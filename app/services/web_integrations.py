@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import secrets
 from typing import cast
 from urllib.parse import urlparse
 from uuid import UUID
@@ -15,13 +16,20 @@ from app.models.webhook import WebhookDelivery, WebhookEndpoint
 from app.schemas.billing import PaymentProviderCreate
 from app.schemas.connector import ConnectorConfigCreate, ConnectorConfigUpdate
 from app.schemas.integration import IntegrationJobCreate, IntegrationTargetCreate
-from app.schemas.webhook import WebhookEndpointCreate, WebhookSubscriptionCreate
+from app.schemas.webhook import (
+    WebhookDeliveryCreate,
+    WebhookEndpointCreate,
+    WebhookEndpointUpdate,
+    WebhookSubscriptionCreate,
+)
 from app.services import billing as billing_service
 from app.services import connector as connector_service
 from app.services import integration as integration_service
 from app.services import webhook as webhook_service
 from app.services.common import validate_enum
+from app.services.credential_crypto import encrypt_credential
 from app.services.integrations import registry as integration_registry
+from app.services.queue_adapter import enqueue_task
 from app.validators.forms import parse_uuid
 
 logger = logging.getLogger(__name__)
@@ -973,6 +981,9 @@ def webhook_error_state(
     secret: str | None,
     event_types: list[str] | None,
     is_active: bool,
+    delivery_timeout_seconds: str | int | None = None,
+    max_retries: str | int | None = None,
+    retry_backoff_seconds: str | int | None = None,
 ) -> dict[str, object]:
     return {
         **webhook_form_options(db),
@@ -980,11 +991,63 @@ def webhook_error_state(
             "name": name,
             "url": url,
             "connector_config_id": connector_config_id or "",
-            "secret": secret or "",
+            "secret": "",
             "event_types": event_types or [],
             "is_active": is_active,
+            "delivery_timeout_seconds": delivery_timeout_seconds or "",
+            "max_retries": max_retries or "",
+            "retry_backoff_seconds": retry_backoff_seconds or "",
         },
     }
+
+
+def _selected_webhook_events(event_types: list[str] | None):
+    from app.models.webhook import WebhookEventType
+
+    selected = []
+    seen = set()
+    for event_type in event_types or []:
+        event = validate_enum(event_type, WebhookEventType, "event_type")
+        if event in seen:
+            continue
+        seen.add(event)
+        selected.append(event)
+    return selected
+
+
+def _optional_int(value: str | int | None) -> int | None:
+    if value is None or value == "":
+        return None
+    return int(value)
+
+
+def _sync_webhook_subscriptions(db, endpoint, event_types: list[str] | None) -> None:
+    from app.models.webhook import WebhookSubscription
+
+    selected = set(_selected_webhook_events(event_types))
+    existing = {
+        subscription.event_type: subscription
+        for subscription in db.query(WebhookSubscription).filter(
+            WebhookSubscription.endpoint_id == endpoint.id
+        )
+    }
+    for event_type in selected:
+        subscription = existing.get(event_type)
+        if subscription:
+            subscription.is_active = True
+        else:
+            webhook_service.webhook_subscriptions.create(
+                db,
+                WebhookSubscriptionCreate(
+                    endpoint_id=endpoint.id,
+                    event_type=event_type,
+                    is_active=True,
+                ),
+            )
+    for event_type, subscription in existing.items():
+        if event_type not in selected:
+            subscription.is_active = False
+    db.commit()
 
 
 def create_webhook_endpoint(
@@ -996,27 +1059,138 @@ def create_webhook_endpoint(
     secret: str | None,
     event_types: list[str] | None,
     is_active: bool,
+    delivery_timeout_seconds: str | int | None = None,
+    max_retries: str | int | None = None,
+    retry_backoff_seconds: str | int | None = None,
 ):
-    from app.models.webhook import WebhookEventType
-
     payload = WebhookEndpointCreate(
         name=name.strip(),
         url=url.strip(),
         connector_config_id=parse_uuid(
             connector_config_id, "connector_config_id", required=False
         ),
-        secret=secret.strip() if secret else None,
+        secret=encrypt_credential(secret.strip())
+        if secret and secret.strip()
+        else None,
         is_active=is_active,
+        delivery_timeout_seconds=_optional_int(delivery_timeout_seconds),
+        max_retries=_optional_int(max_retries),
+        retry_backoff_seconds=_optional_int(retry_backoff_seconds),
     )
     endpoint = webhook_service.webhook_endpoints.create(db, payload)
-    for event_type in event_types or []:
-        subscription_payload = WebhookSubscriptionCreate(
-            endpoint_id=endpoint.id,
-            event_type=validate_enum(event_type, WebhookEventType, "event_type"),
-            is_active=True,
-        )
-        webhook_service.webhook_subscriptions.create(db, subscription_payload)
+    _sync_webhook_subscriptions(db, endpoint, event_types)
     return endpoint
+
+
+def build_webhook_edit_data(db, *, endpoint_id: str) -> dict[str, object]:
+    state = build_webhook_detail_data(db, endpoint_id=endpoint_id)
+    endpoint = state["endpoint"]
+    subscriptions = state["subscriptions"]
+    return {
+        **webhook_form_options(db),
+        "endpoint": endpoint,
+        "form": {
+            "name": endpoint.name,
+            "url": endpoint.url,
+            "connector_config_id": str(endpoint.connector_config_id or ""),
+            "secret": "",
+            "event_types": [
+                subscription.event_type.value
+                for subscription in subscriptions
+                if subscription.is_active and subscription.event_type
+            ],
+            "is_active": endpoint.is_active,
+            "delivery_timeout_seconds": endpoint.delivery_timeout_seconds or "",
+            "max_retries": endpoint.max_retries or "",
+            "retry_backoff_seconds": endpoint.retry_backoff_seconds or "",
+        },
+        "action_url": f"/admin/integrations/webhooks/{endpoint.id}",
+        "submit_label": "Save Webhook",
+    }
+
+
+def update_webhook_endpoint(
+    db,
+    *,
+    endpoint_id: str,
+    name: str,
+    url: str,
+    connector_config_id: str | None,
+    secret: str | None,
+    event_types: list[str] | None,
+    is_active: bool,
+    delivery_timeout_seconds: str | int | None = None,
+    max_retries: str | int | None = None,
+    retry_backoff_seconds: str | int | None = None,
+):
+    data = {
+        "name": name.strip(),
+        "url": url.strip(),
+        "connector_config_id": parse_uuid(
+            connector_config_id, "connector_config_id", required=False
+        ),
+        "is_active": is_active,
+        "delivery_timeout_seconds": _optional_int(delivery_timeout_seconds),
+        "max_retries": _optional_int(max_retries),
+        "retry_backoff_seconds": _optional_int(retry_backoff_seconds),
+    }
+    if secret and secret.strip():
+        data["secret"] = encrypt_credential(secret.strip())
+    endpoint = webhook_service.webhook_endpoints.update(
+        db, endpoint_id, WebhookEndpointUpdate(**data)
+    )
+    _sync_webhook_subscriptions(db, endpoint, event_types)
+    return endpoint
+
+
+def set_webhook_endpoint_active(db, *, endpoint_id: str, is_active: bool):
+    return webhook_service.webhook_endpoints.update(
+        db, endpoint_id, WebhookEndpointUpdate(is_active=is_active)
+    )
+
+
+def delete_webhook_endpoint(db, *, endpoint_id: str) -> None:
+    webhook_service.webhook_endpoints.delete(db, endpoint_id)
+
+
+def rotate_webhook_endpoint_secret(db, *, endpoint_id: str):
+    return webhook_service.webhook_endpoints.update(
+        db,
+        endpoint_id,
+        WebhookEndpointUpdate(secret=encrypt_credential(secrets.token_urlsafe(32))),
+    )
+
+
+def queue_webhook_test_delivery(db, *, endpoint_id: str):
+    endpoint = webhook_service.webhook_endpoints.get(db, endpoint_id)
+    subscriptions = webhook_service.webhook_subscriptions.list(
+        db=db,
+        endpoint_id=str(endpoint.id),
+        event_type=None,
+        is_active=True,
+        order_by="created_at",
+        order_dir="asc",
+        limit=1,
+        offset=0,
+    )
+    if not subscriptions:
+        raise ValueError("Add at least one active event subscription before testing.")
+    subscription = subscriptions[0]
+    delivery = webhook_service.webhook_deliveries.create(
+        db,
+        WebhookDeliveryCreate(
+            subscription_id=subscription.id,
+            event_type=subscription.event_type,
+            payload={"event": "webhook.test", "endpoint_id": str(endpoint.id)},
+        ),
+    )
+    enqueue_task(
+        "app.tasks.webhooks.deliver_webhook",
+        args=[str(delivery.id)],
+        correlation_id=f"webhook_delivery:{delivery.id}",
+        source="admin_integrations_webhook_test",
+    )
+    return delivery
 
 
 def build_webhooks_list_data(db) -> dict[str, object]:
@@ -1195,10 +1369,31 @@ def build_webhook_detail_data(db, *, endpoint_id: str) -> dict[str, object]:
         limit=50,
         offset=0,
     )
+    failed_deliveries = [
+        delivery
+        for delivery in deliveries
+        if getattr(getattr(delivery, "status", None), "value", None) == "failed"
+    ]
+    delivery_summary = {
+        "latest_delivery": deliveries[0] if deliveries else None,
+        "latest_failure": failed_deliveries[0] if failed_deliveries else None,
+        "pending_count": sum(
+            1
+            for delivery in deliveries
+            if getattr(getattr(delivery, "status", None), "value", None) == "pending"
+        ),
+        "failed_count": len(failed_deliveries),
+        "delivered_count": sum(
+            1
+            for delivery in deliveries
+            if getattr(getattr(delivery, "status", None), "value", None) == "delivered"
+        ),
+    }
     return {
         "endpoint": endpoint,
         "subscriptions": subscriptions,
         "deliveries": deliveries,
+        "delivery_summary": delivery_summary,
     }
 
 

@@ -151,7 +151,44 @@ def test_destructive_actions_have_confirmations():
     assert "factory-reset" in cpe
     assert "Factory reset CPE" in cpe
     assert "confirmTr069BulkAction" in tr069
-    assert "Push ${cmds.length} command(s)" in router_push
+    assert "const confirmed = confirm(message)" in router_push
+    assert "Blocked-command override is enabled" in router_push
     assert "Regenerate keys for VPN server" in vpn
     assert "rotates the stored API credentials" in nas
     assert "Import PPPoE credentials now" in radius
+
+
+def test_async_network_actions_have_busy_state_and_visible_results():
+    cpe = Path("templates/admin/network/cpes/_tr069_partial.html").read_text()
+    router_detail = Path("templates/admin/network/routers/detail.html").read_text()
+    service_ports = Path(
+        "templates/admin/network/onts/_service_ports_tab.html"
+    ).read_text()
+
+    assert 'id="cpe-tr069-panel"' in cpe
+    assert 'hx-target="#cpe-tr069-panel"' in cpe
+    assert 'hx-swap="outerHTML"' in cpe
+    assert 'data-loading-label="Refreshing..."' in cpe
+    assert 'data-loading-label="Enabling..."' in cpe
+    assert "/admin/network/routers/{{ router.id }}/test-connection" in router_detail
+    assert "/admin/network/routers/{{ router.id }}/sync" in router_detail
+    assert 'data-loading-label="Testing..."' in router_detail
+    assert 'data-loading-label="Syncing..."' in router_detail
+    assert 'data-loading-label="Creating..."' in service_ports
+    assert 'data-loading-label="Deleting..."' in service_ports
+
+
+def test_freshness_labels_match_snapshot_data():
+    sessions = Path("templates/admin/network/sessions.html").read_text()
+    monitoring = Path("templates/admin/network/monitoring/index.html").read_text()
+    topology = Path("templates/admin/network/topology/index.html").read_text()
+
+    assert "Live RADIUS active sessions" not in sessions
+    assert "RADIUS active-session snapshot" in sessions
+    assert "snapshot_at.strftime" in sessions
+    assert "Current ONU Status Snapshot" in monitoring
+    assert "ONU Status Trend (24h)" not in monitoring
+    assert "Single snapshot" in monitoring
+    assert ">Links<" in topology
+    assert ">Nodes<" in topology
+    assert "Maintenance" in topology

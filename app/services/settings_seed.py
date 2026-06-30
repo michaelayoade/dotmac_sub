@@ -1133,6 +1133,26 @@ def seed_geocoding_settings(db: Session) -> None:
     )
     geocoding_settings.ensure_by_key(
         db,
+        key="min_interval_ms",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("GEOCODING_MIN_INTERVAL_MS", "1000"),
+    )
+    geocoding_settings.ensure_by_key(
+        db,
+        key="google_api_key",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("GEOCODING_GOOGLE_API_KEY", ""),
+        is_secret=True,
+    )
+    geocoding_settings.ensure_by_key(
+        db,
+        key="mapbox_api_key",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("GEOCODING_MAPBOX_API_KEY", ""),
+        is_secret=True,
+    )
+    geocoding_settings.ensure_by_key(
+        db,
         key="batch_geocode_jobs_log",
         value_type=SettingValueType.json,
         value_json=[],

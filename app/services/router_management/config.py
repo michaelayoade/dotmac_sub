@@ -138,13 +138,22 @@ class RouterConfigService:
         initiated_by: uuid.UUID,
         template_id: uuid.UUID | None = None,
         variable_values: dict | None = None,
+        dry_run: bool = False,
+        failure_policy: str = "continue",
+        allow_dangerous_commands: bool = False,
     ) -> RouterConfigPush:
-        check_dangerous_commands(commands)
+        if failure_policy not in {"continue", "abort"}:
+            raise ValueError("Failure policy must be 'continue' or 'abort'.")
+        if not allow_dangerous_commands:
+            check_dangerous_commands(commands)
 
         push = RouterConfigPush(
             template_id=template_id,
             commands=commands,
             variable_values=variable_values,
+            dry_run=dry_run,
+            failure_policy=failure_policy,
+            allow_dangerous_commands=allow_dangerous_commands,
             initiated_by=initiated_by,
             status=RouterConfigPushStatus.pending,
         )

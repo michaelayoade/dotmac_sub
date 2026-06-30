@@ -877,6 +877,7 @@ def hooks_create(
     event_filters_csv: str | None = Form(None),
     retry_max: int = Form(3),
     retry_backoff_ms: int = Form(500),
+    timeout_seconds: int | None = Form(None),
     notes: str | None = Form(None),
     is_enabled: bool = Form(False),
     db: Session = Depends(get_db),
@@ -901,6 +902,7 @@ def hooks_create(
             event_filters=_split_csv(event_filters_csv),
             retry_max=retry_max,
             retry_backoff_ms=retry_backoff_ms,
+            timeout_seconds=timeout_seconds,
             notes=notes,
             is_enabled=is_enabled,
         )
@@ -919,14 +921,15 @@ def hooks_create(
                     "url": url or "",
                     "http_method": (http_method or "POST").upper(),
                     "auth_type": auth_type or "none",
-                    "auth_bearer_token": auth_bearer_token or "",
+                    "auth_bearer_token": "",
                     "auth_basic_username": auth_basic_username or "",
-                    "auth_basic_password": auth_basic_password or "",
-                    "auth_hmac_secret": auth_hmac_secret or "",
+                    "auth_basic_password": "",
+                    "auth_hmac_secret": "",
                     "auth_config_json": auth_config_json or "",
                     "event_filters_csv": event_filters_csv or "",
                     "retry_max": retry_max,
                     "retry_backoff_ms": retry_backoff_ms,
+                    "timeout_seconds": timeout_seconds or "",
                     "notes": notes or "",
                     "is_enabled": is_enabled,
                 },
@@ -959,16 +962,18 @@ def hooks_edit(request: Request, hook_id: str, db: Session = Depends(get_db)):
         "url": hook.url or "",
         "http_method": hook.http_method,
         "auth_type": hook.auth_type.value,
-        "auth_bearer_token": _auth_value(hook.auth_config, "token"),
+        "auth_bearer_token": "",
         "auth_basic_username": _auth_value(hook.auth_config, "username"),
-        "auth_basic_password": _auth_value(hook.auth_config, "password"),
-        "auth_hmac_secret": _auth_value(hook.auth_config, "secret"),
+        "auth_basic_password": "",
+        "auth_hmac_secret": "",
         "auth_config_json": json.dumps(
-            _decrypted_auth_config(hook.auth_config), indent=2
+            integration_hooks_service.public_hook_auth_config(hook.auth_config),
+            indent=2,
         ),
         "event_filters_csv": ", ".join(hook.event_filters or []),
         "retry_max": hook.retry_max,
         "retry_backoff_ms": hook.retry_backoff_ms,
+        "timeout_seconds": hook.timeout_seconds or "",
         "notes": hook.notes or "",
         "is_enabled": hook.is_enabled,
         "id": str(hook.id),
@@ -1011,6 +1016,7 @@ def hooks_update(
     event_filters_csv: str | None = Form(None),
     retry_max: int = Form(3),
     retry_backoff_ms: int = Form(500),
+    timeout_seconds: int | None = Form(None),
     notes: str | None = Form(None),
     is_enabled: bool = Form(False),
     db: Session = Depends(get_db),
@@ -1032,10 +1038,15 @@ def hooks_update(
                 auth_basic_password=auth_basic_password,
                 auth_hmac_secret=auth_hmac_secret,
                 auth_config_json=auth_config_json,
+                existing_auth_config=integration_hooks_service.get_hook(
+                    db, hook_id
+                ).auth_config,
+                preserve_blank_secrets=True,
             ),
             event_filters=_split_csv(event_filters_csv),
             retry_max=retry_max,
             retry_backoff_ms=retry_backoff_ms,
+            timeout_seconds=timeout_seconds,
             notes=notes,
             is_enabled=is_enabled,
         )
@@ -1055,14 +1066,15 @@ def hooks_update(
                     "url": url or "",
                     "http_method": (http_method or "POST").upper(),
                     "auth_type": auth_type or "none",
-                    "auth_bearer_token": auth_bearer_token or "",
+                    "auth_bearer_token": "",
                     "auth_basic_username": auth_basic_username or "",
-                    "auth_basic_password": auth_basic_password or "",
-                    "auth_hmac_secret": auth_hmac_secret or "",
+                    "auth_basic_password": "",
+                    "auth_hmac_secret": "",
                     "auth_config_json": auth_config_json or "",
                     "event_filters_csv": event_filters_csv or "",
                     "retry_max": retry_max,
                     "retry_backoff_ms": retry_backoff_ms,
+                    "timeout_seconds": timeout_seconds or "",
                     "notes": notes or "",
                     "is_enabled": is_enabled,
                 },
@@ -1134,6 +1146,12 @@ def webhook_new(request: Request, db: Session = Depends(get_db)):
     """New webhook endpoint form."""
     context = _base_context(request, db, active_page="webhooks")
     context.update(web_integrations_service.webhook_form_options(db))
+    context.update(
+        {
+            "action_url": "/admin/integrations/webhooks",
+            "submit_label": "Create Webhook",
+        }
+    )
     return templates.TemplateResponse("admin/integrations/webhooks/new.html", context)
 
 
@@ -1149,6 +1167,9 @@ def webhook_create(
     connector_config_id: str | None = Form(None),
     secret: str | None = Form(None),
     event_types: list[str] | None = Form(None),
+    delivery_timeout_seconds: str | None = Form(None),
+    max_retries: str | None = Form(None),
+    retry_backoff_seconds: str | None = Form(None),
     is_active: bool = Form(False),
     db: Session = Depends(get_db),
 ):
@@ -1160,6 +1181,9 @@ def webhook_create(
             connector_config_id=connector_config_id,
             secret=secret,
             event_types=event_types,
+            delivery_timeout_seconds=delivery_timeout_seconds,
+            max_retries=max_retries,
+            retry_backoff_seconds=retry_backoff_seconds,
             is_active=is_active,
         )
     except Exception as exc:
@@ -1173,6 +1197,9 @@ def webhook_create(
                     connector_config_id=connector_config_id,
                     secret=secret,
                     event_types=event_types,
+                    delivery_timeout_seconds=delivery_timeout_seconds,
+                    max_retries=max_retries,
+                    retry_backoff_seconds=retry_backoff_seconds,
                     is_active=is_active,
                 ),
                 "error": str(exc),
@@ -1183,6 +1210,156 @@ def webhook_create(
         )
     return RedirectResponse(
         url=f"/admin/integrations/webhooks/{endpoint.id}", status_code=303
+    )
+
+
+@router.get("/webhooks/{endpoint_id}/edit", response_class=HTMLResponse)
+def webhook_edit(request: Request, endpoint_id: str, db: Session = Depends(get_db)):
+    """Edit webhook endpoint form."""
+    try:
+        state = web_integrations_service.build_webhook_edit_data(
+            db,
+            endpoint_id=endpoint_id,
+        )
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+        context = _base_context(request, db, active_page="webhooks")
+        context["message"] = "The webhook endpoint you are looking for does not exist."
+        return templates.TemplateResponse(
+            "admin/errors/404.html", context, status_code=404
+        )
+    context = _base_context(request, db, active_page="webhooks")
+    context.update(state)
+    return templates.TemplateResponse("admin/integrations/webhooks/new.html", context)
+
+
+@router.post(
+    "/webhooks/{endpoint_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def webhook_update(
+    request: Request,
+    endpoint_id: str,
+    name: str = Form(...),
+    url: str = Form(...),
+    connector_config_id: str | None = Form(None),
+    secret: str | None = Form(None),
+    event_types: list[str] | None = Form(None),
+    delivery_timeout_seconds: str | None = Form(None),
+    max_retries: str | None = Form(None),
+    retry_backoff_seconds: str | None = Form(None),
+    is_active: bool = Form(False),
+    db: Session = Depends(get_db),
+):
+    try:
+        endpoint = web_integrations_service.update_webhook_endpoint(
+            db,
+            endpoint_id=endpoint_id,
+            name=name,
+            url=url,
+            connector_config_id=connector_config_id,
+            secret=secret,
+            event_types=event_types,
+            delivery_timeout_seconds=delivery_timeout_seconds,
+            max_retries=max_retries,
+            retry_backoff_seconds=retry_backoff_seconds,
+            is_active=is_active,
+        )
+    except Exception as exc:
+        context = _base_context(request, db, active_page="webhooks")
+        context.update(
+            {
+                **web_integrations_service.webhook_error_state(
+                    db,
+                    name=name,
+                    url=url,
+                    connector_config_id=connector_config_id,
+                    secret=None,
+                    event_types=event_types,
+                    delivery_timeout_seconds=delivery_timeout_seconds,
+                    max_retries=max_retries,
+                    retry_backoff_seconds=retry_backoff_seconds,
+                    is_active=is_active,
+                ),
+                "endpoint": None,
+                "action_url": f"/admin/integrations/webhooks/{endpoint_id}",
+                "submit_label": "Save Webhook",
+                "error": str(exc),
+            }
+        )
+        return templates.TemplateResponse(
+            "admin/integrations/webhooks/new.html", context, status_code=400
+        )
+    return RedirectResponse(
+        url=f"/admin/integrations/webhooks/{endpoint.id}?saved=1", status_code=303
+    )
+
+
+@router.post(
+    "/webhooks/{endpoint_id}/enable",
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def webhook_enable(endpoint_id: str, db: Session = Depends(get_db)):
+    web_integrations_service.set_webhook_endpoint_active(
+        db, endpoint_id=endpoint_id, is_active=True
+    )
+    return RedirectResponse(
+        url=f"/admin/integrations/webhooks/{endpoint_id}?saved=1", status_code=303
+    )
+
+
+@router.post(
+    "/webhooks/{endpoint_id}/disable",
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def webhook_disable(endpoint_id: str, db: Session = Depends(get_db)):
+    web_integrations_service.set_webhook_endpoint_active(
+        db, endpoint_id=endpoint_id, is_active=False
+    )
+    return RedirectResponse(
+        url=f"/admin/integrations/webhooks/{endpoint_id}?saved=1", status_code=303
+    )
+
+
+@router.post(
+    "/webhooks/{endpoint_id}/rotate-secret",
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def webhook_rotate_secret(endpoint_id: str, db: Session = Depends(get_db)):
+    web_integrations_service.rotate_webhook_endpoint_secret(db, endpoint_id=endpoint_id)
+    return RedirectResponse(
+        url=f"/admin/integrations/webhooks/{endpoint_id}?secret=rotated",
+        status_code=303,
+    )
+
+
+@router.post(
+    "/webhooks/{endpoint_id}/test",
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def webhook_test(endpoint_id: str, db: Session = Depends(get_db)):
+    try:
+        web_integrations_service.queue_webhook_test_delivery(
+            db, endpoint_id=endpoint_id
+        )
+        query = "test=queued"
+    except Exception:
+        query = "test=failed"
+    return RedirectResponse(
+        url=f"/admin/integrations/webhooks/{endpoint_id}?{query}", status_code=303
+    )
+
+
+@router.post(
+    "/webhooks/{endpoint_id}/delete",
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def webhook_delete(endpoint_id: str, db: Session = Depends(get_db)):
+    web_integrations_service.delete_webhook_endpoint(db, endpoint_id=endpoint_id)
+    return RedirectResponse(
+        url="/admin/integrations/webhooks?deleted=1", status_code=303
     )
 
 
@@ -1447,18 +1624,29 @@ def _build_hook_auth_config(
     auth_basic_password: str | None,
     auth_hmac_secret: str | None,
     auth_config_json: str | None,
+    existing_auth_config: object | None = None,
+    preserve_blank_secrets: bool = False,
 ) -> dict | None:
     auth_type_value = (auth_type or "none").strip().lower()
+    existing = existing_auth_config if isinstance(existing_auth_config, dict) else {}
     result: dict[str, str] = {}
-    if auth_type_value == "bearer" and auth_bearer_token and auth_bearer_token.strip():
-        result["token"] = auth_bearer_token.strip()
+    if auth_type_value == "bearer":
+        if auth_bearer_token and auth_bearer_token.strip():
+            result["token"] = auth_bearer_token.strip()
+        elif preserve_blank_secrets and existing.get("token"):
+            result["token"] = str(existing["token"])
     elif auth_type_value == "basic":
         if auth_basic_username and auth_basic_username.strip():
             result["username"] = auth_basic_username.strip()
         if auth_basic_password and auth_basic_password.strip():
             result["password"] = auth_basic_password.strip()
-    elif auth_type_value == "hmac" and auth_hmac_secret and auth_hmac_secret.strip():
-        result["secret"] = auth_hmac_secret.strip()
+        elif preserve_blank_secrets and existing.get("password"):
+            result["password"] = str(existing["password"])
+    elif auth_type_value == "hmac":
+        if auth_hmac_secret and auth_hmac_secret.strip():
+            result["secret"] = auth_hmac_secret.strip()
+        elif preserve_blank_secrets and existing.get("secret"):
+            result["secret"] = str(existing["secret"])
     extra = _parse_json_object(auth_config_json) or {}
     result.update(extra)
     return result or None
@@ -1510,6 +1698,7 @@ def _hook_form_defaults(
         "event_filters_csv": "",
         "retry_max": 3,
         "retry_backoff_ms": 500,
+        "timeout_seconds": "",
         "notes": "",
         "is_enabled": True,
     }
@@ -1530,6 +1719,7 @@ def _hook_form_defaults(
                 "retry_backoff_ms": int(
                     template.get("retry_backoff_ms") or defaults["retry_backoff_ms"]
                 ),
+                "timeout_seconds": int(template.get("timeout_seconds") or 10),
             }
         )
     return defaults

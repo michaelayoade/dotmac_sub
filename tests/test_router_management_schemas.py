@@ -91,9 +91,23 @@ def test_config_push_create():
     schema = RouterConfigPushCreate(
         commands=["/queue simple set [find] queue=sfq/sfq"],
         router_ids=router_ids,
+        dry_run=True,
+        failure_policy="abort",
     )
     assert len(schema.router_ids) == 2
     assert len(schema.commands) == 1
+    assert schema.dry_run is True
+    assert schema.failure_policy == "abort"
+    assert schema.allow_dangerous_commands is False
+
+
+def test_config_push_create_rejects_unknown_failure_policy():
+    with pytest.raises(ValidationError):
+        RouterConfigPushCreate(
+            commands=["/ip address print"],
+            router_ids=[uuid.uuid4()],
+            failure_policy="rollback",
+        )
 
 
 def test_config_push_create_empty_commands():

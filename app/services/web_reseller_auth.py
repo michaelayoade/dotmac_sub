@@ -52,7 +52,13 @@ def reseller_login_page(request: Request, error: str | None = None):
 
     return templates.TemplateResponse(
         "reseller/auth/login.html",
-        {"request": request, "error": error},
+        {
+            "request": request,
+            "error": error,
+            "remember_duration_label": auth_flow_service.duration_label(
+                reseller_portal.get_remember_max_age(db)
+            ),
+        },
     )
 
 

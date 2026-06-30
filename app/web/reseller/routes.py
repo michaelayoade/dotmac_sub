@@ -200,6 +200,15 @@ def reseller_profile(request: Request, db: Session = Depends(get_db)):
     return web_reseller_routes_service.reseller_profile(request, db)
 
 
+@router.post("/profile/sessions/sign-out-others")
+def reseller_profile_sign_out_other_sessions(
+    request: Request, db: Session = Depends(get_db)
+):
+    return web_reseller_routes_service.reseller_profile_sign_out_other_sessions(
+        request, db
+    )
+
+
 @router.post("/profile", response_class=HTMLResponse)
 def reseller_profile_update(
     request: Request,

@@ -36,11 +36,6 @@ SETTINGS_CATEGORIES: list[dict] = [
                 "description": "Company name, address, bank details",
             },
             {
-                "name": "Data Retention",
-                "url": "/admin/system/config/data-retention",
-                "description": "Log rotation and data cleanup policies",
-            },
-            {
                 "name": "Email / SMTP",
                 "url": "/admin/system/email",
                 "description": "Outbound email transport settings",
@@ -174,11 +169,6 @@ SETTINGS_CATEGORIES: list[dict] = [
                 "description": "Reject IPs, MAC binding, debug",
             },
             {
-                "name": "CPE Management",
-                "url": "/admin/system/config/cpe",
-                "description": "QoS, blocking, DHCP defaults",
-            },
-            {
                 "name": "Monitoring",
                 "url": "/admin/system/config/monitoring",
                 "description": "Vendors, device types, alert groups",
@@ -187,16 +177,6 @@ SETTINGS_CATEGORIES: list[dict] = [
                 "name": "NAS Types",
                 "url": "/admin/system/config/nas-types",
                 "description": "Supported NAS vendor types",
-            },
-            {
-                "name": "IPv6 Settings",
-                "url": "/admin/system/config/ipv6",
-                "description": "Auto-assignment, dual-stack",
-            },
-            {
-                "name": "Fair Usage Policy",
-                "url": "/admin/system/config/fup",
-                "description": "FUP thresholds and reset schedules",
             },
         ],
     },
@@ -236,11 +216,6 @@ SETTINGS_CATEGORIES: list[dict] = [
         "color": "violet",
         "description": "Subscriber defaults, portal, catalog options",
         "links": [
-            {
-                "name": "Subscriber Settings",
-                "url": "/admin/system/config/subscribers",
-                "description": "Login format, welcome message, defaults",
-            },
             {
                 "name": "Customer Portal",
                 "url": "/admin/system/config/portal",

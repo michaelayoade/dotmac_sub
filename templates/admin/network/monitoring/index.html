@@ -184,10 +184,10 @@
     {# Charts + Active Alarms #}
     <div class="grid gap-6 lg:grid-cols-2 animate-fade-in-up" style="animation-delay: 90ms;">
         {% if ont_service_trend and ont_service_trend.has_data %}
-        {% call card("ONU Status Trend (24h)", color="blue") %}
+        {% call card("Current ONU Status Snapshot", color="blue") %}
             <div class="mb-3 flex items-center justify-between">
-                <p class="text-sm text-slate-600 dark:text-slate-400">Service status with raw PON link overlay and low-signal counts.</p>
-                <span class="text-xs font-medium text-slate-500 dark:text-slate-400">Solid lines = effective status · dashed = raw OLT</span>
+                <p class="text-sm text-slate-600 dark:text-slate-400">Latest service status with raw PON link overlay and low-signal counts.</p>
+                <span class="text-xs font-medium text-slate-500 dark:text-slate-400">Single snapshot · solid = effective · dashed = raw OLT</span>
             </div>
             <div class="relative" style="height: 280px;">
                 <canvas id="onuStatusTrendChart"></canvas>
@@ -717,7 +717,7 @@ document.addEventListener('DOMContentLoaded', function() {
     {% endif %}
 
     {% if ont_service_trend and ont_service_trend.has_data %}
-    // ONU Status Trend Line Chart (24h)
+    // Current ONU status snapshot chart.
     (function() {
         const timestamps = {{ ont_service_trend.timestamps | tojson | safe }};
         const onlineVals = {{ ont_service_trend.online | tojson | safe }};

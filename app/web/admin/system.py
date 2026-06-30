@@ -52,6 +52,7 @@ from app.services import (
 from app.services import (
     scheduler as scheduler_service,
 )
+from app.services import session_manager as session_manager_service
 from app.services import settings_spec
 from app.services import support_ticket_settings as support_ticket_settings_service
 from app.services import web_system_about as web_system_about_service
@@ -95,6 +96,7 @@ from app.services.audit_helpers import (
     log_audit_event,
 )
 from app.services.auth_dependencies import require_permission
+from app.services.common import coerce_uuid
 from app.tasks.exports import run_export_job
 from app.tasks.gis import run_batch_geocode_job
 from app.tasks.imports import run_import_job
@@ -267,15 +269,6 @@ def _radius_config_audit_items(db: Session, limit: int = 5) -> list[dict]:
         return build_audit_activities(db, "radius_config", "radius", limit=limit)
     except Exception:
         logger.exception("Unable to load RADIUS config audit items")
-        db.rollback()
-        return []
-
-
-def _cpe_config_audit_items(db: Session, limit: int = 5) -> list[dict]:
-    try:
-        return build_audit_activities(db, "cpe_config", "cpe", limit=limit)
-    except Exception:
-        logger.exception("Unable to load CPE config audit items")
         db.rollback()
         return []
 
@@ -1325,11 +1318,14 @@ def user_profile(request: Request, db: Session = Depends(get_db)):
     success = None
     if request.query_params.get("mfa") == "enabled":
         success = "Two-factor authentication enabled successfully."
+    elif request.query_params.get("sessions") == "signed-out":
+        success = "Other active sessions signed out."
     state = web_system_profiles_service.build_profile_page_state(
         db,
         current_user=current_user,
         success=success,
         system_user_id=system_user_id,
+        current_session_id=auth.get("session_id"),
     )
 
     context = {
@@ -1390,6 +1386,7 @@ def user_profile_update(
         success=success,
         person_id=updated_person_id,
         system_user_id=system_user_id if updated_person_id is None else None,
+        current_session_id=auth.get("session_id"),
     )
 
     context = {
@@ -1401,6 +1398,27 @@ def user_profile_update(
         **state,
     }
     return templates.TemplateResponse("admin/system/profile.html", context)
+
+
+@router.post("/users/profile/sessions/sign-out-others")
+def user_profile_sign_out_other_sessions(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    auth = _require_system_user_principal(request)
+    principal_id = str(auth.get("principal_id") or "")
+    if not principal_id:
+        return RedirectResponse(url="/admin/system/users/profile", status_code=303)
+
+    session_manager_service.revoke_all_other_sessions(
+        db,
+        coerce_uuid(principal_id),
+        str(auth.get("session_id") or ""),
+        principal_type="system_user",
+    )
+    return RedirectResponse(
+        url="/admin/system/users/profile?sessions=signed-out", status_code=303
+    )
 
 
 @router.get("/users/profile/mfa/setup", response_class=HTMLResponse)
@@ -1454,7 +1472,7 @@ def user_profile_mfa_confirm(
         return RedirectResponse(url="/admin/system/users/profile", status_code=303)
 
     try:
-        auth_flow_service.auth_flow.admin_mfa_confirm(
+        method = auth_flow_service.auth_flow.admin_mfa_confirm(
             db, method_id, code.strip(), principal_id
         )
     except Exception:
@@ -1473,6 +1491,29 @@ def user_profile_mfa_confirm(
                 "error": "Invalid verification code. Please try again.",
             },
             status_code=401,
+        )
+
+    recovery_codes = (
+        auth_flow_service.generate_mfa_recovery_codes(db, method)
+        if getattr(method, "id", None)
+        else []
+    )
+    if recovery_codes:
+        return templates.TemplateResponse(
+            "admin/system/profile_mfa_setup.html",
+            {
+                "request": request,
+                "active_page": "users",
+                "active_menu": "system",
+                "current_user": get_current_user(request),
+                "sidebar_stats": get_sidebar_stats(db),
+                "method_id": method_id,
+                "secret_key": "",
+                "otpauth_uri": "",
+                "qr_code_url": "",
+                "recovery_codes": recovery_codes,
+                "continue_url": "/admin/system/users/profile?mfa=enabled",
+            },
         )
 
     return RedirectResponse(
@@ -2639,6 +2680,7 @@ def webhook_create(
     url: str = Form(...),
     secret: str = Form(None),
     is_active: str = Form(None),
+    events: list[str] = Form([]),
     db: Session = Depends(get_db),
 ):
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -2650,6 +2692,7 @@ def webhook_create(
             url=url,
             secret=secret,
             is_active=is_active == "true",
+            events=events,
         )
         return RedirectResponse(url="/admin/system/webhooks", status_code=303)
     except Exception as e:
@@ -2661,7 +2704,10 @@ def webhook_create(
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
             "endpoint": None,
-            "subscribed_events": [],
+            "subscribed_events": events,
+            "event_types": web_system_webhook_forms_service.get_webhook_new_form_context()[
+                "event_types"
+            ],
             "action_url": "/admin/system/webhooks",
             "error": str(e),
         }
@@ -2688,6 +2734,7 @@ def webhook_edit(request: Request, endpoint_id: str, db: Session = Depends(get_d
         "sidebar_stats": get_sidebar_stats(db),
         "endpoint": form_data["endpoint"],
         "subscribed_events": form_data["subscribed_events"],
+        "event_types": form_data["event_types"],
         "action_url": f"/admin/system/webhooks/{endpoint_id}",
         "error": None,
     }
@@ -2706,6 +2753,7 @@ def webhook_update(
     url: str = Form(...),
     secret: str = Form(None),
     is_active: str = Form(None),
+    events: list[str] = Form([]),
     db: Session = Depends(get_db),
 ):
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -2718,6 +2766,7 @@ def webhook_update(
             url=url,
             secret=secret,
             is_active=is_active == "true",
+            events=events,
         )
         if endpoint is None:
             return RedirectResponse(url="/admin/system/webhooks", status_code=303)
@@ -2734,7 +2783,16 @@ def webhook_update(
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
             "endpoint": form_data["endpoint"] if form_data else None,
-            "subscribed_events": form_data["subscribed_events"] if form_data else [],
+            "subscribed_events": events
+            if events
+            else form_data["subscribed_events"]
+            if form_data
+            else [],
+            "event_types": form_data["event_types"]
+            if form_data
+            else web_system_webhook_forms_service.get_webhook_new_form_context()[
+                "event_types"
+            ],
             "action_url": f"/admin/system/webhooks/{endpoint_id}",
             "error": str(e),
         }
@@ -4190,31 +4248,20 @@ def config_email_save(request: Request, db: Session = Depends(get_db)):
     return RedirectResponse(url="/admin/system/email", status_code=303)
 
 
-# --- 8.7 Subscriber Settings ---
-@router.get("/config/subscribers", response_class=HTMLResponse)
-def config_subscribers_page(request: Request, db: Session = Depends(get_db)):
-    data = web_system_config_service.get_subscriber_config_context(db)
-    return templates.TemplateResponse(
-        "admin/system/config/subscribers.html",
-        _config_context(request, db, {"active_page": "config-subscribers", **data}),
-    )
-
-
-@router.post(
-    "/config/subscribers",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:settings:write"))],
-)
-def config_subscribers_save(request: Request, db: Session = Depends(get_db)):
-    form = parse_form_data_sync(request)
-    web_system_config_service.save_subscriber_config(db, form)
-    return RedirectResponse(url="/admin/system/config/subscribers", status_code=303)
+# --- 8.7 Subscriber Settings: REMOVED (inert/dead config; subscriber defaults
+# are governed by feature-specific workflows) ---
 
 
 # --- 8.8 Customer Portal ---
 @router.get("/config/portal", response_class=HTMLResponse)
 def config_portal_page(request: Request, db: Session = Depends(get_db)):
     data = web_system_config_service.get_portal_config_context(db)
+    data.update(
+        {
+            "saved": request.query_params.get("saved") == "1",
+            "error": request.query_params.get("error"),
+        }
+    )
     return templates.TemplateResponse(
         "admin/system/config/portal.html",
         _config_context(request, db, {"active_page": "config-portal", **data}),
@@ -4228,29 +4275,19 @@ def config_portal_page(request: Request, db: Session = Depends(get_db)):
 )
 def config_portal_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
-    web_system_config_service.save_portal_config(db, form)
-    return RedirectResponse(url="/admin/system/config/portal", status_code=303)
+    try:
+        web_system_config_service.save_portal_config(db, form)
+    except ValueError as exc:
+        db.rollback()
+        return RedirectResponse(
+            url=f"/admin/system/config/portal?error={quote_plus(str(exc))}",
+            status_code=303,
+        )
+    return RedirectResponse(url="/admin/system/config/portal?saved=1", status_code=303)
 
 
-# --- 8.10 Data Retention ---
-@router.get("/config/data-retention", response_class=HTMLResponse)
-def config_data_retention_page(request: Request, db: Session = Depends(get_db)):
-    data = web_system_config_service.get_retention_context(db)
-    return templates.TemplateResponse(
-        "admin/system/config/data_retention.html",
-        _config_context(request, db, {"active_page": "config-data-retention", **data}),
-    )
-
-
-@router.post(
-    "/config/data-retention",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:settings:write"))],
-)
-def config_data_retention_save(request: Request, db: Session = Depends(get_db)):
-    form = parse_form_data_sync(request)
-    web_system_config_service.save_retention(db, form)
-    return RedirectResponse(url="/admin/system/config/data-retention", status_code=303)
+# --- 8.10 Data Retention: REMOVED (inert/dead config; enforced retention lives on
+# feature-specific settings such as monitoring, bandwidth, restore, and backups) ---
 
 
 # --- 8.11 Finance Automation: REMOVED (inert/dead config; billing automation is
@@ -4551,6 +4588,8 @@ def config_radius_page(request: Request, db: Session = Depends(get_db)):
     data = web_system_config_service.get_radius_config_context(db)
     push_status = str(request.query_params.get("push_status") or "").strip()
     push_message = str(request.query_params.get("push_message") or "").strip()
+    saved = request.query_params.get("saved") == "1"
+    error = str(request.query_params.get("error") or "").strip()
     return templates.TemplateResponse(
         "admin/system/config/radius.html",
         _config_context(
@@ -4560,6 +4599,8 @@ def config_radius_page(request: Request, db: Session = Depends(get_db)):
                 "active_page": "config-radius",
                 "push_status": push_status,
                 "push_message": push_message,
+                "saved": saved,
+                "error": error,
                 "audit_items": _radius_config_audit_items(db),
                 **data,
             },
@@ -4575,7 +4616,14 @@ def config_radius_page(request: Request, db: Session = Depends(get_db)):
 def config_radius_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     before = dict(web_system_config_service.get_radius_config_context(db)["radius"])
-    web_system_config_service.save_radius_config(db, form)
+    try:
+        web_system_config_service.save_radius_config(db, form)
+    except ValueError as exc:
+        db.rollback()
+        return RedirectResponse(
+            url=f"/admin/system/config/radius?error={quote_plus(str(exc))}",
+            status_code=303,
+        )
     after = dict(web_system_config_service.get_radius_config_context(db)["radius"])
     changes = _diff_audit_snapshots(before, after)
     if changes:
@@ -4595,7 +4643,7 @@ def config_radius_save(request: Request, db: Session = Depends(get_db)):
         logger.warning(
             "Failed to push RADIUS reject rules after config save", exc_info=True
         )
-    return RedirectResponse(url="/admin/system/config/radius", status_code=303)
+    return RedirectResponse(url="/admin/system/config/radius?saved=1", status_code=303)
 
 
 @router.post(
@@ -4631,52 +4679,19 @@ def config_radius_push_reject_rules(request: Request, db: Session = Depends(get_
     )
 
 
-# --- 8.22 CPE Configuration ---
-@router.get("/config/cpe", response_class=HTMLResponse)
-def config_cpe_page(request: Request, db: Session = Depends(get_db)):
-    data = web_system_config_service.get_cpe_config_context(db)
-    return templates.TemplateResponse(
-        "admin/system/config/cpe.html",
-        _config_context(
-            request,
-            db,
-            {
-                "active_page": "config-cpe",
-                "audit_items": _cpe_config_audit_items(db),
-                **data,
-            },
-        ),
-    )
-
-
-@router.post(
-    "/config/cpe",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:settings:write"))],
-)
-def config_cpe_save(request: Request, db: Session = Depends(get_db)):
-    form = parse_form_data_sync(request)
-    before = dict(web_system_config_service.get_cpe_config_context(db)["cpe"])
-    web_system_config_service.save_cpe_config(db, form)
-    after = dict(web_system_config_service.get_cpe_config_context(db)["cpe"])
-    changes = _diff_audit_snapshots(before, after)
-    if changes:
-        log_audit_event(
-            db=db,
-            request=request,
-            action="update",
-            entity_type="cpe_config",
-            entity_id="cpe",
-            actor_id=_system_actor_id(request),
-            metadata={"changes": changes},
-        )
-    return RedirectResponse(url="/admin/system/config/cpe", status_code=303)
+# --- 8.22 CPE Configuration: REMOVED (inert/dead config; no active consumer) ---
 
 
 # --- 8.23 Monitoring ---
 @router.get("/config/monitoring", response_class=HTMLResponse)
 def config_monitoring_page(request: Request, db: Session = Depends(get_db)):
     data = web_system_config_service.get_monitoring_config_context(db)
+    data.update(
+        {
+            "saved": request.query_params.get("saved") == "1",
+            "error": request.query_params.get("error"),
+        }
+    )
     return templates.TemplateResponse(
         "admin/system/config/monitoring.html",
         _config_context(request, db, {"active_page": "config-monitoring", **data}),
@@ -4690,29 +4705,20 @@ def config_monitoring_page(request: Request, db: Session = Depends(get_db)):
 )
 def config_monitoring_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
-    web_system_config_service.save_monitoring_config(db, form)
-    return RedirectResponse(url="/admin/system/config/monitoring", status_code=303)
-
-
-# --- 8.25 FUP ---
-@router.get("/config/fup", response_class=HTMLResponse)
-def config_fup_page(request: Request, db: Session = Depends(get_db)):
-    data = web_system_config_service.get_fup_config_context(db)
-    return templates.TemplateResponse(
-        "admin/system/config/fup.html",
-        _config_context(request, db, {"active_page": "config-fup", **data}),
+    try:
+        web_system_config_service.save_monitoring_config(db, form)
+    except ValueError as exc:
+        db.rollback()
+        return RedirectResponse(
+            url=f"/admin/system/config/monitoring?error={quote_plus(str(exc))}",
+            status_code=303,
+        )
+    return RedirectResponse(
+        url="/admin/system/config/monitoring?saved=1", status_code=303
     )
 
 
-@router.post(
-    "/config/fup",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:settings:write"))],
-)
-def config_fup_save(request: Request, db: Session = Depends(get_db)):
-    form = parse_form_data_sync(request)
-    web_system_config_service.save_fup_config(db, form)
-    return RedirectResponse(url="/admin/system/config/fup", status_code=303)
+# --- 8.25 FUP: REMOVED (inert/dead config; no active enforcement consumer) ---
 
 
 # --- 8.26 NAS Types ---
@@ -4725,25 +4731,7 @@ def config_nas_types_page(request: Request, db: Session = Depends(get_db)):
     )
 
 
-# --- 8.27 IPv6 ---
-@router.get("/config/ipv6", response_class=HTMLResponse)
-def config_ipv6_page(request: Request, db: Session = Depends(get_db)):
-    data = web_system_config_service.get_ipv6_config_context(db)
-    return templates.TemplateResponse(
-        "admin/system/config/ipv6.html",
-        _config_context(request, db, {"active_page": "config-ipv6", **data}),
-    )
-
-
-@router.post(
-    "/config/ipv6",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:settings:write"))],
-)
-def config_ipv6_save(request: Request, db: Session = Depends(get_db)):
-    form = parse_form_data_sync(request)
-    web_system_config_service.save_ipv6_config(db, form)
-    return RedirectResponse(url="/admin/system/config/ipv6", status_code=303)
+# --- 8.27 IPv6: REMOVED (inert/dead config; no provisioning/IPAM consumer) ---
 
 
 # ── Secrets Management (OpenBao) ─────────────────────────────────────

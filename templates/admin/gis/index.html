@@ -56,6 +56,47 @@
         </div>
     </div>
 
+    <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+                <div class="flex flex-wrap items-center gap-2">
+                    <h2 class="text-sm font-semibold text-slate-900 dark:text-white">GIS Sync</h2>
+                    {% if gis_sync_status %}
+                        {% if gis_sync_status.status == 'success' %}
+                            {{ status_badge("Successful", "active", size="sm") }}
+                        {% elif gis_sync_status.status == 'error' %}
+                            {{ status_badge("Failed", "error", size="sm") }}
+                        {% else %}
+                            {{ status_badge(gis_sync_status.status | title, "neutral", size="sm") }}
+                        {% endif %}
+                    {% else %}
+                        {{ status_badge("No Runs", "neutral", size="sm") }}
+                    {% endif %}
+                </div>
+                {% if gis_sync_status %}
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                    Last finished {{ gis_sync_status.finished_at or "unknown" }} in {{ gis_sync_status.duration_seconds or 0 }}s.
+                </p>
+                {% if gis_sync_status.error %}
+                <p class="mt-1 text-sm text-rose-600 dark:text-rose-300">{{ gis_sync_status.error }}</p>
+                {% endif %}
+                {% else %}
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">No GIS sync run has been recorded yet.</p>
+                {% endif %}
+            </div>
+            {% if gis_sync_status and gis_sync_status.results %}
+            <div class="grid grid-cols-1 gap-2 text-xs text-slate-600 dark:text-slate-300 sm:grid-cols-2">
+                {% for source, result in gis_sync_status.results.items() %}
+                <div class="rounded-lg border border-slate-200 px-3 py-2 dark:border-slate-700">
+                    <p class="font-semibold text-slate-900 dark:text-white">{{ source | replace('_', ' ') | title }}</p>
+                    <p class="mt-1">Created {{ result.created or 0 }}, Updated {{ result.updated or 0 }}, Skipped {{ result.skipped or 0 }}</p>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
     <div id="gisOverlayAlerts" class="hidden rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
         <p class="font-semibold">Some overlays could not be loaded.</p>
         <ul id="gisOverlayAlertList" class="mt-2 list-disc pl-5"></ul>

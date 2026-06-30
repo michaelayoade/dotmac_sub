@@ -4,9 +4,134 @@
 **Method:** single-agent read-only review of the settings control plane + legal,
 GIS, whats-new, design-system, admin-hub. (The billing settings form is covered in
 `BILLING_UX_POLISH_AUDIT.md`.)
-**Status:** audit only. Part of the remaining-module audit series. This is the
+**Status:** remediation in progress via draft PR #518. Part of the remaining-module audit series. This is the
 natural home for the cross-audit **"single-source-of-truth + no dead controls"**
 theme.
+
+## Remediation status
+
+**Last updated:** 2026-06-29
+**Tracking PR:** #518 (`audit/system-config-remediation`)
+
+### Resolved in current draft
+
+- Legal mutating routes now declare `system:write` route-level permissions for
+  create, edit, upload, delete-file, publish, unpublish, and delete actions.
+- Legal create/update/upload-file/delete-file/publish/unpublish/delete actions now
+  emit `legal_document` audit events after successful mutation.
+- Legal Publish and Unpublish actions now require an explicit browser confirmation.
+- GIS location, area, layer, and customer-location request mutation routes now
+  consistently require `gis:map:edit`.
+- Whats-new status changes and create/edit submissions now confirm before a slide
+  becomes `active` or `featured`, and invalid status updates now use a dedicated
+  `status_error` flag instead of overloading the status filter.
+- GIS sync runs now persist the latest status, timing, options, result counts, and
+  error text in the GIS settings domain, and the admin GIS page surfaces that
+  latest run summary.
+- Geocoding settings now allow the supported runtime providers (`nominatim`,
+  `google`, `mapbox`), seed provider API-key settings, and enforce a configurable
+  minimum interval for external geocoding requests while skipping self-hosted URLs.
+- The Monitoring configuration page now reads and writes the runtime
+  `server_health_*` and `network_health_*` thresholds consumed by the dashboard and
+  system-health evaluator instead of orphan `cpu/mem/interface_warn_pct` keys.
+- The inert Data Retention config page was removed from the Settings Hub and admin
+  router; enforced retention remains on feature-specific settings/tasks.
+- The inert Subscriber Settings and IPv6 config pages were removed from the
+  Settings Hub/admin router because their keys had no provisioning, portal-auth,
+  welcome-message, search, statistics, or IPAM consumers.
+- The Customer Portal config page now only exposes consumed domain-routing keys;
+  inert language/auth-field/display/mobile controls were removed from the save
+  allowlist and template.
+- The Preferences config page now only exposes and saves the consumed
+  `force_2fa` control; inert landing-page, portal-title, and search-debounce
+  controls were removed from the save allowlist and template.
+- The inert CPE config page was removed from the Settings Hub/admin router because
+  its QoS, blocking, DHCP, and WLAN defaults had no runtime consumers. Real CPE
+  management remains under Network > CPEs.
+- Monitoring config saves now use the typed `settings_spec` path where specs
+  exist, rejecting invalid spec-backed values, preserving integer value types, and
+  invalidating the settings cache through the domain-settings service.
+- Monitoring config saves now redirect back with explicit success or validation
+  error feedback instead of allowing invalid spec-backed values to become server
+  errors.
+- The remaining consumed auth-domain Preferences/Portal settings now have
+  `settings_spec` entries. Preferences and Portal saves use the typed save path,
+  and Portal redirects now validate the allowed root targets with explicit
+  success/error feedback.
+- RADIUS config saves now use the typed `settings_spec` path for the consumed
+  captive-redirect and PPPoE auto-generation keys, preserving legacy string
+  behavior for older reject/debug fields while rejecting invalid spec-backed
+  values with explicit save feedback.
+- The inert global System FUP config page was removed from the Settings Hub/admin
+  router because its reset/threshold/notification keys had no runtime consumers;
+  live FUP controls remain on catalog offer FUP policies.
+
+### Still open
+
+- Remaining billing/collections config saves still use bespoke helpers, but those
+  pages belong to the Billing/Notifications audit PRs rather than this
+  System/Config PR.
+- Broader bespoke-save validation consistency should continue in the domain audit
+  PR for each remaining form.
+
+### Verification
+
+- `poetry run pytest tests/test_admin_route_permissions.py tests/test_legal_services.py`
+  - Result: `46 passed`
+- `poetry run pytest tests/test_admin_route_permissions.py tests/test_legal_services.py tests/test_admin_whats_new.py`
+  - Result: `54 passed`
+- `poetry run pytest tests/test_gis_sync_services.py tests/test_gis_route_gaps.py tests/test_admin_route_permissions.py tests/test_celery_tasks.py -q`
+  - Result: passed
+- `poetry run ruff check app/services/gis_sync.py app/services/web_gis.py app/tasks/gis.py tests/test_gis_sync_services.py tests/test_gis_route_gaps.py`
+  - Result: passed
+- `poetry run pytest tests/test_geocoding_services.py tests/test_settings_seed_services.py tests/test_control_registry.py`
+  - Result: `92 passed`
+- `poetry run ruff check app/services/geocoding.py app/services/settings_spec.py app/services/settings_seed.py tests/test_geocoding_services.py tests/test_settings_seed_services.py`
+  - Result: passed
+- `poetry run pytest tests/test_network_monitoring_services.py tests/test_admin_route_permissions.py`
+  - Result: `49 passed`
+- `poetry run ruff check app/services/web_system_config.py tests/test_network_monitoring_services.py`
+  - Result: passed
+- `poetry run pytest tests/test_web_system_settings_hub.py tests/test_admin_route_permissions.py`
+  - Result: `26 passed`
+- `poetry run ruff check app/services/web_system_settings_hub.py app/services/web_system_config.py app/web/admin/system.py tests/test_web_system_settings_hub.py`
+  - Result: passed
+- `poetry run pytest tests/test_system_config_pages.py tests/test_web_system_settings_hub.py tests/test_admin_route_permissions.py`
+  - Result: `29 passed`
+- `poetry run ruff check app/services/web_system_config.py tests/test_system_config_pages.py`
+  - Result: passed
+- `poetry run pytest tests/test_system_config_pages.py tests/test_auth_services.py tests/test_auth_flow.py -q`
+  - Result: `64 passed`
+- `poetry run ruff check app/services/web_system_config.py tests/test_system_config_pages.py`
+  - Result: passed
+- `poetry run pytest tests/test_web_system_settings_hub.py tests/test_admin_route_permissions.py`
+  - Result: `27 passed`
+- `poetry run ruff check app/services/web_system_settings_hub.py app/services/web_system_config.py app/web/admin/system.py tests/test_web_system_settings_hub.py`
+  - Result: passed
+- `poetry run pytest tests/test_web_system_settings_hub.py tests/test_admin_route_permissions.py`
+  - Result: `27 passed`
+- `poetry run ruff check app/services/web_system_settings_hub.py app/services/web_system_config.py app/web/admin/system.py tests/test_web_system_settings_hub.py`
+  - Result: passed
+- `poetry run pytest tests/test_network_monitoring_services.py -q`
+  - Result: `34 passed`
+- `poetry run ruff check app/services/web_system_config.py tests/test_network_monitoring_services.py`
+  - Result: passed
+- `poetry run pytest tests/test_system_config_pages.py tests/test_network_monitoring_services.py tests/test_admin_route_permissions.py -q`
+  - Result: `58 passed`
+- `poetry run ruff check app/web/admin/system.py app/services/web_system_config.py tests/test_system_config_pages.py tests/test_network_monitoring_services.py`
+  - Result: passed
+- `poetry run pytest tests/test_system_config_pages.py tests/test_auth_services.py tests/test_auth_flow.py tests/test_email_services.py tests/test_settings_seed_services.py -q`
+  - Result: passed
+- `poetry run ruff check app/services/settings_spec.py app/services/web_system_config.py app/web/admin/system.py tests/test_system_config_pages.py`
+  - Result: passed
+- `poetry run pytest tests/test_system_config_pages.py tests/test_customer_portal_gaps.py tests/test_pppoe_auto_generation.py tests/test_radius_reject_services.py tests/test_admin_route_permissions.py -q`
+  - Result: passed
+- `poetry run ruff check app/services/web_system_config.py app/web/admin/system.py tests/test_system_config_pages.py`
+  - Result: passed
+- `poetry run pytest tests/test_web_system_settings_hub.py tests/test_admin_route_permissions.py -q`
+  - Result: `27 passed`
+- `poetry run ruff check app/services/web_system_settings_hub.py app/services/web_system_config.py app/web/admin/system.py tests/test_web_system_settings_hub.py`
+  - Result: passed
 
 ## What this audit is
 
@@ -75,7 +200,7 @@ what it deactivated (`app/services/gis_sync.py:79-102`).
 
 **P-C. Validation/feedback inconsistency.** The scheduler save validates
 (`is_valid_cron`, interval≥1) and round-trips errors; the bespoke config saves
-(`save_preferences`/`save_radius_config`/`save_cpe_config`) do no validation and give
+(`save_preferences`/`save_radius_config` and other bespoke saves) do no validation and give
 no explicit confirmation (`app/web/admin/system.py:2857-2877` is the good pattern).
 
 ### Security note (out of the two tracks)
@@ -91,14 +216,14 @@ finding.
 
 | Tier | Items |
 |------|-------|
-| **P0** | Dead config pages that look load-bearing but aren't — Data Retention inert, Monitoring `*_warn_pct` orphan vs real keys, dead toggle groups (C-2); legal publish/unpublish/delete no audit (P-A) |
+| **P0** | None currently open after the dead config page/toggle removals (C-2) |
 | **P1** | Unify the two settings systems / validate-on-save (C-1); confirm before customer-visible publish (legal + whats-new) (P-A); GIS sync observability (P-B); route-guard asymmetry legal/gis — verify vs mount-registry |
 | **P2** | geocoding rate-limit + provider fallback (C-3); standardize bespoke-save validation/feedback (P-C); whats-new magic `?status=` param |
 
 ## Appendix — full findings
 - [CONTROL] (High) `app/services/web_system_config.py:42-72` — `_save_settings`/`_read_settings` persist string-typed, unvalidated, invisible to `resolve_value()`/cache → migrate to settings_spec or validate against spec on save [recommend]
-- [CONTROL] (High) `web_system_config.py:158-188` — Data Retention keys have zero consumers; page inert → wire to cleanup tasks or delete [recommend]
-- [CONTROL] (High) `web_system_config.py:78,97,127,616,818` — PREFERENCE/SUBSCRIBER/PORTAL/CPE/IPV6 largely dead toggles (only force_2fa + selfcare_domain consumed) → audit each; delete inert or implement consumers [recommend]
+- [CONTROL] (High) `web_system_config.py:158-188` — Data Retention keys had zero consumers; page inert → removed from Settings Hub/router [done]
+- [CONTROL] (High) `web_system_config.py:78,97,127,616,818` — PREFERENCE/SUBSCRIBER/PORTAL/CPE/IPV6 largely dead toggles (only force_2fa + selfcare_domain consumed) → Subscriber, IPv6, and CPE pages removed; Portal reduced to consumed domain-routing keys; Preferences reduced to `force_2fa` [done]
 - [CONTROL] (High) `web_system_config.py:647-768` vs `web_admin_dashboard.py:225-247` — Monitoring page edits `*_warn_pct` (no consumer) while evaluator reads `server_health_*`/`network_health_*` spec keys; no disk/load field → collapse to spec keys [recommend]
 - [POLISH] (High) `app/services/legal.py:122-153` + `web_legal.py:225-242` — legal create/update/publish/unpublish/delete emit no audit event → emit audit on publish/unpublish/delete [recommend]
 - [POLISH] (Med) `templates/admin/system/legal/detail.html:179,187` — Publish/Unpublish no confirm (only Delete confirms) → confirm-before-publish/unpublish [recommend]

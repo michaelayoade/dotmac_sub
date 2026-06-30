@@ -73,11 +73,17 @@
                 <svg class="h-5 w-5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
                 Topology Graph
             </h2>
-            <div class="flex items-center gap-3 text-xs">
-                <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-full bg-emerald-500"></span> Normal</span>
-                <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-full bg-amber-500"></span> Warning (70%+)</span>
-                <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-full bg-rose-500"></span> Critical (90%+)</span>
-                <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-full bg-slate-400"></span> Unknown</span>
+            <div class="flex flex-wrap items-center justify-end gap-x-4 gap-y-2 text-xs text-slate-600 dark:text-slate-300">
+                <span class="font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Links</span>
+                <span class="flex items-center gap-1"><span class="h-1 w-5 rounded-full bg-emerald-500"></span> Normal</span>
+                <span class="flex items-center gap-1"><span class="h-1 w-5 rounded-full bg-amber-500"></span> Warning (70%+)</span>
+                <span class="flex items-center gap-1"><span class="h-1 w-5 rounded-full bg-rose-500"></span> Critical (90%+)</span>
+                <span class="flex items-center gap-1"><span class="h-1 w-5 rounded-full bg-slate-400"></span> Unknown</span>
+                <span class="ml-1 font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Nodes</span>
+                <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-full bg-emerald-500"></span> Online</span>
+                <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-full bg-amber-500"></span> Degraded</span>
+                <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-full bg-rose-500"></span> Offline</span>
+                <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-full bg-indigo-500"></span> Maintenance</span>
             </div>
         </div>
         <div id="topologyCanvas" style="height: 550px; position: relative;"></div>

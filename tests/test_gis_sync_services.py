@@ -1,7 +1,9 @@
 """Tests for GIS sync services."""
 
+from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
+from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.gis import GeoLocation, GeoLocationType
 from app.models.network_monitoring import PopSite
 from app.models.subscriber import Address
@@ -93,6 +95,43 @@ class TestSyncResult:
         assert result.created == 5
         assert result.updated == 3
         assert result.skipped == 2
+
+
+def test_record_and_get_last_sync_run(db_session):
+    started_at = datetime(2026, 6, 29, 10, 0, tzinfo=UTC)
+    finished_at = datetime(2026, 6, 29, 10, 0, 5, tzinfo=UTC)
+
+    payload = gis_sync.record_last_sync_run(
+        db_session,
+        status="success",
+        started_at=started_at,
+        finished_at=finished_at,
+        sync_pops=True,
+        sync_addresses=False,
+        deactivate_missing=True,
+        results={"pop_sites": {"created": 1, "updated": 2, "skipped": 3}},
+    )
+
+    assert payload["duration_seconds"] == 5.0
+    stored = gis_sync.get_last_sync_run(db_session)
+    assert stored is not None
+    assert stored["status"] == "success"
+    assert stored["options"]["deactivate_missing"] is True
+    assert stored["results"]["pop_sites"]["created"] == 1
+
+
+def test_get_last_sync_run_ignores_non_json_value(db_session):
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.gis,
+            key=gis_sync.LAST_SYNC_RUN_KEY,
+            value_text="not-json",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    assert gis_sync.get_last_sync_run(db_session) is None
 
 
 # =============================================================================

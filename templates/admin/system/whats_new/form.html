@@ -20,7 +20,7 @@
         <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Manage the content shown in the admin dashboard carousel.</p>
     </div>
 
-    <form method="POST" action="{{ action_url }}" class="space-y-6">
+    <form method="POST" action="{{ action_url }}" class="space-y-6" onsubmit="return confirmWhatsNewVisibilityChange(this);">
         {% include "components/forms/csrf_input.html" %}
 
         <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
@@ -120,4 +120,13 @@
         </div>
     </form>
 </div>
+<script>
+    function confirmWhatsNewVisibilityChange(form) {
+        const status = form.querySelector('[name="status"]')?.value;
+        if (status === 'featured' || status === 'active') {
+            return window.confirm('Publish this slide? It may appear on the admin dashboard immediately.');
+        }
+        return true;
+    }
+</script>
 {% endblock %}

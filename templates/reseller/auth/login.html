@@ -129,7 +129,7 @@
                            id="remember"
                            class="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 dark:border-slate-600 dark:bg-slate-700" />
                     <label for="remember" class="ml-2.5 text-sm text-slate-600 dark:text-slate-400">
-                        Remember me for 30 days
+                        Remember me for {{ remember_duration_label | default('30 days') }}
                     </label>
                 </div>
                 <a href="/reseller/auth/forgot-password" class="text-sm font-medium text-indigo-600 transition-colors hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300">

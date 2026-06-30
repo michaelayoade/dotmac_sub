@@ -1,4 +1,7 @@
+from datetime import UTC, datetime, timedelta
 from http.cookies import SimpleCookie
+from pathlib import Path
+from types import SimpleNamespace
 
 import pyotp
 from cryptography.fernet import Fernet
@@ -42,6 +45,26 @@ def _response_cookies(response) -> dict[str, str]:
         if header.lower() == b"set-cookie":
             jar.load(value.decode())
     return {key: morsel.value for key, morsel in jar.items()}
+
+
+def test_customer_login_template_has_submit_loading_state():
+    template = Path("templates/customer/auth/login.html").read_text()
+
+    assert 'x-data="{ loading: false }"' in template
+    assert 'x-on:submit="loading = true"' in template
+    assert ':disabled="loading"' in template
+    assert "loading ? 'Signing in...' : 'Sign in'" in template
+
+
+def test_customer_mfa_template_has_submit_loading_state():
+    template = Path("templates/customer/auth/mfa.html").read_text()
+
+    assert "x-data=\"{ loading: false, code: '' }\"" in template
+    assert 'x-on:submit="loading = true"' in template
+    assert 'x-model="code"' in template
+    assert ':disabled="loading || code.length < 6"' in template
+    assert "Verification or recovery code" in template
+    assert "loading ? 'Verifying...' : 'Verify'" in template
 
 
 def test_get_current_customer_enriches_module_flags(monkeypatch):
@@ -190,6 +213,66 @@ def test_customer_login_records_local_failure_when_pppoe_fallback_fails(
     assert local_credential.failed_login_attempts == 1
 
 
+def test_customer_login_locked_account_shows_remaining_cooldown(
+    db_session, subscriber, monkeypatch
+):
+    monkeypatch.setattr(
+        web_customer_auth_service.radius_auth,
+        "authenticate",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("radius unavailable")),
+    )
+    local_credential = UserCredential(
+        subscriber_id=subscriber.id,
+        provider=AuthProvider.local,
+        username="100024882",
+        password_hash=hash_password("portal-secret"),
+        is_active=True,
+        failed_login_attempts=5,
+        locked_until=datetime.now(UTC) + timedelta(minutes=10),
+    )
+    db_session.add(local_credential)
+    db_session.commit()
+
+    response = web_customer_auth_service.customer_login_submit(
+        _request(),
+        db_session,
+        "100024882",
+        "portal-secret",
+        False,
+        "/portal/dashboard",
+    )
+
+    assert response.status_code == 401
+    body = response.body.decode()
+    assert "Account locked. Try again in 10 minutes." in body
+
+
+def test_customer_login_radius_throttle_shows_remaining_cooldown(
+    db_session, monkeypatch
+):
+    monkeypatch.setattr(
+        web_customer_auth_service,
+        "allow_operation",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            allowed=False,
+            retry_after_seconds=125,
+        ),
+    )
+
+    response = web_customer_auth_service.customer_login_submit(
+        _request(),
+        db_session,
+        "100024883",
+        "portal-secret",
+        False,
+        "/portal/dashboard",
+    )
+
+    assert response.status_code == 401
+    body = response.body.decode()
+    assert "Account locked. Try again in 3 minutes." in body
+
+
 def test_customer_login_redirects_to_mfa_when_enabled(
     db_session, subscriber, monkeypatch
 ):
@@ -322,6 +405,10 @@ def test_customer_forgot_password_page_renders_form(monkeypatch, db_session):
     body = response.body.decode()
     assert 'action="/portal/auth/forgot-password"' in body
     assert "_csrf_token" in body
+    assert 'x-data="{ loading: false }"' in body
+    assert 'x-on:submit="loading = true"' in body
+    assert ':disabled="loading"' in body
+    assert "loading ? 'Sending...' : 'Send reset link'" in body
 
 
 def test_customer_forgot_password_page_redirects_signed_in(monkeypatch, db_session):

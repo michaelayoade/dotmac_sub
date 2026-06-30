@@ -3,12 +3,103 @@
 **Date:** 2026-06-29
 **Method:** single-agent read-only review of auth/sessions/MFA/login/invite through a
 UX-polish + operator-control lens (**not** a full security review).
-**Status:** audit only. Part of the remaining-module audit series.
+**Status:** remediation in progress via draft PR #519. Part of the remaining-module audit series.
 
 > The agent's verdict: a **narrow security review is warranted** — specifically the
-> MFA recovery-code absence, the per-worker in-memory portal throttle, and the
-> reset-token-in-redirect-URL pattern (`web_auth.py:196`). Those are out of the
-> POLISH/CONTROL scope and listed only as a pointer.
+> per-worker in-memory portal throttle and the reset-token-in-redirect-URL pattern
+> (`web_auth.py:196`). Those are out of the POLISH/CONTROL scope and listed only
+> as a pointer. The MFA recovery-code absence has been resolved in this draft PR.
+
+## Remediation status
+
+**Last updated:** 2026-06-29
+**Tracking PR:** #519 (`audit/auth-sessions-remediation`)
+
+### Resolved in current draft
+
+- The admin MFA challenge page no longer links to the unimplemented
+  `/auth/mfa/recovery` route. The dead recovery-code affordance was replaced with
+  an explicit administrator-reset fallback, and the stale Playwright page helper
+  was removed.
+- Admin credential lockouts, MFA-code lockouts, customer local-account lockouts,
+  and customer portal throttle lockouts now include the remaining cooldown in
+  minutes instead of the generic "try again later" copy.
+- Admin and customer forgot-password forms now disable submit on submission and
+  show a loading spinner/text state, matching the existing reset/login patterns.
+- Customer portal login and MFA forms now have submit loading states, disabled
+  buttons during submission, and MFA code-length gating to match the admin/reseller
+  auth experience.
+- Admin login lockout, admin lockout duration, MFA failure threshold, MFA lockout
+  duration, and admin MFA enforcement are now registered auth-domain settings with
+  the previous hardcoded values preserved as defaults. The system preferences UI
+  now writes the canonical `admin_mfa_required` key while still reading legacy
+  `force_2fa` values.
+- Password reset minimum length is now backed by the registered
+  `password_min_length` auth setting and rendered into the reset form. Admin and
+  reseller login remember-me labels now render their configured remember TTLs
+  instead of hardcoding "30 days".
+- The admin profile now lists active system-user sessions, marks the current
+  session, and provides a self-service "sign out other sessions" action backed by
+  the existing session revocation service.
+- Customer and reseller profile pages now list active portal sessions, mark the
+  current session, and provide a "sign out other sessions" action that preserves
+  the current portal cookie while revoking older sessions.
+- MFA recovery codes are now schema-backed, stored as one-time hashes, shown once
+  after MFA enrollment/replacement, and accepted on the existing MFA challenge for
+  admin, customer, and reseller login flows.
+
+### Still open
+
+- No Auth/Sessions UX-polish/control audit items remain open in this draft PR.
+  The separate security-review pointers noted above remain out of scope for this
+  audit series.
+
+### Verification
+
+- `poetry run pytest tests/test_auth_services.py -q`
+  - Result: `18 passed`
+- `poetry run ruff check tests/test_auth_services.py tests/playwright/pages/auth/mfa_page.py`
+  - Result: passed
+- `poetry run pytest tests/test_auth_flow.py tests/test_web_customer_auth.py -q`
+  - Result: `55 passed`
+- `poetry run ruff check app/services/auth_flow.py app/services/web_customer_auth.py tests/test_auth_flow.py tests/test_web_customer_auth.py`
+  - Result: passed
+- `poetry run pytest tests/test_auth_services.py tests/test_web_customer_auth.py -q`
+  - Result: `31 passed`
+- `poetry run ruff check tests/test_auth_services.py tests/test_web_customer_auth.py`
+  - Result: passed
+- `poetry run pytest tests/test_web_customer_auth.py -q`
+  - Result: `14 passed`
+- `poetry run ruff check tests/test_web_customer_auth.py`
+  - Result: passed
+- `poetry run pytest tests/test_auth_flow.py tests/test_auth_services.py -q`
+  - Result: `68 passed`
+- `poetry run ruff check app/services/auth_flow.py app/services/settings_spec.py app/services/web_system_config.py tests/test_auth_flow.py tests/test_auth_services.py`
+  - Result: passed
+- `poetry run pytest tests/test_auth_flow.py tests/test_auth_services.py tests/test_web_reseller_auth.py -q`
+  - Result: `76 passed`
+- `poetry run ruff check app/services/auth_flow.py app/services/web_auth.py app/services/web_reseller_auth.py app/web/auth/routes.py app/services/settings_spec.py tests/test_auth_flow.py tests/test_auth_services.py tests/test_web_reseller_auth.py`
+  - Result: passed
+- `poetry run pytest tests/test_admin_system_route_guards.py tests/test_auth_flow.py::test_session_manager_handles_system_user_principals tests/test_session_manager_persistence.py -q`
+  - Result: `11 passed`
+- `poetry run ruff check app/services/web_system_profiles.py app/web/admin/system.py tests/test_admin_system_route_guards.py`
+  - Result: passed
+- `poetry run ruff check app/services/session_store.py app/services/customer_portal_session.py app/services/customer_portal.py app/services/reseller_portal.py app/services/web_reseller_routes.py app/web/customer/routes.py app/web/reseller/routes.py tests/test_portal_session_lifecycle.py`
+  - Result: passed
+- `poetry run pytest tests/test_portal_session_lifecycle.py -q`
+  - Result: `10 passed`
+- `poetry run pytest tests/test_web_customer_auth.py tests/test_web_reseller_auth.py -q`
+  - Result: `21 passed`
+- `poetry run pytest tests/test_auth_flow.py::test_mfa_setup_confirm tests/test_auth_flow.py::test_admin_login_mfa_verify_issues_tokens tests/test_auth_flow.py::test_mfa_recovery_code_is_one_time_login_fallback tests/test_auth_flow.py::test_admin_mfa_verify_rejects_wrong_code tests/test_auth_flow.py::test_mfa_verify_locks_after_repeated_wrong_codes -q`
+  - Result: `5 passed`
+- `poetry run pytest tests/test_reseller_portal_phase1b.py::test_reseller_user_mfa_setup_and_confirm tests/test_api_reseller_self_scoped.py::test_mfa_setup_and_confirm_flow -q`
+  - Result: `2 passed`
+- `poetry run pytest tests/test_auth_flow.py tests/test_web_customer_auth.py tests/test_web_reseller_auth.py tests/test_admin_system_route_guards.py -q`
+  - Result: `77 passed`
+- `poetry run pytest tests/test_auth_flow_helpers.py -q`
+  - Result: `42 passed`
+- `poetry run ruff check app/models/auth.py app/models/__init__.py app/services/auth_flow.py app/services/web_auth.py app/web/customer/routes.py app/services/web_reseller_routes.py app/web/admin/system.py tests/test_auth_flow.py tests/test_web_customer_auth.py alembic/versions/186_mfa_recovery_codes.py`
+  - Result: passed
 
 ## What this audit is
 

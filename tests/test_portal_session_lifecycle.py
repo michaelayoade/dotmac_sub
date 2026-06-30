@@ -2,11 +2,24 @@
 absolute cap on sliding refreshes (in-memory fallback store under pytest)."""
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from uuid import uuid4
+
+import pytest
 
 from app.services import customer_portal_session as cps
 from app.services import reseller_portal
 from app.services.session_store import store_session
+
+
+@pytest.fixture(autouse=True)
+def _clear_session_fallbacks():
+    cps._CUSTOMER_SESSIONS.clear()  # noqa: SLF001
+    cps._CUSTOMER_SESSION_INDEX.clear()  # noqa: SLF001
+    cps._CUSTOMER_SESSION_EPOCHS.clear()  # noqa: SLF001
+    reseller_portal._RESELLER_SESSIONS.clear()  # noqa: SLF001
+    reseller_portal._RESELLER_SESSION_INDEX.clear()  # noqa: SLF001
+    reseller_portal._RESELLER_SESSION_EPOCHS.clear()  # noqa: SLF001
 
 
 def test_revoke_customer_sessions_invalidates_existing_tokens():
@@ -71,6 +84,52 @@ def test_customer_refresh_inside_absolute_lifetime_slides():
     assert expires <= created + timedelta(days=30, seconds=5)
 
 
+def test_customer_session_listing_marks_current_session():
+    subscriber_id = uuid4()
+    current = cps.create_customer_session(
+        username="current@example.com",
+        account_id=subscriber_id,
+        subscriber_id=subscriber_id,
+    )
+    other = cps.create_customer_session(
+        username="other@example.com",
+        account_id=subscriber_id,
+        subscriber_id=subscriber_id,
+        remember=True,
+    )
+
+    sessions = cps.list_customer_sessions_for_subscriber(
+        subscriber_id,
+        current_session_token=current,
+    )
+
+    assert {session["token"] for session in sessions} == {current, other}
+    assert sum(1 for session in sessions if session["is_current"]) == 1
+    assert (
+        next(session for session in sessions if session["token"] == other)["remember"]
+        is True
+    )
+
+
+def test_revoke_other_customer_sessions_keeps_current_session():
+    subscriber_id = uuid4()
+    current = cps.create_customer_session(
+        username="current@example.com",
+        account_id=subscriber_id,
+        subscriber_id=subscriber_id,
+    )
+    other = cps.create_customer_session(
+        username="other@example.com",
+        account_id=subscriber_id,
+        subscriber_id=subscriber_id,
+    )
+
+    cps.revoke_other_customer_sessions_for_subscriber(subscriber_id, current)
+
+    assert cps.get_customer_session(current) is not None
+    assert cps.get_customer_session(other) is None
+
+
 def test_revoke_reseller_sessions_invalidates_existing_tokens():
     subscriber_id = str(uuid4())
     token = reseller_portal._create_session(  # noqa: SLF001
@@ -83,3 +142,67 @@ def test_revoke_reseller_sessions_invalidates_existing_tokens():
 
     reseller_portal.revoke_reseller_sessions_for_subscriber(subscriber_id)
     assert reseller_portal._get_session(token) is None  # noqa: SLF001
+
+
+def test_reseller_session_listing_marks_current_session():
+    principal_id = str(uuid4())
+    reseller_id = str(uuid4())
+    current = reseller_portal._create_session(  # noqa: SLF001
+        username="current@example.com",
+        reseller_id=reseller_id,
+        remember=False,
+        reseller_user_id=principal_id,
+    )
+    other = reseller_portal._create_session(  # noqa: SLF001
+        username="other@example.com",
+        reseller_id=reseller_id,
+        remember=True,
+        reseller_user_id=principal_id,
+    )
+
+    sessions = reseller_portal.list_reseller_sessions_for_principal(
+        principal_id,
+        current_session_token=current,
+    )
+
+    assert {session["token"] for session in sessions} == {current, other}
+    assert sum(1 for session in sessions if session["is_current"]) == 1
+    assert (
+        next(session for session in sessions if session["token"] == other)["remember"]
+        is True
+    )
+
+
+def test_revoke_other_reseller_sessions_keeps_current_session():
+    principal_id = str(uuid4())
+    reseller_id = str(uuid4())
+    current = reseller_portal._create_session(  # noqa: SLF001
+        username="current@example.com",
+        reseller_id=reseller_id,
+        remember=False,
+        reseller_user_id=principal_id,
+    )
+    other = reseller_portal._create_session(  # noqa: SLF001
+        username="other@example.com",
+        reseller_id=reseller_id,
+        remember=False,
+        reseller_user_id=principal_id,
+    )
+
+    reseller_portal.revoke_other_reseller_sessions_for_principal(
+        principal_id,
+        current,
+    )
+
+    assert reseller_portal._get_session(current) is not None  # noqa: SLF001
+    assert reseller_portal._get_session(other) is None  # noqa: SLF001
+
+
+def test_profile_templates_include_portal_session_controls():
+    customer_template = Path("templates/customer/profile/index.html").read_text()
+    reseller_template = Path("templates/reseller/profile/index.html").read_text()
+
+    assert "/portal/profile/sessions/sign-out-others" in customer_template
+    assert "/reseller/profile/sessions/sign-out-others" in reseller_template
+    assert "Portal sessions" in customer_template
+    assert "Portal sessions" in reseller_template
