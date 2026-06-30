@@ -17,8 +17,8 @@ from app.web.admin import network_olts_profiles as admin_network_olts_profiles
 from app.web.admin import reports as admin_reports
 from app.web.admin import resellers as admin_resellers
 from app.web.admin import support_automation as admin_support_automation
-from app.web.admin import system_whats_new as admin_system_whats_new
 from app.web.admin import system as admin_system
+from app.web.admin import system_whats_new as admin_system_whats_new
 from app.web.admin import usage as admin_usage
 
 
