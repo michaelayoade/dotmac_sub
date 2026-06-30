@@ -832,6 +832,9 @@ def create_invoice_payment_intent(
             enforce_limits=False,
         )
 
+    customer_email = _resolve_customer_email(db, customer)
+    _require_gateway_email(provider_type, customer_email)
+
     invoice_number = getattr(invoice, "invoice_number", None)
     checkout_metadata = {
         "payment_flow": "invoice_payment",
@@ -881,7 +884,7 @@ def create_invoice_payment_intent(
         "amount": amount,
         "currency": "NGN",
         "invoice_number": invoice_number,
-        "customer_email": _resolve_customer_email(db, customer),
+        "customer_email": customer_email,
         "checkout_metadata": checkout_metadata,
         "charged": False,
         "checkout_url": None,
@@ -1106,6 +1109,13 @@ def _resolve_customer_email(db: Session, customer: dict) -> str:
     return ""
 
 
+def _require_gateway_email(provider_type: str, email: str) -> None:
+    if provider_type != _DIRECT_TRANSFER_PROVIDER and not email:
+        raise ValueError(
+            "A valid customer email address is required before starting card payment."
+        )
+
+
 def get_topup_page(
     db: Session,
     customer: dict,
@@ -1293,6 +1303,9 @@ def create_topup_intent(
     if provider_type == _DIRECT_TRANSFER_PROVIDER:
         return create_direct_transfer_topup_intent(db, customer, requested_amount)
 
+    customer_email = _resolve_customer_email(db, customer)
+    _require_gateway_email(provider_type, customer_email)
+
     _cancel_pending_direct_transfer_intents(db, account_id)
     selected_payment_method_id = str(payment_method_id or "").strip() or None
     selected_payment_method = None
@@ -1368,7 +1381,7 @@ def create_topup_intent(
             paystack.charge_authorization(
                 db,
                 authorization_code=selected_payment_token,
-                email=_resolve_customer_email(db, customer),
+                email=customer_email,
                 amount_kobo=paystack.amount_to_kobo(requested_amount),
                 reference=gateway_context.reference,
                 metadata=checkout_metadata,
