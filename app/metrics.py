@@ -2,9 +2,7 @@ from prometheus_client import REGISTRY, Counter, Histogram
 from prometheus_client.registry import Collector
 
 
-def _gauge_description(
-    name: str, help_text: str, labels: list[str] | None = None
-):  # noqa: ANN202 - prometheus collector protocol
+def _gauge_description(name: str, help_text: str, labels: list[str] | None = None):  # noqa: ANN202 - prometheus collector protocol
     from prometheus_client.core import GaugeMetricFamily
 
     return GaugeMetricFamily(name, help_text, labels=labels)
