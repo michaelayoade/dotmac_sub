@@ -75,7 +75,7 @@ def test_suspended_keeps_credential_and_kicks_once():
     """INV-3 (credential survives suspend, reversible) + INV-5 (CoA once)."""
     suspended = derive_desired_connectivity(SubscriptionStatus.suspended)
     assert suspended.credentials_active is True
-    assert suspended.access_state is AccessState.captive
+    assert suspended.access_state is AccessState.suspended
     assert suspended.kick_live_session is True
 
 
@@ -92,7 +92,7 @@ def test_fraud_hard_reject_is_suspended_not_captive():
     """A fraud lock projects ``suspended`` (Auth-Type Reject), not captive."""
     normal = derive_desired_connectivity(SubscriptionStatus.suspended)
     fraud = derive_desired_connectivity(SubscriptionStatus.suspended, hard_reject=True)
-    assert normal.access_state is AccessState.captive
+    assert normal.access_state is AccessState.suspended
     assert fraud.access_state is AccessState.suspended
 
 
@@ -111,9 +111,9 @@ def test_converge_suspended_returns_suspend_shadow_plan(db_session, catalog_offe
     plan = converge_subscription_connectivity(db_session, str(sub.id), apply=False)
     assert plan["dimension"] == "suspend"
     assert plan["applied"] is False
-    assert plan["desired_access_state"] == "captive"
+    assert plan["desired_access_state"] == "suspended"
     kinds = {a["kind"] for a in plan["actions"]}
-    # access_state None on the row → would set captive; no IP → retention violated.
+    # access_state None on the row -> would set suspended; no IP -> retention violated.
     assert "set_access_state" in kinds
     assert "ip_retention_violated" in kinds
     assert "kick_live_session" in kinds

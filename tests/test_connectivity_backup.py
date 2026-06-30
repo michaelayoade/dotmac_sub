@@ -154,10 +154,8 @@ def test_restore_apply_reverts_local_state(db_session, catalog_offer):
 def test_capture_missing_subscriber_is_safe(db_session):
     import uuid
 
-    # No such subscriber → best-effort capture returns a row with empty state,
-    # never raises.
+    # No such subscriber -> best-effort capture returns None, never raises.
     backup = capture_connectivity_state(
         db_session, uuid.uuid4(), reason="manual", include_radius=False
     )
-    assert backup is not None
-    assert backup.credentials == []
+    assert backup is None

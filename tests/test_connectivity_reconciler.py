@@ -284,7 +284,8 @@ class TestConverge:
         )
         result = _converge(db_session, sub.id, db_path, apply=True)
         db_session.refresh(sub)
-        assert result["reason"] == "not_active"
+        assert result["dimension"] == "suspend"
+        assert result["applied"] is False
         assert sub.ipv4_address == "10.0.0.9"  # untouched
 
 
