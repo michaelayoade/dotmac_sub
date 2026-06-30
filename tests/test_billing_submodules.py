@@ -7,7 +7,7 @@ and billing reporting.
 """
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import cast
 from unittest.mock import patch
@@ -30,7 +30,9 @@ from app.models.billing import (
     PaymentStatus,
     TaxApplication,
 )
+from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscriber import Subscriber
+from app.models.subscription_engine import SettingValueType
 from app.schemas.billing import (
     CollectionAccountCreate,
     CollectionAccountUpdate,
@@ -63,6 +65,8 @@ from app.services.billing._common import (
 )
 from app.services.billing.configuration import _parse_bool, _parse_json
 from app.services.billing.reporting import BillingReporting
+from app.services.settings_cache import SettingsCache
+from app.services.settings_spec import get_spec
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -2018,6 +2022,66 @@ class TestReportingHelpers:
         assert "31_60" in result["buckets"]
         assert "61_90" in result["buckets"]
         assert "90_plus" in result["buckets"]
+
+    def test_ar_aging_excludes_draft_invoices(self, db_session, subscriber):
+        draft = _make_invoice(
+            db_session,
+            subscriber.id,
+            subtotal=Decimal("100.00"),
+            total=Decimal("100.00"),
+            balance_due=Decimal("100.00"),
+            status=InvoiceStatus.draft,
+        )
+        draft.due_at = datetime.now(UTC) - timedelta(days=45)
+        issued = _make_invoice(
+            db_session,
+            subscriber.id,
+            subtotal=Decimal("50.00"),
+            total=Decimal("50.00"),
+            balance_due=Decimal("50.00"),
+            status=InvoiceStatus.issued,
+        )
+        issued.due_at = datetime.now(UTC) - timedelta(days=45)
+        db_session.commit()
+
+        result = BillingReporting.get_ar_aging_buckets(db_session)
+        all_bucketed_invoices = [
+            invoice for invoices in result["buckets"].values() for invoice in invoices
+        ]
+
+        assert draft not in all_bucketed_invoices
+        assert issued in all_bucketed_invoices
+
+    def test_ar_aging_uses_configured_bucket_days(self, db_session, subscriber):
+        spec = get_spec(SettingDomain.billing, "ar_aging_bucket_days")
+        assert spec is not None
+        assert spec.default == "30,60,90"
+
+        db_session.add(
+            DomainSetting(
+                domain=SettingDomain.billing,
+                key="ar_aging_bucket_days",
+                value_type=SettingValueType.string,
+                value_text="10,20,30",
+                is_active=True,
+            )
+        )
+        invoice = _make_invoice(
+            db_session,
+            subscriber.id,
+            subtotal=Decimal("100.00"),
+            total=Decimal("100.00"),
+            balance_due=Decimal("100.00"),
+            status=InvoiceStatus.overdue,
+        )
+        invoice.due_at = datetime.now(UTC) - timedelta(days=15)
+        db_session.commit()
+        SettingsCache.invalidate(SettingDomain.billing.value, "ar_aging_bucket_days")
+
+        result = BillingReporting.get_ar_aging_buckets(db_session)
+
+        assert invoice in result["buckets"]["31_60"]
+        assert invoice not in result["buckets"]["1_30"]
 
 
 # ============================================================================

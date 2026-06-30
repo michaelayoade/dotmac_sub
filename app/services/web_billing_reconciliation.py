@@ -12,6 +12,31 @@ from app.services import web_billing_payments as web_billing_payments_service
 logger = logging.getLogger(__name__)
 
 
+def _currency_code(value: object | None) -> str:
+    code = str(value or "NGN").strip().upper()
+    return code or "NGN"
+
+
+def _format_currency_amount(amount: object, currency: object | None) -> str:
+    return f"{_currency_code(currency)} {Decimal(str(amount or 0)):,.2f}"
+
+
+def _format_currency_groups(amounts: dict[str, Decimal]) -> str:
+    if not amounts:
+        return _format_currency_amount(0, "NGN")
+    return ", ".join(
+        _format_currency_amount(amounts[currency], currency)
+        for currency in sorted(amounts)
+    )
+
+
+def _add_currency_amount(
+    amounts: dict[str, Decimal], *, currency: object | None, amount: object
+) -> None:
+    code = _currency_code(currency)
+    amounts[code] = amounts.get(code, Decimal("0")) + Decimal(str(amount or 0))
+
+
 def _date_start_for_range(date_range: str | None) -> datetime | None:
     now = datetime.now(UTC)
     if date_range == "today":
@@ -33,6 +58,7 @@ def build_reconciliation_data(
     *,
     date_range: str | None,
     handler: str | None,
+    persist_run: bool = False,
 ) -> dict[str, object]:
     history_rows = web_billing_payments_service.list_payment_import_history_filtered(
         db,
@@ -47,33 +73,57 @@ def build_reconciliation_data(
         payment_query = payment_query.filter(Payment.created_at >= start)
     payments = payment_query.order_by(Payment.created_at.desc()).limit(500).all()
 
-    statement_total = sum(
-        Decimal(str(item.get("total_amount", 0) or 0)) for item in history_rows
-    )
+    default_currency = web_billing_payments_service.resolve_default_currency(db)
+    statement_amounts: dict[str, Decimal] = {}
+    for item in history_rows:
+        _add_currency_amount(
+            statement_amounts,
+            currency=item.get("currency") or default_currency,
+            amount=item.get("total_amount", 0),
+        )
+    statement_total = sum(statement_amounts.values(), Decimal("0"))
     statement_rows = sum(int(item.get("row_count", 0) or 0) for item in history_rows)
     imported_rows = sum(int(item.get("matched_count", 0) or 0) for item in history_rows)
     unmatched_rows = sum(
         int(item.get("unmatched_count", 0) or 0) for item in history_rows
     )
-    payment_total = sum(
-        Decimal(str(getattr(item, "amount", 0) or 0)) for item in payments
-    )
+    payment_amounts: dict[str, Decimal] = {}
+    for payment in payments:
+        _add_currency_amount(
+            payment_amounts,
+            currency=getattr(payment, "currency", None) or default_currency,
+            amount=getattr(payment, "amount", 0),
+        )
+    payment_total = sum(payment_amounts.values(), Decimal("0"))
+    difference_amounts = dict(statement_amounts)
+    for currency, amount in payment_amounts.items():
+        difference_amounts[currency] = (
+            difference_amounts.get(currency, Decimal("0")) - amount
+        )
 
-    by_external_id: dict[str, list[Payment]] = {}
+    by_external_id: dict[tuple[str, str], list[Payment]] = {}
     for payment in payments:
         external_id = str(getattr(payment, "external_id", "") or "").strip()
         if not external_id:
             continue
-        by_external_id.setdefault(external_id, []).append(payment)
+        currency = _currency_code(
+            getattr(payment, "currency", None) or default_currency
+        )
+        by_external_id.setdefault((external_id, currency), []).append(payment)
     duplicate_candidates = [
         {
             "external_id": key,
+            "currency": currency,
             "count": len(group),
             "total_amount": float(
                 sum(Decimal(str(getattr(item, "amount", 0) or 0)) for item in group)
             ),
+            "total_display": _format_currency_amount(
+                sum(Decimal(str(getattr(item, "amount", 0) or 0)) for item in group),
+                currency,
+            ),
         }
-        for key, group in by_external_id.items()
+        for (key, currency), group in by_external_id.items()
         if len(group) > 1
     ]
     duplicate_candidates.sort(key=lambda item: item["count"], reverse=True)
@@ -85,54 +135,57 @@ def build_reconciliation_data(
         item for item in history_rows if str(item.get("status")) == "partial"
     ][:25]
 
-    run = BankReconciliationRun(
-        date_range=(date_range or "").strip() or None,
-        handler=(handler or "").strip() or None,
-        statement_rows=statement_rows,
-        imported_rows=imported_rows,
-        unmatched_rows=unmatched_rows,
-        system_payment_count=len(payments),
-        statement_total=statement_total,
-        payment_total=payment_total,
-        difference_total=(statement_total - payment_total),
-    )
-    db.add(run)
-    db.flush()
+    last_run_id = None
+    if persist_run:
+        run = BankReconciliationRun(
+            date_range=(date_range or "").strip() or None,
+            handler=(handler or "").strip() or None,
+            statement_rows=statement_rows,
+            imported_rows=imported_rows,
+            unmatched_rows=unmatched_rows,
+            system_payment_count=len(payments),
+            statement_total=statement_total,
+            payment_total=payment_total,
+            difference_total=(statement_total - payment_total),
+        )
+        db.add(run)
+        db.flush()
+        last_run_id = str(run.id)
 
-    items: list[BankReconciliationItem] = []
-    for row in unmatched_imports:
-        items.append(
-            BankReconciliationItem(
-                run_id=run.id,
-                item_type="unmatched",
-                reference=str(row.get("handler") or ""),
-                file_name=str(row.get("file_name") or ""),
-                count=int(row.get("unmatched_count", 0) or 0),
-                amount=Decimal(str(row.get("total_amount", 0) or 0)),
-                metadata_={
-                    "status": row.get("status"),
-                    "occurred_at": str(row.get("occurred_at") or ""),
-                },
+        items: list[BankReconciliationItem] = []
+        for row in unmatched_imports:
+            items.append(
+                BankReconciliationItem(
+                    run_id=run.id,
+                    item_type="unmatched",
+                    reference=str(row.get("handler") or ""),
+                    file_name=str(row.get("file_name") or ""),
+                    count=int(row.get("unmatched_count", 0) or 0),
+                    amount=Decimal(str(row.get("total_amount", 0) or 0)),
+                    metadata_={
+                        "status": row.get("status"),
+                        "occurred_at": str(row.get("occurred_at") or ""),
+                    },
+                )
             )
-        )
-    for row in duplicate_candidates[:25]:
-        items.append(
-            BankReconciliationItem(
-                run_id=run.id,
-                item_type="duplicate",
-                reference=str(row.get("external_id") or ""),
-                file_name=None,
-                count=int(row.get("count", 0) or 0),
-                amount=Decimal(str(row.get("total_amount", 0) or 0)),
-                metadata_={},
+        for row in duplicate_candidates[:25]:
+            items.append(
+                BankReconciliationItem(
+                    run_id=run.id,
+                    item_type="duplicate",
+                    reference=str(row.get("external_id") or ""),
+                    file_name=None,
+                    count=int(row.get("count", 0) or 0),
+                    amount=Decimal(str(row.get("total_amount", 0) or 0)),
+                    metadata_={"currency": row.get("currency")},
+                )
             )
-        )
-    if items:
-        db.add_all(items)
-    db.commit()
+        if items:
+            db.add_all(items)
+        db.commit()
 
     return {
-        "last_run_id": str(run.id),
+        "last_run_id": last_run_id,
         "date_range": date_range or "",
         "selected_handler": (handler or "").strip() or "",
         "handler_options": [
@@ -150,6 +203,9 @@ def build_reconciliation_data(
             "statement_total": float(statement_total),
             "payment_total": float(payment_total),
             "difference": float(statement_total - payment_total),
+            "statement_display": _format_currency_groups(statement_amounts),
+            "payment_display": _format_currency_groups(payment_amounts),
+            "difference_display": _format_currency_groups(difference_amounts),
         },
         "unmatched_imports": unmatched_imports,
         "partial_imports": partial_imports,

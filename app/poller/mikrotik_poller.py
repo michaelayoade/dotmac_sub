@@ -50,9 +50,10 @@ def _sanitize_exc(exc: BaseException) -> str:
 # customer dashboards display at ~5s granularity; tune via env if needed.
 POLL_INTERVAL_MS = int(os.getenv("BANDWIDTH_POLL_INTERVAL_MS", "5000"))
 # Hard cap on any single device's blocking socket I/O. Without this a silently-
-# dropping router (firewalled/half-open) hangs its executor thread indefinitely;
-# enough of them exhaust the thread pool and stall polling for ALL devices. Both
-# the RouterOS socket_timeout and an asyncio.wait_for guard use this.
+# dropping router (firewalled/half-open) can hang its executor thread
+# indefinitely; enough of them exhaust the thread pool and stall polling for ALL
+# devices. The installed routeros_api version does not support socket timeout
+# kwargs, so asyncio.wait_for provides the async-side guard.
 DEVICE_IO_TIMEOUT_SEC = int(os.getenv("BANDWIDTH_DEVICE_IO_TIMEOUT_SEC", "12"))
 # Bound Redis I/O so a slow/unreachable Redis drops one poll cycle's samples
 # instead of stalling the whole poller (the publish is best-effort telemetry).
@@ -153,9 +154,9 @@ class MikroTikConnection:
         """Establish connection to the device."""
         self._last_attempt = datetime.now(UTC)
         try:
-            # RouterOS API is synchronous, run in executor. socket_timeout bounds
-            # the blocking socket ops; wait_for guarantees the async loop is never
-            # blocked by a hung device even if the executor thread lingers.
+            # RouterOS API is synchronous, run in executor. wait_for guarantees
+            # the async loop is never blocked by a hung device even if the
+            # executor thread lingers.
             loop = asyncio.get_event_loop()
             # TLS-readiness: tag a NAS with mikrotik_api_port:8729 to poll over
             # RouterOS API-SSL (encrypted transport) instead of plaintext 8728.
@@ -175,7 +176,6 @@ class MikroTikConnection:
                         use_ssl=use_ssl,
                         ssl_verify=False,
                         ssl_verify_hostname=False,
-                        socket_timeout=DEVICE_IO_TIMEOUT_SEC,
                     ),
                 ),
                 timeout=DEVICE_IO_TIMEOUT_SEC + 3,

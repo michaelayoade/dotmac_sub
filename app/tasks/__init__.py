@@ -87,14 +87,24 @@ from app.tasks.payment_reconciliation import reconcile_topups
 from app.tasks.profile_sync import (
     execute_due_profile_sync_tasks,
 )
+from app.tasks.projects import reconcile_project_mirror
 from app.tasks.provisioning import (
     reap_stale_provisioning_runs,
     retry_pending_compensation_failures,
     run_bulk_activation_job,
     run_service_migration_job,
 )
+from app.tasks.quotes import reconcile_quote_mirror
 from app.tasks.radius import run_radius_sync_job
 from app.tasks.radius_population import refresh_radius_from_subs
+from app.tasks.referrals import reconcile_referral_mirror
+from app.tasks.router_sync import (
+    capture_scheduled_snapshots,
+    cleanup_idle_tunnels,
+    execute_config_push,
+    sync_all_interfaces,
+    sync_all_system_info,
+)
 from app.tasks.topology_lldp import run_lldp_topology_poll
 from app.tasks.topology_sync import run_topology_reconcile, warm_topology_status
 from app.tasks.tr069 import (
@@ -148,6 +158,7 @@ from app.tasks.wireguard import (
 from app.tasks.wireguard import (
     generate_connection_log_report as wireguard_connection_report,
 )
+from app.tasks.work_orders import reconcile_work_order_mirror
 from app.tasks.workflow import detect_sla_breaches as retired_detect_sla_breaches
 from app.tasks.zabbix_ingestion import (
     dispatch_portal_usage_ingestion,
@@ -267,4 +278,15 @@ __all__ = [
     "execute_due_profile_sync_tasks",
     "warm_monitoring_caches",
     "refresh_monitoring_coverage",
+    # Router config sync/snapshot (keystone) — previously unregistered, so the
+    # scheduled capture never ran. Importing here registers them with the worker.
+    "capture_scheduled_snapshots",
+    "cleanup_idle_tunnels",
+    "execute_config_push",
+    "sync_all_interfaces",
+    "sync_all_system_info",
+    "reconcile_project_mirror",
+    "reconcile_quote_mirror",
+    "reconcile_referral_mirror",
+    "reconcile_work_order_mirror",
 ]

@@ -123,6 +123,18 @@ class ServiceTabScreen extends ConsumerWidget {
             // scroll past the history charts.
             const LiveBandwidthCard(),
             const SizedBox(height: 12),
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.add_location_alt_outlined),
+                title: const Text('Get a quote'),
+                subtitle: const Text(
+                  'Pin a new installation address for an instant estimate',
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => context.push('/quotes'),
+              ),
+            ),
+            const SizedBox(height: 12),
             if (service != null && canBuyData) ...[
               Align(
                 alignment: Alignment.centerLeft,
@@ -138,8 +150,10 @@ class ServiceTabScreen extends ConsumerWidget {
               const SizedBox(height: 12),
             ],
             if (activeBundles.isNotEmpty) ...[
-              Text('Active add-ons',
-                  style: Theme.of(context).textTheme.titleMedium),
+              Text(
+                'Active add-ons',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
               const SizedBox(height: 8),
               for (final a in activeBundles) _ActiveAddonTile(addon: a),
               if (service != null)
@@ -233,9 +247,12 @@ class _ServiceHeader extends StatelessWidget {
             Row(
               children: [
                 Expanded(
-                  child: Text(service.displayName,
-                      style: theme.textTheme.titleMedium
-                          ?.copyWith(fontWeight: FontWeight.w600)),
+                  child: Text(
+                    service.displayName,
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                 ),
                 if (showSwitcher)
                   PopupMenuButton<String>(
@@ -244,18 +261,18 @@ class _ServiceHeader extends StatelessWidget {
                     onSelected: onSwitch,
                     itemBuilder: (_) => [
                       for (final s in services)
-                        PopupMenuItem(
-                          value: s.id,
-                          child: Text(s.displayName),
-                        ),
+                        PopupMenuItem(value: s.id, child: Text(s.displayName)),
                     ],
                   ),
               ],
             ),
             const SizedBox(height: 4),
-            Text(details,
-                style: theme.textTheme.bodySmall
-                    ?.copyWith(color: theme.colorScheme.outline)),
+            Text(
+              details,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
+            ),
             // What the plan provides: provisioned line rate (download/upload).
             if (service.speedSummary != null) ...[
               const SizedBox(height: 6),
@@ -263,9 +280,12 @@ class _ServiceHeader extends StatelessWidget {
                 children: [
                   Icon(Icons.speed, size: 15, color: theme.colorScheme.primary),
                   const SizedBox(width: 5),
-                  Text('Plan speed  ${service.speedSummary}',
-                      style: theme.textTheme.bodyMedium
-                          ?.copyWith(fontWeight: FontWeight.w600)),
+                  Text(
+                    'Plan speed  ${service.speedSummary}',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                 ],
               ),
             ],
@@ -274,15 +294,19 @@ class _ServiceHeader extends StatelessWidget {
             // has no date expiry. Genuine lapses show "Expired".
             if (service.isExpired) ...[
               const SizedBox(height: 4),
-              Text('Expired',
-                  style: theme.textTheme.bodySmall
-                      ?.copyWith(color: theme.colorScheme.error)),
+              Text(
+                'Expired',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.error,
+                ),
+              ),
             ] else if (days != null && days >= 0) ...[
               const SizedBox(height: 4),
               Text(
                 days == 0 ? 'Renews today' : 'Renews in $days days',
-                style: theme.textTheme.bodySmall
-                    ?.copyWith(color: theme.colorScheme.outline),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
               ),
             ],
           ],
@@ -354,9 +378,12 @@ class _FupHeadroomCard extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text('Fair-use allowance', style: theme.textTheme.bodySmall),
-                Text('Unlimited',
-                    style: theme.textTheme.labelMedium
-                        ?.copyWith(color: theme.colorScheme.primary)),
+                Text(
+                  'Unlimited',
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    color: theme.colorScheme.primary,
+                  ),
+                ),
               ],
             ),
             const SizedBox(height: 12),
@@ -386,14 +413,18 @@ class _FupHeadroomCard extends StatelessWidget {
               const SizedBox(height: 8),
               Row(
                 children: [
-                  Icon(Icons.info_outline,
-                      size: 14, color: theme.colorScheme.outline),
+                  Icon(
+                    Icons.info_outline,
+                    size: 14,
+                    color: theme.colorScheme.outline,
+                  ),
                   const SizedBox(width: 4),
                   Expanded(
                     child: Text(
                       fup.policySummary!,
-                      style: theme.textTheme.bodySmall
-                          ?.copyWith(color: theme.colorScheme.outline),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.outline,
+                      ),
                     ),
                   ),
                 ],

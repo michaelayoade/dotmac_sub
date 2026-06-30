@@ -1,0 +1,70 @@
+{% extends "layouts/customer.html" %}
+
+{% block title %}Installation Progress - My Account{% endblock %}
+
+{% block content %}
+<div class="space-y-8">
+    <div>
+        <h1 class="text-3xl font-display font-bold text-stone-900 dark:text-white">Installation Progress</h1>
+        <p class="mt-1 text-base text-stone-500 dark:text-stone-400">Track your installation from survey to activation. For scheduled visits, see <a href="/portal/installations" class="font-semibold text-[var(--color-brand-600)] hover:underline">appointments →</a></p>
+    </div>
+
+    {% set status_styles = {
+        'open': 'bg-stone-100 text-stone-700 dark:bg-stone-700 dark:text-stone-300',
+        'planned': 'bg-stone-100 text-stone-700 dark:bg-stone-700 dark:text-stone-300',
+        'active': 'bg-sky-100 text-sky-800 dark:bg-sky-900/30 dark:text-sky-300',
+        'on_hold': 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300',
+        'completed': 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300',
+        'canceled': 'bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-300'
+    } %}
+
+    {% if tracker.projects %}
+    <div class="space-y-6">
+        {% for p in tracker.projects %}
+        <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-premium dark:border-stone-700 dark:bg-stone-800">
+            <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                    <h2 class="text-lg font-display font-semibold text-stone-900 dark:text-white">{{ p.name }}</h2>
+                    {% if p.customer_address %}<p class="text-sm text-stone-500 dark:text-stone-400">{{ p.customer_address }}</p>{% endif %}
+                </div>
+                <span class="rounded-lg px-2.5 py-1 text-xs font-semibold {{ status_styles.get(p.status, 'bg-stone-100 text-stone-700 dark:bg-stone-700 dark:text-stone-300') }}">{{ p.status | replace('_', ' ') | title }}</span>
+            </div>
+
+            <!-- Progress bar -->
+            <div class="mt-4">
+                <div class="flex items-center justify-between text-sm">
+                    <span class="font-medium text-stone-700 dark:text-stone-300">{{ p.current_stage if p.current_stage else ('Completed' if p.status == 'completed' else 'In progress') }}</span>
+                    <span class="font-semibold text-stone-900 dark:text-white">{{ p.progress_pct }}%</span>
+                </div>
+                <div class="mt-2 h-2.5 w-full overflow-hidden rounded-full bg-stone-100 dark:bg-stone-700">
+                    <div class="h-full rounded-full bg-[var(--color-brand-500)] transition-all" style="width: {{ p.progress_pct }}%"></div>
+                </div>
+            </div>
+
+            <!-- Stage timeline -->
+            {% if p.stages %}
+            <ol class="mt-6 space-y-4">
+                {% for s in p.stages %}
+                <li class="flex items-start gap-3">
+                    <span class="mt-0.5 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full text-xs font-bold
+                        {{ 'bg-emerald-500 text-white' if s.status == 'done' else ('bg-sky-500 text-white' if s.status == 'in_progress' else 'bg-stone-200 text-stone-500 dark:bg-stone-600 dark:text-stone-400') }}">
+                        {% if s.status == 'done' %}&check;{% elif s.status == 'in_progress' %}&bull;{% else %}{{ loop.index }}{% endif %}
+                    </span>
+                    <div class="flex-1">
+                        <p class="text-sm font-medium {{ 'text-stone-900 dark:text-white' if s.status != 'pending' else 'text-stone-500 dark:text-stone-400' }}">{{ s.title }}</p>
+                        {% if s.completed_at %}<p class="text-xs text-stone-400 dark:text-stone-500">Done {{ s.completed_at[:10] }}</p>{% endif %}
+                    </div>
+                </li>
+                {% endfor %}
+            </ol>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="rounded-2xl border border-stone-200 bg-white px-6 py-12 text-center shadow-premium dark:border-stone-700 dark:bg-stone-800">
+        <p class="text-sm text-stone-500 dark:text-stone-400">No installations in progress. Once your order is scheduled, you'll see live progress here.</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

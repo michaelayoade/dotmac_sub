@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/formatters.dart';
 import '../../core/semantic_colors.dart';
+import '../auth/biometric_enrollment_prompt.dart';
 import '../../models/service_status.dart';
 import '../../models/subscription.dart';
 import '../../models/usage.dart';
@@ -233,6 +234,7 @@ class DashboardScreen extends ConsumerWidget {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
+            const BiometricEnrollmentPrompt(),
             const OfflineBanner(),
             _ConnectionBanner(
               session: activeSession,

@@ -473,6 +473,171 @@ class CRMClient:
             session_data["conversation_id"] = identify_data.get("conversation_id")
         return session_data
 
+    def create_portal_session(
+        self,
+        *,
+        crm_subscriber_id: str,
+        actor: str = "subscriber",
+        scopes: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Mint a customer Portal API token (server-to-server, RFC #73).
+
+        The CRM trusts this service JWT to assert the subject, so the client
+        never authenticates to the CRM directly — it presents the returned
+        short-lived, scoped token. Returns {portal_token, expires_at, api_base}.
+        """
+        payload: dict[str, Any] = {
+            "crm_subscriber_id": crm_subscriber_id,
+            "actor": actor,
+            "scopes": list(scopes or []),
+        }
+        data = self._request(
+            "POST", "/api/v1/portal/internal/session", json_data=payload
+        )
+        return data if isinstance(data, dict) else {}
+
+    def _portal_token(
+        self, crm_subscriber_id: str, scopes: list[str], actor: str = "subscriber"
+    ) -> str:
+        minted = self.create_portal_session(
+            crm_subscriber_id=crm_subscriber_id, actor=actor, scopes=scopes
+        )
+        token = str(minted.get("portal_token") or "")
+        if not token:
+            raise CRMClientError("portal token mint returned an empty token")
+        return token
+
+    def get_portal_referrals(self, crm_subscriber_id: str) -> dict[str, Any]:
+        """Read a subscriber's referrals from the CRM Portal API (server-side).
+
+        Mints a scoped portal token then calls the portal API with it (the
+        per-request ``Authorization`` overrides the service token). Used by the
+        local-mirror reconcile, not the customer's own request path.
+        """
+        token = self._portal_token(crm_subscriber_id, ["referrals:read"])
+        data = self._request(
+            "GET",
+            "/api/v1/portal/referrals",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        return data if isinstance(data, dict) else {}
+
+    def get_portal_projects(self, crm_subscriber_id: str) -> dict[str, Any]:
+        """Read a subscriber's projects (with derived stages/progress) from the
+        CRM Portal API (server-side). Used by the local-mirror reconcile."""
+        token = self._portal_token(crm_subscriber_id, ["projects:read"])
+        data = self._request(
+            "GET",
+            "/api/v1/portal/projects",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        return data if isinstance(data, dict) else {}
+
+    def get_portal_work_orders(self, crm_subscriber_id: str) -> dict[str, Any]:
+        """Read a subscriber's work orders (technician, schedule, ETA, status)
+        from the CRM Portal API (server-side). Used by the local-mirror reconcile."""
+        token = self._portal_token(crm_subscriber_id, ["work_orders:read"])
+        data = self._request(
+            "GET",
+            "/api/v1/portal/work-orders",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        return data if isinstance(data, dict) else {}
+
+    def create_portal_referral(
+        self,
+        crm_subscriber_id: str,
+        *,
+        name: str | None = None,
+        email: str | None = None,
+        phone: str | None = None,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        """Refer-a-friend write-through to the CRM Portal API (server-side)."""
+        token = self._portal_token(crm_subscriber_id, ["referrals:write"])
+        payload: dict[str, Any] = {
+            k: v
+            for k, v in {
+                "name": name,
+                "email": email,
+                "phone": phone,
+                "note": note,
+            }.items()
+            if v
+        }
+        data = self._request(
+            "POST",
+            "/api/v1/portal/referrals",
+            json_data=payload,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        return data if isinstance(data, dict) else {}
+
+    def get_portal_quotes(self, crm_subscriber_id: str) -> dict[str, Any]:
+        """Read a subscriber's self-serve quotes (feasibility, estimate, deposit,
+        status) from the CRM Portal API (server-side). Used by the mirror reconcile."""
+        token = self._portal_token(crm_subscriber_id, ["quotes:read"])
+        data = self._request(
+            "GET",
+            "/api/v1/portal/quotes",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        return data if isinstance(data, dict) else {}
+
+    def request_portal_quote(
+        self,
+        crm_subscriber_id: str,
+        *,
+        latitude: float,
+        longitude: float,
+        address: str | None = None,
+        region: str | None = None,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        """Request a map-pinned installation quote (write-through to the CRM
+        Portal API). Returns the created quote payload (feasibility + estimate)."""
+        token = self._portal_token(crm_subscriber_id, ["quotes:write"])
+        payload: dict[str, Any] = {"latitude": latitude, "longitude": longitude}
+        if address:
+            payload["address"] = address
+        if region:
+            payload["region"] = region
+        if note:
+            payload["note"] = note
+        data = self._request(
+            "POST",
+            "/api/v1/portal/quote-request",
+            json_data=payload,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        return data if isinstance(data, dict) else {}
+
+    def accept_portal_quote(
+        self,
+        crm_subscriber_id: str,
+        quote_id: str,
+        *,
+        deposit_reference: str,
+        deposit_amount: str,
+        provider: str | None = None,
+    ) -> dict[str, Any]:
+        """Accept a quote after the deposit is verified (write-through). The CRM
+        records the deposit and triggers the sales-order + install-project."""
+        token = self._portal_token(crm_subscriber_id, ["quotes:write"])
+        payload: dict[str, Any] = {
+            "deposit_reference": deposit_reference,
+            "deposit_amount": deposit_amount,
+        }
+        if provider:
+            payload["provider"] = provider
+        data = self._request(
+            "POST",
+            f"/api/v1/portal/quotes/{quote_id}/accept",
+            json_data=payload,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        return data if isinstance(data, dict) else {}
+
     def list_work_order_notes(self, work_order_id: str) -> list[dict[str, Any]]:
         """List notes for a work order."""
         data = self._cached_get(

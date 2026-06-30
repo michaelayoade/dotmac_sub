@@ -187,7 +187,11 @@ def reseller_create(
     return RedirectResponse(url="/admin/resellers", status_code=303)
 
 
-@router.post("/{reseller_id}", response_class=HTMLResponse)
+@router.post(
+    "/{reseller_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:write"))],
+)
 def reseller_update(
     reseller_id: str,
     request: Request,
@@ -234,7 +238,11 @@ def reseller_detail(
     return templates.TemplateResponse("admin/resellers/detail.html", context)
 
 
-@router.post("/{reseller_id}/users/link", response_class=HTMLResponse)
+@router.post(
+    "/{reseller_id}/users/link",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:write"))],
+)
 def reseller_user_link(
     reseller_id: str,
     request: Request,
@@ -271,7 +279,11 @@ def reseller_user_link(
     )
 
 
-@router.post("/{reseller_id}/users/create", response_class=HTMLResponse)
+@router.post(
+    "/{reseller_id}/users/create",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:write"))],
+)
 def reseller_user_create(
     reseller_id: str,
     request: Request,

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from decimal import Decimal
+from pathlib import Path
+
 from app.models.audit import AuditActorType
 from app.models.billing import Payment, PaymentMethodType
 from app.schemas.audit import AuditEventCreate
@@ -7,6 +10,7 @@ from app.schemas.billing import PaymentMethodCreate
 from app.services import audit as audit_service
 from app.services import billing as billing_service
 from app.services.web_billing_payments import (
+    build_import_result_payload,
     import_payments,
     list_payment_import_history,
     list_payment_import_history_filtered,
@@ -53,6 +57,26 @@ def test_import_payments_respects_pair_inactive_customers_flag(db_session, subsc
     assert imported == 0
     assert len(errors) == 1
     assert "Account not found" in errors[0]
+
+
+def test_import_result_payload_reports_omitted_error_count():
+    errors = [f"Row {idx}: failed" for idx in range(12)]
+
+    payload = build_import_result_payload(imported_count=3, errors=errors)
+
+    assert payload["imported"] == 3
+    assert payload["shown_errors"] == 10
+    assert payload["total_errors"] == 12
+    assert payload["omitted_errors"] == 2
+    assert payload["errors"] == errors[:10]
+
+
+def test_payment_import_template_discloses_truncated_error_sample():
+    template = Path("templates/admin/billing/payment_import.html").read_text()
+
+    assert "Showing " in template
+    assert "omitted_errors" in template
+    assert "more not shown" in template
 
 
 def test_normalize_import_rows_maps_bank_specific_columns():
@@ -157,6 +181,43 @@ def test_create_payment_assigns_saved_payment_method(db_session, subscriber):
     assert payment.payment_method.label == "Cash office"
 
 
+def test_manual_payment_create_replays_same_idempotency_token(db_session, subscriber):
+    result = process_payment_create(
+        db_session,
+        account_id=str(subscriber.id),
+        amount="500",
+        currency="NGN",
+        status="succeeded",
+        invoice_id=None,
+        collection_account_id=None,
+        payment_method_id=None,
+        memo="Cash receipt",
+        idempotency_token="manual-token-1",
+    )
+
+    replay = process_payment_create(
+        db_session,
+        account_id=str(subscriber.id),
+        amount="500",
+        currency="NGN",
+        status="succeeded",
+        invoice_id=None,
+        collection_account_id=None,
+        payment_method_id=None,
+        memo="Cash receipt",
+        idempotency_token="manual-token-1",
+    )
+
+    payment = result["payment"]
+    replayed_payment = replay["payment"]
+    assert replay["idempotent_replay"] is True
+    assert replayed_payment.id == payment.id
+    assert (
+        db_session.query(Payment).filter(Payment.account_id == subscriber.id).count()
+        == 1
+    )
+
+
 def test_list_payment_import_history_reads_audit_metadata(db_session):
     audit_service.audit_events.create(
         db_session,
@@ -189,6 +250,36 @@ def test_list_payment_import_history_reads_audit_metadata(db_session):
     assert first["matched_count"] == 2
     assert first["unmatched_count"] == 1
     assert first["total_amount"] == 1250.0
+    assert first["total_display"] == "NGN 1,250.00"
+
+
+def test_list_payment_import_history_displays_currency_totals(db_session):
+    audit_service.audit_events.create(
+        db_session,
+        AuditEventCreate(
+            actor_type=AuditActorType.system,
+            action="import",
+            entity_type="payment",
+            entity_id="bulk",
+            metadata_={
+                "file_name": "mixed.csv",
+                "handler": "base_csv",
+                "imported": 2,
+                "errors": 0,
+                "total_amount": 150.0,
+                "currency_totals": {"USD": 50.0, "NGN": 100.0},
+            },
+        ),
+    )
+
+    rows = list_payment_import_history(db_session, limit=5)
+
+    assert rows[0]["file_name"] == "mixed.csv"
+    assert rows[0]["currency_totals"] == {
+        "NGN": Decimal("100.0"),
+        "USD": Decimal("50.0"),
+    }
+    assert rows[0]["total_display"] == "NGN 100.00, USD 50.00"
 
 
 def test_list_payment_import_history_filtered_by_status_and_handler(db_session):
