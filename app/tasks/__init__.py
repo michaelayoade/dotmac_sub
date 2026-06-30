@@ -95,6 +95,13 @@ from app.tasks.provisioning import (
 )
 from app.tasks.radius import run_radius_sync_job
 from app.tasks.radius_population import refresh_radius_from_subs
+from app.tasks.router_sync import (
+    capture_scheduled_snapshots,
+    cleanup_idle_tunnels,
+    execute_config_push,
+    sync_all_interfaces,
+    sync_all_system_info,
+)
 from app.tasks.topology_lldp import run_lldp_topology_poll
 from app.tasks.topology_sync import run_topology_reconcile, warm_topology_status
 from app.tasks.tr069 import (
@@ -267,4 +274,11 @@ __all__ = [
     "execute_due_profile_sync_tasks",
     "warm_monitoring_caches",
     "refresh_monitoring_coverage",
+    # Router config sync/snapshot (keystone) — previously unregistered, so the
+    # scheduled capture never ran. Importing here registers them with the worker.
+    "capture_scheduled_snapshots",
+    "cleanup_idle_tunnels",
+    "execute_config_push",
+    "sync_all_interfaces",
+    "sync_all_system_info",
 ]
