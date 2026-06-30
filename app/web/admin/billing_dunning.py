@@ -53,16 +53,16 @@ def _dunning_list_url(
     return "/admin/billing/dunning"
 
 
-def _bulk_action_redirect(action: str, case_ids: str, processed_ids: list[str]):
-    total = len([item for item in case_ids.split(",") if item.strip()])
-    processed = len(processed_ids)
-    skipped = max(0, total - processed)
-    action_label = "paused" if action == "pause" else "resumed"
-    note = f"{processed} dunning case{'s' if processed != 1 else ''} {action_label}."
+def _bulk_action_redirect(
+    action: str,
+    result: web_billing_dunning_service.BulkDunningActionResult,
+):
+    note = result.message(action) if result.processed else None
     warning = None
-    if skipped:
+    if result.failed or result.skipped:
         warning = (
-            f"{skipped} selected dunning case{'s' if skipped != 1 else ''} "
+            f"{result.failed + result.skipped} selected dunning "
+            f"case{'s' if result.failed + result.skipped != 1 else ''} "
             "could not be processed."
         )
     return RedirectResponse(
@@ -168,14 +168,14 @@ def dunning_close(request: Request, case_id: str, db: Session = Depends(get_db))
 def dunning_bulk_pause(
     request: Request, case_ids: str = Form(...), db: Session = Depends(get_db)
 ):
-    processed_ids = web_billing_dunning_service.execute_action_with_audit(
+    result = web_billing_dunning_service.execute_bulk_action_with_audit_result(
         db,
         request=request,
         action="pause",
         actor_id=_actor_id(request),
         case_ids_csv=case_ids,
     )
-    return _bulk_action_redirect("pause", case_ids, processed_ids)
+    return _bulk_action_redirect("pause", result)
 
 
 @router.post(
@@ -185,11 +185,11 @@ def dunning_bulk_pause(
 def dunning_bulk_resume(
     request: Request, case_ids: str = Form(...), db: Session = Depends(get_db)
 ):
-    processed_ids = web_billing_dunning_service.execute_action_with_audit(
+    result = web_billing_dunning_service.execute_bulk_action_with_audit_result(
         db,
         request=request,
         action="resume",
         actor_id=_actor_id(request),
         case_ids_csv=case_ids,
     )
-    return _bulk_action_redirect("resume", case_ids, processed_ids)
+    return _bulk_action_redirect("resume", result)

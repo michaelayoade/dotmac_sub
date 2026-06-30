@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 
+import pytest
+
 from app.models.audit import AuditActorType
 from app.models.billing import (
     BankReconciliationRun,
@@ -22,6 +24,7 @@ from app.services.web_billing_invoices import (
     convert_proforma_to_final,
 )
 from app.services.web_billing_reconciliation import build_reconciliation_data
+from app.services.web_consolidated_billing import record_bulk_payment
 
 
 def test_apply_proforma_form_values_marks_and_cleans():
@@ -139,3 +142,19 @@ def test_reconciliation_builds_unmatched_and_duplicate_views(db_session, subscri
     assert state["duplicate_candidates"][0]["external_id"] == "TRX-1"
     assert state["duplicate_candidates"][0]["total_display"] == "NGN 220.00"
     assert db_session.query(BankReconciliationRun).count() == 0
+
+
+def test_consolidated_bulk_payment_rejects_bad_amount_before_create(db_session):
+    with pytest.raises(ValueError, match="Amount must be a valid number"):
+        record_bulk_payment(
+            db_session,
+            billing_account_id="00000000-0000-0000-0000-000000000000",
+            amount="abc",
+        )
+
+    with pytest.raises(ValueError, match="Amount must be greater than 0"):
+        record_bulk_payment(
+            db_session,
+            billing_account_id="00000000-0000-0000-0000-000000000000",
+            amount="-5",
+        )
