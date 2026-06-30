@@ -584,8 +584,9 @@ def test_web_mfa_enroll_confirm_creates_admin_session(db_session, monkeypatch):
         "/admin/system",
     )
 
-    assert valid_response.status_code == 303
-    assert valid_response.headers.get("location") == "/admin/system"
+    assert valid_response.status_code == 200
+    assert valid_response.context["continue_url"] == "/admin/system"
+    assert len(valid_response.context["recovery_codes"]) == 10
     cookies = _response_cookies(valid_response)
     assert "session_token" in cookies
     assert web_auth_service.MFA_ENROLLMENT_COOKIE in cookies
