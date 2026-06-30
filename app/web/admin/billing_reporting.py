@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models.billing import TaxRate
 from app.services import billing as billing_service
+from app.services import web_billing_health as web_billing_health_service
 from app.services import web_billing_ledger as web_billing_ledger_service
 from app.services import web_billing_overview as web_billing_overview_service
 from app.services import web_billing_tax_rates as web_billing_tax_rates_service
@@ -51,6 +52,28 @@ def _tax_rate_audit_items(db: Session, limit: int = 5) -> list[dict]:
     except Exception:
         db.rollback()
         return []
+
+
+@router.get(
+    "/health",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:ledger:read"))],
+)
+def billing_health(request: Request, db: Session = Depends(get_db)):
+    state = web_billing_health_service.build_billing_health_data(db)
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    return templates.TemplateResponse(
+        "admin/billing/health.html",
+        {
+            "request": request,
+            **state,
+            "active_page": "billing-health",
+            "active_menu": "billing",
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+        },
+    )
 
 
 @router.get(

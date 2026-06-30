@@ -6,12 +6,15 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.models.billing import BankAccount, PaymentMethod
 from app.models.catalog import AccessCredential, NasDevice
 from app.models.domain_settings import DomainSetting
+from app.models.integration_hook import (
+    SECRET_AUTH_CONFIG_KEYS as _INTEGRATION_HOOK_SECRET_KEYS,
+)
 from app.models.integration_hook import IntegrationHook
 from app.models.network import OLTDevice, OntProfileWanService, OntUnit
 from app.models.network_monitoring import NetworkDevice
@@ -29,9 +32,6 @@ from app.services.settings_cache import SettingsCache
 
 logger = logging.getLogger(__name__)
 
-_INTEGRATION_HOOK_SECRET_KEYS = frozenset(
-    {"token", "password", "secret", "api_key", "access_token", "refresh_token"}
-)
 _CREDENTIAL_KEY_SECRET_PATH = "settings/auth"
 _CREDENTIAL_KEY_SECRET_FIELD = "credential_encryption_key"
 _LEGACY_CREDENTIAL_KEY_SECRET_PATH = "auth"
@@ -278,6 +278,41 @@ def _rotate_integration_hooks(
     return updated_records, updated_values
 
 
+def _rotate_connector_auth_config(
+    db: Session, *, old_key: str, new_key: str
+) -> tuple[int, int]:
+    """Rotate ``ConnectorConfig.auth_config`` (a whole-blob EncryptedJSON column).
+
+    The column is TEXT, so the raw stored value is a plain ``enc:``/``plain:`` (or
+    legacy plaintext) string on every dialect. We read/write it via straight SQL —
+    not the ORM — so the EncryptedJSON type's ambient-key encode/decode never runs
+    and we control the old/new keys explicitly. Legacy plaintext blobs are encrypted
+    in passing (``_rotate_value`` encrypts non-``enc:`` input with the new key).
+    """
+    updated_records = 0
+    updated_values = 0
+    rows = db.execute(
+        text(
+            "SELECT id, auth_config FROM connector_configs "
+            "WHERE auth_config IS NOT NULL"
+        )
+    ).all()
+    for row in rows:
+        raw = row.auth_config
+        if not isinstance(raw, str) or not raw:
+            continue
+        rotated, changed = _rotate_value(raw, old_key=old_key, new_key=new_key)
+        if not changed:
+            continue
+        db.execute(
+            text("UPDATE connector_configs SET auth_config = :v WHERE id = :id"),
+            {"v": rotated, "id": row.id},
+        )
+        updated_records += 1
+        updated_values += 1
+    return updated_records, updated_values
+
+
 def rotate_credential_encryption_material(
     db: Session,
     *,
@@ -309,6 +344,12 @@ def rotate_credential_encryption_material(
     updated_values += values
 
     records, values = _rotate_integration_hooks(db, old_key=old_key, new_key=new_key)
+    updated_records += records
+    updated_values += values
+
+    records, values = _rotate_connector_auth_config(
+        db, old_key=old_key, new_key=new_key
+    )
     updated_records += records
     updated_values += values
 

@@ -196,3 +196,47 @@ def test_live_audit_detects_missing_wan_profile_zero(monkeypatch, db_session) ->
     assert audit.observed["required_wan_config_profile_ids"] == [0]
     assert audit.observed["missing_wan_config_profile_ids"] == [0]
     assert "missing WAN config profile(s): 0" in audit.errors[-1]
+
+
+def test_live_audit_allows_missing_wan_profile_zero_when_enabled(
+    monkeypatch, db_session
+) -> None:
+    olt = OLTDevice(
+        name="Live Audit OLT",
+        config_pack={
+            "tr069_olt_profile_id": 2,
+            "wan_config_profile_id": 0,
+            "allow_zero_wan_config_profile_id": True,
+        },
+        supports_ont_wan_config=True,
+        wan_provisioning_mode="omci_wan_config",
+    )
+    db_session.add(olt)
+    db_session.flush()
+
+    monkeypatch.setattr(
+        "app.services.network.olt_config_pack_live_audit.get_tr069_server_profiles",
+        lambda _olt: (
+            True,
+            "ok",
+            [SimpleNamespace(profile_id=2, name="ACS", acs_url="")],
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_config_pack_live_audit.get_dba_profiles",
+        lambda _olt: (True, "ok", []),
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_config_pack_live_audit.get_traffic_tables",
+        lambda _olt: (True, "ok", []),
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_config_pack_live_audit.get_wan_profiles",
+        lambda _olt: (True, "ok", [SimpleNamespace(profile_id=5)]),
+    )
+
+    audit = audit_olt_config_pack_live(db_session, str(olt.id))
+
+    assert audit.is_valid is True
+    assert audit.observed["required_wan_config_profile_ids"] == [0]
+    assert audit.observed["missing_wan_config_profile_ids"] == []

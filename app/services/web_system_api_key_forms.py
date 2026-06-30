@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy.orm import Session
 
 from app.models.auth import ApiKey
-from app.services.auth_flow import hash_password
+from app.services.auth import hash_api_key
 from app.services.common import coerce_uuid
 
 logger = logging.getLogger(__name__)
@@ -20,16 +20,33 @@ def get_api_key_new_form_context() -> dict:
     return {"error": None}
 
 
+def parse_scopes(raw: str | None) -> list[str]:
+    """Parse the comma/space/newline-separated scopes field into a clean list."""
+    if not raw:
+        return []
+    tokens = raw.replace(",", " ").split()
+    seen: list[str] = []
+    for token in tokens:
+        token = token.strip()
+        if token and token not in seen:
+            seen.append(token)
+    return seen
+
+
 def create_api_key(
     db: Session,
     *,
     subscriber_id: str,
     label: str,
     expires_in: str | None,
+    scopes: list[str] | None = None,
 ) -> str:
     """Create API key and return raw secret once for display."""
     raw_key = secrets.token_urlsafe(32)
-    key_hash = hash_password(raw_key)
+    # Must match the verification path (auth_dependencies.require_audit_auth /
+    # ApiKeys.generate), which looks keys up by sha256 hash_api_key. Using bcrypt
+    # here produced keys that could never authenticate.
+    key_hash = hash_api_key(raw_key)
 
     expires_at = None
     if expires_in:
@@ -40,6 +57,7 @@ def create_api_key(
         subscriber_id=coerce_uuid(subscriber_id),
         label=label,
         key_hash=key_hash,
+        scopes=scopes or [],
         is_active=True,
         expires_at=expires_at,
     )

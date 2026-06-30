@@ -16,6 +16,7 @@ class TokenStorage {
   static const _kAccess = 'access_token';
   static const _kRefresh = 'refresh_token';
   static const _kBiometric = 'biometric_lock_enabled';
+  static const _kBiometricPromptSeen = 'biometric_prompt_seen';
   static const _kThemeMode = 'theme_mode';
   static const _kProfile = 'cached_profile';
   static const _kDeviceId = 'device_id';
@@ -40,6 +41,15 @@ class TokenStorage {
 
   Future<bool> isBiometricEnabled() async =>
       (await _storage.read(key: _kBiometric)) == 'true';
+
+  /// Whether we've already offered biometric sign-in enrollment once on this
+  /// device (so the post-login prompt asks at most once). Device-level — kept
+  /// out of [clear] so logging out/in doesn't nag a user who declined.
+  Future<void> setBiometricPromptSeen() =>
+      _storage.write(key: _kBiometricPromptSeen, value: 'true');
+
+  Future<bool> biometricPromptSeen() async =>
+      (await _storage.read(key: _kBiometricPromptSeen)) == 'true';
 
   /// Theme preference ('system' | 'light' | 'dark'). A device setting — kept out
   /// of [clear] so it survives logout.

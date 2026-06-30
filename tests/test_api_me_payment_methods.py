@@ -8,10 +8,15 @@ from __future__ import annotations
 
 import pytest
 
+import app.services.flutterwave as flutterwave
 import app.services.paystack as paystack
+from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.subscription_engine import SettingValueType
 from app.schemas.billing import PaymentMethodCreate
 from app.services import billing as billing_service
 from app.services import customer_portal_flow_payment_methods as cards
+from app.services.settings_cache import SettingsCache
+from app.services.settings_spec import get_spec
 
 # --- Paystack charge_authorization ----------------------------------------
 
@@ -29,11 +34,25 @@ class _FakeResp:
 
 def test_charge_authorization_posts_and_returns_data(monkeypatch, db_session):
     monkeypatch.setattr(paystack, "_get_secret_key", lambda db=None: "sk_test")
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.billing,
+            key="payment_gateway_timeout_seconds",
+            value_type=SettingValueType.integer,
+            value_text="12",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    SettingsCache.invalidate(
+        SettingDomain.billing.value, "payment_gateway_timeout_seconds"
+    )
     captured = {}
 
     def fake_post(url, json=None, headers=None, timeout=None):
         captured["url"] = url
         captured["json"] = json
+        captured["timeout"] = timeout
         return _FakeResp(
             {"status": True, "data": {"status": "success", "reference": "R1"}}
         )
@@ -51,6 +70,52 @@ def test_charge_authorization_posts_and_returns_data(monkeypatch, db_session):
     assert captured["url"].endswith("/transaction/charge_authorization")
     assert captured["json"]["authorization_code"] == "AUTH_x"
     assert captured["json"]["amount"] == 500000
+    assert captured["timeout"] == 12
+
+
+def test_payment_gateway_timeout_setting_specs_registered():
+    spec = get_spec(SettingDomain.billing, "payment_gateway_timeout_seconds")
+    assert spec is not None
+    assert spec.default == 30
+    assert spec.min_value == 1
+    assert spec.max_value == 120
+
+
+def test_flutterwave_uses_configured_gateway_timeout(monkeypatch, db_session):
+    monkeypatch.setattr(flutterwave, "_get_secret_key", lambda db=None: "flw_sk")
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.billing,
+            key="payment_gateway_timeout_seconds",
+            value_type=SettingValueType.integer,
+            value_text="9",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    SettingsCache.invalidate(
+        SettingDomain.billing.value, "payment_gateway_timeout_seconds"
+    )
+    captured = {}
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        captured["url"] = url
+        captured["timeout"] = timeout
+        return _FakeResp({"status": "success", "data": {"link": "https://pay.test"}})
+
+    monkeypatch.setattr(flutterwave.httpx, "post", fake_post)
+
+    data = flutterwave.initialize_transaction(
+        db_session,
+        email="a@b.c",
+        amount=5000,
+        reference="FLW-R1",
+        redirect_url="https://dotmac.test/return",
+    )
+
+    assert data["link"] == "https://pay.test"
+    assert captured["url"].endswith("/payments")
+    assert captured["timeout"] == 9
 
 
 def test_charge_authorization_raises_on_api_failure(monkeypatch, db_session):

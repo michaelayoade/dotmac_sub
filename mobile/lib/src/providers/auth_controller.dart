@@ -281,6 +281,13 @@ class AuthController extends StateNotifier<AuthState> {
 
   Future<bool> isBiometricLockEnabled() => _storage.isBiometricEnabled();
 
+  /// One-time post-login enrollment prompt bookkeeping (see
+  /// BiometricEnrollmentPrompt): offer "Sign in with Face ID/fingerprint" at
+  /// most once per device.
+  Future<bool> biometricPromptSeen() => _storage.biometricPromptSeen();
+
+  Future<void> markBiometricPromptSeen() => _storage.setBiometricPromptSeen();
+
   /// Turn the lock on. Requires a successful biometric check first so the user
   /// proves they can satisfy the lock before we enable it. Returns false if
   /// unavailable or the check was cancelled/failed.

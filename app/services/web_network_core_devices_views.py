@@ -3234,6 +3234,19 @@ def consolidated_page_data(
         for ont in onts
         if getattr(ont, "id", None)
     }
+    from app.services.device_operational_status import derive_ont_operational_status
+
+    signal_data: dict[str, dict[str, str]] = {}
+    for ont in onts:
+        ont_id = getattr(ont, "id", None)
+        if ont_id is None:
+            continue
+        operational = derive_ont_operational_status(ont)
+        signal_data[str(ont_id)] = {
+            "operational": operational.status,
+            "operational_label": operational.label,
+            "operational_reason": operational.reason,
+        }
     return {
         "tab": tab,
         "search": search or "",
@@ -3243,6 +3256,7 @@ def consolidated_page_data(
         "olt_stats": olt_stats,
         "onts": onts,
         "serial_display_by_ont_id": serial_display_by_ont_id,
+        "signal_data": signal_data,
         "cpes": cpes,
     }
 

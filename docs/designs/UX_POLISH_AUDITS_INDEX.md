@@ -30,11 +30,13 @@ a per-cluster appendix of every finding (`file:line` + recommend/defer).
 | Support / tickets | `SUPPORT_UX_POLISH_AUDIT.md` |
 | Dashboards / reports / alerts | `REPORTS_DASHBOARDS_UX_POLISH_AUDIT.md` |
 | Integrations & webhooks | `INTEGRATIONS_WEBHOOKS_UX_POLISH_AUDIT.md` |
+| App integrations (connector lifecycle + API keys) | `APP_INTEGRATIONS_UX_POLISH_AUDIT.md` |
 | System / config / legal / GIS | `SYSTEM_CONFIG_UX_POLISH_AUDIT.md` |
 | VAS / wallet / bill-payments | `VAS_WALLET_UX_POLISH_AUDIT.md` |
 | Auth / sessions / MFA | `AUTH_SESSIONS_UX_POLISH_AUDIT.md` |
 
-(First three were delivered in an earlier PR; the rest in this series.)
+(Networking/billing/catalog landed first (#511); the next ten in #512; app
+integrations in a follow-up PR.)
 
 ## Systemic patterns (recur across nearly every domain)
 
@@ -90,11 +92,18 @@ Surfaced by the polish pass but they're real bugs, not cosmetics:
 - CRM: two schedulers can double-run the same pull; webhook overwrites identity with
   no audit.
 - Reseller: VAS page **500s on render** (`'%,.2f'|format`).
+- App integrations: **admin-issued API keys can't authenticate** (bcrypt-hashed on
+  create vs sha256 on verify); a **disabled job still runs** on manual trigger.
 
 ## Out-of-scope flags (recommend a dedicated security review)
 
 Route-guard asymmetries (mutating routes lacking `require_permission`) in
-**integrations** (incl. `/hooks/{id}/test` → `subprocess.run`), **legal**, **gis**,
-and **catalog_settings**; the auth MFA-recovery absence + per-worker in-memory portal
-throttle + reset-token-in-redirect-URL. Verify against the mount-registry RBAC layer
-first; the asymmetry itself is the finding.
+**integrations** (incl. `/hooks/{id}/test` → `subprocess.run`, and the connector
+lifecycle: `/connectors`, `/installed/bulk|relay|uninstall`, `/register`,
+`/targets`, `/jobs`, **`/providers`** = payment-provider create), **API keys**
+(`api_key_create`/`revoke`), **legal**, **gis**, and **catalog_settings**; plus
+**plaintext connector secrets at rest** (`connector.auth_config`), the API-key
+**one-time secret leaked via URL param**, the **absent API-key scopes model**, and
+the auth MFA-recovery absence + per-worker in-memory portal throttle +
+reset-token-in-redirect-URL. Verify against the mount-registry RBAC layer first; the
+asymmetry itself is the finding.
