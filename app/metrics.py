@@ -1,6 +1,15 @@
 from prometheus_client import REGISTRY, Counter, Histogram
 from prometheus_client.registry import Collector
 
+
+def _gauge_description(
+    name: str, help_text: str, labels: list[str] | None = None
+):  # noqa: ANN202 - prometheus collector protocol
+    from prometheus_client.core import GaugeMetricFamily
+
+    return GaugeMetricFamily(name, help_text, labels=labels)
+
+
 REQUEST_COUNT = Counter(
     "http_requests_total",
     "Total HTTP requests",
@@ -65,6 +74,17 @@ class _SuspensionAuditCollector(Collector):
     defeated by a shared credential (kind=mixed_status_subscribers).
     """
 
+    def describe(self):  # noqa: ANN201 - prometheus collector protocol
+        yield _gauge_description(
+            "radius_suspension_audit_leaks",
+            "Suspension-enforcement audit leak count by class",
+            labels=["kind"],
+        )
+        yield _gauge_description(
+            "radius_suspension_audit_age_seconds",
+            "Seconds since the last completed suspension audit",
+        )
+
     def collect(self):  # noqa: ANN201 - prometheus collector protocol
         from prometheus_client.core import GaugeMetricFamily
 
@@ -119,6 +139,21 @@ class _IpConsistencyAuditCollector(Collector):
     structural risk behind silent partial desync. kind=assignment_missing is
     the one to watch: the address is backed only by the subscription column.
     """
+
+    def describe(self):  # noqa: ANN201 - prometheus collector protocol
+        yield _gauge_description(
+            "radius_ip_consistency_drift",
+            "Active-subscriber IPv4 drift count by class",
+            labels=["kind"],
+        )
+        yield _gauge_description(
+            "radius_ip_consistency_population",
+            "Active subscriptions expected to carry a pinned IPv4",
+        )
+        yield _gauge_description(
+            "radius_ip_consistency_audit_age_seconds",
+            "Seconds since the last completed IP consistency audit",
+        )
 
     def collect(self):  # noqa: ANN201 - prometheus collector protocol
         from prometheus_client.core import GaugeMetricFamily
@@ -177,6 +212,60 @@ class _BillingHealthCollector(Collector):
     billing_paid_invoices_with_balance > 0; billing_invoice_scan_ratio low;
     billing_payment_volume_collapsed == 1.
     """
+
+    def describe(self):  # noqa: ANN201 - prometheus collector protocol
+        yield _gauge_description(
+            "billing_paid_invoices_with_balance",
+            "Invoices status=paid with non-zero balance_due (AR-integrity defect)",
+        )
+        yield _gauge_description(
+            "billing_invoice_last_scanned",
+            "subscriptions_scanned of the most recent billing run",
+        )
+        yield _gauge_description(
+            "billing_active_subscriptions",
+            "Active subscriptions (invoice-cycle eligibility denominator)",
+        )
+        yield _gauge_description(
+            "billing_invoice_scan_ratio",
+            "last_scanned / active_subscriptions (low = cohort silently skipped)",
+        )
+        yield _gauge_description(
+            "billing_payments_succeeded_24h",
+            "Succeeded payments in the last 24h",
+        )
+        yield _gauge_description(
+            "billing_payments_succeeded_7d_daily_avg",
+            "Trailing 7-day daily average of succeeded payments (baseline)",
+        )
+        yield _gauge_description(
+            "billing_payment_volume_ratio",
+            "last-24h payments / 7-day daily average (collapse = intake broke)",
+        )
+        yield _gauge_description(
+            "billing_payment_volume_collapsed",
+            "1 if last-24h payment volume collapsed vs the 7-day baseline",
+        )
+        yield _gauge_description(
+            "billing_enforcement_covered_but_locked",
+            "Accounts under a billing lock whose ledger balance is >= 0 "
+            "(wrongful-suspension drift; should be 0)",
+        )
+        yield _gauge_description(
+            "billing_runner_heartbeat_stale",
+            "1 if an enabled critical runner has no fresh success heartbeat",
+            labels=["task"],
+        )
+        yield _gauge_description(
+            "billing_runner_heartbeat_age_seconds",
+            "Seconds since a critical runner last succeeded",
+            labels=["task"],
+        )
+        yield _gauge_description(
+            "billing_unbilled_active_subscriptions",
+            "Active subscriptions that no enabled billing path covers",
+            labels=["reason"],
+        )
 
     def collect(self):  # noqa: ANN201 - prometheus collector protocol
         from prometheus_client.core import GaugeMetricFamily
@@ -290,6 +379,21 @@ class _ConnectivityShadowCollector(Collector):
     to sole-writer.
     """
 
+    def describe(self):  # noqa: ANN201 - prometheus collector protocol
+        yield _gauge_description(
+            "connectivity_shadow_drift",
+            "Subscribers whose connectivity dimension disagrees with desired",
+            labels=["dimension"],
+        )
+        yield _gauge_description(
+            "connectivity_shadow_population",
+            "Subscribers swept by the connectivity shadow audit",
+        )
+        yield _gauge_description(
+            "connectivity_shadow_audit_age_seconds",
+            "Seconds since the last completed connectivity shadow audit",
+        )
+
     def collect(self):  # noqa: ANN201 - prometheus collector protocol
         from prometheus_client.core import GaugeMetricFamily
 
@@ -350,6 +454,28 @@ class _PollerHealthCollector(Collector):
     key liveness signal: if the poller dies it grows unbounded (alert on it);
     ``bandwidth_poller_devices_failing`` surfaces silently-broken routers.
     """
+
+    def describe(self):  # noqa: ANN201 - prometheus collector protocol
+        yield _gauge_description(
+            "bandwidth_poller_devices_total",
+            "MikroTik devices in the poller pool",
+        )
+        yield _gauge_description(
+            "bandwidth_poller_devices_ok",
+            "Devices polled without recent failures",
+        )
+        yield _gauge_description(
+            "bandwidth_poller_devices_failing",
+            "Devices in failure backoff (silently broken)",
+        )
+        yield _gauge_description(
+            "bandwidth_poller_cycle_seconds",
+            "Duration of the poller's last completed cycle",
+        )
+        yield _gauge_description(
+            "bandwidth_poller_last_cycle_age_seconds",
+            "Seconds since the poller's last completed cycle (liveness)",
+        )
 
     def collect(self):  # noqa: ANN201 - prometheus collector protocol
         from prometheus_client.core import GaugeMetricFamily
