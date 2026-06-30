@@ -29,6 +29,7 @@ import '../features/home/splash_screen.dart';
 import '../features/reseller/reseller_account_screen.dart';
 import '../features/reseller/reseller_accounts_screen.dart';
 import '../features/reseller/reseller_billing_screen.dart';
+import '../features/reseller/reseller_crm_screen.dart';
 import '../features/reseller/reseller_fiber_map_screen.dart';
 import '../features/reseller/reseller_vas_screen.dart';
 import '../features/reseller/reseller_home_screen.dart';
@@ -39,6 +40,8 @@ import '../features/reseller/reseller_service_requests_screen.dart';
 import '../features/service/add_ons_screen.dart';
 import '../features/service/change_plan_screen.dart';
 import '../features/service/data_bundle_screen.dart';
+import '../features/service/quote_request_screen.dart';
+import '../features/service/quotes_screen.dart';
 import '../features/service/service_detail_screen.dart';
 import '../features/service/service_route.dart';
 import '../features/settings/settings_screen.dart';
@@ -159,6 +162,12 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (_, state) =>
             PaymentWebViewScreen(args: state.extra as CheckoutArgs),
       ),
+      // Self-serve installation quotes (map-pin → estimate → pay deposit).
+      GoRoute(path: '/quotes', builder: (_, __) => const QuotesScreen()),
+      GoRoute(
+        path: '/quotes/request',
+        builder: (_, __) => const QuoteRequestScreen(),
+      ),
       // Reseller portal — a standalone landing (resellers manage many customer
       // accounts), outside the customer bottom-nav shell.
       GoRoute(
@@ -188,6 +197,10 @@ final routerProvider = Provider<GoRouter>((ref) {
           GoRoute(
             path: 'service-requests',
             builder: (_, __) => const ResellerServiceRequestsScreen(),
+          ),
+          GoRoute(
+            path: 'quotes',
+            builder: (_, __) => const ResellerCrmScreen(),
           ),
           GoRoute(
             path: 'profile',

@@ -6,11 +6,19 @@ import logging
 from uuid import UUID
 
 from app.models.billing import CollectionAccountType
+from app.models.domain_settings import SettingDomain
 from app.schemas.billing import CollectionAccountUpdate
 from app.services import billing as billing_service
+from app.services import settings_spec
 from app.services.billing import configuration as billing_config_service
 
 logger = logging.getLogger(__name__)
+
+
+def _default_currency(db) -> str:
+    value = settings_spec.resolve_value(db, SettingDomain.billing, "default_currency")
+    code = str(value or "NGN").strip().upper()
+    return code or "NGN"
 
 
 def list_data(db, *, show_inactive: bool) -> dict[str, object]:
@@ -26,6 +34,7 @@ def list_data(db, *, show_inactive: bool) -> dict[str, object]:
         "accounts": accounts,
         "account_types": [item.value for item in CollectionAccountType],
         "show_inactive": show_inactive,
+        "default_currency": _default_currency(db),
     }
 
 
@@ -36,6 +45,7 @@ def edit_data(db, *, account_id: str) -> dict[str, object] | None:
     return {
         "account": account,
         "account_types": [item.value for item in CollectionAccountType],
+        "default_currency": _default_currency(db),
     }
 
 

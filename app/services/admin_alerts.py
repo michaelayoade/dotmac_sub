@@ -5,8 +5,11 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from decimal import Decimal
+from enum import Enum
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
@@ -80,6 +83,36 @@ def run_infrastructure_alert_evaluation(db: Session) -> dict[str, int]:
     }
 
 
+def _json_safe(value: Any) -> Any:
+    """Coerce a value into something ``json.dumps`` can serialize.
+
+    ``AdminAlert.details`` is a plain JSON column, but finding builders often
+    drop raw datetimes into it (e.g. a scheduled task's ``last_success`` from
+    ``_build_task_activity``), plus the occasional Decimal/UUID/Enum. Without
+    this the entire alert-evaluation task fails on flush with
+    "Object of type datetime is not JSON serializable" — every infrastructure
+    alert silently stops syncing. Sanitizing here, at the single sink where
+    details is persisted, covers all current and future finding sources.
+    """
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, (str, int, float)):
+        return value
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, Enum):
+        return _json_safe(value.value)
+    if isinstance(value, UUID):
+        return str(value)
+    return str(value)
+
+
 def sync_alert(db: Session, finding: AlertFinding) -> str:
     now = datetime.now(UTC)
     alert = (
@@ -96,7 +129,7 @@ def sync_alert(db: Session, finding: AlertFinding) -> str:
             status=AlertStatus.open,
             title=finding.title,
             summary=finding.summary,
-            details=dict(finding.details),
+            details=_json_safe(finding.details),
             target_url=finding.target_url,
             first_seen_at=now,
             last_seen_at=now,
@@ -117,7 +150,7 @@ def sync_alert(db: Session, finding: AlertFinding) -> str:
     alert.severity = finding.severity
     alert.title = finding.title
     alert.summary = finding.summary
-    alert.details = dict(finding.details)
+    alert.details = _json_safe(finding.details)
     alert.target_url = finding.target_url
     alert.last_seen_at = now
     alert.updated_at = now

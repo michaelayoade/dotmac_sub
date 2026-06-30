@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import func, select, text
+from sqlalchemy import bindparam, func, select, text
 from sqlalchemy.orm import Session
 
 from app.models.billing import (
@@ -40,23 +40,13 @@ from app.models.catalog import (
 )
 from app.models.domain_settings import SettingDomain
 from app.models.scheduler import ScheduledTask
-from app.models.subscriber import Subscriber, SubscriberStatus
+from app.models.subscriber import Subscriber
 from app.services import settings_spec
-from app.services.job_heartbeat import get_last_success
-
-# Subscriber (account) states whose ACTIVE subscriptions are still billed by
-# run_invoice_cycle — network/enforcement blocks don't suppress invoicing, so a
-# non-payment ``blocked`` (or suspended/delinquent) account is scanned. The
-# scan-coverage denominator MUST mirror this eligibility set, otherwise blocked
-# subs are scanned but not counted as eligible, inflating the ratio and hiding a
-# real cohort drop (false negative). Keep in sync with
-# app/services/billing_automation.run_invoice_cycle's billable_account_statuses.
-_BILLABLE_SUBSCRIBER_STATUSES = (
-    SubscriberStatus.active,
-    SubscriberStatus.blocked,
-    SubscriberStatus.suspended,
-    SubscriberStatus.delinquent,
+from app.services.billing_statuses import (
+    BILLABLE_SUBSCRIBER_STATUS_VALUES,
+    BILLABLE_SUBSCRIBER_STATUSES,
 )
+from app.services.job_heartbeat import get_last_success
 
 # Alert thresholds. Conservative defaults; tune via ops experience.
 SCAN_MIN_RATIO = 0.5  # alert if a run scanned < 50% of active subs
@@ -104,6 +94,9 @@ class BillingHealthSnapshot:
     # §6.1 billing-path coverage.
     unbilled_no_path: int = 0
     active_subs_on_terminal_account: int = 0
+    scan_min_ratio: float = SCAN_MIN_RATIO
+    payment_volume_min_ratio: float = PAYMENT_VOLUME_MIN_RATIO
+    payment_baseline_min_daily: float = PAYMENT_BASELINE_MIN_DAILY
 
     @property
     def stale_runners(self) -> list[str]:
@@ -114,7 +107,7 @@ class BillingHealthSnapshot:
         out: list[str] = []
         if self.paid_with_balance_count > 0:
             out.append("paid_invoices_with_balance")
-        if self.scan_ratio is not None and self.scan_ratio < SCAN_MIN_RATIO:
+        if self.scan_ratio is not None and self.scan_ratio < self.scan_min_ratio:
             out.append("invoice_scan_count_low")
         if self.payment_volume_collapsed:
             out.append("payment_volume_collapse")
@@ -140,6 +133,47 @@ def paid_with_balance(db: Session) -> tuple[int, Decimal]:
     return int(count_ or 0), Decimal(str(total or 0))
 
 
+def _resolve_float_setting(
+    db: Session,
+    key: str,
+    default: float,
+    *,
+    minimum: float,
+    maximum: float,
+) -> float:
+    value = settings_spec.resolve_value(db, SettingDomain.billing, key)
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(maximum, parsed))
+
+
+def _health_thresholds(db: Session) -> tuple[float, float, float]:
+    scan_min_ratio = _resolve_float_setting(
+        db,
+        "billing_health_scan_min_ratio",
+        SCAN_MIN_RATIO,
+        minimum=0.0,
+        maximum=1.0,
+    )
+    payment_volume_min_ratio = _resolve_float_setting(
+        db,
+        "billing_health_payment_volume_min_ratio",
+        PAYMENT_VOLUME_MIN_RATIO,
+        minimum=0.0,
+        maximum=1.0,
+    )
+    payment_baseline_min_daily = _resolve_float_setting(
+        db,
+        "billing_health_payment_baseline_min_daily",
+        PAYMENT_BASELINE_MIN_DAILY,
+        minimum=0.0,
+        maximum=100000.0,
+    )
+    return scan_min_ratio, payment_volume_min_ratio, payment_baseline_min_daily
+
+
 def invoice_scan_coverage(db: Session) -> tuple[int | None, int, float | None]:
     """(last_run_scanned, eligible_active_subs, ratio)."""
     last_scanned = db.execute(
@@ -157,7 +191,7 @@ def invoice_scan_coverage(db: Session) -> tuple[int | None, int, float | None]:
             select(func.count(Subscription.id))
             .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
             .where(Subscription.status == SubscriptionStatus.active)
-            .where(Subscriber.status.in_(_BILLABLE_SUBSCRIBER_STATUSES))
+            .where(Subscriber.status.in_(BILLABLE_SUBSCRIBER_STATUSES))
             .where(Subscription.billing_mode != BillingMode.prepaid)
         ).scalar()
         or 0
@@ -179,6 +213,7 @@ def payment_volume(
 ) -> tuple[int, float, float | None, bool]:
     """(count_24h, daily_avg_prev_7d, ratio, collapsed) for succeeded payments."""
     now = now or datetime.now(UTC)
+    _, payment_volume_min_ratio, payment_baseline_min_daily = _health_thresholds(db)
     last_24h = now - timedelta(hours=24)
     baseline_start = now - timedelta(days=8)  # 7-day window ending 24h ago
 
@@ -204,9 +239,9 @@ def payment_volume(
     daily_avg = float(count_prev_7d) / 7.0
     ratio = float(count_24h) / daily_avg if daily_avg > 0 else None
     collapsed = (
-        daily_avg >= PAYMENT_BASELINE_MIN_DAILY
+        daily_avg >= payment_baseline_min_daily
         and ratio is not None
-        and ratio < PAYMENT_VOLUME_MIN_RATIO
+        and ratio < payment_volume_min_ratio
     )
     return int(count_24h), daily_avg, ratio, collapsed
 
@@ -302,8 +337,8 @@ def billing_path_coverage(db: Session) -> tuple[int, int]:
     ``active_subs_on_terminal_account`` is an active sub whose account is
     non-billable, so the cycle never touches it (lifecycle drift, low volume).
     """
-    # Static SQL — the status set is a fixed constant (the billable-account
-    # statuses), never user input, so this is not an injection surface.
+    # Static SQL — the status set is a fixed constant from billing_statuses,
+    # never user input, so this is not an injection surface.
     terminal = (
         db.execute(
             text(
@@ -311,9 +346,10 @@ def billing_path_coverage(db: Session) -> tuple[int, int]:
             SELECT count(*) FROM subscriptions sub
             JOIN subscribers s ON s.id = sub.subscriber_id
             WHERE sub.status = 'active'
-              AND s.status NOT IN ('active', 'blocked', 'suspended', 'delinquent')
+              AND s.status NOT IN :billable_statuses
             """
-            )
+            ).bindparams(bindparam("billable_statuses", expanding=True)),
+            {"billable_statuses": BILLABLE_SUBSCRIBER_STATUS_VALUES},
         ).scalar()
         or 0
     )
@@ -324,7 +360,7 @@ def billing_path_coverage(db: Session) -> tuple[int, int]:
             JOIN subscribers s ON s.id = sub.subscriber_id
             JOIN catalog_offers o ON o.id = sub.offer_id
             WHERE sub.status = 'active'
-              AND s.status IN ('active', 'blocked', 'suspended', 'delinquent')
+              AND s.status IN :billable_statuses
               AND sub.billing_mode = 'prepaid' AND o.billing_cycle <> 'monthly'
         """
     else:
@@ -332,16 +368,25 @@ def billing_path_coverage(db: Session) -> tuple[int, int]:
             SELECT count(*) FROM subscriptions sub
             JOIN subscribers s ON s.id = sub.subscriber_id
             WHERE sub.status = 'active'
-              AND s.status IN ('active', 'blocked', 'suspended', 'delinquent')
+              AND s.status IN :billable_statuses
               AND sub.billing_mode = 'prepaid'
         """
-    no_path = db.execute(text(no_path_sql)).scalar() or 0
+    no_path = (
+        db.execute(
+            text(no_path_sql).bindparams(bindparam("billable_statuses", expanding=True)),
+            {"billable_statuses": BILLABLE_SUBSCRIBER_STATUS_VALUES},
+        ).scalar()
+        or 0
+    )
     return int(no_path), int(terminal)
 
 
 def billing_health_snapshot(
     db: Session, now: datetime | None = None
 ) -> BillingHealthSnapshot:
+    scan_min_ratio, payment_volume_min_ratio, payment_baseline_min_daily = (
+        _health_thresholds(db)
+    )
     pwb_count, pwb_total = paid_with_balance(db)
     last_scanned, eligible, scan_ratio = invoice_scan_coverage(db)
     c24, avg7, ratio, collapsed = payment_volume(db, now=now)
@@ -360,4 +405,7 @@ def billing_health_snapshot(
         covered_but_locked=covered_but_locked(db),
         unbilled_no_path=no_path,
         active_subs_on_terminal_account=terminal,
+        scan_min_ratio=scan_min_ratio,
+        payment_volume_min_ratio=payment_volume_min_ratio,
+        payment_baseline_min_daily=payment_baseline_min_daily,
     )

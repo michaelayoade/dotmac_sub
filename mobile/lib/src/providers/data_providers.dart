@@ -20,8 +20,11 @@ import '../repositories/catalog_repository.dart';
 import '../repositories/chat_repository.dart';
 import '../repositories/contact_repository.dart';
 import '../models/reseller.dart';
+import '../models/reseller_crm.dart';
+import '../models/quote.dart';
 import '../models/service_location.dart';
 import '../repositories/location_repository.dart';
+import '../repositories/quotes_repository.dart';
 import '../models/vas.dart';
 import '../models/wallet.dart';
 import '../repositories/notification_repository.dart';
@@ -62,6 +65,9 @@ final supportRepositoryProvider = Provider<SupportRepository>(
 final locationRepositoryProvider = Provider<LocationRepository>(
   (ref) => LocationRepository(ref.watch(apiClientProvider).dio),
 );
+final quotesRepositoryProvider = Provider<QuotesRepository>(
+  (ref) => QuotesRepository(ref.watch(apiClientProvider).dio),
+);
 final walletRepositoryProvider = Provider<WalletRepository>(
   (ref) => WalletRepository(ref.watch(apiClientProvider).dio),
 );
@@ -86,6 +92,25 @@ final resellerDashboardProvider = FutureProvider.autoDispose<ResellerDashboard>(
     return ref.watch(resellerRepositoryProvider).dashboard();
   },
 );
+
+/// Sales/Quotes across the reseller's customers (B3).
+final resellerQuotesProvider =
+    FutureProvider.autoDispose<List<ResellerQuote>>((ref) async {
+  cacheFor(ref);
+  return ref.watch(resellerRepositoryProvider).quotes();
+});
+
+final resellerProjectsProvider =
+    FutureProvider.autoDispose<List<ResellerProject>>((ref) async {
+  cacheFor(ref);
+  return ref.watch(resellerRepositoryProvider).projects();
+});
+
+final resellerWorkOrdersProvider =
+    FutureProvider.autoDispose<List<ResellerWorkOrder>>((ref) async {
+  cacheFor(ref);
+  return ref.watch(resellerRepositoryProvider).workOrders();
+});
 
 /// 12-month revenue summary for the reseller portal.
 final resellerRevenueProvider = FutureProvider.autoDispose<ResellerRevenue>((
@@ -546,4 +571,9 @@ final ticketCommentsProvider = FutureProvider.autoDispose
     .family<Page<TicketComment>, String>((ref, ticketId) async {
   cacheFor(ref);
   return ref.watch(supportRepositoryProvider).comments(ticketId);
+});
+
+final quotesProvider = FutureProvider.autoDispose<List<Quote>>((ref) async {
+  cacheFor(ref);
+  return ref.watch(quotesRepositoryProvider).quotes();
 });
