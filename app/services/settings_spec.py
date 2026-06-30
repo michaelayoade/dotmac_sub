@@ -3258,7 +3258,7 @@ def list_specs(domain: SettingDomain) -> list[SettingSpec]:
     return [spec for spec in SETTINGS_SPECS if spec.domain == domain]
 
 
-def resolve_value(db, domain: SettingDomain, key: str) -> object | None:
+def resolve_value(db, domain: SettingDomain, key: str) -> Any:
     """Resolve a setting value with Redis caching.
 
     Checks Redis cache first, falls back to database query, then caches result.
