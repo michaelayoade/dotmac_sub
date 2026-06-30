@@ -110,6 +110,9 @@ from app.models.compensation_failure import (  # noqa: F401
     CompensationFailure,
     CompensationStatus,
 )
+from app.models.connectivity_backup import (  # noqa: F401
+    ConnectivityStateBackup,
+)
 from app.models.connector import (  # noqa: F401
     ConnectorAuthType,
     ConnectorConfig,
