@@ -14,6 +14,7 @@
 
     {# Header #}
     {% set st = arrangement.status.value if arrangement.status else 'pending' %}
+    {% set arrangement_currency = arrangement.invoice.currency if arrangement.invoice and arrangement.invoice.currency else 'NGN' %}
     {% if st == 'active' %}
         {% set badge_variant = "active" %}
     {% elif st == 'pending' %}
@@ -42,8 +43,8 @@
         {# Arrangement Details #}
         {% call card(title="Arrangement Details", icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>', color="emerald") %}
             {% call info_grid() %}
-                {{ info_row("Total Amount", "{:,.2f}".format(arrangement.total_amount)) }}
-                {{ info_row("Installment Amount", "{:,.2f}".format(arrangement.installment_amount)) }}
+                {{ info_row("Total Amount", arrangement_currency ~ " " ~ "{:,.2f}".format(arrangement.total_amount)) }}
+                {{ info_row("Installment Amount", arrangement_currency ~ " " ~ "{:,.2f}".format(arrangement.installment_amount)) }}
                 {{ info_row("Frequency", arrangement.frequency.value | replace('_', ' ') | title if arrangement.frequency else 'N/A') }}
                 {{ info_row("Progress", "{} / {} installments".format(arrangement.installments_paid, arrangement.installments_total)) }}
                 {{ info_row("Start Date", arrangement.start_date.strftime('%Y-%m-%d') if arrangement.start_date else 'N/A') }}
@@ -63,7 +64,7 @@
         {% call card(title="Actions", icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>', color="emerald") %}
             <div class="space-y-3">
                 {% if st == 'pending' %}
-                <form method="post" action="/admin/billing/payment-arrangements/{{ arrangement.id }}/approve">
+                <form method="post" action="/admin/billing/payment-arrangements/{{ arrangement.id }}/approve" onsubmit="return confirm('Approve this payment arrangement?');">
                     {% include "components/forms/csrf_input.html" %}
                     <button type="submit"
                             class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-emerald-700 transition-colors">
@@ -116,7 +117,7 @@
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">
                             <span class="text-sm font-bold font-mono tabular-nums text-slate-900 dark:text-white">
-                                {{ "{:,.2f}".format(inst.amount) }}
+                                {{ arrangement_currency }} {{ "{:,.2f}".format(inst.amount) }}
                             </span>
                         </td>
                         <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
@@ -146,7 +147,7 @@
                                 {% include "components/forms/csrf_input.html" %}
                                 <input type="text" name="note" placeholder="Note (optional)" maxlength="255"
                                        class="w-40 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-700 placeholder-slate-400 focus:border-emerald-500 focus:outline-none dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200">
-                                <button type="submit" onclick="return confirm('Record payment for installment #{{ inst.installment_number }} ({{ '{:,.2f}'.format(inst.amount) }})?')"
+                                <button type="submit" onclick="return confirm('Record payment for installment #{{ inst.installment_number }} ({{ arrangement_currency }} {{ '{:,.2f}'.format(inst.amount) }})?')"
                                         class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-emerald-700 transition-colors">
                                     <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                                     Record Payment

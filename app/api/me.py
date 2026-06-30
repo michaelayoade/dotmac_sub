@@ -9,6 +9,7 @@ subscriber can read their own data without holding staff permissions.
 Mounted at /api/v1/me with router-level require_user_auth (see main.py).
 """
 
+import logging
 from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
@@ -160,6 +161,16 @@ from app.services.bandwidth import (
 from app.services.topology import selfcare as topology_selfcare
 
 router = APIRouter(prefix="/me", tags=["me"])
+logger = logging.getLogger(__name__)
+PAYMENT_CHARGE_ERROR_MESSAGE = (
+    "We could not charge that saved card. Please use another payment method or "
+    "try again later."
+)
+CARD_SAVE_SUCCESS_MESSAGE = "Your card was saved for future payments."
+CARD_SAVE_ERROR_MESSAGE = (
+    "Payment was recorded, but we could not save this card. You can add a card "
+    "from Payment Methods."
+)
 
 
 def _subscriber_id(principal: dict) -> str:
@@ -690,6 +701,12 @@ def my_topup_initiate(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.warning("Customer API saved-card top-up charge failed", exc_info=True)
+        raise HTTPException(
+            status_code=400,
+            detail=PAYMENT_CHARGE_ERROR_MESSAGE,
+        ) from exc
     return TopupInitiateResponse(
         intent_id=result["intent_id"],
         provider_type=result["provider_type"],
@@ -717,16 +734,27 @@ def my_topup_verify(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    card_saved: bool | None = None
+    card_save_message: str | None = None
     if payload.save_card:
-        customer_cards.capture_card_after_payment(
-            db, customer["account_id"], payload.reference, None
-        )
+        try:
+            customer_cards.capture_card_after_payment(
+                db, customer["account_id"], payload.reference, None
+            )
+            card_saved = True
+            card_save_message = CARD_SAVE_SUCCESS_MESSAGE
+        except Exception:
+            logger.warning("Customer API top-up card capture failed", exc_info=True)
+            card_saved = False
+            card_save_message = CARD_SAVE_ERROR_MESSAGE
     return TopupVerifyResponse(
         reference=payload.reference,
         amount=Decimal(str(result.get("amount") or "0")),
         already_recorded=result.get("already_recorded", False),
         available_balance=result.get("available_balance"),
         credit_added=result.get("credit_added"),
+        card_saved=card_saved,
+        card_save_message=card_save_message,
     )
 
 

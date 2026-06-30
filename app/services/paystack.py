@@ -19,6 +19,9 @@ from app.services.settings_spec import resolve_value
 logger = logging.getLogger(__name__)
 
 PAYSTACK_API_BASE = "https://api.paystack.co"
+DEFAULT_GATEWAY_TIMEOUT_SECONDS = 30
+MIN_GATEWAY_TIMEOUT_SECONDS = 1
+MAX_GATEWAY_TIMEOUT_SECONDS = 120
 
 
 def _get_secret_key(db: Session | None = None) -> str:
@@ -41,6 +44,20 @@ def _get_public_key(db: Session | None = None) -> str:
             if resolved:
                 return resolved
     return get_env_or_secret("PAYSTACK_PUBLIC_KEY", "paystack", "public_key")
+
+
+def _get_timeout_seconds(db: Session | None = None) -> int:
+    if db:
+        value = resolve_value(db, SettingDomain.billing, "payment_gateway_timeout_seconds")
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            parsed = DEFAULT_GATEWAY_TIMEOUT_SECONDS
+        return max(
+            MIN_GATEWAY_TIMEOUT_SECONDS,
+            min(MAX_GATEWAY_TIMEOUT_SECONDS, parsed),
+        )
+    return DEFAULT_GATEWAY_TIMEOUT_SECONDS
 
 
 def amount_to_kobo(amount: Decimal | float | int) -> int:
@@ -107,7 +124,7 @@ def initialize_transaction(
         f"{PAYSTACK_API_BASE}/transaction/initialize",
         json=payload,
         headers={"Authorization": f"Bearer {secret_key}"},
-        timeout=30,
+        timeout=_get_timeout_seconds(db),
     )
     resp.raise_for_status()
     data = resp.json()
@@ -163,7 +180,7 @@ def charge_authorization(
         f"{PAYSTACK_API_BASE}/transaction/charge_authorization",
         json=payload,
         headers={"Authorization": f"Bearer {secret_key}"},
-        timeout=30,
+        timeout=_get_timeout_seconds(db),
     )
     resp.raise_for_status()
     data = resp.json()
@@ -196,7 +213,7 @@ def verify_transaction(db: Session, reference: str) -> dict[str, Any]:
     resp = httpx.get(
         f"{PAYSTACK_API_BASE}/transaction/verify/{reference}",
         headers={"Authorization": f"Bearer {secret_key}"},
-        timeout=30,
+        timeout=_get_timeout_seconds(db),
     )
     resp.raise_for_status()
     data = resp.json()
@@ -256,7 +273,7 @@ def refund_transaction(
         f"{PAYSTACK_API_BASE}/refund",
         json=payload,
         headers={"Authorization": f"Bearer {secret_key}"},
-        timeout=30.0,
+        timeout=_get_timeout_seconds(db),
     )
     response.raise_for_status()
     body = response.json()

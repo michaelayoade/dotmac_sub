@@ -396,6 +396,8 @@ class PaymentVerifyResponse(BaseModel):
     currency: str = "NGN"
     status: str
     already_recorded: bool = False
+    card_saved: bool | None = None
+    card_save_message: str | None = None
 
 
 # --- Prepaid account top-up (hosted checkout) -----------------------------
@@ -477,6 +479,8 @@ class TopupVerifyResponse(BaseModel):
     already_recorded: bool = False
     available_balance: Decimal | None = None
     credit_added: Decimal | None = None
+    card_saved: bool | None = None
+    card_save_message: str | None = None
 
 
 class PaymentAllocationBase(BaseModel):

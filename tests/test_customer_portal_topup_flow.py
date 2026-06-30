@@ -49,13 +49,19 @@ def _make_invoice(
 
 
 def _patch_topup_settings(
-    monkeypatch, *, min_amount: int = 1000, max_amount: int = 500000
+    monkeypatch,
+    *,
+    min_amount: int = 1000,
+    max_amount: int = 500000,
+    preset_amounts: str | None = None,
 ) -> None:
     def _fake_resolve_value(_db, _domain, key):
         if key == "topup_min_amount":
             return min_amount
         if key == "topup_max_amount":
             return max_amount
+        if key == "topup_preset_amounts":
+            return preset_amounts
         return None
 
     monkeypatch.setattr(
@@ -108,6 +114,32 @@ def test_get_topup_page_includes_limits_and_public_key(
     assert page["payment_options"] == [
         {"provider_type": "paystack", "label": "Pay with Paystack"},
     ]
+
+
+def test_get_topup_page_uses_configured_preset_amounts_within_limits(
+    monkeypatch, db_session, subscriber
+):
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.payment_gateway_adapter.build_context",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            provider_type="paystack",
+            public_key="pk_test_topup",
+            reference="unused-ref",
+        ),
+    )
+    _patch_topup_settings(
+        monkeypatch,
+        min_amount=2500,
+        max_amount=12000,
+        preset_amounts="1000,3000,7000,7000,20000",
+    )
+
+    page = get_topup_page(
+        db_session,
+        {"account_id": str(subscriber.id), "username": "customer@example.com"},
+    )
+
+    assert page["preset_amounts"] == [3000, 7000]
 
 
 def test_get_topup_page_includes_saved_payment_methods(

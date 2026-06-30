@@ -120,7 +120,7 @@
                                        class="inline-flex items-center rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
                                         Edit
                                     </a>
-                                    <form method="post" action="/admin/billing/payment-channels/{{ channel.id }}/deactivate">
+                                    <form method="post" action="/admin/billing/payment-channels/{{ channel.id }}/deactivate" onsubmit="return confirm('Deactivate this payment channel?');">
                                         {% include "components/forms/csrf_input.html" %}
                                         <button type="submit"
                                                 class="inline-flex items-center rounded-lg border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50 dark:border-red-900/40 dark:text-red-300 dark:hover:bg-red-900/20">
