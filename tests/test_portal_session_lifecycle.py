@@ -105,9 +105,10 @@ def test_customer_session_listing_marks_current_session():
 
     assert {session["token"] for session in sessions} == {current, other}
     assert sum(1 for session in sessions if session["is_current"]) == 1
-    assert next(session for session in sessions if session["token"] == other)[
-        "remember"
-    ] is True
+    assert (
+        next(session for session in sessions if session["token"] == other)["remember"]
+        is True
+    )
 
 
 def test_revoke_other_customer_sessions_keeps_current_session():
@@ -166,9 +167,10 @@ def test_reseller_session_listing_marks_current_session():
 
     assert {session["token"] for session in sessions} == {current, other}
     assert sum(1 for session in sessions if session["is_current"]) == 1
-    assert next(session for session in sessions if session["token"] == other)[
-        "remember"
-    ] is True
+    assert (
+        next(session for session in sessions if session["token"] == other)["remember"]
+        is True
+    )
 
 
 def test_revoke_other_reseller_sessions_keeps_current_session():

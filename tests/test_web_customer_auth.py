@@ -59,7 +59,7 @@ def test_customer_login_template_has_submit_loading_state():
 def test_customer_mfa_template_has_submit_loading_state():
     template = Path("templates/customer/auth/mfa.html").read_text()
 
-    assert 'x-data="{ loading: false, code: \'\' }"' in template
+    assert "x-data=\"{ loading: false, code: '' }\"" in template
     assert 'x-on:submit="loading = true"' in template
     assert 'x-model="code"' in template
     assert ':disabled="loading || code.length < 6"' in template

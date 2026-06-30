@@ -827,9 +827,7 @@ def test_admin_login_mfa_verify_issues_tokens(db_session, monkeypatch):
     assert verified["access_token"]
 
 
-def test_mfa_recovery_code_is_one_time_login_fallback(
-    db_session, person, monkeypatch
-):
+def test_mfa_recovery_code_is_one_time_login_fallback(db_session, person, monkeypatch):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     monkeypatch.setenv("TOTP_ENCRYPTION_KEY", Fernet.generate_key().decode("utf-8"))
     credential = UserCredential(

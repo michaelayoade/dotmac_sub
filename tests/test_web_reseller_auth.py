@@ -80,9 +80,7 @@ def test_password_reset_email_for_identifier_uses_local_username(db_session, per
     assert result == "reseller@example.com"
 
 
-def test_reseller_login_page_uses_configured_remember_duration(
-    db_session, monkeypatch
-):
+def test_reseller_login_page_uses_configured_remember_duration(db_session, monkeypatch):
     db_session.add(
         DomainSetting(
             domain=SettingDomain.auth,

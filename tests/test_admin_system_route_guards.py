@@ -168,9 +168,7 @@ def test_profile_sign_out_other_sessions_keeps_current(db_session):
         )
     )
 
-    response = admin_system.user_profile_sign_out_other_sessions(
-        request, db=db_session
-    )
+    response = admin_system.user_profile_sign_out_other_sessions(request, db=db_session)
 
     assert response.status_code == 303
     assert (
