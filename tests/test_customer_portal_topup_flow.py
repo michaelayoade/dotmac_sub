@@ -448,6 +448,23 @@ def test_create_topup_intent_initializes_flutterwave_checkout(
     assert captured_checkout["metadata"]["account_id"] == str(subscriber.id)
 
 
+def test_create_topup_intent_rejects_gateway_when_customer_email_blank(
+    monkeypatch, db_session, subscriber
+):
+    _patch_topup_settings(monkeypatch)
+    subscriber.email = ""
+    db_session.add(subscriber)
+    db_session.commit()
+
+    with pytest.raises(ValueError, match="email address"):
+        create_topup_intent(
+            db_session,
+            {"account_id": str(subscriber.id), "username": "pppoe-login"},
+            "5000.00",
+            provider="paystack",
+        )
+
+
 # ---------------------------------------------------------------------------
 # Invoice payment chooser (create_invoice_payment_intent)
 # ---------------------------------------------------------------------------
@@ -642,6 +659,26 @@ def test_create_invoice_payment_intent_bank_transfer_allows_below_topup_min(
 
     assert payload["requested_amount"] == Decimal("500.00")
     assert payload["redirect_url"] == "/portal/billing/topup/transfer"
+
+
+def test_create_invoice_payment_intent_rejects_gateway_when_customer_email_blank(
+    monkeypatch, db_session, subscriber
+):
+    _patch_topup_settings(monkeypatch)
+    subscriber.email = ""
+    db_session.add(subscriber)
+    db_session.commit()
+    invoice = _make_invoice(
+        db_session, subscriber.id, amount="2500.00", invoice_number="INV-PAY-NOEMAIL"
+    )
+
+    with pytest.raises(ValueError, match="email address"):
+        create_invoice_payment_intent(
+            db_session,
+            {"account_id": str(subscriber.id), "username": "pppoe-login"},
+            str(invoice.id),
+            provider="paystack",
+        )
 
 
 def test_create_invoice_payment_intent_records_and_completes_gateway_trace(
