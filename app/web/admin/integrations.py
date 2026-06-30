@@ -1234,7 +1234,11 @@ def webhook_edit(request: Request, endpoint_id: str, db: Session = Depends(get_d
     return templates.TemplateResponse("admin/integrations/webhooks/new.html", context)
 
 
-@router.post("/webhooks/{endpoint_id}", response_class=HTMLResponse)
+@router.post(
+    "/webhooks/{endpoint_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def webhook_update(
     request: Request,
     endpoint_id: str,
@@ -1293,7 +1297,10 @@ def webhook_update(
     )
 
 
-@router.post("/webhooks/{endpoint_id}/enable")
+@router.post(
+    "/webhooks/{endpoint_id}/enable",
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def webhook_enable(endpoint_id: str, db: Session = Depends(get_db)):
     web_integrations_service.set_webhook_endpoint_active(
         db, endpoint_id=endpoint_id, is_active=True
@@ -1303,7 +1310,10 @@ def webhook_enable(endpoint_id: str, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/webhooks/{endpoint_id}/disable")
+@router.post(
+    "/webhooks/{endpoint_id}/disable",
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def webhook_disable(endpoint_id: str, db: Session = Depends(get_db)):
     web_integrations_service.set_webhook_endpoint_active(
         db, endpoint_id=endpoint_id, is_active=False
@@ -1313,7 +1323,10 @@ def webhook_disable(endpoint_id: str, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/webhooks/{endpoint_id}/rotate-secret")
+@router.post(
+    "/webhooks/{endpoint_id}/rotate-secret",
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def webhook_rotate_secret(endpoint_id: str, db: Session = Depends(get_db)):
     web_integrations_service.rotate_webhook_endpoint_secret(db, endpoint_id=endpoint_id)
     return RedirectResponse(
@@ -1322,7 +1335,10 @@ def webhook_rotate_secret(endpoint_id: str, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/webhooks/{endpoint_id}/test")
+@router.post(
+    "/webhooks/{endpoint_id}/test",
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def webhook_test(endpoint_id: str, db: Session = Depends(get_db)):
     try:
         web_integrations_service.queue_webhook_test_delivery(
@@ -1336,7 +1352,10 @@ def webhook_test(endpoint_id: str, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/webhooks/{endpoint_id}/delete")
+@router.post(
+    "/webhooks/{endpoint_id}/delete",
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def webhook_delete(endpoint_id: str, db: Session = Depends(get_db)):
     web_integrations_service.delete_webhook_endpoint(db, endpoint_id=endpoint_id)
     return RedirectResponse(
