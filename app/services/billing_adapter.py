@@ -73,7 +73,9 @@ class BillingAdapter:
 
     def _default_currency(self, db: Session | None) -> str:
         if db is not None:
-            value = settings_spec.resolve_value(db, SettingDomain.billing, "default_currency")
+            value = settings_spec.resolve_value(
+                db, SettingDomain.billing, "default_currency"
+            )
             code = str(value or "NGN").strip().upper()
             if code:
                 return code

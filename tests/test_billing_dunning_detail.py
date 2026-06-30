@@ -53,9 +53,7 @@ def test_dunning_templates_link_to_real_detail_route():
     assert "dunning_warning" in listing
 
 
-def test_dunning_bulk_pause_redirect_reports_partial_success(
-    db_session, monkeypatch
-):
+def test_dunning_bulk_pause_redirect_reports_partial_success(db_session, monkeypatch):
     def _fake_actor_id(request):
         return "actor-1"
 

@@ -429,7 +429,9 @@ class TestSaveCardOnVerify:
             "message": "Your card was saved for future payments.",
         }
 
-    def test_pay_verify_surfaces_card_save_failure_without_failing_payment(self) -> None:
+    def test_pay_verify_surfaces_card_save_failure_without_failing_payment(
+        self,
+    ) -> None:
         from app.web.customer.routes import customer_verify_payment
 
         request = MagicMock()
@@ -595,7 +597,10 @@ class TestSaveCardOnVerify:
         template = Path("templates/customer/billing/pay.html").read_text()
 
         assert "const checkoutEmail =" in template
-        assert "Add an email address to your account before paying with Paystack." in template
+        assert (
+            "Add an email address to your account before paying with Paystack."
+            in template
+        )
         assert "email: checkoutEmail" in template
 
     def test_invoice_pay_success_template_shows_remaining_balance(self) -> None:

@@ -445,13 +445,13 @@ def get_subscribers_report_data(
     active_count = 0
     suspended_count = 0
     for sub in all_subscribers:
-        status = _derive_subscriber_status(sub)
-        sub.status = status
-        status_name = status.value if status else "unknown"
+        derived_status = _derive_subscriber_status(sub)
+        sub.status = derived_status
+        status_name = derived_status.value if derived_status else "unknown"
         status_breakdown[status_name] = status_breakdown.get(status_name, 0) + 1
-        if status == AccountStatus.active:
+        if derived_status == AccountStatus.active:
             active_count += 1
-        elif status == AccountStatus.suspended:
+        elif derived_status == AccountStatus.suspended:
             suspended_count += 1
     active_rate = (
         (active_count / total_subscribers * 100) if total_subscribers > 0 else 0
@@ -518,7 +518,7 @@ def build_subscribers_export_csv(
     writer = csv.writer(output)
     writer.writerow(["subscriber_id", "name", "type", "status", "created_at"])
     for sub in all_subscribers:
-        status = _derive_subscriber_status(sub)
+        derived_status = _derive_subscriber_status(sub)
         name = (
             sub.company_name
             if sub.category == SubscriberCategory.business
@@ -534,7 +534,7 @@ def build_subscribers_export_csv(
                 str(sub.id),
                 name,
                 subscriber_type or "",
-                status.value if status else "",
+                derived_status.value if derived_status else "",
                 (
                     created_at.isoformat()
                     if (created_at := subscriber_service.get_effective_created_at(sub))

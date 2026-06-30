@@ -49,10 +49,17 @@ def _resolve_report_window(
         end = parsed_to + timedelta(days=1)
     if end <= start:
         end = start + timedelta(days=1)
-    return start, end, start.date().isoformat(), (end - timedelta(days=1)).date().isoformat()
+    return (
+        start,
+        end,
+        start.date().isoformat(),
+        (end - timedelta(days=1)).date().isoformat(),
+    )
 
 
-def _gb_from_avg_bps(avg_bps: float | int | Decimal | None, span_seconds: float) -> float:
+def _gb_from_avg_bps(
+    avg_bps: float | int | Decimal | None, span_seconds: float
+) -> float:
     return (float(avg_bps or 0) / 8.0 * span_seconds) / (1024**3)
 
 

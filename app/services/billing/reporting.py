@@ -128,7 +128,9 @@ def _subscriber_location_expr():
 
 
 def _ar_aging_bucket_days(db: Session) -> tuple[int, int, int]:
-    value = settings_spec.resolve_value(db, SettingDomain.billing, "ar_aging_bucket_days")
+    value = settings_spec.resolve_value(
+        db, SettingDomain.billing, "ar_aging_bucket_days"
+    )
     raw_parts = str(value or "").split(",")
     parsed: list[int] = []
     for raw_part in raw_parts:
@@ -141,7 +143,7 @@ def _ar_aging_bucket_days(db: Session) -> tuple[int, int, int]:
         parsed.append(day)
     if len(parsed) != 3 or parsed != sorted(set(parsed)):
         return DEFAULT_AR_AGING_BUCKET_DAYS
-    return tuple(parsed)
+    return (parsed[0], parsed[1], parsed[2])
 
 
 class BillingReporting:
