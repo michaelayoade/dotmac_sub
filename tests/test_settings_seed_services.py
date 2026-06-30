@@ -453,6 +453,9 @@ class TestSeedGeocodingSettings:
         monkeypatch.setenv("GEOCODING_USER_AGENT", "dotmac_sm")
         monkeypatch.setenv("GEOCODING_EMAIL", "test@example.com")
         monkeypatch.setenv("GEOCODING_TIMEOUT_SEC", "5")
+        monkeypatch.setenv("GEOCODING_MIN_INTERVAL_MS", "1250")
+        monkeypatch.setenv("GEOCODING_GOOGLE_API_KEY", "google-secret")
+        monkeypatch.setenv("GEOCODING_MAPBOX_API_KEY", "mapbox-secret")
 
         settings_seed.seed_geocoding_settings(db_session)
 
@@ -467,6 +470,28 @@ class TestSeedGeocodingSettings:
         assert setting is not None
         assert setting.value_json is True
 
+        interval = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.geocoding,
+                DomainSetting.key == "min_interval_ms",
+            )
+            .first()
+        )
+        assert interval is not None
+        assert interval.value_text == "1250"
+
+        google_key = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.geocoding,
+                DomainSetting.key == "google_api_key",
+            )
+            .first()
+        )
+        assert google_key is not None
+        assert google_key.is_secret is True
+
     def test_seeds_geocoding_provider(self, db_session, monkeypatch):
         """Test geocoding provider setting is seeded."""
         monkeypatch.setenv("GEOCODING_PROVIDER", "google")
@@ -474,6 +499,9 @@ class TestSeedGeocodingSettings:
         monkeypatch.setenv("GEOCODING_USER_AGENT", "dotmac_sm")
         monkeypatch.setenv("GEOCODING_EMAIL", "test@example.com")
         monkeypatch.setenv("GEOCODING_TIMEOUT_SEC", "5")
+        monkeypatch.setenv("GEOCODING_MIN_INTERVAL_MS", "0")
+        monkeypatch.setenv("GEOCODING_GOOGLE_API_KEY", "google-secret")
+        monkeypatch.setenv("GEOCODING_MAPBOX_API_KEY", "mapbox-secret")
 
         settings_seed.seed_geocoding_settings(db_session)
 

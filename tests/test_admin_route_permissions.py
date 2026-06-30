@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from fastapi.routing import APIRoute
 
 from app.api import network_device_groups as api_network_device_groups
@@ -16,6 +18,7 @@ from app.web.admin import reports as admin_reports
 from app.web.admin import resellers as admin_resellers
 from app.web.admin import support_automation as admin_support_automation
 from app.web.admin import system as admin_system
+from app.web.admin import system_whats_new as admin_system_whats_new
 from app.web.admin import usage as admin_usage
 
 
@@ -84,11 +87,28 @@ def test_catalog_settings_routes_require_catalog_permissions():
     )
 
 
-def test_gis_routes_require_network_permissions():
+def test_gis_routes_require_map_permissions():
     assert _route_has_permission(admin_gis.router, "/gis", "GET", "gis:map:view")
-    assert _route_has_permission(
-        admin_gis.router, "/gis/locations/new", "POST", "gis:map:edit"
-    )
+    for path, method in [
+        ("/gis/location-requests/{request_id}/approve", "POST"),
+        ("/gis/location-requests/{request_id}/reject", "POST"),
+        ("/gis/locations/new", "GET"),
+        ("/gis/locations/new", "POST"),
+        ("/gis/locations/{location_id}/edit", "GET"),
+        ("/gis/locations/{location_id}/edit", "POST"),
+        ("/gis/locations/{location_id}/delete", "POST"),
+        ("/gis/areas/new", "GET"),
+        ("/gis/areas/new", "POST"),
+        ("/gis/areas/{area_id}/edit", "GET"),
+        ("/gis/areas/{area_id}/edit", "POST"),
+        ("/gis/areas/{area_id}/delete", "POST"),
+        ("/gis/layers/new", "GET"),
+        ("/gis/layers/new", "POST"),
+        ("/gis/layers/{layer_id}/edit", "GET"),
+        ("/gis/layers/{layer_id}/edit", "POST"),
+        ("/gis/layers/{layer_id}/delete", "POST"),
+    ]:
+        assert _route_has_permission(admin_gis.router, path, method, "gis:map:edit")
 
 
 def test_profile_sync_task_routes_require_network_permissions():
@@ -316,6 +336,38 @@ def test_system_hub_routes_require_system_read():
     )
 
 
+def test_whats_new_routes_require_settings_permissions():
+    assert _route_has_permission(
+        admin_system_whats_new.router,
+        "/system/whats-new",
+        "GET",
+        "system:settings:read",
+    )
+    for path, method in [
+        ("/system/whats-new/new", "GET"),
+        ("/system/whats-new/new", "POST"),
+        ("/system/whats-new/{item_id}/edit", "GET"),
+        ("/system/whats-new/{item_id}/edit", "POST"),
+        ("/system/whats-new/{item_id}/status", "POST"),
+    ]:
+        expected = (
+            "system:settings:write" if method == "POST" else "system:settings:read"
+        )
+        assert _route_has_permission(
+            admin_system_whats_new.router, path, method, expected
+        )
+
+
+def test_whats_new_publish_actions_require_confirmation():
+    index_template = Path("templates/admin/system/whats_new/index.html").read_text()
+    form_template = Path("templates/admin/system/whats_new/form.html").read_text()
+
+    assert "confirmWhatsNewVisibilityChange" in index_template
+    assert "confirmWhatsNewVisibilityChange" in form_template
+    assert "Publish this slide?" in index_template
+    assert "Publish this slide?" in form_template
+
+
 def test_legal_routes_require_system_permissions():
     assert _route_has_permission(
         admin_legal.router,
@@ -323,12 +375,31 @@ def test_legal_routes_require_system_permissions():
         "GET",
         "system:read",
     )
+    for path, method in [
+        ("/legal/new", "GET"),
+        ("/legal/new", "POST"),
+        ("/legal/{document_id}/edit", "GET"),
+        ("/legal/{document_id}/edit", "POST"),
+        ("/legal/{document_id}/upload", "POST"),
+        ("/legal/{document_id}/delete-file", "POST"),
+        ("/legal/{document_id}/publish", "POST"),
+        ("/legal/{document_id}/unpublish", "POST"),
+        ("/legal/{document_id}/delete", "POST"),
+    ]:
+        assert _route_has_permission(admin_legal.router, path, method, "system:write")
     assert _route_has_permission(
         admin_legal.router,
-        "/legal/{document_id}/publish",
-        "POST",
-        "system:write",
+        "/legal/{document_id}",
+        "GET",
+        "system:read",
     )
+
+
+def test_legal_publish_actions_require_confirmation():
+    template = Path("templates/admin/system/legal/detail.html").read_text()
+
+    assert "Publish this legal document?" in template
+    assert "Unpublish this legal document?" in template
 
 
 def test_integrations_routes_require_settings_permissions():
@@ -435,7 +506,6 @@ def test_system_config_writes_require_settings_write():
         "/system/config/billing",
         "/system/config/direct-bank-transfer",
         "/system/config/radius/push-reject-rules",
-        "/system/config/ipv6",
     ):
         assert _route_has_permission(
             admin_system.router, path, "POST", "system:settings:write"

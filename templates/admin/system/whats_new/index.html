@@ -45,6 +45,12 @@
         {{ stats_card("Archived", stats.archived, icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 8l2-3h10l2 3M5 8h14v11a2 2 0 01-2 2H7a2 2 0 01-2-2V8z"/></svg>', color="rose", color2="pink") }}
     </div>
 
+    {% if status_error == "invalid" %}
+    <div class="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-900/40 dark:bg-rose-900/20 dark:text-rose-300">
+        Status update failed because the selected status is invalid.
+    </div>
+    {% endif %}
+
     <div class="overflow-hidden rounded-2xl border border-slate-200/70 bg-white shadow-sm dark:border-slate-700/70 dark:bg-slate-800">
         <div class="flex items-center justify-between border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
             <div>
@@ -101,7 +107,7 @@
                         </td>
                         <td class="px-6 py-4 align-top">
                             <div class="flex flex-col items-end gap-2">
-                                <form method="POST" action="/admin/system/whats-new/{{ item.id }}/status" class="flex items-center gap-2">
+                                <form method="POST" action="/admin/system/whats-new/{{ item.id }}/status" class="flex items-center gap-2" onsubmit="return confirmWhatsNewVisibilityChange(this);">
                                     {% include "components/forms/csrf_input.html" %}
                                     <select name="status" class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
                                         {% for status in statuses %}
@@ -128,4 +134,13 @@
 </div>
 
 {{ animation_styles() }}
+<script>
+    function confirmWhatsNewVisibilityChange(form) {
+        const status = form.querySelector('[name="status"]')?.value;
+        if (status === 'featured' || status === 'active') {
+            return window.confirm('Publish this slide? It may appear on the admin dashboard immediately.');
+        }
+        return true;
+    }
+</script>
 {% endblock %}

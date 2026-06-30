@@ -17,6 +17,7 @@ from app.schemas.gis import (
     GeoLocationUpdate,
 )
 from app.services import gis as gis_service
+from app.services import gis_sync as gis_sync_service
 
 
 def _enum_values(enum_cls) -> list[str]:
@@ -155,6 +156,7 @@ def build_index_data(db: Session, *, tab: str) -> dict[str, Any]:
         "map_markers": map_markers,
         "area_features": area_features,
         "layer_overlays": layer_overlays,
+        "gis_sync_status": gis_sync_service.get_last_sync_run(db),
     }
 
 

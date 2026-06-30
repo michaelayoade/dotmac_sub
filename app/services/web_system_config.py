@@ -7,14 +7,17 @@ import logging
 import uuid
 from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscription_engine import SettingValueType
+from app.schemas.settings import DomainSettingUpdate
+from app.services import settings_spec
 from app.services.billing_settings import resolve_payment_due_days
+from app.services.domain_settings import DomainSettings
 
 logger = logging.getLogger(__name__)
 
@@ -46,10 +49,41 @@ def _save_settings(
     keys: list[str],
     *,
     secret_keys: set[str] | None = None,
+    use_specs: bool = False,
 ) -> None:
     """Upsert a batch of DomainSettings."""
     secret_keys = secret_keys or set()
+    spec_updates: list[tuple[str, DomainSettingUpdate]] = []
+    if use_specs:
+        for key in keys:
+            spec = settings_spec.get_spec(domain, key)
+            if not spec:
+                continue
+            value = _coerce_spec_form_value(spec, data.get(key))
+            value_text, value_json = settings_spec.normalize_for_db(spec, value)
+            setting_value_json = cast(dict | list | bool | int | str | None, value_json)
+            spec_updates.append(
+                (
+                    key,
+                    DomainSettingUpdate(
+                        value_type=spec.value_type,
+                        value_text=value_text,
+                        value_json=setting_value_json,
+                        is_secret=spec.is_secret or key in secret_keys,
+                        is_active=True,
+                    ),
+                )
+            )
+
+    spec_keys = {key for key, _ in spec_updates}
+    spec_service = DomainSettings(domain) if spec_updates else None
+    if spec_service:
+        for key, payload in spec_updates:
+            spec_service.upsert_by_key(db, key, payload)
+
     for key in keys:
+        if key in spec_keys:
+            continue
         value = (data.get(key) or "").strip()
         stmt = select(DomainSetting).where(
             DomainSetting.domain == domain,
@@ -72,14 +106,40 @@ def _save_settings(
     db.commit()
 
 
+def _coerce_spec_form_value(
+    spec: settings_spec.SettingSpec, raw_value: object
+) -> object | None:
+    raw = "" if raw_value is None else str(raw_value).strip()
+    if raw == "" and spec.default is not None:
+        raw_value = spec.default
+    else:
+        raw_value = raw
+
+    value, error = settings_spec.coerce_value(spec, raw_value)
+    label = spec.label or spec.key
+    if error:
+        raise ValueError(f"{label}: {error}.")
+    if spec.required and (value is None or value == ""):
+        raise ValueError(f"{label} is required.")
+    if spec.allowed and value is not None and value not in spec.allowed:
+        allowed = ", ".join(sorted(spec.allowed))
+        raise ValueError(f"{label} must be one of: {allowed}.")
+    if spec.value_type == SettingValueType.integer and value is not None:
+        parsed = value if isinstance(value, int) else None
+        if parsed is None:
+            raise ValueError(f"{label}: Value must be an integer.")
+        if spec.min_value is not None and parsed < spec.min_value:
+            raise ValueError(f"{label} must be at least {spec.min_value}.")
+        if spec.max_value is not None and parsed > spec.max_value:
+            raise ValueError(f"{label} must be at most {spec.max_value}.")
+    return value
+
+
 # ---------------------------------------------------------------------------
 # 8.5 System Preferences & Security
 # ---------------------------------------------------------------------------
 PREFERENCE_KEYS = [
-    "default_landing_page",
-    "admin_portal_title",
     "force_2fa",
-    "search_debounce_ms",
 ]
 
 
@@ -88,37 +148,12 @@ def get_preferences_context(db: Session) -> dict:
 
 
 def save_preferences(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.auth, data, PREFERENCE_KEYS)
+    _save_settings(db, SettingDomain.auth, data, PREFERENCE_KEYS, use_specs=True)
 
 
-# ---------------------------------------------------------------------------
-# 8.7 Subscriber Settings
-# ---------------------------------------------------------------------------
-SUBSCRIBER_KEYS = [
-    "login_format",
-    "password_length",
-    "password_charset",
-    "welcome_enabled",
-    "welcome_channel",
-    "welcome_delay",
-    "default_billing_type",
-    "max_search_results",
-    "stats_format",
-    "portal_2fa_enabled",
-    "portal_2fa_method",
-]
-
-
-def get_subscriber_config_context(db: Session) -> dict:
-    return {
-        "subscriber_settings": _read_settings(
-            db, SettingDomain.subscriber, SUBSCRIBER_KEYS
-        )
-    }
-
-
-def save_subscriber_config(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.subscriber, data, SUBSCRIBER_KEYS)
+# 8.7 Subscriber Settings — REMOVED. The page's keys were not consumed by
+# subscriber creation, welcome messaging, search, statistics, or portal auth.
+# Real subscriber defaults live on their feature-specific forms/workflows.
 
 
 # ---------------------------------------------------------------------------
@@ -130,17 +165,6 @@ PORTAL_KEYS = [
     "selfcare_redirect_root",
     "admin_domain",
     "reseller_domain",
-    # Portal behaviour
-    "portal_language",
-    "portal_auth_field",
-    "portal_password_reset",
-    "portal_help_url",
-    "show_payment_due",
-    "show_bandwidth_usage",
-    "show_fup_rules",
-    "show_session_stats",
-    "mobile_app_google_play_id",
-    "mobile_app_appstore_id",
 ]
 
 
@@ -149,42 +173,13 @@ def get_portal_config_context(db: Session) -> dict:
 
 
 def save_portal_config(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.auth, data, PORTAL_KEYS)
+    _save_settings(db, SettingDomain.auth, data, PORTAL_KEYS, use_specs=True)
 
 
-# ---------------------------------------------------------------------------
-# 8.10 Data Retention
-# ---------------------------------------------------------------------------
-RETENTION_KEYS = [
-    "admin_logs_months",
-    "api_logs_months",
-    "internal_logs_months",
-    "portal_logs_months",
-    "usage_stats_months",
-    "task_logs_months",
-    "task_results_months",
-]
-RETENTION_DEFAULTS = {
-    "admin_logs_months": "6",
-    "api_logs_months": "1",
-    "internal_logs_months": "24",
-    "portal_logs_months": "12",
-    "usage_stats_months": "36",
-    "task_logs_months": "3",
-    "task_results_months": "24",
-}
-
-
-def get_retention_context(db: Session) -> dict:
-    settings = _read_settings(db, SettingDomain.audit, RETENTION_KEYS)
-    for k, v in RETENTION_DEFAULTS.items():
-        if not settings.get(k):
-            settings[k] = v
-    return {"retention": settings, "retention_defaults": RETENTION_DEFAULTS}
-
-
-def save_retention(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.audit, data, RETENTION_KEYS)
+# 8.10 Data Retention — REMOVED. The page's retention keys were inert: no cleanup
+# task or reporting path consumed them. Real retention controls live on the
+# feature-specific pages/tasks that enforce them, such as Monitoring, Bandwidth,
+# Restore Tool, NAS Backups, and WireGuard logs.
 
 
 # 8.11 Finance Automation — REMOVED. The page's toggles (auto_invoice_enabled,
@@ -761,38 +756,12 @@ def get_radius_config_context(db: Session) -> dict:
 
 
 def save_radius_config(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.radius, data, RADIUS_KEYS)
+    _save_settings(db, SettingDomain.radius, data, RADIUS_KEYS, use_specs=True)
 
 
-# ---------------------------------------------------------------------------
-# 8.22 CPE Configuration
-# ---------------------------------------------------------------------------
-CPE_KEYS = [
-    "kb_base",
-    "api_debug",
-    "api_timeout",
-    "api_attempts",
-    "qos_reverse",
-    "qos_download_queue_type",
-    "qos_upload_queue_type",
-    "blocking_enabled",
-    "redirect_ip",
-    "redirect_port",
-    "dhcp_enabled",
-    "dhcp_server_name",
-    "dhcp_interface",
-    "dhcp_lease_time",
-    "dhcp_dns_servers",
-    "wlan_management",
-]
-
-
-def get_cpe_config_context(db: Session) -> dict:
-    return {"cpe": _read_settings(db, SettingDomain.network, CPE_KEYS)}
-
-
-def save_cpe_config(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.network, data, CPE_KEYS)
+# 8.22 CPE Configuration — REMOVED. These QoS/blocking/DHCP/WLAN defaults had
+# no runtime consumers. Real CPE inventory, TR-069, and device API controls live
+# under Network > CPEs and on the CPE forms/details.
 
 
 # ---------------------------------------------------------------------------
@@ -802,9 +771,14 @@ MONITORING_KEYS = [
     "monitoring_vendors",
     "monitoring_device_types",
     "monitoring_groups",
-    "cpu_warn_pct",
-    "mem_warn_pct",
-    "interface_warn_pct",
+    "server_health_disk_warn_pct",
+    "server_health_disk_crit_pct",
+    "server_health_mem_warn_pct",
+    "server_health_mem_crit_pct",
+    "server_health_load_warn",
+    "server_health_load_crit",
+    "network_health_warn_pct",
+    "network_health_crit_pct",
     "device_metrics_retention_days",
     "alert_evaluation_interval_seconds",
     "ont_signal_warning_dbm",
@@ -825,9 +799,14 @@ def get_monitoring_config_context(db: Session) -> dict:
             "monitoring_vendors",
             "monitoring_device_types",
             "monitoring_groups",
-            "cpu_warn_pct",
-            "mem_warn_pct",
-            "interface_warn_pct",
+            "server_health_disk_warn_pct",
+            "server_health_disk_crit_pct",
+            "server_health_mem_warn_pct",
+            "server_health_mem_crit_pct",
+            "server_health_load_warn",
+            "server_health_load_crit",
+            "network_health_warn_pct",
+            "network_health_crit_pct",
             "device_metrics_retention_days",
             "alert_evaluation_interval_seconds",
             "ont_signal_warning_dbm",
@@ -867,6 +846,14 @@ def get_monitoring_config_context(db: Session) -> dict:
     if not settings.get("monitoring_groups"):
         settings["monitoring_groups"] = "Core Infrastructure,Access Layer,Customer CPE"
     defaults = {
+        "server_health_disk_warn_pct": "80",
+        "server_health_disk_crit_pct": "90",
+        "server_health_mem_warn_pct": "80",
+        "server_health_mem_crit_pct": "90",
+        "server_health_load_warn": "1.0",
+        "server_health_load_crit": "1.5",
+        "network_health_warn_pct": "90",
+        "network_health_crit_pct": "70",
         "device_metrics_retention_days": "90",
         "alert_evaluation_interval_seconds": "60",
         "ont_signal_warning_dbm": "-25",
@@ -892,15 +879,21 @@ def save_monitoring_config(db: Session, data: Mapping[str, Any]) -> None:
             "monitoring_vendors",
             "monitoring_device_types",
             "monitoring_groups",
-            "cpu_warn_pct",
-            "mem_warn_pct",
-            "interface_warn_pct",
+            "server_health_disk_warn_pct",
+            "server_health_disk_crit_pct",
+            "server_health_mem_warn_pct",
+            "server_health_mem_crit_pct",
+            "server_health_load_warn",
+            "server_health_load_crit",
+            "network_health_warn_pct",
+            "network_health_crit_pct",
             "device_metrics_retention_days",
             "alert_evaluation_interval_seconds",
             "ont_signal_warning_dbm",
             "ont_signal_critical_dbm",
             "ont_signal_alert_cooldown_minutes",
         ],
+        use_specs=True,
     )
     _save_settings(
         db,
@@ -910,6 +903,7 @@ def save_monitoring_config(db: Session, data: Mapping[str, Any]) -> None:
             "interface_walk_interval_seconds",
             "interface_discovery_interval_seconds",
         ],
+        use_specs=True,
     )
     _save_settings(
         db,
@@ -919,28 +913,13 @@ def save_monitoring_config(db: Session, data: Mapping[str, Any]) -> None:
             "hot_retention_hours",
             "cleanup_interval_seconds",
         ],
+        use_specs=True,
     )
 
 
-# ---------------------------------------------------------------------------
-# 8.25 Fair Usage Policy
-# ---------------------------------------------------------------------------
-FUP_KEYS = [
-    "fup_custom_reset_field",
-    "fup_monthly_reset_schedule",
-    "fup_weekly_reset_day",
-    "fup_send_notifications",
-    "fup_threshold_warn_pct",
-    "fup_threshold_critical_pct",
-]
-
-
-def get_fup_config_context(db: Session) -> dict:
-    return {"fup": _read_settings(db, SettingDomain.usage, FUP_KEYS)}
-
-
-def save_fup_config(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.usage, data, FUP_KEYS)
+# 8.25 Fair Usage Policy — REMOVED. These global reset/threshold fields were
+# not consumed by enforcement, usage metering, or notifications. Live FUP
+# controls are managed per catalog offer via the catalog FUP policy UI.
 
 
 # ---------------------------------------------------------------------------
@@ -966,23 +945,8 @@ def get_nas_types_context(db: Session) -> dict:
     return {"nas_types": types, "nas_types_raw": settings["nas_types_list"]}
 
 
-# ---------------------------------------------------------------------------
-# 8.27 IPv6 Configuration
-# ---------------------------------------------------------------------------
-IPV6_KEYS = [
-    "ipv6_auto_assign_enabled",
-    "ipv6_auto_assign_network",
-    "ipv6_default_prefix",
-    "ipv6_dual_stack_default",
-]
-
-
-def get_ipv6_config_context(db: Session) -> dict:
-    return {"ipv6": _read_settings(db, SettingDomain.network, IPV6_KEYS)}
-
-
-def save_ipv6_config(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.network, data, IPV6_KEYS)
+# 8.27 IPv6 Configuration — REMOVED. These defaults were not consumed by IPAM,
+# subscriber provisioning, or ONT service-intent code.
 
 
 def get_templates_context(db: Session) -> dict:
