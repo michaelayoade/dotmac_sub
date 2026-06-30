@@ -46,8 +46,12 @@ def build_accounts_list_data(
     status: str | None = None,
 ) -> dict[str, object]:
     offset = (page - 1) * per_page
-    base_query = db.query(Subscriber).filter(Subscriber.user_type != UserType.system_user)
-    base_query = base_query.filter(not_(subscriber_service.splynx_deleted_import_clause()))
+    base_query = db.query(Subscriber).filter(
+        Subscriber.user_type != UserType.system_user
+    )
+    base_query = base_query.filter(
+        not_(subscriber_service.splynx_deleted_import_clause())
+    )
     if customer_ref:
         subscriber_ids = web_billing_customers_service.subscriber_ids_for_customer(
             db, customer_ref
@@ -60,7 +64,9 @@ def build_accounts_list_data(
         base_query = base_query.filter(Subscriber.reseller_id == UUID(reseller_id))
     if status:
         try:
-            base_query = base_query.filter(Subscriber.status == SubscriberStatus(status))
+            base_query = base_query.filter(
+                Subscriber.status == SubscriberStatus(status)
+            )
         except ValueError:
             base_query = base_query.filter(False)
     if search and search.strip():
