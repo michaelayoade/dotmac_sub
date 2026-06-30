@@ -403,7 +403,9 @@ def _normalized_billing_config(data: Mapping[str, Any]) -> dict[str, Any]:
         _normalize_decimal_setting(normalized, key, label, minimum=Decimal("0"))
 
     _normalize_csv_days(normalized, "invoice_reminder_days", "Invoice Reminder Days")
-    _normalize_csv_days(normalized, "dunning_escalation_days", "Dunning Escalation Days")
+    _normalize_csv_days(
+        normalized, "dunning_escalation_days", "Dunning Escalation Days"
+    )
     return normalized
 
 
