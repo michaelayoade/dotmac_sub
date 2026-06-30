@@ -36,6 +36,14 @@ class IntegrationHookExecutionStatus(enum.Enum):
     failed = "failed"
 
 
+# Keys in ``IntegrationHook.auth_config`` whose values are secrets, encrypted at
+# rest. Single source of truth shared by the write path (integration_hooks
+# service), the use path, and credential_key_rotation.
+SECRET_AUTH_CONFIG_KEYS = frozenset(
+    {"token", "password", "secret", "api_key", "access_token", "refresh_token"}
+)
+
+
 class IntegrationHook(Base):
     __tablename__ = "integration_hooks"
 

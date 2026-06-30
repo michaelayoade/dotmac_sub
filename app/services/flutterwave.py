@@ -18,6 +18,9 @@ from app.services.settings_spec import resolve_value
 logger = logging.getLogger(__name__)
 
 FLUTTERWAVE_API_BASE = "https://api.flutterwave.com/v3"
+DEFAULT_GATEWAY_TIMEOUT_SECONDS = 30
+MIN_GATEWAY_TIMEOUT_SECONDS = 1
+MAX_GATEWAY_TIMEOUT_SECONDS = 120
 
 
 def _get_secret_key(db: Session | None = None) -> str:
@@ -45,6 +48,20 @@ def _get_secret_hash(db: Session | None = None) -> str:
         if val:
             return str(val)
     return os.getenv("FLUTTERWAVE_SECRET_HASH", "")
+
+
+def _get_timeout_seconds(db: Session | None = None) -> int:
+    if db:
+        value = resolve_value(db, SettingDomain.billing, "payment_gateway_timeout_seconds")
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            parsed = DEFAULT_GATEWAY_TIMEOUT_SECONDS
+        return max(
+            MIN_GATEWAY_TIMEOUT_SECONDS,
+            min(MAX_GATEWAY_TIMEOUT_SECONDS, parsed),
+        )
+    return DEFAULT_GATEWAY_TIMEOUT_SECONDS
 
 
 def generate_reference(invoice_number: str | None = None) -> str:
@@ -104,7 +121,7 @@ def initialize_transaction(
         f"{FLUTTERWAVE_API_BASE}/payments",
         json=payload,
         headers={"Authorization": f"Bearer {secret_key}"},
-        timeout=30,
+        timeout=_get_timeout_seconds(db),
     )
     resp.raise_for_status()
     data = resp.json()
@@ -140,7 +157,7 @@ def verify_transaction(db: Session, tx_ref: str) -> dict[str, Any]:
         f"{FLUTTERWAVE_API_BASE}/transactions/verify_by_reference",
         params={"tx_ref": tx_ref},
         headers={"Authorization": f"Bearer {secret_key}"},
-        timeout=30,
+        timeout=_get_timeout_seconds(db),
     )
     resp.raise_for_status()
     data = resp.json()

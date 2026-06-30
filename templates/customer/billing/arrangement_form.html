@@ -3,6 +3,7 @@
 {% block title %}Request Payment Arrangement - Customer Portal{% endblock %}
 
 {% block content %}
+{% set arrangement_currency = (selected_invoice.currency if selected_invoice and selected_invoice.currency else default_currency|default('NGN')) %}
 <div class="space-y-6">
     <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
@@ -47,7 +48,7 @@
         <h2 class="text-lg font-semibold text-slate-900 dark:text-white mb-4">Outstanding Balance</h2>
         <div class="flex items-center justify-between">
             <div>
-                <p class="text-3xl font-bold text-slate-900 dark:text-white">NGN {{ '{:,.2f}'.format(outstanding_balance or 0) }}</p>
+                <p class="text-3xl font-bold text-slate-900 dark:text-white">{{ arrangement_currency }} {{ '{:,.2f}'.format(outstanding_balance or 0) }}</p>
                 <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">Total amount due</p>
             </div>
             {% if overdue_invoices %}
@@ -122,11 +123,11 @@
                     <div class="flex items-center justify-between">
                         <span class="text-sm text-slate-500 dark:text-slate-400">Each installment:</span>
                         <span id="installment-amount" class="text-lg font-bold text-primary-600 dark:text-primary-400">
-                            NGN {{ '{:,.2f}'.format((outstanding_balance or 0) / 3) }}
+                            {{ arrangement_currency }} {{ '{:,.2f}'.format((outstanding_balance or 0) / 3) }}
                         </span>
                     </div>
                     <p id="payment-schedule" class="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                        3 payments of NGN {{ '{:,.2f}'.format((outstanding_balance or 0) / 3) }} (monthly)
+                        3 payments of {{ arrangement_currency }} {{ '{:,.2f}'.format((outstanding_balance or 0) / 3) }} (monthly)
                     </p>
                 </div>
             </div>
@@ -194,9 +195,10 @@
             maximumFractionDigits: 2
         });
 
-        document.getElementById('installment-amount').textContent = 'NGN ' + formattedAmount;
+        const currency = '{{ arrangement_currency }}';
+        document.getElementById('installment-amount').textContent = currency + ' ' + formattedAmount;
         document.getElementById('payment-schedule').textContent =
-            installments + ' payments of NGN ' + formattedAmount + ' (' + frequency + ')';
+            installments + ' payments of ' + currency + ' ' + formattedAmount + ' (' + frequency + ')';
     }
 </script>
 {% endblock %}

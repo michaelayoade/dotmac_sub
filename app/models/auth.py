@@ -3,6 +3,7 @@ import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -257,6 +258,11 @@ class ApiKey(Base):
     person_id: Mapped[uuid.UUID | None] = synonym("subscriber_id")
     label: Mapped[str | None] = mapped_column(String(120))
     key_hash: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    # Permission keys this key may exercise (wildcard-aware, like role grants).
+    # Empty = fail-closed: the key authenticates identity but carries no access.
+    scopes: Mapped[list[str]] = mapped_column(
+        JSON, nullable=False, default=list, server_default=text("'[]'")
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)

@@ -654,6 +654,53 @@ def create_connector(
     return connector_service.connector_configs.create(db, payload)
 
 
+# Header/metadata keys whose values are secrets — masked on display so a connector
+# detail page never re-renders pasted tokens (e.g. an Authorization header).
+SECRET_VALUE_SENTINEL = "__redacted__"
+_SECRET_KEY_HINTS = (
+    "authorization",
+    "token",
+    "secret",
+    "password",
+    "cookie",
+    "api_key",
+    "apikey",
+    "api-key",
+    "auth",
+    "credential",
+)
+
+
+def _is_secret_key(key: str) -> bool:
+    lowered = str(key).lower()
+    return any(hint in lowered for hint in _SECRET_KEY_HINTS)
+
+
+def mask_secret_values(data: dict | None) -> dict:
+    """Copy of ``data`` with secret-keyed values replaced by a sentinel."""
+    if not isinstance(data, dict):
+        return {}
+    return {
+        key: (SECRET_VALUE_SENTINEL if (_is_secret_key(key) and value) else value)
+        for key, value in data.items()
+    }
+
+
+def _unmask_secret_values(submitted: object, stored: dict | None) -> object:
+    """Restore sentinel values in a submitted dict from the stored original.
+
+    Lets the edit form show masked secrets and keep them on save unless the
+    operator types a new value over the mask.
+    """
+    if not isinstance(submitted, dict):
+        return submitted
+    stored = stored if isinstance(stored, dict) else {}
+    return {
+        key: (stored.get(key) if value == SECRET_VALUE_SENTINEL else value)
+        for key, value in submitted.items()
+    }
+
+
 def update_connector_config(
     db,
     connector_id: str,
@@ -670,15 +717,20 @@ def update_connector_config(
 ):
     from app.models.connector import ConnectorAuthType
 
+    existing = connector_service.connector_configs.get(db, connector_id)
     timeout_value = int(timeout_sec) if timeout_sec else None
     payload = ConnectorConfigUpdate(
         base_url=base_url.strip() if base_url else None,
         auth_type=validate_enum(auth_type, ConnectorAuthType, "auth_type"),
         timeout_sec=timeout_value,
         auth_config=_parse_json(auth_config, "auth_config"),
-        headers=_parse_json(headers, "headers"),
+        headers=_unmask_secret_values(
+            _parse_json(headers, "headers"), existing.headers
+        ),
         retry_policy=_parse_json(retry_policy, "retry_policy"),
-        metadata_=_parse_json(metadata, "metadata"),
+        metadata_=_unmask_secret_values(
+            _parse_json(metadata, "metadata"), existing.metadata_
+        ),
         notes=notes.strip() if notes else None,
         is_active=is_active,
     )

@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.schemas.chat import ChatSessionResponse
 from app.services import chat_session as chat_session_service
-from app.services import reseller_portal
+from app.services import quotes_mirror, reseller_crm_views, reseller_portal
 from app.services.auth_dependencies import require_user_auth
 
 router = APIRouter(prefix="/reseller", tags=["reseller"])
@@ -57,6 +57,16 @@ class ServiceRequestCreate(BaseModel):
     latitude: float | None = Field(default=None, ge=-90, le=90)
     longitude: float | None = Field(default=None, ge=-180, le=180)
     notes: str | None = Field(default=None, max_length=2000)
+
+
+class ResellerQuoteRequest(BaseModel):
+    """Request a map-pinned installation quote on a managed customer's behalf."""
+
+    latitude: float = Field(..., ge=-90, le=90)
+    longitude: float = Field(..., ge=-180, le=180)
+    address: str | None = Field(default=None, max_length=255)
+    region: str | None = Field(default=None, max_length=80)
+    note: str | None = Field(default=None, max_length=2000)
 
 
 def _reseller_id(db: Session, principal: dict) -> str:
@@ -737,3 +747,63 @@ def my_reseller_revenue(
     """Revenue summary — invoice amounts by month and status, last 12 months."""
     reseller_id = _reseller_id(db, principal)
     return reseller_portal.get_revenue_summary(db, reseller_id)
+
+
+# ── Sales/Quotes + installation tracking across the reseller's customers ──────
+
+
+@router.get("/quotes")
+def my_reseller_quotes(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> dict:
+    """Self-serve installation quotes across all the reseller's customers
+    (aggregated from the local CRM mirror; each row tagged with its account)."""
+    reseller_id = _reseller_id(db, principal)
+    return reseller_crm_views.quotes_for_reseller(db, reseller_id)
+
+
+@router.get("/projects")
+def my_reseller_projects(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> dict:
+    """Installation/projects across all the reseller's customers (stage +
+    progress), from the local mirror."""
+    reseller_id = _reseller_id(db, principal)
+    return reseller_crm_views.projects_for_reseller(db, reseller_id)
+
+
+@router.get("/work-orders")
+def my_reseller_work_orders(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> dict:
+    """Field-service work orders across all the reseller's customers (technician,
+    schedule, ETA, status), from the local mirror."""
+    reseller_id = _reseller_id(db, principal)
+    return reseller_crm_views.work_orders_for_reseller(db, reseller_id)
+
+
+@router.post("/accounts/{account_id}/quote-request", status_code=201)
+def my_reseller_quote_request(
+    account_id: str,
+    payload: ResellerQuoteRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> dict:
+    """Request a map-pinned installation quote on a managed customer's behalf.
+    404 if the account isn't one of the reseller's (no IDOR)."""
+    reseller_id = _reseller_id(db, principal)
+    account = reseller_portal._get_customer_account(db, reseller_id, account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="Account not found")
+    return quotes_mirror.request_quote(
+        db,
+        str(account.id),
+        latitude=payload.latitude,
+        longitude=payload.longitude,
+        address=payload.address,
+        region=payload.region,
+        note=payload.note,
+    )

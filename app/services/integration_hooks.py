@@ -17,6 +17,7 @@ from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from app.models.integration_hook import (
+    SECRET_AUTH_CONFIG_KEYS,
     IntegrationHook,
     IntegrationHookAuthType,
     IntegrationHookExecution,
@@ -33,9 +34,19 @@ from app.services.credential_crypto import decrypt_credential, encrypt_credentia
 
 logger = logging.getLogger(__name__)
 
-HOOK_AUTH_SECRET_KEYS = frozenset({"token", "password", "secret"})
+HOOK_AUTH_SECRET_KEYS = SECRET_AUTH_CONFIG_KEYS
 MIN_HOOK_TIMEOUT_SECONDS = 1
 MAX_HOOK_TIMEOUT_SECONDS = 300
+
+
+def _decrypt_auth_secret(auth_config: object, key: str) -> str:
+    """Return a decrypted secret value from a hook ``auth_config`` or ``""``."""
+    if not isinstance(auth_config, dict):
+        return ""
+    raw = auth_config.get(key)
+    if raw is None:
+        return ""
+    return str(decrypt_credential(str(raw)) or "")
 
 HOOK_TEMPLATES: dict[str, dict[str, Any]] = {
     "n8n": {
@@ -472,17 +483,17 @@ def _execute_http_hook(
     headers: dict[str, str] = {"Content-Type": "application/json"}
     auth_config = decrypt_hook_auth_config(hook.auth_config)
     if hook.auth_type == IntegrationHookAuthType.bearer:
-        token = str(auth_config.get("token") or "")
+        token = _decrypt_auth_secret(auth_config, "token")
         if token:
             headers["Authorization"] = f"Bearer {token}"
     elif hook.auth_type == IntegrationHookAuthType.basic:
         username = str(auth_config.get("username") or "")
-        password = str(auth_config.get("password") or "")
+        password = _decrypt_auth_secret(auth_config, "password")
         if username or password:
             token = base64.b64encode(f"{username}:{password}".encode()).decode("ascii")
             headers["Authorization"] = f"Basic {token}"
     elif hook.auth_type == IntegrationHookAuthType.hmac:
-        secret = str(auth_config.get("secret") or "")
+        secret = _decrypt_auth_secret(auth_config, "secret")
         if secret:
             headers["X-Hook-Secret"] = secret
     response = httpx.request(

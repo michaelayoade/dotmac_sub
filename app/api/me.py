@@ -9,6 +9,7 @@ subscriber can read their own data without holding staff permissions.
 Mounted at /api/v1/me with router-level require_user_auth (see main.py).
 """
 
+import logging
 from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
@@ -69,6 +70,21 @@ from app.schemas.notification import (
     PushTokenRead,
     PushTokenRegister,
 )
+from app.schemas.portal import (
+    MyProjectsResponse,
+    MyQuotesResponse,
+    MyReferralsResponse,
+    MyWorkOrdersResponse,
+    PortalSessionResponse,
+    QuoteDepositInitiateRequest,
+    QuoteDepositInitiateResponse,
+    QuoteDepositVerifyRequest,
+    QuoteDepositVerifyResponse,
+    QuoteItem,
+    QuoteRequestCreate,
+    ReferAFriendRequest,
+    ReferAFriendResponse,
+)
 from app.schemas.service_status import ServiceStatusResponse
 from app.schemas.subscriber import (
     AccountDeletionRequest,
@@ -121,13 +137,21 @@ from app.services import customer_portal_flow_payment_methods as customer_cards
 from app.services import customer_portal_flow_payments as customer_payments
 from app.services import geocoding as geocoding_service
 from app.services import notification as notification_service
+from app.services import portal_session as portal_session_service
+from app.services import (
+    projects_mirror,
+    quote_deposits,
+    quotes_mirror,
+    referrals_mirror,
+    web_support_tickets,
+    work_orders_mirror,
+)
 from app.services import push as push_service
 from app.services import support as support_service
 from app.services import usage as usage_service
 from app.services import usage_summary as usage_summary_service
 from app.services import vas_purchases as vas_purchases_service
 from app.services import vas_wallet as vas_wallet_service
-from app.services import web_support_tickets
 from app.services.auth_dependencies import require_user_auth
 from app.services.bandwidth import (
     add_directions_to_series,
@@ -137,6 +161,16 @@ from app.services.bandwidth import (
 from app.services.topology import selfcare as topology_selfcare
 
 router = APIRouter(prefix="/me", tags=["me"])
+logger = logging.getLogger(__name__)
+PAYMENT_CHARGE_ERROR_MESSAGE = (
+    "We could not charge that saved card. Please use another payment method or "
+    "try again later."
+)
+CARD_SAVE_SUCCESS_MESSAGE = "Your card was saved for future payments."
+CARD_SAVE_ERROR_MESSAGE = (
+    "Payment was recorded, but we could not save this card. You can add a card "
+    "from Payment Methods."
+)
 
 
 def _subscriber_id(principal: dict) -> str:
@@ -667,6 +701,12 @@ def my_topup_initiate(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.warning("Customer API saved-card top-up charge failed", exc_info=True)
+        raise HTTPException(
+            status_code=400,
+            detail=PAYMENT_CHARGE_ERROR_MESSAGE,
+        ) from exc
     return TopupInitiateResponse(
         intent_id=result["intent_id"],
         provider_type=result["provider_type"],
@@ -694,16 +734,27 @@ def my_topup_verify(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    card_saved: bool | None = None
+    card_save_message: str | None = None
     if payload.save_card:
-        customer_cards.capture_card_after_payment(
-            db, customer["account_id"], payload.reference, None
-        )
+        try:
+            customer_cards.capture_card_after_payment(
+                db, customer["account_id"], payload.reference, None
+            )
+            card_saved = True
+            card_save_message = CARD_SAVE_SUCCESS_MESSAGE
+        except Exception:
+            logger.warning("Customer API top-up card capture failed", exc_info=True)
+            card_saved = False
+            card_save_message = CARD_SAVE_ERROR_MESSAGE
     return TopupVerifyResponse(
         reference=payload.reference,
         amount=Decimal(str(result.get("amount") or "0")),
         already_recorded=result.get("already_recorded", False),
         available_balance=result.get("available_balance"),
         credit_added=result.get("credit_added"),
+        card_saved=card_saved,
+        card_save_message=card_save_message,
     )
 
 
@@ -747,6 +798,153 @@ def my_chat_session(
     """
     subscriber_id = _subscriber_id(principal)
     return chat_session_service.broker_customer_session(db, subscriber_id)
+
+
+@router.post("/portal/session", response_model=PortalSessionResponse)
+def my_portal_session(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Mint a scoped customer Portal API token (RFC #73).
+
+    The sub asserts the authenticated subscriber's identity to the CRM and
+    returns a short-lived, scoped token plus the absolute base URL the client
+    uses to call the CRM Portal API directly (e.g. Refer & Earn).
+    """
+    subscriber_id = _subscriber_id(principal)
+    return portal_session_service.broker_customer_portal_session(db, subscriber_id)
+
+
+@router.get("/referrals", response_model=MyReferralsResponse)
+def my_referrals(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """The caller's Refer & Earn summary — code, share link, program terms, and
+    history — served from the local mirror (refreshed from the CRM lazily)."""
+    subscriber_id = _subscriber_id(principal)
+    return referrals_mirror.read_for_subscriber(db, subscriber_id)
+
+
+@router.get("/projects", response_model=MyProjectsResponse)
+def my_projects(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """The caller's installations/projects — stage timeline + progress % —
+    served from the local mirror (refreshed from the CRM lazily)."""
+    subscriber_id = _subscriber_id(principal)
+    return projects_mirror.read_for_subscriber(db, subscriber_id)
+
+
+@router.get("/work-orders", response_model=MyWorkOrdersResponse)
+def my_work_orders(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """The caller's field-service work orders — technician, schedule, ETA,
+    status — served from the local mirror (refreshed from the CRM lazily)."""
+    subscriber_id = _subscriber_id(principal)
+    return work_orders_mirror.read_for_subscriber(db, subscriber_id)
+
+
+@router.get("/quotes", response_model=MyQuotesResponse)
+def my_quotes(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """The caller's self-serve installation quotes — feasibility, estimate,
+    deposit, status — served from the local mirror (refreshed lazily)."""
+    subscriber_id = _subscriber_id(principal)
+    return quotes_mirror.read_for_subscriber(db, subscriber_id)
+
+
+@router.post("/quote-request", response_model=QuoteItem, status_code=201)
+def my_quote_request(
+    payload: QuoteRequestCreate,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Request a map-pinned installation quote. The dropped pin drives the CRM's
+    feasibility check (proximity to fiber) + estimate + deposit; the result is
+    mirrored locally and returned."""
+    subscriber_id = _subscriber_id(principal)
+    return quotes_mirror.request_quote(
+        db,
+        subscriber_id,
+        latitude=payload.latitude,
+        longitude=payload.longitude,
+        address=payload.address,
+        region=payload.region,
+        note=payload.note,
+    )
+
+
+@router.post(
+    "/quotes/{quote_id}/deposit/initiate", response_model=QuoteDepositInitiateResponse
+)
+def my_quote_deposit_initiate(
+    quote_id: str,
+    payload: QuoteDepositInitiateRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Start paying a quote's installation deposit. Raises a deposit invoice and
+    returns a checkout intent via the customer's existing pay flow (any provider)."""
+    subscriber_id = _subscriber_id(principal)
+    customer = _customer(db, principal)
+    return quote_deposits.initiate_deposit(
+        db,
+        customer,
+        subscriber_id,
+        quote_id,
+        provider=payload.provider,
+        redirect_url=payload.redirect_url,
+    )
+
+
+@router.post(
+    "/quotes/{quote_id}/deposit/verify", response_model=QuoteDepositVerifyResponse
+)
+def my_quote_deposit_verify(
+    quote_id: str,
+    payload: QuoteDepositVerifyRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Verify the deposit payment; on full settlement the quote is accepted in the
+    CRM (which triggers the sales order + install project)."""
+    subscriber_id = _subscriber_id(principal)
+    customer = _customer(db, principal)
+    return quote_deposits.verify_deposit(
+        db,
+        customer,
+        subscriber_id,
+        quote_id,
+        reference=payload.reference,
+        provider=payload.provider,
+    )
+
+
+@router.post("/referrals", response_model=ReferAFriendResponse, status_code=201)
+def my_refer_a_friend(
+    payload: ReferAFriendRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Refer a friend: capture in the CRM (source of truth), mirror locally."""
+    subscriber_id = _subscriber_id(principal)
+    try:
+        return referrals_mirror.refer_a_friend(
+            db,
+            subscriber_id,
+            name=payload.name,
+            email=payload.email,
+            phone=payload.phone,
+            note=payload.note,
+        )
+    except referrals_mirror.ReferralError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
 
 @router.get("/notifications", response_model=ListResponse[NotificationRead])

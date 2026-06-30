@@ -45,7 +45,11 @@ def legal_document_new(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/system/legal/form.html", context)
 
 
-@router.post("/new", response_class=HTMLResponse)
+@router.post(
+    "/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:write"))],
+)
 def legal_document_create(
     request: Request,
     document_type: str = Form(...),
@@ -120,7 +124,11 @@ def legal_document_edit(
     return templates.TemplateResponse("admin/system/legal/form.html", context)
 
 
-@router.post("/{document_id}/edit", response_class=HTMLResponse)
+@router.post(
+    "/{document_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:write"))],
+)
 def legal_document_update(
     request: Request,
     document_id: str,
@@ -172,7 +180,11 @@ def legal_document_update(
         )
 
 
-@router.post("/{document_id}/upload", response_class=HTMLResponse)
+@router.post(
+    "/{document_id}/upload",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:write"))],
+)
 def legal_document_upload(
     request: Request,
     document_id: str,
@@ -209,7 +221,11 @@ def legal_document_upload(
         )
 
 
-@router.post("/{document_id}/delete-file", response_class=HTMLResponse)
+@router.post(
+    "/{document_id}/delete-file",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:write"))],
+)
 def legal_document_delete_file(
     request: Request, document_id: str, db: Session = Depends(get_db)
 ):
@@ -243,7 +259,11 @@ def legal_document_publish(
     return RedirectResponse(url=f"/admin/system/legal/{document.id}", status_code=303)
 
 
-@router.post("/{document_id}/unpublish", response_class=HTMLResponse)
+@router.post(
+    "/{document_id}/unpublish",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:write"))],
+)
 def legal_document_unpublish(
     request: Request, document_id: str, db: Session = Depends(get_db)
 ):
@@ -258,7 +278,11 @@ def legal_document_unpublish(
     return RedirectResponse(url=f"/admin/system/legal/{document.id}", status_code=303)
 
 
-@router.post("/{document_id}/delete", response_class=HTMLResponse)
+@router.post(
+    "/{document_id}/delete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:write"))],
+)
 def legal_document_delete(
     request: Request, document_id: str, db: Session = Depends(get_db)
 ):

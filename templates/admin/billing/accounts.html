@@ -3,7 +3,7 @@
     ambient_background, page_header, stats_card,
     table_head, table_row, row_actions, row_action, status_badge,
     empty_state, action_button, animation_styles,
-    icon_plus, icon_view, icon_invoice, icon_delete
+    icon_plus, icon_view, icon_invoice
 %}
 
 {% block title %}Billing Accounts - Admin{% endblock %}
@@ -26,10 +26,9 @@
 
     {# ── Summary Stats ── #}
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {% set total_balance_value = total_balance | default(0) %}
         {{ stats_card(
             "Total Balance",
-            "₦" ~ "{:,.2f}".format(total_balance_value),
+            total_balance_display,
             icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
             color="amber", color2="orange"
         ) }}
@@ -55,7 +54,7 @@
 
     {# ── Filters ── #}
     <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white/80 backdrop-blur-sm p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800/80">
-        <form hx-get="/admin/billing/accounts" hx-target="#accounts-table" hx-trigger="submit, change from:select" class="flex flex-col gap-4 sm:flex-row sm:items-end">
+        <form method="get" action="/admin/billing/accounts" class="flex flex-col gap-4 sm:flex-row sm:items-end">
             <div class="flex-1">
                 <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Search</label>
                 <div class="relative">
@@ -63,7 +62,7 @@
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
                     </svg>
                     <input type="text" name="search" placeholder="Search accounts..."
-                           hx-get="/admin/billing/accounts" hx-target="#accounts-table" hx-trigger="keyup changed delay:300ms"
+                           value="{{ search or '' }}"
                            class="block w-full rounded-xl border-0 bg-slate-100 py-3 pl-10 pr-4 text-sm text-slate-900 placeholder-slate-500 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:placeholder-slate-400 dark:focus:bg-slate-600" />
                 </div>
             </div>
@@ -73,30 +72,22 @@
                     <input type="text" data-typeahead-input
                            placeholder="Search customers..."
                            class="block w-full rounded-xl border-0 bg-slate-100 py-3 pl-4 pr-4 text-sm text-slate-900 placeholder-slate-500 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:placeholder-slate-400 dark:focus:bg-slate-600" />
-                    <input type="hidden" name="customer_ref" data-typeahead-hidden
-                           hx-get="/admin/billing/accounts" hx-target="#accounts-table" hx-trigger="change" hx-include="closest form"
-                           value="{{ customer_ref or '' }}">
+                    <input type="hidden" name="customer_ref" data-typeahead-hidden value="{{ customer_ref or '' }}">
                     <div data-typeahead-results></div>
                 </div>
             </div>
             <div class="w-full sm:w-48">
                 <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Status</label>
                 <select name="status" class="block w-full rounded-xl border-0 bg-slate-100 py-3 pl-4 pr-10 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:focus:bg-slate-600">
-                    <option value="">All Status</option>
-                    <option value="active">Active</option>
-                    <option value="suspended">Blocked</option>
-                    <option value="closed">Closed</option>
+                    <option value="" {% if not status_filter %}selected{% endif %}>All Status</option>
+                    <option value="active" {% if status_filter == "active" %}selected{% endif %}>Active</option>
+                    <option value="blocked" {% if status_filter == "blocked" %}selected{% endif %}>Blocked</option>
+                    <option value="suspended" {% if status_filter == "suspended" %}selected{% endif %}>Suspended</option>
+                    <option value="disabled" {% if status_filter == "disabled" %}selected{% endif %}>Disabled</option>
+                    <option value="canceled" {% if status_filter == "canceled" %}selected{% endif %}>Canceled</option>
                 </select>
             </div>
-            <div class="w-full sm:w-48">
-                <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Balance</label>
-                <select name="balance_filter" class="block w-full rounded-xl border-0 bg-slate-100 py-3 pl-4 pr-10 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:focus:bg-slate-600">
-                    <option value="">Any Balance</option>
-                    <option value="positive">Has Balance Due</option>
-                    <option value="zero">Zero Balance</option>
-                    <option value="credit">Credit Balance</option>
-                </select>
-            </div>
+            <button type="submit" class="inline-flex justify-center rounded-xl bg-amber-600 px-4 py-3 text-sm font-semibold text-white hover:bg-amber-700">Apply</button>
         </form>
     </div>
 
@@ -145,8 +136,9 @@
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">
                             {% set balance = account.balance | default(0) %}
+                            {% set account_currency = account.currency if account.currency is defined else default_currency|default('NGN') %}
                             <span class="text-sm font-bold font-mono tabular-nums {% if balance > 0 %}text-amber-600 dark:text-amber-400{% elif balance < 0 %}text-emerald-600 dark:text-emerald-400{% else %}text-slate-600 dark:text-slate-400{% endif %}">
-                                ₦{{ "{:,.2f}".format(balance) }}
+                                {{ account_currency }} {{ "{:,.2f}".format(balance) }}
                             </span>
                             {% if balance > 0 %}
                             <p class="text-xs text-slate-500 dark:text-slate-400">Due</p>
@@ -162,24 +154,6 @@
                                 {{ row_action(href="/admin/billing/accounts/" ~ account.id, icon=icon_view(), title="View Details", color="amber") }}
                                 {{ row_action(href="/admin/billing/accounts/" ~ account.id ~ "/edit", icon='<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>', title="Edit Account", color="blue") }}
                                 {{ row_action(href="/admin/billing/invoices/new?account=" ~ account.id, icon=icon_invoice("h-4 w-4"), title="Create Invoice", color="emerald") }}
-                                {% set status_action = account.status | default('active') %}
-                                {% set status_action_val = status_action.value if status_action is not string else status_action %}
-                                {% if status_action_val == 'active' %}
-                                <button hx-post="/admin/billing/accounts/{{ account.id }}/deactivate"
-                                        hx-confirm="Deactivate this account before deleting?"
-                                        class="inline-flex items-center justify-center rounded-lg p-2 text-slate-400 transition-all hover:bg-amber-100 hover:text-amber-600 dark:hover:bg-amber-900/30 dark:hover:text-amber-400"
-                                        title="Deactivate Account">
-                                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
-                                </button>
-                                {% endif %}
-                                <button hx-delete="/admin/billing/accounts/{{ account.id }}"
-                                        hx-confirm="Delete this billing account? This action cannot be undone."
-                                        hx-target="closest tr"
-                                        hx-swap="outerHTML swap:0.5s"
-                                        class="inline-flex items-center justify-center rounded-lg p-2 text-slate-400 transition-all hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-900/30 dark:hover:text-red-400"
-                                        title="Delete Account">
-                                    {{ icon_delete() }}
-                                </button>
                             </div>
                         </td>
                     {% endcall %}
