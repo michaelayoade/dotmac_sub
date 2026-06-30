@@ -24,8 +24,15 @@ from app.services.connectivity_reconciler import (
 )
 
 
-def _seed_sub(db_session, *, login, offer, status=SubscriptionStatus.active,
-              col_ip=None, with_active_credential=False):
+def _seed_sub(
+    db_session,
+    *,
+    login,
+    offer,
+    status=SubscriptionStatus.active,
+    col_ip=None,
+    with_active_credential=False,
+):
     subscriber = Subscriber(
         first_name="Susp", last_name="Case", email=f"{login}@example.com"
     )
@@ -84,9 +91,7 @@ def test_terminal_releases_everything():
 def test_fraud_hard_reject_is_suspended_not_captive():
     """A fraud lock projects ``suspended`` (Auth-Type Reject), not captive."""
     normal = derive_desired_connectivity(SubscriptionStatus.suspended)
-    fraud = derive_desired_connectivity(
-        SubscriptionStatus.suspended, hard_reject=True
-    )
+    fraud = derive_desired_connectivity(SubscriptionStatus.suspended, hard_reject=True)
     assert normal.access_state is AccessState.captive
     assert fraud.access_state is AccessState.suspended
 
@@ -98,7 +103,9 @@ def test_fraud_hard_reject_is_suspended_not_captive():
 
 def test_converge_suspended_returns_suspend_shadow_plan(db_session, catalog_offer):
     sub = _seed_sub(
-        db_session, login="s1", offer=catalog_offer,
+        db_session,
+        login="s1",
+        offer=catalog_offer,
         status=SubscriptionStatus.suspended,
     )
     plan = converge_subscription_connectivity(db_session, str(sub.id), apply=False)
@@ -112,12 +119,13 @@ def test_converge_suspended_returns_suspend_shadow_plan(db_session, catalog_offe
     assert "kick_live_session" in kinds
 
 
-def test_converge_suspended_with_credential_no_ensure_action(
-    db_session, catalog_offer
-):
+def test_converge_suspended_with_credential_no_ensure_action(db_session, catalog_offer):
     sub = _seed_sub(
-        db_session, login="s2", offer=catalog_offer,
-        status=SubscriptionStatus.suspended, col_ip="10.0.0.5",
+        db_session,
+        login="s2",
+        offer=catalog_offer,
+        status=SubscriptionStatus.suspended,
+        col_ip="10.0.0.5",
         with_active_credential=True,
     )
     plan = plan_subscription_suspend(db_session, sub)
@@ -129,7 +137,9 @@ def test_converge_suspended_with_credential_no_ensure_action(
 
 def test_converge_suspended_writes_nothing(db_session, catalog_offer):
     sub = _seed_sub(
-        db_session, login="s3", offer=catalog_offer,
+        db_session,
+        login="s3",
+        offer=catalog_offer,
         status=SubscriptionStatus.suspended,
     )
     before = sub.access_state
@@ -183,9 +193,9 @@ def test_enqueue_gate_skips_unchanged_signature(monkeypatch):
         "app.services.connectivity_reconciler._shadow_redis", lambda: fake
     )
     sid = "sub-xyz"
-    assert _should_enqueue_refresh(sid, "abc123") is True   # first time → enqueue
+    assert _should_enqueue_refresh(sid, "abc123") is True  # first time → enqueue
     assert _should_enqueue_refresh(sid, "abc123") is False  # unchanged → skip
-    assert _should_enqueue_refresh(sid, "def456") is True   # changed → enqueue
+    assert _should_enqueue_refresh(sid, "def456") is True  # changed → enqueue
 
 
 def test_enqueue_gate_allows_when_redis_unavailable(monkeypatch):

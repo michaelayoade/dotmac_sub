@@ -37,9 +37,7 @@ def _seed_full(db_session, *, login, offer, ip="10.0.0.9"):
     )
     db_session.add(sub)
     db_session.flush()
-    cred = AccessCredential(
-        subscriber_id=subscriber.id, username=login, is_active=True
-    )
+    cred = AccessCredential(subscriber_id=subscriber.id, username=login, is_active=True)
     db_session.add(cred)
     db_session.flush()
     db_session.add(
@@ -133,7 +131,10 @@ def test_restore_apply_reverts_local_state(db_session, catalog_offer):
     db_session.commit()
 
     plan = restore_connectivity_state(
-        db_session, backup.id, dry_run=False, include_radius=False,
+        db_session,
+        backup.id,
+        dry_run=False,
+        include_radius=False,
         restored_by="tester",
     )
     assert plan["applied"] is True

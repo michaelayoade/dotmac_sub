@@ -60,12 +60,10 @@ _RADIUS_DELETE = {
 }
 _RADIUS_INSERT = {
     "radcheck": (
-        "INSERT INTO radcheck (username, attribute, op, value) "
-        "VALUES (%s, %s, %s, %s)"
+        "INSERT INTO radcheck (username, attribute, op, value) VALUES (%s, %s, %s, %s)"
     ),
     "radreply": (
-        "INSERT INTO radreply (username, attribute, op, value) "
-        "VALUES (%s, %s, %s, %s)"
+        "INSERT INTO radreply (username, attribute, op, value) VALUES (%s, %s, %s, %s)"
     ),
 }
 
@@ -90,9 +88,7 @@ def _subscriber_usernames(db: Session, subscriber_id: Any) -> list[str]:
             names.append(v)
 
     for username in db.scalars(
-        select(AccessCredential.username).where(
-            AccessCredential.subscriber_id == sid
-        )
+        select(AccessCredential.username).where(AccessCredential.subscriber_id == sid)
     ).all():
         _add(username)
     for username in db.scalars(
@@ -305,7 +301,10 @@ def _restore_radius_rows(backup: ConnectivityStateBackup) -> dict[str, int]:
             if rows:
                 conn.cursor().executemany(
                     _RADIUS_INSERT[table],
-                    [(r["username"], r["attribute"], r["op"], r["value"]) for r in rows],
+                    [
+                        (r["username"], r["attribute"], r["op"], r["value"])
+                        for r in rows
+                    ],
                 )
             counts[f"{table}_restored"] = len(rows)
         conn.commit()
@@ -364,9 +363,7 @@ def restore_connectivity_state(
     ip_state = backup.ip_state or {}
     sub_snap = {s["id"]: s for s in ip_state.get("subscriptions", [])}
     for sub in db.scalars(
-        select(Subscription).where(
-            Subscription.subscriber_id == backup.subscriber_id
-        )
+        select(Subscription).where(Subscription.subscriber_id == backup.subscriber_id)
     ).all():
         snap = sub_snap.get(str(sub.id))
         if snap is not None:
@@ -374,9 +371,7 @@ def restore_connectivity_state(
             sub.ipv6_address = snap.get("ipv6_address")
     assign_snap = {a["id"]: a for a in ip_state.get("assignments", [])}
     for assign in db.scalars(
-        select(IPAssignment).where(
-            IPAssignment.subscriber_id == backup.subscriber_id
-        )
+        select(IPAssignment).where(IPAssignment.subscriber_id == backup.subscriber_id)
     ).all():
         snap = assign_snap.get(str(assign.id))
         if snap is not None and snap.get("is_active") is not None:
