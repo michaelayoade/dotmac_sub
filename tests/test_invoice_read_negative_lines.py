@@ -16,8 +16,12 @@ from app.schemas.billing import (
     CreditNoteRead,
     InvoiceLineRead,
     InvoiceRead,
+    LedgerEntryRead,
     PaymentAllocationRead,
+    PaymentRead,
+    TaxRateRead,
 )
+from app.schemas.usage import UsageChargeRead
 
 
 def test_invoice_line_read_allows_negative_amounts():
@@ -175,3 +179,93 @@ def test_credit_note_line_and_application_read_standalone():
         }
     )
     assert app.amount == Decimal("-100.00")
+
+
+# --- Audit follow-up: the same #560 class on other served read models --------
+
+
+def test_invoice_and_credit_note_line_read_allow_zero_quantity():
+    """#560 fixed amount/unit_price but not quantity; a zero-qty flat true-up
+    line would still 500 the list. Read models must allow it."""
+    base = {
+        "id": uuid.uuid4(),
+        "description": "Flat true-up",
+        "quantity": Decimal("0.000"),
+        "unit_price": Decimal("0.00"),
+        "amount": Decimal("-5000.00"),
+        "created_at": datetime.now(UTC),
+        "updated_at": datetime.now(UTC),
+    }
+    inv_line = InvoiceLineRead.model_validate({**base, "invoice_id": uuid.uuid4()})
+    cn_line = CreditNoteLineRead.model_validate(
+        {**base, "credit_note_id": uuid.uuid4()}
+    )
+    assert inv_line.quantity == Decimal("0.000")
+    assert cn_line.quantity == Decimal("0.000")
+
+
+def test_ledger_entry_read_allows_signed_amount():
+    """Ledger entries are inherently signed (debit/credit/reversal)."""
+    entry = LedgerEntryRead.model_validate(
+        {
+            "id": uuid.uuid4(),
+            "account_id": uuid.uuid4(),
+            "entry_type": "credit",
+            "amount": Decimal("-12500.00"),
+            "created_at": datetime.now(UTC),
+            "updated_at": datetime.now(UTC),
+        }
+    )
+    assert entry.amount == Decimal("-12500.00")
+
+
+def test_payment_read_allows_zero_and_negative_amount():
+    """Refund/reversal/zero payments must serialize (was gt=0)."""
+    for amt in (Decimal("0.00"), Decimal("-2500.00")):
+        p = PaymentRead.model_validate(
+            {
+                "id": uuid.uuid4(),
+                "account_id": uuid.uuid4(),
+                "amount": amt,
+                "created_at": datetime.now(UTC),
+                "updated_at": datetime.now(UTC),
+            }
+        )
+        assert p.amount == amt
+
+
+def test_tax_rate_read_allows_100_percent():
+    """A 100% rate sits at the create-side lt=100 bound and must read back."""
+    tr = TaxRateRead.model_validate(
+        {
+            "id": uuid.uuid4(),
+            "name": "Full pass-through",
+            "rate": Decimal("100.0000"),
+            "created_at": datetime.now(UTC),
+            "updated_at": datetime.now(UTC),
+        }
+    )
+    assert tr.rate == Decimal("100.0000")
+
+
+def test_usage_charge_read_allows_negative_money():
+    """The live /usage-charges 500: usage credits/adjustments are negative."""
+    uc = UsageChargeRead.model_validate(
+        {
+            "id": uuid.uuid4(),
+            "account_id": uuid.uuid4(),
+            "subscription_id": uuid.uuid4(),
+            "subscriber_id": uuid.uuid4(),
+            "period_start": datetime.now(UTC),
+            "period_end": datetime.now(UTC),
+            "total_gb": Decimal("-1.0000"),
+            "included_gb": Decimal("0.0000"),
+            "billable_gb": Decimal("-1.0000"),
+            "unit_price": Decimal("100.0000"),
+            "amount": Decimal("-100.00"),
+            "created_at": datetime.now(UTC),
+            "updated_at": datetime.now(UTC),
+        }
+    )
+    assert uc.amount == Decimal("-100.00")
+    assert uc.billable_gb == Decimal("-1.0000")
