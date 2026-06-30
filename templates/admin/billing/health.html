@@ -1,0 +1,169 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import page_header, stats_card, status_badge, icon_shield, icon_warning, icon_check_circle, icon_credit_card, icon_clock, icon_refresh %}
+
+{% block title %}Billing Health - Admin{% endblock %}
+
+{% block content %}
+{% set anomaly_count = snapshot.anomalies|length %}
+<div class="space-y-5">
+    {% call page_header("Billing Health", "Billing automation, ledger integrity, autopay, and runner liveness.", icon_shield(), "green", "emerald") %}
+    <a href="/admin/billing/health" class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+        {{ icon_refresh("h-4 w-4") }}
+        Refresh
+    </a>
+    {% endcall %}
+
+    <section class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {{ stats_card("Health Signals", anomaly_count, icon_warning(), "amber", "orange") }}
+        {{ stats_card("Launch Blockers", integrity_blocking_count, icon_shield(), "rose", "pink") }}
+        {{ stats_card("Autopay Suspended", autopay.suspended, icon_credit_card(), "violet", "purple") }}
+        {{ stats_card("Stale Runners", snapshot.stale_runners|length + (1 if autopay.task.stale else 0), icon_clock(), "blue", "cyan") }}
+    </section>
+
+    <section class="grid gap-4 xl:grid-cols-2">
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-100 px-5 py-4 dark:border-slate-700/60">
+                <h2 class="text-sm font-bold text-slate-900 dark:text-white">Billing Signals</h2>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Generated {{ generated_at.strftime('%Y-%m-%d %H:%M UTC') if generated_at else '' }}</p>
+            </div>
+            <div class="divide-y divide-slate-100 dark:divide-slate-700/60">
+                {% set signals = [
+                    ("Paid invoices with balance", snapshot.paid_with_balance_count, snapshot.paid_with_balance_total),
+                    ("Latest invoice scan", snapshot.last_scanned if snapshot.last_scanned is not none else "No run", snapshot.eligible_active_subs ~ " eligible"),
+                    ("Payment volume ratio", "{:.0%}".format(snapshot.payment_volume_ratio) if snapshot.payment_volume_ratio is not none else "No baseline", "{:.1f}/day baseline".format(snapshot.payments_7d_daily_avg)),
+                    ("Covered but locked", snapshot.covered_but_locked, "accounts"),
+                    ("Active subs without billing path", snapshot.unbilled_no_path, "subscriptions"),
+                    ("Active subs on terminal account", snapshot.active_subs_on_terminal_account, "subscriptions")
+                ] %}
+                {% for label, value, detail in signals %}
+                <div class="flex items-center justify-between gap-4 px-5 py-3">
+                    <div>
+                        <p class="text-sm font-semibold text-slate-800 dark:text-slate-100">{{ label }}</p>
+                        <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{{ detail }}</p>
+                    </div>
+                    <span class="font-mono text-sm font-bold tabular-nums text-slate-900 dark:text-white">{{ value }}</span>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-100 px-5 py-4 dark:border-slate-700/60">
+                <h2 class="text-sm font-bold text-slate-900 dark:text-white">Autopay</h2>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Failure cap: {{ autopay.failure_cap }} consecutive failed runs.</p>
+            </div>
+            <div class="grid grid-cols-2 gap-px bg-slate-100 dark:bg-slate-700/60 sm:grid-cols-4">
+                {% for label, value in [("Mandates", autopay.total), ("Active", autopay.active), ("Failures", autopay.with_failures), ("Suspended", autopay.suspended)] %}
+                <div class="bg-white px-4 py-3 dark:bg-slate-800">
+                    <p class="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">{{ label }}</p>
+                    <p class="mt-1 text-xl font-bold tabular-nums text-slate-900 dark:text-white">{{ value }}</p>
+                </div>
+                {% endfor %}
+            </div>
+            <div class="px-5 py-4">
+                <div class="flex items-center justify-between gap-4">
+                    <div>
+                        <p class="text-sm font-semibold text-slate-800 dark:text-slate-100">{{ autopay.task.name }}</p>
+                        <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{{ autopay.task.task_name }}</p>
+                    </div>
+                    {% if autopay.task.stale %}
+                        {{ status_badge("Stale", variant="overdue") }}
+                    {% elif autopay.task.enabled %}
+                        {{ status_badge("Enabled", variant="paid") }}
+                    {% else %}
+                        {{ status_badge("Disabled", variant="draft") }}
+                    {% endif %}
+                </div>
+                <p class="mt-3 text-xs text-slate-500 dark:text-slate-400">Last success: {{ autopay.task.last_success.strftime('%Y-%m-%d %H:%M UTC') if autopay.task.last_success else 'No heartbeat' }}</p>
+            </div>
+        </div>
+    </section>
+
+    <section class="grid gap-4 xl:grid-cols-2">
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-100 px-5 py-4 dark:border-slate-700/60">
+                <h2 class="text-sm font-bold text-slate-900 dark:text-white">Integrity Checks</h2>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Launch blocked: {{ "yes" if integrity.launch_blocked else "no" }}. Errors: {{ integrity.errors|default(0) }}.</p>
+            </div>
+            <div class="divide-y divide-slate-100 dark:divide-slate-700/60">
+                {% for name, result in integrity.checks.items() %}
+                <div class="px-5 py-3">
+                    <div class="flex items-start justify-between gap-4">
+                        <div>
+                            <p class="text-sm font-semibold text-slate-800 dark:text-slate-100">{{ name.replace("_", " ")|title }}</p>
+                            {% if result.samples %}
+                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ result.samples[:3]|join(", ") }}</p>
+                            {% else %}
+                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">No samples.</p>
+                            {% endif %}
+                        </div>
+                        <span class="font-mono text-sm font-bold tabular-nums {% if result.count|default(0) > 0 %}text-rose-600 dark:text-rose-400{% else %}text-emerald-600 dark:text-emerald-400{% endif %}">{{ result.count|default(0) }}</span>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-100 px-5 py-4 dark:border-slate-700/60">
+                <h2 class="text-sm font-bold text-slate-900 dark:text-white">Runner Heartbeats</h2>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Critical billing and collections task freshness.</p>
+            </div>
+            <div class="divide-y divide-slate-100 dark:divide-slate-700/60">
+                {% for runner in snapshot.runners %}
+                <div class="flex items-center justify-between gap-4 px-5 py-3">
+                    <div class="min-w-0">
+                        <p class="truncate text-sm font-semibold text-slate-800 dark:text-slate-100">{{ runner.task_name }}</p>
+                        <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{{ runner.interval_seconds or "No interval" }} sec interval; {{ runner.last_success.strftime('%Y-%m-%d %H:%M UTC') if runner.last_success else "No heartbeat" }}</p>
+                    </div>
+                    {% if runner.stale %}
+                        {{ status_badge("Stale", variant="overdue") }}
+                    {% elif runner.enabled %}
+                        {{ status_badge("Enabled", variant="paid") }}
+                    {% else %}
+                        {{ status_badge("Disabled", variant="draft") }}
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </section>
+
+    <section class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-100 px-5 py-4 dark:border-slate-700/60">
+            <h2 class="text-sm font-bold text-slate-900 dark:text-white">Recent Autopay Failures</h2>
+        </div>
+        {% if autopay.recent_failures %}
+        <div class="overflow-x-auto">
+            <table class="w-full text-left text-sm">
+                <thead class="bg-slate-50 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500 dark:bg-slate-900/40 dark:text-slate-400">
+                    <tr>
+                        <th class="px-5 py-3">Account</th>
+                        <th class="px-5 py-3">Failures</th>
+                        <th class="px-5 py-3">Last Failure</th>
+                        <th class="px-5 py-3">Reason</th>
+                        <th class="px-5 py-3">State</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-700/60">
+                    {% for item in autopay.recent_failures %}
+                    <tr>
+                        <td class="px-5 py-3 font-semibold text-slate-900 dark:text-white">{{ item.account_name }}<span class="block text-xs font-normal text-slate-500">{{ item.account_id }}</span></td>
+                        <td class="px-5 py-3 font-mono tabular-nums">{{ item.failure_count }}</td>
+                        <td class="px-5 py-3 text-slate-600 dark:text-slate-300">{{ item.last_failure_at.strftime('%Y-%m-%d %H:%M UTC') if item.last_failure_at else "Unknown" }}</td>
+                        <td class="max-w-md px-5 py-3 text-slate-600 dark:text-slate-300">{{ item.last_failure_reason or "Not recorded" }}</td>
+                        <td class="px-5 py-3">{% if item.suspended %}{{ status_badge("Suspended", variant="overdue") }}{% else %}{{ status_badge("Retrying", variant="pending") }}{% endif %}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="flex items-center gap-3 px-5 py-6 text-sm text-slate-500 dark:text-slate-400">
+            {{ icon_check_circle("h-5 w-5 text-emerald-500") }}
+            No autopay failures recorded.
+        </div>
+        {% endif %}
+    </section>
+</div>
+{% endblock %}

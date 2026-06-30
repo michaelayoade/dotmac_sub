@@ -662,6 +662,28 @@ def reseller_fiber_map(request: Request, db: Session):
     )
 
 
+def reseller_quotes_page(request: Request, db: Session):
+    """Sales/Quotes across the reseller's customers: quotes, installs, visits."""
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url=RESELLER_LOGIN_URL, status_code=303)
+    from app.services import reseller_crm_views
+
+    reseller_id = str(context["reseller"].id)
+    return templates.TemplateResponse(
+        "reseller/quotes/index.html",
+        {
+            "request": request,
+            "active_page": "quotes",
+            "current_user": context["current_user"],
+            "reseller": context["reseller"],
+            "quotes": reseller_crm_views.quotes_for_reseller(db, reseller_id),
+            "projects": reseller_crm_views.projects_for_reseller(db, reseller_id),
+            "work_orders": reseller_crm_views.work_orders_for_reseller(db, reseller_id),
+        },
+    )
+
+
 def reseller_service_requests_page(request: Request, db: Session):
     """New-service / installation requests: list + submission form."""
     context = _require_reseller_context(request, db)

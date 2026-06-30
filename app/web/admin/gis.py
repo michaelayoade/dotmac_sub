@@ -189,7 +189,11 @@ def gis_location_edit(
     return templates.TemplateResponse("admin/gis/location_form.html", context)
 
 
-@router.post("/locations/{location_id}/edit", response_class=HTMLResponse)
+@router.post(
+    "/locations/{location_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("gis:map:edit"))],
+)
 def gis_location_update(
     request: Request,
     location_id: str,
@@ -227,7 +231,11 @@ def gis_location_update(
         return templates.TemplateResponse("admin/gis/location_form.html", context)
 
 
-@router.post("/locations/{location_id}/delete", response_class=HTMLResponse)
+@router.post(
+    "/locations/{location_id}/delete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("gis:map:edit"))],
+)
 def gis_location_delete(location_id: str, db: Session = Depends(get_db)):
     web_gis_service.delete_location(db, location_id=location_id)
     return RedirectResponse(url="/admin/gis?tab=locations", status_code=303)
@@ -249,7 +257,11 @@ def gis_area_new(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/gis/area_form.html", ctx)
 
 
-@router.post("/areas/new", response_class=HTMLResponse)
+@router.post(
+    "/areas/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("gis:map:edit"))],
+)
 def gis_area_create(
     request: Request,
     name: str = Form(...),
@@ -296,7 +308,11 @@ def gis_area_edit(request: Request, area_id: str, db: Session = Depends(get_db))
     return templates.TemplateResponse("admin/gis/area_form.html", ctx)
 
 
-@router.post("/areas/{area_id}/edit", response_class=HTMLResponse)
+@router.post(
+    "/areas/{area_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("gis:map:edit"))],
+)
 def gis_area_update(
     request: Request,
     area_id: str,
@@ -332,7 +348,11 @@ def gis_area_update(
         return templates.TemplateResponse("admin/gis/area_form.html", ctx)
 
 
-@router.post("/areas/{area_id}/delete", response_class=HTMLResponse)
+@router.post(
+    "/areas/{area_id}/delete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("gis:map:edit"))],
+)
 def gis_area_delete(area_id: str, db: Session = Depends(get_db)):
     web_gis_service.delete_area(db, area_id=area_id)
     return RedirectResponse(url="/admin/gis?tab=areas", status_code=303)
@@ -354,7 +374,11 @@ def gis_layer_new(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/gis/layer_form.html", ctx)
 
 
-@router.post("/layers/new", response_class=HTMLResponse)
+@router.post(
+    "/layers/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("gis:map:edit"))],
+)
 def gis_layer_create(
     request: Request,
     name: str = Form(...),
@@ -405,7 +429,11 @@ def gis_layer_edit(request: Request, layer_id: str, db: Session = Depends(get_db
     return templates.TemplateResponse("admin/gis/layer_form.html", ctx)
 
 
-@router.post("/layers/{layer_id}/edit", response_class=HTMLResponse)
+@router.post(
+    "/layers/{layer_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("gis:map:edit"))],
+)
 def gis_layer_update(
     request: Request,
     layer_id: str,
@@ -445,7 +473,11 @@ def gis_layer_update(
         return templates.TemplateResponse("admin/gis/layer_form.html", ctx)
 
 
-@router.post("/layers/{layer_id}/delete", response_class=HTMLResponse)
+@router.post(
+    "/layers/{layer_id}/delete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("gis:map:edit"))],
+)
 def gis_layer_delete(layer_id: str, db: Session = Depends(get_db)):
     web_gis_service.delete_layer(db, layer_id=layer_id)
     return RedirectResponse(url="/admin/gis?tab=layers", status_code=303)

@@ -169,6 +169,7 @@ class ApiKeyBase(BaseModel):
     )
     label: str | None = Field(default=None, max_length=120)
     key_hash: str = Field(min_length=1, max_length=255)
+    scopes: list[str] = Field(default_factory=list)
     is_active: bool = True
     last_used_at: datetime | None = None
     expires_at: datetime | None = None
@@ -184,6 +185,7 @@ class ApiKeyGenerateRequest(BaseModel):
         default=None, validation_alias=AliasChoices("subscriber_id", "person_id")
     )
     label: str | None = Field(default=None, max_length=120)
+    scopes: list[str] = Field(default_factory=list)
     expires_at: datetime | None = None
 
 
@@ -191,6 +193,7 @@ class ApiKeyUpdate(BaseModel):
     subscriber_id: UUID | None = None
     label: str | None = Field(default=None, max_length=120)
     key_hash: str | None = Field(default=None, min_length=1, max_length=255)
+    scopes: list[str] | None = None
     is_active: bool | None = None
     last_used_at: datetime | None = None
     expires_at: datetime | None = None

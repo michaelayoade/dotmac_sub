@@ -20,8 +20,11 @@ import '../repositories/catalog_repository.dart';
 import '../repositories/chat_repository.dart';
 import '../repositories/contact_repository.dart';
 import '../models/reseller.dart';
+import '../models/reseller_crm.dart';
+import '../models/quote.dart';
 import '../models/service_location.dart';
 import '../repositories/location_repository.dart';
+import '../repositories/quotes_repository.dart';
 import '../models/vas.dart';
 import '../models/wallet.dart';
 import '../repositories/notification_repository.dart';
@@ -29,50 +32,90 @@ import '../repositories/wallet_repository.dart';
 import '../repositories/reseller_repository.dart';
 import '../repositories/support_repository.dart';
 import '../repositories/usage_repository.dart';
+import '../models/project.dart';
+import '../models/referral.dart';
+import '../models/work_order.dart';
+import '../repositories/project_repository.dart';
+import '../repositories/referral_repository.dart';
+import '../repositories/work_order_repository.dart';
 import 'auth_controller.dart';
 
 // --- Repository providers ---------------------------------------------------
 
 final billingRepositoryProvider = Provider<BillingRepository>(
-    (ref) => BillingRepository(ref.watch(apiClientProvider).dio));
+  (ref) => BillingRepository(ref.watch(apiClientProvider).dio),
+);
 
 final usageRepositoryProvider = Provider<UsageRepository>(
-    (ref) => UsageRepository(ref.watch(apiClientProvider).dio));
+  (ref) => UsageRepository(ref.watch(apiClientProvider).dio),
+);
 
 final catalogRepositoryProvider = Provider<CatalogRepository>(
-    (ref) => CatalogRepository(ref.watch(apiClientProvider).dio));
+  (ref) => CatalogRepository(ref.watch(apiClientProvider).dio),
+);
 
 final chatRepositoryProvider = Provider<ChatRepository>(
-    (ref) => ChatRepository(ref.watch(apiClientProvider).dio));
+  (ref) => ChatRepository(ref.watch(apiClientProvider).dio),
+);
 
 final supportRepositoryProvider = Provider<SupportRepository>(
-    (ref) => SupportRepository(ref.watch(apiClientProvider).dio));
+  (ref) => SupportRepository(ref.watch(apiClientProvider).dio),
+);
 
 final locationRepositoryProvider = Provider<LocationRepository>(
-    (ref) => LocationRepository(ref.watch(apiClientProvider).dio));
+  (ref) => LocationRepository(ref.watch(apiClientProvider).dio),
+);
+final quotesRepositoryProvider = Provider<QuotesRepository>(
+  (ref) => QuotesRepository(ref.watch(apiClientProvider).dio),
+);
 final walletRepositoryProvider = Provider<WalletRepository>(
-    (ref) => WalletRepository(ref.watch(apiClientProvider).dio));
+  (ref) => WalletRepository(ref.watch(apiClientProvider).dio),
+);
 
 final notificationRepositoryProvider = Provider<NotificationRepository>(
-    (ref) => NotificationRepository(ref.watch(apiClientProvider).dio));
+  (ref) => NotificationRepository(ref.watch(apiClientProvider).dio),
+);
 
 final contactRepositoryProvider = Provider<ContactRepository>(
-    (ref) => ContactRepository(ref.watch(apiClientProvider).dio));
+  (ref) => ContactRepository(ref.watch(apiClientProvider).dio),
+);
 
 final resellerRepositoryProvider = Provider<ResellerRepository>(
-    (ref) => ResellerRepository(ref.watch(apiClientProvider).dio));
+  (ref) => ResellerRepository(ref.watch(apiClientProvider).dio),
+);
 
 /// The authenticated reseller's dashboard (KPIs + first page of accounts).
 /// Portfolio aggregation is a heavy call, so cache it stale-while-revalidate.
-final resellerDashboardProvider =
-    FutureProvider.autoDispose<ResellerDashboard>((ref) async {
+final resellerDashboardProvider = FutureProvider.autoDispose<ResellerDashboard>(
+  (ref) async {
+    cacheFor(ref);
+    return ref.watch(resellerRepositoryProvider).dashboard();
+  },
+);
+
+/// Sales/Quotes across the reseller's customers (B3).
+final resellerQuotesProvider =
+    FutureProvider.autoDispose<List<ResellerQuote>>((ref) async {
   cacheFor(ref);
-  return ref.watch(resellerRepositoryProvider).dashboard();
+  return ref.watch(resellerRepositoryProvider).quotes();
+});
+
+final resellerProjectsProvider =
+    FutureProvider.autoDispose<List<ResellerProject>>((ref) async {
+  cacheFor(ref);
+  return ref.watch(resellerRepositoryProvider).projects();
+});
+
+final resellerWorkOrdersProvider =
+    FutureProvider.autoDispose<List<ResellerWorkOrder>>((ref) async {
+  cacheFor(ref);
+  return ref.watch(resellerRepositoryProvider).workOrders();
 });
 
 /// 12-month revenue summary for the reseller portal.
-final resellerRevenueProvider =
-    FutureProvider.autoDispose<ResellerRevenue>((ref) async {
+final resellerRevenueProvider = FutureProvider.autoDispose<ResellerRevenue>((
+  ref,
+) async {
   cacheFor(ref);
   return ref.watch(resellerRepositoryProvider).revenue();
 });
@@ -92,8 +135,9 @@ final resellerAccountInvoicesProvider = FutureProvider.autoDispose
 });
 
 /// Reseller organization profile + MFA state.
-final resellerProfileProvider =
-    FutureProvider.autoDispose<ResellerProfile>((ref) async {
+final resellerProfileProvider = FutureProvider.autoDispose<ResellerProfile>((
+  ref,
+) async {
   cacheFor(ref);
   return ref.watch(resellerRepositoryProvider).profile();
 });
@@ -114,8 +158,9 @@ final resellerPaymentMethodsProvider =
 });
 
 /// Fiber-plant map for the reseller coverage screen.
-final resellerFiberMapProvider =
-    FutureProvider.autoDispose<ResellerFiberMap>((ref) async {
+final resellerFiberMapProvider = FutureProvider.autoDispose<ResellerFiberMap>((
+  ref,
+) async {
   cacheFor(ref);
   return ref.watch(resellerRepositoryProvider).fiberMap();
 });
@@ -171,8 +216,10 @@ final invoicesProvider = FutureProvider.autoDispose<Page<Invoice>>((ref) async {
   return ref.watch(billingRepositoryProvider).invoices();
 });
 
-final invoiceProvider =
-    FutureProvider.autoDispose.family<Invoice, String>((ref, id) async {
+final invoiceProvider = FutureProvider.autoDispose.family<Invoice, String>((
+  ref,
+  id,
+) async {
   cacheFor(ref);
   return ref.watch(billingRepositoryProvider).invoice(id);
 });
@@ -192,14 +239,16 @@ final balanceProvider = FutureProvider.autoDispose<AccountBalance>((ref) async {
   return ref.watch(billingRepositoryProvider).balance();
 });
 
-final paymentMethodsProvider =
-    FutureProvider.autoDispose<List<SavedCard>>((ref) async {
+final paymentMethodsProvider = FutureProvider.autoDispose<List<SavedCard>>((
+  ref,
+) async {
   cacheFor(ref);
   return ref.watch(billingRepositoryProvider).paymentMethods();
 });
 
-final autopayStatusProvider =
-    FutureProvider.autoDispose<AutopayStatus>((ref) async {
+final autopayStatusProvider = FutureProvider.autoDispose<AutopayStatus>((
+  ref,
+) async {
   cacheFor(ref);
   return ref.watch(billingRepositoryProvider).autopayStatus();
 });
@@ -207,14 +256,16 @@ final autopayStatusProvider =
 /// Truthful account/service health (GET /me/service-status): balance, grace,
 /// deactivation, dunning. Drives the renew/top-up banner with the real cut date
 /// instead of guessing from a billing date.
-final serviceStatusProvider =
-    FutureProvider.autoDispose<ServiceStatus>((ref) async {
+final serviceStatusProvider = FutureProvider.autoDispose<ServiceStatus>((
+  ref,
+) async {
   cacheFor(ref);
   return ref.watch(catalogRepositoryProvider).serviceStatus();
 });
 
-final subscriptionsProvider =
-    FutureProvider.autoDispose<Page<Subscription>>((ref) async {
+final subscriptionsProvider = FutureProvider.autoDispose<Page<Subscription>>((
+  ref,
+) async {
   cacheFor(ref);
   final page = await ref.watch(catalogRepositoryProvider).subscriptions();
   // The API returns the subscriber's full history, including terminated
@@ -234,8 +285,9 @@ final subscriptionsProvider =
 /// The customer's single *current* service: prefer an active subscription, then
 /// the most recently started. Null when there are none. (Customers care about
 /// their live service, not the historical list.)
-final currentServiceProvider =
-    Provider.autoDispose<AsyncValue<Subscription?>>((ref) {
+final currentServiceProvider = Provider.autoDispose<AsyncValue<Subscription?>>((
+  ref,
+) {
   return ref.watch(subscriptionsProvider).whenData((page) {
     if (page.items.isEmpty) return null;
     return pickCurrentService(page.items);
@@ -319,8 +371,9 @@ final paymentProofsProvider =
 });
 
 /// All quota buckets for the subscriber, in a single round-trip.
-final quotaBucketsProvider =
-    FutureProvider.autoDispose<List<QuotaBucket>>((ref) async {
+final quotaBucketsProvider = FutureProvider.autoDispose<List<QuotaBucket>>((
+  ref,
+) async {
   cacheFor(ref);
   final page = await ref.watch(usageRepositoryProvider).quotaBuckets();
   return page.items;
@@ -370,23 +423,22 @@ final speedRangeHoursProvider = StateProvider.autoDispose<int>((ref) {
 
 /// Bandwidth-speed time series (GET /bandwidth/my/series) over the selected
 /// look-back window in hours. VM-backed, so it reaches as far as VM retention.
-final bandwidthSeriesProvider =
-    FutureProvider.autoDispose.family<List<BandwidthPoint>, int>(
-  (ref, hours) async {
-    cacheFor(ref);
-    final end = DateTime.now();
-    final start = end.subtract(Duration(hours: hours));
-    return ref
-        .watch(usageRepositoryProvider)
-        .bandwidthSeries(start: start, end: end);
-  },
-);
+final bandwidthSeriesProvider = FutureProvider.autoDispose
+    .family<List<BandwidthPoint>, int>((ref, hours) async {
+  cacheFor(ref);
+  final end = DateTime.now();
+  final start = end.subtract(Duration(hours: hours));
+  return ref
+      .watch(usageRepositoryProvider)
+      .bandwidthSeries(start: start, end: end);
+});
 
 /// Peak throughput this period (~30d window) for the at-a-glance tile, from
 /// /bandwidth/my/stats. Degrades to an empty value (tile shows "—") when the
 /// connection has no bandwidth mapping (403) rather than erroring.
-final peakBandwidthProvider =
-    FutureProvider.autoDispose<LiveBandwidth>((ref) async {
+final peakBandwidthProvider = FutureProvider.autoDispose<LiveBandwidth>((
+  ref,
+) async {
   cacheFor(ref);
   try {
     return await ref
@@ -422,32 +474,70 @@ final liveBandwidthProvider = StreamProvider.autoDispose<LiveBandwidth>((ref) {
   );
 });
 
-final sessionsProvider =
-    FutureProvider.autoDispose<List<AuthSessionInfo>>((ref) async {
+final sessionsProvider = FutureProvider.autoDispose<List<AuthSessionInfo>>((
+  ref,
+) async {
   cacheFor(ref);
   return ref.watch(authRepositoryProvider).sessions();
 });
 
-final notificationsProvider =
-    FutureProvider.autoDispose<Page<AppNotification>>((ref) async {
+final notificationsProvider = FutureProvider.autoDispose<Page<AppNotification>>(
+  (ref) async {
+    cacheFor(ref);
+    return ref.watch(notificationRepositoryProvider).list();
+  },
+);
+
+final referralRepositoryProvider = Provider<ReferralRepository>(
+  (ref) => ReferralRepository(ref.watch(apiClientProvider).dio),
+);
+
+final referralsProvider = FutureProvider.autoDispose<ReferralSummary>((
+  ref,
+) async {
   cacheFor(ref);
-  return ref.watch(notificationRepositoryProvider).list();
+  return ref.watch(referralRepositoryProvider).summary();
 });
 
-final serviceLocationProvider =
-    FutureProvider.autoDispose<ServiceLocation>((ref) async {
+final projectRepositoryProvider = Provider<ProjectRepository>(
+  (ref) => ProjectRepository(ref.watch(apiClientProvider).dio),
+);
+
+final projectsProvider = FutureProvider.autoDispose<ProjectsSummary>((
+  ref,
+) async {
+  cacheFor(ref);
+  return ref.watch(projectRepositoryProvider).summary();
+});
+
+final workOrderRepositoryProvider = Provider<WorkOrderRepository>(
+  (ref) => WorkOrderRepository(ref.watch(apiClientProvider).dio),
+);
+
+final workOrdersProvider = FutureProvider.autoDispose<WorkOrdersSummary>((
+  ref,
+) async {
+  cacheFor(ref);
+  return ref.watch(workOrderRepositoryProvider).summary();
+});
+
+final serviceLocationProvider = FutureProvider.autoDispose<ServiceLocation>((
+  ref,
+) async {
   cacheFor(ref);
   return ref.watch(locationRepositoryProvider).location();
 });
 
-final vasCatalogProvider =
-    FutureProvider.autoDispose<List<VasCategory>>((ref) async {
+final vasCatalogProvider = FutureProvider.autoDispose<List<VasCategory>>((
+  ref,
+) async {
   cacheFor(ref);
   return ref.watch(walletRepositoryProvider).catalog();
 });
 
-final vasPurchasesProvider =
-    FutureProvider.autoDispose<List<VasTransaction>>((ref) async {
+final vasPurchasesProvider = FutureProvider.autoDispose<List<VasTransaction>>((
+  ref,
+) async {
   cacheFor(ref);
   return ref.watch(walletRepositoryProvider).purchases();
 });
@@ -469,8 +559,10 @@ final ticketsProvider = FutureProvider.autoDispose<Page<Ticket>>((ref) async {
   return ref.watch(supportRepositoryProvider).tickets();
 });
 
-final ticketProvider =
-    FutureProvider.autoDispose.family<Ticket, String>((ref, id) async {
+final ticketProvider = FutureProvider.autoDispose.family<Ticket, String>((
+  ref,
+  id,
+) async {
   cacheFor(ref);
   return ref.watch(supportRepositoryProvider).ticket(id);
 });
@@ -479,4 +571,9 @@ final ticketCommentsProvider = FutureProvider.autoDispose
     .family<Page<TicketComment>, String>((ref, ticketId) async {
   cacheFor(ref);
   return ref.watch(supportRepositoryProvider).comments(ticketId);
+});
+
+final quotesProvider = FutureProvider.autoDispose<List<Quote>>((ref) async {
+  cacheFor(ref);
+  return ref.watch(quotesRepositoryProvider).quotes();
 });

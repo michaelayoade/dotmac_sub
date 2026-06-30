@@ -1,0 +1,80 @@
+{% extends "layouts/reseller.html" %}
+
+{% block title %}Quotes & Installs - Reseller{% endblock %}
+
+{% block content %}
+<div class="space-y-8">
+    <div>
+        <h1 class="text-3xl font-display font-bold text-stone-900 dark:text-white">Quotes &amp; Installs</h1>
+        <p class="mt-1 text-base text-stone-500 dark:text-stone-400">Self-serve quotes, installations, and field-service visits across your customers.</p>
+    </div>
+
+    {% set pill = 'rounded-lg px-2.5 py-1 text-xs font-semibold bg-stone-100 text-stone-700 dark:bg-stone-700 dark:text-stone-300' %}
+
+    <!-- Quotes -->
+    <section class="space-y-3">
+        <h2 class="text-lg font-display font-semibold text-stone-900 dark:text-white">Quotes <span class="text-sm font-normal text-stone-400">({{ quotes.total }})</span></h2>
+        {% if quotes.quotes %}
+        <div class="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-premium dark:border-stone-700 dark:bg-stone-800">
+            {% for q in quotes.quotes %}
+            <div class="flex items-center justify-between gap-3 border-b border-stone-100 px-5 py-3 last:border-0 dark:border-stone-700/50">
+                <div class="min-w-0">
+                    <p class="truncate text-sm font-semibold text-stone-900 dark:text-white">{{ q.account_name or 'Customer' }}</p>
+                    <p class="truncate text-xs text-stone-500 dark:text-stone-400">{{ q.address or 'Installation quote' }} · {{ q.feasibility.coverage or 'pending' }}</p>
+                </div>
+                <div class="text-right">
+                    <p class="text-sm font-semibold text-stone-900 dark:text-white">{{ q.currency }} {{ q.total }}</p>
+                    <p class="text-xs text-stone-500 dark:text-stone-400">{% if q.deposit_paid %}deposit paid{% else %}deposit {{ q.currency }} {{ q.deposit_amount }}{% endif %}</p>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="rounded-2xl border border-stone-200 bg-white px-5 py-8 text-center text-sm text-stone-500 shadow-premium dark:border-stone-700 dark:bg-stone-800 dark:text-stone-400">No quotes from your customers yet.</p>
+        {% endif %}
+    </section>
+
+    <!-- Installations -->
+    <section class="space-y-3">
+        <h2 class="text-lg font-display font-semibold text-stone-900 dark:text-white">Installations <span class="text-sm font-normal text-stone-400">({{ projects.active }} active)</span></h2>
+        {% if projects.projects %}
+        <div class="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-premium dark:border-stone-700 dark:bg-stone-800">
+            {% for p in projects.projects %}
+            <div class="border-b border-stone-100 px-5 py-3 last:border-0 dark:border-stone-700/50">
+                <div class="flex items-center justify-between gap-3">
+                    <p class="truncate text-sm font-semibold text-stone-900 dark:text-white">{{ p.account_name or 'Customer' }} · {{ p.name }}</p>
+                    <span class="{{ pill }}">{{ p.progress_pct }}%</span>
+                </div>
+                <p class="mt-0.5 text-xs text-stone-500 dark:text-stone-400">{{ p.current_stage or p.status }}</p>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="rounded-2xl border border-stone-200 bg-white px-5 py-8 text-center text-sm text-stone-500 shadow-premium dark:border-stone-700 dark:bg-stone-800 dark:text-stone-400">No installations in progress.</p>
+        {% endif %}
+    </section>
+
+    <!-- Visits -->
+    <section class="space-y-3">
+        <h2 class="text-lg font-display font-semibold text-stone-900 dark:text-white">Technician Visits <span class="text-sm font-normal text-stone-400">({{ work_orders.upcoming }} upcoming)</span></h2>
+        {% if work_orders.work_orders %}
+        <div class="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-premium dark:border-stone-700 dark:bg-stone-800">
+            {% for w in work_orders.work_orders %}
+            <div class="border-b border-stone-100 px-5 py-3 last:border-0 dark:border-stone-700/50">
+                <div class="flex items-center justify-between gap-3">
+                    <p class="truncate text-sm font-semibold text-stone-900 dark:text-white">{{ w.account_name or 'Customer' }} · {{ w.title }}</p>
+                    <span class="{{ pill }}">{{ w.status | replace('_', ' ') | title }}</span>
+                </div>
+                <p class="mt-0.5 text-xs text-stone-500 dark:text-stone-400">
+                    {% if w.technician_name %}{{ w.technician_name }}{% endif %}
+                    {% if w.estimated_arrival_at %} · ETA {{ w.estimated_arrival_at[:16] | replace('T', ' ') }}{% elif w.scheduled_start %} · {{ w.scheduled_start[:16] | replace('T', ' ') }}{% endif %}
+                </p>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="rounded-2xl border border-stone-200 bg-white px-5 py-8 text-center text-sm text-stone-500 shadow-premium dark:border-stone-700 dark:bg-stone-800 dark:text-stone-400">No scheduled visits.</p>
+        {% endif %}
+    </section>
+</div>
+{% endblock %}

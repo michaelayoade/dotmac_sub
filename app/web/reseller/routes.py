@@ -81,6 +81,11 @@ def reseller_vas_sell(
     )
 
 
+@router.get("/quotes", response_class=HTMLResponse)
+def reseller_quotes(request: Request, db: Session = Depends(get_db)):
+    return web_reseller_routes_service.reseller_quotes_page(request, db)
+
+
 @router.get("/service-requests", response_class=HTMLResponse)
 def reseller_service_requests(request: Request, db: Session = Depends(get_db)):
     return web_reseller_routes_service.reseller_service_requests_page(request, db)

@@ -429,8 +429,13 @@ def audit_olt_config_pack_live(db: Session, olt_id: str) -> OltConfigPackLiveAud
     if not ok:
         audit.errors.append(f"Live WAN profile inventory failed: {message}")
     live_wan_ids = {profile.profile_id for profile in wan_profiles}
+    allowed_missing_wan_ids = (
+        {0} if getattr(pack, "allow_zero_wan_config_profile_id", False) else set()
+    )
     missing_wan_profile_ids = (
-        sorted(set(required_wan_profile_ids) - live_wan_ids) if ok else []
+        sorted(set(required_wan_profile_ids) - live_wan_ids - allowed_missing_wan_ids)
+        if ok
+        else []
     )
     audit.observed.update(
         {

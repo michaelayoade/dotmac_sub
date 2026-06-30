@@ -110,19 +110,16 @@
     </div>
 
     {# ── Summary Stats ── #}
-    {% set total_credits = entries | selectattr('entry_type', 'defined') | selectattr('entry_type.value', 'equalto', 'credit') | sum(attribute='amount') if entries else 0 %}
-    {% set total_debits = entries | selectattr('entry_type', 'defined') | selectattr('entry_type.value', 'equalto', 'debit') | sum(attribute='amount') if entries else 0 %}
-    {% set net = total_credits - total_debits %}
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        {{ stats_card("Total Credits", "₦" ~ "{:,.2f}".format(total_credits),
+        {{ stats_card("Total Credits", ledger_totals.credit_display,
             icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>',
             color="emerald", color2="green"
         ) }}
-        {{ stats_card("Total Debits", "₦" ~ "{:,.2f}".format(total_debits),
+        {{ stats_card("Total Debits", ledger_totals.debit_display,
             icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4"/></svg>',
             color="amber", color2="orange"
         ) }}
-        {{ stats_card("Net Balance", "₦" ~ "{:,.2f}".format(net),
+        {{ stats_card("Net Balance", ledger_totals.net_display,
             icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>',
             color="violet", color2="purple"
         ) }}
@@ -160,6 +157,7 @@
                     {% set et = entry.entry_type.value if entry.entry_type else 'unknown' %}
                     {% set source = entry.source.value if entry.source else 'N/A' %}
                     {% set entry_label = entry.memo or (source | title | replace('_', ' ')) %}
+                    {% set entry_currency = entry.currency or 'NGN' %}
                     {% call table_row(color="emerald") %}
                         <td class="min-w-0 px-3 py-4">
                             <div class="flex min-w-0 items-center gap-3">
@@ -211,14 +209,14 @@
                         </td>
                         <td class="truncate px-3 py-4 text-sm font-semibold font-mono tabular-nums text-amber-700 dark:text-amber-300">
                             {% if et == 'debit' %}
-                            ₦{{ "{:,.2f}".format(entry.amount or 0) }}
+                            {{ entry_currency }} {{ "{:,.2f}".format(entry.amount or 0) }}
                             {% else %}
                             &mdash;
                             {% endif %}
                         </td>
                         <td class="truncate px-3 py-4 text-sm font-semibold font-mono tabular-nums text-emerald-700 dark:text-emerald-300">
                             {% if et == 'credit' %}
-                            ₦{{ "{:,.2f}".format(entry.amount or 0) }}
+                            {{ entry_currency }} {{ "{:,.2f}".format(entry.amount or 0) }}
                             {% else %}
                             &mdash;
                             {% endif %}
@@ -255,15 +253,15 @@
                             <div class="grid gap-3 sm:grid-cols-3">
                                 <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 dark:border-emerald-800/40 dark:bg-emerald-900/20">
                                     <p class="text-[11px] font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-300">Credit</p>
-                                    <p class="mt-0.5 text-sm font-bold text-emerald-700 dark:text-emerald-300">{{ ledger_totals.credit_count }} entries · ₦{{ "{:,.2f}".format(ledger_totals.credit_total or 0) }}</p>
+                                    <p class="mt-0.5 text-sm font-bold text-emerald-700 dark:text-emerald-300">{{ ledger_totals.credit_count }} entries · {{ ledger_totals.credit_display }}</p>
                                 </div>
                                 <div class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-800/40 dark:bg-amber-900/20">
                                     <p class="text-[11px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-300">Debit</p>
-                                    <p class="mt-0.5 text-sm font-bold text-amber-700 dark:text-amber-300">{{ ledger_totals.debit_count }} entries · ₦{{ "{:,.2f}".format(ledger_totals.debit_total or 0) }}</p>
+                                    <p class="mt-0.5 text-sm font-bold text-amber-700 dark:text-amber-300">{{ ledger_totals.debit_count }} entries · {{ ledger_totals.debit_display }}</p>
                                 </div>
                                 <div class="rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 dark:border-violet-800/40 dark:bg-violet-900/20">
                                     <p class="text-[11px] font-semibold uppercase tracking-wide text-violet-700 dark:text-violet-300">Net</p>
-                                    <p class="mt-0.5 text-sm font-bold text-violet-700 dark:text-violet-300">₦{{ "{:,.2f}".format(ledger_totals.net_total or 0) }}</p>
+                                    <p class="mt-0.5 text-sm font-bold text-violet-700 dark:text-violet-300">{{ ledger_totals.net_display }}</p>
                                 </div>
                             </div>
                         </td>
