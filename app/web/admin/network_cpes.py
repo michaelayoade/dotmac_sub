@@ -384,6 +384,7 @@ def cpe_tr069_tab(
 @router.post(
     "/cpes/{cpe_id}/reboot",
     dependencies=[Depends(require_permission("network:cpe:write"))],
+    response_model=None,
 )
 def cpe_reboot(
     request: Request, cpe_id: str, db: Session = Depends(get_db)
@@ -398,6 +399,7 @@ def cpe_reboot(
 @router.post(
     "/cpes/{cpe_id}/factory-reset",
     dependencies=[Depends(require_permission("network:cpe:write"))],
+    response_model=None,
 )
 def cpe_factory_reset(
     request: Request, cpe_id: str, db: Session = Depends(get_db)
@@ -412,6 +414,7 @@ def cpe_factory_reset(
 @router.post(
     "/cpes/{cpe_id}/refresh",
     dependencies=[Depends(require_permission("network:cpe:write"))],
+    response_model=None,
 )
 def cpe_refresh(
     request: Request, cpe_id: str, db: Session = Depends(get_db)
@@ -426,6 +429,7 @@ def cpe_refresh(
 @router.post(
     "/cpes/{cpe_id}/wifi-ssid",
     dependencies=[Depends(require_permission("network:cpe:write"))],
+    response_model=None,
 )
 def cpe_wifi_ssid(
     request: Request, cpe_id: str, ssid: str = "", db: Session = Depends(get_db)
@@ -438,6 +442,7 @@ def cpe_wifi_ssid(
 @router.post(
     "/cpes/{cpe_id}/wifi-password",
     dependencies=[Depends(require_permission("network:cpe:write"))],
+    response_model=None,
 )
 def cpe_wifi_password(
     request: Request, cpe_id: str, db: Session = Depends(get_db)
@@ -454,6 +459,7 @@ def cpe_wifi_password(
 @router.post(
     "/cpes/{cpe_id}/lan-port",
     dependencies=[Depends(require_permission("network:cpe:write"))],
+    response_model=None,
 )
 def cpe_lan_port(
     request: Request,
@@ -472,6 +478,7 @@ def cpe_lan_port(
 @router.post(
     "/cpes/{cpe_id}/connection-request",
     dependencies=[Depends(require_permission("network:cpe:write"))],
+    response_model=None,
 )
 def cpe_connection_request(
     request: Request, cpe_id: str, db: Session = Depends(get_db)
@@ -486,6 +493,7 @@ def cpe_connection_request(
 @router.post(
     "/cpes/{cpe_id}/ping-diagnostic",
     dependencies=[Depends(require_permission("network:cpe:write"))],
+    response_model=None,
 )
 def cpe_ping_diagnostic(
     request: Request, cpe_id: str, db: Session = Depends(get_db)
@@ -506,6 +514,7 @@ def cpe_ping_diagnostic(
 @router.post(
     "/cpes/{cpe_id}/traceroute-diagnostic",
     dependencies=[Depends(require_permission("network:cpe:write"))],
+    response_model=None,
 )
 def cpe_traceroute_diagnostic(
     request: Request, cpe_id: str, db: Session = Depends(get_db)
