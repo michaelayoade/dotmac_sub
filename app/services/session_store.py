@@ -86,7 +86,7 @@ def store_session(
             if principal_id:
                 index_key = _principal_sessions_key(prefix, str(principal_id))
                 client.sadd(index_key, session_token)
-                index_ttl = client.ttl(index_key)
+                index_ttl = cast(int, client.ttl(index_key))
                 if index_ttl < ttl:
                     client.expire(index_key, ttl)
             fallback_store.pop(session_token, None)
@@ -146,7 +146,10 @@ def list_sessions_for_principal(
     client = get_session_redis()
     if client:
         try:
-            raw_tokens = client.smembers(_principal_sessions_key(prefix, principal))
+            raw_tokens = cast(
+                set[object],
+                client.smembers(_principal_sessions_key(prefix, principal)),
+            )
             for raw_token in raw_tokens:
                 token = _decode_redis_text(raw_token)
                 payload = load_session(prefix, token, fallback_store)

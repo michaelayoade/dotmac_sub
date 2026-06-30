@@ -7,6 +7,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
+from starlette.responses import Response
 
 from app.services import auth_flow as auth_flow_service
 from app.services.auth_flow import AuthFlow
@@ -384,6 +385,7 @@ def mfa_enroll_confirm(
         result = auth_flow_service.auth_flow._issue_tokens(  # noqa: SLF001
             db, "system_user", principal_id, request
         )
+        response: Response
         if recovery_codes:
             response = templates.TemplateResponse(
                 request,
