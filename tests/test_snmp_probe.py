@@ -23,7 +23,9 @@ def test_probe_snmp_reachability_success(monkeypatch):
     def fake_run(args, **kwargs):
         calls["args"] = args
         calls["kwargs"] = kwargs
-        return SimpleNamespace(returncode=0, stdout="SNMPv2-MIB::sysDescr.0 = x", stderr="")
+        return SimpleNamespace(
+            returncode=0, stdout="SNMPv2-MIB::sysDescr.0 = x", stderr=""
+        )
 
     monkeypatch.setattr(snmp_probe.subprocess, "run", fake_run)
 

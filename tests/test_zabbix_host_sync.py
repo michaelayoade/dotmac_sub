@@ -89,6 +89,22 @@ class _DisableFakeClient:
         return True
 
 
+class _NestedTx:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _exc_type, _exc, _tb):  # noqa: ANN001
+        return False
+
+
+class _FakeDb:
+    def begin_nested(self) -> _NestedTx:
+        return _NestedTx()
+
+    def flush(self) -> None:
+        return None
+
+
 def _stale_device(zabbix_host_id):  # noqa: ANN001
     return SimpleNamespace(
         id=f"dev-{zabbix_host_id}",
@@ -99,7 +115,7 @@ def _stale_device(zabbix_host_id):  # noqa: ANN001
 
 def test_disable_stale_hosts_disables_and_counts() -> None:
     client = _DisableFakeClient()
-    db = SimpleNamespace(flush=lambda: None)
+    db = _FakeDb()
     rows = [_stale_device("100"), _stale_device(None), _stale_device("300")]
 
     count = zabbix_host_sync._disable_stale_hosts(
@@ -113,7 +129,7 @@ def test_disable_stale_hosts_disables_and_counts() -> None:
 
 def test_disable_stale_hosts_tolerates_client_error() -> None:
     client = _DisableFakeClient(fail_host_id="100")
-    db = SimpleNamespace(flush=lambda: None)
+    db = _FakeDb()
     rows = [_stale_device("100"), _stale_device("300")]
 
     count = zabbix_host_sync._disable_stale_hosts(
@@ -189,14 +205,18 @@ def test_sync_olt_update_path_re_enables_host() -> None:
 
 
 class _AdoptFakeClient:
-    def __init__(self, *, tag_hosts=None, update_error=None) -> None:
+    def __init__(self, *, tag_hosts=None, ip_hosts=None, update_error=None) -> None:
         self._tag_hosts = tag_hosts or []
+        self._ip_hosts = ip_hosts or []
         self._update_error = update_error
         self.created = False
         self.update_status = None
 
     def get_hosts_by_tag(self, _tag, _value, limit=2):  # noqa: ANN001
         return self._tag_hosts
+
+    def get_hosts_by_interface_ip(self, _interface_ip, limit=2):  # noqa: ANN001
+        return self._ip_hosts
 
     def update_host(self, host_id, status=None, **_kwargs):  # noqa: ANN001
         if self._update_error is not None:
