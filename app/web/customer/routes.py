@@ -59,6 +59,10 @@ PAYMENT_CHARGE_ERROR_MESSAGE = (
     "We could not charge that saved card. Please use another payment method or "
     "try again later."
 )
+PAYMENT_START_ERROR_MESSAGE = (
+    "Unable to start the payment. If your card was charged, the payment will "
+    "be reconciled automatically."
+)
 CARD_SAVE_SUCCESS_MESSAGE = "Your card was saved for future payments."
 CARD_SAVE_ERROR_MESSAGE = (
     "Payment was recorded, but we could not save this card. You can add a card "
@@ -80,6 +84,52 @@ def _payment_verification_error_response(
         "customer/errors/400.html",
         {"request": request, "message": PAYMENT_VERIFICATION_ERROR_MESSAGE},
         status_code=status_code,
+    )
+
+
+def _render_payment_return_status(
+    request: Request,
+    *,
+    reference: str,
+    provider: str | None,
+    flow: str,
+    exc: Exception,
+) -> Response:
+    is_decline = isinstance(exc, (ValueError, HTTPException)) and not (
+        isinstance(exc, HTTPException) and exc.status_code >= 500
+    )
+    if is_decline:
+        status_kind = "declined"
+        title = "Payment not confirmed"
+        message = (
+            "The payment provider did not confirm a successful payment. "
+            "No duplicate payment was recorded."
+        )
+    else:
+        status_kind = "pending"
+        title = "Payment verification pending"
+        message = (
+            "We could not confirm the payment provider response right now. "
+            "If you were debited, the payment will be reconciled automatically."
+        )
+        logger.warning(
+            "Customer payment verification returned pending state",
+            extra={"reference": reference, "provider": provider, "flow": flow},
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
+    return templates.TemplateResponse(
+        "customer/billing/payment_status.html",
+        {
+            "request": request,
+            "status_kind": status_kind,
+            "title": title,
+            "message": message,
+            "reference": reference,
+            "provider": provider,
+            "flow": flow,
+            "active_page": "billing",
+        },
+        status_code=200,
     )
 
 
@@ -1744,11 +1794,15 @@ def customer_create_invoice_payment_intent(
             redirect_url=str(request.url_for("customer_verify_payment")),
             idempotency_key=idempotency_key,
         )
-    except ValueError as exc:
+    except (ValueError, HTTPException) as exc:
         return JSONResponse({"detail": str(exc)}, status_code=400)
     except Exception:
-        logger.warning("Customer saved-card invoice charge failed", exc_info=True)
-        return JSONResponse({"detail": PAYMENT_CHARGE_ERROR_MESSAGE}, status_code=400)
+        logger.warning(
+            "Unable to start customer invoice payment intent",
+            extra={"invoice_id": invoice_id, "account_id": customer.get("account_id")},
+            exc_info=True,
+        )
+        return JSONResponse({"detail": PAYMENT_START_ERROR_MESSAGE}, status_code=400)
 
     return JSONResponse(content=jsonable_encoder(result))
 
@@ -1812,13 +1866,22 @@ def customer_verify_payment(
                 "active_page": "billing",
             },
         )
-    except HTTPException as exc:
-        status_code = exc.status_code if exc.status_code < 500 else 400
-        return _payment_verification_error_response(
-            request, exc, status_code=status_code
+    except (ValueError, HTTPException) as exc:
+        return _render_payment_return_status(
+            request,
+            reference=reference,
+            provider=provider,
+            flow="invoice_payment",
+            exc=exc,
         )
     except Exception as exc:
-        return _payment_verification_error_response(request, exc)
+        return _render_payment_return_status(
+            request,
+            reference=reference,
+            provider=provider,
+            flow="invoice_payment",
+            exc=exc,
+        )
 
 
 @router.get("/billing/topup", response_class=HTMLResponse)
@@ -1893,8 +1956,15 @@ def customer_create_topup_intent(
             redirect_url=str(request.url_for("customer_verify_topup")),
             idempotency_key=idempotency_key,
         )
-    except ValueError as exc:
+    except (ValueError, HTTPException) as exc:
         return JSONResponse({"detail": str(exc)}, status_code=400)
+    except Exception:
+        logger.warning(
+            "Unable to start customer top-up intent",
+            extra={"account_id": customer.get("account_id")},
+            exc_info=True,
+        )
+        return JSONResponse({"detail": PAYMENT_START_ERROR_MESSAGE}, status_code=400)
 
     return JSONResponse(content=jsonable_encoder(result))
 
@@ -2059,8 +2129,22 @@ def customer_verify_topup(
                 "active_page": "billing",
             },
         )
+    except (ValueError, HTTPException) as exc:
+        return _render_payment_return_status(
+            request,
+            reference=reference,
+            provider=provider,
+            flow="account_topup",
+            exc=exc,
+        )
     except Exception as exc:
-        return _payment_verification_error_response(request, exc)
+        return _render_payment_return_status(
+            request,
+            reference=reference,
+            provider=provider,
+            flow="account_topup",
+            exc=exc,
+        )
 
 
 @router.post("/billing/autopay/enable")
