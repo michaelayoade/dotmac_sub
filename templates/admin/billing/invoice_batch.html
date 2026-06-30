@@ -29,7 +29,7 @@
     <div class="grid gap-6 lg:grid-cols-3">
         <div class="lg:col-span-2">
             <form id="batch-form" method="post" action="/admin/billing/invoices/generate-batch" class="space-y-6"
-                  @submit="if (submitting) { $event.preventDefault(); return; } submitting = true">
+                  @submit="if (submitting || !$refs.confirmed?.checked || !confirm('Run invoice batch for the previewed scope? This can create invoices for affected accounts.')) { $event.preventDefault(); return; } submitting = true">
                 {% include "components/forms/csrf_input.html" %}
                 <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
                     <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
