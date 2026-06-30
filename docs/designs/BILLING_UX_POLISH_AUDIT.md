@@ -5,7 +5,7 @@
 (~16 admin pages, ~40 services): invoices/ledger/tax, payments/gateways/proofs,
 dunning/collections/autopay, accounts/prepaid/reseller, customer pay portal,
 settings/integrity/reconcilers.
-**Status:** remediation in progress via draft PR #523. Companion to
+**Status:** remediation review-ready on `audit/billing-remediation`. Companion to
 [NETWORKING_UX_POLISH_AUDIT.md](NETWORKING_UX_POLISH_AUDIT.md).
 
 > Note: recent money-state-machine PRs (#308 void/write-off/refund guards,
@@ -15,8 +15,8 @@ settings/integrity/reconcilers.
 
 ## Remediation status
 
-**Last updated:** 2026-06-29
-**Tracking PR:** #523 (`audit/billing-remediation`)
+**Last updated:** 2026-06-30
+**Tracking branch:** `audit/billing-remediation`
 
 ### Resolved in current draft
 
@@ -114,6 +114,9 @@ settings/integrity/reconcilers.
 - Credit and collection-account forms, consolidated payment routing, and the
   billing adapter now use `billing.default_currency` when no explicit currency is
   provided.
+- Admin Billing now has a read-only Billing Health page that combines billing
+  health signals, integrity-launch blockers, runner heartbeats, and autopay
+  mandate/failure visibility.
 
 ### Partially resolved
 
@@ -126,8 +129,7 @@ settings/integrity/reconcilers.
 
 ### Still open
 
-- Bulk/scheduled money-job observability, autopay panel, health/integrity admin UI,
-  and raw exception copy cleanup.
+- Bulk/scheduled money-job result history and raw exception copy cleanup.
 - Remaining billing settings/spec hygiene outside the covered Billing Settings
   policy defaults.
 - Remaining policy thresholds/settings work outside autopay, payment
@@ -250,6 +252,16 @@ settings/integrity/reconcilers.
 - `poetry run pytest tests/test_web_billing_invoice_forms.py -q`
   - Result: interrupted locally after pytest setup produced no output for about
     60 seconds.
+- `python3 -m compileall -q app/services/autopay.py app/services/web_billing_health.py app/web/admin/billing_reporting.py tests/test_web_billing_health.py`
+  - Result: passed on 2026-06-30
+- `python3 -c "... Jinja2 FileSystemLoader ... get_template('admin/billing/health.html') ... get_template('admin/billing/index.html') ..."`
+  - Result: templates parsed on 2026-06-30
+- `python3 -m pytest tests/test_web_billing_health.py -q`
+  - Result: not run on 2026-06-30; host Python has no `pytest`
+- `POETRY_VIRTUALENVS_PATH=/tmp/pypoetry poetry run pytest tests/test_web_billing_health.py -q`
+  - Result: not run on 2026-06-30; Poetry-created venv has no installed `pytest`
+- `POETRY_VIRTUALENVS_PATH=/tmp/pypoetry poetry run ruff check app/services/autopay.py app/services/web_billing_health.py app/web/admin/billing_reporting.py tests/test_web_billing_health.py`
+  - Result: not run on 2026-06-30; Poetry-created venv has no installed `ruff`
 - `poetry run ruff check tests/test_billing_invoice_templates.py`
   - Result: passed
 - `poetry run python -c "...invoice_form.html currency lock markup..."`
@@ -460,7 +472,7 @@ Format: `[POLISH|CONTROL] (severity) file:line — problem → recommendation [r
 - [POLISH] (High) `templates/admin/billing/dunning.html:200` — "View Details" links to a GET route that doesn't exist (only POST pause/resume/close); 404s every row → add case-detail GET+template or remove link [resolved in draft]
 - [POLISH] (High) `dunning.html:93,101,180,208` — Pause/Resume/Close + bulk Pause-All/Resume-All no confirm → add confirms (esp. Close + bulk) [resolved in draft]
 - [POLISH] (Med) `app/services/web_billing_dunning.py:119` + `app/web/admin/billing_dunning.py:116-143` — bulk action swallows per-case failures, routes discard processed list, no flash; 0-processed looks like success → surface "N of M / K failed" [resolved in draft]
-- [POLISH] (Med) `app/services/autopay.py` — no admin observability (suspended mandates, failure_count, run results); `get_status()` exists, no page consumes it → autopay admin panel [recommend]
+- [POLISH] (Med) `app/services/autopay.py` — no admin observability (suspended mandates, failure_count, run results); `get_status()` exists, no page consumes it → autopay admin panel [resolved in draft]
 - [POLISH] (Med) `payment_arrangement_detail.html:66` — Approve no confirm; activates dunning/suspension shield → confirm [resolved in draft]
 - [CONTROL] (High) `app/services/autopay.py:64` — `MAX_CONSECUTIVE_FAILURES=3` (retry cap + auto-suspend threshold) hardcoded → setting (default 3, range 1-10) [resolved in draft]
 - [CONTROL] (Med) `app/services/payment_arrangements.py:147-154` — installment bounds 2/24 hardcoded → settings (default 2/24, range 2-60) [resolved in draft]
@@ -504,7 +516,7 @@ Format: `[POLISH|CONTROL] (severity) file:line — problem → recommendation [r
 - [CONTROL] (High) `app/services/web_system_config.py:251-256` vs settings_spec — policy defaults in context builder not spec: `suspension_grace_hours="48"`, `dunning_escalation_days="3,7,14,30"`, `invoice_reminder_days="7,1"`; `blocking_period_days`/`deactivation_period_days`/`minimum_balance` have NO spec entry → register every key with one authoritative default+range; drop duplicate context defaults [resolved in draft]
 - [POLISH] (High) `app/services/web_system_config.py:42-72` (`_save_settings`) via `save_billing_config:263` — money/policy fields persisted as raw `.strip()` strings, no validation/coercion; no `min` on numeric fields; CSV unparsed; "-5"/"abc"/"3,7,foo" save silently → validate+coerce (numeric ranges, CSV-of-ints) + re-render field errors [resolved in draft]
 - [POLISH] (High) `templates/admin/system/config/billing.html:8-165` — single "Save" applies fleet-wide enforcement (auto_suspend, blocking/deactivation days, dunning schedule) with no preview/confirm → add confirm/diff gate "affects N customers" [resolved in draft]
-- [POLISH] (Med) `app/services/billing_integrity_audit.py:324` + `billing_health.py:342` — surfaced only as Prometheus gauges (only `app/tasks/billing.py:160`), no template → admin can't see launch_blocked/covered_but_locked/paid_with_balance or stale runners → billing health/integrity admin page with severity + empty/loading [recommend]
+- [POLISH] (Med) `app/services/billing_integrity_audit.py:324` + `billing_health.py:342` — surfaced only as Prometheus gauges (only `app/tasks/billing.py:160`), no template → admin can't see launch_blocked/covered_but_locked/paid_with_balance or stale runners → billing health/integrity admin page with severity + empty/loading [resolved in draft]
 - [CONTROL] (Med) `app/services/crm_billing_push.py:54` — currency via `os.getenv("BILLING_DEFAULT_CURRENCY","NGN")`, bypassing settings_spec → resolve through settings_spec [defer]
 - [CONTROL] (Med) `app/services/billing_health.py:256-280,307-338` — currency `'NGN'` hardcoded inside integrity SQL; single-currency assumption baked into correctness checks → derive from default currency [defer]
 - [POLISH] (Med) `account_status_reconcile.py`, `stale_overdue_lock_reconcile.py`, `billing/unwall_paid_accounts.py`, `billing_remediation.py` — CLI-only, no last-run/result in admin → record + surface last-run/counts [defer]

@@ -169,6 +169,7 @@
                         <h3 class="mb-2 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">Operations</h3>
                         <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                             {{ billing_workbench_card("Accounts", "/admin/billing/accounts", icon_building("h-4 w-4"), "slate", "gray", "Balances") }}
+                            {{ billing_workbench_card("Billing Health", "/admin/billing/health", icon_shield("h-4 w-4"), "green", "emerald", "Integrity") }}
                             {{ billing_workbench_card("Batch Billing", "/admin/billing/invoices/batch", icon_refresh("h-4 w-4"), "teal", "cyan", "Runs") }}
                             {{ billing_workbench_card("Import Payments", "/admin/billing/payments/import", icon_upload("h-4 w-4"), "indigo", "blue", "CSV") }}
                             {{ billing_workbench_card("Consolidated", "/admin/billing/consolidated-accounts", icon_clipboard("h-4 w-4"), "purple", "violet", "Groups") }}

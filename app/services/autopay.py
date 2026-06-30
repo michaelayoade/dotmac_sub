@@ -75,6 +75,11 @@ def _max_consecutive_failures(db: Session) -> int:
     return max(1, parsed)
 
 
+def max_consecutive_failures(db: Session) -> int:
+    """Configured autopay failure cap used by both charging and admin views."""
+    return _max_consecutive_failures(db)
+
+
 def _mandate(db: Session, account_id: str) -> AutopayMandate | None:
     # The topup page can be reached with an unresolved/non-UUID account id
     # (impersonation token, partial session); a lookup with no valid id simply
