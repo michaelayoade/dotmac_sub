@@ -3,7 +3,8 @@ import logging
 import time
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.orm import selectinload
 
 from app.celery_app import celery_app
 from app.models.router_management import (
@@ -84,7 +85,9 @@ def capture_scheduled_snapshots() -> dict:
     try:
         routers = list(
             db.execute(
-                select(Router).where(
+                select(Router)
+                .options(selectinload(Router.jump_host))
+                .where(
                     Router.is_active.is_(True),
                     Router.status == RouterStatus.online,
                 )
@@ -92,6 +95,16 @@ def capture_scheduled_snapshots() -> dict:
             .scalars()
             .all()
         )
+        # Detach the routers and close the read transaction BEFORE the slow
+        # per-router REST /export loop. Otherwise expire_on_commit re-loads each
+        # router's attributes on the next iteration, reopening a transaction
+        # that then sits idle through the network call (one router is
+        # unreachable → full timeout) and trips Postgres'
+        # idle_in_transaction_session_timeout, aborting the whole run with zero
+        # snapshots. jump_host is eager-loaded so the connection layer can still
+        # read it while detached.
+        db.expunge_all()
+        db.rollback()
 
         success = 0
         failed = 0
@@ -99,16 +112,23 @@ def capture_scheduled_snapshots() -> dict:
             try:
                 data = RouterConnectionService.execute(router, "GET", "/export")
                 config_text = data if isinstance(data, str) else str(data)
+                # store_snapshot commits its own short transaction.
                 RouterConfigService.store_snapshot(
                     db,
                     router_id=router.id,
                     config_export=config_text,
                     source=RouterSnapshotSource.scheduled,
                 )
-                router.last_config_sync_at = datetime.now(UTC)
+                # router is detached; update the timestamp with a targeted UPDATE.
+                db.execute(
+                    update(Router)
+                    .where(Router.id == router.id)
+                    .values(last_config_sync_at=datetime.now(UTC))
+                )
                 db.commit()
                 success += 1
             except Exception as exc:
+                db.rollback()
                 logger.warning("Failed to snapshot %s: %s", router.name, exc)
                 failed += 1
 

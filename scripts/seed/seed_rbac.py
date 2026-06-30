@@ -39,6 +39,10 @@ DEFAULT_PERMISSIONS = [
     ("auth:manage", "Manage authentication settings"),
     ("system:settings:read", "View system settings"),
     ("system:settings:write", "Modify system settings"),
+    # Secret management (OpenBao) — admin-only; intentionally NOT granted to any
+    # non-admin seeded role, so only wildcard (admin) principals can read/write.
+    ("system:secrets:read", "View secret paths"),
+    ("system:secrets:write", "Create/modify/delete secrets"),
     # RBAC - Granular permissions for role builder
     ("rbac:roles:read", "View roles"),
     ("rbac:roles:write", "Create and update roles"),

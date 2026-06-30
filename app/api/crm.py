@@ -427,9 +427,11 @@ def create_crm_credit(
     payload: dict[str, Any] = Body(default_factory=dict),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Issue an account credit (credit note) for a subscriber — used by the CRM
-    to pay out referral rewards. Body: ``{subscriber_id, amount, reason?,
-    external_ref?, currency?}``. Idempotent on ``external_ref``.
+    """Pay a referral reward into a subscriber's VAS wallet (a spendable
+    balance) — used by the CRM to pay out referral rewards. Body:
+    ``{subscriber_id, amount, reason?, external_ref?, currency?}``. Idempotent on
+    ``external_ref``. Individual subscribers only (reseller float wallets are
+    never credited here).
     """
     errors: dict[str, list[str]] = {}
     subscriber_id = str(payload.get("subscriber_id") or "").strip()
@@ -453,7 +455,7 @@ def create_crm_credit(
     external_ref = str(external_ref).strip() if external_ref not in (None, "") else None
 
     try:
-        credit = crm_api.create_account_credit(
+        entry = crm_api.credit_referral_reward_to_wallet(
             db,
             subscriber_id=subscriber_id,
             amount=amount,
@@ -466,11 +468,12 @@ def create_crm_credit(
 
     return _envelope(
         {
-            "id": str(credit.id),
-            "credit_number": credit.credit_number,
-            "total": str(credit.total),
-            "status": credit.status.value,
-            "account_id": str(credit.account_id),
+            "id": str(entry.id),
+            "wallet_id": str(entry.wallet_id),
+            "amount": str(entry.amount),
+            "currency": entry.currency,
+            "reference": entry.reference,
+            "type": "wallet_credit",
         }
     )
 

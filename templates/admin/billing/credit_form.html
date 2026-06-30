@@ -25,18 +25,18 @@
     {% endif %}
 
     <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
-        <form method="post" action="{{ action_url }}" class="space-y-6 p-6">
+        <form method="post" action="{{ action_url }}" class="space-y-6 p-6" onsubmit="if (!confirm('Issue this credit to the selected billing account?')) return false; this.querySelector('button[type=submit]').disabled = true;">
             {% include "components/forms/csrf_input.html" %}
             {% include "admin/billing/_customer_account_fields.html" with context %}
             <div class="grid gap-4 sm:grid-cols-2">
                 <div>
                     <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Amount</label>
-                    <input type="number" step="0.01" name="amount" required
+                    <input type="number" step="0.01" min="0.01" name="amount" required
                            class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Currency</label>
-                    <input type="text" name="currency" value="NGN"
+                    <input type="text" name="currency" value="{{ default_currency|default('NGN') }}"
                            class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                 </div>
             </div>

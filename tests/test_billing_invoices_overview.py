@@ -45,6 +45,36 @@ def test_build_overview_data_uses_short_ttl_cache(db_session, monkeypatch):
     assert calls["count"] == 1
 
 
+def test_build_overview_data_adds_default_currency_displays(db_session, monkeypatch):
+    _reset_overview_cache()
+
+    class _FakeReporting:
+        @staticmethod
+        def get_dashboard_stats(_db, **_kwargs):
+            return {
+                "stats": {
+                    "payments_amount": 1200,
+                    "total_revenue": 800,
+                    "unpaid_invoices_amount": 400,
+                },
+                "period_comparison": [],
+                "payment_method_breakdown": {"labels": [], "values": []},
+                "daily_payments": {"labels": [], "values": []},
+            }
+
+    monkeypatch.setattr(
+        "app.services.billing.reporting.billing_reporting",
+        _FakeReporting,
+    )
+
+    result = build_overview_data(db_session, period="this_month")
+
+    assert result["default_currency"] == "NGN"
+    assert result["stats"]["payments_amount_display"] == "NGN 1,200.00"
+    assert result["stats"]["total_revenue_display"] == "NGN 800.00"
+    assert result["stats"]["unpaid_invoices_amount_display"] == "NGN 400.00"
+
+
 def test_build_overview_data_cache_is_scoped_by_filters(db_session, monkeypatch):
     _reset_overview_cache()
     calls = {"count": 0}
@@ -82,11 +112,13 @@ def _create_invoice(
     balance_due: str,
     status: InvoiceStatus,
     created_at: datetime,
+    currency: str = "NGN",
 ):
     invoice = Invoice(
         account_id=account_id,
         invoice_number=invoice_number,
         status=status,
+        currency=currency,
         subtotal=Decimal(total),
         tax_total=Decimal("0.00"),
         total=Decimal(total),
@@ -137,6 +169,52 @@ def test_invoices_list_returns_status_totals_and_payment_split(db_session, subsc
     assert result["status_totals"]["all"]["count"] == 2
     assert result["status_totals"]["all"]["due_total"] == 25.0
     assert result["status_totals"]["all"]["received_total"] == 155.0
+
+
+def test_invoices_list_status_totals_are_grouped_by_currency(db_session, subscriber):
+    now = datetime.now(UTC)
+    _create_invoice(
+        db_session,
+        account_id=subscriber.id,
+        invoice_number="INV-NGN",
+        total="100.00",
+        balance_due="25.00",
+        status=InvoiceStatus.issued,
+        created_at=now,
+        currency="NGN",
+    )
+    _create_invoice(
+        db_session,
+        account_id=subscriber.id,
+        invoice_number="INV-USD",
+        total="80.00",
+        balance_due="10.00",
+        status=InvoiceStatus.issued,
+        created_at=now,
+        currency="USD",
+    )
+
+    result = build_invoices_list_data(
+        db_session,
+        account_id=None,
+        partner_id=None,
+        status=None,
+        customer_ref=None,
+        search=None,
+        date_range=None,
+        page=1,
+        per_page=25,
+    )
+
+    issued = result["status_totals"]["issued"]
+    assert issued["amounts"] == {"NGN": Decimal("100.00"), "USD": Decimal("80.00")}
+    assert issued["due_amounts"] == {"NGN": Decimal("25.00"), "USD": Decimal("10.00")}
+    assert issued["received_amounts"] == {
+        "NGN": Decimal("75.00"),
+        "USD": Decimal("70.00"),
+    }
+    assert issued["display"] == "NGN 100.00, USD 80.00"
+    assert issued["due_display"] == "NGN 25.00, USD 10.00"
 
 
 def test_invoices_list_search_filters_invoice_numbers(db_session, subscriber):
