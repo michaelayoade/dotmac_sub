@@ -52,7 +52,9 @@ def _get_secret_hash(db: Session | None = None) -> str:
 
 def _get_timeout_seconds(db: Session | None = None) -> int:
     if db:
-        value = resolve_value(db, SettingDomain.billing, "payment_gateway_timeout_seconds")
+        value = resolve_value(
+            db, SettingDomain.billing, "payment_gateway_timeout_seconds"
+        )
         try:
             parsed = int(value)
         except (TypeError, ValueError):

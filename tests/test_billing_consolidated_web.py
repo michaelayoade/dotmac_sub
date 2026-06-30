@@ -95,9 +95,7 @@ def test_consolidated_record_payment_uses_default_currency_when_omitted(
     assert captured["currency"] == "USD"
 
 
-def test_consolidated_record_payment_redirects_with_safe_error(
-    db_session, monkeypatch
-):
+def test_consolidated_record_payment_redirects_with_safe_error(db_session, monkeypatch):
     def _fake_record_bulk_payment(db, **kwargs):
         raise ValueError("raw decimal stack detail")
 

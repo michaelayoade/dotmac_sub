@@ -43,7 +43,7 @@ def test_billing_accounts_template_uses_normal_get_filters():
     template = Path("templates/admin/billing/accounts.html").read_text()
 
     assert 'method="get" action="/admin/billing/accounts"' in template
-    assert "hx-target=\"#accounts-table\"" not in template
+    assert 'hx-target="#accounts-table"' not in template
     assert 'name="balance_filter"' not in template
     assert "status_filter" in template
 
