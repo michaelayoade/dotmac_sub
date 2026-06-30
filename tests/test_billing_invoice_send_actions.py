@@ -11,6 +11,7 @@ from app.models.billing import (
     InvoiceStatus,
 )
 from app.services.web_billing_invoice_bulk import (
+    BulkInvoiceActionResult,
     bulk_mark_paid,
     bulk_queue_pdf_exports,
     bulk_send,
@@ -192,15 +193,21 @@ def test_bulk_mark_paid_updates_only_eligible_statuses(db_session, subscriber):
 
 
 def test_bulk_mark_paid_route_reports_skipped_count(db_session, monkeypatch):
-    def _fake_execute_audited_bulk_action(db, request, *, action, invoice_ids_csv):
+    def _fake_execute_audited_bulk_action_result(
+        db, request, *, action, invoice_ids_csv
+    ):
         assert action == "mark_paid"
         assert invoice_ids_csv == "inv-1,inv-2,missing"
-        return ["inv-1"]
+        return BulkInvoiceActionResult(
+            selected_ids=["inv-1", "inv-2", "missing"],
+            processed_ids=["inv-1"],
+            skipped_ids=["inv-2", "missing"],
+        )
 
     monkeypatch.setattr(
         bulk_routes.web_billing_invoice_bulk_service,
-        "execute_audited_bulk_action",
-        _fake_execute_audited_bulk_action,
+        "execute_audited_bulk_action_result",
+        _fake_execute_audited_bulk_action_result,
     )
 
     response = bulk_routes.invoice_bulk_mark_paid(
@@ -213,7 +220,7 @@ def test_bulk_mark_paid_route_reports_skipped_count(db_session, monkeypatch):
     assert response.status_code == 200
     assert payload["count"] == 1
     assert payload["skipped"] == 2
-    assert "skipped 2" in payload["message"]
+    assert "2 skipped" in payload["message"]
 
 
 def test_bulk_queue_pdf_exports_reports_ready_and_queued(
