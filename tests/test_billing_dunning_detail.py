@@ -57,20 +57,24 @@ def test_dunning_bulk_pause_redirect_reports_partial_success(db_session, monkeyp
     def _fake_actor_id(request):
         return "actor-1"
 
-    def _fake_execute_action_with_audit(
+    def _fake_execute_bulk_action_with_audit_result(
         db, *, request, action, actor_id, case_id=None, case_ids_csv=None
     ):
         assert action == "pause"
         assert actor_id == "actor-1"
         assert case_ids_csv == "case-1,case-2,missing"
         assert case_id is None
-        return ["case-1"]
+        return web_billing_dunning.BulkDunningActionResult(
+            selected_ids=["case-1", "case-2", "missing"],
+            processed_ids=["case-1"],
+            failed_ids=["missing"],
+        )
 
     monkeypatch.setattr(dunning_routes, "_actor_id", _fake_actor_id)
     monkeypatch.setattr(
         dunning_routes.web_billing_dunning_service,
-        "execute_action_with_audit",
-        _fake_execute_action_with_audit,
+        "execute_bulk_action_with_audit_result",
+        _fake_execute_bulk_action_with_audit_result,
     )
 
     response = dunning_routes.dunning_bulk_pause(
