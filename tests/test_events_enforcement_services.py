@@ -20,7 +20,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from app.models.billing import Invoice, InvoiceStatus
-from app.models.catalog import NasDevice, NasVendor, SubscriptionStatus
+from app.models.catalog import BillingMode, NasDevice, NasVendor, SubscriptionStatus
+from app.models.enforcement_lock import EnforcementLock
 from app.models.notification import (
     Notification,
     NotificationChannel,
@@ -1514,6 +1515,7 @@ class TestInvoiceOverdueSuspensionShields:
         from app.models.subscription_engine import SettingValueType
 
         subscriber.status = AccountStatus.active
+        subscriber.billing_mode = BillingMode.prepaid
         subscription.status = SubscriptionStatus.active
         invoice = Invoice(
             account_id=subscriber.id,
@@ -1708,6 +1710,33 @@ class TestInvoiceOverdueSuspensionShields:
         db_session.refresh(subscription)
 
         assert subscription.status == SubscriptionStatus.suspended
+
+    @patch("app.tasks.enforcement.cleanup_subscription_block_sessions.delay")
+    @patch(
+        "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
+    )
+    def test_postpaid_overdue_does_not_directly_suspend_before_dunning_policy(
+        self,
+        mock_reject_ip,
+        mock_cleanup,
+        db_session,
+        subscriber,
+        subscription,
+    ):
+        invoice = self._setup_overdue_account(db_session, subscriber, subscription)
+        subscriber.billing_mode = BillingMode.postpaid
+        subscription.status = SubscriptionStatus.active
+        db_session.commit()
+
+        EnforcementHandler().handle(
+            db_session, self._overdue_event(subscriber, invoice)
+        )
+        db_session.refresh(subscription)
+
+        assert subscription.status == SubscriptionStatus.active
+        assert db_session.query(EnforcementLock).count() == 0
+        mock_reject_ip.assert_not_called()
+        mock_cleanup.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

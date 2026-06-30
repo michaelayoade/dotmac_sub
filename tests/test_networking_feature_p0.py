@@ -60,6 +60,7 @@ from app.models.notification import (
     NotificationStatus,
 )
 from app.models.radius import RadiusClient, RadiusServer
+from app.models.router_management import Router, RouterStatus
 from app.models.subscriber import Address, AddressType, Subscriber
 from app.models.tr069 import (
     Tr069AcsServer,
@@ -692,6 +693,56 @@ def test_core_devices_list_page_data_includes_uptime_ping_history_and_backup(
     assert payload["uptime_map"][key] is not None
     assert payload["ping_history_map"][key][0]["ok"] is True
     assert payload["backup_map"][key]["status"] == "success"
+
+
+def test_core_devices_list_page_data_prefers_zabbix_live_status(
+    db_session, monkeypatch
+):
+    monkeypatch.setattr(core_devices_forms, "warmer_is_stale", lambda: False)
+    parent = NetworkDevice(
+        name="Live Parent",
+        mgmt_ip="10.220.0.1",
+        status=DeviceStatus.online,
+        is_active=True,
+    )
+    db_session.add(parent)
+    db_session.flush()
+    child = NetworkDevice(
+        name="Live Child",
+        mgmt_ip="10.220.0.2",
+        parent_device_id=parent.id,
+        status=DeviceStatus.degraded,
+        live_status="up",
+        live_status_at=datetime.now(UTC),
+        is_active=True,
+    )
+    db_session.add(child)
+    db_session.commit()
+
+    payload = core_devices_forms.list_page_data(db_session, role=None, status="active")
+
+    assert payload["display_status_map"][str(child.id)] == "online"
+    assert payload["child_impacts"][str(parent.id)]["impacted"] is False
+
+
+def test_core_devices_list_page_data_falls_back_when_zabbix_live_status_stale(
+    db_session, monkeypatch
+):
+    monkeypatch.setattr(core_devices_forms, "warmer_is_stale", lambda: True)
+    device = NetworkDevice(
+        name="Stale Live Device",
+        mgmt_ip="10.220.0.3",
+        status=DeviceStatus.degraded,
+        live_status="up",
+        live_status_at=datetime.now(UTC) - timedelta(hours=1),
+        is_active=True,
+    )
+    db_session.add(device)
+    db_session.commit()
+
+    payload = core_devices_forms.list_page_data(db_session, role=None, status="active")
+
+    assert payload["display_status_map"][str(device.id)] == "degraded"
 
 
 def test_create_bandwidth_graph_add_source_clone_and_public_toggle(db_session):
@@ -2250,6 +2301,94 @@ def test_consolidated_page_data_includes_active_nas_inventory_devices(db_session
         device for device in payload["core_devices"] if device.name == "Fiber POP NAS"
     )
     assert included.detail_url.endswith(f"/admin/network/nas/devices/{included.id}")
+
+
+def test_consolidated_nas_inventory_inherits_linked_monitoring_status(
+    db_session, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.services.device_operational_status.warmer_is_stale",
+        lambda _now=None: False,
+    )
+    monitoring_device = NetworkDevice(
+        name="SPDC",
+        hostname="spdc",
+        mgmt_ip="160.119.127.83",
+        status=DeviceStatus.online,
+        role=DeviceRole.access,
+        live_status="up",
+        live_status_at=datetime.now(UTC),
+        zabbix_hostid="10736",
+    )
+    db_session.add(monitoring_device)
+    db_session.flush()
+    db_session.add(
+        NasDevice(
+            name="SPDC Access",
+            code="spdc-access",
+            vendor=NasVendor.mikrotik,
+            management_ip="160.119.127.83",
+            status=NasDeviceStatus.active,
+            network_device_id=monitoring_device.id,
+            zabbix_host_id="10696",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    payload = core_devices_views.consolidated_page_data(
+        tab="core", db=db_session, search="spdc"
+    )
+
+    included = next(
+        device for device in payload["core_devices"] if device.name == "SPDC Access"
+    )
+    assert included.live_status == "up"
+    assert included.zabbix_hostid == "10736"
+    assert included.operational.status == "up"
+
+
+def test_consolidated_nas_inventory_uses_direct_router_status_without_zabbix(
+    db_session, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.services.device_operational_status.warmer_is_stale",
+        lambda _now=None: False,
+    )
+    nas = NasDevice(
+        name="Direct NAS",
+        code="direct-nas",
+        vendor=NasVendor.mikrotik,
+        management_ip="192.0.2.231",
+        status=NasDeviceStatus.active,
+        is_active=True,
+    )
+    db_session.add(nas)
+    db_session.flush()
+    db_session.add(
+        Router(
+            name="Direct NAS Router",
+            hostname="direct-nas",
+            management_ip="192.0.2.231",
+            rest_api_username="admin",
+            rest_api_password="enc:test",
+            status=RouterStatus.online,
+            nas_device_id=nas.id,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    payload = core_devices_views.consolidated_page_data(
+        tab="core", db=db_session, search="direct nas"
+    )
+
+    included = next(
+        device for device in payload["core_devices"] if device.name == "Direct NAS"
+    )
+    assert included.zabbix_hostid is None
+    assert included.live_status == "up"
+    assert included.operational.status == "up"
 
 
 def test_olts_list_page_data_includes_network_devices_ending_in_olt(

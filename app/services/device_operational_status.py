@@ -13,7 +13,7 @@ Precedence (first match wins):
     no live_status row                -> unmonitored    (reason: not_warmed)
     warmer heartbeat stale            -> unmonitored    (reason: stale)
     live_status == unknown            -> unmonitored    (reason: monitoring_unknown)
-    live_status == problem            -> degraded
+    live_status == problem            -> degraded      (legacy cached status)
     live_status == down               -> down
     live_status == up                 -> up
     else                              -> unknown
@@ -249,7 +249,8 @@ def derive_operational_status(
         # Disabled / in-maintenance in Zabbix, or no availability data.
         return _maybe_mismatch(UNMONITORED, "monitoring_unknown", admin)
 
-    # 5. Live observation maps to the UI bucket. problem == up-with-trigger.
+    # 5. Live observation maps to the UI bucket. "problem" is kept for legacy
+    # cached rows from the older warmer that folded active triggers into status.
     if live == "problem":
         return _maybe_mismatch(DEGRADED, "active_trigger", admin)
     if live == "down":

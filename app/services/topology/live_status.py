@@ -1,10 +1,13 @@
 """Topology live-status warmer (Phase 3).
 
-Batch-fetches Zabbix host availability + active triggers for the reconciled
-nodes and writes a coarse ``live_status`` (up/down/problem/unknown) into the
-network_devices cache. The Network Path panel reads that cache — Zabbix is
-NEVER called on the request path (same warm-and-store pattern as
-``monitoring_warm``). Severity order: down > problem > up.
+Batch-fetches Zabbix host availability for reconciled nodes and writes a coarse
+``live_status`` (up/down/unknown) into the network_devices cache. A failed
+Zabbix ICMP ping item is always the primary outage signal; for enabled hosts,
+ICMP success is also the primary healthy signal. SNMP/host availability is used
+only when there is no authoritative ICMP result. The Network Path panel reads
+that cache — Zabbix is NEVER called on the request path (same warm-and-store
+pattern as
+``monitoring_warm``).
 """
 
 from __future__ import annotations
@@ -111,11 +114,13 @@ def _availability(zhost: dict) -> str:
     return UNKNOWN
 
 
-def _derive(avail: str, has_problem: bool) -> str:
+def _derive(avail: str, icmp_up: bool | None = None) -> str:
+    if icmp_up is True:
+        return UP
+    if icmp_up is False:
+        return DOWN
     if avail == DOWN:
         return DOWN
-    if has_problem:
-        return PROBLEM
     if avail == UP:
         return UP
     return UNKNOWN
@@ -137,13 +142,25 @@ def warm_topology_status(session: Session, client) -> dict:
         return {"nodes": 0}
 
     avail: dict[str, str] = {}
-    problems: set[str] = set()
+    icmp_allowed: dict[str, bool] = {}
+    icmp_up: dict[str, bool] = {}
     for chunk in _chunks(host_ids, _CHUNK):
         for h in client.get_hosts(host_ids=chunk):
-            avail[str(h.get("hostid"))] = _availability(h)
-        for t in client.get_triggers(host_ids=chunk, active_only=True, limit=10000):
-            for hh in t.get("hosts", []):
-                problems.add(str(hh.get("hostid")))
+            host_id = str(h.get("hostid"))
+            avail[host_id] = _availability(h)
+            icmp_allowed[host_id] = (
+                str(h.get("status")) != "1"
+                and str(h.get("maintenance_status")) != "1"
+            )
+        for item in client.get_items(host_ids=chunk, metric="icmpping", limit=100000):
+            if str(item.get("key_") or "") != "icmpping":
+                continue
+            host_id = str(item.get("hostid"))
+            value = str(item.get("lastvalue") or "")
+            if value == "1" and host_id not in icmp_up:
+                icmp_up[host_id] = True
+            elif value == "0":
+                icmp_up[host_id] = False
 
     now = _now()
     sla_logging = _sla_log_enabled()
@@ -153,7 +170,13 @@ def warm_topology_status(session: Session, client) -> dict:
         hid = n.zabbix_hostid
         if hid is None:  # filtered in the query; narrows for the type checker
             continue
-        status = _derive(avail.get(hid, UNKNOWN), hid in problems)
+        raw_icmp = icmp_up.get(hid)
+        zabbix_icmp = (
+            raw_icmp
+            if raw_icmp is False or icmp_allowed.get(hid, False)
+            else None
+        )
+        status = _derive(avail.get(hid, UNKNOWN), zabbix_icmp)
         # Stamp live_status_at only when the state CHANGES, so it marks when the
         # node entered its current state — the dwell clock the customer-facing
         # connection-status debounce relies on (see topology.selfcare).

@@ -36,6 +36,23 @@ ROUTER_CREDENTIAL_FIELDS = ("rest_api_username", "rest_api_password")
 JUMP_HOST_CREDENTIAL_FIELDS = ("ssh_key", "ssh_password")
 
 
+def _sync_router_monitoring_best_effort(db: Session, router: Router) -> None:
+    """Refresh the router's NetworkDevice mirror without blocking inventory writes."""
+    try:
+        from app.services.monitoring_metrics import sync_router_to_monitoring
+
+        sync_router_to_monitoring(db, str(router.id))
+        db.commit()
+        db.refresh(router)
+    except Exception:
+        db.rollback()
+        logger.warning(
+            "router_monitoring_sync_failed",
+            extra={"router_id": str(router.id), "router_name": router.name},
+            exc_info=True,
+        )
+
+
 class RouterInventory(ListResponseMixin):
     ALLOWED_ORDER_COLUMNS = {
         "name": Router.name,
@@ -72,6 +89,7 @@ class RouterInventory(ListResponseMixin):
                 detail=f"Router with name '{payload.name}' already exists",
             )
         db.refresh(router)
+        _sync_router_monitoring_best_effort(db, router)
         logger.info("Router created: %s (%s)", router.name, router.id)
         return router
 
@@ -159,6 +177,7 @@ class RouterInventory(ListResponseMixin):
 
         db.commit()
         db.refresh(router)
+        _sync_router_monitoring_best_effort(db, router)
         logger.info("Router updated: %s (%s)", router.name, router.id)
         return router
 
@@ -166,6 +185,12 @@ class RouterInventory(ListResponseMixin):
     def delete(db: Session, router_id: uuid.UUID) -> None:
         router = RouterInventory.get(db, router_id)
         router.is_active = False
+        if router.network_device_id:
+            from app.models.network_monitoring import NetworkDevice
+
+            device = db.get(NetworkDevice, router.network_device_id)
+            if device:
+                device.is_active = False
         db.commit()
         logger.info("Router soft-deleted: %s (%s)", router.name, router.id)
 

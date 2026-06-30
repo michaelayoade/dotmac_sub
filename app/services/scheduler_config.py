@@ -1864,6 +1864,27 @@ def build_beat_schedule() -> dict:
             interval_seconds=stale_infra_check_interval,
         )
 
+        monitoring_inventory_sync_enabled = _effective_bool(
+            session,
+            SettingDomain.network_monitoring,
+            "monitoring_inventory_sync_enabled",
+            "MONITORING_INVENTORY_SYNC_ENABLED",
+            True,
+        )
+        monitoring_inventory_sync_interval = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "monitoring_inventory_sync_interval_seconds",
+            600,
+        )
+        _sync_scheduled_task(
+            session,
+            name="monitoring_inventory_sync",
+            task_name="app.tasks.monitoring_cleanup.sync_inventory_to_monitoring",
+            enabled=monitoring_inventory_sync_enabled,
+            interval_seconds=max(monitoring_inventory_sync_interval, 300),
+        )
+
         # Event old cleanup - removes old completed events
         event_old_cleanup_enabled = _effective_bool(
             session,

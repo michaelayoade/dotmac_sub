@@ -740,6 +740,26 @@ class ZabbixClient:
         }
         return self._submit_read_payload(payload, method)
 
+    def get_hosts_by_interface_ip(
+        self,
+        ip: str,
+        limit: int = 2,
+    ) -> list[dict[str, Any]]:
+        """Find hosts with an interface using the exact IP address."""
+        method = "host.get"
+        payload = {
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": {
+                "output": ["hostid", "host", "name", "status"],
+                "selectInterfaces": ["interfaceid", "ip", "dns", "type", "main"],
+                "filter": {"ip": ip},
+                "limit": limit,
+            },
+            "id": next(self._request_ids),
+        }
+        return self._submit_read_payload(payload, method)
+
     def get_items(
         self,
         host_ids: list[str] | None = None,
