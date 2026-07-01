@@ -103,6 +103,99 @@
                 </div>
             </form>
 
+            {% if device_login_eligible %}
+            <!-- Router Device Login -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="flex flex-col gap-3 border-b border-slate-200 px-6 py-4 dark:border-slate-700 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                        <h2 class="font-semibold text-slate-900 dark:text-white">Router Device Login</h2>
+                        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">MikroTik RADIUS login credentials</p>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-800 dark:bg-blue-900/30 dark:text-blue-300">{{ device_login_tier }}</span>
+                        {% if device_login_enabled %}
+                        <span class="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900/30 dark:text-green-300">enabled</span>
+                        {% elif device_login_revoked_at %}
+                        <span class="inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/30 dark:text-red-300">revoked</span>
+                        {% else %}
+                        <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-400">not set</span>
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="p-6 space-y-5">
+                    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        <div>
+                            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Credential</p>
+                            <p class="mt-1 text-sm text-slate-900 dark:text-white">
+                                {% if device_login_secret_set_at %}
+                                Last rotated {{ device_login_secret_set_at.strftime('%B %d, %Y at %H:%M') }}
+                                {% else %}
+                                Not set
+                                {% endif %}
+                            </p>
+                        </div>
+                        <div>
+                            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">RADIUS Sync</p>
+                            <p class="mt-1 text-sm text-slate-900 dark:text-white">
+                                {% if device_login_sync_status %}
+                                {{ device_login_sync_status.status }}{% if device_login_sync_status.synced_at %} at {{ device_login_sync_status.synced_at }}{% endif %}
+                                {% else %}
+                                No sync recorded
+                                {% endif %}
+                            </p>
+                        </div>
+                    </div>
+
+                    <form method="POST" action="/admin/system/users/profile/device-login" class="space-y-4">
+                        {% include "components/forms/csrf_input.html" %}
+                        <input type="hidden" name="device_login_action" value="set">
+                        <div>
+                            <label for="device_login_current_password" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Current Account Password</label>
+                            <input type="password" name="current_password" id="device_login_current_password" autocomplete="current-password"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                        <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                            <div>
+                                <label for="device_login_secret" class="block text-sm font-medium text-slate-700 dark:text-slate-300">New Router Password</label>
+                                <input type="password" name="device_login_secret" id="device_login_secret" autocomplete="new-password"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            </div>
+                            <div>
+                                <label for="device_login_secret_confirm" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Confirm Router Password</label>
+                                <input type="password" name="device_login_secret_confirm" id="device_login_secret_confirm" autocomplete="new-password"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            </div>
+                        </div>
+                        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
+                            {% if device_login_enabled %}
+                            <span class="text-xs text-slate-500 dark:text-slate-400">Saving rotates the active router password.</span>
+                            {% endif %}
+                            <button type="submit" class="inline-flex items-center justify-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                                {{ 'Rotate Router Password' if device_login_enabled else 'Set Router Password' }}
+                            </button>
+                        </div>
+                    </form>
+
+                    {% if device_login_enabled %}
+                    <form method="POST" action="/admin/system/users/profile/device-login" class="border-t border-slate-200 pt-5 dark:border-slate-700">
+                        {% include "components/forms/csrf_input.html" %}
+                        <input type="hidden" name="device_login_action" value="revoke">
+                        <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                            <div class="sm:max-w-sm">
+                                <label for="device_login_revoke_current_password" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Current Account Password</label>
+                                <input type="password" name="current_password" id="device_login_revoke_current_password" autocomplete="current-password"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            </div>
+                            <button type="submit" class="inline-flex items-center justify-center rounded-lg border border-red-300 bg-white px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-700 dark:bg-transparent dark:text-red-400 dark:hover:bg-red-900/20">
+                                Revoke Router Login
+                            </button>
+                        </div>
+                    </form>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
+
             <!-- Active Sessions -->
             <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
                 <div class="flex flex-col gap-3 border-b border-slate-200 px-6 py-4 dark:border-slate-700 sm:flex-row sm:items-center sm:justify-between">

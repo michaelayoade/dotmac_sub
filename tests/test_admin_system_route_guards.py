@@ -6,11 +6,21 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from app.models.auth import MFAMethod, MFAMethodType, SessionStatus
+from app.models.auth import (
+    AuthProvider,
+    MFAMethod,
+    MFAMethodType,
+    SessionStatus,
+    UserCredential,
+)
 from app.models.auth import Session as AuthSession
+from app.models.rbac import Permission, SystemUserPermission
 from app.models.subscriber import UserType
 from app.models.system_user import SystemUser
 from app.services import web_system_profiles as web_system_profiles_service
+from app.services.auth_flow import hash_password
+from app.services.credential_crypto import decrypt_credential
+from app.services.radius_population import record_device_login_sync_status
 from app.web.admin import system as admin_system
 
 
@@ -132,6 +142,236 @@ def test_profile_template_includes_active_sessions_controls():
     assert "/admin/system/users/profile/sessions/sign-out-others" in template
     assert "Sign out other sessions" in template
     assert "session.is_current" in template
+
+
+def test_profile_template_includes_router_device_login_self_service():
+    template = Path("templates/admin/system/profile.html").read_text()
+
+    assert "Router Device Login" in template
+    assert "/admin/system/users/profile/device-login" in template
+    assert "device_login_eligible" in template
+    assert "RADIUS Sync" in template
+    assert "Rotate Router Password" in template
+
+
+def test_profile_state_marks_router_permissions_device_login_eligible(db_session):
+    router_admin = SystemUser(
+        first_name="Router",
+        last_name="Admin",
+        email="router-admin@example.com",
+        user_type=UserType.system_user,
+        is_active=True,
+    )
+    router_operator = SystemUser(
+        first_name="Router",
+        last_name="Operator",
+        email="router-operator@example.com",
+        user_type=UserType.system_user,
+        is_active=True,
+    )
+    admin_perm = Permission(key="router:admin", is_active=True)
+    write_perm = Permission(key="router:write", is_active=True)
+    db_session.add_all([router_admin, router_operator, admin_perm, write_perm])
+    db_session.flush()
+    db_session.add_all(
+        [
+            SystemUserPermission(
+                system_user_id=router_admin.id, permission_id=admin_perm.id
+            ),
+            SystemUserPermission(
+                system_user_id=router_operator.id, permission_id=write_perm.id
+            ),
+        ]
+    )
+    record_device_login_sync_status(
+        db_session,
+        status="ok",
+        result={"radcheck_upserts": 1, "app_disabled": 0},
+    )
+
+    admin_state = web_system_profiles_service.build_profile_page_state(
+        db_session,
+        current_user={"person_id": str(router_admin.id)},
+        system_user_id=router_admin.id,
+    )
+    operator_state = web_system_profiles_service.build_profile_page_state(
+        db_session,
+        current_user={"person_id": str(router_operator.id)},
+        system_user_id=router_operator.id,
+    )
+
+    assert admin_state["device_login_eligible"] is True
+    assert admin_state["device_login_tier"] == "full"
+    assert admin_state["device_login_sync_status"]["status"] == "ok"
+    assert operator_state["device_login_eligible"] is True
+    assert operator_state["device_login_tier"] == "write"
+
+
+def test_profile_device_login_self_rotation_sets_secret(db_session, monkeypatch):
+    system_user = SystemUser(
+        first_name="Self",
+        last_name="Rotator",
+        email="self-rotator@example.com",
+        user_type=UserType.system_user,
+        is_active=True,
+    )
+    permission = Permission(key="router:admin", is_active=True)
+    db_session.add_all([system_user, permission])
+    db_session.flush()
+    db_session.add_all(
+        [
+            SystemUserPermission(
+                system_user_id=system_user.id, permission_id=permission.id
+            ),
+            UserCredential(
+                system_user_id=system_user.id,
+                provider=AuthProvider.local,
+                username=system_user.email,
+                password_hash=hash_password("portal-secret"),
+                is_active=True,
+            ),
+        ]
+    )
+    db_session.commit()
+    sync_calls = []
+    request = SimpleNamespace(
+        state=SimpleNamespace(
+            auth={
+                "principal_type": "system_user",
+                "principal_id": str(system_user.id),
+                "session_id": "session-1",
+            }
+        ),
+        client=None,
+        headers={},
+    )
+    monkeypatch.setattr(
+        "app.tasks.radius_population.sync_device_login.delay",
+        lambda: sync_calls.append(True),
+    )
+
+    response = admin_system.user_profile_device_login(
+        request,
+        form_data={
+            "device_login_action": "set",
+            "current_password": "portal-secret",
+            "device_login_secret": "RouterPass123!",
+            "device_login_secret_confirm": "RouterPass123!",
+        },
+        db=db_session,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        "/admin/system/users/profile?device_login=updated"
+    )
+    assert sync_calls == [True]
+    db_session.refresh(system_user)
+    assert system_user.device_login_enabled is True
+    assert decrypt_credential(system_user.device_login_secret) == "RouterPass123!"
+
+
+def test_profile_device_login_self_rotation_rejects_weak_secret(
+    db_session, monkeypatch
+):
+    system_user = SystemUser(
+        first_name="Self",
+        last_name="Weak",
+        email="self-weak@example.com",
+        user_type=UserType.system_user,
+        is_active=True,
+    )
+    permission = Permission(key="router:admin", is_active=True)
+    db_session.add_all([system_user, permission])
+    db_session.flush()
+    db_session.add_all(
+        [
+            SystemUserPermission(
+                system_user_id=system_user.id, permission_id=permission.id
+            ),
+            UserCredential(
+                system_user_id=system_user.id,
+                provider=AuthProvider.local,
+                username=system_user.email,
+                password_hash=hash_password("portal-secret"),
+                is_active=True,
+            ),
+        ]
+    )
+    db_session.commit()
+    mutation_calls = []
+    request = SimpleNamespace(
+        state=SimpleNamespace(
+            auth={
+                "principal_type": "system_user",
+                "principal_id": str(system_user.id),
+            }
+        ),
+        client=None,
+        headers={},
+    )
+    monkeypatch.setattr(
+        "app.web.admin.system._user_profile_template_response",
+        lambda request, db, **kwargs: SimpleNamespace(**kwargs),
+    )
+    monkeypatch.setattr(
+        "app.web.admin.system.web_system_user_mutations_service.set_device_login",
+        lambda *args, **kwargs: mutation_calls.append((args, kwargs)),
+    )
+
+    response = admin_system.user_profile_device_login(
+        request,
+        form_data={
+            "device_login_action": "set",
+            "current_password": "portal-secret",
+            "device_login_secret": "NoSymbol1234",
+            "device_login_secret_confirm": "NoSymbol1234",
+        },
+        db=db_session,
+    )
+
+    assert response.status_code == 400
+    assert response.error == "Router password must include at least one symbol."
+    assert mutation_calls == []
+
+
+def test_profile_device_login_self_rotation_rejects_non_router_user(db_session):
+    system_user = SystemUser(
+        first_name="Self",
+        last_name="Operator",
+        email="self-operator@example.com",
+        user_type=UserType.system_user,
+        is_active=True,
+    )
+    permission = Permission(key="customer:read", is_active=True)
+    db_session.add_all([system_user, permission])
+    db_session.flush()
+    db_session.add(
+        SystemUserPermission(system_user_id=system_user.id, permission_id=permission.id)
+    )
+    db_session.commit()
+    request = SimpleNamespace(
+        state=SimpleNamespace(
+            auth={
+                "principal_type": "system_user",
+                "principal_id": str(system_user.id),
+            }
+        )
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        admin_system.user_profile_device_login(
+            request,
+            form_data={
+                "device_login_action": "set",
+                "current_password": "portal-secret",
+                "device_login_secret": "RouterPass123!",
+                "device_login_secret_confirm": "RouterPass123!",
+            },
+            db=db_session,
+        )
+
+    assert exc.value.status_code == 403
 
 
 def test_profile_sign_out_other_sessions_keeps_current(db_session):

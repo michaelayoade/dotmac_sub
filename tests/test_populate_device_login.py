@@ -249,7 +249,7 @@ def test_disabled_staff_removed(db_session, radius_admin_engine, conn_factory):
 
 def test_ineligible_skipped(db_session, radius_admin_engine, conn_factory, monkeypatch):
     """An enabled staff member with no router perms is skipped and counted."""
-    _seed_staff(db_session, email="sup@dotmac", enabled=True)
+    user = _seed_staff(db_session, email="sup@dotmac", enabled=True)
 
     monkeypatch.setattr(
         "app.services.radius_population.effective_perms",
@@ -264,6 +264,11 @@ def test_ineligible_skipped(db_session, radius_admin_engine, conn_factory, monke
 
     assert stats["skipped_ineligible"] == 1
     assert stats["radcheck_upserts"] == 0
+    assert stats["app_disabled"] == 1
+
+    db_session.refresh(user)
+    assert user.device_login_enabled is False
+    assert user.device_login_revoked_at is not None
 
     with radius_admin_engine.connect() as conn:
         n = conn.execute(
@@ -271,6 +276,43 @@ def test_ineligible_skipped(db_session, radius_admin_engine, conn_factory, monke
             {"u": "sup@dotmac"},
         ).scalar()
     assert n == 0
+
+
+def test_read_write_router_perms_project_limited_login(
+    db_session, radius_admin_engine, conn_factory, monkeypatch
+):
+    """Read/write router permissions are projected as limited RouterOS login."""
+    user = _seed_staff(db_session, email="ops@dotmac", enabled=True)
+
+    monkeypatch.setattr(
+        "app.services.radius_population.effective_perms",
+        lambda db, uid: {"router:read", "router:write", "router:push_config"},
+    )
+    monkeypatch.setattr(
+        "app.services.radius_population.effective_roles",
+        lambda db, uid: set(),
+    )
+
+    stats = populate_device_login(db_session, dry_run=False, _conn_factory=conn_factory)
+
+    assert stats["skipped_ineligible"] == 0
+    assert stats["radcheck_upserts"] == 1
+    assert stats["radreply_upserts"] == 2
+    assert stats["app_disabled"] == 0
+
+    db_session.refresh(user)
+    assert user.device_login_enabled is True
+    assert user.device_login_revoked_at is None
+
+    with radius_admin_engine.connect() as conn:
+        group = conn.execute(
+            text(
+                "SELECT value FROM radreply_admin "
+                "WHERE username=:u AND attribute='Mikrotik-Group'"
+            ),
+            {"u": "ops@dotmac"},
+        ).scalar()
+    assert group == "write"
 
 
 def test_dry_run_makes_no_writes(
