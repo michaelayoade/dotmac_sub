@@ -633,6 +633,36 @@ def build_beat_schedule() -> dict:
             enabled=radius_reap_enabled,
             interval_seconds=radius_reap_interval_seconds,
         )
+        # Staff device-login reconcile: authoritative sweep of radcheck_admin /
+        # radreply_admin from active SystemUser device-login state. This is the
+        # backstop that actually revokes router login when staff are deactivated,
+        # deleted, or renamed — populate_device_login otherwise only runs on a
+        # device-login edit, so a deactivation via the normal user-admin path
+        # would never take effect in RADIUS. Default-on (a security control).
+        device_login_sync_enabled = _effective_bool(
+            session,
+            SettingDomain.usage,
+            "device_login_sync_enabled",
+            "DEVICE_LOGIN_SYNC_ENABLED",
+            True,
+        )
+        device_login_sync_interval_seconds = max(
+            _effective_int(
+                session,
+                SettingDomain.usage,
+                "device_login_sync_interval_seconds",
+                "DEVICE_LOGIN_SYNC_INTERVAL_SECONDS",
+                900,
+            ),
+            60,
+        )
+        _sync_scheduled_task(
+            session,
+            name="device_login_sync",
+            task_name="app.tasks.radius_population.sync_device_login",
+            enabled=device_login_sync_enabled,
+            interval_seconds=device_login_sync_interval_seconds,
+        )
         # Companion to the app-side reaper above: this one closes the *external*
         # FreeRADIUS radacct table (the mirror reaper only touches the app-side
         # RadiusAccountingSession). Same flag/interval — without it, dead NAS
@@ -1174,6 +1204,14 @@ def build_beat_schedule() -> dict:
         if not integration_jobs:
             logger.info("EMAIL_POLL_EXIT reason=no_jobs")
         for job in integration_jobs:
+            adapter_key = str(getattr(job, "adapter_key", "") or "").strip().lower()
+            action = str(getattr(job, "action", "") or "").strip().lower()
+            if adapter_key == "crm" and action == "pull_tickets":
+                logger.info(
+                    "integration_interval_job_skipped_dedicated_crm_pull job_id=%s",
+                    getattr(job, "id", ""),
+                )
+                continue
             # Be defensive: tests may use MagicMock jobs and production may have
             # string values depending on where the job was sourced.
             raw_seconds = getattr(job, "interval_seconds", None)

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.notification import (
     Notification,
     NotificationChannel,
@@ -16,7 +18,9 @@ from app.models.notification import (
     NotificationTemplate,
 )
 from app.services.customer_notification_policy import (
+    has_recent_notification,
     is_notification_enabled_for_subscriber,
+    quiet_hours_send_at,
     resolve_subscriber_id_for_recipient,
 )
 from app.services.events.types import Event, EventType
@@ -43,6 +47,59 @@ _CHANNEL_ENABLE_FLAG: dict[NotificationChannel, tuple[str, str]] = {
 }
 
 _DISABLED_VALUES = {"false", "0", "no", "off", "disabled"}
+_ENABLED_VALUES = {"1", "true", "yes", "on", "enabled"}
+_UNRESOLVED_TEMPLATE_RE = re.compile(r"\{\{?\s*[a-zA-Z0-9_]+\s*\}?\}")
+
+
+def _notification_setting_value(db: Session, key: str) -> str | None:
+    setting = (
+        db.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.notification)
+        .filter(DomainSetting.key == key)
+        .filter(DomainSetting.is_active.is_(True))
+        .first()
+    )
+    if not setting:
+        return None
+    if setting.value_text is not None:
+        return str(setting.value_text)
+    if setting.value_json is not None:
+        return str(setting.value_json)
+    return None
+
+
+def _event_enabled(db: Session, template_code: str) -> bool:
+    value = _notification_setting_value(db, f"notification_event_{template_code}_enabled")
+    if value is None:
+        return True
+    return value.strip().lower() in _ENABLED_VALUES
+
+
+def _event_channels(
+    db: Session,
+    template_code: str,
+    default_channels: tuple[NotificationChannel, ...],
+) -> tuple[NotificationChannel, ...]:
+    value = _notification_setting_value(db, f"notification_event_{template_code}_channels")
+    if not value:
+        return default_channels
+    channels: list[NotificationChannel] = []
+    for item in value.split(","):
+        raw = item.strip().lower()
+        if not raw:
+            continue
+        try:
+            channel = NotificationChannel(raw)
+        except ValueError:
+            logger.warning(
+                "Ignoring invalid notification channel %r for event %s",
+                raw,
+                template_code,
+            )
+            continue
+        if channel not in channels:
+            channels.append(channel)
+    return tuple(channels) or default_channels
 
 
 def _channel_disabled_in_config(db: Session, channel: NotificationChannel) -> bool:
@@ -469,6 +526,12 @@ class NotificationHandler:
         spec = EVENT_NOTIFICATION_SPECS.get(event.event_type)
         if spec is None:
             return
+        if not _event_enabled(db, spec.template_code):
+            logger.info(
+                "Suppressed notification for event %s: event disabled by settings",
+                event.event_type.value,
+            )
+            return
 
         # Back-office bookkeeping (e.g. the cutover credit reconcile) suppresses
         # customer notifications: the activity is not a real-time customer action,
@@ -500,11 +563,12 @@ class NotificationHandler:
             _LOGGED_MISSING_TEMPLATE_CODES.add(spec.template_code)
 
         context = self._build_render_context(db, event)
+        quiet_send_at = quiet_hours_send_at(db)
         templates_by_channel = {
             (template.channel or NotificationChannel.email): template
             for template in templates
         }
-        for channel in spec.channels:
+        for channel in _event_channels(db, spec.template_code, spec.channels):
             # Skip channels explicitly disabled in config, so we don't create a
             # row per spec channel that can only fail at dispatch (e.g. SMS with
             # sms_enabled=false / no provider — the source of the failed-SMS
@@ -519,6 +583,15 @@ class NotificationHandler:
                     "Skipping event %s on %s: channel disabled in config",
                     event.event_type.value,
                     channel.value,
+                )
+                continue
+            template = templates_by_channel.get(channel)
+            if template is None:
+                logger.info(
+                    "Suppressed notification for event %s on %s: no active template for code %s",
+                    event.event_type.value,
+                    channel.value,
+                    spec.template_code,
                 )
                 continue
             recipient = self._resolve_recipient(db, event, channel)
@@ -559,8 +632,39 @@ class NotificationHandler:
                     recipient,
                 )
                 continue
+            if has_recent_notification(
+                db,
+                subscriber_id=subscriber_id,
+                channel=channel,
+                event_type=spec.template_code,
+                category=spec.category,
+                recipient=recipient,
+            ):
+                logger.info(
+                    "Suppressed duplicate notification for event %s on %s to %s",
+                    event.event_type.value,
+                    channel.value,
+                    recipient,
+                )
+                continue
 
-            template = templates_by_channel.get(channel)
+            subject = self._render_subject(template, spec, context)
+            body = self._render_body(template, spec, context)
+            unresolved = sorted(
+                {
+                    *_UNRESOLVED_TEMPLATE_RE.findall(subject),
+                    *_UNRESOLVED_TEMPLATE_RE.findall(body),
+                }
+            )
+            if unresolved:
+                logger.error(
+                    "Suppressed notification for event %s on %s: unresolved template variable(s) %s",
+                    event.event_type.value,
+                    channel.value,
+                    ", ".join(unresolved),
+                )
+                continue
+
             notification = Notification(
                 template_id=template.id if template else None,
                 subscriber_id=subscriber_id,
@@ -568,9 +672,10 @@ class NotificationHandler:
                 event_type=spec.template_code,
                 category=spec.category,
                 recipient=recipient,
-                subject=self._render_subject(template, spec, context),
-                body=self._render_body(template, spec, context),
+                subject=subject,
+                body=body,
                 status=NotificationStatus.queued,
+                send_at=quiet_send_at,
             )
             db.add(notification)
 

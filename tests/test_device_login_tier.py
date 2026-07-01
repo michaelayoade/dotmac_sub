@@ -13,13 +13,13 @@ def test_wildcard_is_full():
     assert derive_router_tier(set(), {"*"}) == "full"
 
 
-def test_write_perms_are_not_device_login_eligible():
-    assert derive_router_tier(set(), {"router:write"}) is None
-    assert derive_router_tier(set(), {"router:push_config"}) is None
+def test_write_perms_map_to_limited_routeros_login():
+    assert derive_router_tier(set(), {"router:write"}) == "write"
+    assert derive_router_tier(set(), {"router:push_config"}) == "write"
 
 
-def test_read_perm_is_not_device_login_eligible():
-    assert derive_router_tier(set(), {"router:read"}) is None
+def test_read_perm_maps_to_limited_routeros_login():
+    assert derive_router_tier(set(), {"router:read"}) == "read"
 
 
 def test_ineligible():

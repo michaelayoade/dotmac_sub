@@ -56,7 +56,9 @@ from app.services.customer_identity_normalization import (
     normalize_phone_identifier,
 )
 from app.services.customer_notification_policy import (
+    has_recent_notification,
     is_notification_enabled_for_subscriber,
+    quiet_hours_send_at,
     resolve_notification_category,
 )
 from app.services.integrations.connectors import whatsapp as whatsapp_connector
@@ -764,11 +766,15 @@ def queue_bulk_message_from_payload(
     if not customers:
         raise HTTPException(status_code=400, detail="No customers matched this scope")
 
+    preview_only = bool(payload.get("preview_only"))
+    if not preview_only and not bool(payload.get("confirmed")):
+        raise HTTPException(status_code=400, detail="Bulk message confirmation required")
     notifications: list[Notification] = []
     skipped: list[dict[str, str]] = []
     queued_count = 0
     suppressed_count = 0
     category = resolve_notification_category("service_bulk_message")
+    quiet_send_at = quiet_hours_send_at(db)
 
     for subscriber in customers:
         recipient = _resolve_notification_recipient(subscriber, channel)
@@ -813,22 +819,21 @@ def queue_bulk_message_from_payload(
                 template.subject or "Service Update", variables
             )
             body = _render_manual_template_text(template.body, variables)
-            if channel == NotificationChannel.email:
-                unresolved = sorted(
-                    {
-                        *_unresolved_template_variables(subject),
-                        *_unresolved_template_variables(body),
-                    }
+            unresolved = sorted(
+                {
+                    *_unresolved_template_variables(subject),
+                    *_unresolved_template_variables(body),
+                }
+            )
+            if unresolved:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"{channel.value.upper()} template has unsupported or "
+                        "unavailable variable(s): "
+                        + ", ".join("{" + name + "}" for name in unresolved)
+                    ),
                 )
-                if unresolved:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=(
-                            "Email template has unsupported or unavailable "
-                            "variable(s): "
-                            + ", ".join("{" + name + "}" for name in unresolved)
-                        ),
-                    )
         status = NotificationStatus.queued
         last_error = None
         if not is_notification_enabled_for_subscriber(
@@ -840,6 +845,17 @@ def queue_bulk_message_from_payload(
         ):
             status = NotificationStatus.canceled
             last_error = "Suppressed by customer notification preferences"
+            suppressed_count += 1
+        elif has_recent_notification(
+            db,
+            subscriber_id=subscriber.id,
+            channel=channel,
+            event_type="service_bulk_message",
+            category=category,
+            recipient=recipient,
+        ):
+            status = NotificationStatus.canceled
+            last_error = "Suppressed by notification dedupe window"
             suppressed_count += 1
         else:
             queued_count += 1
@@ -854,24 +870,30 @@ def queue_bulk_message_from_payload(
             subject=subject if channel == NotificationChannel.email else None,
             body=body,
             status=status,
+            send_at=quiet_send_at if status == NotificationStatus.queued else None,
             last_error=last_error,
         )
-        db.add(notification)
+        if not preview_only:
+            db.add(notification)
         notifications.append(notification)
 
-    db.commit()
-    for notification in notifications:
-        db.refresh(notification)
+    if not preview_only:
+        db.commit()
+        for notification in notifications:
+            db.refresh(notification)
 
     return {
         "success": True,
+        "preview": preview_only,
         "scope": scope,
         "matched_count": len(customers),
         "created_count": len(notifications),
         "queued_count": queued_count,
         "suppressed_count": suppressed_count,
         "skipped": skipped,
-        "notification_ids": [str(notification.id) for notification in notifications],
+        "notification_ids": [
+            str(notification.id) for notification in notifications if notification.id
+        ],
     }
 
 

@@ -116,7 +116,7 @@ def resolve_crm_subscriber_id(db: Session, subscriber_id: str) -> str | None:
         _cache_set(cache_key, "__none__", _CACHE_SUBSCRIBER_MAP)
         return None
 
-    client = get_crm_client()
+    client = get_crm_client(db)
     crm_id = client.resolve_subscriber_id(subscriber.splynx_customer_id)
     if crm_id:
         try:
@@ -509,13 +509,13 @@ def reseller_open_tickets_count(
     db: Session,
     reseller_id: str,
     account_ids: list[str],
-) -> int:
+) -> int | None:
     """Count open tickets across all reseller accounts.
 
-    Fails silently (returns 0) if CRM is unreachable.
+    Returns None if CRM is unreachable so callers do not show a false zero.
     """
     total = 0
-    client = get_crm_client()
+    client = get_crm_client(db)
     for account_id in account_ids:
         try:
             crm_sub_id = resolve_crm_subscriber_id(db, account_id)
@@ -529,5 +529,5 @@ def reseller_open_tickets_count(
             )
         except CRMClientError:
             logger.debug("CRM unreachable for open ticket count, skipping")
-            return 0
+            return None
     return total

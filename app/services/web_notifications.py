@@ -39,21 +39,38 @@ def templates_list_context(
     db: Session,
     *,
     channel: str | None,
+    status: str | None,
+    search: str | None,
     page: int,
     per_page: int,
 ) -> dict[str, object]:
     offset = (page - 1) * per_page
     effective_channel = channel if channel else None
+    effective_status = str(status or "").strip().lower()
+    is_active = (
+        True
+        if effective_status == "active"
+        else False
+        if effective_status == "inactive"
+        else None
+    )
+    effective_search = str(search or "").strip() or None
     template_list = notification_service.templates.list(
         db=db,
         channel=effective_channel,
-        is_active=None,
+        is_active=is_active,
+        search=effective_search,
         order_by="name",
         order_dir="asc",
         limit=per_page,
         offset=offset,
     )
-    total = notification_service.templates.count(db=db, channel=effective_channel)
+    total = notification_service.templates.count(
+        db=db,
+        channel=effective_channel,
+        is_active=is_active,
+        search=effective_search,
+    )
     total_pages = (total + per_page - 1) // per_page if total else 1
     return {
         "templates": template_list,
@@ -62,6 +79,8 @@ def templates_list_context(
         "total": total,
         "total_pages": total_pages,
         "channel": channel,
+        "status": effective_status,
+        "search": effective_search or "",
         "channel_counts": notification_service.templates.channel_counts(db),
         "channels": channels(),
     }
@@ -155,6 +174,15 @@ def delete_template(db: Session, *, template_id: UUID) -> None:
     notification_service.templates.delete(db=db, template_id=str(template_id))
 
 
+def toggle_template(db: Session, *, template_id: UUID):
+    template = notification_service.templates.get(db=db, template_id=str(template_id))
+    return notification_service.templates.update(
+        db=db,
+        template_id=str(template_id),
+        payload=NotificationTemplateUpdate(is_active=not template.is_active),
+    )
+
+
 def preview_variables(test_variables_json: str | None) -> dict[str, str]:
     variables = template_renderer.default_preview_variables()
     if not test_variables_json or not test_variables_json.strip():
@@ -186,6 +214,25 @@ def render_template_preview(
         ),
         "variables": variables,
         "channel": template.channel.value,
+    }
+
+
+def render_template_preview_from_fields(
+    *,
+    channel: str,
+    subject: str | None,
+    body: str,
+    test_variables_json: str | None,
+) -> dict[str, object]:
+    variables = preview_variables(test_variables_json)
+    return {
+        "rendered_subject": template_renderer.render_template_text(
+            subject or "",
+            variables,
+        ),
+        "rendered_body": template_renderer.render_template_text(body, variables),
+        "variables": variables,
+        "channel": channel,
     }
 
 
@@ -290,6 +337,7 @@ def bulk_notification_setup_context(db: Session) -> dict[str, object]:
         db=db,
         channel=None,
         is_active=True,
+        search=None,
         order_by="name",
         order_dir="asc",
         limit=500,

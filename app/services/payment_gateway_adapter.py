@@ -97,6 +97,30 @@ class PaymentGatewayAdapter:
             raw=dict(tx),
         )
 
+    def refund(
+        self,
+        db: Session,
+        *,
+        provider_type: str,
+        reference: str,
+        amount: Decimal | None = None,
+    ) -> dict[str, object]:
+        if provider_type == "flutterwave":
+            from app.services import flutterwave as flutterwave_svc
+
+            tx = flutterwave_svc.verify_transaction(db, reference)
+            tx_id = str(tx.get("id") or "").strip()
+            if not tx_id:
+                raise ValueError("Flutterwave transaction id not found for reference")
+            return dict(flutterwave_svc.refund_transaction(db, tx_id, amount))
+
+        if provider_type == "paystack":
+            from app.services import paystack as paystack_svc
+
+            return dict(paystack_svc.refund_transaction(db, reference, amount))
+
+        raise ValueError(f"Refunds are not supported for provider {provider_type!r}")
+
 
 payment_gateway_adapter = PaymentGatewayAdapter()
 adapter_registry.register(payment_gateway_adapter)

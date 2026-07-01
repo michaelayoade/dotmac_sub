@@ -139,6 +139,7 @@ class Templates(ListResponseMixin):
         db: Session,
         channel: str | None,
         is_active: bool | None,
+        search: str | None,
         order_by: str,
         order_dir: str,
         limit: int,
@@ -150,10 +151,15 @@ class Templates(ListResponseMixin):
                 NotificationTemplate.channel
                 == validate_enum(channel, NotificationChannel, "channel")
             )
-        if is_active is None:
-            query = query.filter(NotificationTemplate.is_active.is_(True))
-        else:
+        if is_active is not None:
             query = query.filter(NotificationTemplate.is_active == is_active)
+        if search:
+            pattern = f"%{search.strip()}%"
+            query = query.filter(
+                (NotificationTemplate.name.ilike(pattern))
+                | (NotificationTemplate.code.ilike(pattern))
+                | (NotificationTemplate.subject.ilike(pattern))
+            )
         query = apply_ordering(
             query,
             order_by,
@@ -166,15 +172,27 @@ class Templates(ListResponseMixin):
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
-    def count(db: Session, channel: str | None = None) -> int:
-        """Count active templates, optionally filtered by channel."""
-        query = db.query(func.count(NotificationTemplate.id)).filter(
-            NotificationTemplate.is_active.is_(True)
-        )
+    def count(
+        db: Session,
+        channel: str | None = None,
+        is_active: bool | None = None,
+        search: str | None = None,
+    ) -> int:
+        """Count templates, optionally filtered by channel/status/search."""
+        query = db.query(func.count(NotificationTemplate.id))
         if channel:
             query = query.filter(
                 NotificationTemplate.channel
                 == validate_enum(channel, NotificationChannel, "channel")
+            )
+        if is_active is not None:
+            query = query.filter(NotificationTemplate.is_active == is_active)
+        if search:
+            pattern = f"%{search.strip()}%"
+            query = query.filter(
+                (NotificationTemplate.name.ilike(pattern))
+                | (NotificationTemplate.code.ilike(pattern))
+                | (NotificationTemplate.subject.ilike(pattern))
             )
         return query.scalar() or 0
 
@@ -602,6 +620,36 @@ class AlertNotificationPolicies(ListResponseMixin):
             },
         )
         return apply_pagination(query, limit, offset).all()
+
+    @staticmethod
+    def count(
+        db: Session,
+        channel: str | None,
+        status: str | None,
+        severity_min: str | None,
+        is_active: bool | None,
+    ) -> int:
+        query = db.query(func.count(AlertNotificationPolicy.id))
+        if channel:
+            query = query.filter(
+                AlertNotificationPolicy.channel
+                == validate_enum(channel, NotificationChannel, "channel")
+            )
+        if status:
+            query = query.filter(
+                AlertNotificationPolicy.status
+                == validate_enum(status, AlertStatus, "status")
+            )
+        if severity_min:
+            query = query.filter(
+                AlertNotificationPolicy.severity_min
+                == validate_enum(severity_min, AlertSeverity, "severity_min")
+            )
+        if is_active is None:
+            query = query.filter(AlertNotificationPolicy.is_active.is_(True))
+        else:
+            query = query.filter(AlertNotificationPolicy.is_active == is_active)
+        return query.scalar() or 0
 
     @staticmethod
     def update(db: Session, policy_id: str, payload: AlertNotificationPolicyUpdate):

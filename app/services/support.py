@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -326,7 +326,7 @@ def _apply_inbound_identity_resolution(db: Session, data: dict[str, Any]) -> Non
         metadata["automation_suppressed_reason"] = (
             AUTOMATION_SUPPRESSION_REASON_IDENTITY_REVIEW
         )
-    elif not identity_resolution_allows_sensitive_automation(resolution):
+    elif not identity_resolution_allows_sensitive_automation(resolution, db):
         metadata["account_sensitive_automation_allowed"] = False
     else:
         metadata["account_sensitive_automation_allowed"] = True
@@ -645,9 +645,7 @@ class Tickets:
 
     @staticmethod
     def _auto_assignment_enabled(db: Session) -> bool:
-        return _read_bool_setting(
-            db, SettingDomain.workflow, SUPPORT_AUTO_ASSIGN_ENABLED_KEY, True
-        )
+        return support_ticket_settings_service.auto_assign_enabled(db)
 
     @staticmethod
     def _notifications_enabled(db: Session) -> bool:
@@ -657,12 +655,13 @@ class Tickets:
 
     @staticmethod
     def _apply_region_auto_assignment(ticket: Ticket, db: Session) -> dict[str, Any]:
-        rules = _read_json_setting(
-            db, SettingDomain.workflow, SUPPORT_REGION_ASSIGNMENT_RULES_KEY
-        )
+        rules = support_ticket_settings_service.region_assignment_rules(db)
         if not ticket.region:
             return {"matched": False, "reason": "region_missing"}
-        region_rule = rules.get(ticket.region) if isinstance(rules, dict) else None
+        region_key = support_ticket_settings_service.normalize_system_value(
+            ticket.region
+        )
+        region_rule = rules.get(region_key) if isinstance(rules, dict) else None
         if not isinstance(region_rule, dict):
             return {"matched": False, "reason": "no_rule"}
 
@@ -697,6 +696,16 @@ class Tickets:
             if isinstance(region_rule.get("assignee_person_ids"), list)
             else []
         )
+        if ticket.service_team_id:
+            members = support_ticket_settings_service.service_team_members(db).get(
+                str(ticket.service_team_id), []
+            )
+            if members:
+                current = set(assignee_ids)
+                assignee_ids = [
+                    *assignee_ids,
+                    *[uid for uid in members if uid not in current],
+                ]
         if assignee_ids:
             resolved = [
                 uid
@@ -717,6 +726,38 @@ class Tickets:
                 changed["assignee_person_ids"] = [str(uid) for uid in resolved]
 
         return {"matched": True, "changes": changed}
+
+    @staticmethod
+    def _apply_sla_policy(
+        db: Session,
+        ticket: Ticket,
+        *,
+        explicit_due_at: bool = False,
+    ) -> None:
+        if explicit_due_at or ticket.due_at is not None:
+            return
+        if support_ticket_settings_service.status_is_terminal(ticket.status):
+            return
+        policy = support_ticket_settings_service.sla_policy(db).get(
+            str(ticket.priority or "").strip(), {}
+        )
+        resolution_hours = int(policy.get("resolution_hours") or 0)
+        if resolution_hours <= 0:
+            return
+        expected_at = _now() + timedelta(hours=resolution_hours)
+        ticket.due_at = expected_at
+        db.add(
+            TicketSlaEvent(
+                ticket_id=ticket.id,
+                event_type="resolution_due",
+                expected_at=expected_at,
+                metadata_={
+                    "source": "priority_sla_policy",
+                    "priority": ticket.priority,
+                    "resolution_hours": resolution_hours,
+                },
+            )
+        )
 
     @staticmethod
     def _ensure_field_visit_work_order(db: Session, ticket: Ticket) -> None:
@@ -935,6 +976,9 @@ class Tickets:
         if Tickets._auto_assignment_enabled(db):
             Tickets._apply_region_auto_assignment(ticket, db)
 
+        Tickets._apply_sla_policy(
+            db, ticket, explicit_due_at=payload.due_at is not None
+        )
         Tickets._apply_status_timestamp_rules(ticket, data)
         Tickets._ensure_field_visit_work_order(db, ticket)
 
@@ -1124,6 +1168,7 @@ class Tickets:
         if Tickets._auto_assignment_enabled(db):
             Tickets._apply_region_auto_assignment(ticket, db)
 
+        Tickets._apply_sla_policy(db, ticket, explicit_due_at="due_at" in data)
         Tickets._ensure_field_visit_work_order(db, ticket)
         Tickets._queue_notifications_for_assignments(db, ticket, actor_id)
 
@@ -1710,7 +1755,7 @@ def regions(db: Session) -> list[str]:
         .all()
     )
     discovered = [str(item[0]) for item in rows if item and item[0]]
-    defaults = ["north", "south", "east", "west", "central"]
+    defaults = support_ticket_settings_service.list_region_options(db)
     return sorted(set(discovered + defaults))
 
 

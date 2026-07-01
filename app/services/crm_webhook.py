@@ -8,9 +8,8 @@ import json
 import logging
 from datetime import UTC, datetime
 
-from requests import RequestException, post
-
 from app.config import settings
+from app.services.crm_client import CRMClientError, get_crm_client
 
 logger = logging.getLogger(__name__)
 
@@ -51,14 +50,10 @@ def push_subscriber_change(
     )
 
     try:
-        resp = post(
-            f"{settings.crm_base_url}/webhooks/crm/subscribers/sync",
-            data=body,
-            headers={
-                "Content-Type": "application/json",
-                "X-Selfcare-Signature": signature,
-            },
-            timeout=15,
+        resp = get_crm_client().post_signed_webhook(
+            "/webhooks/crm/subscribers/sync",
+            body=body,
+            signature=signature,
         )
         if resp.status_code == 200:
             logger.debug("CRM webhook OK for %s %s", external_system, external_id)
@@ -74,7 +69,7 @@ def push_subscriber_change(
             resp.status_code,
             resp.text[:200],
         )
-    except RequestException as e:
+    except CRMClientError as e:
         logger.warning(
             "CRM webhook error for %s %s: %s", external_system, external_id, e
         )

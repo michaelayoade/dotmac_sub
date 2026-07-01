@@ -15,16 +15,26 @@ import time
 from typing import Any, cast
 
 import httpx
+from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.models.domain_settings import SettingDomain
+from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
 
 # Response cache TTLs (seconds). Portal list/detail pages are read-heavy and
 # tolerate brief staleness; caching them stops every page load from fanning
 # out live HTTP calls per subscriber account.
-_CACHE_LIST_TTL = int(os.getenv("CRM_CACHE_LIST_SECONDS", "60"))
-_CACHE_DETAIL_TTL = int(os.getenv("CRM_CACHE_DETAIL_SECONDS", "30"))
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+_CACHE_LIST_TTL = _env_int("CRM_CACHE_LIST_SECONDS", 60)
+_CACHE_DETAIL_TTL = _env_int("CRM_CACHE_DETAIL_SECONDS", 30)
 
 # Bounded retry for transient rate-limit / unavailable responses. A 429/503
 # means the request was rejected (not processed), so retrying — including for
@@ -32,24 +42,50 @@ _CACHE_DETAIL_TTL = int(os.getenv("CRM_CACHE_DETAIL_SECONDS", "30"))
 # else back off exponentially, each delay capped so total wait stays well
 # inside the Celery task time limits.
 _RETRY_STATUSES = frozenset({429, 503})
-_RETRY_MAX_ATTEMPTS = int(os.getenv("CRM_RETRY_MAX_ATTEMPTS", "2"))  # extra tries
-_RETRY_MAX_SLEEP = float(os.getenv("CRM_RETRY_MAX_SLEEP_SECONDS", "8"))
+_RETRY_MAX_ATTEMPTS = _env_int("CRM_RETRY_MAX_ATTEMPTS", 2)  # extra tries
+_RETRY_MAX_SLEEP = float(_env_int("CRM_RETRY_MAX_SLEEP_SECONDS", 8))
 
 
-def _retry_delay(resp: httpx.Response, attempt: int) -> float:
+def _resolve_scheduler_int(
+    db: Session | None,
+    key: str,
+    env_name: str,
+    default: int,
+) -> int:
+    value: object | None = None
+    if db is not None:
+        try:
+            value = resolve_value(db, SettingDomain.scheduler, key)
+        except Exception:
+            value = None
+    if value is None:
+        return _env_int(env_name, default)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return _env_int(env_name, default)
+
+
+def _retry_delay(
+    resp: httpx.Response,
+    attempt: int,
+    *,
+    max_sleep: float | None = None,
+) -> float:
     """Seconds to wait before the next retry of a 429/503 response.
 
     Prefers a numeric ``Retry-After`` header; falls back to exponential
     backoff (0.5s, 1s, 2s, …). Always clamped to ``_RETRY_MAX_SLEEP``.
     """
+    sleep_cap = _RETRY_MAX_SLEEP if max_sleep is None else max(0.0, max_sleep)
     retry_after = resp.headers.get("Retry-After")
     if retry_after:
         try:
-            return min(_RETRY_MAX_SLEEP, max(0.0, float(retry_after)))
+            return min(sleep_cap, max(0.0, float(retry_after)))
         except ValueError:
             # HTTP-date form is rare here; fall through to backoff.
             pass
-    return min(_RETRY_MAX_SLEEP, 0.5 * (2**attempt))
+    return min(sleep_cap, 0.5 * (2**attempt))
 
 
 class CRMClientError(Exception):
@@ -75,9 +111,13 @@ class _CRMReachabilityCircuit:
         with self._lock:
             return time.monotonic() < self._open_until
 
-    def trip(self) -> None:
+    def trip(self, cooldown_seconds: float | None = None) -> None:
         with self._lock:
-            cooldown = float(os.getenv("CRM_REACHABILITY_CIRCUIT_SECONDS", "30"))
+            cooldown = (
+                cooldown_seconds
+                if cooldown_seconds is not None
+                else float(_env_int("CRM_REACHABILITY_CIRCUIT_SECONDS", 30))
+            )
             self._open_until = time.monotonic() + max(cooldown, 1.0)
 
     def reset(self) -> None:
@@ -101,13 +141,73 @@ class CRMClient:
         username: str,
         password: str,
         timeout: float = 15.0,
+        settings_db: Session | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.username = username
         self.password = password
         self.timeout = timeout
+        self.settings_db = settings_db
         self._token: str | None = None
         self._token_expires_at: float = 0
+
+    @property
+    def cache_list_ttl(self) -> int:
+        return _resolve_scheduler_int(
+            self.settings_db,
+            "crm_cache_list_seconds",
+            "CRM_CACHE_LIST_SECONDS",
+            _CACHE_LIST_TTL,
+        )
+
+    @property
+    def cache_detail_ttl(self) -> int:
+        return _resolve_scheduler_int(
+            self.settings_db,
+            "crm_cache_detail_seconds",
+            "CRM_CACHE_DETAIL_SECONDS",
+            _CACHE_DETAIL_TTL,
+        )
+
+    @property
+    def retry_max_attempts(self) -> int:
+        return max(
+            0,
+            _resolve_scheduler_int(
+                self.settings_db,
+                "crm_retry_max_attempts",
+                "CRM_RETRY_MAX_ATTEMPTS",
+                _RETRY_MAX_ATTEMPTS,
+            ),
+        )
+
+    @property
+    def retry_max_sleep(self) -> float:
+        return float(
+            max(
+                0,
+                _resolve_scheduler_int(
+                    self.settings_db,
+                    "crm_retry_max_sleep_seconds",
+                    "CRM_RETRY_MAX_SLEEP_SECONDS",
+                    int(_RETRY_MAX_SLEEP),
+                ),
+            )
+        )
+
+    @property
+    def circuit_seconds(self) -> float:
+        return float(
+            max(
+                1,
+                _resolve_scheduler_int(
+                    self.settings_db,
+                    "crm_reachability_circuit_seconds",
+                    "CRM_REACHABILITY_CIRCUIT_SECONDS",
+                    30,
+                ),
+            )
+        )
 
     def _ensure_token(self) -> str:
         """Get a valid JWT token, refreshing if within 60s of expiry."""
@@ -141,7 +241,7 @@ class CRMClient:
         except httpx.RequestError as e:
             # Connection/timeout — CRM is unreachable, trip the breaker so the
             # rest of this request's fan-out fast-fails.
-            _REACHABILITY_CIRCUIT.trip()
+            _REACHABILITY_CIRCUIT.trip(self.circuit_seconds)
             logger.error("CRM login error: %s", e)
             raise CRMClientError(f"CRM connection error: {e}") from e
 
@@ -180,11 +280,13 @@ class CRMClient:
                             **(headers or {}),
                         },
                     )
-                if (
-                    resp.status_code in _RETRY_STATUSES
-                    and attempt < _RETRY_MAX_ATTEMPTS
-                ):
-                    delay = _retry_delay(resp, attempt)
+                retry_max_attempts = self.retry_max_attempts
+                if resp.status_code in _RETRY_STATUSES and attempt < retry_max_attempts:
+                    delay = _retry_delay(
+                        resp,
+                        attempt,
+                        max_sleep=self.retry_max_sleep,
+                    )
                     logger.warning(
                         "CRM %s %s -> %d, retrying in %.1fs (attempt %d/%d)",
                         method,
@@ -192,7 +294,7 @@ class CRMClient:
                         resp.status_code,
                         delay,
                         attempt + 1,
-                        _RETRY_MAX_ATTEMPTS,
+                        retry_max_attempts,
                     )
                     time.sleep(delay)
                     attempt += 1
@@ -214,9 +316,77 @@ class CRMClient:
         except httpx.RequestError as e:
             # Connection/timeout — CRM is unreachable, trip the breaker so the
             # rest of this request's fan-out fast-fails.
-            _REACHABILITY_CIRCUIT.trip()
+            _REACHABILITY_CIRCUIT.trip(self.circuit_seconds)
             logger.error("CRM request error %s %s: %s", method, path, e)
             raise CRMClientError(f"CRM connection error: {e}") from e
+
+    def _raw_request(
+        self,
+        method: str,
+        path: str,
+        *,
+        content: bytes,
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        """Send an unauthenticated raw request with CRM retry/circuit handling."""
+        if _REACHABILITY_CIRCUIT.is_open():
+            raise CRMClientError("CRM temporarily unavailable (circuit open)")
+        if not self.base_url:
+            raise CRMClientError("CRM is not configured")
+
+        url = f"{self.base_url}{path}"
+        try:
+            attempt = 0
+            while True:
+                with httpx.Client(timeout=self.timeout) as client:
+                    resp = client.request(
+                        method,
+                        url,
+                        content=content,
+                        headers=headers or {},
+                    )
+                retry_max_attempts = self.retry_max_attempts
+                if resp.status_code in _RETRY_STATUSES and attempt < retry_max_attempts:
+                    delay = _retry_delay(
+                        resp,
+                        attempt,
+                        max_sleep=self.retry_max_sleep,
+                    )
+                    logger.warning(
+                        "CRM raw %s %s -> %d, retrying in %.1fs (attempt %d/%d)",
+                        method,
+                        path,
+                        resp.status_code,
+                        delay,
+                        attempt + 1,
+                        retry_max_attempts,
+                    )
+                    time.sleep(delay)
+                    attempt += 1
+                    continue
+                _REACHABILITY_CIRCUIT.reset()
+                return resp
+        except httpx.RequestError as exc:
+            _REACHABILITY_CIRCUIT.trip(self.circuit_seconds)
+            logger.error("CRM raw request error %s %s: %s", method, path, exc)
+            raise CRMClientError(f"CRM connection error: {exc}") from exc
+
+    def post_signed_webhook(
+        self,
+        path: str,
+        *,
+        body: bytes,
+        signature: str,
+    ) -> httpx.Response:
+        return self._raw_request(
+            "POST",
+            path,
+            content=body,
+            headers={
+                "Content-Type": "application/json",
+                "X-Selfcare-Signature": signature,
+            },
+        )
 
     def _cached_get(
         self,
@@ -285,7 +455,7 @@ class CRMClient:
     def get_subscriber(self, subscriber_id: str) -> dict[str, Any]:
         """Get a CRM subscriber by UUID."""
         return self._cached_get(
-            f"/api/v1/subscribers/{subscriber_id}", None, _CACHE_DETAIL_TTL
+            f"/api/v1/subscribers/{subscriber_id}", None, self.cache_detail_ttl
         )
 
     def update_subscriber(
@@ -312,7 +482,7 @@ class CRMClient:
         if external_system:
             params["external_system"] = external_system
         data = (
-            self._cached_get("/api/v1/subscribers", params, _CACHE_LIST_TTL)
+            self._cached_get("/api/v1/subscribers", params, self.cache_list_ttl)
             if use_cache
             else self._request("GET", "/api/v1/subscribers", params=params)
         )
@@ -340,7 +510,7 @@ class CRMClient:
         if subscriber_id:
             params["subscriber_id"] = subscriber_id
         data = (
-            self._cached_get("/api/v1/tickets", params, _CACHE_LIST_TTL)
+            self._cached_get("/api/v1/tickets", params, self.cache_list_ttl)
             if use_cache
             else self._request("GET", "/api/v1/tickets", params=params)
         )
@@ -348,7 +518,9 @@ class CRMClient:
 
     def get_ticket(self, ticket_id: str) -> dict[str, Any]:
         """Get a single ticket by ID."""
-        return self._cached_get(f"/api/v1/tickets/{ticket_id}", None, _CACHE_DETAIL_TTL)
+        return self._cached_get(
+            f"/api/v1/tickets/{ticket_id}", None, self.cache_detail_ttl
+        )
 
     def create_ticket(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Create a new ticket in the CRM."""
@@ -367,7 +539,7 @@ class CRMClient:
             self._cached_get(
                 "/api/v1/ticket-comments",
                 params,
-                _CACHE_DETAIL_TTL,
+                self.cache_detail_ttl,
             )
             if use_cache
             else self._request("GET", "/api/v1/ticket-comments", params=params)
@@ -387,13 +559,13 @@ class CRMClient:
         params: dict[str, Any] = {"limit": 100}
         if subscriber_id:
             params["subscriber_id"] = subscriber_id
-        data = self._cached_get("/api/v1/work-orders", params, _CACHE_LIST_TTL)
+        data = self._cached_get("/api/v1/work-orders", params, self.cache_list_ttl)
         return data if isinstance(data, list) else data.get("items", [])
 
     def get_work_order(self, work_order_id: str) -> dict[str, Any]:
         """Get a single work order by ID."""
         return self._cached_get(
-            f"/api/v1/work-orders/{work_order_id}", None, _CACHE_DETAIL_TTL
+            f"/api/v1/work-orders/{work_order_id}", None, self.cache_detail_ttl
         )
 
     def update_work_order(
@@ -643,7 +815,7 @@ class CRMClient:
         data = self._cached_get(
             "/api/v1/work-order-notes",
             {"work_order_id": work_order_id, "limit": 500},
-            _CACHE_DETAIL_TTL,
+            self.cache_detail_ttl,
         )
         return data if isinstance(data, list) else data.get("items", [])
 
@@ -653,8 +825,15 @@ class CRMClient:
 _crm_client: CRMClient | None = None
 
 
-def get_crm_client() -> CRMClient:
-    """Get or create the singleton CRM client instance."""
+def get_crm_client(db: Session | None = None) -> CRMClient:
+    """Get a CRM client, DB-scoped when runtime settings are available."""
+    if db is not None:
+        return CRMClient(
+            base_url=settings.crm_base_url,
+            username=settings.crm_username,
+            password=settings.crm_password,
+            settings_db=db,
+        )
     global _crm_client
     if _crm_client is None:
         _crm_client = CRMClient(

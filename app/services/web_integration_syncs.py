@@ -229,20 +229,17 @@ def update_sync_profile(
     job.interval_minutes = interval_value
     job.trigger_mode = (trigger_mode or "").strip() or None
     if job.adapter_key == "crm" and job.action == "pull_tickets":
-        job.mapping_config = {
-            "primary": (mapping_primary or "").strip(),
-            "fallback": (mapping_fallback or "").strip(),
-            "ambiguous": (mapping_ambiguous or "").strip(),
-        }
         job.filter_config = {
             "page_size": int(page_size or 200),
             "max_pages": int(max_pages or 50),
             "sync_comments": bool(sync_comments),
         }
+        job.mapping_config = None
+        job.conflict_policy = None
     else:
         job.mapping_config = _parse_json(mapping_config, "mapping_config")
         job.filter_config = _parse_json(filter_config, "filter_config")
-    job.conflict_policy = (conflict_policy or "").strip() or None
+        job.conflict_policy = (conflict_policy or "").strip() or None
     job.is_active = is_active
     db.commit()
     db.refresh(job)

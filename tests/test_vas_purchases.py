@@ -8,6 +8,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.subscription_engine import SettingValueType
 from app.models.subscriber import Subscriber
 from app.models.vas import (
     VasEntryCategory,
@@ -16,6 +17,8 @@ from app.models.vas import (
     VasTransactionStatus,
 )
 from app.services import vas_purchases, vas_wallet
+from app.schemas.settings import DomainSettingUpdate
+from app.services.domain_settings import vas_settings
 
 
 def _enable_vas(db_session):
@@ -329,6 +332,24 @@ class TestRequerySweep:
         # Crucially: NOT refunded — money stays held for manual resolution.
         assert vas_wallet.wallet_balance(db_session, wallet.id) == Decimal("9500.00")
 
+    def test_requery_exhaustion_uses_configured_cap(self, db_session):
+        _enable_vas(db_session)
+        vas_settings.upsert_by_key(
+            db_session,
+            "requery_max_attempts",
+            DomainSettingUpdate(value_type=SettingValueType.integer, value_text="1"),
+        )
+        subscriber = _subscriber(db_session)
+        service = _airtime_service(db_session)
+        _, txn = self._submitted_txn(db_session, subscriber, service)
+        with patch.object(
+            vas_purchases.vtpass, "requery", return_value=PROCESSING_BODY
+        ):
+            stats = vas_purchases.run_requery_sweep(db_session)
+        db_session.refresh(txn)
+        assert stats["review"] == 1
+        assert txn.status == VasTransactionStatus.review
+
     def test_provider_unreachable_leaves_submitted(self, db_session):
         _enable_vas(db_session)
         subscriber = _subscriber(db_session)
@@ -393,6 +414,8 @@ class TestHardening:
                     amount=Decimal("500"),
                 )
             assert exc_info.value.status_code == 409
+            assert exc_info.value.detail["code"] == "duplicate_purchase"
+            assert exc_info.value.detail["confirm_required"] is True
             # Explicit confirmation goes through.
             txn = vas_purchases.purchase(
                 db_session,
@@ -428,6 +451,37 @@ class TestHardening:
                     amount=Decimal("500"),
                 )
         assert txn.status == VasTransactionStatus.delivered
+
+    def test_purchase_dedupe_window_can_be_disabled(self, db_session):
+        _enable_vas(db_session)
+        vas_settings.upsert_by_key(
+            db_session,
+            "purchase_dedupe_window_seconds",
+            DomainSettingUpdate(value_type=SettingValueType.integer, value_text="0"),
+        )
+        subscriber = _subscriber(db_session)
+        service = _airtime_service(db_session)
+        _funded_wallet(db_session, subscriber)
+        with (
+            _ok_float(),
+            patch.object(vas_purchases.vtpass, "pay", return_value=DELIVERED_BODY),
+        ):
+            first = vas_purchases.purchase(
+                db_session,
+                subscriber_id=str(subscriber.id),
+                service_id=service.service_id,
+                identifier="08031234567",
+                amount=Decimal("500"),
+            )
+            second = vas_purchases.purchase(
+                db_session,
+                subscriber_id=str(subscriber.id),
+                service_id=service.service_id,
+                identifier="08031234567",
+                amount=Decimal("500"),
+            )
+        assert first.status == VasTransactionStatus.delivered
+        assert second.status == VasTransactionStatus.delivered
 
     def test_live_price_overrides_stale_cache(self, db_session):
         _enable_vas(db_session)

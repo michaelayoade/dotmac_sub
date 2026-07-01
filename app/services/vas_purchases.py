@@ -42,11 +42,33 @@ from app.services.credential_crypto import decrypt_credential, encrypt_credentia
 
 logger = logging.getLogger(__name__)
 
-# Categories whose ambiguous outcomes must NEVER auto-refund on a timer —
-# only a definitive provider "failed" refunds (tokens can arrive hours late).
+# Legacy defaults; runtime reads come from settings helpers below.
 SLOW_SETTLEMENT_CATEGORIES = {"electricity-bill"}
-
 REQUERY_MAX_ATTEMPTS = 10
+
+
+def _setting_int(db: Session, key: str, default: int) -> int:
+    value = settings_spec.resolve_value(db, SettingDomain.vas, key)
+    try:
+        return int(str(value)) if value is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+def purchase_dedupe_window_seconds(db: Session) -> int:
+    return max(0, _setting_int(db, "purchase_dedupe_window_seconds", 300))
+
+
+def requery_max_attempts(db: Session) -> int:
+    return max(1, _setting_int(db, "requery_max_attempts", REQUERY_MAX_ATTEMPTS))
+
+
+def slow_settlement_categories(db: Session) -> set[str]:
+    value = settings_spec.resolve_value(
+        db, SettingDomain.vas, "slow_settlement_categories"
+    )
+    raw = str(value) if value else ",".join(sorted(SLOW_SETTLEMENT_CATEGORIES))
+    return {part.strip() for part in raw.split(",") if part.strip()}
 
 
 def _enabled_categories(db: Session) -> set[str]:
@@ -519,28 +541,35 @@ def _purchase_from_wallet(
     # dedup can't catch it — block a same-looking purchase made moments ago
     # unless the caller explicitly confirms.
     if not confirm_duplicate:
-        recent_cutoff = datetime.now(UTC) - timedelta(minutes=5)
-        duplicate = (
-            db.query(VasTransaction)
-            .filter(
-                VasTransaction.wallet_id == wallet.id,
-                VasTransaction.service_pk == service.id,
-                VasTransaction.identifier == identifier,
-                VasTransaction.amount == value,
-                VasTransaction.created_at >= recent_cutoff,
-                VasTransaction.status.notin_(
-                    [VasTransactionStatus.failed, VasTransactionStatus.refunded]
-                ),
+        dedupe_window = purchase_dedupe_window_seconds(db)
+        duplicate = None
+        if dedupe_window > 0:
+            recent_cutoff = datetime.now(UTC) - timedelta(seconds=dedupe_window)
+            duplicate = (
+                db.query(VasTransaction)
+                .filter(
+                    VasTransaction.wallet_id == wallet.id,
+                    VasTransaction.service_pk == service.id,
+                    VasTransaction.identifier == identifier,
+                    VasTransaction.amount == value,
+                    VasTransaction.created_at >= recent_cutoff,
+                    VasTransaction.status.notin_(
+                        [VasTransactionStatus.failed, VasTransactionStatus.refunded]
+                    ),
+                )
+                .first()
             )
-            .first()
-        )
         if duplicate:
             raise HTTPException(
                 status_code=409,
-                detail=(
-                    "You made this exact purchase moments ago — confirm to "
-                    "buy it again."
-                ),
+                detail={
+                    "code": "duplicate_purchase",
+                    "message": (
+                        "You made this exact purchase moments ago — confirm to "
+                        "buy it again."
+                    ),
+                    "confirm_required": True,
+                },
             )
 
     request_id = vtpass.generate_request_id()
@@ -738,9 +767,12 @@ def run_requery_sweep(db: Session) -> dict:
         elif outcome == "failed":
             _mark_failed_and_refund(db, txn, detail)
             refunded += 1
-        elif txn.requery_attempts >= REQUERY_MAX_ATTEMPTS:
+        elif txn.requery_attempts >= requery_max_attempts(db):
             txn.status = VasTransactionStatus.review
-            txn.error = "Requery attempts exhausted — needs manual review"
+            suffix = ""
+            if txn.service and txn.service.category in slow_settlement_categories(db):
+                suffix = " (slow-settlement category)"
+            txn.error = f"Requery attempts exhausted{suffix} — needs manual review"
             review += 1
         db.commit()
     return {
@@ -755,7 +787,7 @@ def run_requery_sweep(db: Session) -> dict:
 def run_review_requery(db: Session) -> dict:
     """Daily closing loop for parked transactions.
 
-    The 5-min sweep gives up after REQUERY_MAX_ATTEMPTS; without this,
+    The frequent sweep gives up after the configured requery cap; without this,
     `review` quietly becomes "manual forever" with the customer debited.
     Re-asks the provider once a day (same request_id — provider-side dedup
     keys on it, so this can never double-purchase) and resolves definitive

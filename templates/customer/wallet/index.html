@@ -11,12 +11,12 @@
         </div>
         <div class="rounded-2xl border border-stone-200 bg-white px-6 py-4 text-right shadow-premium dark:border-stone-700 dark:bg-stone-800">
             <p class="text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">Balance</p>
-            <p class="mt-1 text-3xl font-display font-bold text-stone-900 dark:text-white">₦{{ '%,.2f'|format(balance) }}</p>
+            <p class="mt-1 text-3xl font-display font-bold text-stone-900 dark:text-white">{{ currency_symbol }}{{ '%,.2f'|format(balance) }}</p>
         </div>
     </div>
 
     {% if funded %}
-    {% set success = "Wallet funded with ₦" ~ funded ~ "." %}
+    {% set success = "Wallet funded with " ~ currency_symbol ~ funded ~ "." %}
     {% include "components/feedback/form_success.html" %}
     {% endif %}
     {% if submitted %}
@@ -32,9 +32,9 @@
         <!-- Fund wallet -->
         <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-premium dark:border-stone-700 dark:bg-stone-800">
             <h2 class="text-lg font-display font-semibold text-stone-900 dark:text-white">Fund wallet</h2>
-            <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">₦{{ min_topup }} – ₦{{ '%,d'|format(max_topup) }} per top-up.</p>
+            <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">{{ currency_symbol }}{{ min_topup }} – {{ currency_symbol }}{{ '%,d'|format(max_topup) }} per top-up.</p>
             <div class="mt-4">
-                <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300" for="wallet-amount">Amount (₦)</label>
+                <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300" for="wallet-amount">Amount ({{ currency_symbol }})</label>
                 <input type="number" id="wallet-amount" x-model="amount" min="{{ min_topup }}" max="{{ max_topup }}" step="0.01"
                        oninput="if (this.value && this.value.includes('.') && this.value.split('.')[1].length > 2) { this.value = parseFloat(this.value).toFixed(2); }"
                        class="mt-1 block w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-2.5 text-sm text-stone-900 focus:border-[var(--color-brand-500)] focus:outline-none dark:border-stone-600 dark:bg-stone-700 dark:text-white">
@@ -51,7 +51,7 @@
         <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-premium dark:border-stone-700 dark:bg-stone-800">
             <h2 class="text-lg font-display font-semibold text-stone-900 dark:text-white">Pay DotMac bill</h2>
             {% if open_bill_due > 0 %}
-            <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">Outstanding: <span class="font-semibold text-stone-900 dark:text-white">₦{{ '%,.2f'|format(open_bill_due) }}</span></p>
+            <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">Outstanding: <span class="font-semibold text-stone-900 dark:text-white">{{ currency_symbol }}{{ '%,.2f'|format(open_bill_due) }}</span></p>
             {% else %}
             <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">No outstanding balance — payments become account credit.</p>
             {% endif %}
@@ -61,7 +61,7 @@
                 {% include "components/forms/csrf_input.html" %}
                 <input type="hidden" name="idempotency_key" :value="billKey">
                 <div>
-                    <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300" for="bill-amount">Amount (₦)</label>
+                    <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300" for="bill-amount">Amount ({{ currency_symbol }})</label>
                     <input type="number" id="bill-amount" name="amount" min="0.01" step="0.01" required
                            oninput="if (this.value && this.value.includes('.') && this.value.split('.')[1].length > 2) { this.value = parseFloat(this.value).toFixed(2); }"
                            value="{{ '%.2f'|format(open_bill_due) if open_bill_due > 0 else '' }}"
@@ -105,7 +105,7 @@
                     <p class="text-xs text-stone-500 dark:text-stone-400">{{ entry.created_at.strftime('%Y-%m-%d %H:%M') }}</p>
                 </div>
                 <p class="font-mono font-semibold {{ 'text-emerald-600' if entry.entry_type.value == 'credit' else 'text-stone-900 dark:text-white' }}">
-                    {{ '+' if entry.entry_type.value == 'credit' else '−' }}₦{{ '%,.2f'|format(entry.amount) }}
+                    {{ '+' if entry.entry_type.value == 'credit' else '−' }}{{ currency_symbol }}{{ '%,.2f'|format(entry.amount) }}
                 </p>
             </div>
             {% else %}
@@ -125,7 +125,7 @@ function walletPage() {
             const self = this;
             const value = parseFloat(this.amount);
             if (!value || value <= 0) {
-                this.fundError = 'Enter an amount greater than ₦0 to fund.';
+                this.fundError = 'Enter an amount greater than {{ currency_symbol }}0 to fund.';
                 return;
             }
             if (Math.round(value * 100) !== value * 100) {

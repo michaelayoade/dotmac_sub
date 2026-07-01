@@ -746,6 +746,18 @@ def _create_smtp_client(
     return smtplib.SMTP(host, port, timeout=timeout)
 
 
+def _smtp_timeout_seconds(db: Session | None = None) -> int:
+    raw_timeout = (
+        resolve_value(db, SettingDomain.notification, "smtp_test_timeout_seconds")
+        if db
+        else None
+    )
+    try:
+        return max(1, int(raw_timeout)) if raw_timeout is not None else 10
+    except (TypeError, ValueError):
+        return 10
+
+
 def send_email_with_config(
     config: dict,
     to_email: str,
@@ -769,7 +781,12 @@ def send_email_with_config(
         if not host:
             return False
         port = int(config.get("port", 587) or 587)
-        server = _create_smtp_client(host, port, bool(config.get("use_ssl")))
+        server = _create_smtp_client(
+            host,
+            port,
+            bool(config.get("use_ssl")),
+            timeout=int(config.get("timeout") or 10),
+        )
 
         if config.get("use_tls") and not config.get("use_ssl"):
             server.starttls()
@@ -862,6 +879,7 @@ def send_email(
             config["host"],
             config["port"],
             bool(config["use_ssl"]),
+            timeout=_smtp_timeout_seconds(db),
         )
 
         if config["use_tls"] and not config["use_ssl"]:

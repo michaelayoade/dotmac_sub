@@ -154,7 +154,7 @@ def test_profile_template_includes_router_device_login_self_service():
     assert "Rotate Router Password" in template
 
 
-def test_profile_state_marks_only_router_admin_device_login_eligible(db_session):
+def test_profile_state_marks_router_permissions_device_login_eligible(db_session):
     router_admin = SystemUser(
         first_name="Router",
         last_name="Admin",
@@ -203,8 +203,8 @@ def test_profile_state_marks_only_router_admin_device_login_eligible(db_session)
     assert admin_state["device_login_eligible"] is True
     assert admin_state["device_login_tier"] == "full"
     assert admin_state["device_login_sync_status"]["status"] == "ok"
-    assert operator_state["device_login_eligible"] is False
-    assert operator_state["device_login_tier"] is None
+    assert operator_state["device_login_eligible"] is True
+    assert operator_state["device_login_tier"] == "write"
 
 
 def test_profile_device_login_self_rotation_sets_secret(db_session, monkeypatch):
@@ -335,7 +335,7 @@ def test_profile_device_login_self_rotation_rejects_weak_secret(
     assert mutation_calls == []
 
 
-def test_profile_device_login_self_rotation_rejects_non_router_admin(db_session):
+def test_profile_device_login_self_rotation_rejects_non_router_user(db_session):
     system_user = SystemUser(
         first_name="Self",
         last_name="Operator",
@@ -343,7 +343,7 @@ def test_profile_device_login_self_rotation_rejects_non_router_admin(db_session)
         user_type=UserType.system_user,
         is_active=True,
     )
-    permission = Permission(key="router:write", is_active=True)
+    permission = Permission(key="customer:read", is_active=True)
     db_session.add_all([system_user, permission])
     db_session.flush()
     db_session.add(

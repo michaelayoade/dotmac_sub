@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 from unittest.mock import patch
 
 from app.models.crm_sync_failure import CrmSyncFailure, CrmSyncFailureStatus
 from app.services import crm_sync_failures
+from app.web.admin import integrations as integrations_admin
 
 
 def _failure(db, *, status=CrmSyncFailureStatus.unresolved):
@@ -65,6 +67,14 @@ class TestVisibility:
             len(crm_sync_failures.list_failures(db_session, unresolved_only=False)) == 3
         )
 
+    def test_integrations_template_renders_dead_letter_controls(self):
+        template = Path("templates/admin/integrations/connectors/index.html").read_text()
+
+        assert "CRM Dead Letters" in template
+        assert "/admin/integrations/crm-dead-letters/redrive" in template
+        assert "Re-drive All" in template
+        assert 'name="failure_id"' in template
+
 
 class TestRedrive:
     def test_redrive_one_resolves_and_reenqueues(self, db_session):
@@ -103,3 +113,25 @@ class TestRedrive:
         task.delay.assert_not_called()
         # Still unresolved — surfaced for manual handling, not silently lost.
         assert crm_sync_failures.unresolved_count(db_session) == 1
+
+    def test_admin_redrive_redirect_reports_count(self, db_session):
+        _failure(db_session)
+        _failure(db_session)
+        with patch("app.tasks.crm_sync.push_subscriber_change"):
+            response = integrations_admin.crm_dead_letters_redrive(
+                failure_id="", db=db_session
+            )
+
+        assert response.status_code == 303
+        assert response.headers["location"] == "/admin/integrations/?crm_redrive=2"
+
+    def test_admin_redrive_redirect_reports_missing_row(self, db_session):
+        response = integrations_admin.crm_dead_letters_redrive(
+            failure_id=str(uuid.uuid4()), db=db_session
+        )
+
+        assert response.status_code == 303
+        assert (
+            response.headers["location"]
+            == "/admin/integrations/?crm_redrive=not_found"
+        )

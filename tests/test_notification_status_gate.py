@@ -5,7 +5,11 @@ from __future__ import annotations
 import pytest
 
 from app.models.domain_settings import DomainSetting, SettingDomain
-from app.models.notification import Notification
+from app.models.notification import (
+    Notification,
+    NotificationChannel,
+    NotificationTemplate,
+)
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services.events.handlers.notification import NotificationHandler
 from app.services.events.types import Event, EventType
@@ -66,7 +70,21 @@ def _handle(db, event_type, account_id):
     db.flush()
 
 
+def _invoice_template(db):
+    template = NotificationTemplate(
+        name="Invoice Overdue",
+        code="invoice_overdue",
+        channel=NotificationChannel.email,
+        subject="Invoice overdue",
+        body="Invoice overdue notice",
+        is_active=True,
+    )
+    db.add(template)
+    db.commit()
+
+
 def test_canceled_account_gets_no_billing_notification(db_session):
+    _invoice_template(db_session)
     sub = _subscriber(db_session, SubscriberStatus.canceled, "Cancel")
     before = db_session.query(Notification).count()
     _handle(db_session, EventType.invoice_overdue, sub.id)  # billing category
@@ -74,6 +92,7 @@ def test_canceled_account_gets_no_billing_notification(db_session):
 
 
 def test_active_account_gets_billing_notification(db_session):
+    _invoice_template(db_session)
     sub = _subscriber(db_session, SubscriberStatus.active, "Active")
     before = db_session.query(Notification).count()
     _handle(db_session, EventType.invoice_overdue, sub.id)
@@ -81,6 +100,7 @@ def test_active_account_gets_billing_notification(db_session):
 
 
 def test_suspended_account_billing_allowed_usage_suppressed(db_session):
+    _invoice_template(db_session)
     sub = _subscriber(db_session, SubscriberStatus.suspended, "Susp")
     base = db_session.query(Notification).count()
     _handle(db_session, EventType.usage_warning, sub.id)  # usage → suppressed
@@ -90,6 +110,7 @@ def test_suspended_account_billing_allowed_usage_suppressed(db_session):
 
 
 def test_kill_switch_disables_gate(db_session):
+    _invoice_template(db_session)
     db_session.add(
         DomainSetting(
             domain=SettingDomain.notification,

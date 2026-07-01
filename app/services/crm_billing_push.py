@@ -18,18 +18,29 @@ generic dotmac payload with CRM column names.
 from __future__ import annotations
 
 import logging
-import os
 from datetime import datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription, SubscriptionStatus
+from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber
+from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
 
 _SNAPSHOT_KEY = "crm_billing_snapshot"
+
+
+def _setting_enabled(db: Session, domain: SettingDomain, key: str) -> bool:
+    try:
+        value = resolve_value(db, domain, key)
+    except Exception:
+        value = False
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def build_snapshot(db: Session, subscriber: Subscriber) -> dict[str, Any]:
@@ -49,9 +60,12 @@ def build_snapshot(db: Session, subscriber: Subscriber) -> dict[str, Any]:
         .scalar()
     )
     billing_mode = getattr(subscriber.billing_mode, "value", subscriber.billing_mode)
+    currency = str(
+        resolve_value(db, SettingDomain.billing, "default_currency") or "NGN"
+    ).strip()
     return {
         "balance": f"{balance:.2f}",
-        "currency": os.getenv("BILLING_DEFAULT_CURRENCY", "NGN"),
+        "currency": currency or "NGN",
         "billing_cycle": str(billing_mode or "") or None,
         "next_bill_date": next_bill.isoformat() if next_bill else None,
     }
@@ -74,7 +88,10 @@ def push_billing_snapshots(
     from app.services.crm_webhook import NATIVE_EXTERNAL_SYSTEM
     from app.tasks.crm_sync import push_subscriber_change as push_task
 
-    stats = {"considered": 0, "enqueued": 0, "unchanged": 0}
+    stats: dict[str, Any] = {"considered": 0, "enqueued": 0, "unchanged": 0}
+    if not _setting_enabled(db, SettingDomain.scheduler, "crm_billing_push_enabled"):
+        stats["disabled"] = True
+        return stats
 
     query = (
         db.query(Subscriber)

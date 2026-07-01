@@ -27,6 +27,8 @@ from app.services.customer_identity_resolution import (
     MATCH_VIA_SUBSCRIBER,
     MATCH_VIA_SUBSCRIBER_CHANNEL,
     MATCH_VIA_SUBSCRIBER_CONTACT,
+    CustomerIdentityResolution,
+    identity_resolution_allows_sensitive_automation,
     identity_resolution_requires_manual_review,
     rebuild_identity_index_for_subscriber,
     resolve_customer_identity,
@@ -118,6 +120,28 @@ def test_resolve_phone_and_whatsapp_matches_contact(db_session):
     assert whatsapp_result.matched_field == "whatsapp"
     assert whatsapp_result.matched_contact_id == contact.id
     assert whatsapp_result.match_confidence == MATCH_CONFIDENCE_MEDIUM
+
+
+def test_sensitive_automation_threshold_can_require_high_confidence(
+    monkeypatch,
+    db_session,
+):
+    monkeypatch.setattr(
+        "app.services.customer_identity_resolution.resolve_value",
+        lambda db, domain, key: "HIGH",
+    )
+    resolution = CustomerIdentityResolution(
+        raw_identifier="08012345678",
+        normalized_identifier="+2348012345678",
+        identity_type="phone",
+        inbound_channel="sms",
+        matched=True,
+        ambiguous=False,
+        match_confidence=MATCH_CONFIDENCE_MEDIUM,
+    )
+
+    assert identity_resolution_allows_sensitive_automation(resolution) is True
+    assert identity_resolution_allows_sensitive_automation(resolution, db_session) is False
 
 
 def test_resolve_matches_verified_subscriber_channel_with_high_confidence(db_session):

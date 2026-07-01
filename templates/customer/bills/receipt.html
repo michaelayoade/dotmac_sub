@@ -15,19 +15,19 @@
             <svg class="h-7 w-7 text-rose-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
         </div>
         <h1 class="mt-4 text-2xl font-display font-bold text-stone-900 dark:text-white">Not delivered</h1>
-        <p class="mt-1 text-sm text-emerald-700 dark:text-emerald-400">₦{{ '%,.2f'|format(txn.amount) }} is back in your wallet.</p>
+        <p class="mt-1 text-sm text-emerald-700 dark:text-emerald-400">{{ currency_symbol }}{{ '%,.2f'|format(txn.amount) }} is back in your wallet.</p>
         {% else %}
         <div class="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900/30">
             <svg class="h-7 w-7 animate-spin text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h5M20 20v-5h-5M5.07 14A7.97 7.97 0 0012 20a8 8 0 007.45-5M18.93 10A7.97 7.97 0 0012 4a8 8 0 00-7.45 5"/></svg>
         </div>
         <h1 class="mt-4 text-2xl font-display font-bold text-stone-900 dark:text-white">Processing</h1>
-        <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">This can take a few minutes — we keep checking and refund automatically if it fails. Refresh for the latest status.</p>
+        <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">This can take a few minutes — this receipt updates automatically while we check the latest status.</p>
         {% endif %}
 
         <div class="mt-6 space-y-2 rounded-xl bg-stone-50 px-5 py-4 text-left text-sm dark:bg-stone-700/40">
             <div class="flex justify-between"><span class="text-stone-500 dark:text-stone-400">Service</span><span class="font-medium text-stone-900 dark:text-white">{{ txn.service.name if txn.service else '—' }}</span></div>
             <div class="flex justify-between"><span class="text-stone-500 dark:text-stone-400">Recipient</span><span class="font-mono text-stone-900 dark:text-white">{{ txn.identifier }}</span></div>
-            <div class="flex justify-between"><span class="text-stone-500 dark:text-stone-400">Amount</span><span class="font-mono font-semibold text-stone-900 dark:text-white">₦{{ '%,.2f'|format(txn.amount) }}</span></div>
+            <div class="flex justify-between"><span class="text-stone-500 dark:text-stone-400">Amount</span><span class="font-mono font-semibold text-stone-900 dark:text-white">{{ currency_symbol }}{{ '%,.2f'|format(txn.amount) }}</span></div>
             <div class="flex justify-between"><span class="text-stone-500 dark:text-stone-400">Reference</span><span class="font-mono text-xs text-stone-700 dark:text-stone-300">{{ txn.request_id }}</span></div>
             <div class="flex justify-between"><span class="text-stone-500 dark:text-stone-400">Date</span><span class="text-stone-900 dark:text-white">{{ txn.created_at.strftime('%Y-%m-%d %H:%M') }}</span></div>
         </div>
@@ -46,4 +46,9 @@
         </div>
     </div>
 </div>
+{% if non_terminal %}
+<script>
+setTimeout(() => window.location.reload(), 20000);
+</script>
+{% endif %}
 {% endblock %}

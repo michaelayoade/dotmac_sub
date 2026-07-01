@@ -174,6 +174,105 @@ def _zabbix_interface_state(host: dict[str, Any] | None) -> tuple[str, str, str 
     return "Unknown", "unknown", "Zabbix SNMP availability is unknown"
 
 
+def _zabbix_icmp_probe_state(items: list[dict[str, Any]]) -> tuple[str, str, str | None]:
+    item = next(
+        (item for item in items if str(item.get("key_") or "") == "icmpping"),
+        None,
+    )
+    if not item:
+        return "Timeout", "fail", "Zabbix ICMP item is missing"
+    value = str(item.get("lastvalue") or "").strip()
+    if value == "1":
+        return "Online", "ok", None
+    if value == "0":
+        return "Timeout", "fail", None
+    return "Timeout", "fail", "Zabbix ICMP value is missing"
+
+
+def _zabbix_snmp_probe_state(
+    host: dict[str, Any] | None,
+) -> tuple[str, str, str | None]:
+    label, state, reason = _zabbix_interface_state(host)
+    if state == "ok":
+        return "Online", "ok", None
+    if state == "fail":
+        return "Timeout", "fail", reason
+    return label, state, reason
+
+
+def _build_zabbix_probe_statuses(
+    devices: list[dict[str, Any]],
+) -> dict[str, dict[str, str | None]]:
+    """Return Zabbix-only ICMP/SNMP states for Network Devices core rows."""
+    result: dict[str, dict[str, str | None]] = {}
+    host_ids = sorted(
+        {
+            str(device.get("zabbix_host_id") or "").strip()
+            for device in devices
+            if str(device.get("zabbix_host_id") or "").strip()
+        }
+    )
+    for device in devices:
+        device_id = str(device.get("id") or "").strip()
+        if not device_id:
+            continue
+        result[device_id] = {
+            "ping_label": "Timeout",
+            "ping_state": "fail",
+            "ping_reason": "Device is not linked to Zabbix",
+            "snmp_label": "Unknown",
+            "snmp_state": "unknown",
+            "snmp_reason": "Device is not linked to Zabbix",
+        }
+
+    if not result or not host_ids or not zabbix_configured():
+        return result
+
+    try:
+        client = ZabbixClient.from_env()
+        hosts_by_id: dict[str, dict[str, Any]] = {}
+        host_count = max(len(host_ids), 1)
+        for zabbix_host in client.get_hosts(host_ids=host_ids, limit=host_count):
+            host_id = str(zabbix_host.get("hostid") or "")
+            if host_id:
+                hosts_by_id[host_id] = zabbix_host
+
+        icmp_items_by_host: dict[str, list[dict[str, Any]]] = {
+            host_id: [] for host_id in host_ids
+        }
+        for item in client.get_items(host_ids=host_ids, metric="icmpping", limit=100000):
+            host_id = str(item.get("hostid") or "")
+            if host_id in icmp_items_by_host:
+                icmp_items_by_host[host_id].append(item)
+    except ZabbixClientError as exc:
+        logger.warning(
+            "network_devices_zabbix_probe_statuses_failed",
+            extra={"error": str(exc)},
+        )
+        return result
+
+    for device in devices:
+        device_id = str(device.get("id") or "").strip()
+        host_id = str(device.get("zabbix_host_id") or "").strip()
+        if not device_id or not host_id:
+            continue
+        ping_label, ping_state, ping_reason = _zabbix_icmp_probe_state(
+            icmp_items_by_host.get(host_id, [])
+        )
+        snmp_label, snmp_state, snmp_reason = _zabbix_snmp_probe_state(
+            hosts_by_id.get(host_id)
+        )
+        result[device_id] = {
+            "ping_label": ping_label,
+            "ping_state": ping_state,
+            "ping_reason": ping_reason,
+            "snmp_label": snmp_label,
+            "snmp_state": snmp_state,
+            "snmp_reason": snmp_reason,
+        }
+    return result
+
+
 def _summarize_zabbix_items(
     items: list[dict[str, Any]],
 ) -> tuple[dict[str, str], datetime | None]:

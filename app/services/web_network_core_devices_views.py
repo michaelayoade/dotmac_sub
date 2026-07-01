@@ -41,6 +41,7 @@ from app.services.network.effective_ont_config import resolve_effective_ont_conf
 from app.services.network.olt_polling_parsers import _decode_huawei_packed_fsp
 from app.services.network.provisioning_events import list_ont_provisioning_events
 from app.services.web_network_core_devices_inventory import (
+    _build_zabbix_probe_statuses,
     _network_device_is_olt_candidate,
     resolve_olt_device_for_network_device,
 )
@@ -3079,6 +3080,29 @@ def consolidated_page_data(
     from app.services.device_operational_status import annotate_operational_status
 
     annotate_operational_status(core_devices)
+    zabbix_probe_statuses = _build_zabbix_probe_statuses(
+        [
+            {
+                "id": str(getattr(device, "id", "")),
+                "zabbix_host_id": getattr(device, "zabbix_hostid", None),
+            }
+            for device in core_devices
+        ]
+    )
+    for device in core_devices:
+        probe_status = zabbix_probe_statuses.get(str(getattr(device, "id", ""))) or {}
+        device.ping_status = {
+            "label": probe_status.get("ping_label") or "Timeout",
+            "state": probe_status.get("ping_state") or "fail",
+            "source": "Zabbix",
+            "reason": probe_status.get("ping_reason"),
+        }
+        device.snmp_status = {
+            "label": probe_status.get("snmp_label") or "Unknown",
+            "state": probe_status.get("snmp_state") or "unknown",
+            "source": "Zabbix",
+            "reason": probe_status.get("snmp_reason"),
+        }
     core_roles = {
         "core": len([d for d in core_devices if d.role and d.role.value == "core"]),
         "distribution": len(

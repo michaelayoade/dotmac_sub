@@ -84,7 +84,7 @@ def test_sms_provider_send_invokes_send_sms_correctly(monkeypatch):
     assert result.success is True
     assert captured["to_phone"] == "+2348000000001"
     assert isinstance(captured["db"], Session)
-    assert captured["body"] == "x" * 160
+    assert captured["body"] == long_message
 
 
 def test_sms_provider_unavailable_without_provider_config(monkeypatch):
