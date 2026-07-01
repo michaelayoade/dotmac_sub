@@ -183,7 +183,7 @@ def test_account_tickets_normalizes_crm_fields(monkeypatch):
                 }
             ]
 
-    monkeypatch.setattr(crm_portal, "get_crm_client", lambda: _Client())
+    monkeypatch.setattr(crm_portal, "get_crm_client", lambda *_: _Client())
 
     out = reseller_api.my_reseller_account_tickets(
         account_id=str(uuid.uuid4()),

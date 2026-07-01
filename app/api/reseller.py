@@ -118,7 +118,7 @@ def my_reseller_dashboard(
     reseller_id = _reseller_id(db, principal)
     summary = reseller_portal.get_dashboard_summary(db, reseller_id, limit, offset)
     # Open-ticket count mirrors the web dashboard: best-effort against the
-    # external CRM (0 when unreachable), bounded to the page's accounts.
+    # external CRM (None when unreachable), bounded to the page's accounts.
     from app.services import crm_portal
 
     try:
@@ -129,7 +129,7 @@ def my_reseller_dashboard(
             db, reseller_id, account_ids
         )
     except Exception:
-        summary["open_tickets"] = 0
+        summary["open_tickets"] = None
     return summary
 
 

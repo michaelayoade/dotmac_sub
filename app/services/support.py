@@ -326,7 +326,7 @@ def _apply_inbound_identity_resolution(db: Session, data: dict[str, Any]) -> Non
         metadata["automation_suppressed_reason"] = (
             AUTOMATION_SUPPRESSION_REASON_IDENTITY_REVIEW
         )
-    elif not identity_resolution_allows_sensitive_automation(resolution):
+    elif not identity_resolution_allows_sensitive_automation(resolution, db):
         metadata["account_sensitive_automation_allowed"] = False
     else:
         metadata["account_sensitive_automation_allowed"] = True

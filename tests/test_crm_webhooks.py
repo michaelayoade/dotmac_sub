@@ -297,6 +297,34 @@ def test_customer_webhook_audits_identity_overwrite(db_session):
     assert event.metadata_["crm_person_id"] == body["crm_person_id"]
 
 
+def test_customer_webhook_matches_existing_customer_by_normalized_phone(db_session):
+    subscriber = Subscriber(
+        first_name="Normalized",
+        last_name="Customer",
+        display_name="Normalized Customer",
+        email="old.normalized@example.com",
+        phone="08012345678",
+    )
+    db_session.add(subscriber)
+    db_session.commit()
+
+    body = {
+        "name": "Normalized Customer",
+        "email": "new.normalized@example.com",
+        "phone": "+2348012345678",
+        "status": "active",
+    }
+
+    with _with_secret(SECRET):
+        response = _post_customer(db_session, body)
+
+    assert response.status_code == 200
+    assert response.json()["id"] == str(subscriber.id)
+    assert db_session.query(Subscriber).count() == 1
+    db_session.refresh(subscriber)
+    assert subscriber.email == "new.normalized@example.com"
+
+
 def test_shared_project_id_does_not_merge_distinct_customers(db_session):
     """A crm_project_id can span multiple customers, so it must NOT be used to
     dedupe — two distinct people on the same project stay distinct subscribers."""

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
@@ -15,6 +16,12 @@ from app.schemas.audit import AuditEventCreate
 from app.schemas.subscriber import SubscriberCreate
 from app.services import audit as audit_service
 from app.services import subscriber as subscriber_service
+from app.services.customer_identity_normalization import (
+    default_country_code,
+    normalize_phone_identifier,
+)
+
+logger = logging.getLogger(__name__)
 
 
 def _text(value: Any) -> str:
@@ -145,14 +152,24 @@ def _matching_metadata_clause(metadata: dict[str, Any]):
     return or_(*clauses) if clauses else None
 
 
+def _metadata_match_via(metadata: dict[str, Any]) -> str:
+    if _text(metadata.get("crm_person_id")):
+        return "crm_person_id"
+    if _text(metadata.get("crm_sales_order_id")):
+        return "crm_sales_order_id"
+    if _text(metadata.get("crm_quote_id")):
+        return "crm_quote_id"
+    return "crm_metadata"
+
+
 def _find_existing_customer(
     db: Session, payload: dict[str, Any], metadata: dict[str, Any], display_name: str
-) -> Subscriber | None:
+) -> tuple[Subscriber | None, str | None]:
     clause = _matching_metadata_clause(metadata)
     if clause is not None:
         existing = db.query(Subscriber).filter(clause).first()
         if existing is not None:
-            return existing
+            return existing, _metadata_match_via(metadata)
 
     expected_name = " ".join(display_name.lower().split())
     candidates = []
@@ -162,9 +179,19 @@ def _find_existing_customer(
         candidates.extend(
             db.query(Subscriber).filter(Subscriber.email.ilike(email)).limit(10).all()
         )
+    normalized_phone = None
     if phone:
+        country_code = default_country_code(db)
+        normalized_phone = normalize_phone_identifier(
+            phone,
+            default_country_code=country_code,
+        )
         candidates.extend(
-            db.query(Subscriber).filter(Subscriber.phone == phone).limit(10).all()
+            db.query(Subscriber)
+            .filter(Subscriber.phone.isnot(None))
+            .order_by(Subscriber.id)
+            .limit(500)
+            .all()
         )
     seen: set[str] = set()
     for subscriber in candidates:
@@ -172,9 +199,20 @@ def _find_existing_customer(
         if sid in seen:
             continue
         seen.add(sid)
-        if expected_name and _normalized_name(subscriber) == expected_name:
-            return subscriber
-    return None
+        if not expected_name or _normalized_name(subscriber) != expected_name:
+            continue
+        if email and _text(subscriber.email).lower() == email:
+            return subscriber, "email_name"
+        if (
+            normalized_phone
+            and normalize_phone_identifier(
+                subscriber.phone,
+                default_country_code=default_country_code(db),
+            )
+            == normalized_phone
+        ):
+            return subscriber, "phone_name"
+    return None, None
 
 
 def _record_identity_overwrite_audit(
@@ -325,7 +363,16 @@ def upsert_customer_from_payload(
 ) -> dict[str, Any]:
     metadata = _crm_metadata(payload)
     _, _, display_name = _name_parts(payload)
-    existing = _find_existing_customer(db, payload, metadata, display_name)
+    existing, matched_via = _find_existing_customer(db, payload, metadata, display_name)
+    logger.info(
+        "crm_customer_match_decision action=%s matched_via=%s crm_person_id=%s crm_quote_id=%s crm_sales_order_id=%s subscriber_id=%s",
+        "update" if existing is not None else "create",
+        matched_via or "none",
+        metadata.get("crm_person_id"),
+        metadata.get("crm_quote_id"),
+        metadata.get("crm_sales_order_id"),
+        existing.id if existing is not None else None,
+    )
     subscriber = (
         _update_existing_customer(db, existing, payload, metadata)
         if existing is not None

@@ -1253,6 +1253,36 @@ def seed_scheduler_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text=os.getenv("CELERY_BEAT_REFRESH_MINUTES", "5"),
     )
+    for key, env_name, default in [
+        ("crm_ticket_pull_enabled", "CRM_TICKET_PULL_ENABLED", "false"),
+        ("crm_billing_push_enabled", "CRM_BILLING_PUSH_ENABLED", "false"),
+    ]:
+        raw = os.getenv(env_name, default)
+        scheduler_settings.ensure_by_key(
+            db,
+            key=key,
+            value_type=SettingValueType.boolean,
+            value_text=raw,
+            value_json=raw.lower() in {"1", "true", "yes", "on"},
+        )
+    for key, env_name, default in [
+        ("crm_ticket_pull_interval_minutes", "CRM_TICKET_PULL_INTERVAL_MINUTES", "5"),
+        ("crm_cache_list_seconds", "CRM_CACHE_LIST_SECONDS", "60"),
+        ("crm_cache_detail_seconds", "CRM_CACHE_DETAIL_SECONDS", "30"),
+        ("crm_retry_max_attempts", "CRM_RETRY_MAX_ATTEMPTS", "2"),
+        ("crm_retry_max_sleep_seconds", "CRM_RETRY_MAX_SLEEP_SECONDS", "8"),
+        (
+            "crm_reachability_circuit_seconds",
+            "CRM_REACHABILITY_CIRCUIT_SECONDS",
+            "30",
+        ),
+    ]:
+        scheduler_settings.ensure_by_key(
+            db,
+            key=key,
+            value_type=SettingValueType.integer,
+            value_text=os.getenv(env_name, default),
+        )
 
 
 def seed_radius_settings(db: Session) -> None:
@@ -1883,6 +1913,18 @@ def seed_subscriber_settings(db: Session) -> None:
         key="default_contact_role",
         value_type=SettingValueType.string,
         value_text=os.getenv("SUBSCRIBER_DEFAULT_CONTACT_ROLE", "primary"),
+    )
+    subscriber_settings.ensure_by_key(
+        db,
+        key="default_country_code",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("DEFAULT_COUNTRY_CODE", "234"),
+    )
+    subscriber_settings.ensure_by_key(
+        db,
+        key="identity_sensitive_automation_min_confidence",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("IDENTITY_SENSITIVE_AUTOMATION_MIN_CONFIDENCE", "MEDIUM"),
     )
     subscriber_number_enabled_raw = os.getenv("SUBSCRIBER_NUMBER_ENABLED", "true")
     subscriber_settings.ensure_by_key(

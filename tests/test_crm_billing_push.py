@@ -6,6 +6,7 @@ from decimal import Decimal
 from unittest.mock import patch
 from uuid import uuid4
 
+from app.models.domain_settings import SettingDomain
 from app.services import crm_billing_push
 from app.services.crm_billing_push import build_snapshot, push_billing_snapshots
 
@@ -24,18 +25,31 @@ def _balance(monkeypatch, value):
     )
 
 
+def _settings(monkeypatch, *, billing_push_enabled=True, currency="NGN"):
+    def fake_resolve_value(db, domain, key):
+        if domain == SettingDomain.scheduler and key == "crm_billing_push_enabled":
+            return billing_push_enabled
+        if domain == SettingDomain.billing and key == "default_currency":
+            return currency
+        return None
+
+    monkeypatch.setattr(crm_billing_push, "resolve_value", fake_resolve_value)
+
+
 def test_build_snapshot_shape(monkeypatch, db_session, subscriber):
+    _settings(monkeypatch, currency="USD")
     _balance(monkeypatch, "1500.50")
 
     snapshot = build_snapshot(db_session, subscriber)
 
     assert snapshot["balance"] == "1500.50"
-    assert snapshot["currency"]
+    assert snapshot["currency"] == "USD"
     assert snapshot["billing_cycle"]
     assert "next_bill_date" in snapshot
 
 
 def test_splynx_subscriber_enqueues_splynx_webhook(monkeypatch, db_session, subscriber):
+    _settings(monkeypatch)
     _link(db_session, subscriber, splynx_id=777)
     _balance(monkeypatch, "200")
 
@@ -57,6 +71,7 @@ def test_splynx_subscriber_enqueues_splynx_webhook(monkeypatch, db_session, subs
 def test_native_subscriber_enqueues_generic_webhook(
     monkeypatch, db_session, subscriber
 ):
+    _settings(monkeypatch)
     _link(db_session, subscriber, splynx_id=None)
     _balance(monkeypatch, "200")
 
@@ -73,6 +88,7 @@ def test_native_subscriber_enqueues_generic_webhook(
 
 def test_push_skips_unchanged_snapshot(monkeypatch, db_session, subscriber):
     """Second run skips once the task has stamped the transmitted payload."""
+    _settings(monkeypatch)
     _link(db_session, subscriber, splynx_id=777)
     _balance(monkeypatch, "200")
 
@@ -91,10 +107,28 @@ def test_push_skips_unchanged_snapshot(monkeypatch, db_session, subscriber):
 
 
 def test_push_ignores_unlinked_subscribers(monkeypatch, db_session, subscriber):
+    _settings(monkeypatch)
     _balance(monkeypatch, "200")
 
     with patch("app.tasks.crm_sync.push_subscriber_change") as task:
         stats = push_billing_snapshots(db_session)
 
     assert stats["considered"] == 0
+    task.delay.assert_not_called()
+
+
+def test_push_respects_disabled_setting(monkeypatch, db_session, subscriber):
+    _settings(monkeypatch, billing_push_enabled=False)
+    _link(db_session, subscriber, splynx_id=777)
+    _balance(monkeypatch, "200")
+
+    with patch("app.tasks.crm_sync.push_subscriber_change") as task:
+        stats = push_billing_snapshots(db_session)
+
+    assert stats == {
+        "considered": 0,
+        "enqueued": 0,
+        "unchanged": 0,
+        "disabled": True,
+    }
     task.delay.assert_not_called()
