@@ -54,6 +54,7 @@ from app.services import (
 )
 from app.services import session_manager as session_manager_service
 from app.services import settings_spec
+from app.services import support as support_service
 from app.services import support_ticket_settings as support_ticket_settings_service
 from app.services import web_system_about as web_system_about_service
 from app.services import web_system_api_key_forms as web_system_api_key_forms_service
@@ -4078,26 +4079,31 @@ def settings_hub(request: Request, db: Session = Depends(get_db)):
     dependencies=[Depends(require_permission("system:settings:read"))],
 )
 def ticket_settings_page(request: Request, db: Session = Depends(get_db)):
+    staff_options = support_service.list_assignment_people(db)
+    ticket_settings = {
+        "active_page": "ticket-settings",
+        "status_options": support_ticket_settings_service.list_status_options(db),
+        "priority_options": support_ticket_settings_service.list_priority_options(db),
+        "ticket_type_options": support_ticket_settings_service.list_ticket_type_options(
+            db
+        ),
+        "region_options": support_ticket_settings_service.list_region_options(db),
+        "service_team_options": support_ticket_settings_service.list_service_teams(db),
+        "auto_assign_enabled": support_ticket_settings_service.auto_assign_enabled(db),
+        "routing_rules": support_ticket_settings_service.region_assignment_rules(db),
+        "service_team_members": support_ticket_settings_service.service_team_members(
+            db
+        ),
+        "sla_policy": support_ticket_settings_service.sla_policy(db),
+        "status_colors": support_ticket_settings_service.status_color_options(db),
+        "status_color_variants": support_ticket_settings_service.STATUS_COLOR_VARIANTS,
+        "staff_options": staff_options,
+        "saved": request.query_params.get("saved") == "1",
+        "errors": [],
+    }
     return templates.TemplateResponse(
         "admin/system/ticket_settings.html",
-        _config_context(
-            request,
-            db,
-            {
-                "active_page": "ticket-settings",
-                "status_options": support_ticket_settings_service.list_status_options(
-                    db
-                ),
-                "priority_options": support_ticket_settings_service.list_priority_options(
-                    db
-                ),
-                "ticket_type_options": support_ticket_settings_service.list_ticket_type_options(
-                    db
-                ),
-                "saved": request.query_params.get("saved") == "1",
-                "errors": [],
-            },
-        ),
+        _config_context(request, db, ticket_settings),
     )
 
 
@@ -4114,6 +4120,25 @@ def ticket_settings_update(
     statuses = form.getlist("status_values")
     priorities = form.getlist("priority_values")
     ticket_types = form.getlist("ticket_type_values")
+    regions = form.getlist("region_values")
+    service_team_ids = form.getlist("service_team_ids")
+    service_team_labels = form.getlist("service_team_labels")
+    routing_regions = form.getlist("routing_regions")
+    routing_ticket_manager_person_ids = form.getlist("routing_ticket_manager_person_ids")
+    routing_site_coordinator_person_ids = form.getlist(
+        "routing_site_coordinator_person_ids"
+    )
+    routing_technician_person_ids = form.getlist("routing_technician_person_ids")
+    routing_service_team_ids = form.getlist("routing_service_team_ids")
+    routing_assignee_person_ids = form.getlist("routing_assignee_person_ids")
+    team_member_team_ids = form.getlist("team_member_team_ids")
+    team_member_person_ids = form.getlist("team_member_person_ids")
+    sla_priorities = form.getlist("sla_priorities")
+    sla_response_hours = form.getlist("sla_response_hours")
+    sla_resolution_hours = form.getlist("sla_resolution_hours")
+    sla_aging_hours = form.getlist("sla_aging_hours")
+    status_color_statuses = form.getlist("status_color_statuses")
+    status_color_values = form.getlist("status_color_values")
     errors: list[str] = []
     try:
         support_ticket_settings_service.update_options(
@@ -4121,6 +4146,24 @@ def ticket_settings_update(
             statuses=statuses,
             priorities=priorities,
             ticket_types=ticket_types,
+            regions=regions,
+            service_team_ids=service_team_ids,
+            service_team_labels=service_team_labels,
+            auto_assign=form.get("auto_assign_enabled") == "1",
+            routing_regions=routing_regions,
+            routing_ticket_manager_person_ids=routing_ticket_manager_person_ids,
+            routing_site_coordinator_person_ids=routing_site_coordinator_person_ids,
+            routing_technician_person_ids=routing_technician_person_ids,
+            routing_service_team_ids=routing_service_team_ids,
+            routing_assignee_person_ids=routing_assignee_person_ids,
+            team_member_team_ids=team_member_team_ids,
+            team_member_person_ids=team_member_person_ids,
+            sla_priorities=sla_priorities,
+            sla_response_hours=sla_response_hours,
+            sla_resolution_hours=sla_resolution_hours,
+            sla_aging_hours=sla_aging_hours,
+            status_color_statuses=status_color_statuses,
+            status_color_values=status_color_values,
         )
         return RedirectResponse(
             url="/admin/system/ticket-settings?saved=1", status_code=303
@@ -4144,6 +4187,27 @@ def ticket_settings_update(
                 "ticket_type_options": support_ticket_settings_service.list_ticket_type_options(
                     db
                 ),
+                "region_options": support_ticket_settings_service.list_region_options(
+                    db
+                ),
+                "service_team_options": support_ticket_settings_service.list_service_teams(
+                    db
+                ),
+                "auto_assign_enabled": support_ticket_settings_service.auto_assign_enabled(
+                    db
+                ),
+                "routing_rules": support_ticket_settings_service.region_assignment_rules(
+                    db
+                ),
+                "service_team_members": support_ticket_settings_service.service_team_members(
+                    db
+                ),
+                "sla_policy": support_ticket_settings_service.sla_policy(db),
+                "status_colors": support_ticket_settings_service.status_color_options(
+                    db
+                ),
+                "status_color_variants": support_ticket_settings_service.STATUS_COLOR_VARIANTS,
+                "staff_options": support_service.list_assignment_people(db),
                 "saved": False,
                 "errors": errors,
             },

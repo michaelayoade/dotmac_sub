@@ -15,6 +15,7 @@ from app.models.support import (
     TicketChannel,
     TicketComment,
     TicketCommentAuthorType,
+    TicketSlaEvent,
 )
 from app.models.system_user import SystemUser
 from app.schemas.support import (
@@ -25,6 +26,8 @@ from app.schemas.support import (
 )
 from app.services import support as support_service
 from app.services import support_automation
+from app.services import support_ticket_settings as support_ticket_settings_service
+from app.services import web_support_tickets as web_support_tickets_service
 from app.services.customer_identity_resolution import (
     rebuild_identity_index_for_subscriber,
 )
@@ -62,6 +65,89 @@ def test_ticket_create_defaults_to_open_and_generates_number(db_session, subscri
     assert ticket.status == "open"
     assert ticket.number is not None
     assert ticket.number != ""
+
+
+def test_ticket_create_uses_configured_routing_and_sla_policy(
+    db_session, subscriber
+):
+    team_id = uuid4()
+    technician_id = uuid4()
+    member_id = uuid4()
+    support_ticket_settings_service.update_options(
+        db_session,
+        statuses=["open", "closed", "merged"],
+        priorities=["normal"],
+        ticket_types=["incident"],
+        regions=["north"],
+        service_team_ids=[str(team_id)],
+        service_team_labels=["Field Operations"],
+        routing_regions=["north"],
+        routing_technician_person_ids=[str(technician_id)],
+        routing_service_team_ids=[str(team_id)],
+        team_member_team_ids=[str(team_id)],
+        team_member_person_ids=[str(member_id)],
+        sla_priorities=["normal"],
+        sla_response_hours=["1"],
+        sla_resolution_hours=["8"],
+        sla_aging_hours=["4"],
+    )
+
+    ticket = support_service.tickets.create(
+        db_session,
+        TicketCreate(
+            title="North outage",
+            description="Needs routing",
+            subscriber_id=subscriber.id,
+            customer_account_id=subscriber.id,
+            region="north",
+            priority="normal",
+        ),
+        actor_id=str(subscriber.id),
+    )
+
+    assert ticket.technician_person_id == technician_id
+    assert ticket.service_team_id == team_id
+    assert ticket.due_at is not None
+    assert (
+        db_session.query(TicketAssignee)
+        .filter(
+            TicketAssignee.ticket_id == ticket.id,
+            TicketAssignee.person_id == member_id,
+        )
+        .count()
+        == 1
+    )
+    assert (
+        db_session.query(TicketSlaEvent)
+        .filter(
+            TicketSlaEvent.ticket_id == ticket.id,
+            TicketSlaEvent.event_type == "resolution_due",
+        )
+        .count()
+        == 1
+    )
+
+
+def test_link_and_merge_form_reject_invalid_target_uuid(db_session):
+    with pytest.raises(ValueError, match="valid ticket UUID"):
+        web_support_tickets_service.link_ticket_from_form(
+            db_session,
+            request=None,
+            ticket_id=str(uuid4()),
+            to_ticket_id="not-a-uuid",
+            link_type="related_outage",
+            actor_id=None,
+        )
+
+    with pytest.raises(ValueError, match="valid ticket UUID"):
+        web_support_tickets_service.merge_ticket_from_form(
+            db_session,
+            request=None,
+            ticket_id=str(uuid4()),
+            target_ticket_id="",
+            reason=None,
+            actor_id=None,
+        )
 
 
 def test_ticket_resolved_and_closed_set_timestamps(db_session, subscriber):
