@@ -1827,13 +1827,15 @@ def user_device_login_set(
     note: str
     try:
         if action == "revoke":
-            web_system_user_mutations_service.revoke_device_login(db, user_id=user_id)
+            web_system_user_mutations_service.revoke_device_login(
+                db, user_id=user_id, commit=False
+            )
             note = "Device login revoked."
         else:
             enabled = bool(form_data.get("device_login_enabled"))
             secret = form_data.get("device_login_secret") or None
             web_system_user_mutations_service.set_device_login(
-                db, user_id=user_id, enabled=enabled, secret=secret
+                db, user_id=user_id, enabled=enabled, secret=secret, commit=False
             )
             note = "Device login updated."
         _log_system_user_event(
@@ -1843,7 +1845,9 @@ def user_device_login_set(
             user_id=user_id,
             metadata={"action": action},
         )
-        sync_device_login.delay()
+        # Commit the credential change and its audit row atomically, so a
+        # failure in either rolls BOTH back (no "changed but reported failed").
+        db.commit()
     except ValueError as exc:
         db.rollback()
         note = str(exc)
@@ -1879,6 +1883,17 @@ def user_device_login_set(
             )
         return RedirectResponse(
             url=f"/admin/system/users/{user_id}/edit", status_code=303
+        )
+
+    # Best-effort sync: the credential change + audit are already committed. A
+    # broker/enqueue failure must NOT report failure to the operator — the
+    # periodic device_login_sync sweep reconciles RADIUS regardless.
+    try:
+        sync_device_login.delay()
+    except Exception:
+        logger.warning(
+            "device-login sync enqueue failed; periodic sweep will reconcile",
+            exc_info=True,
         )
 
     trigger = {

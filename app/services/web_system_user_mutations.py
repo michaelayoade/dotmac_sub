@@ -407,9 +407,20 @@ def delete_user_records(db: Session, *, user_id: str) -> SystemUser:
 
 
 def set_device_login(
-    db: Session, *, user_id: str, enabled: bool, secret: str | None
+    db: Session,
+    *,
+    user_id: str,
+    enabled: bool,
+    secret: str | None,
+    commit: bool = True,
 ) -> SystemUser:
-    """Enable/disable device login and optionally set/rotate the secret."""
+    """Enable/disable device login and optionally set/rotate the secret.
+
+    With ``commit=False`` the change is flushed but not committed, so the caller
+    can commit it atomically with an audit-log row. This avoids the "credential
+    already changed in the DB but the request reported failure" divergence when
+    a later audit write or sync-enqueue fails.
+    """
     from app.services.credential_crypto import encrypt_credential
 
     u = db.get(SystemUser, coerce_uuid(user_id))
@@ -422,21 +433,32 @@ def set_device_login(
         u.device_login_secret = encrypt_credential(secret)
         u.device_login_secret_set_at = datetime.now(UTC)
     db.add(u)
-    db.commit()
-    db.refresh(u)
+    if commit:
+        db.commit()
+        db.refresh(u)
+    else:
+        db.flush()
     return u
 
 
-def revoke_device_login(db: Session, *, user_id: str) -> SystemUser:
-    """Revoke device login access: disable and timestamp revocation."""
+def revoke_device_login(
+    db: Session, *, user_id: str, commit: bool = True
+) -> SystemUser:
+    """Revoke device login access: disable and timestamp revocation.
+
+    ``commit=False`` flushes without committing (see ``set_device_login``).
+    """
     u = db.get(SystemUser, coerce_uuid(user_id))
     if not u:
         raise ValueError("User not found")
     u.device_login_enabled = False
     u.device_login_revoked_at = datetime.now(UTC)
     db.add(u)
-    db.commit()
-    db.refresh(u)
+    if commit:
+        db.commit()
+        db.refresh(u)
+    else:
+        db.flush()
     return u
 
 
