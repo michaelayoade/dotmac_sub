@@ -30,6 +30,7 @@ from app.services.network.ont_olt_context import (
 from app.services.network.provisioning_events import (
     current_provisioning_correlation_key,
 )
+from app.services.network.service_classification import service_type_for_vlan
 
 logger = logging.getLogger(__name__)
 
@@ -449,7 +450,7 @@ class OntWriteService:
                     lambda allocation: _write_service_port(allocation.port_index),
                     vlan_id=vlan_id,
                     gem_index=gem_index,
-                    service_type="internet" if vlan_id in (203,) else "management",
+                    service_type=service_type_for_vlan(db, vlan_id),
                     correlation_key=correlation_key,
                     provisioned=lambda write_result: bool(write_result.success),
                     serialize_result=lambda write_result: {

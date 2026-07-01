@@ -2,7 +2,9 @@
 
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.notification import NotificationChannel, NotificationTemplate
+from app.models.subscription_engine import SettingValueType
 from app.services import settings_seed
+from app.services.domain_settings import network_settings
 
 # =============================================================================
 # Auth Settings Tests
@@ -361,6 +363,20 @@ class TestSeedCollectionsSettings:
         assert setting is not None
         assert setting.value_json == ["2026-01-01"]
 
+    def test_seeds_suspension_notification_dedupe_hours(self, db_session):
+        settings_seed.seed_collections_settings(db_session)
+
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.collections,
+                DomainSetting.key == "suspension_notification_dedupe_hours",
+            )
+            .first()
+        )
+        assert setting is not None
+        assert setting.value_text == "24"
+
 
 class TestSeedBillingNotificationSettings:
     def test_seeds_phase7_notification_keys(self, db_session):
@@ -377,6 +393,22 @@ class TestSeedBillingNotificationSettings:
                         "expiry_reminder_days",
                         "invoice_reminder_days",
                         "dunning_escalation_days",
+                        "autopay_max_consecutive_failures",
+                        "blocking_period_days",
+                        "deactivation_period_days",
+                        "minimum_balance",
+                        "arrangement_min_installments",
+                        "arrangement_max_installments",
+                        "arrangement_default_overdue_installments",
+                        "service_extension_max_days",
+                        "topup_preset_amounts",
+                        "topup_reconciliation_stale_minutes",
+                        "topup_reconciliation_max_age_days",
+                        "payment_gateway_timeout_seconds",
+                        "ar_aging_bucket_days",
+                        "billing_health_scan_min_ratio",
+                        "billing_health_payment_volume_min_ratio",
+                        "billing_health_payment_baseline_min_daily",
                     ]
                 ),
             )
@@ -387,6 +419,22 @@ class TestSeedBillingNotificationSettings:
         assert settings["expiry_reminder_days"] == "7"
         assert settings["invoice_reminder_days"] == "7,1"
         assert settings["dunning_escalation_days"] == "3,7,14,30"
+        assert settings["autopay_max_consecutive_failures"] == "3"
+        assert settings["blocking_period_days"] == "0"
+        assert settings["deactivation_period_days"] == "0"
+        assert settings["minimum_balance"] == "0"
+        assert settings["arrangement_min_installments"] == "2"
+        assert settings["arrangement_max_installments"] == "24"
+        assert settings["arrangement_default_overdue_installments"] == "2"
+        assert settings["service_extension_max_days"] == "30"
+        assert settings["topup_preset_amounts"] == ("1000,2000,5000,10000,20000,50000")
+        assert settings["topup_reconciliation_stale_minutes"] == "15"
+        assert settings["topup_reconciliation_max_age_days"] == "7"
+        assert settings["payment_gateway_timeout_seconds"] == "30"
+        assert settings["ar_aging_bucket_days"] == "30,60,90"
+        assert settings["billing_health_scan_min_ratio"] == "0.5"
+        assert settings["billing_health_payment_volume_min_ratio"] == "0.4"
+        assert settings["billing_health_payment_baseline_min_daily"] == "5.0"
 
 
 # =============================================================================
@@ -405,6 +453,9 @@ class TestSeedGeocodingSettings:
         monkeypatch.setenv("GEOCODING_USER_AGENT", "dotmac_sm")
         monkeypatch.setenv("GEOCODING_EMAIL", "test@example.com")
         monkeypatch.setenv("GEOCODING_TIMEOUT_SEC", "5")
+        monkeypatch.setenv("GEOCODING_MIN_INTERVAL_MS", "1250")
+        monkeypatch.setenv("GEOCODING_GOOGLE_API_KEY", "google-secret")
+        monkeypatch.setenv("GEOCODING_MAPBOX_API_KEY", "mapbox-secret")
 
         settings_seed.seed_geocoding_settings(db_session)
 
@@ -419,6 +470,28 @@ class TestSeedGeocodingSettings:
         assert setting is not None
         assert setting.value_json is True
 
+        interval = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.geocoding,
+                DomainSetting.key == "min_interval_ms",
+            )
+            .first()
+        )
+        assert interval is not None
+        assert interval.value_text == "1250"
+
+        google_key = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.geocoding,
+                DomainSetting.key == "google_api_key",
+            )
+            .first()
+        )
+        assert google_key is not None
+        assert google_key.is_secret is True
+
     def test_seeds_geocoding_provider(self, db_session, monkeypatch):
         """Test geocoding provider setting is seeded."""
         monkeypatch.setenv("GEOCODING_PROVIDER", "google")
@@ -426,6 +499,9 @@ class TestSeedGeocodingSettings:
         monkeypatch.setenv("GEOCODING_USER_AGENT", "dotmac_sm")
         monkeypatch.setenv("GEOCODING_EMAIL", "test@example.com")
         monkeypatch.setenv("GEOCODING_TIMEOUT_SEC", "5")
+        monkeypatch.setenv("GEOCODING_MIN_INTERVAL_MS", "0")
+        monkeypatch.setenv("GEOCODING_GOOGLE_API_KEY", "google-secret")
+        monkeypatch.setenv("GEOCODING_MAPBOX_API_KEY", "mapbox-secret")
 
         settings_seed.seed_geocoding_settings(db_session)
 
@@ -805,10 +881,10 @@ class TestSeedNetworkPolicySettings:
         )
         assert setting is not None
 
-    def test_seeds_mikrotik_api_session_kick_disabled_by_default(
+    def test_seeds_mikrotik_api_session_kick_enabled_by_default(
         self, db_session, monkeypatch
     ):
-        """RouterOS API session kicking is opt-in for controlled rollout."""
+        """RouterOS API session kicking is enabled for reliable forced reauth."""
         monkeypatch.delenv("NETWORK_MIKROTIK_API_SESSION_KICK_ENABLED", raising=False)
 
         settings_seed.seed_network_policy_settings(db_session)
@@ -822,8 +898,33 @@ class TestSeedNetworkPolicySettings:
             .first()
         )
         assert setting is not None
-        assert setting.value_text == "false"
-        assert setting.value_json is False
+        assert setting.value_text == "true"
+        assert setting.value_json is True
+
+    def test_updates_mikrotik_api_session_kick_existing_false(
+        self, db_session, monkeypatch
+    ):
+        """Existing old defaults are moved to the reliable force-reauth path."""
+        monkeypatch.delenv("NETWORK_MIKROTIK_API_SESSION_KICK_ENABLED", raising=False)
+        network_settings.ensure_by_key(
+            db_session,
+            key="mikrotik_api_session_kick_enabled",
+            value_type=SettingValueType.boolean,
+            value_text="false",
+            value_json=False,
+        )
+
+        settings_seed.seed_network_policy_settings(db_session)
+
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(DomainSetting.domain == SettingDomain.network)
+            .filter(DomainSetting.key == "mikrotik_api_session_kick_enabled")
+            .first()
+        )
+        assert setting is not None
+        assert setting.value_text == "true"
+        assert setting.value_json is True
 
 
 # =============================================================================

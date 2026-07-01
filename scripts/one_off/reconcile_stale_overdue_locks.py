@@ -2,10 +2,11 @@
 """Reconcile stale ``overdue`` enforcement locks (dry-run first).
 
 Clears ``overdue`` enforcement locks that are still active while the account owes
-NO overdue debt (stale drift that keeps a paid-up service suspended), and
-reactivates subs held by nothing else. A sub also held by another lock (e.g. a
-wrongful ``prepaid`` lock — run restore_prepaid_suspended_postpaid.py too) has
-its overdue lock cleared but stays suspended (reported). See
+NO overdue debt (stale drift that keeps a paid-up service suspended). With
+``--restore-ledger-covered``, also clears overdue locks where invoices remain
+overdue but local available balance covers the account. Reactivates subs held by
+nothing else. A sub also held by another lock has its overdue lock cleared but
+stays suspended (reported). See
 app/services/stale_overdue_lock_reconcile.py.
 
 NO ledger / money writes.
@@ -46,6 +47,14 @@ def main() -> int:
         help="Comma-separated subscription UUIDs — a targeted set instead of the "
         "full cohort (still filtered by eligibility).",
     )
+    parser.add_argument(
+        "--restore-ledger-covered",
+        action="store_true",
+        help=(
+            "Also restore overdue-locked accounts whose local available balance "
+            "covers the account threshold even though overdue invoice rows remain."
+        ),
+    )
     args = parser.parse_args()
 
     sub_ids = (
@@ -56,7 +65,13 @@ def main() -> int:
 
     db = SessionLocal()
     try:
-        result = reconcile(db, apply=args.apply, sub_ids=sub_ids, limit=args.limit)
+        result = reconcile(
+            db,
+            apply=args.apply,
+            sub_ids=sub_ids,
+            limit=args.limit,
+            restore_ledger_covered=args.restore_ledger_covered,
+        )
     finally:
         db.close()
 

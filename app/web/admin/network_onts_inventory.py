@@ -130,7 +130,7 @@ def _is_htmx_request(request: Request) -> bool:
 @router.get(
     "/onts",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def onts_list(
     request: Request,
@@ -206,7 +206,7 @@ def onts_list(
 @router.post(
     "/onts/bulk-action",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def onts_bulk_action(
     request: Request,
@@ -238,7 +238,7 @@ def onts_bulk_action(
 @router.get(
     "/onts/new",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_new(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
     context = _base_context(request, db, active_page="onts")
@@ -255,7 +255,7 @@ def ont_new(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
 @router.post(
     "/onts",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_create(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
@@ -279,7 +279,7 @@ def ont_create(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/onts/{ont_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_detail(
     request: Request,
@@ -393,7 +393,7 @@ def ont_detail(
 @router.get(
     "/onts/{ont_id}/assign",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_assign_new(
     request: Request,
@@ -425,7 +425,7 @@ def ont_assign_new(
 @router.get(
     "/onts/{ont_id}/assign-modal",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_assign_modal(
     request: Request,
@@ -456,7 +456,7 @@ def ont_assign_modal(
 @router.post(
     "/onts/{ont_id}/assign",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_assign_create(request: Request, ont_id: str, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
@@ -548,7 +548,7 @@ def ont_assign_create(request: Request, ont_id: str, db: Session = Depends(get_d
 @router.get(
     "/onts/available-mgmt-ips",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def available_mgmt_ips_for_vlan(
     request: Request,
@@ -570,7 +570,7 @@ def available_mgmt_ips_for_vlan(
 @router.get(
     "/onts/{ont_id}/assignments/{assignment_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_assignment_edit(
     request: Request,
@@ -607,7 +607,7 @@ def ont_assignment_edit(
 @router.post(
     "/onts/{ont_id}/assignments/{assignment_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_assignment_update(
     request: Request,
@@ -657,7 +657,7 @@ def ont_assignment_update(
 @router.post(
     "/onts/{ont_id}/assignments/{assignment_id}/remove",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_assignment_remove(
     request: Request,
@@ -689,7 +689,7 @@ def ont_assignment_remove(
 @router.get(
     "/onts/{ont_id}/onu-mode",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_onu_mode_modal(
     ont_id: str, request: Request, db: Session = Depends(get_db)
@@ -709,7 +709,7 @@ def ont_onu_mode_modal(
 @router.post(
     "/onts/{ont_id}/onu-mode",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_onu_mode_update(
     ont_id: str, request: Request, db: Session = Depends(get_db)
@@ -737,7 +737,7 @@ def ont_onu_mode_update(
 @router.get(
     "/onts/{ont_id}/mgmt-ip",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_mgmt_ip_modal(
     ont_id: str, request: Request, db: Session = Depends(get_db)
@@ -755,7 +755,7 @@ def ont_mgmt_ip_modal(
 @router.post(
     "/onts/{ont_id}/mgmt-ip",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def ont_mgmt_ip_update(
     ont_id: str, request: Request, db: Session = Depends(get_db)

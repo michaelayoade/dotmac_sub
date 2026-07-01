@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -41,7 +42,7 @@ class RouterCreate(BaseModel):
     hostname: str = Field(min_length=1, max_length=255)
     management_ip: str = Field(min_length=1, max_length=255)
     rest_api_port: int = Field(default=443, ge=1, le=65535)
-    rest_api_username: str = Field(min_length=1, max_length=255)
+    rest_api_username: str = Field(min_length=1, max_length=512)
     rest_api_password: str = Field(min_length=1, max_length=512)
     use_ssl: bool = True
     verify_tls: bool = False
@@ -59,7 +60,7 @@ class RouterUpdate(BaseModel):
     hostname: str | None = Field(default=None, min_length=1, max_length=255)
     management_ip: str | None = Field(default=None, min_length=1, max_length=255)
     rest_api_port: int | None = Field(default=None, ge=1, le=65535)
-    rest_api_username: str | None = Field(default=None, min_length=1, max_length=255)
+    rest_api_username: str | None = Field(default=None, min_length=1, max_length=512)
     rest_api_password: str | None = Field(default=None, min_length=1, max_length=512)
     use_ssl: bool | None = None
     verify_tls: bool | None = None
@@ -172,6 +173,9 @@ class RouterConfigPushCreate(BaseModel):
     commands: list[str] = Field(min_length=1)
     variable_values: dict | None = None
     router_ids: list[uuid.UUID] = Field(min_length=1)
+    dry_run: bool = False
+    failure_policy: Literal["continue", "abort"] = "continue"
+    allow_dangerous_commands: bool = False
 
 
 class RouterConfigPushRead(BaseModel):
@@ -181,6 +185,9 @@ class RouterConfigPushRead(BaseModel):
     template_id: uuid.UUID | None
     commands: list
     variable_values: dict | None
+    dry_run: bool
+    failure_policy: str
+    allow_dangerous_commands: bool
     initiated_by: uuid.UUID
     status: str
     created_at: datetime

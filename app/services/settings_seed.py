@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.models.domain_settings import SettingDomain
 from app.models.subscription_engine import SettingValueType
+from app.schemas.settings import DomainSettingUpdate
 from app.services.domain_settings import (
     DomainSettings,
     audit_settings,
@@ -320,6 +321,18 @@ def seed_usage_settings(db: Session) -> None:
         key="usage_rating_interval_seconds",
         value_type=SettingValueType.integer,
         value_text=os.getenv("USAGE_RATING_INTERVAL_SECONDS", "86400"),
+    )
+    usage_settings.ensure_by_key(
+        db,
+        key="usage_metering_interval_seconds",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("USAGE_METERING_INTERVAL_SECONDS", "60"),
+    )
+    usage_settings.ensure_by_key(
+        db,
+        key="fup_evaluation_interval_seconds",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("FUP_EVALUATION_INTERVAL_SECONDS", "900"),
     )
     accounting_enabled_raw = os.getenv("RADIUS_ACCOUNTING_IMPORT_ENABLED", "true")
     usage_settings.ensure_by_key(
@@ -989,19 +1002,11 @@ def seed_collections_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text=os.getenv("DUNNING_INTERVAL_SECONDS", "86400"),
     )
-    prepaid_enabled_raw = os.getenv("PREPAID_ENFORCEMENT_ENABLED", "true")
     collections_settings.ensure_by_key(
         db,
-        key="prepaid_enforcement_enabled",
-        value_type=SettingValueType.boolean,
-        value_text=prepaid_enabled_raw,
-        value_json=prepaid_enabled_raw.lower() in {"1", "true", "yes", "on"},
-    )
-    collections_settings.ensure_by_key(
-        db,
-        key="prepaid_enforcement_interval_seconds",
+        key="suspension_notification_dedupe_hours",
         value_type=SettingValueType.integer,
-        value_text=os.getenv("PREPAID_ENFORCEMENT_INTERVAL_SECONDS", "3600"),
+        value_text=os.getenv("COLLECTIONS_SUSPENSION_NOTIFICATION_DEDUPE_HOURS", "24"),
     )
     collections_settings.ensure_by_key(
         db,
@@ -1125,6 +1130,26 @@ def seed_geocoding_settings(db: Session) -> None:
         key="timeout_sec",
         value_type=SettingValueType.integer,
         value_text=os.getenv("GEOCODING_TIMEOUT_SEC", "5"),
+    )
+    geocoding_settings.ensure_by_key(
+        db,
+        key="min_interval_ms",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("GEOCODING_MIN_INTERVAL_MS", "1000"),
+    )
+    geocoding_settings.ensure_by_key(
+        db,
+        key="google_api_key",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("GEOCODING_GOOGLE_API_KEY", ""),
+        is_secret=True,
+    )
+    geocoding_settings.ensure_by_key(
+        db,
+        key="mapbox_api_key",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("GEOCODING_MAPBOX_API_KEY", ""),
+        is_secret=True,
     )
     geocoding_settings.ensure_by_key(
         db,
@@ -1282,6 +1307,12 @@ def seed_radius_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text=os.getenv("RADIUS_COA_RETRIES", "1"),
     )
+    radius_settings.ensure_by_key(
+        db,
+        key="suspended_address_list",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("RADIUS_SUSPENDED_ADDRESS_LIST", "suspended"),
+    )
     refresh_raw = os.getenv("RADIUS_REFRESH_SESSIONS_ON_PROFILE_CHANGE", "true")
     radius_settings.ensure_by_key(
         db,
@@ -1413,6 +1444,15 @@ def seed_billing_settings(db: Session) -> None:
         value_type=SettingValueType.boolean,
         value_text=billing_enabled_raw,
     )
+    # Pin the expected master-switch value so the hourly check_billing_switch
+    # guard alarms if billing is ever turned OFF (drift = actual != expected).
+    # Default "true": post-cutover DotMac is the biller of record.
+    billing_settings.ensure_by_key(
+        db,
+        key="billing_enabled_expected",
+        value_type=SettingValueType.boolean,
+        value_text=os.getenv("BILLING_ENABLED_EXPECTED", "true"),
+    )
     billing_settings.ensure_by_key(
         db,
         key="billing_interval_seconds",
@@ -1435,6 +1475,22 @@ def seed_billing_settings(db: Session) -> None:
         value_type=SettingValueType.boolean,
         value_text=auto_suspend_raw,
         value_json=auto_suspend_raw.lower() in {"1", "true", "yes", "on"},
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="autopay_max_consecutive_failures",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("BILLING_AUTOPAY_MAX_CONSECUTIVE_FAILURES", "3"),
+    )
+    prepaid_monthly_invoicing_raw = os.getenv(
+        "PREPAID_MONTHLY_INVOICING_ENABLED", "false"
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="prepaid_monthly_invoicing_enabled",
+        value_type=SettingValueType.boolean,
+        value_text=prepaid_monthly_invoicing_raw,
+        value_json=prepaid_monthly_invoicing_raw.lower() in {"1", "true", "yes", "on"},
     )
     customer_balance_notifications_raw = os.getenv(
         "BILLING_CUSTOMER_BALANCE_NOTIFICATIONS_ENABLED", "true"
@@ -1470,6 +1526,24 @@ def seed_billing_settings(db: Session) -> None:
         key="dunning_escalation_days",
         value_type=SettingValueType.string,
         value_text=os.getenv("BILLING_DUNNING_ESCALATION_DAYS", "3,7,14,30"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="blocking_period_days",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("BILLING_BLOCKING_PERIOD_DAYS", "0"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="deactivation_period_days",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("BILLING_DEACTIVATION_PERIOD_DAYS", "0"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="minimum_balance",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("BILLING_MINIMUM_BALANCE", "0"),
     )
     billing_settings.ensure_by_key(
         db,
@@ -1522,6 +1596,80 @@ def seed_billing_settings(db: Session) -> None:
         key="minimum_invoice_amount",
         value_type=SettingValueType.string,
         value_text=os.getenv("PLAN_CHANGE_MINIMUM_INVOICE_AMOUNT", "0.00"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="arrangement_min_installments",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("BILLING_ARRANGEMENT_MIN_INSTALLMENTS", "2"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="arrangement_max_installments",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("BILLING_ARRANGEMENT_MAX_INSTALLMENTS", "24"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="arrangement_default_overdue_installments",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("BILLING_ARRANGEMENT_DEFAULT_OVERDUE_INSTALLMENTS", "2"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="service_extension_max_days",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("BILLING_SERVICE_EXTENSION_MAX_DAYS", "30"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="topup_preset_amounts",
+        value_type=SettingValueType.string,
+        value_text=os.getenv(
+            "BILLING_TOPUP_PRESET_AMOUNTS", "1000,2000,5000,10000,20000,50000"
+        ),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="topup_reconciliation_stale_minutes",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("BILLING_TOPUP_RECONCILIATION_STALE_MINUTES", "15"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="topup_reconciliation_max_age_days",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("BILLING_TOPUP_RECONCILIATION_MAX_AGE_DAYS", "7"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="payment_gateway_timeout_seconds",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("BILLING_PAYMENT_GATEWAY_TIMEOUT_SECONDS", "30"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="ar_aging_bucket_days",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("BILLING_AR_AGING_BUCKET_DAYS", "30,60,90"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="billing_health_scan_min_ratio",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("BILLING_HEALTH_SCAN_MIN_RATIO", "0.5"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="billing_health_payment_volume_min_ratio",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("BILLING_HEALTH_PAYMENT_VOLUME_MIN_RATIO", "0.4"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="billing_health_payment_baseline_min_daily",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("BILLING_HEALTH_PAYMENT_BASELINE_MIN_DAILY", "5.0"),
     )
     invoice_enabled_raw = os.getenv("BILLING_INVOICE_NUMBER_ENABLED", "true")
     billing_settings.ensure_by_key(
@@ -1812,6 +1960,99 @@ def seed_collections_policy_settings(db: Session) -> None:
         value_type=SettingValueType.string,
         value_text=os.getenv("COLLECTIONS_DEFAULT_DUNNING_CASE_STATUS", "open"),
     )
+    for key, env_name, default in [
+        (
+            "billing_enforcement_health_gates_enabled",
+            "BILLING_ENFORCEMENT_HEALTH_GATES_ENABLED",
+            "true",
+        ),
+        (
+            "billing_enforcement_require_notification_health",
+            "BILLING_ENFORCEMENT_REQUIRE_NOTIFICATION_HEALTH",
+            "false",
+        ),
+        (
+            "billing_enforcement_require_payment_health",
+            "BILLING_ENFORCEMENT_REQUIRE_PAYMENT_HEALTH",
+            "true",
+        ),
+        (
+            "billing_enforcement_settle_credit_before_dunning_enabled",
+            "BILLING_ENFORCEMENT_SETTLE_CREDIT_BEFORE_DUNNING_ENABLED",
+            "true",
+        ),
+        (
+            "billing_enforcement_require_active_gateway",
+            "BILLING_ENFORCEMENT_REQUIRE_ACTIVE_GATEWAY",
+            "false",
+        ),
+    ]:
+        raw = os.getenv(env_name, default)
+        collections_settings.ensure_by_key(
+            db,
+            key=key,
+            value_type=SettingValueType.boolean,
+            value_text=raw,
+            value_json=raw.lower() in {"1", "true", "yes", "on"},
+        )
+    for key, env_name, default in [
+        (
+            "billing_enforcement_min_enforcing_day_offset",
+            "BILLING_ENFORCEMENT_MIN_ENFORCING_DAY_OFFSET",
+            "3",
+        ),
+        (
+            "billing_enforcement_notification_max_oldest_queued_minutes",
+            "BILLING_ENFORCEMENT_NOTIFICATION_MAX_OLDEST_QUEUED_MINUTES",
+            "120",
+        ),
+        (
+            "billing_enforcement_notification_max_failed",
+            "BILLING_ENFORCEMENT_NOTIFICATION_MAX_FAILED",
+            "100",
+        ),
+        (
+            "billing_enforcement_notification_max_stuck_sending",
+            "BILLING_ENFORCEMENT_NOTIFICATION_MAX_STUCK_SENDING",
+            "25",
+        ),
+        (
+            "billing_enforcement_notification_failed_window_hours",
+            "BILLING_ENFORCEMENT_NOTIFICATION_FAILED_WINDOW_HOURS",
+            "24",
+        ),
+        (
+            "billing_enforcement_payment_health_window_hours",
+            "BILLING_ENFORCEMENT_PAYMENT_HEALTH_WINDOW_HOURS",
+            "24",
+        ),
+        (
+            "billing_enforcement_payment_max_pending_minutes",
+            "BILLING_ENFORCEMENT_PAYMENT_MAX_PENDING_MINUTES",
+            "45",
+        ),
+        (
+            "billing_enforcement_payment_max_dead_letters",
+            "BILLING_ENFORCEMENT_PAYMENT_MAX_DEAD_LETTERS",
+            "0",
+        ),
+        (
+            "billing_enforcement_payment_max_stale_pending_topups",
+            "BILLING_ENFORCEMENT_PAYMENT_MAX_STALE_PENDING_TOPUPS",
+            "20",
+        ),
+        (
+            "billing_enforcement_payment_min_recent_successes",
+            "BILLING_ENFORCEMENT_PAYMENT_MIN_RECENT_SUCCESSES",
+            "0",
+        ),
+    ]:
+        collections_settings.ensure_by_key(
+            db,
+            key=key,
+            value_type=SettingValueType.integer,
+            value_text=os.getenv(env_name, default),
+        )
 
 
 def seed_auth_policy_settings(db: Session) -> None:
@@ -2030,14 +2271,16 @@ def seed_network_policy_settings(db: Session) -> None:
         value_text=os.getenv("NETWORK_DEFAULT_FIBER_STRAND_STATUS", "available"),
     )
     api_kick_enabled_raw = os.getenv(
-        "NETWORK_MIKROTIK_API_SESSION_KICK_ENABLED", "false"
+        "NETWORK_MIKROTIK_API_SESSION_KICK_ENABLED", "true"
     )
-    network_settings.ensure_by_key(
+    network_settings.upsert_by_key(
         db,
         key="mikrotik_api_session_kick_enabled",
-        value_type=SettingValueType.boolean,
-        value_text=api_kick_enabled_raw,
-        value_json=api_kick_enabled_raw.lower() in {"1", "true", "yes", "on"},
+        payload=DomainSettingUpdate(
+            value_type=SettingValueType.boolean,
+            value_text=api_kick_enabled_raw,
+            value_json=api_kick_enabled_raw.lower() in {"1", "true", "yes", "on"},
+        ),
     )
     network_settings.ensure_by_key(
         db,
@@ -2100,6 +2343,18 @@ def seed_network_settings(db: Session) -> None:
         key="default_mikrotik_address_list",
         value_type=SettingValueType.string,
         value_text=os.getenv("NETWORK_DEFAULT_MIKROTIK_ADDRESS_LIST", ""),
+    )
+    network_settings.ensure_by_key(
+        db,
+        key="internet_service_vlans",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("NETWORK_INTERNET_SERVICE_VLANS", "203"),
+    )
+    network_settings.ensure_by_key(
+        db,
+        key="speedtest_sla_ratio",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("NETWORK_SPEEDTEST_SLA_RATIO", "0.8"),
     )
     network_settings.ensure_by_key(
         db,

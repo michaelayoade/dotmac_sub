@@ -12,6 +12,9 @@ class WebhookEndpointBase(BaseModel):
     connector_config_id: UUID | None = None
     secret: str | None = Field(default=None, max_length=255)
     is_active: bool = True
+    delivery_timeout_seconds: int | None = Field(default=None, ge=1, le=300)
+    max_retries: int | None = Field(default=None, ge=0, le=20)
+    retry_backoff_seconds: int | None = Field(default=None, ge=1, le=28800)
 
 
 class WebhookEndpointCreate(WebhookEndpointBase):
@@ -24,6 +27,9 @@ class WebhookEndpointUpdate(BaseModel):
     connector_config_id: UUID | None = None
     secret: str | None = Field(default=None, max_length=255)
     is_active: bool | None = None
+    delivery_timeout_seconds: int | None = Field(default=None, ge=1, le=300)
+    max_retries: int | None = Field(default=None, ge=0, le=20)
+    retry_backoff_seconds: int | None = Field(default=None, ge=1, le=28800)
 
 
 class WebhookEndpointRead(WebhookEndpointBase):

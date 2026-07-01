@@ -31,7 +31,7 @@ class QuotaBucket {
 
   /// Total data available this period (included + rolled-over + top-ups).
   double? get allowanceGb =>
-      includedGb == null ? null : includedGb! + rolloverGb + topupGb;
+      isUnlimited ? null : includedGb! + rolloverGb + topupGb;
 
   double? get remainingGb {
     final a = allowanceGb;
@@ -48,7 +48,9 @@ class QuotaBucket {
     return f.clamp(0.0, 1.0);
   }
 
-  bool get isUnlimited => includedGb == null;
+  /// Unmetered plan: no included allowance on file (null) or an explicit 0,
+  /// which is how "unlimited" offers are rated (no GB cap to count against).
+  bool get isUnlimited => includedGb == null || includedGb! <= 0;
 
   factory QuotaBucket.fromJson(Map<String, dynamic> json) => QuotaBucket(
         id: json['id'].toString(),
@@ -127,16 +129,51 @@ class AccountingSession {
 /// perspective. Mirrors BandwidthStats from api/bandwidth.py (we bind only
 /// the download/upload fields — rx/tx are NAS-perspective).
 class LiveBandwidth {
-  LiveBandwidth({this.downloadBps, this.uploadBps});
+  LiveBandwidth({
+    this.downloadBps,
+    this.uploadBps,
+    this.peakDownloadBps,
+    this.peakUploadBps,
+  });
 
   final double? downloadBps;
   final double? uploadBps;
+
+  /// Peak throughput over the requested window (subscriber perspective).
+  /// Populated by /bandwidth/my/stats; null on the live one-shot.
+  final double? peakDownloadBps;
+  final double? peakUploadBps;
 
   bool get hasSignal => (downloadBps ?? 0) > 0 || (uploadBps ?? 0) > 0;
 
   factory LiveBandwidth.fromJson(Map<String, dynamic> json) => LiveBandwidth(
         downloadBps: (json['download_bps'] as num?)?.toDouble(),
         uploadBps: (json['upload_bps'] as num?)?.toDouble(),
+        peakDownloadBps: (json['peak_download_bps'] as num?)?.toDouble(),
+        peakUploadBps: (json['peak_upload_bps'] as num?)?.toDouble(),
+      );
+}
+
+/// One point of the bandwidth-speed time series. Mirrors BandwidthSeriesPoint
+/// from app/api/bandwidth.py (GET /bandwidth/my/series). We bind only the
+/// subscriber-perspective download/upload rates.
+class BandwidthPoint {
+  BandwidthPoint({
+    required this.at,
+    required this.downloadBps,
+    required this.uploadBps,
+  });
+
+  final DateTime at;
+  final double downloadBps;
+  final double uploadBps;
+
+  double get totalBps => downloadBps + uploadBps;
+
+  factory BandwidthPoint.fromJson(Map<String, dynamic> json) => BandwidthPoint(
+        at: DateTime.parse(json['timestamp'].toString()).toLocal(),
+        downloadBps: (json['download_bps'] as num?)?.toDouble() ?? 0,
+        uploadBps: (json['upload_bps'] as num?)?.toDouble() ?? 0,
       );
 }
 
@@ -222,6 +259,9 @@ class UsageSummary {
     required this.totalSource,
     required this.isAuthoritative,
     this.bucket,
+    this.averageBps,
+    this.peakDownloadBps,
+    this.peakUploadBps,
     this.series = const [],
     this.fup,
   });
@@ -230,9 +270,18 @@ class UsageSummary {
   final DateTime start;
   final DateTime end;
   final int totalBytes;
-  final String totalSource; // samples | sessions | quota
+  final String totalSource; // samples | sessions | quota | lifetime
   final bool isAuthoritative;
   final String? bucket; // minute | hour | day | null
+
+  /// Mean throughput over the window (rx+tx bits/s) — the "average speed".
+  /// Null for windows with no samples (e.g. "all").
+  final double? averageBps;
+
+  /// Exact peak throughput over the window (subscriber bits/s). Populated for
+  /// the billing cycle; null when unavailable.
+  final double? peakDownloadBps;
+  final double? peakUploadBps;
   final List<UsageSeriesPoint> series;
   final FupStatus? fup;
 
@@ -244,6 +293,9 @@ class UsageSummary {
         totalSource: json['total_source'].toString(),
         isAuthoritative: json['is_authoritative'] as bool? ?? false,
         bucket: json['bucket'] as String?,
+        averageBps: (json['average_bps'] as num?)?.toDouble(),
+        peakDownloadBps: (json['peak_download_bps'] as num?)?.toDouble(),
+        peakUploadBps: (json['peak_upload_bps'] as num?)?.toDouble(),
         series: (json['series'] as List? ?? const [])
             .map((e) => UsageSeriesPoint.fromJson(e as Map<String, dynamic>))
             .toList(),
@@ -251,6 +303,93 @@ class UsageSummary {
             ? null
             : FupStatus.fromJson(json['fup'] as Map<String, dynamic>),
       );
+}
+
+/// One calendar day's traffic (bytes). Mirrors DailyUsagePoint from
+/// schemas/usage.py (GET /me/usage-history). Dates are plain calendar days —
+/// not localized, so month bucketing stays stable across timezones.
+class DailyUsagePoint {
+  DailyUsagePoint({
+    required this.date,
+    required this.uploadBytes,
+    required this.downloadBytes,
+    required this.totalBytes,
+  });
+
+  final DateTime date;
+  final int uploadBytes;
+  final int downloadBytes;
+  final int totalBytes;
+
+  factory DailyUsagePoint.fromJson(Map<String, dynamic> json) =>
+      DailyUsagePoint(
+        date: DateTime.parse(json['date'].toString()),
+        uploadBytes: (json['upload_bytes'] as num?)?.toInt() ?? 0,
+        downloadBytes: (json['download_bytes'] as num?)?.toInt() ?? 0,
+        totalBytes: (json['total_bytes'] as num?)?.toInt() ?? 0,
+      );
+}
+
+/// One calendar month's total traffic (bytes), aggregated client-side.
+class MonthlyUsagePoint {
+  MonthlyUsagePoint({required this.month, required this.bytes});
+
+  /// First day of the month (day = 1).
+  final DateTime month;
+  final int bytes;
+}
+
+/// Long-history daily usage. Mirrors DailyUsageHistoryResponse from
+/// schemas/usage.py (GET /me/usage-history). Sourced from the daily rollup
+/// (Splynx backfill), reaching years further back than per-session accounting.
+class UsageHistory {
+  UsageHistory({
+    required this.start,
+    required this.end,
+    required this.totalUploadBytes,
+    required this.totalDownloadBytes,
+    required this.totalBytes,
+    this.points = const [],
+  });
+
+  final DateTime start;
+  final DateTime end;
+  final int totalUploadBytes;
+  final int totalDownloadBytes;
+  final int totalBytes;
+  final List<DailyUsagePoint> points;
+
+  factory UsageHistory.fromJson(Map<String, dynamic> json) => UsageHistory(
+        start: DateTime.parse(json['start'].toString()),
+        end: DateTime.parse(json['end'].toString()),
+        totalUploadBytes: (json['total_upload_bytes'] as num?)?.toInt() ?? 0,
+        totalDownloadBytes:
+            (json['total_download_bytes'] as num?)?.toInt() ?? 0,
+        totalBytes: (json['total_bytes'] as num?)?.toInt() ?? 0,
+        points: (json['points'] as List? ?? const [])
+            .map((e) => DailyUsagePoint.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
+
+  /// Aggregate the daily points into calendar-month totals, ascending. Gaps
+  /// (months with no recorded usage) are simply absent — same as the daily
+  /// source, which isn't zero-filled.
+  List<MonthlyUsagePoint> toMonthly() {
+    final byMonth = <String, int>{};
+    for (final p in points) {
+      final key = '${p.date.year}-${p.date.month.toString().padLeft(2, '0')}';
+      byMonth[key] = (byMonth[key] ?? 0) + p.totalBytes;
+    }
+    final out = byMonth.entries.map((e) {
+      final parts = e.key.split('-');
+      return MonthlyUsagePoint(
+        month: DateTime(int.parse(parts[0]), int.parse(parts[1])),
+        bytes: e.value,
+      );
+    }).toList()
+      ..sort((a, b) => a.month.compareTo(b.month));
+    return out;
+  }
 }
 
 DateTime? _toDate(dynamic v) {

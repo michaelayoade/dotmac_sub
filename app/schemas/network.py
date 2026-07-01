@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import ipaddress
 from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models.network import (
     DeviceStatus,
@@ -311,6 +312,8 @@ class IpPoolBase(BaseModel):
     olt_device_id: UUID | None = None
     vlan_id: UUID | None = None
     notes: str | None = None
+    # IPv6 pools: per-customer prefix-delegation size carved from ``cidr``.
+    delegation_prefix_length: int | None = Field(default=None, ge=1, le=128)
 
 
 class IpPoolCreate(IpPoolBase):
@@ -328,6 +331,7 @@ class IpPoolUpdate(BaseModel):
     olt_device_id: UUID | None = None
     vlan_id: UUID | None = None
     notes: str | None = None
+    delegation_prefix_length: int | None = Field(default=None, ge=1, le=128)
 
 
 class IpPoolRead(IpPoolBase):
@@ -364,11 +368,35 @@ class IpBlockRead(IpBlockBase):
     updated_at: datetime
 
 
+def _canonical_ipv4(value: str | None) -> str | None:
+    if value is None:
+        return None
+    try:
+        return str(ipaddress.IPv4Address(value.strip()))
+    except ValueError as exc:
+        raise ValueError("address must be a valid IPv4 address") from exc
+
+
+def _canonical_ipv6(value: str | None) -> str | None:
+    if value is None:
+        return None
+    try:
+        # Compressed form so 2001:db8::1 and 2001:0db8:0000::1 are the same row.
+        return str(ipaddress.IPv6Address(value.strip()))
+    except ValueError as exc:
+        raise ValueError("address must be a valid IPv6 address") from exc
+
+
 class IPv4AddressBase(BaseModel):
     address: str = Field(min_length=1, max_length=15)
     pool_id: UUID | None = None
     is_reserved: bool = False
     notes: str | None = None
+
+    @field_validator("address")
+    @classmethod
+    def _validate_address(cls, value: str) -> str:
+        return _canonical_ipv4(value)  # type: ignore[return-value]
 
 
 class IPv4AddressCreate(IPv4AddressBase):
@@ -380,6 +408,11 @@ class IPv4AddressUpdate(BaseModel):
     pool_id: UUID | None = None
     is_reserved: bool | None = None
     notes: str | None = None
+
+    @field_validator("address")
+    @classmethod
+    def _validate_address(cls, value: str | None) -> str | None:
+        return _canonical_ipv4(value)
 
 
 class IPv4AddressRead(IPv4AddressBase):
@@ -396,6 +429,11 @@ class IPv6AddressBase(BaseModel):
     is_reserved: bool = False
     notes: str | None = None
 
+    @field_validator("address")
+    @classmethod
+    def _validate_address(cls, value: str) -> str:
+        return _canonical_ipv6(value)  # type: ignore[return-value]
+
 
 class IPv6AddressCreate(IPv6AddressBase):
     pass
@@ -406,6 +444,11 @@ class IPv6AddressUpdate(BaseModel):
     pool_id: UUID | None = None
     is_reserved: bool | None = None
     notes: str | None = None
+
+    @field_validator("address")
+    @classmethod
+    def _validate_address(cls, value: str | None) -> str | None:
+        return _canonical_ipv6(value)
 
 
 class IPv6AddressRead(IPv6AddressBase):

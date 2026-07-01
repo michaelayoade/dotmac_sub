@@ -27,6 +27,9 @@ Future<void> _initPushBackground() async {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  if (kDebugMode) {
+    debugPrint('[config] API_ROOT=${Env.apiRoot}');
+  }
   await _initPushBackground();
 
   const app = ProviderScope(child: DotMacApp());
@@ -46,7 +49,7 @@ Future<void> main() async {
         options.environment = Env.glitchtipEnvironment;
         // Identifies app events in the shared GlitchTip project (filter by
         // release:dotmac-mobile@* or environment:mobile-*).
-        options.release = 'dotmac-mobile@1.0.1';
+        options.release = 'dotmac-mobile@1.1.1';
         options.sendDefaultPii = false;
       });
 

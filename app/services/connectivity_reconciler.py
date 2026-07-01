@@ -28,9 +28,13 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import hashlib
+import json
 import logging
+import os
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, select
@@ -45,7 +49,15 @@ from app.models.catalog import (
 from app.models.network import IPAssignment, IPv4Address, IPVersion
 from app.services.common import coerce_uuid
 from app.services.ip_consistency_audit import _external_ip_state, _norm
-from app.services.radius_access_state import derive_access_state
+from app.services.radius_access_state import (
+    ACTIVE_STATUSES,
+    BLOCKED_STATUSES,
+    derive_access_state,
+)
+
+# Subscribers in these statuses are expected to carry connectivity (an IP is
+# retained), so they are the population the shadow audit sweeps for drift.
+_RETAINED_STATUSES = ACTIVE_STATUSES | BLOCKED_STATUSES
 
 logger = logging.getLogger(__name__)
 
@@ -152,11 +164,18 @@ def note_connectivity_write(field: str, caller: str) -> None:
         )
 
 
-def connectivity_shadow_diff(db: Session, subscriber_id: Any) -> dict[str, Any]:
+def connectivity_shadow_diff(
+    db: Session, subscriber_id: Any, *, emit: bool = True
+) -> dict[str, Any]:
     """READ-ONLY. Compare desired connectivity (derived) vs actual stored state
-    for a subscriber across access_state / credentials / IP. Logs and counts
-    disagreements via ``connectivity_shadow_diff_total``. Writes nothing — the
-    step-2c observability path that must look sane before any apply=True cutover.
+    for a subscriber across access_state / credentials / IP / ipv4_cache. Writes
+    nothing — the step-2c observability path that must look sane before any
+    apply=True cutover.
+
+    ``emit`` (default True): increment ``connectivity_shadow_diff_total`` and log
+    per disagreeing subscriber — right for the per-transition event hook. The
+    full-base sweep passes ``emit=False`` (it emits its own point-in-time gauge
+    and would otherwise double-count + log-spam over thousands of subscribers).
 
     Returns a structured report; ``diffs`` lists the disagreeing dimensions.
     """
@@ -169,6 +188,7 @@ def connectivity_shadow_diff(db: Session, subscriber_id: Any) -> dict[str, Any]:
     any_creds_desired = False
     any_ip_desired = False
     access_mismatch = False
+    ipv4_cache_mismatch = False
     for sub in subs:
         desired = derive_desired_connectivity(sub.status)
         any_creds_desired = any_creds_desired or desired.credentials_active
@@ -178,6 +198,15 @@ def connectivity_shadow_diff(db: Session, subscriber_id: Any) -> dict[str, Any]:
         )
         match = desired_access == sub.access_state
         access_mismatch = access_mismatch or not match
+        # ipv4_cache (INV-4 / R2): the served column is a PROJECTION of the
+        # active assignment, not a second source of truth. When an IP is
+        # retained (active/suspended), the column must equal the assignment IP;
+        # divergence is the drift that the reconciler will own. Report-only —
+        # this gauge sizes the cutover that removes the accounting dual-write.
+        col_ip = _norm(sub.ipv4_address)
+        assign_ip = _active_assignment_ip(db, sub)
+        cache_match = (not desired.ip_retained) or (col_ip == assign_ip)
+        ipv4_cache_mismatch = ipv4_cache_mismatch or not cache_match
         sub_reports.append(
             {
                 "id": str(sub.id),
@@ -185,6 +214,9 @@ def connectivity_shadow_diff(db: Session, subscriber_id: Any) -> dict[str, Any]:
                 "desired_access_state": desired_access,
                 "actual_access_state": sub.access_state,
                 "match": match,
+                "served_ipv4": col_ip or None,
+                "assignment_ipv4": assign_ip or None,
+                "ipv4_cache_match": cache_match,
             }
         )
 
@@ -221,8 +253,10 @@ def connectivity_shadow_diff(db: Session, subscriber_id: Any) -> dict[str, Any]:
         diffs.append("credentials_active")
     if not ip_match:
         diffs.append("ip_active")
+    if ipv4_cache_mismatch:
+        diffs.append("ipv4_cache")
 
-    if diffs:
+    if diffs and emit:
         try:
             from app.metrics import CONNECTIVITY_SHADOW_DIFF
 
@@ -246,6 +280,9 @@ def connectivity_shadow_diff(db: Session, subscriber_id: Any) -> dict[str, Any]:
             "desired": any_ip_desired,
             "actual": actual_ip_active > 0,
             "match": ip_match,
+        },
+        "ipv4_cache": {
+            "match": not ipv4_cache_mismatch,
         },
         "diffs": diffs,
     }
@@ -351,6 +388,134 @@ def plan_subscription_ip(
     }
 
 
+def desired_connectivity_signature(db: Session, subscriber_id: Any) -> str:
+    """Stable 16-hex-char hash of a subscriber's DESIRED connectivity across all
+    its subscriptions (status → ``DesiredConnectivity`` + desired IP). Same
+    desired state → same signature: the idempotency key for credential/RADIUS
+    sync, so a converge that changes nothing is a provable no-op rather than a
+    blind re-write."""
+    sid = coerce_uuid(subscriber_id)
+    subs = list(
+        db.scalars(
+            select(Subscription)
+            .where(Subscription.subscriber_id == sid)
+            .order_by(Subscription.id)
+        ).all()
+    )
+    payload = []
+    for sub in subs:
+        d = derive_desired_connectivity(sub.status)
+        payload.append(
+            {
+                "sub": str(sub.id),
+                "status": sub.status.value if sub.status is not None else None,
+                "access_state": (
+                    d.access_state.value if d.access_state is not None else None
+                ),
+                "creds": d.credentials_active,
+                "ip_active": d.ip_active,
+                "ip_retained": d.ip_retained,
+                "kick": d.kick_live_session,
+                "ip": _active_assignment_ip(db, sub) or _norm(sub.ipv4_address),
+            }
+        )
+    blob = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(blob.encode()).hexdigest()[:16]
+
+
+_LAST_SIG_KEY = "connectivity:last_sig:{}"
+_LAST_SIG_TTL = int(timedelta(days=30).total_seconds())
+
+
+def _should_enqueue_refresh(subscriber_id: Any, signature: str) -> bool:
+    """Idempotency gate: allow the RADIUS refresh only when the desired-state
+    signature changed since the last applied convergence for this subscriber.
+    Best-effort — if Redis is unavailable or the signature is empty, returns
+    True (never suppress a real refresh on an infra failure)."""
+    if not signature:
+        return True
+    try:
+        client = _shadow_redis()
+        if client is None:
+            return True
+        key = _LAST_SIG_KEY.format(subscriber_id)
+        prev = client.get(key)
+        if isinstance(prev, bytes):
+            prev = prev.decode()
+        if prev == signature:
+            return False
+        client.set(key, signature, ex=_LAST_SIG_TTL)
+        return True
+    except Exception:  # pragma: no cover - gate must never block on infra
+        return True
+
+
+def plan_subscription_suspend(
+    db: Session, subscription: Subscription
+) -> dict[str, Any]:
+    """SHADOW plan for a blocked-family subscription (suspended/blocked/stopped).
+    Reports the actions that would converge the suspend dimensions to the design
+    invariants (INV-1 IP retained, INV-3 credential survives, INV-5 CoA-once);
+    writes nothing. The ``apply=True`` cutover is deferred (design §2d)."""
+    desired = derive_desired_connectivity(subscription.status)
+    desired_access = (
+        desired.access_state.value if desired.access_state is not None else None
+    )
+    actions: list[dict[str, Any]] = []
+    if desired_access != subscription.access_state:
+        actions.append(
+            {
+                "kind": "set_access_state",
+                "from": subscription.access_state,
+                "to": desired_access,
+            }
+        )
+    if desired.credentials_active:
+        active_creds = (
+            db.scalar(
+                select(func.count())
+                .select_from(AccessCredential)
+                .where(
+                    AccessCredential.subscriber_id == subscription.subscriber_id,
+                    AccessCredential.is_active.is_(True),
+                )
+            )
+            or 0
+        )
+        if active_creds == 0:
+            actions.append(
+                {
+                    "kind": "ensure_credentials_active",
+                    "note": "credential must survive suspend (INV-3)",
+                }
+            )
+    if desired.ip_retained:
+        assign_ip = _active_assignment_ip(db, subscription)
+        col_ip = _norm(subscription.ipv4_address)
+        if not assign_ip and not col_ip:
+            actions.append(
+                {
+                    "kind": "ip_retention_violated",
+                    "note": "no retained IP while suspended (INV-1)",
+                }
+            )
+    if desired.kick_live_session:
+        actions.append(
+            {
+                "kind": "kick_live_session",
+                "note": "CoA-disconnect once if a session is live (INV-5)",
+            }
+        )
+    return {
+        "subscription_id": str(subscription.id),
+        "status": (
+            subscription.status.value if subscription.status is not None else None
+        ),
+        "desired_access_state": desired_access,
+        "actions": actions,
+    }
+
+
 def converge_subscription_connectivity(
     db: Session,
     subscription_id: str,
@@ -372,7 +537,27 @@ def converge_subscription_connectivity(
     subscription = db.get(Subscription, coerce_uuid(subscription_id))
     if subscription is None:
         return {"ok": False, "reason": "subscription_not_found", "actions": []}
+    if subscription.status in BLOCKED_STATUSES:
+        # Suspend dimension — SHADOW ONLY in this slice (design §2d). Compute the
+        # plan that would converge the blocked-family invariants; never mutate
+        # here. The apply=True cutover is gauge-gated and deferred.
+        plan = plan_subscription_suspend(db, subscription)
+        plan["ok"] = True
+        plan["dimension"] = "suspend"
+        plan["applied"] = False
+        plan["applied_actions"] = []
+        plan["signature"] = desired_connectivity_signature(
+            db, subscription.subscriber_id
+        )
+        if plan["actions"]:
+            logger.info(
+                "connectivity reconciler (suspend, shadow) sub=%s would: %s",
+                subscription_id,
+                plan["actions"],
+            )
+        return plan
     if subscription.status != _CONVERGE_STATUS:
+        # pending/terminal — out of scope for this reconciler increment.
         return {
             "ok": True,
             "reason": "not_active",
@@ -395,6 +580,12 @@ def converge_subscription_connectivity(
             )
         return plan
 
+    from app.services.enforcement import (
+        network_identity_signature,
+        reauth_subscription_on_identity_change,
+    )
+
+    before_sig = network_identity_signature(db, subscription)
     applied: list[str] = []
     needs_refresh = False
     with reconciler_write_scope():
@@ -414,18 +605,40 @@ def converge_subscription_connectivity(
             db.commit()
 
     if needs_refresh:
-        try:
-            from app.tasks.radius_population import refresh_radius_from_subs
+        # Idempotent credential sync: only enqueue the single-writer refresh when
+        # the desired-state signature actually changed since the last applied
+        # convergence — a re-run with unchanged desired state is a provable no-op
+        # instead of a blind full re-write.
+        signature = desired_connectivity_signature(db, subscription.subscriber_id)
+        plan["signature"] = signature
+        if _should_enqueue_refresh(subscription.subscriber_id, signature):
+            try:
+                from app.tasks.radius_population import refresh_radius_from_subs
 
-            refresh_radius_from_subs.delay()
-            applied.append("refresh_radius")
-        except Exception as exc:
-            logger.error(
-                "connectivity reconciler: failed to enqueue RADIUS refresh "
-                "for sub=%s: %s (periodic sweep converges within 15 min)",
-                subscription_id,
-                exc,
-            )
+                refresh_radius_from_subs.delay()
+                applied.append("refresh_radius")
+            except Exception as exc:
+                logger.error(
+                    "connectivity reconciler: failed to enqueue RADIUS refresh "
+                    "for sub=%s: %s (periodic sweep converges within 15 min)",
+                    subscription_id,
+                    exc,
+                )
+        else:
+            applied.append("refresh_skipped_idempotent")
+
+    # If we changed the served IP, a live session is still pinned to the old
+    # Framed-IP until it reconnects — reconcile this subscriber's RADIUS state and
+    # kick it so it re-auths onto the new IP. No-op if nothing effective changed.
+    if "set_column" in applied:
+        result = reauth_subscription_on_identity_change(
+            db,
+            str(subscription_id),
+            before=before_sig,
+            reason="connectivity_reconciler_ip_change",
+        )
+        if result.get("changed"):
+            applied.append("reauth")
 
     plan["applied"] = bool(applied)
     plan["applied_actions"] = applied
@@ -436,3 +649,96 @@ def converge_subscription_connectivity(
             applied,
         )
     return plan
+
+
+# ---------------------------------------------------------------------------
+# Full-base shadow audit — periodic, read-only. Sweeps every subscriber that
+# should carry connectivity and aggregates per-dimension drift into a single
+# point-in-time result, stored in Redis where the web process's metrics
+# collector exports it as ``connectivity_shadow_drift{dimension}``. This is the
+# cutover-readiness signal: when every dimension reads ~0 across the base, the
+# reconciler can be promoted from shadow to sole-writer (apply=True).
+# ---------------------------------------------------------------------------
+
+_SHADOW_DIMENSIONS = ("access_state", "credentials_active", "ip_active", "ipv4_cache")
+
+
+def connectivity_shadow_audit(db: Session, *, sample_limit: int = 20) -> dict[str, Any]:
+    """READ-ONLY full-base sweep. For every subscriber with a connectivity-
+    retaining subscription, compute the shadow-diff and aggregate per-dimension
+    drift counts (+ capped sample subscriber ids). Writes nothing."""
+    sids = (
+        db.execute(
+            select(Subscription.subscriber_id)
+            .where(Subscription.status.in_(_RETAINED_STATUSES))
+            .distinct()
+        )
+        .scalars()
+        .all()
+    )
+    counts: dict[str, int] = dict.fromkeys(_SHADOW_DIMENSIONS, 0)
+    samples: dict[str, list[str]] = {dim: [] for dim in _SHADOW_DIMENSIONS}
+    population = 0
+    for sid in sids:
+        if sid is None:
+            continue
+        population += 1
+        report = connectivity_shadow_diff(db, sid, emit=False)
+        for dim in report.get("diffs", []):
+            if dim not in counts:
+                continue
+            counts[dim] += 1
+            if len(samples[dim]) < sample_limit:
+                samples[dim].append(str(sid))
+    return {"population": population, "counts": counts, "samples": samples}
+
+
+_SHADOW_RESULT_KEY = "connectivity:shadow_audit:latest"
+_SHADOW_RESULT_TTL = int(timedelta(days=7).total_seconds())
+_shadow_redis_client: Any = None
+
+
+def _shadow_redis() -> Any:
+    global _shadow_redis_client
+    if _shadow_redis_client is None:
+        url = os.getenv("REDIS_URL")
+        if not url:
+            return None
+        import redis
+
+        # Cached per process — never build clients per call (OOM lesson).
+        _shadow_redis_client = redis.Redis.from_url(
+            url, socket_timeout=2, socket_connect_timeout=2
+        )
+    return _shadow_redis_client
+
+
+def store_connectivity_shadow_result(result: dict[str, Any]) -> bool:
+    """Persist the sweep result for the web-process metrics collector."""
+    client = _shadow_redis()
+    if client is None:
+        logger.warning("Connectivity shadow audit: REDIS_URL unset — not stored.")
+        return False
+    payload = dict(result)
+    payload["ran_at"] = datetime.now(UTC).isoformat()
+    try:
+        client.set(_SHADOW_RESULT_KEY, json.dumps(payload), ex=_SHADOW_RESULT_TTL)
+        return True
+    except Exception as exc:
+        logger.warning("Connectivity shadow audit: failed to store: %s", exc)
+        return False
+
+
+def load_connectivity_shadow_result() -> dict[str, Any] | None:
+    """Latest stored sweep result, or None. Never raises (scrape path)."""
+    try:
+        client = _shadow_redis()
+        if client is None:
+            return None
+        raw = client.get(_SHADOW_RESULT_KEY)
+        if not raw:
+            return None
+        return json.loads(raw)
+    except Exception:
+        logger.debug("Connectivity shadow audit: load failed.", exc_info=True)
+        return None

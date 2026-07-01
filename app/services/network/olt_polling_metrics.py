@@ -17,6 +17,7 @@ from app.models.network import (
     OntUnit,
     PonPort,
 )
+from app.models.tr069 import Tr069CpeDevice
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +111,17 @@ def _push_signal_metrics(db: Session) -> int:
         .where(
             OntUnit.is_active.is_(True),
             OntUnit.tr069_last_snapshot_at.is_not(None),
+            # Only export ONTs still managed via GenieACS. Without this, ONTs
+            # that lost their ACS link (decommissioned/replaced/never bound)
+            # keep exporting a frozen historical snapshot until it ages out,
+            # showing phantom traffic on dashboards for unmanaged devices.
+            select(Tr069CpeDevice.id)
+            .where(
+                Tr069CpeDevice.ont_unit_id == OntUnit.id,
+                Tr069CpeDevice.is_active.is_(True),
+                Tr069CpeDevice.genieacs_device_id.is_not(None),
+            )
+            .exists(),
         )
     )
     rows = db.execute(stmt).all()
@@ -118,7 +130,6 @@ def _push_signal_metrics(db: Session) -> int:
         return 0
 
     now = datetime.now(UTC)
-    now_ms = int(now.timestamp() * 1000)
     traffic_cutoff = now - timedelta(hours=_TRAFFIC_SNAPSHOT_MAX_AGE_HOURS)
     lines: list[str] = []
 
@@ -146,16 +157,17 @@ def _push_signal_metrics(db: Session) -> int:
                 bytes_sent, bytes_received = _extract_traffic_bytes(
                     row.tr069_last_snapshot
                 )
-                # Use snapshot timestamp for traffic metrics (reflects when data was collected)
-                snapshot_ms = int(snapshot_at.timestamp() * 1000)
+                # No explicit timestamp: let VictoriaMetrics stamp ingest time.
+                # The TR-069 snapshot lags poll-to-poll and can freeze for hours
+                # when collection stalls; re-pushing a frozen past timestamp every
+                # cycle made VM treat each sample as out-of-order (older than
+                # -search.cacheTimestampOffset=5m) and flush its rollup result
+                # cache fleet-wide. These are monotonic byte counters, so
+                # ingest-time stamping is correct for rate()/dashboards.
                 if bytes_sent is not None:
-                    lines.append(
-                        f"ont_tx_bytes_total{{{labels}}} {bytes_sent} {snapshot_ms}"
-                    )
+                    lines.append(f"ont_tx_bytes_total{{{labels}}} {bytes_sent}")
                 if bytes_received is not None:
-                    lines.append(
-                        f"ont_rx_bytes_total{{{labels}}} {bytes_received} {snapshot_ms}"
-                    )
+                    lines.append(f"ont_rx_bytes_total{{{labels}}} {bytes_received}")
 
     if not lines:
         return 0

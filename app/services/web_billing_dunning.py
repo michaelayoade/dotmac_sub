@@ -3,13 +3,58 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 
-from app.models.collections import DunningCase, DunningCaseStatus
+from fastapi import HTTPException
+
+from app.models.collections import DunningActionLog, DunningCase, DunningCaseStatus
 from app.services import collections as collections_service
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services.audit_helpers import log_audit_event
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class BulkDunningActionResult:
+    """Outcome for a bulk dunning action."""
+
+    selected_ids: list[str]
+    processed_ids: list[str] = field(default_factory=list)
+    failed_ids: list[str] = field(default_factory=list)
+
+    @property
+    def selected(self) -> int:
+        return len(self.selected_ids)
+
+    @property
+    def processed(self) -> int:
+        return len(self.processed_ids)
+
+    @property
+    def failed(self) -> int:
+        return len(self.failed_ids)
+
+    @property
+    def skipped(self) -> int:
+        return max(0, self.selected - self.processed - self.failed)
+
+    def message(self, action: str) -> str:
+        label = {
+            "pause": "Paused",
+            "resume": "Resumed",
+            "close": "Closed",
+        }.get(action, "Processed")
+        noun = "case" if self.selected == 1 else "cases"
+        message = f"{label} {self.processed} of {self.selected} selected dunning {noun}"
+        details = []
+        if self.skipped:
+            details.append(f"{self.skipped} skipped")
+        if self.failed:
+            details.append(f"{self.failed} failed")
+        if details:
+            message += f"; {', '.join(details)}"
+        return message
 
 
 def build_listing_data(
@@ -102,6 +147,22 @@ def build_listing_data(
     }
 
 
+def build_detail_data(db, *, case_id: str) -> dict[str, object]:
+    case = collections_service.dunning_cases.get(db, case_id)
+    actions = (
+        db.query(DunningActionLog)
+        .filter(DunningActionLog.case_id == case.id)
+        .order_by(DunningActionLog.executed_at.desc())
+        .limit(100)
+        .all()
+    )
+    return {
+        "case": case,
+        "account": case.subscriber,
+        "actions": actions,
+    }
+
+
 def apply_case_action(db, *, case_id: str, action: str) -> None:
     """Apply a single dunning-case action."""
     if action == "pause":
@@ -131,6 +192,32 @@ def apply_bulk_action(db, *, case_ids_csv: str, action: str) -> list[str]:
     return processed
 
 
+def apply_bulk_action_result(
+    db, *, case_ids_csv: str, action: str
+) -> BulkDunningActionResult:
+    """Apply a dunning action for many IDs and report per-item outcome counts."""
+    case_ids = [item.strip() for item in case_ids_csv.split(",") if item.strip()]
+    result = BulkDunningActionResult(selected_ids=case_ids)
+    for case_id in case_ids:
+        try:
+            apply_case_action(db, case_id=case_id, action=action)
+            result.processed_ids.append(case_id)
+        except HTTPException as exc:
+            if exc.status_code >= 500:
+                db.rollback()
+            logger.debug(
+                "Skipping dunning bulk action for case %s", case_id, exc_info=True
+            )
+            result.failed_ids.append(case_id)
+        except Exception:
+            db.rollback()
+            logger.debug(
+                "Skipping dunning bulk action for case %s", case_id, exc_info=True
+            )
+            result.failed_ids.append(case_id)
+    return result
+
+
 def execute_action(
     db,
     *,
@@ -145,6 +232,16 @@ def execute_action(
     if case_ids_csv is not None:
         return apply_bulk_action(db, case_ids_csv=case_ids_csv, action=action)
     raise ValueError("case_id or case_ids_csv is required")
+
+
+def execute_bulk_action_result(
+    db,
+    *,
+    action: str,
+    case_ids_csv: str,
+) -> BulkDunningActionResult:
+    """Execute a bulk dunning action and return a full outcome."""
+    return apply_bulk_action_result(db, case_ids_csv=case_ids_csv, action=action)
 
 
 def execute_action_with_audit(
@@ -172,3 +269,29 @@ def execute_action_with_audit(
             actor_id=actor_id,
         )
     return processed_ids
+
+
+def execute_bulk_action_with_audit_result(
+    db,
+    *,
+    request,
+    action: str,
+    actor_id: str | None,
+    case_ids_csv: str,
+) -> BulkDunningActionResult:
+    """Execute a bulk dunning action and audit successfully processed cases."""
+    result = execute_bulk_action_result(
+        db,
+        action=action,
+        case_ids_csv=case_ids_csv,
+    )
+    for processed_id in result.processed_ids:
+        log_audit_event(
+            db=db,
+            request=request,
+            action=action,
+            entity_type="dunning_case",
+            entity_id=processed_id,
+            actor_id=actor_id,
+        )
+    return result

@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io' show Platform;
 
 import 'package:firebase_core/firebase_core.dart';
@@ -6,6 +8,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import 'observability.dart';
+
+typedef PushRouteHandler = FutureOr<void> Function(String route);
 
 /// Background isolate handler for data/notification messages. Must be a
 /// top-level (or static) function annotated for the Flutter entrypoint.
@@ -36,6 +40,9 @@ class PushService {
 
   bool _available = false;
   bool _handlersWired = false;
+  bool _tapHandlersWired = false;
+  bool _initialMessageChecked = false;
+  PushRouteHandler? _routeHandler;
 
   /// True once Firebase initialised successfully and FCM is usable.
   bool get isAvailable => _available;
@@ -75,12 +82,15 @@ class PushService {
       );
       await _local.initialize(
         const InitializationSettings(android: androidInit, iOS: iosInit),
+        onDidReceiveNotificationResponse: (response) =>
+            _handleLocalPayload(response.payload),
       );
       await _local
           .resolvePlatformSpecificImplementation<
               AndroidFlutterLocalNotificationsPlugin>()
           ?.createNotificationChannel(_androidChannel);
       _available = true;
+      _wireTapHandlers();
       return true;
     } catch (e) {
       Log.breadcrumb('push: local-notification init failed',
@@ -120,6 +130,31 @@ class PushService {
     });
   }
 
+  /// Wire notification taps to app routes. Safe to call before Firebase is
+  /// available; [init] completes the native listeners later.
+  void wireRouteHandler(PushRouteHandler handler) {
+    _routeHandler = handler;
+    _wireTapHandlers();
+  }
+
+  void _wireTapHandlers() {
+    final messaging = _messaging;
+    if (!_available || messaging == null || _routeHandler == null) return;
+    if (!_tapHandlersWired) {
+      _tapHandlersWired = true;
+      FirebaseMessaging.onMessageOpenedApp.listen(_handleRemoteMessage);
+    }
+    if (!_initialMessageChecked) {
+      _initialMessageChecked = true;
+      unawaited(messaging.getInitialMessage().then((message) {
+        if (message != null) _handleRemoteMessage(message);
+      }).catchError((Object e) {
+        Log.breadcrumb('push: initial notification route failed',
+            category: 'push', data: {'error': '$e'});
+      }));
+    }
+  }
+
   Future<void> _showForeground(RemoteMessage message) async {
     final n = message.notification;
     if (n == null) return;
@@ -135,14 +170,127 @@ class PushService {
             channelDescription: _androidChannel.description,
             importance: Importance.high,
             priority: Priority.high,
+            // Expandable: show the full message when the notification is
+            // pulled down, instead of a single truncated line.
+            styleInformation: BigTextStyleInformation(
+              n.body ?? '',
+              contentTitle: n.title,
+            ),
           ),
           iOS: const DarwinNotificationDetails(),
         ),
+        payload: jsonEncode({
+          ...message.data,
+          if (n.title != null) '_title': n.title,
+          if (n.body != null) '_body': n.body,
+        }),
       );
     } catch (e) {
       Log.breadcrumb('push: foreground display failed',
           category: 'push', data: {'error': '$e'});
     }
+  }
+
+  void _handleRemoteMessage(RemoteMessage message) {
+    final route = routeForNotificationData(
+      message.data,
+      title: message.notification?.title,
+      body: message.notification?.body,
+    );
+    if (route != null) _openRoute(route);
+  }
+
+  void _handleLocalPayload(String? payload) {
+    if (payload == null || payload.isEmpty) return;
+    try {
+      final decoded = jsonDecode(payload);
+      if (decoded is! Map) return;
+      final data = decoded.map((k, v) => MapEntry(k.toString(), v));
+      final route = routeForNotificationData(data);
+      if (route != null) _openRoute(route);
+    } catch (e) {
+      Log.breadcrumb('push: local notification payload ignored',
+          category: 'push', data: {'error': '$e'});
+    }
+  }
+
+  void _openRoute(String route) {
+    final handler = _routeHandler;
+    if (handler == null) return;
+    try {
+      final result = handler(route);
+      if (result is Future) {
+        unawaited(result.catchError((Object e) {
+          Log.breadcrumb('push: route handler failed',
+              category: 'push', data: {'error': '$e', 'route': route});
+        }));
+      }
+    } catch (e) {
+      Log.breadcrumb('push: route handler failed',
+          category: 'push', data: {'error': '$e', 'route': route});
+    }
+  }
+
+  @visibleForTesting
+  static String? routeForNotificationData(
+    Map<String, dynamic> data, {
+    String? title,
+    String? body,
+  }) {
+    for (final key in const [
+      'route',
+      'path',
+      'deep_link',
+      'deeplink',
+      'link',
+      'url',
+    ]) {
+      final route = _internalRoute(data[key]);
+      if (route != null) return route;
+    }
+
+    final hay = [
+      title,
+      body,
+      for (final entry in data.entries) entry.key,
+      for (final entry in data.entries) entry.value,
+    ].whereType<Object>().join(' ').toLowerCase();
+
+    bool has(List<String> words) => words.any(hay.contains);
+    if (has([
+      'message.outbound',
+      'message_outbound',
+      'message-new',
+      'message_new',
+      'chat_message',
+      'support message',
+      'new message',
+      'agent replied',
+      'agent message',
+      'live chat',
+      'chat',
+      'crm',
+    ])) {
+      if (has(['reseller'])) return '/reseller/chat';
+      return '/support/chat';
+    }
+    if (has(['ticket', 'support'])) return '/support';
+    if (has(
+        ['invoice', 'payment', 'billing', 'suspend', 'overdue', 'charge'])) {
+      return '/billing';
+    }
+    if (has(['usage', 'quota', 'data', 'cap'])) return '/usage';
+    return '/dashboard/notifications';
+  }
+
+  static String? _internalRoute(Object? value) {
+    final raw = value?.toString().trim();
+    if (raw == null || raw.isEmpty) return null;
+    if (raw.startsWith('/')) return raw;
+    final uri = Uri.tryParse(raw);
+    if (uri == null) return null;
+    if (uri.scheme.isNotEmpty && uri.path.startsWith('/')) return uri.path;
+    return null;
   }
 
   /// The current device FCM token, or null when unavailable.

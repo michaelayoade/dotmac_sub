@@ -1,0 +1,122 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import page_header, card, status_badge, icon_bell, icon_warning %}
+
+{% block title %}Operational Alerts - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    {% call page_header(title="Operational Alerts", subtitle="Network, infrastructure, and application alerts from internal health checks and monitoring", icon=icon_bell(), color="rose", color2="amber") %}
+    {% endcall %}
+
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <a href="/admin/alerts?status=open" class="rounded-lg border border-slate-200 bg-white p-4 transition hover:border-rose-300 dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Open</p>
+            <p class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{{ counts.open }}</p>
+        </a>
+        <a href="/admin/alerts?status=acknowledged" class="rounded-lg border border-slate-200 bg-white p-4 transition hover:border-amber-300 dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Acknowledged</p>
+            <p class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{{ counts.acknowledged }}</p>
+        </a>
+        <a href="/admin/alerts?status=resolved" class="rounded-lg border border-slate-200 bg-white p-4 transition hover:border-emerald-300 dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Resolved</p>
+            <p class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{{ counts.resolved }}</p>
+        </a>
+    </div>
+
+    {% call card("Filters") %}
+    <form method="get" action="/admin/alerts" class="grid grid-cols-1 gap-3 md:grid-cols-5">
+        <select name="category" class="rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+            <option value="">All categories</option>
+            {% for item in categories %}
+            <option value="{{ item }}" {% if category == item %}selected{% endif %}>{{ item|title }}</option>
+            {% endfor %}
+        </select>
+        <select name="status" class="rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+            <option value="">All statuses</option>
+            {% for item in statuses %}
+            <option value="{{ item.value }}" {% if status == item.value %}selected{% endif %}>{{ item.value|title }}</option>
+            {% endfor %}
+        </select>
+        <select name="severity" class="rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+            <option value="">All severities</option>
+            {% for item in severities %}
+            <option value="{{ item.value }}" {% if severity == item.value %}selected{% endif %}>{{ item.value|title }}</option>
+            {% endfor %}
+        </select>
+        <input type="text" name="source" value="{{ source }}" placeholder="Source" class="rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+        <button type="submit" class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200">Apply</button>
+    </form>
+    {% endcall %}
+
+    {% call card("Alerts") %}
+    <p class="mb-4 text-sm text-slate-500 dark:text-slate-400">{{ total }} matching alert{{ "s" if total != 1 else "" }}</p>
+    {% if alerts %}
+    <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
+            <thead>
+                <tr class="text-left text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">
+                    <th class="px-3 py-2">Alert</th>
+                    <th class="px-3 py-2">Category</th>
+                    <th class="px-3 py-2">Source</th>
+                    <th class="px-3 py-2">State</th>
+                    <th class="px-3 py-2">Last Seen</th>
+                    <th class="px-3 py-2 text-right">Actions</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+                {% for alert in alerts %}
+                {% set severity_variant = 'error' if alert.severity.value == 'critical' else 'warning' if alert.severity.value == 'warning' else 'info' %}
+                {% set status_variant = 'success' if alert.status.value == 'resolved' else 'warning' if alert.status.value == 'acknowledged' else severity_variant %}
+                <tr id="alert-{{ alert.id }}" class="align-top">
+                    <td class="px-3 py-3">
+                        <div class="flex gap-3">
+                            <div class="mt-0.5 text-rose-500">{{ icon_warning("h-4 w-4") }}</div>
+                            <div>
+                                <p class="font-semibold text-slate-900 dark:text-white">{{ alert.title }}</p>
+                                {% if alert.summary %}
+                                <p class="mt-1 max-w-xl text-xs text-slate-500 dark:text-slate-400">{{ alert.summary }}</p>
+                                {% endif %}
+                                <p class="mt-1 text-[11px] text-slate-400 dark:text-slate-500">{{ alert.fingerprint }}</p>
+                            </div>
+                        </div>
+                    </td>
+                    <td class="px-3 py-3">{{ status_badge(alert.category|title, 'neutral', size='sm') }}</td>
+                    <td class="px-3 py-3 text-slate-600 dark:text-slate-300">{{ alert.source }}</td>
+                    <td class="px-3 py-3">
+                        <div class="space-y-1">
+                            {{ status_badge(alert.severity.value|title, severity_variant, size='sm') }}
+                            {{ status_badge(alert.status.value|title, status_variant, size='sm') }}
+                        </div>
+                    </td>
+                    <td class="px-3 py-3 text-slate-600 dark:text-slate-300">{{ alert.last_seen_at.strftime('%b %d, %H:%M') if alert.last_seen_at else '' }}</td>
+                    <td class="px-3 py-3 text-right">
+                        <div class="flex justify-end gap-2">
+                            {% if alert.target_url %}
+                            <a href="{{ alert.target_url }}" class="rounded-md border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">Inspect</a>
+                            {% endif %}
+                            {% if alert.status.value == 'open' %}
+                            <form method="post" action="/admin/alerts/{{ alert.id }}/acknowledge">
+                                <button type="submit" class="rounded-md border border-amber-200 px-2.5 py-1.5 text-xs font-semibold text-amber-700 hover:bg-amber-50 dark:border-amber-800 dark:text-amber-300 dark:hover:bg-amber-900/20">Ack</button>
+                            </form>
+                            {% endif %}
+                            {% if alert.status.value != 'resolved' %}
+                            <form method="post" action="/admin/alerts/{{ alert.id }}/resolve">
+                                <button type="submit" class="rounded-md border border-emerald-200 px-2.5 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-300 dark:hover:bg-emerald-900/20">Resolve</button>
+                            </form>
+                            {% endif %}
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="rounded-lg border border-dashed border-slate-300 p-8 text-center dark:border-slate-700">
+        <p class="text-sm font-semibold text-slate-900 dark:text-white">No alerts match this filter.</p>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Operational issues will appear here when health checks detect them.</p>
+    </div>
+    {% endif %}
+    {% endcall %}
+</div>
+{% endblock %}

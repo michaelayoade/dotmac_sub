@@ -128,7 +128,7 @@ Before/after checks:
 The reconciler refresh path is injectable; its default prefers
 `app.services.radius_population.populate` and falls back to the committed
 `scripts.migration.populate_radius_from_subs.populate`, so it works on `main`
-before the Splynx-decommission relocation lands.
+before the legacy BSS-decommission relocation lands.
 
 ## Out of scope / follow-ups
 
@@ -137,5 +137,5 @@ before the Splynx-decommission relocation lands.
   c8739bc8 one-off covers only the known case.
 - **Pool-resolution determinism** — back the alphabetical fallback with NAS links.
 - **RADIUS sweep is untracked working-tree code** — relocation belongs to the
-  Splynx-decommission refactor; snapshot captured at
+  legacy BSS-decommission refactor; snapshot captured at
   `/root/radius-sweep-snapshot-2026-06-18/` (move to a real artifact store).

@@ -46,6 +46,7 @@ from app.services.customer_portal_flows import (
     get_service_orders_page,
     get_services_page,
     get_topup_page,
+    get_usage_history,
     get_usage_page,
     request_plan_migration,
     submit_change_plan,
@@ -70,7 +71,10 @@ from app.services.customer_portal_session import (
     get_remember_max_age,
     get_session_max_age,
     invalidate_customer_session,
+    list_customer_sessions_for_subscriber,
     refresh_customer_session,
+    revoke_customer_sessions_for_subscriber,
+    revoke_other_customer_sessions_for_subscriber,
 )
 
 logger = logging.getLogger(__name__)
@@ -87,6 +91,9 @@ __all__ = [
     "refresh_customer_session",
     "invalidate_customer_session",
     "get_current_customer",
+    "list_customer_sessions_for_subscriber",
+    "revoke_customer_sessions_for_subscriber",
+    "revoke_other_customer_sessions_for_subscriber",
     "_session_ttl_seconds",
     "get_session_max_age",
     "get_remember_max_age",
@@ -103,6 +110,7 @@ __all__ = [
     "_resolve_next_billing_date",
     "get_billing_page",
     "get_usage_page",
+    "get_usage_history",
     "get_services_page",
     "get_service_detail",
     "get_service_orders_page",

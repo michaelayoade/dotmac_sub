@@ -184,19 +184,25 @@
                                 <span class="font-mono text-sm text-slate-900 dark:text-white">{{ device.mgmt_ip or '-' }}</span>
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap">
-                                {% set status_val = device.status.value if device.status else 'offline' %}
-                                {% if status_val == 'online' %}
-                                <span class="inline-flex items-center gap-1.5 rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">
-                                    <span class="h-1.5 w-1.5 rounded-full bg-green-500"></span>Online
+                                {# Derived operational status (NOC truth): live observation + freshness + lifecycle, not raw admin status. See DEVICE_OPERATIONAL_STATUS.md #}
+                                {% set op = device.operational %}
+                                {% set opst = op.status if op else 'unknown' %}
+                                {% set opmap = {
+                                    'up':        ('bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400', 'bg-green-500'),
+                                    'degraded':  ('bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400', 'bg-amber-500'),
+                                    'down':      ('bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400', 'bg-red-500'),
+                                    'unmonitored': ('bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300', 'bg-slate-400'),
+                                    'maintenance': ('bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400', 'bg-indigo-500'),
+                                    'unknown':   ('bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400', 'bg-slate-300')
+                                } %}
+                                {% set cls = opmap.get(opst, opmap['unknown']) %}
+                                <span class="inline-flex items-center gap-1.5 rounded-full {{ cls[0] }} px-2.5 py-0.5 text-xs font-medium" title="{{ op.label if op else 'Unknown' }} — {{ (op.reason if op else 'n/a')|replace('_',' ') }}{% if op and op.admin_status %} · admin: {{ op.admin_status }}{% endif %}">
+                                    <span class="h-1.5 w-1.5 rounded-full {{ cls[1] }}"></span>{{ op.label if op else 'Unknown' }}
                                 </span>
-                                {% elif status_val == 'degraded' %}
-                                <span class="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
-                                    <span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span>Degraded
-                                </span>
-                                {% else %}
-                                <span class="inline-flex items-center gap-1.5 rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/30 dark:text-red-400">
-                                    <span class="h-1.5 w-1.5 rounded-full bg-red-500"></span>Offline
-                                </span>
+                                {% if op and op.mismatch %}
+                                <div class="mt-1 text-[10px] font-medium text-amber-600 dark:text-amber-400" title="Admin status conflicts with what monitoring observes">&#9888; admin: {{ op.admin_status }}</div>
+                                {% elif op and op.admin_status %}
+                                <div class="mt-1 text-[10px] text-slate-400">admin: {{ op.admin_status }}</div>
                                 {% endif %}
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap text-right">
@@ -304,24 +310,20 @@
                                 </span>
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap">
-                                {% set status_val = olt.runtime_status | default('unknown') %}
-                                {% if status_val == 'online' %}
-                                <span class="inline-flex items-center gap-1.5 rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">
-                                    <span class="h-1.5 w-1.5 rounded-full bg-green-500"></span>Online
+                                {# Derived operational status from the OLT's own ping/poll telemetry (see DEVICE_OPERATIONAL_STATUS.md) #}
+                                {% set op = olt.operational %}
+                                {% set opst = op.status if op else 'unknown' %}
+                                {% set opmap = {
+                                    'up': ('bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400','bg-green-500'),
+                                    'degraded': ('bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400','bg-amber-500'),
+                                    'down': ('bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400','bg-red-500'),
+                                    'unmonitored': ('bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300','bg-slate-400'),
+                                    'unknown': ('bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400','bg-slate-300')
+                                } %}
+                                {% set cls = opmap.get(opst, opmap['unknown']) %}
+                                <span class="inline-flex items-center gap-1.5 rounded-full {{ cls[0] }} px-2.5 py-0.5 text-xs font-medium" title="{{ op.label if op else 'Unknown' }} — {{ (op.reason if op else 'n/a')|replace('_',' ') }}">
+                                    <span class="h-1.5 w-1.5 rounded-full {{ cls[1] }}"></span>{{ op.label if op else 'Unknown' }}
                                 </span>
-                                {% elif status_val == 'degraded' %}
-                                <span class="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
-                                    <span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span>Degraded
-                                </span>
-                                {% elif status_val == 'offline' %}
-                                <span class="inline-flex items-center gap-1.5 rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/30 dark:text-red-400">
-                                    <span class="h-1.5 w-1.5 rounded-full bg-red-500"></span>Offline
-                                </span>
-                                {% else %}
-                                <span class="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700/60 dark:text-slate-300">
-                                    <span class="h-1.5 w-1.5 rounded-full bg-slate-500"></span>Unknown
-                                </span>
-                                {% endif %}
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap text-right">
                                 <div class="flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">
@@ -404,7 +406,20 @@
                                 <span class="inline-flex items-center rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-mono text-slate-700 dark:bg-slate-700 dark:text-slate-300">{{ ont.firmware_version or '-' }}</span>
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap">
-                                {{ status_badge("Active" if ont.is_active else "Inactive", "active" if ont.is_active else "inactive", pulse=ont.is_active) }}
+                                {# Derived operational status: OLT-reported state reconciled with ACS informs + last-seen (see DEVICE_OPERATIONAL_STATUS.md) #}
+                                {% set sd = signal_data.get(ont.id | string, {}) %}
+                                {% set opst = sd.get('operational', 'unknown') %}
+                                {% set opmap = {
+                                    'up': ('bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400','bg-green-500'),
+                                    'down': ('bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400','bg-red-500'),
+                                    'unmonitored': ('bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300','bg-slate-400'),
+                                    'unknown': ('bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400','bg-slate-300')
+                                } %}
+                                {% set cls = opmap.get(opst, opmap['unknown']) %}
+                                <span class="inline-flex items-center gap-1.5 rounded-full {{ cls[0] }} px-2.5 py-0.5 text-xs font-medium" title="{{ sd.get('operational_label', 'Unknown') }} — {{ sd.get('operational_reason', 'n/a')|replace('_',' ') }}">
+                                    <span class="h-1.5 w-1.5 rounded-full {{ cls[1] }}"></span>{{ sd.get('operational_label', 'Unknown') }}
+                                </span>
+                                {% if not ont.is_active %}<div class="mt-1 text-[10px] text-slate-400">admin: inactive</div>{% endif %}
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap text-right">
                                 <div class="flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">

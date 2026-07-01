@@ -16,7 +16,6 @@ Usage:
 from __future__ import annotations
 
 import logging
-import os
 import sys
 from typing import cast
 
@@ -36,12 +35,17 @@ from app.services.credential_crypto import (
     decrypt_credential_with_key,
     get_encryption_key,
 )
+from app.services.radius_address_lists import (
+    DEFAULT_SUSPENDED_ADDRESS_LIST,
+    suspended_address_list,
+)
+from app.services.radius_dsn import radius_dsn_libpq
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
 ACCT_INTERIM_SECONDS = 300  # 5 min Acct-Interim-Update cadence
-SUSPENDED_ADDRESS_LIST = "suspended"  # MikroTik address-list for blocked customers
+SUSPENDED_ADDRESS_LIST = DEFAULT_SUSPENDED_ADDRESS_LIST
 
 
 def _rate_limit(offer: CatalogOffer, profile: RadiusProfile | None) -> str | None:
@@ -61,6 +65,9 @@ def _radreply_attrs(
     captive_redirect_enabled: bool = False,
     additional_routes: list[tuple[str, int | None]] | None = None,
     framed_ipv4: str | None = None,
+    framed_ipv6: str | None = None,
+    delegated_ipv6: str | None = None,
+    suspended_list_name: str = SUSPENDED_ADDRESS_LIST,
 ) -> list[tuple[str, str, str]]:
     """Compute the list of (attribute, op, value) tuples for radreply.
 
@@ -83,10 +90,20 @@ def _radreply_attrs(
     stale/cleared `subscriptions.ipv4_address` does NOT silently drop Framed-IP
     (which de-IPs the customer and the BNG tears the session down). "0.0.0.0" is
     treated as no address.
+
+    `framed_ipv6`: the prefix to emit as Framed-IPv6-Prefix; defaults to
+    `sub.ipv6_address`. This authoritative sweep must emit it too — otherwise the
+    sweep's `DELETE FROM radreply` wipes the Framed-IPv6-Prefix that
+    build_radius_reply_attributes wrote on activation, so IPv6 RADIUS could never
+    be durable (same wipe hazard the Framed-Route handling already guards against).
     """
     ipv4 = framed_ipv4 if framed_ipv4 is not None else sub.ipv4_address
     if ipv4 == "0.0.0.0":  # nosec B104  # noqa: S104 — IP-string compare, not a bind
         ipv4 = None
+    ipv6 = (
+        framed_ipv6 if framed_ipv6 is not None else getattr(sub, "ipv6_address", None)
+    )
+    ipv6 = (str(ipv6).strip() or None) if ipv6 else None
 
     attrs: list[tuple[str, str, str]] = [
         ("Service-Type", ":=", "Framed-User"),
@@ -96,6 +113,11 @@ def _radreply_attrs(
 
     if ipv4:
         attrs.append(("Framed-IP-Address", ":=", ipv4))
+    if ipv6:
+        attrs.append(("Framed-IPv6-Prefix", ":=", ipv6))
+    delegated = (str(delegated_ipv6).strip() or None) if delegated_ipv6 else None
+    if delegated:
+        attrs.append(("Delegated-IPv6-Prefix", ":=", delegated))
 
     rate = _rate_limit(offer, profile)
     if rate:
@@ -115,7 +137,7 @@ def _radreply_attrs(
         SubscriptionStatus.suspended,
     )
     if is_blocked and captive_redirect_enabled:
-        attrs.append(("Mikrotik-Address-List", ":=", SUSPENDED_ADDRESS_LIST))
+        attrs.append(("Mikrotik-Address-List", ":=", suspended_list_name))
     elif additional_routes and not is_blocked:
         # Additional routed IP blocks -> one Framed-Route each (+= so multiple
         # coexist; gateway 0.0.0.0 = via this session, since primaries are CGNAT).
@@ -133,9 +155,11 @@ def _radreply_attrs(
 
 
 def populate(dry_run: bool = True) -> dict[str, int]:
-    radius_dsn = os.environ.get("RADIUS_DB_DSN", "")
+    # Single authority (shared with radius.py's event-time sync) so both writers
+    # target the same radius DB and cannot split-brain.
+    radius_dsn = radius_dsn_libpq()
     if not radius_dsn:
-        raise RuntimeError("RADIUS_DB_DSN not set")
+        raise RuntimeError("RADIUS database DSN not configured")
 
     stats = {
         "subscriptions_considered": 0,
@@ -150,6 +174,7 @@ def populate(dry_run: bool = True) -> dict[str, int]:
     enc_key = get_encryption_key()
     db = SessionLocal()
     try:
+        suspended_list_name = suspended_address_list(db)
         # Active, blocked, or suspended subs with a login — blocked/suspended
         # subs get a walled-garden radreply so suspension actually takes
         # effect at the BNG (hard-deleting their rows would fail-closed but
@@ -256,6 +281,24 @@ def populate(dry_run: bool = True) -> dict[str, int]:
             if sid and addr:
                 ipv4_by_subscriber.setdefault(sid, str(addr))
 
+        # IPv6 PD: the subscriber's assigned delegated prefix, emitted as
+        # Delegated-IPv6-Prefix. Flag-gated (inert until IPv6 PD is turned on).
+        pd_by_subscriber: dict = {}
+        from app.services.ipv6_pd import pd_enabled
+
+        if pd_enabled():
+            from app.models.network import Ipv6DelegatedPrefix, Ipv6PrefixState
+
+            for sid, prefix, plen in db.execute(
+                select(
+                    Ipv6DelegatedPrefix.subscriber_id,
+                    Ipv6DelegatedPrefix.prefix,
+                    Ipv6DelegatedPrefix.prefix_length,
+                ).where(Ipv6DelegatedPrefix.state == Ipv6PrefixState.assigned)
+            ).all():
+                if sid and prefix:
+                    pd_by_subscriber.setdefault(sid, f"{prefix}/{plen}")
+
         # Compute the full work list in memory while the dotmac session is
         # alive, then release it BEFORE the radius writes — holding the read
         # transaction through the write phase trips the app's 120s
@@ -296,6 +339,8 @@ def populate(dry_run: bool = True) -> dict[str, int]:
                 captive_redirect_enabled=captive,
                 additional_routes=routes_by_subscriber.get(sub.subscriber_id),
                 framed_ipv4=eff_ipv4,
+                delegated_ipv6=pd_by_subscriber.get(sub.subscriber_id),
+                suspended_list_name=suspended_list_name,
             )
             blocked_flag = sub_blocked or sub.status in (
                 SubscriptionStatus.blocked,
@@ -311,7 +356,7 @@ def populate(dry_run: bool = True) -> dict[str, int]:
                 mode = "captive"
             else:
                 mode = "active"
-            # Duplicate logins (Splynx-migration dups): the ACTIVE sub wins the
+            # Duplicate logins (migration duplicates): the ACTIVE sub wins the
             # slot — subscriber-level block still dominates via sub_blocked,
             # so a blocked customer stays enforced either way.
             existing = by_login.get(login)
@@ -504,7 +549,8 @@ def populate_device_login(
         _conn_factory: Optional zero-arg callable that returns a DB-API 2
             connection to the RADIUS DB.  Used by tests to inject an in-memory
             SQLite connection in place of the real psycopg Postgres connection.
-            When None (production), opens psycopg.connect(RADIUS_DB_DSN).
+            When None (production), connects to the resolved radius DSN
+            (radius_dsn.radius_dsn_libpq()).
 
     Returns:
         dict with keys: considered, radcheck_upserts, radreply_upserts,
@@ -570,9 +616,9 @@ def populate_device_login(
     if _conn_factory is not None:
         conn = _conn_factory()
     else:
-        radius_dsn = os.environ.get("RADIUS_DB_DSN", "")
+        radius_dsn = radius_dsn_libpq()
         if not radius_dsn:
-            raise RuntimeError("RADIUS_DB_DSN not set")
+            raise RuntimeError("RADIUS database DSN not configured")
         conn = psycopg.connect(radius_dsn)
         conn.autocommit = False
 

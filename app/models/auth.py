@@ -3,6 +3,7 @@ import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -187,6 +188,29 @@ class MFAMethod(Base):
     reseller_user = relationship("ResellerUser")
 
 
+class MFARecoveryCode(Base):
+    __tablename__ = "mfa_recovery_codes"
+    __table_args__ = (
+        Index("ix_mfa_recovery_codes_method_active", "mfa_method_id", "is_active"),
+        Index("ux_mfa_recovery_codes_code_hash", "code_hash", unique=True),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    mfa_method_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("mfa_methods.id"), nullable=False
+    )
+    code_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    mfa_method = relationship("MFAMethod")
+
+
 class Session(Base):
     __tablename__ = "sessions"
     __table_args__ = (
@@ -232,6 +256,10 @@ class Session(Base):
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Stable per-install identifier sent by native clients (X-Device-Id). Lets a
+    # re-login on the same device supersede that device's prior session instead
+    # of stacking a new row each time.
+    device_id: Mapped[str | None] = mapped_column(String(64), index=True)
 
     subscriber = relationship("Subscriber")
     system_user = relationship("SystemUser")
@@ -253,6 +281,11 @@ class ApiKey(Base):
     person_id: Mapped[uuid.UUID | None] = synonym("subscriber_id")
     label: Mapped[str | None] = mapped_column(String(120))
     key_hash: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    # Permission keys this key may exercise (wildcard-aware, like role grants).
+    # Empty = fail-closed: the key authenticates identity but carries no access.
+    scopes: Mapped[list[str]] = mapped_column(
+        JSON, nullable=False, default=list, server_default=text("'[]'")
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)

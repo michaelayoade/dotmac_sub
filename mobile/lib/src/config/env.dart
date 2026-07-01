@@ -5,15 +5,15 @@ import 'package:flutter/material.dart';
 /// Override the API base URL at build/run time, e.g.:
 ///   flutter run --dart-define=API_BASE_URL=https://selfcare.dotmac.io
 ///
-/// Defaults to the Android emulator loopback alias (10.0.2.2 -> host machine
-/// localhost). For the iOS simulator use http://localhost:8000, and for a
-/// physical device use your machine's LAN IP.
+/// Defaults to the production self-care API. For local development, override
+/// this with the Android emulator loopback alias, localhost, or your machine's
+/// LAN IP depending on the target device.
 class Env {
   const Env._();
 
   static const String apiBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://10.0.2.2:8000',
+    defaultValue: 'https://selfcare.dotmac.io',
   );
 
   /// All backend routers are mounted under this prefix in app/main.py.
@@ -58,7 +58,7 @@ class Brand {
   const Brand._();
 
   static const String name = String.fromEnvironment('BRAND_MOBILE_APP_NAME',
-      defaultValue: 'DotMac Self-Care');
+      defaultValue: 'Dotmac Selfcare');
 
   static const String tagline = String.fromEnvironment(
     'BRAND_TAGLINE',
@@ -75,7 +75,7 @@ class Brand {
 
   /// App version label for the About screen (set per release build).
   static const String version =
-      String.fromEnvironment('APP_VERSION', defaultValue: '1.0.1');
+      String.fromEnvironment('APP_VERSION', defaultValue: '1.1.1');
 
   /// Hex brand colour (e.g. `#3b82f6`) used as the Material seed colour.
   static const String _primaryColorHex =

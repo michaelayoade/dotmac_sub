@@ -215,7 +215,7 @@ class NetworkDevice(Base):
             postgresql_where=text("is_active AND splynx_monitoring_id IS NOT NULL"),
         ),
         # Stable Zabbix host id is the reconcile key; partial-unique so rows not
-        # yet linked to Zabbix (e.g. orphaned Splynx imports) stay NULL.
+        # yet linked to Zabbix (e.g. orphaned imports) stay NULL.
         Index(
             "uq_network_devices_zabbix_hostid",
             "zabbix_hostid",
@@ -866,4 +866,54 @@ class OutageIncident(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
+    )
+
+
+class AvailabilitySnapshot(Base):
+    """Daily rolled-up availability for an infrastructure element.
+
+    The SLA/uptime report computes uptime % live by merging downtime intervals,
+    which is fine for a single ad-hoc window but too heavy for 365-day trend
+    charts. A daily Celery task writes one row per element per day so the
+    performance dashboard can chart availability over time without re-merging
+    the whole alert history on every render (same pattern as
+    ``IpPoolUtilizationSnapshot`` / ``MrrSnapshot``).
+
+    ``element_type`` is one of ``device`` (covers OLT and access-point, both
+    NetworkDevice-backed), ``pop_site`` (BTS), or ``pon_port``. ``element_id``
+    holds the id within that type — stored as id+type rather than a polymorphic
+    FK so a deleted element's history survives.
+    """
+
+    __tablename__ = "availability_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "element_type",
+            "element_id",
+            "snapshot_date",
+            name="uq_availability_snapshots_element_day",
+        ),
+        Index(
+            "ix_availability_snapshots_type_date",
+            "element_type",
+            "snapshot_date",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    element_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    element_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    snapshot_date: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    uptime_percent: Mapped[float | None] = mapped_column(Float)
+    downtime_seconds: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    window_seconds: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    incident_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    affected_subscribers_peak: Mapped[int | None] = mapped_column(Integer)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )

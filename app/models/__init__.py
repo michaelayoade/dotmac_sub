@@ -1,10 +1,17 @@
+from app.models.admin_alert import AdminAlert, AdminNotification  # noqa: F401
 from app.models.admin_whats_new import AdminWhatsNewItem  # noqa: F401
 from app.models.analytics import (  # noqa: F401
     KPIAggregate,
     KPIConfig,
 )
 from app.models.audit import AuditActorType, AuditEvent  # noqa: F401
-from app.models.auth import ApiKey, MFAMethod, Session, UserCredential  # noqa: F401
+from app.models.auth import (  # noqa: F401
+    ApiKey,
+    MFAMethod,
+    MFARecoveryCode,
+    Session,
+    UserCredential,
+)
 from app.models.bandwidth import BandwidthSample, QueueMapping  # noqa: F401
 from app.models.billing import (  # noqa: F401
     BankAccount,
@@ -109,6 +116,9 @@ from app.models.compensation_failure import (  # noqa: F401
     CompensationFailure,
     CompensationStatus,
 )
+from app.models.connectivity_backup import (  # noqa: F401
+    ConnectivityStateBackup,
+)
 from app.models.connector import (  # noqa: F401
     ConnectorAuthType,
     ConnectorConfig,
@@ -160,6 +170,12 @@ from app.models.gis import (  # noqa: F401
     GeoLocation,
     GeoLocationType,
     ServiceBuilding,
+)
+from app.models.imports import (  # noqa: F401
+    ImportRowStatus,
+    ImportRun,
+    ImportRunRow,
+    ImportRunStatus,
 )
 from app.models.integration import (  # noqa: F401
     IntegrationJob,
@@ -361,6 +377,10 @@ from app.models.portal_message import (  # noqa: F401
     PortalMessageType,
     PortalOnboardingState,
 )
+from app.models.project_mirror import (  # noqa: F401
+    ProjectMirror,
+    ProjectSyncState,
+)
 from app.models.provisioning import (  # noqa: F401
     AppointmentStatus,
     ProvisioningRun,
@@ -390,6 +410,10 @@ from app.models.qualification import (  # noqa: F401
     QualificationStatus,
     ServiceQualification,
 )
+from app.models.quote_mirror import (  # noqa: F401
+    QuoteMirror,
+    QuoteSyncState,
+)
 from app.models.radius import (  # noqa: F401
     RadiusClient,
     RadiusServer,
@@ -411,6 +435,10 @@ from app.models.rbac import (  # noqa: F401
     SubscriberRole,
     SystemUserPermission,
     SystemUserRole,
+)
+from app.models.referral import (  # noqa: F401
+    ReferralMirror,
+    ReferralProgramCache,
 )
 from app.models.router_management import (  # noqa: F401
     JumpHost,
@@ -517,6 +545,7 @@ from app.models.usage import (  # noqa: F401
     AccountingStatus,
     QuotaBucket,
     RadiusAccountingSession,
+    SubscriberDailyUsage,
     UsageCharge,
     UsageChargeStatus,
     UsageRatingRun,
@@ -549,4 +578,8 @@ from app.models.wireguard import (  # noqa: F401
     WireGuardPeer,
     WireGuardPeerStatus,
     WireGuardServer,
+)
+from app.models.work_order_mirror import (  # noqa: F401
+    WorkOrderMirror,
+    WorkOrderSyncState,
 )

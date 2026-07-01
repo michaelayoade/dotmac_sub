@@ -8,6 +8,7 @@ from app.models.integration_hook import (
     IntegrationHookExecutionStatus,
 )
 from app.services import integration_hooks as hooks_service
+from app.services.credential_crypto import decrypt_credential
 
 
 def test_create_cli_hook_requires_command(db_session):
@@ -42,17 +43,62 @@ def test_create_and_duplicate_hook(db_session):
         auth_config={"token": "secret"},
         retry_max=5,
         retry_backoff_ms=200,
+        timeout_seconds=12,
         event_filters=["invoice.created", "payment.received"],
         is_enabled=True,
         notes="Primary automation",
     )
     assert hook.title == "n8n sync"
     assert hook.url == "https://example.test/hook"
+    assert hook.timeout_seconds == 12
+    assert hook.auth_config["token"] != "secret"
+    assert decrypt_credential(hook.auth_config["token"]) == "secret"
 
     copy = hooks_service.duplicate_hook(db_session, hook_id=str(hook.id))
     assert copy.id != hook.id
     assert copy.title.endswith("(Copy)")
     assert copy.is_enabled is False
+    assert copy.timeout_seconds == 12
+    assert decrypt_credential(copy.auth_config["token"]) == "secret"
+
+
+def test_execute_http_hook_decrypts_auth_secret(db_session, monkeypatch):
+    hook = hooks_service.create_hook(
+        db_session,
+        title="Outbound",
+        hook_type="web",
+        command=None,
+        url="https://example.test/hook",
+        http_method="POST",
+        auth_type="bearer",
+        auth_config={"token": "outbound-secret"},
+        retry_max=1,
+        retry_backoff_ms=10,
+        timeout_seconds=7,
+        event_filters=[],
+        is_enabled=True,
+        notes=None,
+    )
+    captured = {}
+
+    class Response:
+        status_code = 202
+        text = "accepted"
+
+    def fake_request(**kwargs):
+        captured.update(kwargs)
+        return Response()
+
+    monkeypatch.setattr(hooks_service.httpx, "request", fake_request)
+
+    status_code, body = hooks_service._execute_http_hook(
+        hook=hook, payload={"event_type": "custom.test"}
+    )
+
+    assert status_code == 202
+    assert body == "accepted"
+    assert captured["headers"]["Authorization"] == "Bearer outbound-secret"
+    assert captured["timeout"] == 7.0
 
 
 def test_build_hooks_page_state_includes_success_rate(db_session):

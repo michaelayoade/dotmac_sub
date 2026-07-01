@@ -36,6 +36,14 @@ class IntegrationHookExecutionStatus(enum.Enum):
     failed = "failed"
 
 
+# Keys in ``IntegrationHook.auth_config`` whose values are secrets, encrypted at
+# rest. Single source of truth shared by the write path (integration_hooks
+# service), the use path, and credential_key_rotation.
+SECRET_AUTH_CONFIG_KEYS = frozenset(
+    {"token", "password", "secret", "api_key", "access_token", "refresh_token"}
+)
+
+
 class IntegrationHook(Base):
     __tablename__ = "integration_hooks"
 
@@ -57,6 +65,7 @@ class IntegrationHook(Base):
     auth_config: Mapped[dict | None] = mapped_column(JSON)
     retry_max: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
     retry_backoff_ms: Mapped[int] = mapped_column(Integer, default=500, nullable=False)
+    timeout_seconds: Mapped[int | None] = mapped_column(Integer)
     event_filters: Mapped[list[str] | None] = mapped_column(JSON)
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     notes: Mapped[str | None] = mapped_column(Text)

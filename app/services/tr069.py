@@ -2,6 +2,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from billiard.exceptions import SoftTimeLimitExceeded
 from fastapi import HTTPException
 from sqlalchemy import and_, false, func, or_, select, text
 from sqlalchemy.orm import Session
@@ -61,6 +62,27 @@ _STALE_INFORM_SERVICE_APPLY_DAYS = 5
 # delayed autovacuum). Each device upsert is independent, so partial progress
 # on failure is fine.
 _GENIEACS_SYNC_COMMIT_BATCH = 200
+# Commit the auto-link pass in batches too, for the same reason and so a
+# soft-time-limit interrupt mid-pass keeps the links it already made.
+_GENIEACS_AUTOLINK_COMMIT_BATCH = 200
+
+
+def _safe_rollback(db: Session) -> None:
+    """Best-effort rollback that tolerates a connection left mid-statement.
+
+    A Celery ``SoftTimeLimitExceeded`` is raised asynchronously and can land
+    while psycopg is mid-query, leaving the connection in a state where even
+    ``rollback()`` raises ("another command is already in progress"). Swallow
+    that here so the original interrupt propagates cleanly; the session's
+    pool-return reset (on ``db.close()``) invalidates the bad connection.
+    """
+    try:
+        db.rollback()
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "rollback after interrupt failed; connection will be reset on close"
+        )
+
 
 logger = logging.getLogger(__name__)
 
@@ -1210,6 +1232,12 @@ class CpeDevices(ListResponseMixin):
             # only sees the supertype on `db.execute`.
             synced_ont_status = result.rowcount or 0  # type: ignore[attr-defined]
             db.commit()
+        except SoftTimeLimitExceeded:
+            # Time budget exhausted mid-refresh — don't swallow it as a generic
+            # failure; propagate so the task stops cleanly instead of reusing a
+            # possibly poisoned connection.
+            _safe_rollback(db)
+            raise
         except Exception as e:
             logger.warning("Bulk ONT ACS status refresh after sync failed: %s", e)
             db.rollback()
@@ -1230,7 +1258,12 @@ class CpeDevices(ListResponseMixin):
                 )
                 .all()
             )
-            for cpe_dev in unlinked_devices:
+            for link_idx, cpe_dev in enumerate(unlinked_devices, start=1):
+                # Commit periodically so a large fleet doesn't hold one long
+                # write transaction and so a soft-time-limit interrupt keeps the
+                # links already made.
+                if link_idx % _GENIEACS_AUTOLINK_COMMIT_BATCH == 0:
+                    db.commit()
                 if not cpe_dev.serial_number:
                     continue
                 cpe_serial = str(cpe_dev.serial_number).strip()
@@ -1287,6 +1320,11 @@ class CpeDevices(ListResponseMixin):
                     serial_updated,
                     status_snapshot_updated,
                 )
+        except SoftTimeLimitExceeded:
+            # Time budget exhausted mid-pass — propagate instead of swallowing,
+            # so the task aborts cleanly rather than reusing a poisoned session.
+            _safe_rollback(db)
+            raise
         except Exception as e:
             logger.warning("Auto-link ONTs after sync failed: %s", e)
             db.rollback()

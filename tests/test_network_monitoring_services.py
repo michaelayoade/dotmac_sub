@@ -3,7 +3,11 @@
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
+import pytest
+
+from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.network import (
     OLTDevice,
     OntAssignment,
@@ -19,7 +23,9 @@ from app.models.network_monitoring import (
     DeviceMetric,
     MetricType,
 )
+from app.models.subscription_engine import SettingValueType
 from app.models.system_user import SystemUser
+from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
 from app.schemas.network_monitoring import (
     AlertAcknowledgeRequest,
     AlertResolveRequest,
@@ -202,6 +208,50 @@ def test_get_onu_status_summary_uses_zabbix_directly(db_session, monkeypatch):
     assert summary["low_signal"] == 1
 
 
+def test_get_onu_status_summary_cold_cache_counts_onts_as_offline(
+    db_session, monkeypatch
+):
+    """On a cold per-OLT cache (request path), the OLT's ONTs must be counted as
+    offline via unmonitored_total — not silently dropped from the totals."""
+    olt = OLTDevice(
+        name="Cold Cache OLT",
+        vendor="Huawei",
+        model="MA5608T",
+        zabbix_host_id="30303",
+    )
+    db_session.add(olt)
+    db_session.flush()
+    db_session.add_all(
+        [OntUnit(serial_number=f"ONT-COLD-{i}", olt_device_id=olt.id) for i in range(3)]
+    )
+    db_session.commit()
+
+    def _cold_cache(olt, onts=None, **_kwargs):
+        return {
+            "total_count": 0,
+            "online_count": 0,
+            "offline_count": 0,
+            "low_signal_count": 0,
+            "cache_miss": True,
+        }
+
+    def _no_live_walk(*_args, **_kwargs):
+        raise AssertionError("request path must not do a live snapshot walk")
+
+    monkeypatch.setattr(
+        zabbix_ont_status, "get_olt_ont_summary_from_zabbix", _cold_cache
+    )
+    monkeypatch.setattr(
+        zabbix_ont_status, "get_olt_ont_snapshot_from_zabbix", _no_live_walk
+    )
+
+    summary = monitoring_service.get_onu_status_summary(db_session)
+
+    assert summary["total"] == 3
+    assert summary["offline"] == 3
+    assert summary["online"] == 0
+
+
 def test_get_onu_olt_status_summary_has_no_unknown_bucket(db_session, monkeypatch):
     olt = OLTDevice(
         name="OLT Link Summary OLT",
@@ -360,25 +410,51 @@ def test_push_signal_metrics_does_not_emit_ont_status_counts(db_session, monkeyp
 
     monkeypatch.setattr(olt_polling_metrics_service.httpx, "Client", _FakeClient)
 
+    acs = Tr069AcsServer(
+        name="Test ACS",
+        base_url="http://genieacs.example:7557",
+        is_active=True,
+    )
+    db_session.add(acs)
+    db_session.flush()
+
+    ont1 = OntUnit(
+        serial_number="ONT-METRIC-1",
+        is_active=True,
+        tr069_last_snapshot_at=datetime.now(UTC),
+        tr069_last_snapshot={
+            "ethernet_ports": [{"bytes_sent": "1000", "bytes_received": "2000"}]
+        },
+        olt_status=OnuOnlineStatus.offline,
+    )
+    ont2 = OntUnit(
+        serial_number="ONT-METRIC-2",
+        is_active=True,
+        tr069_last_snapshot_at=datetime.now(UTC),
+        tr069_last_snapshot={
+            "ethernet_ports": [{"bytes_sent": "3000", "bytes_received": "4000"}]
+        },
+        olt_status=OnuOnlineStatus.online,
+    )
+    db_session.add_all([ont1, ont2])
+    db_session.flush()
+
+    # Only ONTs with an active GenieACS link are exported (see _push_signal_metrics).
     db_session.add_all(
         [
-            OntUnit(
-                serial_number="ONT-METRIC-1",
+            Tr069CpeDevice(
+                acs_server_id=acs.id,
+                ont_unit_id=ont1.id,
+                serial_number=ont1.serial_number,
+                genieacs_device_id="genie-metric-1",
                 is_active=True,
-                tr069_last_snapshot_at=datetime.now(UTC),
-                tr069_last_snapshot={
-                    "ethernet_ports": [{"bytes_sent": "1000", "bytes_received": "2000"}]
-                },
-                olt_status=OnuOnlineStatus.offline,
             ),
-            OntUnit(
-                serial_number="ONT-METRIC-2",
+            Tr069CpeDevice(
+                acs_server_id=acs.id,
+                ont_unit_id=ont2.id,
+                serial_number=ont2.serial_number,
+                genieacs_device_id="genie-metric-2",
                 is_active=True,
-                tr069_last_snapshot_at=datetime.now(UTC),
-                tr069_last_snapshot={
-                    "ethernet_ports": [{"bytes_sent": "3000", "bytes_received": "4000"}]
-                },
-                olt_status=OnuOnlineStatus.online,
             ),
         ]
     )
@@ -918,10 +994,126 @@ def test_monitoring_config_context_includes_runtime_settings(db_session):
 
     context = get_monitoring_config_context(db_session)
 
+    assert context["monitoring"]["server_health_disk_warn_pct"] == "80"
+    assert context["monitoring"]["server_health_mem_warn_pct"] == "80"
+    assert context["monitoring"]["server_health_load_warn"] == "1.0"
+    assert context["monitoring"]["network_health_warn_pct"] == "90"
+    assert "cpu_warn_pct" not in context["monitoring"]
+    assert "interface_warn_pct" not in context["monitoring"]
     assert context["monitoring"]["device_metrics_retention_days"] == "90"
     assert context["monitoring"]["alert_evaluation_interval_seconds"] == "60"
     assert context["monitoring"]["interface_walk_interval_seconds"] == "300"
     assert context["monitoring"]["hot_retention_hours"] == "24"
+
+
+def test_save_monitoring_config_writes_runtime_health_keys(db_session):
+    from app.services.web_system_config import save_monitoring_config
+
+    save_monitoring_config(
+        db_session,
+        {
+            "server_health_mem_warn_pct": "75",
+            "server_health_mem_crit_pct": "92",
+            "network_health_warn_pct": "88",
+            "network_health_crit_pct": "65",
+            "cpu_warn_pct": "10",
+        },
+    )
+
+    rows = {
+        row.key: row.value_text
+        for row in db_session.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.network_monitoring)
+        .all()
+    }
+
+    assert rows["server_health_mem_warn_pct"] == "75"
+    assert rows["server_health_mem_crit_pct"] == "92"
+    assert rows["network_health_warn_pct"] == "88"
+    assert rows["network_health_crit_pct"] == "65"
+    assert "cpu_warn_pct" not in rows
+
+
+def test_save_monitoring_config_uses_typed_settings_for_spec_keys(db_session):
+    from app.services.web_system_config import save_monitoring_config
+
+    save_monitoring_config(
+        db_session,
+        {
+            "server_health_mem_warn_pct": "75",
+            "server_health_mem_crit_pct": "92",
+            "network_health_warn_pct": "88",
+            "network_health_crit_pct": "65",
+        },
+    )
+
+    rows = {
+        row.key: row
+        for row in db_session.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.network_monitoring)
+        .all()
+    }
+
+    assert rows["server_health_mem_warn_pct"].value_text == "75"
+    assert rows["server_health_mem_warn_pct"].value_type == SettingValueType.integer
+    assert rows["network_health_warn_pct"].value_text == "88"
+    assert rows["network_health_warn_pct"].value_type == SettingValueType.integer
+
+
+def test_save_monitoring_config_invalidates_spec_setting_cache(db_session, monkeypatch):
+    from app.services import domain_settings as domain_settings_service
+    from app.services.web_system_config import save_monitoring_config
+
+    invalidated: list[tuple[str, str]] = []
+
+    def fake_invalidate(domain: str, key: str) -> bool:
+        invalidated.append((domain, key))
+        return True
+
+    monkeypatch.setattr(
+        domain_settings_service.SettingsCache,
+        "invalidate",
+        fake_invalidate,
+    )
+
+    save_monitoring_config(
+        db_session,
+        {
+            "server_health_mem_warn_pct": "75",
+        },
+    )
+
+    assert ("network_monitoring", "server_health_mem_warn_pct") in invalidated
+
+
+def test_save_monitoring_config_invalid_spec_value_is_rejected(db_session):
+    from app.services.web_system_config import save_monitoring_config
+
+    with pytest.raises(ValueError, match="Server Health Memory Warning"):
+        save_monitoring_config(
+            db_session,
+            {
+                "server_health_mem_warn_pct": "150",
+            },
+        )
+
+    assert (
+        db_session.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.network_monitoring)
+        .filter(DomainSetting.key == "server_health_mem_warn_pct")
+        .first()
+        is None
+    )
+
+
+def test_monitoring_config_template_uses_runtime_health_keys():
+    template = Path("templates/admin/system/config/monitoring.html").read_text()
+
+    assert 'name="server_health_disk_warn_pct"' in template
+    assert 'name="server_health_mem_warn_pct"' in template
+    assert 'name="network_health_warn_pct"' in template
+    assert 'name="cpu_warn_pct"' not in template
+    assert 'name="interface_warn_pct"' not in template
 
 
 def test_notify_alert_uses_policy_engine_before_admin_fallback(

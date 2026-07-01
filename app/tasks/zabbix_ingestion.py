@@ -24,7 +24,10 @@ logger = logging.getLogger(__name__)
 _DISPATCH_LOCK_KEY = "zabbix:portal_usage_ingestion:dispatch:lock"
 _DISPATCH_CURSOR_KEY = "zabbix:portal_usage_ingestion:dispatch:cursor"
 _CHUNK_LOCK_PREFIX = "zabbix:portal_usage_ingestion:chunk"
-_LOCK_TTL_SECONDS = 900
+# Chunk lock TTL sits just above the chunk task's hard time_limit (300s) so a
+# hard-killed worker (which skips the finally-release) only wedges its chunk for
+# a few seconds, not the ~10 min a 900s TTL caused.
+_LOCK_TTL_SECONDS = 330
 
 
 def _zabbix_enabled() -> bool:
@@ -217,46 +220,9 @@ def ingest_portal_usage() -> dict[str, Any]:
     return dispatch_portal_usage_ingestion()
 
 
-@celery_app.task(name="app.tasks.zabbix_ingestion.sync_devices_to_zabbix")
-def sync_devices_to_zabbix() -> dict[str, Any]:
-    """Sync DotMac devices to Zabbix hosts.
-
-    Creates or updates Zabbix hosts for all active OLTs and NAS devices.
-    Schedule: Every 5 minutes (configured in scheduler_config.py)
-    """
-    if not _zabbix_enabled():
-        return {"skipped": "zabbix_token_missing"}
-
-    db = db_session_adapter.create_session()
-    try:
-        from app.services.zabbix_host_sync import sync_all_devices
-
-        result = sync_all_devices(db)
-        db.commit()
-
-        logger.info(
-            "zabbix_device_sync_complete",
-            extra={
-                "event": "zabbix_device_sync_complete",
-                "olt_created": result["olt"]["created"],
-                "olt_updated": result["olt"]["updated"],
-                "nas_created": result["nas"]["created"],
-                "nas_updated": result["nas"]["updated"],
-            },
-        )
-
-        return result
-
-    except ZabbixClientError as exc:
-        logger.warning("zabbix_device_sync_failed: %s", exc)
-        db.rollback()
-        return {"error": "zabbix_unavailable", "message": str(exc)}
-    except Exception as exc:
-        logger.exception("zabbix_device_sync_exception")
-        db.rollback()
-        return {"error": str(exc)}
-    finally:
-        db.close()
+# Device sync lives in app.tasks.zabbix_sync.sync_devices_to_zabbix (time-limited).
+# The duplicate that previously lived here is gone; the scheduler points at the
+# zabbix_sync task name.
 
 
 @celery_app.task(
@@ -319,7 +285,26 @@ def repair_stale_olt_signal_ingest() -> dict[str, Any]:
                 OntUnit.last_sync_source == "zabbix_data_ingest",
             )
         )
-        stale_after = datetime.now(UTC) - timedelta(minutes=10)
+        # Stale threshold must exceed the primary ingest interval, otherwise the
+        # watchdog (every 10 min) sees data older than its threshold between
+        # every primary run and re-triggers ingest each cycle — doubling Zabbix
+        # load and defeating the configured interval. Trip at 2x the primary
+        # interval (min 20 min) so it only fires when the primary has actually
+        # stopped.
+        from app.models.domain_settings import SettingDomain
+        from app.services.settings_spec import resolve_value
+
+        raw_interval = resolve_value(
+            db,
+            SettingDomain.network_monitoring,
+            "ont_signal_ingest_interval_minutes",
+        )
+        try:
+            primary_minutes = int(str(raw_interval)) if raw_interval is not None else 15
+        except (TypeError, ValueError):
+            primary_minutes = 15
+        stale_minutes = max(primary_minutes * 2, 20)
+        stale_after = datetime.now(UTC) - timedelta(minutes=stale_minutes)
         if newest_seen is not None and newest_seen.tzinfo is None:
             newest_seen = newest_seen.replace(tzinfo=UTC)
         if newest_seen is not None and newest_seen > stale_after:

@@ -1,6 +1,13 @@
 from prometheus_client import REGISTRY, Counter, Histogram
 from prometheus_client.registry import Collector
 
+
+def _gauge_description(name: str, help_text: str, labels: list[str] | None = None):  # noqa: ANN202 - prometheus collector protocol
+    from prometheus_client.core import GaugeMetricFamily
+
+    return GaugeMetricFamily(name, help_text, labels=labels)
+
+
 REQUEST_COUNT = Counter(
     "http_requests_total",
     "Total HTTP requests",
@@ -65,6 +72,17 @@ class _SuspensionAuditCollector(Collector):
     defeated by a shared credential (kind=mixed_status_subscribers).
     """
 
+    def describe(self):  # noqa: ANN201 - prometheus collector protocol
+        yield _gauge_description(
+            "radius_suspension_audit_leaks",
+            "Suspension-enforcement audit leak count by class",
+            labels=["kind"],
+        )
+        yield _gauge_description(
+            "radius_suspension_audit_age_seconds",
+            "Seconds since the last completed suspension audit",
+        )
+
     def collect(self):  # noqa: ANN201 - prometheus collector protocol
         from prometheus_client.core import GaugeMetricFamily
 
@@ -120,6 +138,21 @@ class _IpConsistencyAuditCollector(Collector):
     the one to watch: the address is backed only by the subscription column.
     """
 
+    def describe(self):  # noqa: ANN201 - prometheus collector protocol
+        yield _gauge_description(
+            "radius_ip_consistency_drift",
+            "Active-subscriber IPv4 drift count by class",
+            labels=["kind"],
+        )
+        yield _gauge_description(
+            "radius_ip_consistency_population",
+            "Active subscriptions expected to carry a pinned IPv4",
+        )
+        yield _gauge_description(
+            "radius_ip_consistency_audit_age_seconds",
+            "Seconds since the last completed IP consistency audit",
+        )
+
     def collect(self):  # noqa: ANN201 - prometheus collector protocol
         from prometheus_client.core import GaugeMetricFamily
 
@@ -166,6 +199,329 @@ class _IpConsistencyAuditCollector(Collector):
 
 
 REGISTRY.register(_IpConsistencyAuditCollector())
+
+
+class _BillingHealthCollector(Collector):
+    """Exports billing liveness/anomaly signals at scrape time.
+
+    Cheap, indexed aggregate queries computed on scrape (no worker needed).
+    Wrapped so a transient DB hiccup yields no metrics rather than breaking the
+    whole /metrics endpoint. See app/services/billing_health.py. Alert on:
+    billing_paid_invoices_with_balance > 0; billing_invoice_scan_ratio low;
+    billing_payment_volume_collapsed == 1.
+    """
+
+    def describe(self):  # noqa: ANN201 - prometheus collector protocol
+        yield _gauge_description(
+            "billing_paid_invoices_with_balance",
+            "Invoices status=paid with non-zero balance_due (AR-integrity defect)",
+        )
+        yield _gauge_description(
+            "billing_invoice_last_scanned",
+            "subscriptions_scanned of the most recent billing run",
+        )
+        yield _gauge_description(
+            "billing_active_subscriptions",
+            "Active subscriptions (invoice-cycle eligibility denominator)",
+        )
+        yield _gauge_description(
+            "billing_invoice_scan_ratio",
+            "last_scanned / active_subscriptions (low = cohort silently skipped)",
+        )
+        yield _gauge_description(
+            "billing_payments_succeeded_24h",
+            "Succeeded payments in the last 24h",
+        )
+        yield _gauge_description(
+            "billing_payments_succeeded_7d_daily_avg",
+            "Trailing 7-day daily average of succeeded payments (baseline)",
+        )
+        yield _gauge_description(
+            "billing_payment_volume_ratio",
+            "last-24h payments / 7-day daily average (collapse = intake broke)",
+        )
+        yield _gauge_description(
+            "billing_payment_volume_collapsed",
+            "1 if last-24h payment volume collapsed vs the 7-day baseline",
+        )
+        yield _gauge_description(
+            "billing_enforcement_covered_but_locked",
+            "Accounts under a billing lock whose ledger balance is >= 0 "
+            "(wrongful-suspension drift; should be 0)",
+        )
+        yield _gauge_description(
+            "billing_runner_heartbeat_stale",
+            "1 if an enabled critical runner has no fresh success heartbeat",
+            labels=["task"],
+        )
+        yield _gauge_description(
+            "billing_runner_heartbeat_age_seconds",
+            "Seconds since a critical runner last succeeded",
+            labels=["task"],
+        )
+        yield _gauge_description(
+            "billing_unbilled_active_subscriptions",
+            "Active subscriptions that no enabled billing path covers",
+            labels=["reason"],
+        )
+
+    def collect(self):  # noqa: ANN201 - prometheus collector protocol
+        from prometheus_client.core import GaugeMetricFamily
+
+        try:
+            from app.services.billing_health import billing_health_snapshot
+            from app.services.db_session_adapter import db_session_adapter
+
+            with db_session_adapter.session() as db:
+                snap = billing_health_snapshot(db)
+        except Exception:
+            return
+
+        def gauge(name: str, help_text: str, value: float):
+            g = GaugeMetricFamily(name, help_text)
+            g.add_metric([], float(value))
+            return g
+
+        yield gauge(
+            "billing_paid_invoices_with_balance",
+            "Invoices status=paid with non-zero balance_due (AR-integrity defect)",
+            snap.paid_with_balance_count,
+        )
+        yield gauge(
+            "billing_invoice_last_scanned",
+            "subscriptions_scanned of the most recent billing run",
+            snap.last_scanned or 0,
+        )
+        yield gauge(
+            "billing_active_subscriptions",
+            "Active subscriptions (invoice-cycle eligibility denominator)",
+            snap.eligible_active_subs,
+        )
+        if snap.scan_ratio is not None:
+            yield gauge(
+                "billing_invoice_scan_ratio",
+                "last_scanned / active_subscriptions (low = cohort silently skipped)",
+                snap.scan_ratio,
+            )
+        yield gauge(
+            "billing_payments_succeeded_24h",
+            "Succeeded payments in the last 24h",
+            snap.payments_24h,
+        )
+        yield gauge(
+            "billing_payments_succeeded_7d_daily_avg",
+            "Trailing 7-day daily average of succeeded payments (baseline)",
+            snap.payments_7d_daily_avg,
+        )
+        if snap.payment_volume_ratio is not None:
+            yield gauge(
+                "billing_payment_volume_ratio",
+                "last-24h payments / 7-day daily average (collapse = intake broke)",
+                snap.payment_volume_ratio,
+            )
+        yield gauge(
+            "billing_payment_volume_collapsed",
+            "1 if last-24h payment volume collapsed vs the 7-day baseline",
+            1.0 if snap.payment_volume_collapsed else 0.0,
+        )
+        yield gauge(
+            "billing_enforcement_covered_but_locked",
+            "Accounts under a billing lock whose ledger balance is >= 0 "
+            "(wrongful-suspension drift; should be 0)",
+            snap.covered_but_locked,
+        )
+
+        # §6.3 per-runner heartbeat freshness (label = task).
+        stale = GaugeMetricFamily(
+            "billing_runner_heartbeat_stale",
+            "1 if an enabled critical runner has no fresh success heartbeat",
+            labels=["task"],
+        )
+        age = GaugeMetricFamily(
+            "billing_runner_heartbeat_age_seconds",
+            "Seconds since a critical runner last succeeded",
+            labels=["task"],
+        )
+        for r in snap.runners:
+            if not r.enabled:
+                continue
+            stale.add_metric([r.task_name], 1.0 if r.stale else 0.0)
+            if r.age_seconds is not None:
+                age.add_metric([r.task_name], max(r.age_seconds, 0.0))
+        yield stale
+        yield age
+
+        # §6.1 billing-path coverage: active subs no enabled path will bill.
+        unbilled = GaugeMetricFamily(
+            "billing_unbilled_active_subscriptions",
+            "Active subscriptions that no enabled billing path covers",
+            labels=["reason"],
+        )
+        unbilled.add_metric(["no_billing_path"], float(snap.unbilled_no_path))
+        unbilled.add_metric(
+            ["terminal_account"], float(snap.active_subs_on_terminal_account)
+        )
+        yield unbilled
+
+
+REGISTRY.register(_BillingHealthCollector())
+
+
+class _ConnectivityShadowCollector(Collector):
+    """Exports the latest full-base connectivity shadow-audit result at scrape
+    time (worker runs the sweep, stores Redis; web scrapes — same pattern as the
+    suspension/IP audits). ``connectivity_shadow_drift{dimension}`` is the
+    cutover-readiness gauge: a point-in-time count of subscribers whose
+    connectivity dimension disagrees with the desired state. When every
+    dimension reads ~0 the connectivity reconciler can be promoted from shadow
+    to sole-writer.
+    """
+
+    def describe(self):  # noqa: ANN201 - prometheus collector protocol
+        yield _gauge_description(
+            "connectivity_shadow_drift",
+            "Subscribers whose connectivity dimension disagrees with desired",
+            labels=["dimension"],
+        )
+        yield _gauge_description(
+            "connectivity_shadow_population",
+            "Subscribers swept by the connectivity shadow audit",
+        )
+        yield _gauge_description(
+            "connectivity_shadow_audit_age_seconds",
+            "Seconds since the last completed connectivity shadow audit",
+        )
+
+    def collect(self):  # noqa: ANN201 - prometheus collector protocol
+        from prometheus_client.core import GaugeMetricFamily
+
+        try:
+            from app.services.connectivity_reconciler import (
+                load_connectivity_shadow_result,
+            )
+
+            data = load_connectivity_shadow_result()
+        except Exception:
+            return
+        if not data:
+            return
+
+        drift = GaugeMetricFamily(
+            "connectivity_shadow_drift",
+            "Subscribers whose connectivity dimension disagrees with desired",
+            labels=["dimension"],
+        )
+        for dim, count in (data.get("counts") or {}).items():
+            drift.add_metric([dim], float(count or 0))
+        yield drift
+
+        population = GaugeMetricFamily(
+            "connectivity_shadow_population",
+            "Subscribers swept by the connectivity shadow audit",
+        )
+        population.add_metric([], float(data.get("population") or 0))
+        yield population
+
+        ran_at = data.get("ran_at")
+        if ran_at:
+            from datetime import UTC, datetime
+
+            try:
+                age = (
+                    datetime.now(UTC) - datetime.fromisoformat(ran_at)
+                ).total_seconds()
+            except ValueError:
+                return
+            age_metric = GaugeMetricFamily(
+                "connectivity_shadow_audit_age_seconds",
+                "Seconds since the last completed connectivity shadow audit",
+            )
+            age_metric.add_metric([], max(age, 0))
+            yield age_metric
+
+
+REGISTRY.register(_ConnectivityShadowCollector())
+
+
+class _PollerHealthCollector(Collector):
+    """Exports bandwidth-poller health at scrape time.
+
+    The poller is a separate process, so Prometheus metrics set there aren't
+    visible here. It writes a Redis snapshot each cycle and this collector reads
+    it on scrape — fail-soft. ``bandwidth_poller_last_cycle_age_seconds`` is the
+    key liveness signal: if the poller dies it grows unbounded (alert on it);
+    ``bandwidth_poller_devices_failing`` surfaces silently-broken routers.
+    """
+
+    def describe(self):  # noqa: ANN201 - prometheus collector protocol
+        yield _gauge_description(
+            "bandwidth_poller_devices_total",
+            "MikroTik devices in the poller pool",
+        )
+        yield _gauge_description(
+            "bandwidth_poller_devices_ok",
+            "Devices polled without recent failures",
+        )
+        yield _gauge_description(
+            "bandwidth_poller_devices_failing",
+            "Devices in failure backoff (silently broken)",
+        )
+        yield _gauge_description(
+            "bandwidth_poller_cycle_seconds",
+            "Duration of the poller's last completed cycle",
+        )
+        yield _gauge_description(
+            "bandwidth_poller_last_cycle_age_seconds",
+            "Seconds since the poller's last completed cycle (liveness)",
+        )
+
+    def collect(self):  # noqa: ANN201 - prometheus collector protocol
+        from prometheus_client.core import GaugeMetricFamily
+
+        try:
+            from app.services.poller_health import load_poller_health
+
+            data = load_poller_health()
+        except Exception:
+            return
+        if not data:
+            return
+
+        for key, help_text in (
+            ("devices_total", "MikroTik devices in the poller pool"),
+            ("devices_ok", "Devices polled without recent failures"),
+            ("devices_failing", "Devices in failure backoff (silently broken)"),
+        ):
+            gauge = GaugeMetricFamily(f"bandwidth_poller_{key}", help_text)
+            gauge.add_metric([], float(data.get(key) or 0))
+            yield gauge
+
+        cycle = data.get("cycle_seconds")
+        if cycle is not None:
+            gauge = GaugeMetricFamily(
+                "bandwidth_poller_cycle_seconds",
+                "Duration of the poller's last completed cycle",
+            )
+            gauge.add_metric([], float(cycle))
+            yield gauge
+
+        ts = data.get("ts")
+        if ts:
+            from datetime import UTC, datetime
+
+            try:
+                age = (datetime.now(UTC) - datetime.fromisoformat(ts)).total_seconds()
+            except ValueError:
+                return
+            gauge = GaugeMetricFamily(
+                "bandwidth_poller_last_cycle_age_seconds",
+                "Seconds since the poller's last completed cycle (liveness)",
+            )
+            gauge.add_metric([], max(age, 0))
+            yield gauge
+
+
+REGISTRY.register(_PollerHealthCollector())
 
 GENIEACS_IDENTITY_RECOVERY_EVENTS = Counter(
     "genieacs_identity_recovery_events_total",

@@ -1,13 +1,13 @@
 # Section 2: Selfcare Portal & Messaging
 
-## Source: Splynx ISP Management Platform
-These screenshots document Splynx's tariff plan management (Internet plans, Recurring charges, One-time fees, Bundles) and messaging system (mass sending with advanced filters, rich-text editor, financial document attachments, and delivery history). The analysis below maps Splynx capabilities to feature improvements for DotMac Sub.
+## Source: legacy BSS ISP Management Platform
+These screenshots document legacy BSS's tariff plan management (Internet plans, Recurring charges, One-time fees, Bundles) and messaging system (mass sending with advanced filters, rich-text editor, financial document attachments, and delivery history). The analysis below maps legacy BSS capabilities to feature improvements for DotMac Sub.
 
 ---
 
 ## 2.1 Internet Tariff Plans -- Admin Catalog View
 
-**What Splynx has:**
+**What legacy BSS has:**
 - Dedicated "Tariff plans > Internet" section listing all internet service plans in a sortable, searchable table
 - Columns: ID, Title, Price (in Naira), Download speed (Kbps), Upload speed (Kbps), Customers (count), Customers online (count), and Actions
 - 57 plans visible ranging from 1 Mbps Fiber (21,500 NGN) to 700 Mbps Dedicated (1,304,411.72 NGN)
@@ -32,13 +32,13 @@ These screenshots document Splynx's tariff plan management (Internet plans, Recu
 
 ### Capped vs Unlimited Plan Support
 - [ ] **Data cap plan type**: Enhance `CatalogOffer` to explicitly support capped data plans (e.g., "20GB data") with a `data_cap_gb` field, distinct from unlimited plans that have no cap but may have speed tiers
-- [ ] **Plan naming convention enforcement**: Add admin guidance or validation suggesting consistent plan naming (e.g., "{Speed} Mbps Fiber", "Unlimited {Tier}") to prevent the inconsistency visible in Splynx (e.g., "unlimited 1.5" vs "Unlimited Basic")
+- [ ] **Plan naming convention enforcement**: Add admin guidance or validation suggesting consistent plan naming (e.g., "{Speed} Mbps Fiber", "Unlimited {Tier}") to prevent the inconsistency visible in legacy BSS (e.g., "unlimited 1.5" vs "Unlimited Basic")
 
 ---
 
 ## 2.2 Recurring Tariff Plans
 
-**What Splynx has:**
+**What legacy BSS has:**
 - Separate "Tariff plans > Recurring" section for non-internet recurring charges
 - Table columns: ID, Title, Price, Customers, Actions (statistics chart icon)
 - 13 recurring plans including:
@@ -56,13 +56,13 @@ These screenshots document Splynx's tariff plan management (Internet plans, Recu
 - [ ] **Static IP add-on tiers**: Pre-define standard IP allocation add-ons (/32, /30, /29, /28) with automatic pricing and IPAM integration, so operators can assign IP blocks as recurring charges linked to the IP address management system
 - [ ] **Leased line / dedicated circuit plans**: Support a "dedicated" plan type with committed information rate (CIR) guarantees, separate from shared residential plans, with distinct billing and SLA terms
 - [ ] **Device replacement as recurring service**: Allow "device rental" or "device replacement" to be configured as a recurring charge add-on that auto-bills monthly, separate from one-time installation fees
-- [ ] **Add-on subscriber count**: Show the count of active subscribers using each add-on/recurring charge in the catalog list, matching the visibility Splynx provides
+- [ ] **Add-on subscriber count**: Show the count of active subscribers using each add-on/recurring charge in the catalog list, matching the visibility legacy BSS provides
 
 ---
 
 ## 2.3 One-Time Tariff Plans
 
-**What Splynx has:**
+**What legacy BSS has:**
 - Separate "Tariff plans > One-time" section for non-recurring charges
 - Table columns: ID, Title, Enabled (Yes/No badge), Price, Actions
 - 8 one-time charges defined:
@@ -91,7 +91,7 @@ These screenshots document Splynx's tariff plan management (Internet plans, Recu
 
 ## 2.4 Bundle Plans
 
-**What Splynx has:**
+**What legacy BSS has:**
 - "Tariff plans > Bundles" section for combined service packages
 - Table columns: ID, Title, Price, Customers, Actions
 - Currently empty ("No data available in table") indicating the feature exists but is not yet used by this operator
@@ -111,7 +111,7 @@ These screenshots document Splynx's tariff plan management (Internet plans, Recu
 
 ## 2.5 Mass Message Sending -- Recipient Targeting
 
-**What Splynx has:**
+**What legacy BSS has:**
 - "Messages > Mass sending > Create" form with extensive recipient targeting filters
 - Recipient type selector: "Customer" (dropdown, likely also supports "Lead", "Admin")
 - Targeting filters include:
@@ -152,7 +152,7 @@ These screenshots document Splynx's tariff plan management (Internet plans, Recu
 
 ## 2.6 Mass Message Sending -- Composition & Financial Attachments
 
-**What Splynx has:**
+**What legacy BSS has:**
 - Rich-text message editor with formatting toolbar: Bold, Italic, Underline, Ordered list, Unordered list, Link, Blockquote, Table, Image, Clear formatting, Code/HTML view
 - Message template system: "Templates" dropdown with "Load" button to populate the message body from a pre-defined template
 - "Attachments" section with an "Upload" button for adding file attachments
@@ -181,7 +181,7 @@ These screenshots document Splynx's tariff plan management (Internet plans, Recu
 
 ## 2.7 Payment Totals Summary (Finance Context)
 
-**What Splynx has:**
+**What legacy BSS has:**
 - A "Totals" summary table showing payment collection aggregated by payment provider/type
 - Columns: Type (colored badge), Amount (count of transactions), Total (monetary sum)
 - Payment types visible:
@@ -210,7 +210,7 @@ These screenshots document Splynx's tariff plan management (Internet plans, Recu
 
 ## 2.8 Mass Message History & Delivery Tracking
 
-**What Splynx has:**
+**What legacy BSS has:**
 - "Messages > Mass sending > History" page showing all sent mass messages
 - Table columns: ID, Send to (channel), Subject, Created (timestamp), Status (green "Sent" badges), Customer login (account identifier), Actions
 - Filters: Status dropdown ("Any"), Period date range picker ("01/02/2026 - 28/02/2026"), Table search
@@ -240,7 +240,7 @@ These screenshots document Splynx's tariff plan management (Internet plans, Recu
 
 ## 2.9 Customer Self-Service Portal Enhancements
 
-**What Splynx has (inferred from tariff plan structure):**
+**What legacy BSS has (inferred from tariff plan structure):**
 - Tariff plans marked as visible/active are shown on the customer selfcare portal
 - Customers can view available plans and request upgrades/downgrades
 - Plan details include speed, price, and included services

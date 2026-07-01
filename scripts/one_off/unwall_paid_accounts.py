@@ -1,7 +1,7 @@
 """Restore service to paid-up-but-walled accounts (account-level, no ledger writes).
 
 The safe replacement for the per-invoice credit-settle backfill. Keys on the
-authoritative account-level net (``get_available_balance`` — Splynx deposit for
+authoritative account-level net (``get_available_balance`` — imported deposit for
 migrated accounts, ledger for native), NOT per-invoice balance_due. A walled
 (suspended/blocked) account whose available balance is >= 0 is paid up and gets
 its service restored: reason-scoped status restore + re-derive + RADIUS refresh

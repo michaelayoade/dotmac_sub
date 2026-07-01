@@ -11,9 +11,14 @@ router = APIRouter(prefix="/auth", tags=["web-auth"])
 
 
 @router.get("/login", response_class=HTMLResponse)
-def login_page(request: Request, error: str | None = None, next: str | None = None):
+def login_page(
+    request: Request,
+    error: str | None = None,
+    next: str | None = None,
+    db: Session = Depends(get_db),
+):
     """Display the login page."""
-    return web_auth_service.login_page(request, error, next)
+    return web_auth_service.login_page(request, error, next, db)
 
 
 @router.post("/login", response_class=HTMLResponse)
@@ -99,9 +104,10 @@ def reset_password_page(
     token: str,
     error: str | None = None,
     next_login: str | None = None,
+    db: Session = Depends(get_db),
 ):
     """Display the password reset page."""
-    return web_auth_service.reset_password_page(request, token, error, next_login)
+    return web_auth_service.reset_password_page(request, db, token, error, next_login)
 
 
 @router.post("/reset-password", response_class=HTMLResponse)

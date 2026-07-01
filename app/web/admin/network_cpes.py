@@ -37,7 +37,7 @@ def _base_context(
 @router.get(
     "/cpes",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:cpe:read"))],
 )
 def cpe_list(
     request: Request,
@@ -66,7 +66,7 @@ def cpe_list(
 @router.get(
     "/cpes/new",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:cpe:read"))],
 )
 def cpe_new(
     request: Request,
@@ -92,7 +92,7 @@ def cpe_new(
 @router.get(
     "/cpes/subscriber-fields",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:cpe:read"))],
 )
 def cpe_subscriber_fields(
     request: Request,
@@ -125,7 +125,7 @@ def cpe_subscriber_fields(
 @router.post(
     "/cpes",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:cpe:write"))],
 )
 def cpe_create(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
@@ -160,7 +160,7 @@ def cpe_create(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/cpes/{cpe_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:cpe:read"))],
 )
 def cpe_edit(
     request: Request, cpe_id: str, db: Session = Depends(get_db)
@@ -191,7 +191,7 @@ def cpe_edit(
 @router.post(
     "/cpes/{cpe_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:cpe:write"))],
 )
 def cpe_update(request: Request, cpe_id: str, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
@@ -229,7 +229,7 @@ def cpe_update(request: Request, cpe_id: str, db: Session = Depends(get_db)):
 
 @router.post(
     "/cpes/{cpe_id}/test-api",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:cpe:write"))],
 )
 def cpe_test_api(cpe_id: str, db: Session = Depends(get_db)) -> RedirectResponse:
     try:
@@ -261,7 +261,7 @@ def cpe_test_api(cpe_id: str, db: Session = Depends(get_db)) -> RedirectResponse
 @router.get(
     "/cpes/{cpe_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:cpe:read"))],
 )
 def cpe_detail(
     request: Request,
@@ -294,7 +294,7 @@ def cpe_detail(
 @router.get(
     "/cpes/{cpe_id}/quick-status",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:cpe:read"))],
 )
 def cpe_quick_status(
     request: Request, cpe_id: str, db: Session = Depends(get_db)
@@ -310,8 +310,19 @@ def cpe_quick_status(
     )
 
 
-def _cpe_action_response(result: object) -> JSONResponse:
-    """Build a JSON response with HX-Trigger toast header from an ActionResult."""
+def _cpe_action_response(
+    result: object,
+    *,
+    request: Request | None = None,
+    db: Session | None = None,
+    cpe_id: str | None = None,
+) -> JSONResponse | HTMLResponse:
+    """Build an action response with HX toast support.
+
+    Browser-triggered HTMX actions get the refreshed TR-069 partial so stale
+    values do not linger after refreshes or port toggles. Non-HTMX callers keep
+    the JSON contract and status codes.
+    """
     from app.services.network.ont_action_common import ActionResult
 
     if not isinstance(result, ActionResult):
@@ -330,6 +341,22 @@ def _cpe_action_response(result: object) -> JSONResponse:
             ensure_ascii=True,
         )
     }
+    if (
+        request is not None
+        and db is not None
+        and cpe_id is not None
+        and request.headers.get("HX-Request", "").lower() == "true"
+    ):
+        from app.services.network.cpe_tr069 import CpeTR069
+
+        summary = CpeTR069.get_device_summary(db, cpe_id)
+        context = _base_context(request, db, active_page="cpes")
+        context.update({"tr069": summary, "tr069_available": summary.available})
+        response = templates.TemplateResponse(
+            "admin/network/cpes/_tr069_partial.html", context
+        )
+        response.headers.update(headers)
+        return response
     return JSONResponse(
         {"success": result.success, "message": result.message},
         status_code=status_code,
@@ -340,7 +367,7 @@ def _cpe_action_response(result: object) -> JSONResponse:
 @router.get(
     "/cpes/{cpe_id}/tr069",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:cpe:read"))],
 )
 def cpe_tr069_tab(
     request: Request, cpe_id: str, db: Session = Depends(get_db)
@@ -356,77 +383,83 @@ def cpe_tr069_tab(
 
 @router.post(
     "/cpes/{cpe_id}/reboot",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:cpe:write"))],
+    response_model=None,
 )
 def cpe_reboot(
     request: Request, cpe_id: str, db: Session = Depends(get_db)
-) -> JSONResponse:
+) -> JSONResponse | HTMLResponse:
     """Reboot CPE device via TR-069."""
     result = web_network_cpe_actions_service.execute_reboot_from_request(
         db, cpe_id, request=request
     )
-    return _cpe_action_response(result)
+    return _cpe_action_response(result, request=request, db=db, cpe_id=cpe_id)
 
 
 @router.post(
     "/cpes/{cpe_id}/factory-reset",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:cpe:write"))],
+    response_model=None,
 )
 def cpe_factory_reset(
     request: Request, cpe_id: str, db: Session = Depends(get_db)
-) -> JSONResponse:
+) -> JSONResponse | HTMLResponse:
     """Factory reset CPE device via TR-069."""
     result = web_network_cpe_actions_service.execute_factory_reset_from_request(
         db, cpe_id, request=request
     )
-    return _cpe_action_response(result)
+    return _cpe_action_response(result, request=request, db=db, cpe_id=cpe_id)
 
 
 @router.post(
     "/cpes/{cpe_id}/refresh",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:cpe:write"))],
+    response_model=None,
 )
 def cpe_refresh(
     request: Request, cpe_id: str, db: Session = Depends(get_db)
-) -> JSONResponse:
+) -> JSONResponse | HTMLResponse:
     """Refresh CPE device status from ACS."""
     result = web_network_cpe_actions_service.execute_refresh_from_request(
         db, cpe_id, request=request
     )
-    return _cpe_action_response(result)
+    return _cpe_action_response(result, request=request, db=db, cpe_id=cpe_id)
 
 
 @router.post(
     "/cpes/{cpe_id}/wifi-ssid",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:cpe:write"))],
+    response_model=None,
 )
 def cpe_wifi_ssid(
     request: Request, cpe_id: str, ssid: str = "", db: Session = Depends(get_db)
-) -> JSONResponse:
+) -> JSONResponse | HTMLResponse:
     """Set WiFi SSID on CPE device via TR-069."""
     result = web_network_cpe_actions_service.execute_wifi_ssid(db, cpe_id, ssid=ssid)
-    return _cpe_action_response(result)
+    return _cpe_action_response(result, request=request, db=db, cpe_id=cpe_id)
 
 
 @router.post(
     "/cpes/{cpe_id}/wifi-password",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:cpe:write"))],
+    response_model=None,
 )
 def cpe_wifi_password(
     request: Request, cpe_id: str, db: Session = Depends(get_db)
-) -> JSONResponse:
+) -> JSONResponse | HTMLResponse:
     """Set WiFi password on CPE device via TR-069."""
     form = parse_form_data_sync(request)
     password = str(form.get("password") or "")
     result = web_network_cpe_actions_service.execute_wifi_password(
         db, cpe_id, password=password
     )
-    return _cpe_action_response(result)
+    return _cpe_action_response(result, request=request, db=db, cpe_id=cpe_id)
 
 
 @router.post(
     "/cpes/{cpe_id}/lan-port",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:cpe:write"))],
+    response_model=None,
 )
 def cpe_lan_port(
     request: Request,
@@ -434,35 +467,37 @@ def cpe_lan_port(
     port: int = 1,
     enabled: str = "true",
     db: Session = Depends(get_db),
-) -> JSONResponse:
+) -> JSONResponse | HTMLResponse:
     """Toggle LAN port on CPE device via TR-069."""
     result = web_network_cpe_actions_service.execute_lan_port(
         db, cpe_id, port=port, enabled=enabled.lower() == "true"
     )
-    return _cpe_action_response(result)
+    return _cpe_action_response(result, request=request, db=db, cpe_id=cpe_id)
 
 
 @router.post(
     "/cpes/{cpe_id}/connection-request",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:cpe:write"))],
+    response_model=None,
 )
 def cpe_connection_request(
     request: Request, cpe_id: str, db: Session = Depends(get_db)
-) -> JSONResponse:
+) -> JSONResponse | HTMLResponse:
     """Send connection request to CPE device."""
     result = web_network_cpe_actions_service.execute_connection_request_from_request(
         db, cpe_id, request=request
     )
-    return _cpe_action_response(result)
+    return _cpe_action_response(result, request=request, db=db, cpe_id=cpe_id)
 
 
 @router.post(
     "/cpes/{cpe_id}/ping-diagnostic",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:cpe:write"))],
+    response_model=None,
 )
 def cpe_ping_diagnostic(
     request: Request, cpe_id: str, db: Session = Depends(get_db)
-) -> JSONResponse:
+) -> JSONResponse | HTMLResponse:
     """Run ping diagnostic from CPE device via TR-069."""
     form = parse_form_data_sync(request)
     host = str(form.get("host") or "")
@@ -473,20 +508,21 @@ def cpe_ping_diagnostic(
     result = web_network_cpe_actions_service.execute_ping_diagnostic(
         db, cpe_id, host=host, count=count
     )
-    return _cpe_action_response(result)
+    return _cpe_action_response(result, request=request, db=db, cpe_id=cpe_id)
 
 
 @router.post(
     "/cpes/{cpe_id}/traceroute-diagnostic",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:cpe:write"))],
+    response_model=None,
 )
 def cpe_traceroute_diagnostic(
     request: Request, cpe_id: str, db: Session = Depends(get_db)
-) -> JSONResponse:
+) -> JSONResponse | HTMLResponse:
     """Run traceroute diagnostic from CPE device via TR-069."""
     form = parse_form_data_sync(request)
     host = str(form.get("host") or "8.8.8.8")
     result = web_network_cpe_actions_service.execute_traceroute_diagnostic(
         db, cpe_id, host=host
     )
-    return _cpe_action_response(result)
+    return _cpe_action_response(result, request=request, db=db, cpe_id=cpe_id)

@@ -107,7 +107,7 @@ class Router(Base):
     hostname: Mapped[str] = mapped_column(String(255), nullable=False)
     management_ip: Mapped[str] = mapped_column(String(255), nullable=False)
     rest_api_port: Mapped[int] = mapped_column(Integer, default=443)
-    rest_api_username: Mapped[str] = mapped_column(String(255), nullable=False)
+    rest_api_username: Mapped[str] = mapped_column(String(512), nullable=False)
     rest_api_password: Mapped[str] = mapped_column(String(512), nullable=False)
     use_ssl: Mapped[bool] = mapped_column(Boolean, default=True)
     verify_tls: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -280,6 +280,13 @@ class RouterConfigPush(Base):
     )
     commands: Mapped[list] = mapped_column(JSON, nullable=False)
     variable_values: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    dry_run: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    failure_policy: Mapped[str] = mapped_column(
+        String(20), default="continue", nullable=False
+    )
+    allow_dangerous_commands: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
     initiated_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     status: Mapped[RouterConfigPushStatus] = mapped_column(
         Enum(

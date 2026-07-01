@@ -29,8 +29,28 @@ from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
 
-ROUTER_CREDENTIAL_FIELDS = ("rest_api_password",)
+# Both are encrypted at rest. Reads go through decrypt_credential(), which
+# passes legacy plaintext values through unchanged, so existing rows keep
+# working until their next write re-encrypts them.
+ROUTER_CREDENTIAL_FIELDS = ("rest_api_username", "rest_api_password")
 JUMP_HOST_CREDENTIAL_FIELDS = ("ssh_key", "ssh_password")
+
+
+def _sync_router_monitoring_best_effort(db: Session, router: Router) -> None:
+    """Refresh the router's NetworkDevice mirror without blocking inventory writes."""
+    try:
+        from app.services.monitoring_metrics import sync_router_to_monitoring
+
+        sync_router_to_monitoring(db, str(router.id))
+        db.commit()
+        db.refresh(router)
+    except Exception:
+        db.rollback()
+        logger.warning(
+            "router_monitoring_sync_failed",
+            extra={"router_id": str(router.id), "router_name": router.name},
+            exc_info=True,
+        )
 
 
 class RouterInventory(ListResponseMixin):
@@ -69,6 +89,7 @@ class RouterInventory(ListResponseMixin):
                 detail=f"Router with name '{payload.name}' already exists",
             )
         db.refresh(router)
+        _sync_router_monitoring_best_effort(db, router)
         logger.info("Router created: %s (%s)", router.name, router.id)
         return router
 
@@ -119,10 +140,22 @@ class RouterInventory(ListResponseMixin):
         return list(db.execute(query).scalars().all())
 
     @staticmethod
-    def count(db: Session, status: str | None = None) -> int:
+    def count(
+        db: Session,
+        status: str | None = None,
+        search: str | None = None,
+    ) -> int:
         query = select(func.count(Router.id)).where(Router.is_active.is_(True))
         if status:
             query = query.where(Router.status == RouterStatus(status))
+        if search:
+            pattern = f"%{search}%"
+            query = query.where(
+                Router.name.ilike(pattern)
+                | Router.hostname.ilike(pattern)
+                | Router.management_ip.ilike(pattern)
+                | Router.location.ilike(pattern)
+            )
         return db.execute(query).scalar_one()
 
     @staticmethod
@@ -144,6 +177,7 @@ class RouterInventory(ListResponseMixin):
 
         db.commit()
         db.refresh(router)
+        _sync_router_monitoring_best_effort(db, router)
         logger.info("Router updated: %s (%s)", router.name, router.id)
         return router
 
@@ -151,6 +185,12 @@ class RouterInventory(ListResponseMixin):
     def delete(db: Session, router_id: uuid.UUID) -> None:
         router = RouterInventory.get(db, router_id)
         router.is_active = False
+        if router.network_device_id:
+            from app.models.network_monitoring import NetworkDevice
+
+            device = db.get(NetworkDevice, router.network_device_id)
+            if device:
+                device.is_active = False
         db.commit()
         logger.info("Router soft-deleted: %s (%s)", router.name, router.id)
 
@@ -159,8 +199,14 @@ class RouterInventory(ListResponseMixin):
         """Fetch /system/resource and /system/routerboard then persist to the router row."""
         from app.services.router_management.connection import RouterConnectionService
 
-        sys_data = RouterConnectionService.execute(router, "GET", "/system/resource")
-        rb_data = RouterConnectionService.execute(router, "GET", "/system/routerboard")
+        sys_data = RouterConnectionService.require_dict_response(
+            RouterConnectionService.execute(router, "GET", "/system/resource"),
+            "/system/resource",
+        )
+        rb_data = RouterConnectionService.require_dict_response(
+            RouterConnectionService.execute(router, "GET", "/system/routerboard"),
+            "/system/routerboard",
+        )
 
         router.routeros_version = sys_data.get("version")
         router.board_name = sys_data.get("board-name") or rb_data.get("model")
@@ -177,27 +223,29 @@ class RouterInventory(ListResponseMixin):
         """Fetch /interface and upsert into the database."""
         from app.services.router_management.connection import RouterConnectionService
 
-        iface_data = RouterConnectionService.execute(router, "GET", "/interface")
-        if isinstance(iface_data, list):
-            interfaces = [
-                {
-                    "name": i.get("name", ""),
-                    "type": i.get("type", "ether"),
-                    "mac_address": i.get("mac-address"),
-                    "is_running": i.get("running", "false") == "true",
-                    "is_disabled": i.get("disabled", "false") == "true",
-                    "rx_byte": int(i.get("rx-byte", 0)),
-                    "tx_byte": int(i.get("tx-byte", 0)),
-                    "rx_packet": int(i.get("rx-packet", 0)),
-                    "tx_packet": int(i.get("tx-packet", 0)),
-                    "last_link_up_time": i.get("last-link-up-time"),
-                    "speed": i.get("actual-mtu"),
-                    "comment": i.get("comment"),
-                }
-                for i in iface_data
-            ]
-            RouterInventory.upsert_interfaces(db, router, interfaces)
-            logger.info("Interfaces synced for router %s (%s)", router.name, router.id)
+        iface_data = RouterConnectionService.require_list_response(
+            RouterConnectionService.execute(router, "GET", "/interface"),
+            "/interface",
+        )
+        interfaces = [
+            {
+                "name": i.get("name", ""),
+                "type": i.get("type", "ether"),
+                "mac_address": i.get("mac-address"),
+                "is_running": i.get("running", "false") == "true",
+                "is_disabled": i.get("disabled", "false") == "true",
+                "rx_byte": int(i.get("rx-byte", 0)),
+                "tx_byte": int(i.get("tx-byte", 0)),
+                "rx_packet": int(i.get("rx-packet", 0)),
+                "tx_packet": int(i.get("tx-packet", 0)),
+                "last_link_up_time": i.get("last-link-up-time"),
+                "speed": i.get("actual-mtu"),
+                "comment": i.get("comment"),
+            }
+            for i in iface_data
+        ]
+        RouterInventory.upsert_interfaces(db, router, interfaces)
+        logger.info("Interfaces synced for router %s (%s)", router.name, router.id)
 
     @staticmethod
     def list_interfaces(

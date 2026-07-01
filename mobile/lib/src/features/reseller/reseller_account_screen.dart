@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/formatters.dart';
+import '../../core/semantic_colors.dart';
 import '../../models/reseller.dart';
 import '../../providers/data_providers.dart';
 import '../../providers/impersonation.dart';
@@ -277,7 +278,9 @@ class _StatusChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final active = status.toLowerCase() == 'active';
-    final color = active ? Colors.green : Colors.grey;
+    final color = active
+        ? context.semantic.success
+        : Theme.of(context).colorScheme.outline;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       decoration: BoxDecoration(

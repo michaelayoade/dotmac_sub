@@ -15,16 +15,46 @@
 #}
 <script>
 window.submitPaymentIntent = async function (opts) {
-    const response = await fetch(opts.endpoint, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-Token': opts.csrfToken,
-            'Idempotency-Key': opts.idempotencyKey,
-        },
-        body: JSON.stringify(opts.body),
-    });
-    const payload = await response.json();
+    // The same idempotency key is reused across every attempt below, so a
+    // saved-card charge that succeeded on a lost response is replayed, never
+    // double-charged. That makes it safe to retry transient failures and the
+    // stale/missing-CSRF case that previously dead-ended the Pay button.
+    function postOnce(csrfToken) {
+        return fetch(opts.endpoint, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': csrfToken || '',
+                'Idempotency-Key': opts.idempotencyKey,
+            },
+            body: JSON.stringify(opts.body),
+        });
+    }
+
+    let response;
+    try {
+        response = await postOnce(opts.csrfToken);
+    } catch (netErr) {
+        // Transient network blip before any server response — one retry.
+        response = await postOnce(opts.csrfToken);
+    }
+
+    // A stale/missing CSRF cookie is the most common reason the pre-flight
+    // 403s; refresh it and retry once before giving up.
+    if (response.status === 403 && typeof opts.refreshCsrf === 'function') {
+        const fresh = await opts.refreshCsrf();
+        if (fresh) {
+            response = await postOnce(fresh);
+        }
+    }
+
+    let payload = {};
+    try {
+        payload = await response.json();
+    } catch (parseErr) {
+        payload = {};
+    }
     if (!response.ok) {
         throw new Error(payload.detail || 'Unable to start payment.');
     }

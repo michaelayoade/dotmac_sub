@@ -35,11 +35,6 @@ ALLOWED_METHODS = [
     "hostgroup.create",
     # Template methods
     "template.get",
-    # Maintenance window methods
-    "maintenance.get",
-    "maintenance.create",
-    "maintenance.update",
-    "maintenance.delete",
 ]
 
 
@@ -330,11 +325,17 @@ class ZabbixClient:
         if method != expected or method not in ALLOWED_METHODS:
             raise ZabbixMethodNotAllowedError("Zabbix API method is not allowed")
 
-    def _submit_read_payload(
+    def _post_payload(
         self,
         payload: dict[str, Any],
         expected: str,
-    ) -> list[dict[str, Any]]:
+    ) -> dict[str, Any]:
+        """Shared transport: enforce allowlist + circuits, POST, return raw data.
+
+        Handles authentication, transport failures, and circuit breakers
+        identically for reads and writes. The caller interprets the JSON-RPC
+        ``error``/``result`` envelope on the returned dict.
+        """
         self._ensure_allowed(payload, expected)
         circuit_error = _AUTH_CIRCUIT.check()
         if circuit_error:
@@ -379,6 +380,14 @@ class ZabbixClient:
 
         if not isinstance(data, dict):
             raise ZabbixClientError("Invalid Zabbix API response")
+        return data
+
+    def _submit_read_payload(
+        self,
+        payload: dict[str, Any],
+        expected: str,
+    ) -> list[dict[str, Any]]:
+        data = self._post_payload(payload, expected)
         if data.get("error"):
             error_info = data.get("error") or {}
             error_message = str(
@@ -408,50 +417,7 @@ class ZabbixClient:
         expected: str,
     ) -> dict[str, Any]:
         """Submit a write payload and return the result (dict or scalar)."""
-        self._ensure_allowed(payload, expected)
-        circuit_error = _AUTH_CIRCUIT.check()
-        if circuit_error:
-            raise ZabbixAuthError(circuit_error)
-        if _REACHABILITY_CIRCUIT.is_open():
-            raise ZabbixClientError(
-                "Zabbix circuit open after recent connection failures"
-            )
-        try:
-            with httpx.Client(timeout=self.timeout) as client:
-                response = client.post(
-                    self.api_url,
-                    headers={
-                        "Authorization": f"Bearer {self.api_token}",
-                        "Content-Type": "application/json-rpc",
-                    },
-                    json=payload,
-                )
-                response.raise_for_status()
-                data = response.json()
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code in {401, 403}:
-                _raise_auth_error(
-                    f"Zabbix API authentication failed with HTTP {exc.response.status_code}"
-                )
-            logger.info(
-                "zabbix_request_failure",
-                extra={
-                    "event": "zabbix_request_failure",
-                    "method": expected,
-                    "status_code": exc.response.status_code,
-                },
-            )
-            raise ZabbixClientError("Zabbix API request failed") from exc
-        except (httpx.RequestError, ValueError) as exc:
-            _REACHABILITY_CIRCUIT.trip()
-            logger.info(
-                "zabbix_request_failure",
-                extra={"event": "zabbix_request_failure", "method": expected},
-            )
-            raise ZabbixClientError("Zabbix API request failed") from exc
-
-        if not isinstance(data, dict):
-            raise ZabbixClientError("Invalid Zabbix API response")
+        data = self._post_payload(payload, expected)
         if data.get("error"):
             error_info = data.get("error", {})
             error_message = str(
@@ -696,137 +662,6 @@ class ZabbixClient:
         result = self._submit_write_payload(payload, method)
         return bool(result.get("hostids"))
 
-    # ========== Maintenance Methods ==========
-
-    def get_maintenance_windows(
-        self,
-        host_ids: list[str] | None = None,
-        active_only: bool = True,
-        limit: int = 100,
-    ) -> list[dict[str, Any]]:
-        """Get maintenance windows, optionally filtered by host IDs."""
-        method = "maintenance.get"
-        params: dict[str, Any] = {
-            "output": [
-                "maintenanceid",
-                "name",
-                "active_since",
-                "active_till",
-                "description",
-            ],
-            "selectHosts": ["hostid", "host", "name"],
-            "selectTimeperiods": "extend",
-            "sortfield": "active_since",
-            "sortorder": "DESC",
-            "limit": limit,
-        }
-        if host_ids:
-            params["hostids"] = host_ids
-        if active_only:
-            import time
-
-            now = int(time.time())
-            params["filter"] = {}
-            # Filter for active maintenance windows handled by time range
-        payload = {
-            "jsonrpc": "2.0",
-            "method": method,
-            "params": params,
-            "id": next(self._request_ids),
-        }
-        return self._submit_read_payload(payload, method)
-
-    def create_maintenance(
-        self,
-        name: str,
-        host_ids: list[str],
-        active_since: int,
-        active_till: int,
-        description: str | None = None,
-    ) -> str:
-        """Create a maintenance window and return its ID.
-
-        Args:
-            name: Maintenance window name
-            host_ids: List of host IDs to put in maintenance
-            active_since: Unix timestamp for start
-            active_till: Unix timestamp for end
-            description: Optional description
-        """
-        method = "maintenance.create"
-        params: dict[str, Any] = {
-            "name": name,
-            "active_since": active_since,
-            "active_till": active_till,
-            "hostids": host_ids,
-            "timeperiods": [
-                {
-                    "timeperiod_type": 0,  # One-time
-                    "start_date": active_since,
-                    "period": active_till - active_since,
-                }
-            ],
-        }
-        if description:
-            params["description"] = description
-
-        payload = {
-            "jsonrpc": "2.0",
-            "method": method,
-            "params": params,
-            "id": next(self._request_ids),
-        }
-        result = self._submit_write_payload(payload, method)
-        maint_ids = result.get("maintenanceids", [])
-        if not maint_ids:
-            raise ZabbixClientError("Failed to create maintenance window")
-        return maint_ids[0]
-
-    def update_maintenance(
-        self,
-        maintenance_id: str,
-        name: str | None = None,
-        host_ids: list[str] | None = None,
-        active_since: int | None = None,
-        active_till: int | None = None,
-        description: str | None = None,
-    ) -> bool:
-        """Update an existing maintenance window."""
-        method = "maintenance.update"
-        params: dict[str, Any] = {"maintenanceid": maintenance_id}
-
-        if name is not None:
-            params["name"] = name
-        if host_ids is not None:
-            params["hostids"] = host_ids
-        if active_since is not None:
-            params["active_since"] = active_since
-        if active_till is not None:
-            params["active_till"] = active_till
-        if description is not None:
-            params["description"] = description
-
-        payload = {
-            "jsonrpc": "2.0",
-            "method": method,
-            "params": params,
-            "id": next(self._request_ids),
-        }
-        result = self._submit_write_payload(payload, method)
-        return bool(result.get("maintenanceids"))
-
-    def delete_maintenance(self, maintenance_id: str) -> bool:
-        """Delete a maintenance window by ID."""
-        method = "maintenance.delete"
-        payload = {
-            "jsonrpc": "2.0",
-            "method": method,
-            "params": [maintenance_id],
-            "id": next(self._request_ids),
-        }
-        result = self._submit_write_payload(payload, method)
-        return bool(result.get("maintenanceids"))
-
     def get_hosts(
         self,
         host_id: str | None = None,
@@ -836,7 +671,14 @@ class ZabbixClient:
     ) -> list[dict[str, Any]]:
         method = "host.get"
         params: dict[str, Any] = {
-            "output": ["hostid", "host", "name", "status", "available"],
+            "output": [
+                "hostid",
+                "host",
+                "name",
+                "status",
+                "available",
+                "maintenance_status",
+            ],
             "selectGroups": ["groupid", "name"],
             "selectInterfaces": [
                 "interfaceid",
@@ -869,6 +711,51 @@ class ZabbixClient:
             "jsonrpc": "2.0",
             "method": method,
             "params": params,
+            "id": next(self._request_ids),
+        }
+        return self._submit_read_payload(payload, method)
+
+    def get_hosts_by_tag(
+        self,
+        tag: str,
+        value: str,
+        limit: int = 2,
+    ) -> list[dict[str, Any]]:
+        """Find hosts carrying an exact tag value.
+
+        Used to adopt a host that already represents a device (e.g. one created
+        before the device stored its ``zabbix_host_id``) instead of creating a
+        duplicate. ``operator: 1`` is an exact-equals tag match.
+        """
+        method = "host.get"
+        payload = {
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": {
+                "output": ["hostid", "host", "name", "status"],
+                "tags": [{"tag": tag, "value": value, "operator": 1}],
+                "limit": limit,
+            },
+            "id": next(self._request_ids),
+        }
+        return self._submit_read_payload(payload, method)
+
+    def get_hosts_by_interface_ip(
+        self,
+        ip: str,
+        limit: int = 2,
+    ) -> list[dict[str, Any]]:
+        """Find hosts with an interface using the exact IP address."""
+        method = "host.get"
+        payload = {
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": {
+                "output": ["hostid", "host", "name", "status"],
+                "selectInterfaces": ["interfaceid", "ip", "dns", "type", "main"],
+                "filter": {"ip": ip},
+                "limit": limit,
+            },
             "id": next(self._request_ids),
         }
         return self._submit_read_payload(payload, method)

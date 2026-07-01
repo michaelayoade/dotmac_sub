@@ -26,6 +26,8 @@ logger = logging.getLogger(__name__)
 @celery_app.task(
     name="app.tasks.monitoring_warm.warm_monitoring_caches",
     expires=110,
+    soft_time_limit=90,
+    time_limit=110,
 )
 def warm_monitoring_caches() -> dict[str, Any]:
     """Refresh the per-OLT Zabbix summary cache (ont-zabbix-summary:*)."""

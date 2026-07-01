@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import ipaddress
 import logging
+import threading
+import time
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import httpx
 from fastapi import HTTPException
@@ -12,6 +15,8 @@ from sqlalchemy.orm import Session
 from app.models.domain_settings import DomainSetting, SettingDomain
 
 logger = logging.getLogger(__name__)
+_LAST_REQUEST_LOCK = threading.Lock()
+_LAST_REQUEST_AT: dict[str, float] = {}
 
 
 def _setting_value(db: Session, key: str) -> str | None:
@@ -49,6 +54,36 @@ def _setting_int(db: Session, key: str, default: int) -> int:
         return default
 
 
+def _is_self_hosted_url(base_url: str) -> bool:
+    host = (urlparse(base_url).hostname or "").strip().lower()
+    if not host:
+        return False
+    if host in {"localhost", "127.0.0.1", "::1"}:
+        return True
+    try:
+        parsed = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return parsed.is_private or parsed.is_loopback
+
+
+def _throttle_geocoding_request(db: Session, *, provider: str, base_url: str) -> None:
+    min_interval_ms = max(_setting_int(db, "min_interval_ms", 0), 0)
+    if min_interval_ms <= 0 or _is_self_hosted_url(base_url):
+        return
+    key = f"{provider}:{base_url.rstrip('/')}"
+    min_interval_seconds = min_interval_ms / 1000.0
+    with _LAST_REQUEST_LOCK:
+        now = time.monotonic()
+        last_request_at = _LAST_REQUEST_AT.get(key)
+        if last_request_at is not None:
+            wait_seconds = min_interval_seconds - (now - last_request_at)
+            if wait_seconds > 0:
+                time.sleep(wait_seconds)
+                now = time.monotonic()
+        _LAST_REQUEST_AT[key] = now
+
+
 def _compose_address(data: dict) -> str | None:
     parts = [
         data.get("address_line1"),
@@ -81,6 +116,7 @@ def _nominatim_search(db: Session, query: str, limit: int) -> list[dict]:
     if email:
         params["email"] = email
     try:
+        _throttle_geocoding_request(db, provider="nominatim", base_url=base_url)
         response = httpx.get(
             f"{base_url.rstrip('/')}/search",
             params=params,
@@ -111,6 +147,7 @@ def _nominatim_reverse(db: Session, latitude: float, longitude: float) -> dict |
     if email:
         params["email"] = email
     try:
+        _throttle_geocoding_request(db, provider="nominatim", base_url=base_url)
         response = httpx.get(
             f"{base_url.rstrip('/')}/reverse",
             params=params,
@@ -160,9 +197,11 @@ def _google_search(db: Session, query: str, limit: int) -> list[dict]:
             status_code=400, detail="Google geocoding key is not configured"
         )
     timeout_sec = _setting_int(db, "timeout_sec", 5)
+    base_url = "https://maps.googleapis.com"
     try:
+        _throttle_geocoding_request(db, provider="google", base_url=base_url)
         response = httpx.get(
-            "https://maps.googleapis.com/maps/api/geocode/json",
+            f"{base_url}/maps/api/geocode/json",
             params={"address": query, "key": api_key},
             timeout=float(timeout_sec),
         )
@@ -203,9 +242,11 @@ def _mapbox_search(db: Session, query: str, limit: int) -> list[dict]:
             status_code=400, detail="Mapbox geocoding token is not configured"
         )
     timeout_sec = _setting_int(db, "timeout_sec", 5)
+    base_url = "https://api.mapbox.com"
     try:
+        _throttle_geocoding_request(db, provider="mapbox", base_url=base_url)
         response = httpx.get(
-            f"https://api.mapbox.com/geocoding/v5/mapbox.places/{quote(query)}.json",
+            f"{base_url}/geocoding/v5/mapbox.places/{quote(query)}.json",
             params={"access_token": token, "limit": max(limit, 1)},
             timeout=float(timeout_sec),
         )

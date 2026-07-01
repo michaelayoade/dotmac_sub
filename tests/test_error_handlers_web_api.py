@@ -5,8 +5,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 from fastapi import APIRouter, FastAPI, HTTPException
+from fastapi.exceptions import RequestValidationError
 
-from app.errors import register_error_handlers
+from app.errors import _validation_error_summary, register_error_handlers
 from app.observability import ObservabilityMiddleware
 
 
@@ -111,6 +112,23 @@ def test_api_validation_error_returns_json() -> None:
     assert body["code"] == "validation_error"
     assert body["message"] == "Validation error"
     assert isinstance(body["details"], list)
+
+
+def test_validation_error_summary_excludes_raw_input() -> None:
+    exc = RequestValidationError(
+        [
+            {
+                "loc": ("body", "secret_field"),
+                "msg": "Field required",
+                "type": "missing",
+                "input": "do-not-log",
+            }
+        ]
+    )
+
+    assert _validation_error_summary(exc) == [
+        {"loc": ["body", "secret_field"], "type": "missing", "msg": "Field required"}
+    ]
 
 
 def test_htmx_request_stays_json_not_template() -> None:

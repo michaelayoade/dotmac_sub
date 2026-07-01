@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from fastapi import Request
@@ -12,7 +13,7 @@ from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
-from app.models.catalog import ConnectionType, NasVendor
+from app.models.catalog import ConnectionType, NasDevice, NasVendor
 from app.models.radius import RadiusServer
 from app.models.radius_active_session import RadiusActiveSession
 from app.models.radius_error import RadiusAuthError, RadiusAuthErrorType
@@ -666,8 +667,10 @@ def active_sessions_page_data(
     return {
         "sessions": db.scalars(stmt.limit(500)).unique().all(),
         "total_online": db.scalar(select(func.count(RadiusActiveSession.id))) or 0,
+        "nas_devices": db.scalars(select(NasDevice).order_by(NasDevice.name)).all(),
         "search": search,
         "nas_filter": nas_filter,
+        "snapshot_at": datetime.now(UTC),
     }
 
 
@@ -771,6 +774,7 @@ def parse_profile_form(form) -> tuple[dict[str, object], list[dict], str | None]
     download_speed = form.get("download_speed", "").strip()
     upload_speed = form.get("upload_speed", "").strip()
     mikrotik_rate_limit = form.get("mikrotik_rate_limit", "").strip()
+    mikrotik_address_list = form.get("mikrotik_address_list", "").strip()
     is_active = form.get("is_active") == "true"
     attributes, attr_error = parse_profile_attributes(form)
 
@@ -795,6 +799,11 @@ def parse_profile_form(form) -> tuple[dict[str, object], list[dict], str | None]
             return profile_data, attributes, "Upload speed must be a valid integer."
     if mikrotik_rate_limit:
         profile_data["mikrotik_rate_limit"] = mikrotik_rate_limit
+    profile_data["mikrotik_address_list"] = mikrotik_address_list or None
+    # Framed-Pool (v4) and Delegated-IPv6-Prefix-Pool (v6) names. Set
+    # unconditionally so an admin can clear them by submitting an empty field.
+    profile_data["ip_pool_name"] = form.get("ip_pool_name", "").strip() or None
+    profile_data["ipv6_pool_name"] = form.get("ipv6_pool_name", "").strip() or None
 
     if not name:
         return profile_data, attributes, "Profile name is required."

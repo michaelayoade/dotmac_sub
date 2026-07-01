@@ -1,5 +1,7 @@
 """Admin billing dunning web routes."""
 
+from urllib.parse import urlencode
+
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -35,6 +37,40 @@ def _actor_id(request: Request) -> str | None:
     return str(value) if value else None
 
 
+def _dunning_list_url(
+    *,
+    note: str | None = None,
+    warning: str | None = None,
+) -> str:
+    params = {
+        key: value
+        for key, value in {"dunning_note": note, "dunning_warning": warning}.items()
+        if value
+    }
+    query = urlencode(params)
+    if query:
+        return f"/admin/billing/dunning?{query}"
+    return "/admin/billing/dunning"
+
+
+def _bulk_action_redirect(
+    action: str,
+    result: web_billing_dunning_service.BulkDunningActionResult,
+):
+    note = result.message(action) if result.processed else None
+    warning = None
+    if result.failed or result.skipped:
+        warning = (
+            f"{result.failed + result.skipped} selected dunning "
+            f"case{'s' if result.failed + result.skipped != 1 else ''} "
+            "could not be processed."
+        )
+    return RedirectResponse(
+        url=_dunning_list_url(note=note, warning=warning),
+        status_code=303,
+    )
+
+
 @router.get(
     "/dunning",
     response_class=HTMLResponse,
@@ -57,6 +93,22 @@ def billing_dunning(
     )
     return templates.TemplateResponse(
         "admin/billing/dunning.html",
+        {
+            **_base_context(request, db, "dunning"),
+            **state,
+        },
+    )
+
+
+@router.get(
+    "/dunning/{case_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:dunning:read"))],
+)
+def dunning_detail(request: Request, case_id: str, db: Session = Depends(get_db)):
+    state = web_billing_dunning_service.build_detail_data(db, case_id=case_id)
+    return templates.TemplateResponse(
+        "admin/billing/dunning_detail.html",
         {
             **_base_context(request, db, "dunning"),
             **state,
@@ -116,14 +168,14 @@ def dunning_close(request: Request, case_id: str, db: Session = Depends(get_db))
 def dunning_bulk_pause(
     request: Request, case_ids: str = Form(...), db: Session = Depends(get_db)
 ):
-    web_billing_dunning_service.execute_action_with_audit(
+    result = web_billing_dunning_service.execute_bulk_action_with_audit_result(
         db,
         request=request,
         action="pause",
         actor_id=_actor_id(request),
         case_ids_csv=case_ids,
     )
-    return RedirectResponse(url="/admin/billing/dunning", status_code=303)
+    return _bulk_action_redirect("pause", result)
 
 
 @router.post(
@@ -133,11 +185,11 @@ def dunning_bulk_pause(
 def dunning_bulk_resume(
     request: Request, case_ids: str = Form(...), db: Session = Depends(get_db)
 ):
-    web_billing_dunning_service.execute_action_with_audit(
+    result = web_billing_dunning_service.execute_bulk_action_with_audit_result(
         db,
         request=request,
         action="resume",
         actor_id=_actor_id(request),
         case_ids_csv=case_ids,
     )
-    return RedirectResponse(url="/admin/billing/dunning", status_code=303)
+    return _bulk_action_redirect("resume", result)

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/formatters.dart';
+import '../../core/semantic_colors.dart';
 import '../../models/reseller.dart';
 import '../../providers/auth_controller.dart';
 import '../../providers/data_providers.dart';
@@ -91,7 +92,9 @@ class _SectionTiles extends StatelessWidget {
   const _SectionTiles();
 
   static const _sections = [
+    (Icons.add_location_alt_outlined, 'Quotes & installs', '/reseller/quotes'),
     (Icons.receipt_long_outlined, 'Billing', '/reseller/billing'),
+    (Icons.forum_outlined, 'Live chat', '/reseller/chat'),
     (Icons.bar_chart_outlined, 'Revenue', '/reseller/revenue'),
     (
       Icons.add_business_outlined,
@@ -205,8 +208,8 @@ class _AlertTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final (IconData icon, Color color) = switch (alert.level) {
-      'danger' => (Icons.error_outline, Colors.red),
-      'warning' => (Icons.warning_amber_outlined, Colors.orange),
+      'danger' => (Icons.error_outline, Theme.of(context).colorScheme.error),
+      'warning' => (Icons.warning_amber_outlined, context.semantic.warning),
       _ => (Icons.info_outline, Colors.blue),
     };
     return Card(

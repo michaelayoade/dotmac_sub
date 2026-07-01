@@ -94,7 +94,7 @@ def resolve_crm_subscriber_id(db: Session, subscriber_id: str) -> str | None:
     """Resolve a DotMac Sub subscriber UUID to a CRM subscriber UUID.
 
     Prefers the locally stored crm_subscriber_id; falls back to the legacy
-    splynx_customer_id → CRM external_id chain and persists the result so each
+    imported customer id -> CRM external_id chain and persists the result so each
     subscriber only pays for the chain once. Cached in Redis for 1hr.
     """
     cache_key = f"crm:sub_map:{subscriber_id}"

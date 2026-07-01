@@ -120,6 +120,12 @@ def _active_ont_assignment(
     # NOTE: ont_assignments has a partial-unique index on ont_unit_id (active),
     # not on subscriber_id. This single-subscriber lookup is fine for a detail
     # page; a subscriber_id index is a follow-up if it becomes a hot path.
+    #
+    # Order by id so a subscriber with >1 active ONT (and no service-address
+    # match) resolves to a STABLE ONT — otherwise the customer-facing path and
+    # the batched gap reader (which orders by id) could pick different ONTs,
+    # hence different OLTs/basestations, run to run.
+    base = base.order_by(OntAssignment.id)
     if subscription.service_address_id is not None:
         by_addr = base.filter(
             OntAssignment.service_address_id == subscription.service_address_id

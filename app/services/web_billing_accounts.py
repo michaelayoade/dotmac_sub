@@ -3,16 +3,43 @@
 from __future__ import annotations
 
 import logging
+from decimal import Decimal
 from uuid import UUID
 
-from app.models.subscriber import Subscriber, SubscriberCategory, SubscriberStatus
+from sqlalchemy import func, not_, or_
+
+from app.models.billing import Invoice, InvoiceStatus
+from app.models.domain_settings import SettingDomain
+from app.models.subscriber import (
+    Subscriber,
+    SubscriberCategory,
+    SubscriberStatus,
+    UserType,
+)
 from app.schemas.subscriber import SubscriberAccountCreate, SubscriberUpdate
 from app.services import billing as billing_service
+from app.services import settings_spec
 from app.services import subscriber as subscriber_service
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services.audit_helpers import build_changes_metadata, log_audit_event
 
 logger = logging.getLogger(__name__)
+
+_OPEN_BALANCE_INVOICE_STATUSES = (
+    InvoiceStatus.issued,
+    InvoiceStatus.partially_paid,
+    InvoiceStatus.overdue,
+)
+
+
+def _default_currency(db) -> str:
+    value = settings_spec.resolve_value(db, SettingDomain.billing, "default_currency")
+    code = str(value or "NGN").strip().upper()
+    return code or "NGN"
+
+
+def _format_money(amount: object, currency: str) -> str:
+    return f"{currency} {Decimal(str(amount or 0)):,.2f}"
 
 
 def build_accounts_list_data(
@@ -22,39 +49,100 @@ def build_accounts_list_data(
     per_page: int,
     customer_ref: str | None,
     reseller_id: str | None = None,
+    search: str | None = None,
+    status: str | None = None,
+    balance_filter: str | None = None,
 ) -> dict[str, object]:
     offset = (page - 1) * per_page
-    accounts = []
-    total = 0
+    balance_subquery = (
+        db.query(
+            Invoice.account_id.label("account_id"),
+            func.coalesce(func.sum(Invoice.balance_due), 0).label("open_balance"),
+        )
+        .filter(Invoice.is_active.is_(True))
+        .filter(Invoice.status.in_(_OPEN_BALANCE_INVOICE_STATUSES))
+        .group_by(Invoice.account_id)
+        .subquery()
+    )
+    balance_value = func.coalesce(balance_subquery.c.open_balance, 0)
+    base_query = db.query(Subscriber).filter(
+        Subscriber.user_type != UserType.system_user
+    )
+    base_query = base_query.outerjoin(
+        balance_subquery, balance_subquery.c.account_id == Subscriber.id
+    )
+    base_query = base_query.filter(
+        not_(subscriber_service.splynx_deleted_import_clause())
+    )
     if customer_ref:
         subscriber_ids = web_billing_customers_service.subscriber_ids_for_customer(
             db, customer_ref
         )
         if subscriber_ids:
-            query = (
-                db.query(Subscriber)
-                .filter(Subscriber.id.in_(subscriber_ids))
-                .order_by(Subscriber.created_at.desc())
+            base_query = base_query.filter(Subscriber.id.in_(subscriber_ids))
+        else:
+            base_query = base_query.filter(False)
+    if reseller_id:
+        base_query = base_query.filter(Subscriber.reseller_id == UUID(reseller_id))
+    if status:
+        try:
+            base_query = base_query.filter(
+                Subscriber.status == SubscriberStatus(status)
             )
-            total = query.count()
-            accounts = query.offset(offset).limit(per_page).all()
-    else:
-        accounts = subscriber_service.accounts.list(
-            db=db,
-            subscriber_id=None,
-            reseller_id=reseller_id,
-            order_by="created_at",
-            order_dir="desc",
-            limit=per_page,
-            offset=offset,
+        except ValueError:
+            base_query = base_query.filter(False)
+    if search and search.strip():
+        like = f"%{search.strip()}%"
+        base_query = base_query.filter(
+            or_(
+                Subscriber.first_name.ilike(like),
+                Subscriber.last_name.ilike(like),
+                Subscriber.display_name.ilike(like),
+                Subscriber.company_name.ilike(like),
+                Subscriber.email.ilike(like),
+                Subscriber.phone.ilike(like),
+                Subscriber.subscriber_number.ilike(like),
+                Subscriber.account_number.ilike(like),
+            )
         )
-        total_query = db.query(Subscriber)
-        if reseller_id:
-            total_query = total_query.filter(
-                Subscriber.reseller_id == UUID(reseller_id)
-            )
-        total = total_query.count()
+    normalized_balance_filter = (balance_filter or "").strip().lower()
+    if normalized_balance_filter == "positive":
+        base_query = base_query.filter(balance_value > 0)
+    elif normalized_balance_filter == "zero":
+        base_query = base_query.filter(balance_value == 0)
+    elif normalized_balance_filter == "credit":
+        base_query = base_query.filter(balance_value < 0)
+    else:
+        normalized_balance_filter = ""
+
+    total = base_query.count()
+    summary_rows = base_query.add_columns(balance_value.label("open_balance")).all()
+    account_rows = (
+        base_query.add_columns(balance_value.label("open_balance"))
+        .order_by(Subscriber.created_at.desc())
+        .offset(offset)
+        .limit(per_page)
+        .all()
+    )
+    accounts = []
+    for account, open_balance in account_rows:
+        account.balance = Decimal(str(open_balance or 0))
+        accounts.append(account)
     total_pages = (total + per_page - 1) // per_page
+    default_currency = _default_currency(db)
+    total_balance = sum(
+        Decimal(str(open_balance or 0)) for _, open_balance in summary_rows
+    )
+    active_count = sum(
+        1
+        for account, _ in summary_rows
+        if getattr(account, "status", None) == SubscriberStatus.active
+    )
+    suspended_count = sum(
+        1
+        for account, _ in summary_rows
+        if getattr(account, "status", None) == SubscriberStatus.suspended
+    )
     return {
         "accounts": accounts,
         "page": page,
@@ -63,6 +151,14 @@ def build_accounts_list_data(
         "total_pages": total_pages,
         "customer_ref": customer_ref,
         "reseller_id": reseller_id,
+        "search": search or "",
+        "status_filter": status or "",
+        "balance_filter": normalized_balance_filter,
+        "default_currency": default_currency,
+        "total_balance": float(total_balance),
+        "total_balance_display": _format_money(total_balance, default_currency),
+        "active_count": active_count,
+        "suspended_count": suspended_count,
     }
 
 
@@ -361,4 +457,9 @@ def build_account_detail_data(db, *, account_id: str) -> dict[str, object]:
         limit=50,
         offset=0,
     )
-    return {"account": account, "invoices": invoices}
+    default_currency = _default_currency(db)
+    return {
+        "account": account,
+        "invoices": invoices,
+        "default_currency": default_currency,
+    }

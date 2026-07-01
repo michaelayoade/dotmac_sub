@@ -170,19 +170,33 @@ def _write_subscription_ips_from_accounting(
     ipv4: str | None,
     ipv6: str | None,
 ) -> None:
-    """Mirror of the MAC write-back: the framed address on a live accounting
-    row is the subscriber's current address, so keep Subscription.ipv4_address
-    / ipv6_address (what the portal and mobile dashboard render) in sync."""
+    """Record the OBSERVED framed address from a live accounting row.
+
+    The observed live IP goes to ``last_seen_framed_ipv4/ipv6`` (display /
+    diagnostics, never enforcement). It is kept SEPARATE from
+    ``ipv4_address``/``ipv6_address`` — the DESIRED/served IP owned by the IP
+    assignment + connectivity reconciler — so the observed value can't overwrite
+    the desired IP and be re-emitted by the RADIUS sweep
+    (CONNECTIVITY_STATE_MACHINE.md §3.1). A legacy dual-write into the served
+    column is retained for ACTIVE subs only (the portal still reads it) until
+    the reconciler-as-sole-writer cutover."""
     if not subscription_id or not (ipv4 or ipv6):
         return
     subscription = db.get(Subscription, subscription_id)
     if not subscription:
         return
-    # Only mirror the framed address for an ACTIVE subscription. For a
+    # OBSERVED → last_seen_framed_* (any status; observational, safe).
+    if ipv4 and subscription.last_seen_framed_ipv4 != ipv4:
+        subscription.last_seen_framed_ipv4 = ipv4
+    if ipv6 and subscription.last_seen_framed_ipv6 != ipv6:
+        subscription.last_seen_framed_ipv6 = ipv6
+
+    # LEGACY dual-write into the served-IP column, ACTIVE subs only. For a
     # suspended/blocked/terminated sub the accounting row can carry a stale or
     # reject-pool address; copying that into the served-IP column makes it the
     # new "desired" IP that the RADIUS sweep then re-emits — a self-reinforcing
-    # wrong-IP loop. The column is only authoritative while service is live.
+    # wrong-IP loop. Removed in the sole-writer cutover once the connectivity
+    # shadow gauge shows ipv4_cache drift is ~0; behaviour unchanged until then.
     if subscription.status != SubscriptionStatus.active:
         return
     if ipv4 and subscription.ipv4_address != ipv4:
@@ -930,6 +944,7 @@ def meter_usage_into_quota(db: Session, now: datetime | None = None) -> dict:
         .all()
     )
     metered = 0
+    changed_subscription_ids: list[str] = []
     for sub in subs:
         if _resolve_allowance(sub) is None:
             continue
@@ -944,6 +959,9 @@ def meter_usage_into_quota(db: Session, now: datetime | None = None) -> dict:
             .filter(RadiusAccountingSession.session_start < bucket.period_end)
             .scalar()
         ) or 0
+        previous_used_gb = Decimal(str(bucket.used_gb or 0))
+        previous_topup_gb = Decimal(str(bucket.topup_gb or 0))
+        previous_overage_gb = Decimal(str(bucket.overage_gb or 0))
         used_gb = _round_bucket_gb(Decimal(int(octets)) / Decimal(_GB_BYTES))
         bucket.used_gb = used_gb
         # Refresh top-up from still-valid purchases so expired ones drop out.
@@ -957,9 +975,18 @@ def meter_usage_into_quota(db: Session, now: datetime | None = None) -> dict:
         bucket.overage_gb = (
             _round_bucket_gb(overage) if overage > Decimal("0") else Decimal("0.00")
         )
+        if (
+            previous_used_gb != Decimal(str(bucket.used_gb or 0))
+            or previous_topup_gb != Decimal(str(bucket.topup_gb or 0))
+            or previous_overage_gb != Decimal(str(bucket.overage_gb or 0))
+        ):
+            changed_subscription_ids.append(str(sub.id))
         metered += 1
-    logger.info("usage_metered_into_quota", extra={"metered": metered})
-    return {"metered": metered}
+    logger.info(
+        "usage_metered_into_quota",
+        extra={"metered": metered, "changed": len(changed_subscription_ids)},
+    )
+    return {"metered": metered, "changed_subscription_ids": changed_subscription_ids}
 
 
 def _active_topup_gb(db: Session, subscription: Subscription, now: datetime) -> Decimal:

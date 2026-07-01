@@ -6,6 +6,7 @@ from typing import cast
 from urllib.parse import urlparse
 
 from fastapi import HTTPException
+from sqlalchemy import and_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -178,16 +179,30 @@ def _get_address_by_id(
 def _find_available_address(
     db: Session, ip_version: IPVersion, pool_id: str
 ) -> IPv4Address | IPv6Address | None:
+    # An address is free when it has no *active* assignment — a released
+    # (is_active=false) assignment stays for history but must not block reuse
+    # (the partial-unique index permits a fresh active row alongside it). The
+    # active-only outerjoin is the read side of the asymmetric-release fix.
+    # ``with_for_update(skip_locked=True)`` makes two concurrent provisionings pick
+    # *different* free rows instead of racing onto the same lowest address. (No-op
+    # on SQLite, which the test suite uses; real protection on Postgres.)
     if ip_version == IPVersion.ipv4:
         return cast(
             IPv4Address | None,
             (
                 db.query(IPv4Address)
-                .outerjoin(IPAssignment, IPAssignment.ipv4_address_id == IPv4Address.id)
+                .outerjoin(
+                    IPAssignment,
+                    and_(
+                        IPAssignment.ipv4_address_id == IPv4Address.id,
+                        IPAssignment.is_active.is_(True),
+                    ),
+                )
                 .filter(IPv4Address.pool_id == pool_id)
                 .filter(IPv4Address.is_reserved.is_(False))
                 .filter(IPAssignment.id.is_(None))
                 .order_by(IPv4Address.address.asc())
+                .with_for_update(skip_locked=True, of=IPv4Address)
                 .first()
             ),
         )
@@ -195,28 +210,61 @@ def _find_available_address(
         IPv6Address | None,
         (
             db.query(IPv6Address)
-            .outerjoin(IPAssignment, IPAssignment.ipv6_address_id == IPv6Address.id)
+            .outerjoin(
+                IPAssignment,
+                and_(
+                    IPAssignment.ipv6_address_id == IPv6Address.id,
+                    IPAssignment.is_active.is_(True),
+                ),
+            )
             .filter(IPv6Address.pool_id == pool_id)
             .filter(IPv6Address.is_reserved.is_(False))
             .filter(IPAssignment.id.is_(None))
             .order_by(IPv6Address.address.asc())
+            .with_for_update(skip_locked=True, of=IPv6Address)
             .first()
         ),
     )
 
 
-def _any_ipv4_assignment_exists(db: Session, address: IPv4Address) -> bool:
-    """True if any IPAssignment (active OR inactive) references this address.
+def _active_ipv4_assignment_exists(db: Session, address: IPv4Address) -> bool:
+    """True if an *active* IPAssignment references this address.
 
-    Reusing an address that still carries an inactive assignment would steal a
-    suspended customer's held IP, so on-demand allocation skips it.
+    Suspended/blocked customers keep their assignment ACTIVE (only terminal
+    release, admin release, ONT removal and the repair tools deactivate), so an
+    inactive assignment means the address was released and is reusable. Only an
+    active assignment blocks reuse.
     """
     return (
         db.query(IPAssignment.id)
         .filter(IPAssignment.ipv4_address_id == address.id)
+        .filter(IPAssignment.is_active.is_(True))
         .first()
         is not None
     )
+
+
+def _reactivation_address_is_valid(db: Session, address: IPv4Address | None) -> bool:
+    """True if a subscriber's previously-released IPv4 address is still safe to
+    reactivate. Guards the ``inactive -> active`` reuse so a long-dead assignment
+    is not resurrected onto an address whose role changed (now reserved, a
+    management/ONT address, or swallowed by an active routed block).
+    """
+    if address is None:
+        return False
+    if address.is_reserved or address.ont_unit_id is not None:
+        return False
+    if (address.allocation_type or "") == "management":
+        return False
+    # Don't resurrect onto an address already re-allocated to someone else — the
+    # partial-unique index would reject a second active row anyway.
+    if _active_ipv4_assignment_exists(db, address):
+        return False
+    try:
+        ip_obj = ipaddress.ip_address(str(address.address))
+    except ValueError:
+        return False
+    return not any(ip_obj in net for net in _active_additional_route_networks(db))
 
 
 def _active_additional_route_networks(db: Session) -> list[ipaddress.IPv4Network]:
@@ -338,6 +386,9 @@ def _allocate_ipv4_on_demand(db: Session, pool: IpPool) -> IPv4Address | None:
                         [row.id for row in existing_by_ip.values()]
                     )
                 )
+                # Only an ACTIVE assignment blocks reuse; a released (inactive)
+                # one leaves the address allocatable.
+                .filter(IPAssignment.is_active.is_(True))
                 .all()
             }
 
@@ -394,13 +445,31 @@ def _ensure_ip_assignment_for_version(
             .first()
         )
         if inactive_assignment:
-            inactive_assignment.is_active = True
-            assignment = inactive_assignment
-            logger.info(
-                "Reactivated existing IP assignment %s for subscription %s",
-                assignment.id,
-                subscription.id,
+            candidate_addr = (
+                inactive_assignment.ipv4_address
+                if ip_version == IPVersion.ipv4
+                else inactive_assignment.ipv6_address
             )
+            if ip_version == IPVersion.ipv4 and not _reactivation_address_is_valid(
+                db, candidate_addr
+            ):
+                # Address changed role since release — don't resurrect onto it;
+                # fall through to a fresh allocation below.
+                logger.info(
+                    "Not reactivating assignment %s for subscription %s — address "
+                    "%s is no longer allocatable; allocating fresh",
+                    inactive_assignment.id,
+                    subscription.id,
+                    getattr(candidate_addr, "address", None),
+                )
+            else:
+                inactive_assignment.is_active = True
+                assignment = inactive_assignment
+                logger.info(
+                    "Reactivated existing IP assignment %s for subscription %s",
+                    assignment.id,
+                    subscription.id,
+                )
 
     version_key = ip_version.value
     override_address_id = context.get(f"{version_key}_address_id")
@@ -485,17 +554,27 @@ def _ensure_ip_assignment_for_version(
                 detail=f"No available {version_key} addresses in pool {pool.name}.",
             )
 
-    if (
+    # ``address.assignment`` is active-preferring (see the model relationship), so
+    # only treat it as a conflict when it is ACTIVE. An inactive (released) row —
+    # possibly from a different, terminated subscriber — does not block reuse: a
+    # fresh active assignment is created alongside it under the partial-unique
+    # index.
+    active_assignment = (
         address.assignment
-        and address.assignment.subscriber_id != subscription.subscriber_id
+        if (address.assignment and address.assignment.is_active)
+        else None
+    )
+    if (
+        active_assignment
+        and active_assignment.subscriber_id != subscription.subscriber_id
     ):
         raise HTTPException(
             status_code=400,
             detail=f"{version_key} address is already assigned.",
         )
 
-    if address.assignment:
-        assignment = address.assignment
+    if active_assignment:
+        assignment = active_assignment
     else:
         assignment_payload = IPAssignmentCreate(
             subscriber_id=subscription.subscriber_id,
@@ -543,6 +622,14 @@ def _ensure_ip_assignments(
                     f"{version_key}_prefix_length": assignment.prefix_length,
                 }
             )
+
+    # IPv6 prefix delegation (flag-gated by IPV6_PD_ENABLED): allocate a delegated
+    # prefix into the app's PD inventory; the RADIUS writers emit
+    # Delegated-IPv6-Prefix from there. No-op when disabled or no PD pool resolves.
+    from app.services import ipv6_pd
+
+    ipv6_pd.provision_pd_for_subscription(db, subscription)
+
     db.commit()
     return updates
 

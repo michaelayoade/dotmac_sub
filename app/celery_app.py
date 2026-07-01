@@ -86,14 +86,19 @@ celery_app.conf.task_routes = {
     "app.tasks.zabbix_ingestion.ingest_portal_usage_batch": {"queue": "ingestion"},
     "app.tasks.topology_sync.run_topology_reconcile": {"queue": "ingestion"},
     "app.tasks.topology_sync.warm_topology_status": {"queue": "ingestion"},
+    "app.tasks.monitoring_coverage.refresh_monitoring_coverage": {"queue": "ingestion"},
     "app.tasks.topology_lldp.run_lldp_topology_poll": {"queue": "ingestion"},
     "app.tasks.usage.import_radius_accounting": {"queue": "ingestion"},
     "app.tasks.usage.reap_stale_radius_sessions": {"queue": "ingestion"},
+    "app.tasks.radius.reap_radacct_ghosts": {"queue": "ingestion"},
     "app.tasks.usage.meter_usage_into_quota": {"queue": "ingestion"},
+    # Safety-net FUP reset runs off the billing queue on purpose, so expired
+    # throttle/block enforcement is still lifted when the billing queue stalls.
+    "app.tasks.usage.lift_expired_fup_enforcement": {"queue": "ingestion"},
     # Operator-triggered identity checks should not wait behind bulk jobs.
     "app.tasks.nin_tasks.verify_nin_task": {"queue": "nin"},
     # Monitoring cache warmer queries Zabbix; keep it off the default queue so
-    # it isn't starved by slow/long default-queue jobs (e.g. Splynx sync).
+    # it isn't starved by slow/long default-queue jobs.
     "app.tasks.monitoring_warm.warm_monitoring_caches": {"queue": "ingestion"},
     # CRM ticket pull paginates an external API; the default queue's backlog
     # would push it far past its 5-minute schedule.
@@ -111,10 +116,11 @@ celery_app.conf.task_routes = {
     "app.tasks.autopay.charge_due_invoices": {"queue": "billing"},
     "app.tasks.arrangements.check_overdue_arrangements": {"queue": "billing"},
     "app.tasks.payment_reconciliation.reconcile_topups": {"queue": "billing"},
+    "app.tasks.collections.run_billing_enforcement": {"queue": "billing"},
     "app.tasks.collections.run_dunning": {"queue": "billing"},
-    "app.tasks.prepaid_billing.run_prepaid_charges": {"queue": "billing"},
-    "app.tasks.prepaid_billing.check_billing_switch": {"queue": "billing"},
+    "app.tasks.billing.check_billing_switch": {"queue": "billing"},
     "app.tasks.catalog.expire_subscriptions": {"queue": "billing"},
+    "app.tasks.enforcement.cleanup_subscription_block_sessions": {"queue": "billing"},
     "app.tasks.usage.run_usage_rating": {"queue": "billing"},
     "app.tasks.usage.evaluate_fup_rules": {"queue": "billing"},
     # Daily customer-facing heads-up; must not sit behind a default-queue
@@ -343,6 +349,15 @@ def _log_task_postrun(task_id=None, task=None, state=None, retval=None, **_kwarg
             result_type=type(retval).__name__ if retval is not None else None,
         ),
     )
+    # Record a success heartbeat so the billing-health monitor can detect a
+    # stalled/dead runner (ScheduledTask.last_run_at is not maintained by beat).
+    if state == "SUCCESS" and task is not None and getattr(task, "name", None):
+        try:
+            from app.services.job_heartbeat import record_success
+
+            record_success(task.name)
+        except Exception:
+            logger.debug("heartbeat record failed", exc_info=True)
 
 
 @task_failure.connect

@@ -68,7 +68,7 @@ def _nin_verification_payload(
     response_model=ResellerRead,
     status_code=status.HTTP_201_CREATED,
     tags=["resellers"],
-    dependencies=[Depends(require_permission("subscriber:write"))],
+    dependencies=[Depends(require_permission("customer:create"))],
 )
 def create_reseller(payload: ResellerCreate, db: Session = Depends(get_db)):
     return subscriber_service.resellers.create(db, payload)
@@ -78,7 +78,7 @@ def create_reseller(payload: ResellerCreate, db: Session = Depends(get_db)):
     "/resellers/{reseller_id}",
     response_model=ResellerRead,
     tags=["resellers"],
-    dependencies=[Depends(require_permission("subscriber:read"))],
+    dependencies=[Depends(require_permission("customer:read"))],
 )
 def get_reseller(reseller_id: str, db: Session = Depends(get_db)):
     return subscriber_service.resellers.get(db, reseller_id)
@@ -88,7 +88,7 @@ def get_reseller(reseller_id: str, db: Session = Depends(get_db)):
     "/resellers",
     response_model=ListResponse[ResellerRead],
     tags=["resellers"],
-    dependencies=[Depends(require_permission("subscriber:read"))],
+    dependencies=[Depends(require_permission("customer:read"))],
 )
 def list_resellers(
     is_active: bool | None = None,
@@ -107,7 +107,7 @@ def list_resellers(
     "/resellers/{reseller_id}",
     response_model=ResellerRead,
     tags=["resellers"],
-    dependencies=[Depends(require_permission("subscriber:write"))],
+    dependencies=[Depends(require_permission("customer:update"))],
 )
 def update_reseller(
     reseller_id: str, payload: ResellerUpdate, db: Session = Depends(get_db)
@@ -119,7 +119,7 @@ def update_reseller(
     "/resellers/{reseller_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["resellers"],
-    dependencies=[Depends(require_permission("subscriber:write"))],
+    dependencies=[Depends(require_permission("customer:delete"))],
 )
 def delete_reseller(reseller_id: str, db: Session = Depends(get_db)):
     subscriber_service.resellers.delete(db, reseller_id)
@@ -130,7 +130,7 @@ def delete_reseller(reseller_id: str, db: Session = Depends(get_db)):
     response_model=SubscriberRead,
     status_code=status.HTTP_201_CREATED,
     tags=["subscribers"],
-    dependencies=[Depends(require_permission("subscriber:write"))],
+    dependencies=[Depends(require_permission("customer:create"))],
 )
 def create_subscriber(payload: SubscriberCreate, db: Session = Depends(get_db)):
     return subscriber_service.subscribers.create(db, payload)
@@ -140,7 +140,7 @@ def create_subscriber(payload: SubscriberCreate, db: Session = Depends(get_db)):
     "/subscribers/{subscriber_id}",
     response_model=SubscriberRead,
     tags=["subscribers"],
-    dependencies=[Depends(require_permission("subscriber:read"))],
+    dependencies=[Depends(require_permission("customer:read"))],
 )
 def get_subscriber(subscriber_id: str, db: Session = Depends(get_db)):
     return subscriber_service.subscribers.get(db, subscriber_id)
@@ -150,7 +150,7 @@ def get_subscriber(subscriber_id: str, db: Session = Depends(get_db)):
     "/subscribers",
     response_model=ListResponse[SubscriberRead],
     tags=["subscribers"],
-    dependencies=[Depends(require_permission("subscriber:read"))],
+    dependencies=[Depends(require_permission("customer:read"))],
 )
 def list_subscribers(
     subscriber_type: str | None = None,
@@ -177,7 +177,7 @@ def list_subscribers(
     "/subscribers/{subscriber_id}",
     response_model=SubscriberRead,
     tags=["subscribers"],
-    dependencies=[Depends(require_permission("subscriber:write"))],
+    dependencies=[Depends(require_permission("customer:update"))],
 )
 def update_subscriber(
     subscriber_id: str, payload: SubscriberUpdate, db: Session = Depends(get_db)
@@ -189,7 +189,7 @@ def update_subscriber(
     "/subscribers/{subscriber_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["subscribers"],
-    dependencies=[Depends(require_permission("subscriber:write"))],
+    dependencies=[Depends(require_permission("customer:delete"))],
 )
 def delete_subscriber(subscriber_id: str, db: Session = Depends(get_db)):
     subscriber_service.subscribers.delete(db, subscriber_id)
@@ -198,7 +198,7 @@ def delete_subscriber(subscriber_id: str, db: Session = Depends(get_db)):
 @router.post(
     "/subscribers/{subscriber_id}/verify-nin",
     tags=["subscribers"],
-    dependencies=[Depends(require_permission("subscriber:write"))],
+    dependencies=[Depends(require_permission("customer:update"))],
 )
 async def verify_subscriber_nin(
     subscriber_id: str,
@@ -267,7 +267,7 @@ async def verify_subscriber_nin(
 @router.get(
     "/subscribers/{subscriber_id}/nin-verification",
     tags=["subscribers"],
-    dependencies=[Depends(require_permission("subscriber:read"))],
+    dependencies=[Depends(require_permission("customer:read"))],
 )
 def get_subscriber_nin_verification(
     subscriber_id: str,
@@ -290,7 +290,7 @@ def get_subscriber_nin_verification(
     response_model=AddressRead,
     status_code=status.HTTP_201_CREATED,
     tags=["addresses"],
-    dependencies=[Depends(require_permission("subscriber:write"))],
+    dependencies=[Depends(require_permission("customer:create"))],
 )
 def create_address(payload: AddressCreate, db: Session = Depends(get_db)):
     return subscriber_service.addresses.create(db, payload)
@@ -300,7 +300,7 @@ def create_address(payload: AddressCreate, db: Session = Depends(get_db)):
     "/addresses/{address_id}",
     response_model=AddressRead,
     tags=["addresses"],
-    dependencies=[Depends(require_permission("subscriber:read"))],
+    dependencies=[Depends(require_permission("customer:read"))],
 )
 def get_address(address_id: str, db: Session = Depends(get_db)):
     return subscriber_service.addresses.get(db, address_id)
@@ -310,7 +310,7 @@ def get_address(address_id: str, db: Session = Depends(get_db)):
     "/addresses",
     response_model=ListResponse[AddressRead],
     tags=["addresses"],
-    dependencies=[Depends(require_permission("subscriber:read"))],
+    dependencies=[Depends(require_permission("customer:read"))],
 )
 def list_addresses(
     subscriber_id: str | None = None,
@@ -329,7 +329,7 @@ def list_addresses(
     "/addresses/{address_id}",
     response_model=AddressRead,
     tags=["addresses"],
-    dependencies=[Depends(require_permission("subscriber:write"))],
+    dependencies=[Depends(require_permission("customer:update"))],
 )
 def update_address(
     address_id: str, payload: AddressUpdate, db: Session = Depends(get_db)
@@ -341,7 +341,7 @@ def update_address(
     "/addresses/{address_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["addresses"],
-    dependencies=[Depends(require_permission("subscriber:write"))],
+    dependencies=[Depends(require_permission("customer:delete"))],
 )
 def delete_address(address_id: str, db: Session = Depends(get_db)):
     subscriber_service.addresses.delete(db, address_id)
@@ -352,7 +352,7 @@ def delete_address(address_id: str, db: Session = Depends(get_db)):
     response_model=SubscriberCustomFieldRead,
     status_code=status.HTTP_201_CREATED,
     tags=["subscriber-custom-fields"],
-    dependencies=[Depends(require_permission("subscriber:write"))],
+    dependencies=[Depends(require_permission("customer:create"))],
 )
 def create_subscriber_custom_field(
     payload: SubscriberCustomFieldCreate, db: Session = Depends(get_db)
@@ -364,7 +364,7 @@ def create_subscriber_custom_field(
     "/subscriber-custom-fields/{custom_field_id}",
     response_model=SubscriberCustomFieldRead,
     tags=["subscriber-custom-fields"],
-    dependencies=[Depends(require_permission("subscriber:read"))],
+    dependencies=[Depends(require_permission("customer:read"))],
 )
 def get_subscriber_custom_field(custom_field_id: str, db: Session = Depends(get_db)):
     return subscriber_service.subscriber_custom_fields.get(db, custom_field_id)
@@ -374,7 +374,7 @@ def get_subscriber_custom_field(custom_field_id: str, db: Session = Depends(get_
     "/subscriber-custom-fields",
     response_model=ListResponse[SubscriberCustomFieldRead],
     tags=["subscriber-custom-fields"],
-    dependencies=[Depends(require_permission("subscriber:read"))],
+    dependencies=[Depends(require_permission("customer:read"))],
 )
 def list_subscriber_custom_fields(
     subscriber_id: str | None = None,
@@ -394,7 +394,7 @@ def list_subscriber_custom_fields(
     "/subscriber-custom-fields/{custom_field_id}",
     response_model=SubscriberCustomFieldRead,
     tags=["subscriber-custom-fields"],
-    dependencies=[Depends(require_permission("subscriber:write"))],
+    dependencies=[Depends(require_permission("customer:update"))],
 )
 def update_subscriber_custom_field(
     custom_field_id: str,
@@ -410,7 +410,7 @@ def update_subscriber_custom_field(
     "/subscriber-custom-fields/{custom_field_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["subscriber-custom-fields"],
-    dependencies=[Depends(require_permission("subscriber:write"))],
+    dependencies=[Depends(require_permission("customer:delete"))],
 )
 def delete_subscriber_custom_field(custom_field_id: str, db: Session = Depends(get_db)):
     subscriber_service.subscriber_custom_fields.delete(db, custom_field_id)

@@ -27,9 +27,9 @@ REPORT_HUB_SECTIONS: list[dict] = [
                 "description": "Revenue metrics and recent payments",
             },
             {
-                "name": "Subscribers",
-                "url": "/admin/reports/subscribers",
-                "description": "Subscriber growth and status breakdown",
+                "name": "Customer Report",
+                "url": "/admin/reports/customers",
+                "description": "Customer totals, status filters, and matching exports",
             },
             {
                 "name": "Churn",
@@ -164,7 +164,7 @@ def reports_hub(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/revenue",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:read"))],
+    dependencies=[Depends(require_permission("reports:billing"))],
 )
 def reports_revenue(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -200,18 +200,34 @@ def reports_revenue_export(days: int | None = None, db: Session = Depends(get_db
 
 
 @router.get(
+    "/customers",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:read"))],
+)
+@router.get(
     "/subscribers",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("customer:read"))],
 )
-def reports_subscribers(request: Request, db: Session = Depends(get_db)):
+def reports_subscribers(
+    request: Request,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    status: str | None = None,
+    db: Session = Depends(get_db),
+):
     from app.web.admin import get_current_user, get_sidebar_stats
 
-    report_data = web_reports_service.get_subscribers_report_data(db)
+    report_data = web_reports_service.get_subscribers_report_data(
+        db,
+        date_from=date_from,
+        date_to=date_to,
+        status=status,
+    )
 
     context = {
         "request": request,
-        "active_page": "reports-subscribers",
+        "active_page": "reports-customers",
         "active_menu": "reports",
         "current_user": get_current_user(request),
         "sidebar_stats": get_sidebar_stats(db),
@@ -224,17 +240,35 @@ def reports_subscribers(request: Request, db: Session = Depends(get_db)):
         "status_breakdown": report_data["status_breakdown"],
         "recent_subscribers": report_data["recent_subscribers"],
         "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
+        "customers": report_data["customers"],
+        "date_from": report_data["date_from"],
+        "date_to": report_data["date_to"],
+        "status_filter": report_data["status_filter"],
+        "status_options": report_data["status_options"],
     }
     return templates.TemplateResponse("admin/reports/subscribers.html", context)
 
 
+@router.get("/customers/export")
 @router.get("/subscribers/export")
-def reports_subscribers_export(days: int | None = None, db: Session = Depends(get_db)):
-    content = web_reports_service.build_subscribers_export_csv(db=db, days=days)
+def reports_subscribers_export(
+    days: int | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    status: str | None = None,
+    db: Session = Depends(get_db),
+):
+    content = web_reports_service.build_subscribers_export_csv(
+        db=db,
+        days=days,
+        date_from=date_from,
+        date_to=date_to,
+        status=status,
+    )
     return Response(
         content,
         media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=subscribers.csv"},
+        headers={"Content-Disposition": "attachment; filename=customers.csv"},
     )
 
 
@@ -274,7 +308,7 @@ def reports_churn_export(days: int | None = None, db: Session = Depends(get_db))
 @router.get(
     "/network",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("reports:network"))],
 )
 def reports_network(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -536,8 +570,21 @@ def reports_revenue_categories(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/bandwidth", response_class=HTMLResponse)
-def reports_bandwidth(request: Request, days: int = 30, db: Session = Depends(get_db)):
-    data = web_reports_ext_service.get_bandwidth_report_data(db, days=days)
+def reports_bandwidth(
+    request: Request,
+    days: int | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    show_chart: bool = False,
+    db: Session = Depends(get_db),
+):
+    data = web_reports_ext_service.get_bandwidth_report_data(
+        db,
+        days=days,
+        date_from=date_from,
+        date_to=date_to,
+        show_chart=show_chart,
+    )
     ctx = _base_context(
         request,
         db,
@@ -547,3 +594,26 @@ def reports_bandwidth(request: Request, days: int = 30, db: Session = Depends(ge
     )
     ctx.update(data)
     return templates.TemplateResponse("admin/reports/bandwidth.html", ctx)
+
+
+@router.get("/bandwidth/export")
+def reports_bandwidth_export(
+    days: int | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    db: Session = Depends(get_db),
+):
+    data = web_reports_ext_service.get_bandwidth_report_data(
+        db,
+        days=days,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    content = web_reports_ext_service.build_bandwidth_report_export_csv(data)
+    return Response(
+        content,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": "attachment; filename=bandwidth-usage-report.csv"
+        },
+    )

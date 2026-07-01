@@ -1,6 +1,6 @@
 """Reconcile match-merge + idempotency (Phase 1, Task 4).
 
-The fixture deliberately SEEDS a pre-existing Splynx-sourced network_device
+The fixture deliberately SEEDS a pre-existing imported network_device
 (no zabbix_hostid) and an existing pop_site that the Zabbix data must MERGE
 INTO — a clean-DB fixture would pass even if merge were broken. It also seeds a
 device-host + NAS-host sharing one IP to exercise the shared-IP node guard.
@@ -32,7 +32,7 @@ GROUPS = [
     {"groupid": "99", "name": "DotMac/Network/NAS"},
 ]
 HOSTS = [
-    {  # OLT device-host — should MERGE into the pre-existing Splynx row by IP
+    {  # OLT device-host — should MERGE into the pre-existing imported row by IP
         "hostid": "201",
         "host": "olt2",
         "name": "olt2",
@@ -62,7 +62,7 @@ def _seed(db_session):
         name="OLT-2", hostname="olt2", mgmt_ip="10.0.0.8", zabbix_host_id="201"
     )
     nas = NasDevice(name="NAS-B", management_ip="10.0.0.8")
-    # Orphaned Splynx-sourced node at the OLT's IP — the merge target.
+    # Orphaned imported node at the OLT's IP — the merge target.
     splynx_node = NetworkDevice(
         name="olt2-splynx",
         hostname="olt2",
@@ -93,12 +93,12 @@ def test_reconcile_merges_and_is_idempotent(db_session):
     lekki = db_session.query(PopSite).filter_by(zabbix_group_id="11").one()
     assert "Lekki" in lekki.name
 
-    # --- network_devices: merged into the Splynx row (no duplicate) ---
+    # --- network_devices: merged into the imported row (no duplicate) ---
     assert r1["network_devices"]["merged"] == 1
     assert r1["network_devices"]["created"] == 1
     assert r1["network_devices"]["duplicate_host"] == 1  # the NAS sibling
     nodes = db_session.query(NetworkDevice).all()
-    assert len(nodes) == 2  # merged Splynx row + new Lekki node; NOT 3
+    assert len(nodes) == 2  # merged imported row + new Lekki node; NOT 3
 
     merged = db_session.query(NetworkDevice).filter_by(id=splynx_node_id).one()
     assert merged.zabbix_hostid == "201"  # backfilled

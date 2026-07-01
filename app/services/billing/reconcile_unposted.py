@@ -2,7 +2,7 @@
 
 Background
 ----------
-During the Splynx → local-ledger cutover (from 2026-06-13) a cohort of
+During the legacy-BSS -> local-ledger cutover (from 2026-06-13) a cohort of
 ``succeeded`` gateway payments landed without their balance being applied to the
 customer's open invoices. Two distinct failure modes produced the same visible
 symptom (*"paid but still walled-garden"*):
@@ -40,6 +40,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.billing import (
+    CreditNoteApplication,
     Invoice,
     InvoiceStatus,
     LedgerEntry,
@@ -168,34 +169,75 @@ def settle_open_invoices_from_credit(db: Session, account_id: str) -> SettleResu
     # Serialize the read-modify-write of the credit pool for this account.
     lock_account(db, str(account_id))
 
-    available = get_account_credit_balance(db, str(account_id))
-    result.available_credit = available
-    if available <= 0:
-        return result
-
     invoices = _open_invoices(db, str(account_id))
     if not invoices:
         return result
 
+    currencies = sorted({invoice.currency or "NGN" for invoice in invoices})
+    credit_by_currency = {
+        currency: get_account_credit_balance(db, str(account_id), currency=currency)
+        for currency in currencies
+    }
+    result.available_credit = round_money(
+        sum(
+            (
+                credit
+                for credit in credit_by_currency.values()
+                if credit > Decimal("0.00")
+            ),
+            Decimal("0.00"),
+        )
+    )
+    if result.available_credit <= 0:
+        return result
+
     payments = _allocatable_payments(db, str(account_id))
+    payment_backed_by_currency: dict[str, Decimal] = {}
+    for payment, room in payments:
+        currency = payment.currency or "NGN"
+        payment_backed_by_currency[currency] = round_money(
+            payment_backed_by_currency.get(currency, Decimal("0.00")) + room
+        )
     payment_backed = round_money(
         sum((room for _payment, room in payments), Decimal("0.00"))
     )
     # Spend only credit that real succeeded payments can back. Any surplus credit
     # with no allocatable payment behind it is left alone and reported.
-    spendable = min(available, payment_backed)
-    if payment_backed < available:
-        result.unbacked_credit = round_money(available - payment_backed)
+    spendable_by_currency = {
+        currency: min(
+            max(credit_by_currency.get(currency, Decimal("0.00")), Decimal("0.00")),
+            payment_backed_by_currency.get(currency, Decimal("0.00")),
+        )
+        for currency in currencies
+    }
+    result.unbacked_credit = round_money(
+        sum(
+            (
+                max(
+                    credit_by_currency.get(currency, Decimal("0.00"))
+                    - payment_backed_by_currency.get(currency, Decimal("0.00")),
+                    Decimal("0.00"),
+                )
+                for currency in currencies
+            ),
+            Decimal("0.00"),
+        )
+    )
 
-    remaining = spendable
+    remaining_by_currency = dict(spendable_by_currency)
+    applied_by_currency: dict[str, Decimal] = {}
     room_by_payment: dict = {payment.id: room for payment, room in payments}
     touched: set = set()
 
     for invoice in invoices:
+        currency = invoice.currency or "NGN"
+        remaining = remaining_by_currency.get(currency, Decimal("0.00"))
         if remaining <= 0:
-            break
-        invoice_remaining = round_money(to_decimal(invoice.balance_due))
+            continue
+        invoice_remaining = _project_invoice_remaining(db, invoice)
         if invoice_remaining <= 0:
+            if to_decimal(invoice.balance_due) > 0:
+                touched.add(invoice.id)
             continue
         for payment, _room in payments:
             if remaining <= 0 or invoice_remaining <= 0:
@@ -217,11 +259,15 @@ def settle_open_invoices_from_credit(db: Session, account_id: str) -> SettleResu
             )
             result.applied = round_money(result.applied + applied)
             remaining = round_money(remaining - applied)
+            remaining_by_currency[currency] = remaining
+            applied_by_currency[currency] = round_money(
+                applied_by_currency.get(currency, Decimal("0.00")) + applied
+            )
             invoice_remaining = round_money(invoice_remaining - applied)
             room_by_payment[payment.id] = round_money(payment_room - applied)
             touched.add(invoice.id)
 
-    if result.applied <= 0:
+    if result.applied <= 0 and not touched:
         return result
 
     db.flush()
@@ -234,21 +280,26 @@ def settle_open_invoices_from_credit(db: Session, account_id: str) -> SettleResu
         if inv.status == InvoiceStatus.paid:
             result.invoices_settled.append(str(invoice_id))
 
-    # Reduce the unallocated-credit pool by exactly what we applied. Mirrors the
-    # reseller path's closing ``BillingAccounts.debit_balance``; here the pool is
-    # the per-account ledger, so the reduction is a debit with no invoice_id.
-    db.add(
-        LedgerEntry(
-            account_id=coerce_uuid(account_id),
-            invoice_id=None,
-            payment_id=None,
-            entry_type=LedgerEntryType.debit,
-            source=LedgerSource.payment,
-            amount=result.applied,
-            currency=invoices[0].currency,
-            memo=CREDIT_SETTLEMENT_MEMO,
-        )
-    )
+    if result.applied > 0:
+        # Reduce the unallocated-credit pool by exactly what we applied. Mirrors
+        # the reseller path's closing ``BillingAccounts.debit_balance``; here
+        # the pool is the per-account ledger, so the reduction is a debit with
+        # no invoice_id.
+        for currency, applied in applied_by_currency.items():
+            if applied <= 0:
+                continue
+            db.add(
+                LedgerEntry(
+                    account_id=coerce_uuid(account_id),
+                    invoice_id=None,
+                    payment_id=None,
+                    entry_type=LedgerEntryType.debit,
+                    source=LedgerSource.payment,
+                    amount=applied,
+                    currency=currency,
+                    memo=CREDIT_SETTLEMENT_MEMO,
+                )
+            )
     db.flush()
     logger.info(
         "Cutover reconcile: applied %s credit to %d invoice(s) for account %s "
@@ -269,26 +320,65 @@ def project_settlement(db: Session, account_id: str) -> SettleResult:
     guaranteed side-effect free (never relies on a write-then-rollback).
     """
     result = SettleResult(account_id=str(account_id))
-    available = get_account_credit_balance(db, str(account_id))
-    result.available_credit = available
-    if available <= 0:
-        return result
     invoices = _open_invoices(db, str(account_id))
     if not invoices:
         return result
+
+    currencies = sorted({invoice.currency or "NGN" for invoice in invoices})
+    credit_by_currency = {
+        currency: get_account_credit_balance(db, str(account_id), currency=currency)
+        for currency in currencies
+    }
+    result.available_credit = round_money(
+        sum(
+            (
+                credit
+                for credit in credit_by_currency.values()
+                if credit > Decimal("0.00")
+            ),
+            Decimal("0.00"),
+        )
+    )
+    if result.available_credit <= 0:
+        return result
+
     payments = _allocatable_payments(db, str(account_id))
+    payment_backed_by_currency: dict[str, Decimal] = {}
+    for payment, room in payments:
+        currency = payment.currency or "NGN"
+        payment_backed_by_currency[currency] = round_money(
+            payment_backed_by_currency.get(currency, Decimal("0.00")) + room
+        )
     payment_backed = round_money(
         sum((room for _payment, room in payments), Decimal("0.00"))
     )
-    spendable = min(available, payment_backed)
-    if payment_backed < available:
-        result.unbacked_credit = round_money(available - payment_backed)
-    remaining = spendable
-    currency_room = payment_backed  # rough; per-currency handled in apply
+    remaining_by_currency = {
+        currency: min(
+            max(credit_by_currency.get(currency, Decimal("0.00")), Decimal("0.00")),
+            payment_backed_by_currency.get(currency, Decimal("0.00")),
+        )
+        for currency in currencies
+    }
+    result.unbacked_credit = round_money(
+        sum(
+            (
+                max(
+                    credit_by_currency.get(currency, Decimal("0.00"))
+                    - payment_backed_by_currency.get(currency, Decimal("0.00")),
+                    Decimal("0.00"),
+                )
+                for currency in currencies
+            ),
+            Decimal("0.00"),
+        )
+    )
+    _ = payment_backed
     for invoice in invoices:
+        currency = invoice.currency or "NGN"
+        remaining = remaining_by_currency.get(currency, Decimal("0.00"))
         if remaining <= 0:
-            break
-        invoice_remaining = round_money(to_decimal(invoice.balance_due))
+            continue
+        invoice_remaining = _project_invoice_remaining(db, invoice)
         if invoice_remaining <= 0:
             continue
         apply_here = min(remaining, invoice_remaining)
@@ -296,11 +386,34 @@ def project_settlement(db: Session, account_id: str) -> SettleResult:
             continue
         result.applied = round_money(result.applied + apply_here)
         remaining = round_money(remaining - apply_here)
+        remaining_by_currency[currency] = remaining
         result.invoices_touched.append(str(invoice.id))
         if apply_here >= invoice_remaining:
             result.invoices_settled.append(str(invoice.id))
-    _ = currency_room
     return result
+
+
+def _project_invoice_remaining(db: Session, invoice: Invoice) -> Decimal:
+    allocated = (
+        db.query(func.coalesce(func.sum(PaymentAllocation.amount), 0))
+        .join(Payment, Payment.id == PaymentAllocation.payment_id)
+        .filter(PaymentAllocation.invoice_id == invoice.id)
+        .filter(PaymentAllocation.is_active.is_(True))
+        .filter(Payment.is_active.is_(True))
+        .filter(Payment.status == PaymentStatus.succeeded)
+        .scalar()
+    )
+    credited = (
+        db.query(func.coalesce(func.sum(CreditNoteApplication.amount), 0))
+        .filter(CreditNoteApplication.invoice_id == invoice.id)
+        .scalar()
+    )
+    computed_remaining = round_money(
+        to_decimal(invoice.total) - to_decimal(allocated) - to_decimal(credited)
+    )
+    return max(
+        Decimal("0.00"), min(to_decimal(invoice.balance_due), computed_remaining)
+    )
 
 
 @dataclass

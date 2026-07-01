@@ -7,6 +7,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
+from starlette.responses import Response
 
 from app.services import auth_flow as auth_flow_service
 from app.services.auth_flow import AuthFlow
@@ -99,13 +100,24 @@ def _get_csrf_token(request: Request) -> str:
     return getattr(request.state, "csrf_token", "")
 
 
-def login_page(request: Request, error: str | None = None, next_url: str | None = None):
+def _remember_duration_label(db: Session | None) -> str:
+    settings = AuthFlow.refresh_cookie_settings(db)
+    return auth_flow_service.duration_label(int(settings["max_age"]))
+
+
+def login_page(
+    request: Request,
+    error: str | None = None,
+    next_url: str | None = None,
+    db: Session | None = None,
+):
     return templates.TemplateResponse(
         "auth/login.html",
         {
             "request": request,
             "error": error,
             "next": next_url or "",
+            "remember_duration_label": _remember_duration_label(db),
             "csrf_token": _get_csrf_token(request),
         },
     )
@@ -213,6 +225,7 @@ def login_submit(
                 "request": request,
                 "error": error_msg,
                 "next": next_url,
+                "remember_duration_label": _remember_duration_label(db),
                 "csrf_token": _get_csrf_token(request),
             },
             status_code=401,
@@ -361,13 +374,35 @@ def mfa_enroll_confirm(
     try:
         payload = _mfa_enrollment_payload(db, enrollment_token)
         principal_id = str(payload.get("principal_id") or payload.get("sub"))
-        auth_flow_service.auth_flow.admin_mfa_confirm(
+        method = auth_flow_service.auth_flow.admin_mfa_confirm(
             db, method_id, code.strip(), principal_id
+        )
+        recovery_codes = (
+            auth_flow_service.generate_mfa_recovery_codes(db, method)
+            if getattr(method, "id", None)
+            else []
         )
         result = auth_flow_service.auth_flow._issue_tokens(  # noqa: SLF001
             db, "system_user", principal_id, request
         )
-        response = RedirectResponse(url=redirect_url, status_code=303)
+        response: Response
+        if recovery_codes:
+            response = templates.TemplateResponse(
+                request,
+                "auth/mfa_enroll.html",
+                {
+                    "request": request,
+                    "next": redirect_url,
+                    "method_id": method_id,
+                    "secret_key": "",
+                    "otpauth_uri": "",
+                    "recovery_codes": recovery_codes,
+                    "continue_url": redirect_url,
+                    "csrf_token": _get_csrf_token(request),
+                },
+            )
+        else:
+            response = RedirectResponse(url=redirect_url, status_code=303)
         response.delete_cookie(MFA_ENROLLMENT_COOKIE)
         cookie_cfg = _session_cookie_settings(db)
         secure_cookie = cookie_cfg["secure"] and _is_https_request(request)
@@ -437,6 +472,7 @@ def forgot_password_submit(request: Request, db: Session, email: str):
 
 def reset_password_page(
     request: Request,
+    db: Session,
     token: str,
     error: str | None = None,
     next_login: str | None = None,
@@ -449,6 +485,7 @@ def reset_password_page(
             "token": token,
             "error": error,
             "next_login": safe_next_login,
+            "password_min_length": auth_flow_service.password_min_length(db),
             "csrf_token": _get_csrf_token(request),
         },
     )
@@ -471,6 +508,7 @@ def reset_password_submit(
                 "token": token,
                 "error": "Passwords do not match",
                 "next_login": safe_next_login,
+                "password_min_length": auth_flow_service.password_min_length(db),
                 "csrf_token": _get_csrf_token(request),
             },
             status_code=400,
@@ -496,6 +534,7 @@ def reset_password_submit(
                 "token": token,
                 "error": error_msg,
                 "next_login": safe_next_login,
+                "password_min_length": auth_flow_service.password_min_length(db),
                 "csrf_token": _get_csrf_token(request),
             },
             status_code=400,

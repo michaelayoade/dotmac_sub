@@ -259,7 +259,7 @@ def test_pull_crm_ticket_persists_crm_link_after_legacy_resolution(
                 "id": str(uuid4()),
                 "subscriber_id": crm_subscriber_id,
                 "number": "30002",
-                "title": "Splynx customer ticket",
+                "title": "Imported customer ticket",
                 "status": "open",
                 "priority": "normal",
                 "channel": "phone",

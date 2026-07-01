@@ -7,14 +7,17 @@ import logging
 import uuid
 from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscription_engine import SettingValueType
+from app.schemas.settings import DomainSettingUpdate
+from app.services import settings_spec
 from app.services.billing_settings import resolve_payment_due_days
+from app.services.domain_settings import DomainSettings
 
 logger = logging.getLogger(__name__)
 
@@ -46,10 +49,41 @@ def _save_settings(
     keys: list[str],
     *,
     secret_keys: set[str] | None = None,
+    use_specs: bool = False,
 ) -> None:
     """Upsert a batch of DomainSettings."""
     secret_keys = secret_keys or set()
+    spec_updates: list[tuple[str, DomainSettingUpdate]] = []
+    if use_specs:
+        for key in keys:
+            spec = settings_spec.get_spec(domain, key)
+            if not spec:
+                continue
+            value = _coerce_spec_form_value(spec, data.get(key))
+            value_text, value_json = settings_spec.normalize_for_db(spec, value)
+            setting_value_json = cast(dict | list | bool | int | str | None, value_json)
+            spec_updates.append(
+                (
+                    key,
+                    DomainSettingUpdate(
+                        value_type=spec.value_type,
+                        value_text=value_text,
+                        value_json=setting_value_json,
+                        is_secret=spec.is_secret or key in secret_keys,
+                        is_active=True,
+                    ),
+                )
+            )
+
+    spec_keys = {key for key, _ in spec_updates}
+    spec_service = DomainSettings(domain) if spec_updates else None
+    if spec_service:
+        for key, payload in spec_updates:
+            spec_service.upsert_by_key(db, key, payload)
+
     for key in keys:
+        if key in spec_keys:
+            continue
         value = (data.get(key) or "").strip()
         stmt = select(DomainSetting).where(
             DomainSetting.domain == domain,
@@ -72,53 +106,58 @@ def _save_settings(
     db.commit()
 
 
+def _coerce_spec_form_value(
+    spec: settings_spec.SettingSpec, raw_value: object
+) -> object | None:
+    raw = "" if raw_value is None else str(raw_value).strip()
+    if raw == "" and spec.default is not None:
+        raw_value = spec.default
+    else:
+        raw_value = raw
+
+    value, error = settings_spec.coerce_value(spec, raw_value)
+    label = spec.label or spec.key
+    if error:
+        raise ValueError(f"{label}: {error}.")
+    if spec.required and (value is None or value == ""):
+        raise ValueError(f"{label} is required.")
+    if spec.allowed and value is not None and value not in spec.allowed:
+        allowed = ", ".join(sorted(spec.allowed))
+        raise ValueError(f"{label} must be one of: {allowed}.")
+    if spec.value_type == SettingValueType.integer and value is not None:
+        parsed = value if isinstance(value, int) else None
+        if parsed is None:
+            raise ValueError(f"{label}: Value must be an integer.")
+        if spec.min_value is not None and parsed < spec.min_value:
+            raise ValueError(f"{label} must be at least {spec.min_value}.")
+        if spec.max_value is not None and parsed > spec.max_value:
+            raise ValueError(f"{label} must be at most {spec.max_value}.")
+    return value
+
+
 # ---------------------------------------------------------------------------
 # 8.5 System Preferences & Security
 # ---------------------------------------------------------------------------
 PREFERENCE_KEYS = [
-    "default_landing_page",
-    "admin_portal_title",
-    "force_2fa",
-    "search_debounce_ms",
+    "admin_mfa_required",
 ]
 
 
 def get_preferences_context(db: Session) -> dict:
-    return {"preferences": _read_settings(db, SettingDomain.auth, PREFERENCE_KEYS)}
+    preferences = _read_settings(db, SettingDomain.auth, PREFERENCE_KEYS)
+    if not preferences.get("admin_mfa_required"):
+        legacy = _read_settings(db, SettingDomain.auth, ["force_2fa"])
+        preferences["admin_mfa_required"] = legacy.get("force_2fa", "")
+    return {"preferences": preferences}
 
 
 def save_preferences(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.auth, data, PREFERENCE_KEYS)
+    _save_settings(db, SettingDomain.auth, data, PREFERENCE_KEYS, use_specs=True)
 
 
-# ---------------------------------------------------------------------------
-# 8.7 Subscriber Settings
-# ---------------------------------------------------------------------------
-SUBSCRIBER_KEYS = [
-    "login_format",
-    "password_length",
-    "password_charset",
-    "welcome_enabled",
-    "welcome_channel",
-    "welcome_delay",
-    "default_billing_type",
-    "max_search_results",
-    "stats_format",
-    "portal_2fa_enabled",
-    "portal_2fa_method",
-]
-
-
-def get_subscriber_config_context(db: Session) -> dict:
-    return {
-        "subscriber_settings": _read_settings(
-            db, SettingDomain.subscriber, SUBSCRIBER_KEYS
-        )
-    }
-
-
-def save_subscriber_config(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.subscriber, data, SUBSCRIBER_KEYS)
+# 8.7 Subscriber Settings — REMOVED. The page's keys were not consumed by
+# subscriber creation, welcome messaging, search, statistics, or portal auth.
+# Real subscriber defaults live on their feature-specific forms/workflows.
 
 
 # ---------------------------------------------------------------------------
@@ -130,17 +169,6 @@ PORTAL_KEYS = [
     "selfcare_redirect_root",
     "admin_domain",
     "reseller_domain",
-    # Portal behaviour
-    "portal_language",
-    "portal_auth_field",
-    "portal_password_reset",
-    "portal_help_url",
-    "show_payment_due",
-    "show_bandwidth_usage",
-    "show_fup_rules",
-    "show_session_stats",
-    "mobile_app_google_play_id",
-    "mobile_app_appstore_id",
 ]
 
 
@@ -149,73 +177,20 @@ def get_portal_config_context(db: Session) -> dict:
 
 
 def save_portal_config(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.auth, data, PORTAL_KEYS)
+    _save_settings(db, SettingDomain.auth, data, PORTAL_KEYS, use_specs=True)
 
 
-# ---------------------------------------------------------------------------
-# 8.10 Data Retention
-# ---------------------------------------------------------------------------
-RETENTION_KEYS = [
-    "admin_logs_months",
-    "api_logs_months",
-    "internal_logs_months",
-    "portal_logs_months",
-    "usage_stats_months",
-    "task_logs_months",
-    "task_results_months",
-]
-RETENTION_DEFAULTS = {
-    "admin_logs_months": "6",
-    "api_logs_months": "1",
-    "internal_logs_months": "24",
-    "portal_logs_months": "12",
-    "usage_stats_months": "36",
-    "task_logs_months": "3",
-    "task_results_months": "24",
-}
+# 8.10 Data Retention — REMOVED. The page's retention keys were inert: no cleanup
+# task or reporting path consumed them. Real retention controls live on the
+# feature-specific pages/tasks that enforce them, such as Monitoring, Bandwidth,
+# Restore Tool, NAS Backups, and WireGuard logs.
 
 
-def get_retention_context(db: Session) -> dict:
-    settings = _read_settings(db, SettingDomain.audit, RETENTION_KEYS)
-    for k, v in RETENTION_DEFAULTS.items():
-        if not settings.get(k):
-            settings[k] = v
-    return {"retention": settings, "retention_defaults": RETENTION_DEFAULTS}
-
-
-def save_retention(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.audit, data, RETENTION_KEYS)
-
-
-# ---------------------------------------------------------------------------
-# 8.11 Finance Automation
-# ---------------------------------------------------------------------------
-FINANCE_AUTO_KEYS = [
-    "auto_invoice_enabled",
-    "confirmation_period_days",
-    "confirmation_time",
-    "preview_days",
-    "date_mode",
-    "dashboard_billing_notification",
-    "auto_blocking_enabled",
-    "blocking_time",
-    "block_on_weekends",
-    "block_on_holidays",
-    "deactivation_enabled",
-    "prepaid_deactivation",
-    "ip_reclamation_enabled",
-    "ip_reclamation_months",
-]
-
-
-def get_finance_automation_context(db: Session) -> dict:
-    return {
-        "finance_auto": _read_settings(db, SettingDomain.billing, FINANCE_AUTO_KEYS)
-    }
-
-
-def save_finance_automation(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.billing, data, FINANCE_AUTO_KEYS)
+# 8.11 Finance Automation — REMOVED. The page's toggles (auto_invoice_enabled,
+# auto_blocking_enabled, deactivation_enabled, ip_reclamation_enabled, …) were
+# inert: nothing read them. Billing automation is governed by the single control
+# plane (control_registry / module_manager), so this dead, misleading config was
+# deleted rather than left as a footgun that looks like it controls billing.
 
 
 # ---------------------------------------------------------------------------
@@ -277,6 +252,9 @@ def get_billing_config_context(db: Session) -> dict:
         "expiry_reminder_days": "7",
         "invoice_reminder_days": "7,1",
         "dunning_escalation_days": "3,7,14,30",
+        "blocking_period_days": "0",
+        "deactivation_period_days": "0",
+        "minimum_balance": "0",
     }
     for key, value in defaults.items():
         if not billing.get(key):
@@ -284,8 +262,159 @@ def get_billing_config_context(db: Session) -> dict:
     return {"billing": billing}
 
 
+def _normalize_choice(
+    data: dict[str, Any],
+    key: str,
+    label: str,
+    allowed_values: set[str],
+) -> None:
+    value = str(data.get(key) or "").strip().lower()
+    if not value:
+        return
+    if value not in allowed_values:
+        allowed = ", ".join(sorted(allowed_values))
+        raise ValueError(f"{label} must be one of: {allowed}.")
+    data[key] = value
+
+
+def _normalize_bool_setting(data: dict[str, Any], key: str, label: str) -> None:
+    value = str(data.get(key) or "").strip().lower()
+    if not value:
+        return
+    if value not in {"true", "false"}:
+        raise ValueError(f"{label} must be true or false.")
+    data[key] = value
+
+
+def _normalize_int_setting(
+    data: dict[str, Any],
+    key: str,
+    label: str,
+    *,
+    minimum: int,
+    maximum: int,
+) -> None:
+    value = str(data.get(key) or "").strip()
+    if not value:
+        return
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise ValueError(f"{label} must be a whole number.") from exc
+    if parsed < minimum or parsed > maximum:
+        raise ValueError(f"{label} must be between {minimum} and {maximum}.")
+    data[key] = str(parsed)
+
+
+def _normalize_decimal_setting(
+    data: dict[str, Any],
+    key: str,
+    label: str,
+    *,
+    minimum: Decimal,
+) -> None:
+    value = str(data.get(key) or "").strip()
+    if not value:
+        return
+    try:
+        parsed = Decimal(value)
+    except InvalidOperation as exc:
+        raise ValueError(f"{label} must be a valid decimal value.") from exc
+    if parsed < minimum:
+        raise ValueError(f"{label} must be at least {minimum}.")
+    data[key] = format(parsed, "f")
+
+
+def _normalize_csv_days(data: dict[str, Any], key: str, label: str) -> None:
+    value = str(data.get(key) or "").strip()
+    if not value:
+        return
+    parts = [part.strip() for part in value.split(",")]
+    if any(not part for part in parts):
+        raise ValueError(f"{label} must be a comma-separated list of day numbers.")
+    normalized: list[str] = []
+    for part in parts:
+        try:
+            parsed = int(part)
+        except ValueError as exc:
+            raise ValueError(
+                f"{label} must be a comma-separated list of day numbers."
+            ) from exc
+        if parsed < 0 or parsed > 3650:
+            raise ValueError(f"{label} values must be between 0 and 3650.")
+        normalized.append(str(parsed))
+    data[key] = ",".join(normalized)
+
+
+def _normalized_billing_config(data: Mapping[str, Any]) -> dict[str, Any]:
+    normalized = dict(data)
+    for key, label in (
+        ("billing_enabled", "Billing Enabled"),
+        ("use_creation_date", "Use Customer Creation Date"),
+        ("customer_balance_notifications_enabled", "Customer Balance Notifications"),
+        ("auto_suspend_on_overdue", "Auto-Suspend on Overdue"),
+        ("send_billing_notifications", "Send Billing Notifications"),
+        ("proforma_enabled", "Proforma Invoices"),
+        ("zero_total_invoices", "Zero-Total Invoices"),
+        ("invoice_caching", "Invoice PDF Caching"),
+    ):
+        _normalize_bool_setting(normalized, key, label)
+
+    _normalize_choice(
+        normalized,
+        "payment_period",
+        "Payment Period",
+        {"monthly", "quarterly", "annual"},
+    )
+    _normalize_choice(
+        normalized,
+        "proforma_payment_period",
+        "Proforma Payment Period",
+        {"monthly", "quarterly", "annual"},
+    )
+
+    for key, label in (
+        ("billing_day", "Billing Day"),
+        ("prepaid_default_billing_day", "Prepaid Default Billing Day"),
+        ("postpaid_default_billing_day", "Postpaid Default Billing Day"),
+    ):
+        _normalize_int_setting(normalized, key, label, minimum=1, maximum=28)
+
+    for key, label in (
+        ("payment_due_days", "Payment Due Days"),
+        ("suspension_grace_hours", "Suspension Grace Period"),
+        ("expiry_reminder_days", "Expiry Reminder Days"),
+        ("blocking_period_days", "Blocking Period"),
+        ("deactivation_period_days", "Deactivation Period"),
+        ("proforma_generation_day", "Proforma Generation Day"),
+        ("prepaid_default_payment_due_days", "Prepaid Default Payment Due Days"),
+        ("prepaid_default_grace_period_days", "Prepaid Default Grace Period Days"),
+        ("postpaid_default_payment_due_days", "Postpaid Default Payment Due Days"),
+        ("postpaid_default_grace_period_days", "Postpaid Default Grace Period Days"),
+    ):
+        _normalize_int_setting(normalized, key, label, minimum=0, maximum=3650)
+
+    for key, label in (
+        ("minimum_balance", "Minimum Balance"),
+        ("prepaid_default_min_balance", "Prepaid Default Minimum Balance"),
+        ("postpaid_default_min_balance", "Postpaid Default Minimum Balance"),
+    ):
+        _normalize_decimal_setting(normalized, key, label, minimum=Decimal("0"))
+
+    _normalize_csv_days(normalized, "invoice_reminder_days", "Invoice Reminder Days")
+    _normalize_csv_days(
+        normalized, "dunning_escalation_days", "Dunning Escalation Days"
+    )
+    return normalized
+
+
 def save_billing_config(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.billing, data, BILLING_KEYS)
+    _save_settings(
+        db,
+        SettingDomain.billing,
+        _normalized_billing_config(data),
+        BILLING_KEYS,
+    )
 
 
 def get_direct_bank_transfer_context(db: Session) -> dict:
@@ -631,38 +760,12 @@ def get_radius_config_context(db: Session) -> dict:
 
 
 def save_radius_config(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.radius, data, RADIUS_KEYS)
+    _save_settings(db, SettingDomain.radius, data, RADIUS_KEYS, use_specs=True)
 
 
-# ---------------------------------------------------------------------------
-# 8.22 CPE Configuration
-# ---------------------------------------------------------------------------
-CPE_KEYS = [
-    "kb_base",
-    "api_debug",
-    "api_timeout",
-    "api_attempts",
-    "qos_reverse",
-    "qos_download_queue_type",
-    "qos_upload_queue_type",
-    "blocking_enabled",
-    "redirect_ip",
-    "redirect_port",
-    "dhcp_enabled",
-    "dhcp_server_name",
-    "dhcp_interface",
-    "dhcp_lease_time",
-    "dhcp_dns_servers",
-    "wlan_management",
-]
-
-
-def get_cpe_config_context(db: Session) -> dict:
-    return {"cpe": _read_settings(db, SettingDomain.network, CPE_KEYS)}
-
-
-def save_cpe_config(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.network, data, CPE_KEYS)
+# 8.22 CPE Configuration — REMOVED. These QoS/blocking/DHCP/WLAN defaults had
+# no runtime consumers. Real CPE inventory, TR-069, and device API controls live
+# under Network > CPEs and on the CPE forms/details.
 
 
 # ---------------------------------------------------------------------------
@@ -672,9 +775,14 @@ MONITORING_KEYS = [
     "monitoring_vendors",
     "monitoring_device_types",
     "monitoring_groups",
-    "cpu_warn_pct",
-    "mem_warn_pct",
-    "interface_warn_pct",
+    "server_health_disk_warn_pct",
+    "server_health_disk_crit_pct",
+    "server_health_mem_warn_pct",
+    "server_health_mem_crit_pct",
+    "server_health_load_warn",
+    "server_health_load_crit",
+    "network_health_warn_pct",
+    "network_health_crit_pct",
     "device_metrics_retention_days",
     "alert_evaluation_interval_seconds",
     "ont_signal_warning_dbm",
@@ -695,9 +803,14 @@ def get_monitoring_config_context(db: Session) -> dict:
             "monitoring_vendors",
             "monitoring_device_types",
             "monitoring_groups",
-            "cpu_warn_pct",
-            "mem_warn_pct",
-            "interface_warn_pct",
+            "server_health_disk_warn_pct",
+            "server_health_disk_crit_pct",
+            "server_health_mem_warn_pct",
+            "server_health_mem_crit_pct",
+            "server_health_load_warn",
+            "server_health_load_crit",
+            "network_health_warn_pct",
+            "network_health_crit_pct",
             "device_metrics_retention_days",
             "alert_evaluation_interval_seconds",
             "ont_signal_warning_dbm",
@@ -737,6 +850,14 @@ def get_monitoring_config_context(db: Session) -> dict:
     if not settings.get("monitoring_groups"):
         settings["monitoring_groups"] = "Core Infrastructure,Access Layer,Customer CPE"
     defaults = {
+        "server_health_disk_warn_pct": "80",
+        "server_health_disk_crit_pct": "90",
+        "server_health_mem_warn_pct": "80",
+        "server_health_mem_crit_pct": "90",
+        "server_health_load_warn": "1.0",
+        "server_health_load_crit": "1.5",
+        "network_health_warn_pct": "90",
+        "network_health_crit_pct": "70",
         "device_metrics_retention_days": "90",
         "alert_evaluation_interval_seconds": "60",
         "ont_signal_warning_dbm": "-25",
@@ -762,15 +883,21 @@ def save_monitoring_config(db: Session, data: Mapping[str, Any]) -> None:
             "monitoring_vendors",
             "monitoring_device_types",
             "monitoring_groups",
-            "cpu_warn_pct",
-            "mem_warn_pct",
-            "interface_warn_pct",
+            "server_health_disk_warn_pct",
+            "server_health_disk_crit_pct",
+            "server_health_mem_warn_pct",
+            "server_health_mem_crit_pct",
+            "server_health_load_warn",
+            "server_health_load_crit",
+            "network_health_warn_pct",
+            "network_health_crit_pct",
             "device_metrics_retention_days",
             "alert_evaluation_interval_seconds",
             "ont_signal_warning_dbm",
             "ont_signal_critical_dbm",
             "ont_signal_alert_cooldown_minutes",
         ],
+        use_specs=True,
     )
     _save_settings(
         db,
@@ -780,6 +907,7 @@ def save_monitoring_config(db: Session, data: Mapping[str, Any]) -> None:
             "interface_walk_interval_seconds",
             "interface_discovery_interval_seconds",
         ],
+        use_specs=True,
     )
     _save_settings(
         db,
@@ -789,28 +917,13 @@ def save_monitoring_config(db: Session, data: Mapping[str, Any]) -> None:
             "hot_retention_hours",
             "cleanup_interval_seconds",
         ],
+        use_specs=True,
     )
 
 
-# ---------------------------------------------------------------------------
-# 8.25 Fair Usage Policy
-# ---------------------------------------------------------------------------
-FUP_KEYS = [
-    "fup_custom_reset_field",
-    "fup_monthly_reset_schedule",
-    "fup_weekly_reset_day",
-    "fup_send_notifications",
-    "fup_threshold_warn_pct",
-    "fup_threshold_critical_pct",
-]
-
-
-def get_fup_config_context(db: Session) -> dict:
-    return {"fup": _read_settings(db, SettingDomain.usage, FUP_KEYS)}
-
-
-def save_fup_config(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.usage, data, FUP_KEYS)
+# 8.25 Fair Usage Policy — REMOVED. These global reset/threshold fields were
+# not consumed by enforcement, usage metering, or notifications. Live FUP
+# controls are managed per catalog offer via the catalog FUP policy UI.
 
 
 # ---------------------------------------------------------------------------
@@ -836,23 +949,8 @@ def get_nas_types_context(db: Session) -> dict:
     return {"nas_types": types, "nas_types_raw": settings["nas_types_list"]}
 
 
-# ---------------------------------------------------------------------------
-# 8.27 IPv6 Configuration
-# ---------------------------------------------------------------------------
-IPV6_KEYS = [
-    "ipv6_auto_assign_enabled",
-    "ipv6_auto_assign_network",
-    "ipv6_default_prefix",
-    "ipv6_dual_stack_default",
-]
-
-
-def get_ipv6_config_context(db: Session) -> dict:
-    return {"ipv6": _read_settings(db, SettingDomain.network, IPV6_KEYS)}
-
-
-def save_ipv6_config(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.network, data, IPV6_KEYS)
+# 8.27 IPv6 Configuration — REMOVED. These defaults were not consumed by IPAM,
+# subscriber provisioning, or ONT service-intent code.
 
 
 def get_templates_context(db: Session) -> dict:

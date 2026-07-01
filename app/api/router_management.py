@@ -1,6 +1,7 @@
 import uuid
+from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -88,19 +89,6 @@ def create_router(
     return RouterRead.model_validate(r)
 
 
-@router.get(
-    "/{router_id}",
-    response_model=RouterRead,
-    dependencies=[Depends(require_permission("router:read"))],
-)
-def get_router(
-    router_id: uuid.UUID,
-    db: Session = Depends(get_db),
-) -> RouterRead:
-    r = RouterInventory.get(db, router_id)
-    return RouterRead.model_validate(r)
-
-
 @router.patch(
     "/{router_id}",
     response_model=RouterRead,
@@ -171,7 +159,10 @@ def get_router_health(
     db: Session = Depends(get_db),
 ) -> RouterHealthRead:
     r = RouterInventory.get(db, router_id)
-    data = RouterConnectionService.execute(r, "GET", "/system/resource")
+    data = RouterConnectionService.require_dict_response(
+        RouterConnectionService.execute(r, "GET", "/system/resource"),
+        "/system/resource",
+    )
     parsed = RouterMonitoringService.parse_health_response(data)
     return RouterHealthRead(**parsed)
 
@@ -237,7 +228,7 @@ def get_snapshot(
     db: Session = Depends(get_db),
 ) -> RouterConfigSnapshotRead:
     RouterInventory.get(db, router_id)
-    snap = RouterConfigService.get_snapshot(db, snapshot_id)
+    snap = RouterConfigService.get_snapshot(db, snapshot_id, router_id=router_id)
     return RouterConfigSnapshotRead.model_validate(snap)
 
 
@@ -310,19 +301,21 @@ def preview_template(
 @router.post(
     "/config-pushes",
     response_model=RouterConfigPushRead,
-    dependencies=[Depends(require_permission("router:push_config"))],
 )
 def create_push(
     payload: RouterConfigPushCreate,
-    initiated_by_header: str | None = Header(default=None, alias="X-Initiated-By"),
+    auth: dict = Depends(require_permission("router:push_config")),
     db: Session = Depends(get_db),
 ) -> RouterConfigPushRead:
+    # The audit actor is the authenticated principal — never a client-supplied
+    # header or a fabricated UUID. A config push mutates live routers, so its
+    # initiator must be attributable.
     try:
-        user_id = (
-            uuid.UUID(initiated_by_header) if initiated_by_header else uuid.uuid4()
+        user_id = uuid.UUID(str(auth.get("principal_id")))
+    except (ValueError, TypeError):
+        raise HTTPException(
+            status_code=400, detail="Authenticated principal is not a valid actor id"
         )
-    except (ValueError, AttributeError):
-        user_id = uuid.uuid4()
 
     try:
         push = RouterConfigService.create_push(
@@ -332,23 +325,43 @@ def create_push(
             initiated_by=user_id,
             template_id=payload.template_id,
             variable_values=payload.variable_values,
+            dry_run=payload.dry_run,
+            failure_policy=payload.failure_policy,
+            allow_dangerous_commands=payload.allow_dangerous_commands,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
-    try:
-        from app.services.queue_adapter import enqueue_task
-        from app.tasks.router_sync import execute_config_push
+    from app.models.router_management import (
+        RouterConfigPushStatus,
+        RouterPushResultStatus,
+    )
+    from app.services.queue_adapter import enqueue_task
+    from app.tasks.router_sync import execute_config_push
 
-        enqueue_task(
-            execute_config_push,
-            args=[str(push.id)],
-            correlation_id=f"router_config_push:{push.id}",
-            source="api_router_management",
-            actor_id=str(user_id),
+    dispatch = enqueue_task(
+        execute_config_push,
+        args=[str(push.id)],
+        correlation_id=f"router_config_push:{push.id}",
+        source="api_router_management",
+        actor_id=str(user_id),
+    )
+    if not dispatch.queued:
+        # The push row exists but no worker will ever pick it up. Fail it
+        # explicitly instead of returning a forever-"pending" push that the
+        # operator believes is in flight.
+        push.status = RouterConfigPushStatus.failed
+        push.completed_at = datetime.now(UTC)
+        for result in push.results:
+            result.status = RouterPushResultStatus.failed
+            result.error_message = (
+                f"Config push could not be queued: {dispatch.error or 'enqueue failed'}"
+            )
+        db.commit()
+        raise HTTPException(
+            status_code=502,
+            detail=f"Config push could not be queued: {dispatch.error or 'enqueue failed'}",
         )
-    except ImportError:
-        pass
 
     return RouterConfigPushRead.model_validate(push)
 
@@ -457,3 +470,21 @@ def test_jump_host(
 )
 def router_dashboard(db: Session = Depends(get_db)) -> dict:
     return RouterMonitoringService.get_dashboard_summary(db)
+
+
+# NOTE: the dynamic ``/{router_id}`` route MUST be registered after every static
+# collection route above (``/config-templates``, ``/config-pushes``,
+# ``/dashboard``). FastAPI matches in registration order, so registering this
+# first would shadow those paths — they would be parsed as a ``router_id`` and
+# rejected as an invalid UUID (422).
+@router.get(
+    "/{router_id}",
+    response_model=RouterRead,
+    dependencies=[Depends(require_permission("router:read"))],
+)
+def get_router(
+    router_id: uuid.UUID,
+    db: Session = Depends(get_db),
+) -> RouterRead:
+    r = RouterInventory.get(db, router_id)
+    return RouterRead.model_validate(r)

@@ -32,6 +32,7 @@ from app.models.network_operation import (
     NetworkOperationTargetType,
     NetworkOperationType,
 )
+from app.models.router_management import Router, RouterStatus
 from app.models.subscriber import SubscriberCategory
 from app.models.tr069 import Tr069CpeDevice
 from app.services import network as network_service
@@ -232,7 +233,36 @@ def _nas_status_to_monitoring_status(status: NasDeviceStatus | None) -> DeviceSt
     return DeviceStatus.offline
 
 
-def _nas_inventory_stub(device: NasDevice) -> SimpleNamespace:
+def _enum_value(value) -> str | None:
+    if value is None:
+        return None
+    return getattr(value, "value", value)
+
+
+def _router_status_to_live_status(router: Router | None) -> str | None:
+    if router is None:
+        return None
+    status = _enum_value(getattr(router, "status", None))
+    if status == RouterStatus.online.value:
+        return "up"
+    if status in {RouterStatus.offline.value, RouterStatus.unreachable.value}:
+        return "down"
+    if status == RouterStatus.degraded.value:
+        return "problem"
+    return None
+
+
+def _nas_inventory_stub(
+    device: NasDevice,
+    *,
+    linked_device: NetworkDevice | None = None,
+    linked_router: Router | None = None,
+) -> SimpleNamespace:
+    router_live_status = _router_status_to_live_status(linked_router)
+    live_status = getattr(linked_device, "live_status", None) or router_live_status
+    live_status_at = getattr(linked_device, "live_status_at", None) or getattr(
+        linked_router, "last_seen_at", None
+    )
     return SimpleNamespace(
         id=device.id,
         name=device.name,
@@ -243,6 +273,14 @@ def _nas_inventory_stub(device: NasDevice) -> SimpleNamespace:
         serial_number=device.serial_number,
         role=DeviceRole.access,
         status=_nas_status_to_monitoring_status(device.status),
+        live_status=live_status,
+        live_status_at=live_status_at,
+        zabbix_hostid=getattr(linked_device, "zabbix_hostid", None)
+        or device.zabbix_host_id,
+        last_ping_ok=getattr(linked_device, "last_ping_ok", None),
+        last_ping_at=getattr(linked_device, "last_ping_at", None),
+        last_snmp_ok=getattr(linked_device, "last_snmp_ok", None),
+        last_snmp_at=getattr(linked_device, "last_snmp_at", None),
         detail_url=f"/admin/network/nas/devices/{device.id}",
         edit_url=f"/admin/network/nas/{device.id}/edit",
     )
@@ -1506,7 +1544,15 @@ def onts_list_page_data(
         )
         reason = getattr(ont, "offline_reason", None)
         reason_val = reason.value if reason else None
+        from app.services.device_operational_status import (
+            derive_ont_operational_status,
+        )
+
+        ont_op = derive_ont_operational_status(ont)
         signal_data[str(ont.id)] = {
+            "operational": ont_op.status,
+            "operational_label": ont_op.label,
+            "operational_reason": ont_op.reason,
             "olt_rx_dbm": olt_rx_dbm,
             "onu_rx_dbm": onu_rx_dbm,
             "signal_updated_at": getattr(ont, "signal_updated_at", None),
@@ -2996,8 +3042,29 @@ def consolidated_page_data(
             .order_by(NasDevice.name.asc())
         ).all()
     )
+    monitoring_by_id = {device.id: device for device in all_monitoring_devices}
+    nas_ids = [device.id for device in nas_devices]
+    routers_by_nas_id: dict[object, Router] = {}
+    if nas_ids:
+        routers = db.scalars(
+            select(Router).where(
+                Router.is_active.is_(True), Router.nas_device_id.in_(nas_ids)
+            )
+        ).all()
+        routers_by_nas_id = {
+            router.nas_device_id: router for router in routers if router.nas_device_id
+        }
     for nas_device in nas_devices:
-        nas_stub = _nas_inventory_stub(nas_device)
+        linked_device = (
+            monitoring_by_id.get(nas_device.network_device_id)
+            if nas_device.network_device_id
+            else None
+        )
+        nas_stub = _nas_inventory_stub(
+            nas_device,
+            linked_device=linked_device,
+            linked_router=routers_by_nas_id.get(nas_device.id),
+        )
         key = (
             str(getattr(nas_stub, "mgmt_ip", "") or "").strip(),
             str(getattr(nas_stub, "hostname", "") or "").strip(),
@@ -3007,6 +3074,11 @@ def consolidated_page_data(
             continue
         core_devices.append(nas_stub)
         core_device_keys.add(key)
+    # Derived NOC-facing operational status (projection over admin intent +
+    # live observation + warmer freshness). See DEVICE_OPERATIONAL_STATUS.md.
+    from app.services.device_operational_status import annotate_operational_status
+
+    annotate_operational_status(core_devices)
     core_roles = {
         "core": len([d for d in core_devices if d.role and d.role.value == "core"]),
         "distribution": len(
@@ -3077,6 +3149,12 @@ def consolidated_page_data(
             )
         )
 
+    from app.services.device_operational_status import (
+        derive_olt_operational_status,
+        warmer_is_stale,
+    )
+
+    olt_warm_stale = warmer_is_stale()
     olt_stats = {}
     for olt in olts:
         linked_monitor = _linked_monitoring(olt)
@@ -3085,6 +3163,14 @@ def consolidated_page_data(
         else:
             # Keep unknown when we have no linked monitoring telemetry.
             olt.runtime_status = "unknown"
+        # Derived operational status: the OLT's own ping/poll telemetry first,
+        # falling back to the linked Zabbix device's live_status (reachable if
+        # any source confirms). runtime_status above is admin status — stale.
+        olt.operational = derive_olt_operational_status(
+            olt,
+            linked_live_status=getattr(linked_monitor, "live_status", None),
+            warm_stale=olt_warm_stale,
+        )
 
         pon_ports = network_service.pon_ports.list(
             db=db,
@@ -3207,6 +3293,19 @@ def consolidated_page_data(
         for ont in onts
         if getattr(ont, "id", None)
     }
+    from app.services.device_operational_status import derive_ont_operational_status
+
+    signal_data: dict[str, dict[str, str]] = {}
+    for ont in onts:
+        ont_id = getattr(ont, "id", None)
+        if ont_id is None:
+            continue
+        operational = derive_ont_operational_status(ont)
+        signal_data[str(ont_id)] = {
+            "operational": operational.status,
+            "operational_label": operational.label,
+            "operational_reason": operational.reason,
+        }
     return {
         "tab": tab,
         "search": search or "",
@@ -3216,6 +3315,7 @@ def consolidated_page_data(
         "olt_stats": olt_stats,
         "onts": onts,
         "serial_display_by_ont_id": serial_display_by_ont_id,
+        "signal_data": signal_data,
         "cpes": cpes,
     }
 
@@ -3344,8 +3444,10 @@ def backup_overview_page_data(
                 "last_message": last_message,
                 "backup_status": backup_status,
                 "device_url": f"/admin/network/olts/{olt.id}",
-                "backup_url": None,
-                "history_url": f"/admin/network/olts/{olt.id}",
+                "backup_url": f"/admin/network/olts/backups/{latest.id}"
+                if latest
+                else None,
+                "history_url": f"/admin/network/olts/{olt.id}/backups",
             }
         )
 

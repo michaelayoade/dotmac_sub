@@ -16,7 +16,63 @@
                 <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Webhook Endpoint</p>
             </div>
         </div>
+        <div class="flex flex-wrap items-center gap-2">
+            <a href="/admin/integrations/webhooks/{{ endpoint.id }}/edit" class="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                Edit
+            </a>
+            <form method="post" action="/admin/integrations/webhooks/{{ endpoint.id }}/test">
+                {% include "components/forms/csrf_input.html" %}
+                <button type="submit" class="inline-flex items-center justify-center rounded-lg border border-primary-300 bg-primary-50 px-3 py-2 text-sm font-medium text-primary-700 hover:bg-primary-100 dark:border-primary-700 dark:bg-primary-900/20 dark:text-primary-300">
+                    Send test
+                </button>
+            </form>
+            <form method="post" action="/admin/integrations/webhooks/{{ endpoint.id }}/rotate-secret" onsubmit="return confirm('Rotate this webhook signing secret? Existing consumers must be updated.');">
+                {% include "components/forms/csrf_input.html" %}
+                <button type="submit" class="inline-flex items-center justify-center rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
+                    Rotate secret
+                </button>
+            </form>
+            {% if endpoint.is_active %}
+            <form method="post" action="/admin/integrations/webhooks/{{ endpoint.id }}/disable" onsubmit="return confirm('Disable this webhook endpoint?');">
+                {% include "components/forms/csrf_input.html" %}
+                <button type="submit" class="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                    Disable
+                </button>
+            </form>
+            {% else %}
+            <form method="post" action="/admin/integrations/webhooks/{{ endpoint.id }}/enable">
+                {% include "components/forms/csrf_input.html" %}
+                <button type="submit" class="inline-flex items-center justify-center rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-100 dark:border-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300">
+                    Enable
+                </button>
+            </form>
+            {% endif %}
+            <form method="post" action="/admin/integrations/webhooks/{{ endpoint.id }}/delete" onsubmit="return confirm('Delete this webhook endpoint?');">
+                {% include "components/forms/csrf_input.html" %}
+                <button type="submit" class="inline-flex items-center justify-center rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-100 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
+                    Delete
+                </button>
+            </form>
+        </div>
     </div>
+
+    {% if request.query_params.get('saved') %}
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">
+        Webhook updated.
+    </div>
+    {% elif request.query_params.get('secret') == 'rotated' %}
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">
+        Signing secret rotated.
+    </div>
+    {% elif request.query_params.get('test') == 'queued' %}
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">
+        Test delivery queued.
+    </div>
+    {% elif request.query_params.get('test') == 'failed' %}
+    <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
+        Test delivery could not be queued.
+    </div>
+    {% endif %}
 
     <!-- Details Card -->
     <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
@@ -38,9 +94,68 @@
             </div>
             <div>
                 <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Secret</dt>
-                <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ '****' + endpoint.secret[-4:] if endpoint.secret else 'None' }}</dd>
+                <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ 'Configured' if endpoint.secret else 'Not configured' }}</dd>
+            </div>
+            <div>
+                <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Delivery Timeout</dt>
+                <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ endpoint.delivery_timeout_seconds or 30 }} sec</dd>
+            </div>
+            <div>
+                <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Max Retries</dt>
+                <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ endpoint.max_retries if endpoint.max_retries is not none else 10 }}</dd>
+            </div>
+            <div>
+                <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Retry Backoff</dt>
+                <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ endpoint.retry_backoff_seconds ~ ' sec base' if endpoint.retry_backoff_seconds else 'Legacy schedule' }}</dd>
             </div>
         </dl>
+    </div>
+
+    <!-- Delivery Summary -->
+    <div class="grid gap-4 lg:grid-cols-3">
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Latest delivery</p>
+            {% set latest_delivery = delivery_summary.latest_delivery if delivery_summary else none %}
+            {% if latest_delivery %}
+            <div class="mt-3 space-y-1">
+                <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ latest_delivery.status.value|title if latest_delivery.status else 'Pending' }}</p>
+                <p class="text-sm text-slate-500 dark:text-slate-400">{{ latest_delivery.event_type.value if latest_delivery.event_type else 'custom' }}</p>
+                <p class="text-xs text-slate-500 dark:text-slate-400">{{ latest_delivery.created_at.strftime('%b %d %H:%M') if latest_delivery.created_at else '-' }}</p>
+            </div>
+            {% else %}
+            <p class="mt-3 text-sm text-slate-500 dark:text-slate-400">No deliveries yet</p>
+            {% endif %}
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Latest failure</p>
+            {% set latest_failure = delivery_summary.latest_failure if delivery_summary else none %}
+            {% if latest_failure %}
+            <div class="mt-3 space-y-1">
+                <p class="text-sm font-semibold text-red-700 dark:text-red-300">{{ latest_failure.response_status or 'No response' }}</p>
+                <p class="line-clamp-2 text-sm text-slate-500 dark:text-slate-400">{{ latest_failure.error or 'Delivery failed' }}</p>
+                <p class="text-xs text-slate-500 dark:text-slate-400">{{ latest_failure.last_attempt_at.strftime('%b %d %H:%M') if latest_failure.last_attempt_at else latest_failure.created_at.strftime('%b %d %H:%M') if latest_failure.created_at else '-' }}</p>
+            </div>
+            {% else %}
+            <p class="mt-3 text-sm text-slate-500 dark:text-slate-400">No recent failures</p>
+            {% endif %}
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Recent outcomes</p>
+            <dl class="mt-3 grid grid-cols-3 gap-3 text-center">
+                <div>
+                    <dt class="text-xs text-slate-500 dark:text-slate-400">Sent</dt>
+                    <dd class="text-lg font-semibold text-emerald-700 dark:text-emerald-300">{{ delivery_summary.delivered_count if delivery_summary else 0 }}</dd>
+                </div>
+                <div>
+                    <dt class="text-xs text-slate-500 dark:text-slate-400">Pending</dt>
+                    <dd class="text-lg font-semibold text-amber-700 dark:text-amber-300">{{ delivery_summary.pending_count if delivery_summary else 0 }}</dd>
+                </div>
+                <div>
+                    <dt class="text-xs text-slate-500 dark:text-slate-400">Failed</dt>
+                    <dd class="text-lg font-semibold text-red-700 dark:text-red-300">{{ delivery_summary.failed_count if delivery_summary else 0 }}</dd>
+                </div>
+            </dl>
+        </div>
     </div>
 
     <!-- Subscriptions -->

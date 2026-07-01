@@ -284,7 +284,8 @@ class TestConverge:
         )
         result = _converge(db_session, sub.id, db_path, apply=True)
         db_session.refresh(sub)
-        assert result["reason"] == "not_active"
+        assert result["dimension"] == "suspend"
+        assert result["applied"] is False
         assert sub.ipv4_address == "10.0.0.9"  # untouched
 
 
@@ -405,3 +406,140 @@ class TestShadowDiff:
         # exactly that, so nothing disagrees.
         assert report["diffs"] == []
         assert report["credentials"]["match"] and report["ip"]["match"]
+
+
+class TestShadowDiffIpv4Cache:
+    """The ipv4_cache dimension (INV-4 / R2): served column must equal the
+    active assignment IP when an IP is retained. This gauge sizes the cutover
+    that removes the accounting dual-write into the served column."""
+
+    def test_diff_when_served_column_differs_from_assignment(
+        self, db_session, catalog_offer
+    ):
+        sub = _seed_sub(
+            db_session,
+            login="cache1",
+            offer=catalog_offer,
+            status=SubscriptionStatus.active,
+            col_ip="10.0.0.9",  # served column
+            assign_ip="10.0.0.5",  # active assignment (source of truth)
+        )
+        report = connectivity_shadow_diff(db_session, sub.subscriber_id)
+        assert "ipv4_cache" in report["diffs"]
+        assert report["ipv4_cache"]["match"] is False
+
+    def test_no_diff_when_served_column_matches_assignment(
+        self, db_session, catalog_offer
+    ):
+        sub = _seed_sub(
+            db_session,
+            login="cache2",
+            offer=catalog_offer,
+            status=SubscriptionStatus.active,
+            col_ip="10.0.0.5",
+            assign_ip="10.0.0.5",
+        )
+        report = connectivity_shadow_diff(db_session, sub.subscriber_id)
+        assert "ipv4_cache" not in report["diffs"]
+        assert report["ipv4_cache"]["match"] is True
+
+    def test_terminal_sub_does_not_flag_ipv4_cache(self, db_session, catalog_offer):
+        # canceled = ip not retained → the column is irrelevant, no cache diff
+        sub = _seed_sub(
+            db_session,
+            login="cache3",
+            offer=catalog_offer,
+            status=SubscriptionStatus.canceled,
+            col_ip="10.0.0.9",
+            assign_ip=None,
+        )
+        report = connectivity_shadow_diff(db_session, sub.subscriber_id)
+        assert "ipv4_cache" not in report["diffs"]
+
+
+class TestAccountingObservedIpSplit:
+    """§3.1: the live framed IP from accounting goes to last_seen_framed_*,
+    NOT the served-IP column (except the retained legacy dual-write for ACTIVE
+    subs)."""
+
+    def test_observed_ip_recorded_to_last_seen_and_spares_served_when_inactive(
+        self, db_session, catalog_offer
+    ):
+        from app.services.usage import _write_subscription_ips_from_accounting
+
+        sub = _seed_sub(
+            db_session,
+            login="obs1",
+            offer=catalog_offer,
+            status=SubscriptionStatus.suspended,
+            col_ip="10.0.0.5",
+        )
+        _write_subscription_ips_from_accounting(
+            db_session, sub.id, ipv4="10.0.0.99", ipv6=None
+        )
+        assert sub.last_seen_framed_ipv4 == "10.0.0.99"  # observed recorded
+        assert sub.ipv4_address == "10.0.0.5"  # served column untouched (suspended)
+
+    def test_active_sub_still_dual_writes_served_column(
+        self, db_session, catalog_offer
+    ):
+        from app.services.usage import _write_subscription_ips_from_accounting
+
+        sub = _seed_sub(
+            db_session,
+            login="obs2",
+            offer=catalog_offer,
+            status=SubscriptionStatus.active,
+            col_ip="10.0.0.5",
+        )
+        _write_subscription_ips_from_accounting(
+            db_session, sub.id, ipv4="10.0.0.99", ipv6=None
+        )
+        assert sub.last_seen_framed_ipv4 == "10.0.0.99"
+        assert sub.ipv4_address == "10.0.0.99"  # legacy dual-write retained
+
+
+class TestConnectivityShadowAudit:
+    """Full-base sweep aggregates per-dimension drift across subscribers."""
+
+    def test_sweep_counts_ipv4_cache_drift_and_population(
+        self, db_session, catalog_offer
+    ):
+        from app.services.connectivity_reconciler import connectivity_shadow_audit
+
+        # drifting: served column != active assignment
+        _seed_sub(
+            db_session,
+            login="sweep_drift",
+            offer=catalog_offer,
+            status=SubscriptionStatus.active,
+            col_ip="10.0.0.9",
+            assign_ip="10.0.0.5",
+        )
+        # clean ipv4_cache: column == assignment (distinct IP from the other sub
+        # — IPv4Address.address is unique)
+        _seed_sub(
+            db_session,
+            login="sweep_clean",
+            offer=catalog_offer,
+            status=SubscriptionStatus.active,
+            col_ip="10.0.0.6",
+            assign_ip="10.0.0.6",
+        )
+        result = connectivity_shadow_audit(db_session)
+        assert result["population"] == 2  # both are connectivity-retaining
+        assert result["counts"]["ipv4_cache"] == 1
+        assert len(result["samples"]["ipv4_cache"]) == 1
+
+    def test_terminal_subs_excluded_from_population(self, db_session, catalog_offer):
+        from app.services.connectivity_reconciler import connectivity_shadow_audit
+
+        _seed_sub(
+            db_session,
+            login="sweep_canceled",
+            offer=catalog_offer,
+            status=SubscriptionStatus.canceled,
+            col_ip="10.0.0.9",
+        )
+        result = connectivity_shadow_audit(db_session)
+        assert result["population"] == 0  # canceled is not connectivity-retaining

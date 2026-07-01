@@ -109,9 +109,16 @@ class RouterConfigService:
         return list(db.execute(query).scalars().all())
 
     @staticmethod
-    def get_snapshot(db: Session, snapshot_id: uuid.UUID) -> RouterConfigSnapshot:
+    def get_snapshot(
+        db: Session,
+        snapshot_id: uuid.UUID,
+        router_id: uuid.UUID | None = None,
+    ) -> RouterConfigSnapshot:
         snap = db.get(RouterConfigSnapshot, snapshot_id)
-        if not snap:
+        # When a router scope is supplied, a snapshot belonging to a different
+        # router must read as "not found" — otherwise any snapshot id is
+        # fetchable under any router URL.
+        if not snap or (router_id is not None and snap.router_id != router_id):
             raise HTTPException(status_code=404, detail="Snapshot not found")
         return snap
 
@@ -131,13 +138,22 @@ class RouterConfigService:
         initiated_by: uuid.UUID,
         template_id: uuid.UUID | None = None,
         variable_values: dict | None = None,
+        dry_run: bool = False,
+        failure_policy: str = "continue",
+        allow_dangerous_commands: bool = False,
     ) -> RouterConfigPush:
-        check_dangerous_commands(commands)
+        if failure_policy not in {"continue", "abort"}:
+            raise ValueError("Failure policy must be 'continue' or 'abort'.")
+        if not allow_dangerous_commands:
+            check_dangerous_commands(commands)
 
         push = RouterConfigPush(
             template_id=template_id,
             commands=commands,
             variable_values=variable_values,
+            dry_run=dry_run,
+            failure_policy=failure_policy,
+            allow_dangerous_commands=allow_dangerous_commands,
             initiated_by=initiated_by,
             status=RouterConfigPushStatus.pending,
         )

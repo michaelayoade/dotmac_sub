@@ -1,0 +1,61 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Import Run - System{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+        <a href="/admin/system/import-runs" class="hover:underline">Import Runs</a>
+        <span>/</span>
+        <span class="text-slate-700 dark:text-slate-200">{{ run.module }}</span>
+    </nav>
+
+    <div class="flex items-start justify-between">
+        <div>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ run.module }} <span class="text-base font-normal text-slate-500">({{ "dry-run" if run.dry_run else "apply" }})</span></h1>
+            <p class="text-sm text-slate-500 dark:text-slate-400">Status <strong>{{ run.status.value }}</strong> — {{ run.total_rows }} rows, {{ run.ok_rows }} ok, {{ run.failed_rows }} failed.</p>
+            {% if run.error_message %}<p class="mt-1 text-sm text-red-600">{{ run.error_message }}</p>{% endif %}
+        </div>
+        {% if run.status.value == "dry_run_ready" %}
+        <form method="post" action="/admin/system/import-runs/{{ run.id }}/apply"
+              onsubmit="return confirm('Apply this import? {{ run.ok_rows }} valid rows will be written.');">
+            {% include "components/forms/csrf_input.html" %}
+            <button type="submit" class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700">Apply {{ run.ok_rows }} valid rows</button>
+        </form>
+        {% endif %}
+    </div>
+
+    <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+            <thead class="bg-slate-50 dark:bg-slate-900/50">
+                <tr>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-500">#</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-500">Status</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-500">Data</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-500">Detail</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+                {% for row in rows %}
+                <tr>
+                    <td class="px-4 py-3 text-sm text-slate-500">{{ row.row_number }}</td>
+                    <td class="px-4 py-3 text-sm">
+                        {% if row.status.value == "ok" %}
+                        <span class="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">ok</span>
+                        {% elif row.status.value == "error" %}
+                        <span class="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/40 dark:text-red-300">error</span>
+                        {% else %}
+                        <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ row.status.value }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 font-mono text-xs text-slate-600 dark:text-slate-300">{{ row.raw }}</td>
+                    <td class="px-4 py-3 text-xs text-red-600">{{ row.error_message or "" }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="4" class="px-4 py-8 text-center text-sm text-slate-500">No rows recorded.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

@@ -6,6 +6,8 @@ Handles retry of failed events and cleanup of old event records.
 import logging
 from datetime import UTC, datetime, timedelta
 
+from sqlalchemy import text
+
 from app.celery_app import celery_app
 from app.services.db_session_adapter import db_session_adapter
 
@@ -103,16 +105,36 @@ def cleanup_old_events(retention_days: int = 30):
     with db_session_adapter.session() as session:
         cutoff = datetime.now(UTC) - timedelta(days=retention_days)
 
-        # Delete old completed events
-        deleted_count = (
-            session.query(EventStore)
+        old_completed_event_ids = (
+            session.query(EventStore.id)
             .filter(EventStore.status == EventStatus.completed)
             .filter(EventStore.created_at < cutoff)
+            .scalar_subquery()
+        )
+        deleted_attempts = session.execute(
+            text(
+                "delete from event_handler_attempts "
+                "where event_store_id in (select id from event_store "
+                "where status = 'completed' and created_at < :cutoff)"
+            ),
+            {"cutoff": cutoff},
+        )
+        deleted_attempt_count = int(getattr(deleted_attempts, "rowcount", 0) or 0)
+        deleted_count = (
+            session.query(EventStore)
+            .filter(EventStore.id.in_(old_completed_event_ids))
             .delete(synchronize_session=False)
         )
 
-        logger.info("Cleaned up %s old completed events", deleted_count)
-        return {"deleted": deleted_count}
+        logger.info(
+            "Cleaned up %s old completed events and %s handler attempts",
+            deleted_count,
+            deleted_attempt_count,
+        )
+        return {
+            "deleted": deleted_count,
+            "handler_attempts_deleted": deleted_attempt_count,
+        }
 
 
 @celery_app.task(name="app.tasks.events.mark_stale_processing_events")

@@ -17,6 +17,7 @@ from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from app.models.integration_hook import (
+    SECRET_AUTH_CONFIG_KEYS,
     IntegrationHook,
     IntegrationHookAuthType,
     IntegrationHookExecution,
@@ -29,8 +30,24 @@ from app.services.common import (
     coerce_uuid,
     validate_enum,
 )
+from app.services.credential_crypto import decrypt_credential, encrypt_credential
 
 logger = logging.getLogger(__name__)
+
+HOOK_AUTH_SECRET_KEYS = SECRET_AUTH_CONFIG_KEYS
+MIN_HOOK_TIMEOUT_SECONDS = 1
+MAX_HOOK_TIMEOUT_SECONDS = 300
+
+
+def _decrypt_auth_secret(auth_config: object, key: str) -> str:
+    """Return a decrypted secret value from a hook ``auth_config`` or ``""``."""
+    if not isinstance(auth_config, dict):
+        return ""
+    raw = auth_config.get(key)
+    if raw is None:
+        return ""
+    return str(decrypt_credential(str(raw)) or "")
+
 
 HOOK_TEMPLATES: dict[str, dict[str, Any]] = {
     "n8n": {
@@ -134,6 +151,7 @@ def create_hook(
     event_filters: list[str] | None,
     is_enabled: bool,
     notes: str | None,
+    timeout_seconds: int | None = None,
 ) -> IntegrationHook:
     _validate_hook_fields(hook_type=hook_type, command=command, url=url)
     hook = IntegrationHook(
@@ -147,9 +165,10 @@ def create_hook(
             IntegrationHookAuthType,
             "auth_type",
         ),
-        auth_config=auth_config,
+        auth_config=encrypt_hook_auth_config(auth_config),
         retry_max=max(0, retry_max),
         retry_backoff_ms=max(0, retry_backoff_ms),
+        timeout_seconds=_normalize_timeout_seconds(timeout_seconds),
         event_filters=event_filters or [],
         is_enabled=is_enabled,
         notes=notes.strip() if notes else None,
@@ -176,6 +195,7 @@ def update_hook(
     event_filters: list[str] | None,
     is_enabled: bool,
     notes: str | None,
+    timeout_seconds: int | None = None,
 ) -> IntegrationHook:
     hook = get_hook(db, hook_id)
     _validate_hook_fields(hook_type=hook_type, command=command, url=url)
@@ -189,9 +209,10 @@ def update_hook(
         IntegrationHookAuthType,
         "auth_type",
     )
-    hook.auth_config = auth_config
+    hook.auth_config = encrypt_hook_auth_config(auth_config)
     hook.retry_max = max(0, retry_max)
     hook.retry_backoff_ms = max(0, retry_backoff_ms)
+    hook.timeout_seconds = _normalize_timeout_seconds(timeout_seconds)
     hook.event_filters = event_filters or []
     hook.is_enabled = is_enabled
     hook.notes = notes.strip() if notes else None
@@ -213,6 +234,7 @@ def duplicate_hook(db: Session, *, hook_id: str) -> IntegrationHook:
         auth_config=source.auth_config,
         retry_max=source.retry_max,
         retry_backoff_ms=source.retry_backoff_ms,
+        timeout_seconds=source.timeout_seconds,
         event_filters=source.event_filters or [],
         is_enabled=False,
         notes=source.notes,
@@ -221,6 +243,60 @@ def duplicate_hook(db: Session, *, hook_id: str) -> IntegrationHook:
     db.commit()
     db.refresh(copy)
     return copy
+
+
+def encrypt_hook_auth_config(
+    auth_config: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not auth_config:
+        return None
+    encrypted: dict[str, Any] = {}
+    for key, value in auth_config.items():
+        if key in HOOK_AUTH_SECRET_KEYS and isinstance(value, str) and value:
+            encrypted[key] = encrypt_credential(value)
+        else:
+            encrypted[key] = value
+    return encrypted or None
+
+
+def decrypt_hook_auth_config(auth_config: object) -> dict[str, Any]:
+    if not isinstance(auth_config, dict):
+        return {}
+    decrypted: dict[str, Any] = {}
+    for key, value in auth_config.items():
+        if key in HOOK_AUTH_SECRET_KEYS and isinstance(value, str) and value:
+            decrypted[key] = decrypt_credential(value)
+        else:
+            decrypted[key] = value
+    return decrypted
+
+
+def public_hook_auth_config(auth_config: object) -> dict[str, Any]:
+    if not isinstance(auth_config, dict):
+        return {}
+    return {
+        key: value
+        for key, value in auth_config.items()
+        if key not in HOOK_AUTH_SECRET_KEYS
+    }
+
+
+def _normalize_timeout_seconds(timeout_seconds: int | None) -> int | None:
+    if timeout_seconds is None:
+        return None
+    return max(
+        MIN_HOOK_TIMEOUT_SECONDS,
+        min(MAX_HOOK_TIMEOUT_SECONDS, int(timeout_seconds)),
+    )
+
+
+def _hook_timeout_seconds(hook: IntegrationHook) -> int:
+    configured = _normalize_timeout_seconds(getattr(hook, "timeout_seconds", None))
+    if configured is not None:
+        return configured
+    if hook.hook_type == IntegrationHookType.cli:
+        return 20
+    return 10
 
 
 def set_enabled(db: Session, *, hook_id: str, is_enabled: bool) -> IntegrationHook:
@@ -406,19 +482,19 @@ def _execute_http_hook(
     *, hook: IntegrationHook, payload: dict[str, Any]
 ) -> tuple[int, str]:
     headers: dict[str, str] = {"Content-Type": "application/json"}
-    auth_config = hook.auth_config if isinstance(hook.auth_config, dict) else {}
+    auth_config = decrypt_hook_auth_config(hook.auth_config)
     if hook.auth_type == IntegrationHookAuthType.bearer:
-        token = str(auth_config.get("token") or "")
+        token = _decrypt_auth_secret(auth_config, "token")
         if token:
             headers["Authorization"] = f"Bearer {token}"
     elif hook.auth_type == IntegrationHookAuthType.basic:
         username = str(auth_config.get("username") or "")
-        password = str(auth_config.get("password") or "")
+        password = _decrypt_auth_secret(auth_config, "password")
         if username or password:
             token = base64.b64encode(f"{username}:{password}".encode()).decode("ascii")
             headers["Authorization"] = f"Basic {token}"
     elif hook.auth_type == IntegrationHookAuthType.hmac:
-        secret = str(auth_config.get("secret") or "")
+        secret = _decrypt_auth_secret(auth_config, "secret")
         if secret:
             headers["X-Hook-Secret"] = secret
     response = httpx.request(
@@ -426,7 +502,7 @@ def _execute_http_hook(
         url=str(hook.url or ""),
         headers=headers,
         json=payload,
-        timeout=10.0,
+        timeout=float(_hook_timeout_seconds(hook)),
     )
     body = response.text
     if len(body) > 2000:
@@ -444,7 +520,7 @@ def _execute_cli_hook(
         shlex.split(command),
         capture_output=True,
         text=True,
-        timeout=20,
+        timeout=_hook_timeout_seconds(hook),
         input=json.dumps(payload),
     )
     body = (result.stdout or "").strip()

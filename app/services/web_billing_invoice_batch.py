@@ -23,6 +23,13 @@ from app.timezone import APP_TIMEZONE_NAME
 
 logger = logging.getLogger(__name__)
 
+INVOICE_BATCH_ERROR_MESSAGE = (
+    "Invoice batch could not be completed. Check billing run logs for details."
+)
+INVOICE_BATCH_PREVIEW_ERROR_MESSAGE = (
+    "Invoice batch preview could not be prepared. Check the selected cycle and date."
+)
+
 
 def parse_billing_cycle(value: str | None) -> BillingCycle | None:
     if not value:
@@ -52,8 +59,9 @@ def run_batch(
             f"Subscriptions billed: {summary.get('subscriptions_billed', 0)} · "
             f"Skipped: {summary.get('skipped', 0)}."
         )
-    except Exception as exc:
-        return f"Batch run failed: {exc}"
+    except Exception:
+        logger.exception("Invoice batch run failed")
+        return INVOICE_BATCH_ERROR_MESSAGE
 
 
 def retry_batch_run(
@@ -218,13 +226,18 @@ def run_batch_with_date(
             f"Subscriptions billed: {summary.get('subscriptions_billed', 0)} · "
             f"Skipped: {summary.get('skipped', 0)}."
         )
-    except Exception as exc:
-        return f"Batch run failed: {exc}"
+    except Exception:
+        logger.exception("Invoice batch run failed")
+        return INVOICE_BATCH_ERROR_MESSAGE
 
 
 def preview_error_payload(exc: Exception) -> dict[str, object]:
+    logger.info(
+        "Invoice batch preview failed",
+        exc_info=(type(exc), exc, exc.__traceback__),
+    )
     return {
-        "error": str(exc),
+        "error": INVOICE_BATCH_PREVIEW_ERROR_MESSAGE,
         "invoice_count": 0,
         "account_count": 0,
         "total_amount_formatted": "NGN 0.00",

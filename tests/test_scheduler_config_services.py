@@ -369,28 +369,40 @@ class TestSyncScheduledTask:
 
         assert task is None
 
-    def test_updates_existing_task_name(self, db_session):
-        """Test updates name of existing task."""
+    def test_updates_existing_task_task_name_in_place(self, db_session):
+        """Match is by ``name``; a task_name rename updates the row in place.
+
+        The sync identifies the row by its stable ``name``. When the task is
+        renamed/moved (its ``task_name`` changes) the existing row's
+        ``task_name`` is updated in place rather than a new row being inserted.
+        """
         task = ScheduledTask(
-            name="original_name",
-            task_name="app.tasks.update.run",
+            name="stable_name",
+            task_name="app.tasks.update.old",
             schedule_type=ScheduleType.interval,
             interval_seconds=3600,
             enabled=True,
         )
         db_session.add(task)
         db_session.commit()
+        original_id = task.id
 
         scheduler_config._sync_scheduled_task(
             db_session,
-            name="updated_name",
-            task_name="app.tasks.update.run",
+            name="stable_name",
+            task_name="app.tasks.update.new",
             enabled=True,
             interval_seconds=3600,
         )
 
-        db_session.refresh(task)
-        assert task.name == "updated_name"
+        rows = (
+            db_session.query(ScheduledTask)
+            .filter(ScheduledTask.name == "stable_name")
+            .all()
+        )
+        assert len(rows) == 1
+        assert rows[0].id == original_id
+        assert rows[0].task_name == "app.tasks.update.new"
 
     def test_updates_existing_task_interval(self, db_session):
         """Test updates interval of existing task."""
@@ -728,8 +740,34 @@ class TestBuildBeatSchedule:
 
         assert schedule["gis_sync"]["schedule"] == timedelta(minutes=1)
 
+    def test_dunning_runner_targets_unified_billing_enforcement(self, monkeypatch):
+        """The scheduled collections writer is the unified enforcement task."""
+        monkeypatch.setenv("GIS_SYNC_ENABLED", "false")
+        monkeypatch.setenv("DUNNING_ENABLED", "true")
+        monkeypatch.delenv("USAGE_RATING_ENABLED", raising=False)
+
+        mock_session = MagicMock()
+        mock_session.query.return_value.filter.return_value.filter.return_value.filter.return_value.first.return_value = None
+        mock_session.query.return_value.filter.return_value.all.return_value = []
+        mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
+
+        with patch.object(scheduler_config, "SessionLocal", return_value=mock_session):
+            with patch.object(
+                scheduler_config.integration_service,
+                "list_interval_jobs",
+                return_value=[],
+            ):
+                scheduler_config.build_beat_schedule()
+
+        assert any(
+            getattr(call.args[0], "name", None) == "dunning_runner"
+            and getattr(call.args[0], "task_name", None)
+            == "app.tasks.collections.run_billing_enforcement"
+            for call in mock_session.add.call_args_list
+        )
+
     def test_ignores_retired_splynx_sync_settings(self, monkeypatch):
-        """Retired Splynx sync env toggles must not create beat entries."""
+        """Retired legacy-sync env toggles must not create beat entries."""
         monkeypatch.setenv("GIS_SYNC_ENABLED", "false")
         monkeypatch.setenv("SPLYNX_CUSTOMER_SYNC_ENABLED", "true")
         monkeypatch.setenv("SPLYNX_CUSTOMER_SYNC_INTERVAL_HOURS", "24")
@@ -823,6 +861,41 @@ class TestBuildBeatSchedule:
             and getattr(call.args[0], "task_name", None)
             == "app.tasks.profile_sync.execute_due_profile_sync_tasks"
             and getattr(call.args[0], "interval_seconds", None) == 60
+            for call in scheduled_calls
+        )
+
+    def test_builds_infra_availability_snapshot_and_prune(self, monkeypatch):
+        """Infra availability snapshot + prune register as daily tasks."""
+        monkeypatch.setenv("GIS_SYNC_ENABLED", "false")
+        monkeypatch.delenv("INFRA_AVAILABILITY_SNAPSHOT_ENABLED", raising=False)
+        monkeypatch.delenv("INFRA_AVAILABILITY_PRUNE_ENABLED", raising=False)
+
+        mock_session = MagicMock()
+        mock_session.query.return_value.filter.return_value.filter.return_value.filter.return_value.first.return_value = None
+        mock_session.query.return_value.filter.return_value.all.return_value = []
+        mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
+
+        with patch.object(scheduler_config, "SessionLocal", return_value=mock_session):
+            with patch.object(
+                scheduler_config.integration_service,
+                "list_interval_jobs",
+                return_value=[],
+            ):
+                scheduler_config.build_beat_schedule()
+
+        scheduled_calls = mock_session.add.call_args_list
+        assert any(
+            getattr(call.args[0], "name", None) == "infra_availability_snapshot"
+            and getattr(call.args[0], "task_name", None)
+            == "app.tasks.infrastructure_availability."
+            "snapshot_infrastructure_availability"
+            and getattr(call.args[0], "interval_seconds", None) == 86400
+            for call in scheduled_calls
+        )
+        assert any(
+            getattr(call.args[0], "name", None) == "infra_availability_prune"
+            and getattr(call.args[0], "task_name", None)
+            == "app.tasks.infrastructure_availability.prune_infrastructure_availability"
             for call in scheduled_calls
         )
 

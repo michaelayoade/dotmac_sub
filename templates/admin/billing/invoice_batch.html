@@ -28,7 +28,8 @@
 
     <div class="grid gap-6 lg:grid-cols-3">
         <div class="lg:col-span-2">
-            <form id="batch-form" method="post" action="/admin/billing/invoices/generate-batch" class="space-y-6">
+            <form id="batch-form" method="post" action="/admin/billing/invoices/generate-batch" class="space-y-6"
+                  @submit="if (submitting || !$refs.confirmed?.checked || !confirm('Run invoice batch for the previewed scope? This can create invoices for affected accounts.')) { $event.preventDefault(); return; } submitting = true">
                 {% include "components/forms/csrf_input.html" %}
                 <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
                     <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
@@ -85,7 +86,7 @@
                             </div>
                         </label>
                         <label class="flex cursor-pointer items-start gap-3">
-                            <input type="checkbox" name="confirmed" value="1" id="confirmed" class="mt-0.5 h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                            <input type="checkbox" name="confirmed" value="1" id="confirmed" x-ref="confirmed" class="mt-0.5 h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
                             <div>
                                 <span class="text-sm font-medium text-slate-700 dark:text-slate-300">I have reviewed the preview</span>
                                 <p class="text-xs text-slate-500 dark:text-slate-400">Required before running batch generation</p>
@@ -107,9 +108,10 @@
                         <svg x-show="loading" class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
                         <span x-text="loading ? 'Loading...' : 'Preview'"></span>
                     </button>
-                    <button type="submit" :disabled="!$refs.confirmed?.checked" class="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50">
-                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-                        Run Batch
+                    <button type="submit" :disabled="!$refs.confirmed?.checked || submitting" class="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50">
+                        <svg x-show="!submitting" class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                        <svg x-show="submitting" class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                        <span x-text="submitting ? 'Running...' : 'Run Batch'"></span>
                     </button>
                 </div>
             </form>
@@ -236,6 +238,7 @@
 function batchPage() {
     return {
         loading: false,
+        submitting: false,
         previewData: null,
         error: null,
         async runPreview() {

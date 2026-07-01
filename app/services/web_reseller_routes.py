@@ -29,6 +29,13 @@ def _require_reseller_context(request: Request, db: Session):
     )
     if not context:
         return None
+    # Surface admin "view as reseller" state to the layout banner (read in
+    # reseller.html via request.state, like the customer portal banner). Set on
+    # every guarded request so any reseller page shows the exit control.
+    request.state.reseller_impersonation = {
+        "active": bool(context.get("is_impersonation")),
+        "return_to": context.get("return_to") or "/admin/resellers",
+    }
     return context
 
 
@@ -413,14 +420,41 @@ def reseller_profile(request: Request, db: Session):
         return RedirectResponse(url="/reseller/auth/login", status_code=303)
 
     mfa_methods = _reseller_mfa_methods(db, context)
+    current_session_token = request.cookies.get(reseller_portal.SESSION_COOKIE_NAME)
+    active_sessions = reseller_portal.list_reseller_sessions_for_principal(
+        context["principal_id"],
+        current_session_token=current_session_token,
+    )
     return templates.TemplateResponse(
         "reseller/profile/index.html",
         _profile_context(
             request,
             context,
             mfa_methods=mfa_methods,
+            active_sessions=active_sessions,
+            other_session_count=sum(
+                1 for session in active_sessions if not session["is_current"]
+            ),
+            success="Other portal sessions signed out."
+            if request.query_params.get("sessions") == "signed-out"
+            else None,
             verify_sent=request.query_params.get("verify_sent"),
         ),
+    )
+
+
+def reseller_profile_sign_out_other_sessions(request: Request, db: Session):
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url=RESELLER_LOGIN_URL, status_code=303)
+    current_session_token = request.cookies.get(reseller_portal.SESSION_COOKIE_NAME)
+    reseller_portal.revoke_other_reseller_sessions_for_principal(
+        context["principal_id"],
+        current_session_token,
+        db=db,
+    )
+    return RedirectResponse(
+        url="/reseller/profile?sessions=signed-out", status_code=303
     )
 
 
@@ -512,11 +546,11 @@ def reseller_mfa_confirm(request: Request, db: Session, method_id: str, code: st
 
     try:
         if context["principal_type"] == "reseller_user":
-            auth_flow_service.auth_flow.reseller_mfa_confirm(
+            method = auth_flow_service.auth_flow.reseller_mfa_confirm(
                 db, method_id, code.strip(), context["principal_id"]
             )
         else:
-            auth_flow_service.auth_flow.mfa_confirm(
+            method = auth_flow_service.auth_flow.mfa_confirm(
                 db, method_id, code.strip(), context["principal_id"]
             )
     except Exception:
@@ -533,6 +567,27 @@ def reseller_mfa_confirm(request: Request, db: Session, method_id: str, code: st
                 "error": "Invalid verification code. Please try again.",
             },
             status_code=401,
+        )
+
+    recovery_codes = (
+        auth_flow_service.generate_mfa_recovery_codes(db, method)
+        if getattr(method, "id", None)
+        else []
+    )
+    if recovery_codes:
+        return templates.TemplateResponse(
+            "reseller/profile/mfa_setup.html",
+            {
+                "request": request,
+                "active_page": "profile",
+                "current_user": context["current_user"],
+                "reseller": context["reseller"],
+                "method_id": method_id,
+                "secret_key": "",
+                "otpauth_uri": "",
+                "recovery_codes": recovery_codes,
+                "continue_url": "/reseller/profile",
+            },
         )
 
     mfa_methods = _reseller_mfa_methods(db, context)
@@ -605,6 +660,28 @@ def reseller_fiber_map(request: Request, db: Session):
             "reseller": context["reseller"],
             **map_data,
             "read_only": True,
+        },
+    )
+
+
+def reseller_quotes_page(request: Request, db: Session):
+    """Sales/Quotes across the reseller's customers: quotes, installs, visits."""
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url=RESELLER_LOGIN_URL, status_code=303)
+    from app.services import reseller_crm_views
+
+    reseller_id = str(context["reseller"].id)
+    return templates.TemplateResponse(
+        "reseller/quotes/index.html",
+        {
+            "request": request,
+            "active_page": "quotes",
+            "current_user": context["current_user"],
+            "reseller": context["reseller"],
+            "quotes": reseller_crm_views.quotes_for_reseller(db, reseller_id),
+            "projects": reseller_crm_views.projects_for_reseller(db, reseller_id),
+            "work_orders": reseller_crm_views.work_orders_for_reseller(db, reseller_id),
         },
     )
 

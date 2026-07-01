@@ -13,10 +13,12 @@ from uuid import uuid4
 
 def _run(prior_action_status):
     sub = MagicMock(id=uuid4(), offer_id=uuid4(), subscriber_id=uuid4())
+    lock_session = MagicMock()
+    lock_session.bind.dialect.name = "sqlite"
     session = MagicMock()
-    (
-        session.query.return_value.join.return_value.filter.return_value.filter.return_value.all.return_value
-    ) = [sub]
+    query = session.query.return_value
+    joined = query.join.return_value.outerjoin.return_value
+    joined.filter.return_value.filter.return_value.all.return_value = [sub]
 
     state = None
     if prior_action_status is not None:
@@ -39,7 +41,7 @@ def _run(prior_action_status):
     emitted = []
 
     with (
-        patch("app.tasks.usage.SessionLocal", return_value=session),
+        patch("app.tasks.usage.SessionLocal", side_effect=[lock_session, session]),
         patch("app.services.fup_state.fup_state", fup_state_mock),
         patch(
             "app.services.usage._resolve_or_create_quota_bucket",
@@ -47,7 +49,15 @@ def _run(prior_action_status):
         ),
         patch("app.services.fup.evaluate_rules", return_value=[rule_result]),
         patch("app.services.events.emit_event", lambda *a, **k: emitted.append(a)),
-        patch("app.services.settings_spec.resolve_value", return_value=None),
+        # A throttle profile must be configured for reduce_speed to actually
+        # enforce; otherwise enforcement is (correctly) skipped. This test
+        # exercises transition/cooldown logic, so configure one.
+        patch(
+            "app.services.settings_spec.resolve_value",
+            side_effect=lambda session, domain, key: (
+                "throttle-profile" if key == "fup_throttle_radius_profile_id" else None
+            ),
+        ),
         patch("app.tasks.usage._maybe_queue_repeat_upsell", lambda *a, **k: None),
     ):
         from app.tasks.usage import evaluate_fup_rules
@@ -60,6 +70,7 @@ def test_enforces_on_transition_into_throttled():
     result, emitted = _run(prior_action_status=None)
     assert result["enforced"] == 1
     assert len(emitted) == 1
+    assert emitted[0][2]["action"] == "reduce_speed"
 
 
 def test_does_not_re_enforce_when_already_throttled():

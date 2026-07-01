@@ -60,6 +60,20 @@ def _request_id(request: Request) -> str:
     return str(rid) if rid else "unknown"
 
 
+def _validation_error_summary(exc: RequestValidationError) -> list[dict[str, object]]:
+    summary: list[dict[str, object]] = []
+    for error in exc.errors():
+        item = dict(error)
+        summary.append(
+            {
+                "loc": [str(part) for part in item.get("loc", [])],
+                "type": str(item.get("type", "")),
+                "msg": str(item.get("msg", "")),
+            }
+        )
+    return summary
+
+
 def _friendly_bad_request_message(detail: object) -> str:
     if isinstance(detail, str):
         msg = detail.strip()
@@ -322,6 +336,17 @@ def register_error_handlers(app) -> None:
     async def validation_exception_handler(
         request: Request, exc: RequestValidationError
     ):
+        summary = _validation_error_summary(exc)
+        logger.warning(
+            "request_validation_failed",
+            extra={
+                "request_id": _request_id(request),
+                "path": request.url.path,
+                "method": request.method,
+                "status": 400 if _is_html_request(request) else 422,
+                "validation_errors": summary,
+            },
+        )
         if _is_html_request(request):
             return _template_response(
                 request,

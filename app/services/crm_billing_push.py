@@ -9,8 +9,8 @@ subscriber, skipping ones whose snapshot hasn't changed since the last push
 Delivery goes through the CRM's sync webhook, NOT the subscriber PATCH
 endpoint: the CRM's SubscriberUpdate schema only accepts person/org/status/
 notes and silently drops billing fields (verified live — 200 with no
-effect), while the webhook upsert applies any Subscriber column. Splynx-
-linked subscribers use the splynx-shaped payload (its mapper reads balance/
+effect), while the webhook upsert applies any Subscriber column. Migrated
+subscribers use the legacy-shaped payload (its mapper reads balance/
 currency/next_bill_date; it has no billing_cycle output); natives use the
 generic dotmac payload with CRM column names.
 """
@@ -94,7 +94,7 @@ def push_billing_snapshots(
         if subscriber.splynx_customer_id:
             external_id: int | str = subscriber.splynx_customer_id
             external_system = "splynx"
-            # The splynx mapper has no billing_cycle output.
+            # The legacy CRM mapper has no billing_cycle output.
             payload = {k: v for k, v in sendable.items() if k != "billing_cycle"}
         else:
             external_id = str(subscriber.id)

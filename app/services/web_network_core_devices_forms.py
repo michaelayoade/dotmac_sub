@@ -40,8 +40,15 @@ from app.schemas.catalog import NasDeviceUpdate
 from app.services import nas as nas_service
 from app.services import network as network_service
 from app.services import ping as ping_service
+from app.services.device_operational_status import warmer_is_stale
 
 logger = logging.getLogger(__name__)
+
+_ZABBIX_LIVE_STATUS_TO_DEVICE_STATUS = {
+    "up": DeviceStatus.online.value,
+    "problem": DeviceStatus.degraded.value,
+    "down": DeviceStatus.offline.value,
+}
 
 
 def _format_uptime_short(seconds: int | None) -> str | None:
@@ -57,6 +64,31 @@ def _format_uptime_short(seconds: int | None) -> str | None:
     if hours:
         return f"{hours}h {minutes}m"
     return f"{minutes}m"
+
+
+def _zabbix_live_status_available() -> bool:
+    try:
+        return not warmer_is_stale()
+    except Exception:
+        logger.warning("zabbix_live_status_warmer_check_failed", exc_info=True)
+        return True
+
+
+def _status_value(device: NetworkDevice) -> str:
+    return device.status.value if device.status else DeviceStatus.offline.value
+
+
+def _display_status_value(
+    device: NetworkDevice, *, zabbix_live_status_available: bool
+) -> str:
+    if device.status == DeviceStatus.maintenance:
+        return DeviceStatus.maintenance.value
+    if zabbix_live_status_available:
+        live_status = str(device.live_status or "").strip().lower()
+        mapped = _ZABBIX_LIVE_STATUS_TO_DEVICE_STATUS.get(live_status)
+        if mapped:
+            return mapped
+    return _status_value(device)
 
 
 def _form_str(form: FormData, key: str, default: str = "") -> str:
@@ -596,6 +628,13 @@ def list_page_data(
 
     devices = db.scalars(stmt.order_by(NetworkDevice.name).limit(200)).all()
     device_ids = [device.id for device in devices]
+    zabbix_live_status_available = _zabbix_live_status_available()
+    display_status_map = {
+        str(device.id): _display_status_value(
+            device, zabbix_live_status_available=zabbix_live_status_available
+        )
+        for device in devices
+    }
     pop_sites = pop_sites_for_forms(db)
     child_impacts: dict[str, dict[str, int | bool]] = {}
     parent_ids = [device.id for device in devices]
@@ -615,9 +654,12 @@ def list_page_data(
                 key, {"total": 0, "offline": 0, "degraded": 0, "impacted": False}
             )
             bucket["total"] = int(bucket["total"]) + 1
-            if child.status == DeviceStatus.offline:
+            child_status = _display_status_value(
+                child, zabbix_live_status_available=zabbix_live_status_available
+            )
+            if child_status == DeviceStatus.offline.value:
                 bucket["offline"] = int(bucket["offline"]) + 1
-            if child.status == DeviceStatus.degraded:
+            if child_status == DeviceStatus.degraded.value:
                 bucket["degraded"] = int(bucket["degraded"]) + 1
             bucket["impacted"] = bool(
                 int(bucket["offline"]) > 0 or int(bucket["degraded"]) > 0
@@ -742,6 +784,7 @@ def list_page_data(
         "device_type_filter": device_type_filter,
         "device_type_options": [item.value for item in DeviceType],
         "child_impacts": child_impacts,
+        "display_status_map": display_status_map,
         "uptime_map": uptime_map,
         "ping_history_map": ping_history_map,
         "backup_map": backup_map,

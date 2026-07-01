@@ -45,7 +45,7 @@ class CrmSyncHandler:
     def _dispatch(self, db: Session, event: Event) -> None:
         from app.config import settings
         from app.services.crm_webhook import (
-            NATIVE_EXTERNAL_SYSTEM,
+            SELFCARE_EXTERNAL_SYSTEM,
             native_status,
             native_subscriber_payload,
             service_activation_payload,
@@ -65,12 +65,15 @@ class CrmSyncHandler:
         if not subscriber:
             return
 
-        # Migrated subscribers stay on the splynx-shaped webhook; native ones
-        # use the CRM's generic webhook keyed by our subscriber UUID.
+        # Every subscriber — migrated or native — is pushed to the CRM under its
+        # canonical selfcare keying, keyed by our subscriber UUID, so the CRM
+        # updates one canonical row. Previously migrated subscribers were pushed
+        # under "splynx" by splynx_customer_id, which created a duplicate row
+        # alongside the selfcare row for the same subscriber.
         splynx_id = subscriber.splynx_customer_id
         is_native = splynx_id is None
-        external_system = NATIVE_EXTERNAL_SYSTEM if is_native else "splynx"
-        external_id: int | str = str(subscriber.id) if splynx_id is None else splynx_id
+        external_system = SELFCARE_EXTERNAL_SYSTEM
+        external_id: int | str = str(subscriber.id)
         name = f"{subscriber.first_name} {subscriber.last_name}".strip()
 
         if event.event_type == EventType.subscriber_created:

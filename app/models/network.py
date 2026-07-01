@@ -75,6 +75,14 @@ class IPVersion(enum.Enum):
     ipv6 = "ipv6"
 
 
+class Ipv6PrefixState(enum.Enum):
+    """Lifecycle of a delegated IPv6 prefix carved from a pool."""
+
+    available = "available"  # free to allocate
+    reserved = "reserved"  # held (e.g. infra / manual) — not auto-allocatable
+    assigned = "assigned"  # delegated to a subscriber
+
+
 class HardwareUnitStatus(enum.Enum):
     active = "active"
     inactive = "inactive"
@@ -498,8 +506,24 @@ class PortVlan(Base):
 class IPAssignment(Base):
     __tablename__ = "ip_assignments"
     __table_args__ = (
-        UniqueConstraint("ipv4_address_id", name="uq_ip_assignments_ipv4_address_id"),
-        UniqueConstraint("ipv6_address_id", name="uq_ip_assignments_ipv6_address_id"),
+        # Partial-unique: only ONE *active* assignment per address. Released
+        # assignments stay (is_active=False) for history, and the address becomes
+        # re-allocatable — without this a terminally-released IP was stranded
+        # (counted free in the UI but un-assignable). See migration 177.
+        Index(
+            "uq_ip_assignments_ipv4_active",
+            "ipv4_address_id",
+            unique=True,
+            postgresql_where=text("is_active"),
+            sqlite_where=text("is_active"),
+        ),
+        Index(
+            "uq_ip_assignments_ipv6_active",
+            "ipv6_address_id",
+            unique=True,
+            postgresql_where=text("is_active"),
+            sqlite_where=text("is_active"),
+        ),
         CheckConstraint(
             "(ip_version = 'ipv4' AND ipv4_address_id IS NOT NULL AND ipv6_address_id IS NULL) OR "
             "(ip_version = 'ipv6' AND ipv6_address_id IS NOT NULL AND ipv4_address_id IS NULL)",
@@ -558,7 +582,7 @@ class IPAssignment(Base):
 class SubscriberAdditionalRoute(Base):
     """Extra routed IP blocks for a subscriber, emitted as RADIUS Framed-Route.
 
-    Splynx auto-attached these via the ``ipv4_route`` field on its
+    The legacy billing platform auto-attached these via the ``ipv4_route`` field on its
     ``services_internet`` table; the BNG installed each as a route to the PPP
     interface on session-up. After the 2026-06-11 RADIUS cutover dotmac_sub is
     the answering server and must reproduce them, fleet-wide, automatically.
@@ -566,7 +590,7 @@ class SubscriberAdditionalRoute(Base):
     Stored per-subscriber (not via IPAM ``IPAssignment``) on purpose: a routed
     subnet has no managed host-address row in ``ipv4_addresses`` — and the
     ``ip_assignments`` check constraint requires one — so a routed /29 doesn't
-    fit that model without polluting host inventory. Splynx duplicate services
+    fit that model without polluting host inventory. Imported duplicate services
     also collapse to a single dotmac_sub subscriber, so subscriber + CIDR is the
     natural unique grain (see uq constraint below; makes backfill idempotent).
     """
@@ -595,7 +619,7 @@ class SubscriberAdditionalRoute(Base):
     # Normalised network/prefix, e.g. "160.119.125.104/29" or "102.0.2.5/32".
     cidr: Mapped[str] = mapped_column(String(64), nullable=False)
     prefix_length: Mapped[int] = mapped_column(Integer, nullable=False)
-    # Framed-Route metric (Splynx default was 1).
+    # Framed-Route metric (legacy default was 1).
     metric: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     # Provenance: "splynx_backfill" | "splynx_sync" | "manual".
@@ -650,6 +674,9 @@ class IpPool(Base):
     # Cached allocation tracking for faster IP allocation
     next_available_ip: Mapped[str | None] = mapped_column(String(64))
     available_count: Mapped[int | None] = mapped_column(Integer)
+    # For IPv6 pools: the size of each customer prefix-delegation carved from
+    # ``cidr`` (the parent prefix). Configurable per pool; defaults to /64.
+    delegation_prefix_length: Mapped[int | None] = mapped_column(Integer)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
@@ -663,6 +690,7 @@ class IpPool(Base):
     blocks = relationship("IpBlock", back_populates="pool")
     ipv4_addresses = relationship("IPv4Address", back_populates="pool")
     ipv6_addresses = relationship("IPv6Address", back_populates="pool")
+    delegated_prefixes = relationship("Ipv6DelegatedPrefix", back_populates="pool")
     olt_device = relationship(
         "OLTDevice", back_populates="ip_pools", foreign_keys=[olt_device_id]
     )
@@ -732,8 +760,14 @@ class IPv4Address(Base):
         onupdate=lambda: datetime.now(UTC),
     )
 
+    # Active-preferring: with the partial-unique index an address can carry past
+    # (inactive) assignments plus at most one active one; order so the active row
+    # wins this uselist=False accessor.
     assignment = relationship(
-        "IPAssignment", back_populates="ipv4_address", uselist=False
+        "IPAssignment",
+        back_populates="ipv4_address",
+        uselist=False,
+        order_by="IPAssignment.is_active.desc()",
     )
     pool = relationship("IpPool", back_populates="ipv4_addresses")
     ont_unit = relationship("OntUnit", foreign_keys=[ont_unit_id])
@@ -763,9 +797,70 @@ class IPv6Address(Base):
     )
 
     assignment = relationship(
-        "IPAssignment", back_populates="ipv6_address", uselist=False
+        "IPAssignment",
+        back_populates="ipv6_address",
+        uselist=False,
+        order_by="IPAssignment.is_active.desc()",
     )
     pool = relationship("IpPool", back_populates="ipv6_addresses")
+
+
+class Ipv6DelegatedPrefix(Base):
+    """A delegated IPv6 prefix (e.g. a /64) carved from an IPv6 pool's parent
+    prefix and handed to a subscriber.
+
+    First-class PD record: the app — not FreeRADIUS dynamic pools — is the source
+    of truth for who owns which prefix. One row per (pool, prefix); its ``state``
+    transitions available -> reserved/assigned and back, so a released prefix
+    stays for reuse. ``subscriber_id``/``subscription_id`` use SET NULL so deleting
+    an owner unassigns the prefix rather than destroying the inventory record.
+    """
+
+    __tablename__ = "ipv6_delegated_prefixes"
+    __table_args__ = (
+        UniqueConstraint(
+            "pool_id", "prefix", "prefix_length", name="uq_ipv6_pd_pool_prefix"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    pool_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ip_pools.id"), nullable=False, index=True
+    )
+    # Network address of the delegated prefix, e.g. "2001:db8:0:1::".
+    prefix: Mapped[str] = mapped_column(String(64), nullable=False)
+    prefix_length: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[Ipv6PrefixState] = mapped_column(
+        Enum(Ipv6PrefixState, name="ipv6prefixstate"),
+        default=Ipv6PrefixState.available,
+        nullable=False,
+        index=True,
+    )
+    subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("subscribers.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    subscription_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("subscriptions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    pool = relationship("IpPool", back_populates="delegated_prefixes")
 
 
 class IpPoolUtilizationSnapshot(Base):
@@ -1314,7 +1409,7 @@ class OltOntRegistration(Base):
     )
     olt_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("olt_devices.id", ondelete="CASCADE"),
+        ForeignKey("olt_devices.id", ondelete="RESTRICT"),
         nullable=False,
     )
     fsp: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -3156,7 +3251,7 @@ class OntWanServiceInstance(Base):
     )
     ont_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("ont_units.id", ondelete="CASCADE"),
+        ForeignKey("ont_units.id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )
@@ -3612,12 +3707,12 @@ class ServicePortAllocation(Base):
     )
     pool_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("olt_service_port_pools.id", ondelete="CASCADE"),
+        ForeignKey("olt_service_port_pools.id", ondelete="RESTRICT"),
         nullable=False,
     )
     ont_unit_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("ont_units.id", ondelete="CASCADE"),
+        ForeignKey("ont_units.id", ondelete="RESTRICT"),
         nullable=False,
     )
     port_index: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -3666,7 +3761,7 @@ class OltServicePort(Base):
     )
     olt_device_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("olt_devices.id", ondelete="CASCADE"),
+        ForeignKey("olt_devices.id", ondelete="RESTRICT"),
         nullable=False,
     )
     ont_unit_id: Mapped[uuid.UUID | None] = mapped_column(

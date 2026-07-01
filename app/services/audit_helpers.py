@@ -208,24 +208,17 @@ def log_audit_event(
     status_code: int = 200,
     is_success: bool = True,
 ) -> None:
-    actor_type = AuditActorType.user if actor_id else AuditActorType.system
+    resolved_actor_id = _resolve_request_actor_id(request, actor_id)
+    actor_type = _resolve_request_actor_type(request, resolved_actor_id)
     metadata_payload = dict(metadata or {})
-    if request is not None:
-        subscriber = getattr(request.state, "user", None)
-        if subscriber:
-            display_name = (
-                subscriber.display_name
-                or f"{subscriber.first_name} {subscriber.last_name}".strip()
-            )
-            if display_name and not metadata_payload.get("actor_name"):
-                metadata_payload["actor_name"] = display_name
-            if getattr(subscriber, "email", None) and not metadata_payload.get(
-                "actor_email"
-            ):
-                metadata_payload["actor_email"] = subscriber.email
+    actor_name, actor_email = _request_actor_identity(request)
+    if actor_name and not metadata_payload.get("actor_name"):
+        metadata_payload["actor_name"] = actor_name
+    if actor_email and not metadata_payload.get("actor_email"):
+        metadata_payload["actor_email"] = actor_email
     payload = AuditEventCreate(
         actor_type=actor_type,
-        actor_id=actor_id,
+        actor_id=resolved_actor_id,
         action=action,
         entity_type=entity_type,
         entity_id=entity_id,
@@ -237,6 +230,127 @@ def log_audit_event(
         metadata_=metadata_payload or None,
     )
     audit_service.audit_events.create(db=db, payload=payload)
+
+
+def _resolve_request_actor_id(request, actor_id: str | None) -> str | None:
+    """Prefer explicit IDs, then authenticated request principal IDs."""
+    for candidate in (
+        actor_id,
+        getattr(getattr(request, "state", None), "actor_id", None)
+        if request is not None
+        else None,
+        _request_auth_value(request, "principal_id"),
+        _request_auth_value(request, "subscriber_id"),
+        _request_user_value(request, "id"),
+        _cached_current_user_value(request, "actor_id"),
+        _cached_current_user_value(request, "principal_id"),
+        _cached_current_user_value(request, "id"),
+        _cached_current_user_value(request, "subscriber_id"),
+    ):
+        value = str(candidate or "").strip()
+        if value:
+            return value
+    return None
+
+
+def _resolve_request_actor_type(request, actor_id: str | None) -> AuditActorType:
+    raw_type = _request_auth_value(request, "principal_type") or getattr(
+        getattr(request, "state", None), "actor_type", None
+    )
+    normalized = str(raw_type or "").strip().lower()
+    if normalized in {AuditActorType.api_key.value, AuditActorType.service.value}:
+        return AuditActorType(normalized)
+    if normalized in {"subscriber", "system_user", "reseller_user", "user"}:
+        return AuditActorType.user
+    return AuditActorType.user if actor_id else AuditActorType.system
+
+
+def _request_auth_value(request, key: str):
+    if request is None:
+        return None
+    auth = getattr(getattr(request, "state", None), "auth", None)
+    if isinstance(auth, Mapping):
+        return auth.get(key)
+    return None
+
+
+def _request_user_value(request, key: str):
+    if request is None:
+        return None
+    user = getattr(getattr(request, "state", None), "user", None)
+    if user is None:
+        return None
+    if isinstance(user, Mapping):
+        return user.get(key)
+    try:
+        return getattr(user, key, None)
+    except Exception:
+        return None
+
+
+def _cached_current_user_value(request, key: str):
+    if request is None:
+        return None
+    cached = getattr(
+        getattr(request, "state", None), "_dotmac_cached_user_context", None
+    )
+    if isinstance(cached, Mapping):
+        return cached.get(key)
+    return None
+
+
+def _request_actor_identity(request) -> tuple[str | None, str | None]:
+    """Return display name and email from request state without requiring DB IO."""
+    if request is None:
+        return None, None
+
+    cached_name = _first_text(
+        _cached_current_user_value(request, "name"),
+        _cached_current_user_value(request, "display_name"),
+    )
+    cached_email = _first_text(_cached_current_user_value(request, "email"))
+    if cached_name or cached_email:
+        return cached_name, cached_email
+
+    user = getattr(getattr(request, "state", None), "user", None)
+    if user is None:
+        return None, None
+    if isinstance(user, Mapping):
+        first_name = _first_text(user.get("first_name"))
+        last_name = _first_text(user.get("last_name"))
+        display_name = _first_text(
+            user.get("display_name"),
+            user.get("name"),
+            f"{first_name or ''} {last_name or ''}",
+        )
+        return display_name, _first_text(user.get("email"))
+
+    try:
+        state = getattr(user, "__dict__", {}) or {}
+        first_name = _first_text(
+            state.get("first_name"), getattr(user, "first_name", None)
+        )
+        last_name = _first_text(
+            state.get("last_name"), getattr(user, "last_name", None)
+        )
+        display_name = _first_text(
+            state.get("display_name"),
+            getattr(user, "display_name", None),
+            getattr(user, "name", None),
+            f"{first_name or ''} {last_name or ''}",
+        )
+        email = _first_text(state.get("email"), getattr(user, "email", None))
+        return display_name, email
+    except Exception:
+        return None, None
+
+
+def _first_text(*values) -> str | None:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return None
 
 
 def build_audit_activities(

@@ -17,6 +17,20 @@ String? notificationRoute(AppNotification n) {
       .toLowerCase();
   bool has(List<String> words) => words.any(hay.contains);
 
+  if (has([
+    'message.outbound',
+    'message_outbound',
+    'message_new',
+    'support message',
+    'new message',
+    'agent replied',
+    'agent message',
+    'live chat',
+    'chat',
+    'crm',
+  ])) {
+    return '/support/chat';
+  }
   if (has(['invoice', 'payment', 'billing', 'suspend', 'overdue', 'charge'])) {
     return '/billing';
   }
@@ -24,6 +38,14 @@ String? notificationRoute(AppNotification n) {
   if (has(['usage', 'quota', 'data', 'cap'])) return '/usage';
   return null;
 }
+
+String _sectionLabel(String route) => switch (route) {
+      '/support/chat' => 'chat',
+      '/billing' => 'billing',
+      '/support' => 'support',
+      '/usage' => 'usage',
+      _ => 'details',
+    };
 
 class NotificationsScreen extends ConsumerWidget {
   const NotificationsScreen({super.key});
@@ -84,16 +106,11 @@ class NotificationsScreen extends ConsumerWidget {
                 return _NotificationCard(
                   n: n,
                   unread: !readIds.contains(n.id),
-                  // Every notification is now tappable: actionable ones open a
-                  // related screen; the rest fall back to home so a tap is
-                  // never a dead no-op.
-                  hasAction: true,
-                  onTap: () {
+                  onMarkRead: () {
                     ref.read(readNotificationsProvider.notifier).markRead(n.id);
-                    // Unknown / unmapped types: there's nothing specific to
-                    // open, so route home rather than no-op or crash.
-                    context.go(route ?? '/dashboard');
                   },
+                  onOpen: route == null ? null : () => context.go(route),
+                  openLabel: route == null ? null : _sectionLabel(route),
                 );
               },
             );
@@ -104,21 +121,28 @@ class NotificationsScreen extends ConsumerWidget {
   }
 }
 
-class _NotificationCard extends StatelessWidget {
+class _NotificationCard extends StatefulWidget {
   const _NotificationCard({
     required this.n,
     required this.unread,
-    required this.hasAction,
-    required this.onTap,
+    required this.onMarkRead,
+    this.onOpen,
+    this.openLabel,
   });
   final AppNotification n;
   final bool unread;
+  final VoidCallback onMarkRead;
+  final VoidCallback? onOpen;
+  final String? openLabel;
 
-  /// Whether tapping opens a related screen (vs. just marking read).
-  final bool hasAction;
-  final VoidCallback onTap;
+  @override
+  State<_NotificationCard> createState() => _NotificationCardState();
+}
 
-  IconData get _icon => switch (n.channel) {
+class _NotificationCardState extends State<_NotificationCard> {
+  bool _expanded = false;
+
+  IconData get _icon => switch (widget.n.channel) {
         'email' => Icons.mail_outline,
         'sms' => Icons.sms_outlined,
         'push' => Icons.notifications_active_outlined,
@@ -126,69 +150,117 @@ class _NotificationCard extends StatelessWidget {
         _ => Icons.notifications_none_outlined,
       };
 
+  void _toggle() {
+    widget.onMarkRead();
+    setState(() => _expanded = !_expanded);
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final n = widget.n;
+    final body = n.body?.trim();
+    final hasBody = body != null && body.isNotEmpty;
+    final hasAction = widget.onOpen != null;
+
     return Card(
       margin: EdgeInsets.zero,
       child: InkWell(
-        onTap: (unread || hasAction) ? onTap : null,
+        onTap: _toggle,
         borderRadius: BorderRadius.circular(12),
         child: Padding(
           padding: const EdgeInsets.all(14),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          child: Column(
             children: [
-              CircleAvatar(
-                radius: 18,
-                backgroundColor: theme.colorScheme.secondaryContainer,
-                child: Icon(_icon,
-                    size: 18, color: theme.colorScheme.onSecondaryContainer),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(n.title,
-                        style: theme.textTheme.titleSmall?.copyWith(
-                          fontWeight:
-                              unread ? FontWeight.w700 : FontWeight.w400,
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  CircleAvatar(
+                    radius: 18,
+                    backgroundColor: theme.colorScheme.secondaryContainer,
+                    child: Icon(_icon,
+                        size: 18,
+                        color: theme.colorScheme.onSecondaryContainer),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(n.title,
+                            style: theme.textTheme.titleSmall?.copyWith(
+                              fontWeight: widget.unread
+                                  ? FontWeight.w700
+                                  : FontWeight.w400,
+                            ),
+                            maxLines: _expanded ? null : 2,
+                            overflow: _expanded
+                                ? TextOverflow.visible
+                                : TextOverflow.ellipsis),
+                        if (hasBody && !_expanded) ...[
+                          const SizedBox(height: 4),
+                          Text(body,
+                              style: theme.textTheme.bodySmall,
+                              maxLines: 3,
+                              overflow: TextOverflow.ellipsis),
+                        ],
+                        const SizedBox(height: 6),
+                        Text(
+                          '${n.channel} · ${Fmt.dateTime(n.createdAt)}',
+                          style: theme.textTheme.labelSmall
+                              ?.copyWith(color: theme.colorScheme.outline),
                         ),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis),
-                    if (n.body != null && n.body!.trim().isNotEmpty) ...[
-                      const SizedBox(height: 4),
-                      Text(n.body!.trim(),
-                          style: theme.textTheme.bodySmall,
-                          maxLines: 3,
-                          overflow: TextOverflow.ellipsis),
-                    ],
-                    const SizedBox(height: 6),
-                    Text(
-                      '${n.channel} · ${Fmt.dateTime(n.createdAt)}',
-                      style: theme.textTheme.labelSmall
-                          ?.copyWith(color: theme.colorScheme.outline),
+                      ],
                     ),
+                  ),
+                  if (widget.unread)
+                    Container(
+                      margin: const EdgeInsets.only(left: 8, top: 4),
+                      width: 9,
+                      height: 9,
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.primary,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                  Padding(
+                    padding: const EdgeInsets.only(left: 4),
+                    child: Icon(
+                      _expanded ? Icons.expand_less : Icons.expand_more,
+                      size: 20,
+                      color: theme.colorScheme.outline,
+                    ),
+                  ),
+                ],
+              ),
+              AnimatedCrossFade(
+                firstChild: const SizedBox.shrink(),
+                secondChild: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const Divider(height: 24),
+                    Text(
+                      hasBody ? body : n.title,
+                      style: theme.textTheme.bodyMedium,
+                    ),
+                    if (hasAction) ...[
+                      const SizedBox(height: 8),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TextButton.icon(
+                          onPressed: widget.onOpen,
+                          icon: const Icon(Icons.open_in_new),
+                          label: Text('Open ${widget.openLabel ?? 'details'}'),
+                        ),
+                      ),
+                    ],
                   ],
                 ),
+                crossFadeState: _expanded
+                    ? CrossFadeState.showSecond
+                    : CrossFadeState.showFirst,
+                duration: const Duration(milliseconds: 180),
               ),
-              if (unread)
-                Container(
-                  margin: const EdgeInsets.only(left: 8, top: 4),
-                  width: 9,
-                  height: 9,
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.primary,
-                    shape: BoxShape.circle,
-                  ),
-                ),
-              if (hasAction)
-                Padding(
-                  padding: const EdgeInsets.only(left: 4),
-                  child: Icon(Icons.chevron_right,
-                      size: 18, color: theme.colorScheme.outline),
-                ),
             ],
           ),
         ),

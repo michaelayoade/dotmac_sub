@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.catalog import (
@@ -489,7 +490,7 @@ def _append_additional_routes(
 ) -> None:
     """Append one Framed-Route per active additional routed block.
 
-    Reproduces what Splynx emitted from ``services_internet.ipv4_route``: the
+    Reproduces the legacy route format from ``services_internet.ipv4_route``: the
     BNG installs each as a route to this session's PPP interface and tears it
     down on disconnect. The gateway is ``0.0.0.0`` ("via this session") rather
     than the customer's primary, because primaries are CGNAT and can't be
@@ -540,6 +541,86 @@ def _append_additional_routes(
         )
 
 
+# Interim-accounting cadence — kept in sync with
+# radius_population.ACCT_INTERIM_SECONDS so both writers agree.
+_ACCT_INTERIM_SECONDS = "300"
+
+
+def _offer_rate_limit_fallback(db: Session, subscription: Subscription) -> str | None:
+    """Offer-derived MikroTik rate-limit ('{down}M/{up}M'), mirroring the
+    authoritative sweep's fallback when the profile defines no rate-limit."""
+    offer_id = getattr(subscription, "offer_id", None)
+    if not offer_id:
+        return None
+    from app.models.catalog import CatalogOffer
+
+    offer = db.get(CatalogOffer, offer_id)
+    down = getattr(offer, "speed_download_mbps", None) if offer else None
+    up = getattr(offer, "speed_upload_mbps", None) if offer else None
+    if down and up:
+        return f"{down}M/{up}M"
+    return None
+
+
+def _active_ipassignment_ipv4(db: Session, subscription: Subscription) -> str | None:
+    """The subscriber's active IPAM IPv4 address, or None.
+
+    Used as a fallback when ``subscription.ipv4_address`` is empty/stale, mirroring
+    the authoritative ``radius_population`` sweep.
+    """
+    subscriber_id = getattr(subscription, "subscriber_id", None)
+    if not subscriber_id:
+        return None
+    from app.models.network import IPAssignment, IPv4Address, IPVersion
+
+    row = db.execute(
+        select(IPv4Address.address)
+        .join(IPAssignment, IPAssignment.ipv4_address_id == IPv4Address.id)
+        .where(IPAssignment.subscriber_id == subscriber_id)
+        .where(IPAssignment.is_active.is_(True))
+        .where(IPAssignment.ip_version == IPVersion.ipv4)
+        .limit(1)
+    ).scalar()
+    return str(row) if row else None
+
+
+def _ensure_framed_ip(
+    db: Session, attrs: list[dict[str, str]], subscription: Subscription
+) -> None:
+    """Guarantee a usable Framed-IP-Address — never a stale/empty/0.0.0.0 one.
+
+    The per-connection-type builders emit Framed-IP-Address straight from
+    ``subscription.ipv4_address``, so a cleared column drops the attribute and a
+    "0.0.0.0" column emits a bogus one — either way the customer is de-IP'd and the
+    BNG tears the session down. Mirror the authoritative sweep: prefer the column
+    when usable, else fall back to the active IPAM assignment, and never emit
+    0.0.0.0.
+    """
+    column_ip = (subscription.ipv4_address or "").strip()
+    if column_ip == "0.0.0.0":  # nosec B104  # noqa: S104 — IP-string compare
+        column_ip = ""
+    effective = column_ip or (_active_ipassignment_ipv4(db, subscription) or "")
+
+    framed = [a for a in attrs if a["attribute"] == "Framed-IP-Address"]
+    if effective:
+        if framed:
+            for a in framed:
+                a["value"] = effective
+        else:
+            attrs.append(
+                {"attribute": "Framed-IP-Address", "op": ":=", "value": effective}
+            )
+    else:
+        # No usable IP anywhere — drop any 0.0.0.0 a builder added.
+        attrs[:] = [
+            a
+            for a in attrs
+            if not (
+                a["attribute"] == "Framed-IP-Address" and a["value"] == "0.0.0.0"  # nosec B104  # noqa: S104 — IP-compare
+            )
+        ]
+
+
 def build_radius_reply_attributes(
     db: Session,
     subscription: Subscription,
@@ -569,13 +650,56 @@ def build_radius_reply_attributes(
     attr_fn = _CONNECTION_TYPE_ATTRS.get(connection_type, _base_pppoe_attributes)
     attrs = attr_fn(profile, subscription)
 
+    # Parity with the authoritative radius_population sweep: never let a stale or
+    # 0.0.0.0 ipv4_address column drop Framed-IP (BNG teardown), and emit the same
+    # interim-accounting cadence so the two writers don't disagree.
+    _ensure_framed_ip(db, attrs, subscription)
+    if not any(a["attribute"] == "Acct-Interim-Interval" for a in attrs):
+        attrs.append(
+            {
+                "attribute": "Acct-Interim-Interval",
+                "op": ":=",
+                "value": _ACCT_INTERIM_SECONDS,
+            }
+        )
+
+    # IPv6 PD: emit the subscriber's delegated prefix from the app's PD inventory
+    # (the app — not FreeRADIUS dynamic pools — is the source of truth). Flag-gated
+    # and additive (only when the subscriber has an assigned prefix).
+    if not any(a["attribute"] == "Delegated-IPv6-Prefix" for a in attrs):
+        from app.services.ipv6_pd import (
+            active_delegated_prefix_for_subscriber,
+            pd_enabled,
+        )
+
+        if pd_enabled():
+            pd = active_delegated_prefix_for_subscriber(db, subscription.subscriber_id)
+            if pd:
+                attrs.append(
+                    {"attribute": "Delegated-IPv6-Prefix", "op": ":=", "value": pd}
+                )
+
     # Append vendor-specific attributes
     _append_vendor_attributes(attrs, profile, connection_type)
+
+    # Parity: when the profile defines no rate-limit, fall back to the offer's
+    # speeds (the authoritative sweep does this) so a rate-limited connection type
+    # isn't left unthrottled until the next 15-min sweep corrects it.
+    if connection_type in (
+        ConnectionType.pppoe,
+        ConnectionType.hotspot,
+        ConnectionType.ipoe,
+    ) and not any(a["attribute"] == "Mikrotik-Rate-Limit" for a in attrs):
+        offer_rate = _offer_rate_limit_fallback(db, subscription)
+        if offer_rate:
+            attrs.append(
+                {"attribute": "Mikrotik-Rate-Limit", "op": ":=", "value": offer_rate}
+            )
 
     # Append Option 82 relay agent attributes for IPoE
     _append_option82_attributes(db, attrs, subscription, connection_type)
 
-    # Append Framed-Route per additional routed IP block (Splynx ipv4_route)
+    # Append Framed-Route per additional routed IP block.
     _append_additional_routes(db, attrs, subscription)
 
     # Append any custom attributes from the profile
@@ -722,8 +846,14 @@ def _mikrotik_commands(
 
     elif connection_type == ConnectionType.static:
         if action == "suspend" and ip:
+            # Conditional add so a repeated suspend (e.g. duplicate event) is a
+            # no-op instead of a "already have such entry" error — matching the
+            # enforcement address-list helper.
             commands.append(
-                f"/ip firewall address-list add list=blocked-subscribers address={ip}"
+                f":if ([:len [/ip firewall address-list find "
+                f'list="blocked-subscribers" address="{ip}"]] = 0) '
+                f"do={{/ip firewall address-list add "
+                f'list="blocked-subscribers" address="{ip}"}}'
             )
         elif action == "unsuspend" and ip:
             commands.append(

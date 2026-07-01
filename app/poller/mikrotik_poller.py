@@ -6,6 +6,7 @@ devices using the RouterOS API and publishes them to a Redis stream.
 """
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -21,6 +22,7 @@ import redis.asyncio as redis
 from routeros_api import RouterOsApiPool
 
 from app.models.catalog import (
+    CatalogOffer,
     NasDevice,
     NasDeviceStatus,
     NasVendor,
@@ -29,6 +31,7 @@ from app.models.catalog import (
 )
 from app.services.credential_crypto import decrypt_credential
 from app.services.db_session_adapter import db_session_adapter
+from app.services.poller_health import POLLER_HEALTH_KEY
 from app.services.queue_mapping import queue_mapping
 
 logger = logging.getLogger(__name__)
@@ -46,6 +49,15 @@ def _sanitize_exc(exc: BaseException) -> str:
 # saturates the poller process and dwarfs any UI responsiveness benefit. Real
 # customer dashboards display at ~5s granularity; tune via env if needed.
 POLL_INTERVAL_MS = int(os.getenv("BANDWIDTH_POLL_INTERVAL_MS", "5000"))
+# Hard cap on any single device's blocking socket I/O. Without this a silently-
+# dropping router (firewalled/half-open) can hang its executor thread
+# indefinitely; enough of them exhaust the thread pool and stall polling for ALL
+# devices. The installed routeros_api version does not support socket timeout
+# kwargs, so asyncio.wait_for provides the async-side guard.
+DEVICE_IO_TIMEOUT_SEC = int(os.getenv("BANDWIDTH_DEVICE_IO_TIMEOUT_SEC", "12"))
+# Bound Redis I/O so a slow/unreachable Redis drops one poll cycle's samples
+# instead of stalling the whole poller (the publish is best-effort telemetry).
+REDIS_IO_TIMEOUT_SEC = int(os.getenv("BANDWIDTH_REDIS_IO_TIMEOUT_SEC", "5"))
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 REDIS_STREAM = os.getenv("BANDWIDTH_REDIS_STREAM", "bandwidth:samples")
 POLLING_ENABLED = os.getenv("BANDWIDTH_POLLING_ENABLED", "true").lower() in (
@@ -78,6 +90,26 @@ class QueueStats:
     bytes_tx: int
     packets_rx: int
     packets_tx: int
+    max_rx: int = 0  # configured max-limit (bits/s), 0 = unlimited
+    max_tx: int = 0
+
+
+def _clamp_rate(rate_bps: int, max_bps: int, tolerance: float = 1.05) -> int:
+    """Clamp a reported queue rate to its configured max-limit.
+
+    RouterOS occasionally reports a transient ``rate`` above the queue's
+    ``max-limit`` (a measurement glitch). A queue cannot physically pass more
+    than its cap, so such a reading would otherwise surface as a bogus "peak".
+    ``max_bps <= 0`` means unlimited (no cap to apply). A small tolerance
+    absorbs rounding right at the cap.
+    """
+    if rate_bps < 0:
+        return 0
+    if max_bps <= 0:
+        return rate_bps
+    if rate_bps > int(max_bps * tolerance):
+        return max_bps
+    return rate_bps
 
 
 @dataclass
@@ -122,22 +154,39 @@ class MikroTikConnection:
         """Establish connection to the device."""
         self._last_attempt = datetime.now(UTC)
         try:
-            # RouterOS API is synchronous, run in executor
+            # RouterOS API is synchronous, run in executor. wait_for guarantees
+            # the async loop is never blocked by a hung device even if the
+            # executor thread lingers.
             loop = asyncio.get_event_loop()
-            self._pool = await loop.run_in_executor(
-                None,
-                lambda: RouterOsApiPool(
-                    self.host,
-                    username=self.username,
-                    password=self.password,
-                    port=self.port,
-                    plaintext_login=True,
+            # TLS-readiness: tag a NAS with mikrotik_api_port:8729 to poll over
+            # RouterOS API-SSL (encrypted transport) instead of plaintext 8728.
+            # No-op until a device is on 8729, so the fleet is unchanged today.
+            # ssl_verify stays off for now (encrypted but unverified) — cert
+            # verification is a later step once the routers have trusted certs.
+            use_ssl = self.port == 8729
+            self._pool = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None,
+                    lambda: RouterOsApiPool(
+                        self.host,
+                        username=self.username,
+                        password=self.password,
+                        port=self.port,
+                        plaintext_login=True,
+                        use_ssl=use_ssl,
+                        ssl_verify=False,
+                        ssl_verify_hostname=False,
+                    ),
                 ),
+                timeout=DEVICE_IO_TIMEOUT_SEC + 3,
             )
             pool = self._pool
             if pool is None:
                 return False
-            self._connection = await loop.run_in_executor(None, lambda: pool.get_api())
+            self._connection = await asyncio.wait_for(
+                loop.run_in_executor(None, lambda: pool.get_api()),
+                timeout=DEVICE_IO_TIMEOUT_SEC + 3,
+            )
             self._last_connected = datetime.now(UTC)
             self._consecutive_failures = 0
             logger.info(f"Connected to MikroTik device {self.device_id} at {self.host}")
@@ -189,8 +238,11 @@ class MikroTikConnection:
 
         try:
             loop = asyncio.get_event_loop()
-            queues = await loop.run_in_executor(
-                None, lambda: conn.get_resource("/queue/simple").get()
+            queues = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None, lambda: conn.get_resource("/queue/simple").get()
+                ),
+                timeout=DEVICE_IO_TIMEOUT_SEC + 3,
             )
 
             stats = []
@@ -199,6 +251,8 @@ class MikroTikConnection:
                 rate = q.get("rate", "0/0").split("/")
                 bytes_val = q.get("bytes", "0/0").split("/")
                 packets = q.get("packets", "0/0").split("/")
+                # max-limit "rxMax/txMax" (bits/s); "0/0" means unlimited.
+                max_limit = q.get("max-limit", "0/0").split("/")
 
                 stats.append(
                     QueueStats(
@@ -215,6 +269,10 @@ class MikroTikConnection:
                         packets_rx=int(packets[0]) if packets[0].isdigit() else 0,
                         packets_tx=int(packets[1])
                         if len(packets) > 1 and packets[1].isdigit()
+                        else 0,
+                        max_rx=int(max_limit[0]) if max_limit[0].isdigit() else 0,
+                        max_tx=int(max_limit[1])
+                        if len(max_limit) > 1 and max_limit[1].isdigit()
                         else 0,
                     )
                 )
@@ -261,8 +319,18 @@ class DevicePool:
         self._connections: dict[UUID, MikroTikConnection] = {}
         self._queue_mappings: dict[UUID, dict[str, UUID]] = {}
         self._login_mappings: dict[UUID, dict[str, UUID]] = {}
+        # subscription_id -> (rx_cap_bps, tx_cap_bps) from the plan's provisioned
+        # speed. The fallback cap when a RouterOS queue is uncapped (max-limit
+        # 0/0, common on "unlimited" plans), so a glitchy rate still can't exceed
+        # the plan rate.
+        self._speed_caps: dict[UUID, tuple[int, int]] = {}
         self._refresh_interval = refresh_interval
         self._last_refresh: datetime | None = None
+
+    def resolve_speed(self, subscription_id: UUID) -> tuple[int, int]:
+        """Plan rate caps (rx_bps, tx_bps) for a subscription, or (0, 0) if
+        unknown (no cap applied)."""
+        return self._speed_caps.get(subscription_id, (0, 0))
 
     @staticmethod
     def _resolve_mikrotik_api_port(device: NasDevice) -> int:
@@ -457,6 +525,29 @@ class DevicePool:
                 self._queue_mappings.pop(device_id, None)
                 self._login_mappings.pop(device_id, None)
 
+            # Plan rate caps (subscriber download = NAS tx, upload = NAS rx),
+            # used to clamp glitchy samples on uncapped RouterOS queues.
+            speed_caps: dict[UUID, tuple[int, int]] = {}
+            speed_rows = (
+                db.query(
+                    Subscription.id,
+                    CatalogOffer.speed_download_mbps,
+                    CatalogOffer.speed_upload_mbps,
+                )
+                .join(CatalogOffer, CatalogOffer.id == Subscription.offer_id)
+                .filter(
+                    Subscription.status.in_(
+                        [SubscriptionStatus.active, SubscriptionStatus.pending]
+                    )
+                )
+                .all()
+            )
+            for sub_id, dl_mbps, ul_mbps in speed_rows:
+                rx_cap = int(ul_mbps) * 1_000_000 if ul_mbps else 0  # upload -> rx
+                tx_cap = int(dl_mbps) * 1_000_000 if dl_mbps else 0  # download -> tx
+                speed_caps[sub_id] = (rx_cap, tx_cap)
+            self._speed_caps = speed_caps
+
             logger.info(f"Device pool refreshed: {len(self._connections)} devices")
 
         finally:
@@ -548,6 +639,23 @@ class DevicePool:
                     continue
         return None
 
+    def health_snapshot(self) -> dict[str, int]:
+        """Per-cycle device health for telemetry: total / reachable / failing.
+
+        A device is "failing" while it has consecutive poll failures (it's in
+        backoff). Surfaces silently-broken routers that would otherwise be
+        invisible until a customer complains.
+        """
+        total = len(self._connections)
+        failing = sum(
+            1 for c in self._connections.values() if c._consecutive_failures > 0
+        )
+        return {
+            "devices_total": total,
+            "devices_ok": total - failing,
+            "devices_failing": failing,
+        }
+
     async def close(self):
         """Close all connections."""
         for conn in self._connections.values():
@@ -573,7 +681,14 @@ class BandwidthPoller:
 
     async def _get_redis(self) -> redis.Redis:
         if self._redis is None:
-            self._redis = cast(redis.Redis, redis.from_url(REDIS_URL))
+            self._redis = cast(
+                redis.Redis,
+                redis.from_url(
+                    REDIS_URL,
+                    socket_timeout=REDIS_IO_TIMEOUT_SEC,
+                    socket_connect_timeout=REDIS_IO_TIMEOUT_SEC,
+                ),
+            )
         return self._redis
 
     async def _publish_samples(self, samples: list[BandwidthSample]):
@@ -587,20 +702,51 @@ class BandwidthPoller:
             return
 
         r = await self._get_redis()
-        async with r.pipeline(transaction=False) as pipe:
-            for sample in samples:
-                data: dict[bytes | str | int | float, bytes | str | int | float] = {
-                    "subscription_id": sample.subscription_id,
-                    "nas_device_id": sample.nas_device_id,
-                    "queue_name": sample.queue_name,
-                    "rx_bps": str(sample.rx_bps),
-                    "tx_bps": str(sample.tx_bps),
-                    "sample_at": sample.sample_at.isoformat(),
-                }
-                pipe.xadd(REDIS_STREAM, data, maxlen=100000)
-            await pipe.execute()
+        try:
+            async with r.pipeline(transaction=False) as pipe:
+                for sample in samples:
+                    data: dict[bytes | str | int | float, bytes | str | int | float] = {
+                        "subscription_id": sample.subscription_id,
+                        "nas_device_id": sample.nas_device_id,
+                        "queue_name": sample.queue_name,
+                        "rx_bps": str(sample.rx_bps),
+                        "tx_bps": str(sample.tx_bps),
+                        "sample_at": sample.sample_at.isoformat(),
+                    }
+                    pipe.xadd(REDIS_STREAM, data, maxlen=100000)
+                await asyncio.wait_for(pipe.execute(), timeout=REDIS_IO_TIMEOUT_SEC)
+        except (TimeoutError, redis.RedisError) as exc:
+            # Best-effort telemetry: a slow/broken Redis must not stall polling.
+            # Drop this cycle's samples (the next cycle re-reads current rates).
+            logger.warning(
+                "bandwidth sample publish failed (%s); dropping %d samples",
+                exc,
+                len(samples),
+            )
+            return
 
         self._sample_count += len(samples)
+
+    async def _publish_health(self, cycle_seconds: float) -> None:
+        """Write a best-effort health snapshot for the web /metrics collector.
+
+        Never raises — health telemetry must never affect polling.
+        """
+        try:
+            payload = json.dumps(
+                {
+                    **self.device_pool.health_snapshot(),
+                    "cycle_seconds": round(cycle_seconds, 3),
+                    "poll_count": self._poll_count,
+                    "ts": datetime.now(UTC).isoformat(),
+                }
+            )
+            r = await self._get_redis()
+            await asyncio.wait_for(
+                r.set(POLLER_HEALTH_KEY, payload), timeout=REDIS_IO_TIMEOUT_SEC
+            )
+        except Exception:
+            pass
 
     async def _active_viewer_subscriptions(self) -> set[str]:
         """Return subscription IDs with a live SSE viewer within the TTL window."""
@@ -645,14 +791,23 @@ class BandwidthPoller:
                     device_id, qs.name
                 )
                 if subscription_id:
-                    # RouterOS simple-queue rate is already bits/s.
+                    # RouterOS simple-queue rate is already bits/s. Clamp to the
+                    # queue's configured max-limit: a queue physically cannot pass
+                    # more than its cap, so a reported rate above it is a RouterOS
+                    # glitch that would otherwise become a bogus "peak". When the
+                    # queue is uncapped (max-limit 0/0, common on "unlimited"
+                    # plans), fall back to the plan's provisioned speed so the
+                    # glitch still can't exceed the rate the customer pays for.
+                    rx_plan, tx_plan = self.device_pool.resolve_speed(subscription_id)
+                    rx_bps = _clamp_rate(qs.rate_rx, qs.max_rx or rx_plan)
+                    tx_bps = _clamp_rate(qs.rate_tx, qs.max_tx or tx_plan)
                     samples.append(
                         BandwidthSample(
                             subscription_id=str(subscription_id),
                             nas_device_id=str(device_id),
                             queue_name=qs.name,
-                            rx_bps=qs.rate_rx,
-                            tx_bps=qs.rate_tx,
+                            rx_bps=rx_bps,
+                            tx_bps=tx_bps,
                             sample_at=sample_time,
                         )
                     )
@@ -689,6 +844,7 @@ class BandwidthPoller:
 
                 # Calculate sleep time to maintain consistent interval
                 elapsed = time.monotonic() - start
+                await self._publish_health(elapsed)
                 sleep_time = max(0, interval_seconds - elapsed)
 
                 if sleep_time > 0:

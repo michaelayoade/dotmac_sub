@@ -18,7 +18,7 @@ from app.db import Base
 
 
 class SplynxArchivedTicket(Base):
-    """Frozen read-only archive of Splynx support tickets."""
+    """Frozen read-only archive of imported support tickets."""
 
     __tablename__ = "splynx_archived_tickets"
 
@@ -52,7 +52,7 @@ class SplynxArchivedTicket(Base):
 
 
 class SplynxArchivedTicketMessage(Base):
-    """Frozen read-only archive of Splynx ticket messages."""
+    """Frozen read-only archive of imported ticket messages."""
 
     __tablename__ = "splynx_archived_ticket_messages"
 
@@ -80,7 +80,7 @@ class SplynxArchivedTicketMessage(Base):
 
 
 class SplynxArchivedQuote(Base):
-    """Frozen read-only archive of Splynx quotes."""
+    """Frozen read-only archive of imported quotes."""
 
     __tablename__ = "splynx_archived_quotes"
 
@@ -116,7 +116,7 @@ class SplynxArchivedQuote(Base):
 
 
 class SplynxArchivedQuoteItem(Base):
-    """Frozen read-only archive of Splynx quote line items."""
+    """Frozen read-only archive of imported quote line items."""
 
     __tablename__ = "splynx_archived_quote_items"
 

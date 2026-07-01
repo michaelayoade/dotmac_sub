@@ -140,6 +140,9 @@ def require_audit_auth(
                 request.state.actor_id = session_actor_id
                 request.state.actor_type = "user"
             return {"actor_type": "user", "actor_id": session_actor_id}
+    # API keys are accepted only when they carry an explicit audit scope — the
+    # same gate JWTs must pass (`_has_audit_scope`). A key with no/other scopes is
+    # rejected, closing the historical unscoped-key bypass.
     if x_api_key:
         api_key = (
             db.query(ApiKey)
@@ -149,7 +152,9 @@ def require_audit_auth(
             .filter((ApiKey.expires_at.is_(None)) | (ApiKey.expires_at > now))
             .first()
         )
-        if api_key:
+        if api_key and _has_audit_scope({"scopes": list(api_key.scopes or [])}):
+            api_key.last_used_at = now
+            db.commit()
             if request is not None:
                 request.state.actor_id = str(api_key.id)
                 request.state.actor_type = "api_key"
@@ -157,8 +162,51 @@ def require_audit_auth(
     raise HTTPException(status_code=401, detail="Unauthorized")
 
 
+def _api_key_principal(
+    db: Session, raw_key: str, request: Request | None
+) -> dict | None:
+    """Authenticate an ``X-Api-Key`` as a first-class principal.
+
+    The key's access is exactly its ``scopes`` (wildcard-aware via
+    ``require_permission``); it carries no roles, so there is no admin shortcut.
+    Returns the auth dict, or ``None`` if the key is missing/invalid.
+    """
+    now = datetime.now(UTC)
+    api_key = (
+        db.query(ApiKey)
+        .filter(ApiKey.key_hash == hash_api_key(raw_key))
+        .filter(ApiKey.is_active.is_(True))
+        .filter(ApiKey.revoked_at.is_(None))
+        .filter((ApiKey.expires_at.is_(None)) | (ApiKey.expires_at > now))
+        .first()
+    )
+    if not api_key:
+        return None
+    api_key.last_used_at = now
+    db.commit()
+    actor_id = str(api_key.id)
+    owner = str(api_key.subscriber_id) if api_key.subscriber_id else actor_id
+    auth = {
+        "subscriber_id": owner,
+        "person_id": owner,
+        "principal_id": actor_id,
+        "principal_type": "api_key",
+        "session_id": None,
+        "roles": [],
+        "scopes": list(api_key.scopes or []),
+        "impersonated_by": None,
+        "api_key_id": actor_id,
+    }
+    if request is not None:
+        request.state.actor_id = actor_id
+        request.state.actor_type = "api_key"
+        request.state.auth = auth
+    return auth
+
+
 def require_user_auth(
     authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None),
     request: Request = None,  # type: ignore[assignment]
     db: Session = Depends(_get_db),
 ):
@@ -171,6 +219,15 @@ def require_user_auth(
     if not token and request is not None:
         token = request.cookies.get("session_token")
     if not token:
+        # No bearer/session token — accept a scoped API key as a principal whose
+        # access is exactly its scopes (wildcard-aware). require_admin_web_auth
+        # still rejects api_key principals from /admin (staff-only baseline).
+        # (isinstance guard: direct (non-DI) callers leave x_api_key as the
+        # ``Header`` sentinel rather than a str.)
+        if isinstance(x_api_key, str) and x_api_key:
+            api_key_auth = _api_key_principal(db, x_api_key, request)
+            if api_key_auth is not None:
+                return api_key_auth
         raise HTTPException(status_code=401, detail="Unauthorized")
     payload = decode_access_token(db, token)
     # Reseller "view as customer" tokens are strictly read-only: any mutation
@@ -278,38 +335,15 @@ def _permission_domain_aliases(permission_key: str) -> list[str]:
 
 def _expand_permission_key_single(permission_key: str) -> list[str]:
     """
-    Expand a permission key to include hierarchical matches.
+    Expand a permission key to aliases for the same permission.
 
-    For granular permissions like 'billing:invoice:create', this returns:
-    - 'billing:invoice:create' (exact match)
-    - 'billing:write' (domain:write implies domain:*:create/update/delete)
-    - 'billing:read' (if the action is 'read')
-
-    This allows both granular and broad permissions to work together.
+    Permission checks are intentionally exact. A route requiring
+    ``billing:invoice:create`` is not satisfied by ``billing:write`` unless the
+    principal has an explicit wildcard grant handled by ``_wildcard_ancestors``
+    or is in the admin role. This keeps broad/admin-only permissions from
+    overriding granular role containers.
     """
-    keys = [permission_key]
-    parts = permission_key.split(":")
-
-    if len(parts) >= 2:
-        domain = parts[0]
-        # For 3-part permissions like billing:invoice:create
-        if len(parts) == 3:
-            action = parts[2]
-            # billing:invoice:read -> also accept billing:read
-            if action == "read":
-                keys.append(f"{domain}:read")
-            # billing:invoice:create/update/delete -> also accept billing:write
-            elif action in ("create", "update", "delete", "write"):
-                keys.append(f"{domain}:write")
-        # For 2-part permissions like customer:read
-        elif len(parts) == 2:
-            action = parts[1]
-            # customer:read is already a broad permission
-            # customer:create/update/delete -> also accept customer:write (if it exists)
-            if action in ("create", "update", "delete"):
-                keys.append(f"{domain}:write")
-
-    return keys
+    return [permission_key]
 
 
 def _wildcard_ancestors(permission_key: str) -> list[str]:

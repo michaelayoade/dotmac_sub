@@ -27,7 +27,9 @@ from app.models.collections import DunningCase
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.lifecycle import LifecycleEventType, SubscriptionLifecycleEvent
 from app.models.network_monitoring import PopSite
+from app.models.service_extension import ServiceExtension, ServiceExtensionEntry
 from app.models.subscriber import Address, Subscriber, SubscriberStatus
+from app.models.system_user import SystemUser
 from app.models.usage import AccountingStatus, RadiusAccountingSession
 
 ACTIVE_INVOICE_STATUSES = (
@@ -65,6 +67,13 @@ def money(value: Any) -> float:
 
 def enum_value(value: Any) -> str | None:
     return getattr(value, "value", value)
+
+
+def _uuid_or_none(value: str | uuid.UUID | None) -> uuid.UUID | None:
+    try:
+        return uuid.UUID(str(value))
+    except (TypeError, ValueError):
+        return None
 
 
 def subscriber_name(subscriber: Subscriber) -> str:
@@ -297,12 +306,294 @@ def billing_summary(db: Session, subscriber: Subscriber) -> dict[str, Any]:
     }
 
 
+def _system_user_name(user: SystemUser) -> str:
+    rendered = (
+        user.display_name
+        or f"{user.first_name or ''} {user.last_name or ''}".strip()
+        or user.email
+    )
+    return rendered or str(user.id)
+
+
+def _actor_map(db: Session, actor_ids: list[str | None]) -> dict[str, dict[str, Any]]:
+    parsed_ids = sorted(
+        {
+            actor_id
+            for actor_id in (_uuid_or_none(value) for value in actor_ids)
+            if actor_id is not None
+        }
+    )
+    if not parsed_ids:
+        return {}
+    rows = list(
+        db.scalars(select(SystemUser).where(SystemUser.id.in_(parsed_ids))).all()
+    )
+    return {
+        str(row.id): {
+            "id": str(row.id),
+            "name": _system_user_name(row),
+            "email": row.email,
+        }
+        for row in rows
+    }
+
+
+def _actor_payload(
+    actor_id: str | None, actors: dict[str, dict[str, Any]]
+) -> dict[str, Any] | None:
+    if not actor_id:
+        return None
+    resolved = actors.get(str(actor_id))
+    if resolved:
+        return resolved
+    return {"id": str(actor_id), "name": None, "email": None}
+
+
+def _service_extension_entry_payload(
+    entry: ServiceExtensionEntry,
+    *,
+    subscriber: Subscriber | None = None,
+) -> dict[str, Any]:
+    return {
+        "entry_id": str(entry.id),
+        "subscriber_id": str(entry.subscriber_id),
+        "customer_id": subscriber.splynx_customer_id if subscriber else None,
+        "subscriber_number": subscriber.subscriber_number if subscriber else None,
+        "name": subscriber_name(subscriber) if subscriber else None,
+        "subscription_id": str(entry.subscription_id),
+        "previous_next_billing_at": utc_iso(entry.previous_next_billing_at),
+        "new_next_billing_at": utc_iso(entry.new_next_billing_at),
+        "created_at": utc_iso(entry.created_at),
+    }
+
+
+def _service_extension_payload(
+    extension: ServiceExtension,
+    *,
+    actors: dict[str, dict[str, Any]] | None = None,
+    entries: list[ServiceExtensionEntry] | None = None,
+) -> dict[str, Any]:
+    actor_lookup = actors or {}
+    payload = {
+        "id": str(extension.id),
+        "reason": extension.reason,
+        "window_start": utc_iso(extension.window_start),
+        "window_end": utc_iso(extension.window_end),
+        "days": extension.days,
+        "scope_type": enum_value(extension.scope_type),
+        "scope_id": str(extension.scope_id) if extension.scope_id else None,
+        "scope_subscriber_ids": extension.scope_subscriber_ids or [],
+        "status": enum_value(extension.status),
+        "affected_count": extension.affected_count,
+        "skipped_count": extension.skipped_count,
+        "created_by": _actor_payload(extension.created_by, actor_lookup),
+        "applied_by": _actor_payload(extension.applied_by, actor_lookup),
+        "applied_at": utc_iso(extension.applied_at),
+        "created_at": utc_iso(extension.created_at),
+    }
+    if entries is not None:
+        payload["affected_customers"] = [
+            _service_extension_entry_payload(entry) for entry in entries
+        ]
+    return payload
+
+
+def service_extension_rows(
+    db: Session, *, page: int, per_page: int
+) -> tuple[list[dict[str, Any]], int]:
+    total = db.scalar(select(func.count(ServiceExtension.id))) or 0
+    rows = list(
+        db.scalars(
+            select(ServiceExtension)
+            .order_by(
+                func.coalesce(
+                    ServiceExtension.applied_at,
+                    ServiceExtension.created_at,
+                ).desc(),
+                ServiceExtension.id.desc(),
+            )
+            .offset((page - 1) * per_page)
+            .limit(per_page)
+        ).all()
+    )
+    actors = _actor_map(
+        db,
+        [actor for row in rows for actor in (row.created_by, row.applied_by)],
+    )
+    return [_service_extension_payload(row, actors=actors) for row in rows], int(total)
+
+
+def service_extension_detail(db: Session, extension_id: str) -> dict[str, Any] | None:
+    parsed = _uuid_or_none(extension_id)
+    if parsed is None:
+        return None
+    extension = db.get(ServiceExtension, parsed)
+    if extension is None:
+        return None
+    entries = list(
+        db.scalars(
+            select(ServiceExtensionEntry)
+            .where(ServiceExtensionEntry.extension_id == extension.id)
+            .order_by(ServiceExtensionEntry.created_at.desc())
+        ).all()
+    )
+    subscribers = {
+        row.id: row
+        for row in db.scalars(
+            select(Subscriber).where(
+                Subscriber.id.in_([entry.subscriber_id for entry in entries])
+            )
+        ).all()
+    }
+    actors = _actor_map(db, [extension.created_by, extension.applied_by])
+    payload = _service_extension_payload(extension, actors=actors)
+    payload["affected_customers"] = [
+        _service_extension_entry_payload(
+            entry, subscriber=subscribers.get(entry.subscriber_id)
+        )
+        for entry in entries
+    ]
+    return payload
+
+
+def service_extensions_for_subscriber(
+    db: Session, subscriber_id: uuid.UUID
+) -> list[dict[str, Any]]:
+    rows = list(
+        db.scalars(
+            select(ServiceExtensionEntry)
+            .where(ServiceExtensionEntry.subscriber_id == subscriber_id)
+            .options(
+                joinedload(ServiceExtensionEntry.extension),
+            )
+            .order_by(ServiceExtensionEntry.created_at.desc())
+        ).all()
+    )
+    subscriber = db.get(Subscriber, subscriber_id)
+    actors = _actor_map(
+        db,
+        [
+            actor
+            for row in rows
+            for actor in (row.extension.created_by, row.extension.applied_by)
+            if row.extension is not None
+        ],
+    )
+    data = []
+    for row in rows:
+        item = _service_extension_payload(row.extension, actors=actors)
+        item["entry"] = _service_extension_entry_payload(row, subscriber=subscriber)
+        data.append(item)
+    return data
+
+
 def billing_by_subscriber(
     db: Session, subscribers: list[Subscriber]
 ) -> dict[uuid.UUID, dict[str, Any]]:
-    return {
-        subscriber.id: billing_summary(db, subscriber) for subscriber in subscribers
+    if not subscribers:
+        return {}
+
+    subscriber_ids = [subscriber.id for subscriber in subscribers]
+    subscriber_by_id = {subscriber.id: subscriber for subscriber in subscribers}
+
+    balances = {
+        account_id: Decimal(str(value or 0))
+        for account_id, value in db.execute(
+            select(
+                Invoice.account_id,
+                func.coalesce(func.sum(Invoice.balance_due), 0),
+            )
+            .where(Invoice.account_id.in_(subscriber_ids))
+            .where(Invoice.status.in_(ACTIVE_INVOICE_STATUSES))
+            .where(Invoice.is_active.is_(True))
+            .group_by(Invoice.account_id)
+        ).all()
     }
+    invoiced_until = {
+        account_id: value
+        for account_id, value in db.execute(
+            select(Invoice.account_id, func.max(Invoice.billing_period_end))
+            .where(Invoice.account_id.in_(subscriber_ids))
+            .where(Invoice.is_active.is_(True))
+            .group_by(Invoice.account_id)
+        ).all()
+    }
+    total_paid = {
+        account_id: Decimal(str(value or 0))
+        for account_id, value in db.execute(
+            select(Payment.account_id, func.coalesce(func.sum(Payment.amount), 0))
+            .where(Payment.account_id.in_(subscriber_ids))
+            .where(Payment.status.in_(SUCCESSFUL_PAYMENT_STATUSES))
+            .where(Payment.is_active.is_(True))
+            .group_by(Payment.account_id)
+        ).all()
+    }
+    next_bill_dates = {
+        subscriber_id: value
+        for subscriber_id, value in db.execute(
+            select(Subscription.subscriber_id, func.min(Subscription.next_billing_at))
+            .where(Subscription.subscriber_id.in_(subscriber_ids))
+            .where(
+                Subscription.status.in_(
+                    [SubscriptionStatus.active, SubscriptionStatus.pending]
+                )
+            )
+            .group_by(Subscription.subscriber_id)
+        ).all()
+    }
+    subscription_starts = {
+        subscriber_id: value
+        for subscriber_id, value in db.execute(
+            select(Subscription.subscriber_id, func.min(Subscription.start_at))
+            .where(Subscription.subscriber_id.in_(subscriber_ids))
+            .group_by(Subscription.subscriber_id)
+        ).all()
+    }
+    lock_dates = {
+        subscriber_id: value
+        for subscriber_id, value in db.execute(
+            select(EnforcementLock.subscriber_id, func.max(EnforcementLock.created_at))
+            .where(EnforcementLock.subscriber_id.in_(subscriber_ids))
+            .where(
+                EnforcementLock.reason.in_(
+                    [EnforcementReason.overdue, EnforcementReason.prepaid]
+                )
+            )
+            .group_by(EnforcementLock.subscriber_id)
+        ).all()
+    }
+    dunning_dates = {
+        account_id: value
+        for account_id, value in db.execute(
+            select(DunningCase.account_id, func.max(DunningCase.started_at))
+            .where(DunningCase.account_id.in_(subscriber_ids))
+            .group_by(DunningCase.account_id)
+        ).all()
+    }
+
+    summaries: dict[uuid.UUID, dict[str, Any]] = {}
+    for subscriber_id in subscriber_ids:
+        subscriber = subscriber_by_id[subscriber_id]
+        blocked_values = [
+            value
+            for value in (
+                lock_dates.get(subscriber_id),
+                dunning_dates.get(subscriber_id),
+            )
+            if value is not None
+        ]
+        billing_start = subscriber.account_start_date or subscription_starts.get(
+            subscriber_id
+        )
+        summaries[subscriber_id] = {
+            "balance": money(balances.get(subscriber_id)),
+            "next_bill_date": utc_iso(next_bill_dates.get(subscriber_id)),
+            "billing_start_date": utc_iso(billing_start),
+            "invoiced_until": utc_iso(invoiced_until.get(subscriber_id)),
+            "blocked_date": utc_iso(max(blocked_values) if blocked_values else None),
+            "total_paid": money(total_paid.get(subscriber_id)),
+        }
+    return summaries
 
 
 def latest_payment(db: Session, subscriber_id: uuid.UUID) -> Payment | None:
@@ -314,6 +605,46 @@ def latest_payment(db: Session, subscriber_id: uuid.UUID) -> Payment | None:
         .order_by(func.coalesce(Payment.paid_at, Payment.created_at).desc())
         .first()
     )
+
+
+def latest_payments_by_subscriber(
+    db: Session, subscriber_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, dict[str, Any]]:
+    if not subscriber_ids:
+        return {}
+    ranked = (
+        select(
+            Payment.account_id.label("account_id"),
+            Payment.amount.label("amount"),
+            Payment.paid_at.label("paid_at"),
+            Payment.created_at.label("created_at"),
+            func.row_number()
+            .over(
+                partition_by=Payment.account_id,
+                order_by=func.coalesce(Payment.paid_at, Payment.created_at).desc(),
+            )
+            .label("rank"),
+        )
+        .where(Payment.account_id.in_(subscriber_ids))
+        .where(Payment.status.in_(SUCCESSFUL_PAYMENT_STATUSES))
+        .where(Payment.is_active.is_(True))
+        .subquery()
+    )
+    rows = db.execute(
+        select(
+            ranked.c.account_id,
+            ranked.c.amount,
+            ranked.c.paid_at,
+            ranked.c.created_at,
+        ).where(ranked.c.rank == 1)
+    ).all()
+    return {
+        account_id: {
+            "last_payment_date": utc_iso(paid_at or created_at),
+            "last_payment_amount": money(amount),
+        }
+        for account_id, amount, paid_at, created_at in rows
+    }
 
 
 def _latest_session_by_subscription(
@@ -461,6 +792,8 @@ def subscriber_payload(
         "email": subscriber.email,
         "phone": subscriber.phone,
         "status": enum_value(subscriber.status),
+        "billing_mode": enum_value(subscriber.billing_mode),
+        "billing_day": subscriber.billing_day,
         "address": address_text(subscriber, list(subscriber.addresses or [])),
         "location": location_label(db, subscriber),
         "created_at": utc_iso(subscriber.created_at),
@@ -545,13 +878,33 @@ def billing_risk_rows(
     db: Session, *, page: int, per_page: int
 ) -> tuple[list[dict[str, Any]], int]:
     subscribers, total = list_subscribers(db, page=page, per_page=per_page)
-    services = services_by_subscriber(db, [item.id for item in subscribers])
+    subscriber_ids = [item.id for item in subscribers]
+    services = services_by_subscriber(db, subscriber_ids)
     billing = billing_by_subscriber(db, subscribers)
+    payments = latest_payments_by_subscriber(db, subscriber_ids)
+    pop_site_ids = {
+        subscriber.pop_site_id for subscriber in subscribers if subscriber.pop_site_id
+    }
+    pop_names = (
+        {
+            pop_id: name
+            for pop_id, name in db.execute(
+                select(PopSite.id, PopSite.name).where(PopSite.id.in_(pop_site_ids))
+            ).all()
+        }
+        if pop_site_ids
+        else {}
+    )
     rows: list[dict[str, Any]] = []
     for subscriber in subscribers:
         primary_service = next(iter(services.get(subscriber.id, [])), {})
-        payment = latest_payment(db, subscriber.id)
         summary = billing[subscriber.id]
+        payment = payments.get(subscriber.id, {})
+        location = (
+            pop_names.get(subscriber.pop_site_id)
+            if subscriber.pop_site_id
+            else subscriber.city or subscriber.region or address_text(subscriber)
+        )
         rows.append(
             {
                 "id": str(subscriber.id),
@@ -559,7 +912,7 @@ def billing_risk_rows(
                 "email": subscriber.email,
                 "phone": subscriber.phone,
                 "status": enum_value(subscriber.status),
-                "location": location_label(db, subscriber),
+                "location": location,
                 "service_plan": primary_service.get("plan_name"),
                 "speed": primary_service.get("speed"),
                 "balance": summary["balance"],
@@ -568,10 +921,8 @@ def billing_risk_rows(
                 "invoiced_until": summary["invoiced_until"],
                 "blocked_date": summary["blocked_date"],
                 "total_paid": summary["total_paid"],
-                "last_payment_date": utc_iso(payment.paid_at or payment.created_at)
-                if payment
-                else None,
-                "last_payment_amount": money(payment.amount) if payment else 0.0,
+                "last_payment_date": payment.get("last_payment_date"),
+                "last_payment_amount": payment.get("last_payment_amount", 0.0),
             }
         )
     return rows, total
@@ -863,3 +1214,174 @@ def disable_subscriber_from_crm(
     db.commit()
     db.refresh(subscriber)
     return {"id": str(subscriber.id), "status": enum_value(subscriber.status)}
+
+
+def create_account_credit(
+    db: Session,
+    *,
+    subscriber_id: str,
+    amount: Decimal,
+    reason: str | None = None,
+    external_ref: str | None = None,
+    currency: str = "NGN",
+):
+    """Issue an account credit (an *issued* credit note) on a subscriber's
+    billing account. Used by the CRM to pay out referral rewards.
+
+    Idempotent on ``external_ref`` (embedded in the memo): a repeat call returns
+    the existing credit note rather than double-crediting. Raises ``LookupError``
+    when the subscriber does not exist.
+    """
+    from app.models.billing import CreditNote, CreditNoteStatus
+    from app.schemas.billing import CreditNoteCreate
+    from app.services import billing as billing_service
+
+    sub_uuid = coerce_subscriber_id(str(subscriber_id))
+    if sub_uuid is None:
+        raise LookupError("subscriber_not_found")
+    subscriber = db.get(Subscriber, sub_uuid)
+    if subscriber is None or not subscriber.is_active:
+        raise LookupError("subscriber_not_found")
+
+    ref_marker = f"[ref:{external_ref}]" if external_ref else ""
+    if external_ref:
+        existing = (
+            db.query(CreditNote)
+            .filter(CreditNote.account_id == sub_uuid)
+            .filter(CreditNote.is_active.is_(True))
+            .filter(CreditNote.memo.ilike(f"%{ref_marker}%"))
+            .order_by(CreditNote.created_at.desc())
+            .first()
+        )
+        if existing is not None:
+            return existing
+
+    memo = (reason or "Referral reward").strip()
+    if ref_marker:
+        memo = f"{memo} {ref_marker}"
+
+    payload = CreditNoteCreate(
+        account_id=sub_uuid,
+        currency=currency,
+        subtotal=amount,
+        total=amount,
+        status=CreditNoteStatus.issued,
+        memo=memo,
+    )
+    return billing_service.credit_notes.create(db, payload)
+
+
+def credit_referral_reward_to_wallet(
+    db: Session,
+    *,
+    subscriber_id: str,
+    amount: Decimal,
+    reason: str | None = None,
+    external_ref: str | None = None,
+    currency: str = "NGN",
+):
+    """Pay a referral reward into the subscriber's VAS wallet (a spendable
+    balance), not the billing account. Individual subscribers only — resellers
+    have a separate float wallet that referral rewards must never touch.
+
+    Idempotent on ``external_ref`` (stored as the wallet entry ``reference``,
+    which is unique): a repeat call returns the existing entry. Raises
+    ``LookupError`` when the subscriber does not exist or is inactive.
+    """
+    from app.models.vas import VasEntryCategory, VasWalletEntry
+    from app.services import vas_wallet
+
+    sub_uuid = coerce_subscriber_id(str(subscriber_id))
+    if sub_uuid is None:
+        raise LookupError("subscriber_not_found")
+    subscriber = db.get(Subscriber, sub_uuid)
+    if subscriber is None or not subscriber.is_active:
+        raise LookupError("subscriber_not_found")
+
+    if external_ref:
+        existing = (
+            db.query(VasWalletEntry)
+            .filter(VasWalletEntry.reference == external_ref)
+            .first()
+        )
+        if existing is not None:
+            return existing
+
+    wallet = vas_wallet.get_or_create_wallet(db, str(sub_uuid))
+    return vas_wallet.credit_wallet(
+        db,
+        wallet,
+        amount=amount,
+        category=VasEntryCategory.adjustment,
+        reference=external_ref,
+        memo=(reason or "Referral reward").strip(),
+    )
+
+
+def create_installation_invoice(
+    db: Session,
+    *,
+    subscriber_id: str,
+    amount: Decimal,
+    description: str,
+    external_ref: str | None = None,
+    currency: str = "NGN",
+) -> Invoice:
+    """Create a one-time installation invoice (header + single line) for a
+    CRM-driven subscriber. Replaces the old Splynx installation-invoice path.
+
+    Idempotent on ``external_ref``: a repeat call with the same ref returns the
+    existing invoice rather than creating a duplicate. Raises ``LookupError``
+    when the subscriber does not exist.
+    """
+    from app.services.billing.invoices import next_invoice_number
+    from app.services.billing_adapter import (
+        BillingAdapter,
+        InvoiceIntent,
+        InvoiceLineIntent,
+    )
+
+    sub_uuid = coerce_subscriber_id(str(subscriber_id))
+    subscriber = db.get(Subscriber, sub_uuid) if sub_uuid else None
+    if subscriber is None or not subscriber.is_active:
+        raise LookupError("subscriber_not_found")
+
+    if external_ref:
+        existing = (
+            db.query(Invoice)
+            .filter(Invoice.account_id == subscriber.id)
+            .filter(Invoice.is_active.is_(True))
+            .filter(Invoice.metadata_["crm_external_ref"].astext == str(external_ref))
+            .order_by(Invoice.created_at.desc())
+            .first()
+        )
+        if existing is not None:
+            return existing
+
+    intent = InvoiceIntent(
+        account_id=subscriber.id,
+        invoice_number=next_invoice_number(db),
+        currency=currency,
+        total=amount,
+        memo=description,
+        status=InvoiceStatus.issued,
+        issued_at=datetime.now(UTC),
+    )
+    invoice = BillingAdapter().create_invoice_with_lines(
+        db,
+        intent,
+        [
+            InvoiceLineIntent(
+                description=description, quantity=Decimal("1"), unit_price=amount
+            )
+        ],
+    )
+    metadata = dict(invoice.metadata_ or {})
+    metadata["source"] = "dotmac_crm"
+    if external_ref:
+        metadata["crm_external_ref"] = str(external_ref)
+    invoice.metadata_ = metadata
+    db.add(invoice)
+    db.commit()
+    db.refresh(invoice)
+    return invoice

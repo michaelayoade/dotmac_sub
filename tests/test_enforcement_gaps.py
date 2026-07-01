@@ -675,3 +675,41 @@ class TestDisconnectRouterOsApiGate:
         assert count == 1
         api_kick.assert_called_once_with(nas_device, {"pppoe-user"})
         ssh.assert_not_called()
+
+
+class TestAddressListApiFallback:
+    def test_address_list_api_fallback_is_not_gated_by_session_kick_setting(self):
+        from app.services.enforcement import _enforce_address_list_on_nas
+
+        db = MagicMock()
+        nas_device = MagicMock(spec=NasDevice)
+        nas_device.name = "BNG-API"
+
+        ssh_cm = MagicMock()
+        ssh_cm.__enter__.side_effect = RuntimeError("ssh unavailable")
+
+        with (
+            patch(
+                "app.services.enforcement.DeviceProvisioner.ssh_session",
+                return_value=ssh_cm,
+            ),
+            patch(
+                "app.services.enforcement._mikrotik_api_session_kick_enabled",
+                return_value=False,
+            ) as session_kick_enabled,
+            patch(
+                "app.services.enforcement._nas_with_api_creds",
+                return_value=nas_device,
+            ),
+            patch(
+                "app.services.nas._mikrotik.apply_mikrotik_address_list_via_api",
+                return_value=True,
+            ) as api_apply,
+        ):
+            result = _enforce_address_list_on_nas(
+                db, nas_device, "blocked", "10.0.0.10", add=True
+            )
+
+        assert result is True
+        session_kick_enabled.assert_not_called()
+        api_apply.assert_called_once_with(nas_device, "blocked", "10.0.0.10")

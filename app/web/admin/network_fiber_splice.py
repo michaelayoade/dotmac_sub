@@ -49,7 +49,7 @@ def _base_context(
 @router.get(
     "/fiber-strands",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:fiber:read"))],
 )
 def fiber_strands_list(request: Request, db: Session = Depends(get_db)):
     page_data = web_network_strands_service.list_page_data(db)
@@ -63,7 +63,7 @@ def fiber_strands_list(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/fiber-strands/new",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:fiber:read"))],
 )
 def fiber_strand_new(request: Request, db: Session = Depends(get_db)):
     form_context = web_network_strands_service.build_form_context(
@@ -80,7 +80,7 @@ def fiber_strand_new(request: Request, db: Session = Depends(get_db)):
 @router.post(
     "/fiber-strands",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:fiber:write"))],
 )
 def fiber_strand_create(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
@@ -143,7 +143,7 @@ def fiber_strand_create(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/fiber-strands/{strand_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:fiber:read"))],
 )
 def fiber_strand_edit(request: Request, strand_id: str, db: Session = Depends(get_db)):
     strand = web_network_strands_service.get_strand(db, strand_id)
@@ -161,7 +161,7 @@ def fiber_strand_edit(request: Request, strand_id: str, db: Session = Depends(ge
 @router.post(
     "/fiber-strands/{strand_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:fiber:write"))],
 )
 def fiber_strand_update(
     request: Request, strand_id: str, db: Session = Depends(get_db)
@@ -235,7 +235,7 @@ def fiber_strand_update(
 @router.get(
     "/splice-closures",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:fiber:read"))],
 )
 def splice_closures_list(request: Request, db: Session = Depends(get_db)):
     page_data = web_network_splice_closures_service.list_page_data(db)
@@ -251,7 +251,7 @@ def splice_closures_list(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/splice-closures/new",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:fiber:read"))],
 )
 def splice_closure_new(request: Request, db: Session = Depends(get_db)):
     form_context = web_network_splice_closures_service.build_form_context(
@@ -270,7 +270,7 @@ def splice_closure_new(request: Request, db: Session = Depends(get_db)):
 @router.post(
     "/splice-closures",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:fiber:write"))],
 )
 def splice_closure_create(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
@@ -312,7 +312,7 @@ def splice_closure_create(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/splice-closures/{closure_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:fiber:read"))],
 )
 def splice_closure_edit(
     request: Request, closure_id: str, db: Session = Depends(get_db)
@@ -340,7 +340,7 @@ def splice_closure_edit(
 @router.post(
     "/splice-closures/{closure_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:fiber:write"))],
 )
 def splice_closure_update(
     request: Request, closure_id: str, db: Session = Depends(get_db)
@@ -397,7 +397,7 @@ def splice_closure_update(
 @router.get(
     "/splice-closures/{closure_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:fiber:read"))],
 )
 def splice_closure_detail(
     request: Request, closure_id: str, db: Session = Depends(get_db)
@@ -425,7 +425,7 @@ def splice_closure_detail(
 @router.get(
     "/splice-closures/{closure_id}/trays/new",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:fiber:read"))],
 )
 def splice_tray_new(request: Request, closure_id: str, db: Session = Depends(get_db)):
     closure = web_network_splice_closures_service.get_closure(db, closure_id)
@@ -453,7 +453,7 @@ def splice_tray_new(request: Request, closure_id: str, db: Session = Depends(get
 @router.get(
     "/splice-closures/{closure_id}/trays",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:fiber:read"))],
 )
 def splice_tray_redirect(closure_id: str):
     return RedirectResponse(
@@ -464,7 +464,7 @@ def splice_tray_redirect(closure_id: str):
 @router.get(
     "/splice-closures/{closure_id}/trays/{tray_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:fiber:read"))],
 )
 def splice_tray_edit(
     request: Request,
@@ -498,7 +498,7 @@ def splice_tray_edit(
 @router.post(
     "/splice-closures/{closure_id}/trays",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:fiber:write"))],
 )
 def splice_tray_create(
     request: Request, closure_id: str, db: Session = Depends(get_db)
@@ -569,7 +569,7 @@ def splice_tray_create(
 @router.post(
     "/splice-closures/{closure_id}/trays/{tray_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:fiber:write"))],
 )
 def splice_tray_update(
     request: Request,
@@ -646,7 +646,7 @@ def splice_tray_update(
 @router.get(
     "/splice-closures/{closure_id}/splices/new",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:fiber:read"))],
 )
 def splice_new(request: Request, closure_id: str, db: Session = Depends(get_db)):
     dependencies = web_network_splice_closures_service.splice_form_dependencies(
@@ -679,7 +679,7 @@ def splice_new(request: Request, closure_id: str, db: Session = Depends(get_db))
 @router.post(
     "/splice-closures/{closure_id}/splices",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:fiber:write"))],
 )
 def splice_create(request: Request, closure_id: str, db: Session = Depends(get_db)):
     dependencies = web_network_splice_closures_service.splice_form_dependencies(
@@ -772,7 +772,7 @@ def splice_create(request: Request, closure_id: str, db: Session = Depends(get_d
 @router.get(
     "/splice-closures/{closure_id}/splices/{splice_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:fiber:read"))],
 )
 def splice_edit(
     request: Request,
@@ -810,7 +810,7 @@ def splice_edit(
 @router.post(
     "/splice-closures/{closure_id}/splices/{splice_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:fiber:write"))],
 )
 def splice_update(
     request: Request,

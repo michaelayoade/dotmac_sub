@@ -14,6 +14,7 @@ from app.schemas.billing import (
 )
 from app.services import billing as billing_service
 from app.services.locking import lock_for_update as _real_lock_for_update
+from app.services.web_billing_credits import create_credit_from_form
 
 
 def _issued_credit_note_and_invoice(db_session, account_id, *, amount):
@@ -40,6 +41,26 @@ def _issued_credit_note_and_invoice(db_session, account_id, *, amount):
         ),
     )
     return credit_note, invoice
+
+
+def test_credit_form_rejects_non_positive_amounts(db_session, subscriber_account):
+    with pytest.raises(ValueError, match="Amount must be greater than 0"):
+        create_credit_from_form(
+            db_session,
+            account_id=str(subscriber_account.id),
+            amount="0",
+            currency="USD",
+            memo=None,
+        )
+
+    with pytest.raises(ValueError, match="Amount must be greater than 0"):
+        create_credit_from_form(
+            db_session,
+            account_id=str(subscriber_account.id),
+            amount="-1",
+            currency="USD",
+            memo=None,
+        )
 
 
 def test_credit_note_apply_reduces_invoice_balance(db_session, subscriber_account):

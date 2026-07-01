@@ -12,6 +12,8 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from billiard.exceptions import SoftTimeLimitExceeded
+
 from app.celery_app import celery_app
 from app.models.network import OltConfigBackup, OltConfigBackupType, OLTDevice
 from app.services import backup_alerts
@@ -113,7 +115,14 @@ def _cleanup_old_backups(db, max_age_days: int = 90, max_per_olt: int = 50) -> i
     return cleaned
 
 
-@celery_app.task(name="app.tasks.olt_config_backup.backup_all_olts")
+@celery_app.task(
+    name="app.tasks.olt_config_backup.backup_all_olts",
+    # Serial SSH across the whole fleet can exceed the global 840/900s default
+    # and be hard-killed mid-run. Give it generous-but-bounded limits and commit
+    # whatever finished when the soft limit hits (handled below).
+    soft_time_limit=3000,
+    time_limit=3300,
+)
 def backup_all_olts() -> dict[str, int]:
     """Backup running config for all active OLTs."""
     logger.info("Starting OLT config backup run")
@@ -121,6 +130,7 @@ def backup_all_olts() -> dict[str, int]:
     backed_up = 0
     errors = 0
     skipped = 0
+    cleaned = 0
     error_details: list[dict[str, str | None]] = []
 
     try:
@@ -208,6 +218,16 @@ def backup_all_olts() -> dict[str, int]:
         # Retention cleanup: remove backups older than configured age
         cleaned = _cleanup_old_backups(db, max_age_days=90, max_per_olt=50)
 
+    except SoftTimeLimitExceeded:
+        # Out of time — keep the backups that finished rather than losing the
+        # whole run. Retention cleanup is skipped until the next run.
+        logger.warning(
+            "olt_config_backup soft time limit hit; committing %d backups", backed_up
+        )
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
     except Exception:
         db.rollback()
         raise

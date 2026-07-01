@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:dotmac_portal/src/features/home/notifications_screen.dart';
+import 'package:dotmac_portal/src/core/push_service.dart';
 import 'package:dotmac_portal/src/models/auth.dart';
 import 'package:dotmac_portal/src/models/invoice.dart';
 import 'package:dotmac_portal/src/models/notification.dart';
@@ -102,8 +103,61 @@ void main() {
       expect(notificationRoute(n(eventType: 'quota_threshold')), '/usage');
     });
 
+    test('chat message notifications route to the live chat', () {
+      expect(
+        notificationRoute(n(eventType: 'message.outbound')),
+        '/support/chat',
+      );
+      expect(
+        notificationRoute(n(subject: 'New support message')),
+        '/support/chat',
+      );
+    });
+
     test('returns null when nothing is actionable', () {
       expect(notificationRoute(n(subject: 'Welcome aboard')), isNull);
+    });
+  });
+
+  group('push notification routing', () {
+    test('honours explicit internal routes from FCM data', () {
+      expect(
+        PushService.routeForNotificationData({'route': '/support/chat'}),
+        '/support/chat',
+      );
+      expect(
+        PushService.routeForNotificationData(
+          {'deep_link': 'dotmac://open/billing'},
+        ),
+        '/billing',
+      );
+    });
+
+    test('routes chat-shaped push payloads to live chat', () {
+      expect(
+        PushService.routeForNotificationData(
+          {'event_type': 'message.outbound'},
+        ),
+        '/support/chat',
+      );
+      expect(
+        PushService.routeForNotificationData({'type': 'chat_message'}),
+        '/support/chat',
+      );
+      expect(
+        PushService.routeForNotificationData(
+          const {},
+          title: 'New support message',
+        ),
+        '/support/chat',
+      );
+    });
+
+    test('routes generic push payloads to the notifications inbox', () {
+      expect(
+        PushService.routeForNotificationData({'type': 'account_notice'}),
+        '/dashboard/notifications',
+      );
     });
   });
 

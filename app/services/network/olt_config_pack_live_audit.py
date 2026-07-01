@@ -332,12 +332,34 @@ def audit_olt_config_pack_live(db: Session, olt_id: str) -> OltConfigPackLiveAud
     audit.observed.update(imported_observed)
     audit.errors.extend(imported_errors)
     audit.warnings.extend(imported_warnings)
+    required_tr069_id = int(pack.tr069_olt_profile_id)  # type: ignore[arg-type]
+    required_traffic_ids = _required_traffic_table_ids(pack)
+    required_wan_profile_ids = sorted(
+        {
+            profile_id
+            for profile_id in [
+                pack.wan_config_profile_id,
+                *audit.observed.get("mapping_wan_config_profile_ids", []),
+            ]
+            if profile_id is not None
+        }
+    )
+
+    # Live inventory reads can take long enough for PostgreSQL's
+    # idle-in-transaction timeout to kill the connection. Release the read
+    # transaction before opening SSH sessions; all DB-derived values needed
+    # below have been copied to primitives.
+    previous = db.expire_on_commit
+    db.expire_on_commit = False
+    try:
+        db.commit()
+    finally:
+        db.expire_on_commit = previous
 
     ok, message, tr069_profiles = get_tr069_server_profiles(olt)
     if not ok:
         audit.errors.append(f"Live TR-069 profile inventory failed: {message}")
     tr069_profile_ids = {profile.profile_id for profile in tr069_profiles}
-    required_tr069_id = int(pack.tr069_olt_profile_id)  # type: ignore[arg-type]
     tr069_detail = next(
         (
             profile
@@ -382,7 +404,6 @@ def audit_olt_config_pack_live(db: Session, olt_id: str) -> OltConfigPackLiveAud
     if not ok:
         audit.errors.append(f"Live traffic table inventory failed: {message}")
     live_traffic_ids = {table.index for table in traffic_tables}
-    required_traffic_ids = _required_traffic_table_ids(pack)
     missing_traffic_fields = {
         field: table_id
         for field, table_id in required_traffic_ids.items()
@@ -408,18 +429,13 @@ def audit_olt_config_pack_live(db: Session, olt_id: str) -> OltConfigPackLiveAud
     if not ok:
         audit.errors.append(f"Live WAN profile inventory failed: {message}")
     live_wan_ids = {profile.profile_id for profile in wan_profiles}
-    required_wan_profile_ids = sorted(
-        {
-            profile_id
-            for profile_id in [
-                pack.wan_config_profile_id,
-                *audit.observed.get("mapping_wan_config_profile_ids", []),
-            ]
-            if profile_id is not None
-        }
+    allowed_missing_wan_ids = (
+        {0} if getattr(pack, "allow_zero_wan_config_profile_id", False) else set()
     )
     missing_wan_profile_ids = (
-        sorted(set(required_wan_profile_ids) - live_wan_ids) if ok else []
+        sorted(set(required_wan_profile_ids) - live_wan_ids - allowed_missing_wan_ids)
+        if ok
+        else []
     )
     audit.observed.update(
         {

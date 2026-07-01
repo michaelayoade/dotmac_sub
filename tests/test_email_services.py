@@ -596,3 +596,19 @@ def test_send_user_invite_email_prefers_selfcare_domain_for_admin_login(
         "https://selfcare.dotmac.io/auth/reset-password?token=token-123"
         in captured["body_text"]
     )
+
+
+def test_render_email_bodies_leaves_full_html_document_unwrapped():
+    from app.services.email_template import render_email_bodies
+
+    document = (
+        '<!DOCTYPE html><html lang="en"><head><title>Notice</title></head>'
+        "<body><p>Hi {{ customer_name }}</p></body></html>"
+    )
+
+    body_html, body_text = render_email_bodies(document, subject="Notice")
+
+    assert body_html == document
+    assert body_html.count("<html") == 1
+    assert "{{ customer_name }}" in body_html
+    assert "Hi {{ customer_name }}" in body_text

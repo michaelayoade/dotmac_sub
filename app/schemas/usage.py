@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -153,9 +153,42 @@ class UsageSummaryResponse(BaseModel):
     is_authoritative: bool
     # Bucket width of the series: "minute" | "hour" | "day" | None (no chart).
     bucket: str | None = None
+    # Mean throughput over the window (rx+tx bits/s) — the "average speed".
+    # None for windows with no sample points (e.g. "all").
+    average_bps: float | None = None
+    # Exact peak throughput over the window (subscriber-perspective bits/s),
+    # from the metrics store. Currently populated for the billing cycle; None
+    # when the metrics store is unavailable or the window has no data.
+    peak_download_bps: float | None = None
+    peak_upload_bps: float | None = None
     series: list[UsageSeriesPoint] = Field(default_factory=list)
     # Fair-Usage status for the caller (None when no FUP applies / unknown).
     fup: FupSummary | None = None
+
+
+class DailyUsagePoint(BaseModel):
+    """One day's upload/download volume (bytes), summed across the caller's
+    subscriptions."""
+
+    date: date
+    upload_bytes: int
+    download_bytes: int
+    total_bytes: int
+
+
+class DailyUsageHistoryResponse(BaseModel):
+    """Long-history daily usage for GET /me/usage-history.
+
+    Sourced from the historical daily rollup (Splynx ``traffic_counter``
+    backfill), which reaches years further back than per-session accounting.
+    """
+
+    start: date
+    end: date
+    total_upload_bytes: int
+    total_download_bytes: int
+    total_bytes: int
+    points: list[DailyUsagePoint] = Field(default_factory=list)
 
 
 class UsageRecordBase(BaseModel):
@@ -197,11 +230,14 @@ class UsageChargeBase(BaseModel):
     invoice_line_id: UUID | None = None
     period_start: datetime
     period_end: datetime
-    total_gb: Decimal = Field(default=Decimal("0.0000"), ge=0)
-    included_gb: Decimal = Field(default=Decimal("0.0000"), ge=0)
-    billable_gb: Decimal = Field(default=Decimal("0.0000"), ge=0)
-    unit_price: Decimal = Field(default=Decimal("0.0000"), ge=0)
-    amount: Decimal = Field(default=Decimal("0.00"), ge=0)
+    # No *Create subclass exists (usage charges are built service-side), so
+    # these bounds only ever reached *Read. Drop them so the read model
+    # serializes stored signed values (usage credits/adjustments).
+    total_gb: Decimal = Decimal("0.0000")
+    included_gb: Decimal = Decimal("0.0000")
+    billable_gb: Decimal = Decimal("0.0000")
+    unit_price: Decimal = Decimal("0.0000")
+    amount: Decimal = Decimal("0.00")
     currency: str = Field(default="NGN", min_length=3, max_length=3)
     status: UsageChargeStatus = UsageChargeStatus.staged
     notes: str | None = None
@@ -211,6 +247,8 @@ class UsageChargeBase(BaseModel):
 class UsageChargeRead(UsageChargeBase):
     model_config = ConfigDict(from_attributes=True)
 
+    # Money fields inherit unbounded from UsageChargeBase (no create-side bound
+    # exists to drop).
     id: UUID
     created_at: datetime
     updated_at: datetime

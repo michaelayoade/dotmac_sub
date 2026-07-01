@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/formatters.dart';
+import '../../core/semantic_colors.dart';
 import '../../models/invoice.dart';
 import '../../models/ledger.dart';
 import '../../providers/data_providers.dart';
@@ -75,6 +76,10 @@ class InvoicesScreen extends ConsumerWidget {
                           ],
                           _InvoiceFilterBar(
                             selected: filter,
+                            counts: {
+                              for (final f in InvoiceFilter.values)
+                                f: all.where(f.test).length,
+                            },
                             onChanged: (f) => ref
                                 .read(invoiceFilterProvider.notifier)
                                 .state = f,
@@ -231,9 +236,14 @@ class _OutstandingHeader extends StatelessWidget {
 
 /// Status filter chips above the invoices list.
 class _InvoiceFilterBar extends StatelessWidget {
-  const _InvoiceFilterBar({required this.selected, required this.onChanged});
+  const _InvoiceFilterBar({
+    required this.selected,
+    required this.onChanged,
+    this.counts = const {},
+  });
   final InvoiceFilter selected;
   final ValueChanged<InvoiceFilter> onChanged;
+  final Map<InvoiceFilter, int> counts;
 
   @override
   Widget build(BuildContext context) {
@@ -242,7 +252,8 @@ class _InvoiceFilterBar extends StatelessWidget {
       children: [
         for (final f in InvoiceFilter.values)
           ChoiceChip(
-            label: Text(f.label),
+            label:
+                Text(counts[f] != null ? '${f.label} (${counts[f]})' : f.label),
             selected: f == selected,
             onSelected: (_) => onChanged(f),
           ),
@@ -316,7 +327,7 @@ class _BalanceCard extends StatelessWidget {
     final (label, color) = balance.owes
         ? ('Balance due', scheme.error)
         : balance.inCredit
-            ? ('Account credit', Colors.green.shade700)
+            ? ('Account credit', context.semantic.success)
             : ('Balance', scheme.onSurface);
     return Card(
       color: scheme.surfaceContainerHighest,
@@ -359,7 +370,7 @@ class _LedgerTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final credit = txn.isCredit;
-    final color = credit ? Colors.green.shade700 : scheme.error;
+    final color = credit ? context.semantic.success : scheme.error;
     final sign = credit ? '+' : '−';
     return Card(
       margin: EdgeInsets.zero,

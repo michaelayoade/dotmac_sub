@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import ipaddress
+import itertools
 import logging
 import re
 from collections import defaultdict
@@ -1048,12 +1049,14 @@ def _build_ipv4_range_rows(
             .all()
         )
     }
-    all_hosts = (
-        [str(ip) for ip in network]
-        if allow_network_broadcast
-        else [str(ip) for ip in network.hosts()]
-    )
-    limited_hosts = all_hosts[:limit] if limit > 0 else all_hosts
+    # Stream hosts and stop at `limit` rather than materializing the whole list
+    # first — a /16 detail view would otherwise build ~65k strings (a /8, ~16M)
+    # just to slice to `limit`.
+    host_iter = iter(network) if allow_network_broadcast else network.hosts()
+    if limit > 0:
+        limited_hosts = [str(ip) for ip in itertools.islice(host_iter, limit)]
+    else:
+        limited_hosts = [str(ip) for ip in host_iter]
     subscriptions_by_ip = _subscriptions_by_ipv4(db, ip_addresses=limited_hosts)
     device_refs_by_ip = _device_ip_references_by_ip(
         db,
@@ -1065,9 +1068,6 @@ def _build_ipv4_range_rows(
     )
 
     rows: list[dict[str, object]] = []
-    assigned_count = 0
-    reserved_count = 0
-    available_count = 0
     for ip in limited_hosts:
         record = address_records.get(ip)
         device_refs = device_refs_by_ip.get(ip, [])
@@ -1084,14 +1084,6 @@ def _build_ipv4_range_rows(
             status = "device"
         if status in {"available", "reserved"} and route_owner:
             status = "routed"
-        if status in {"assigned", "ont_management", "device"}:
-            assigned_count += 1
-        elif status == "routed":
-            assigned_count += 1
-        elif status == "reserved":
-            reserved_count += 1
-        else:
-            available_count += 1
 
         subscriber_name = _subscriber_display_name(subscriber)
         subscriber_id = str(getattr(subscriber, "id", "") or "") or None
@@ -1146,8 +1138,56 @@ def _build_ipv4_range_rows(
     total_usable = _ipv4_capacity_count(
         str(cidr), allow_network_broadcast=allow_network_broadcast
     )
-    if len(limited_hosts) < total_usable:
-        available_count += total_usable - len(limited_hosts)
+
+    # Stats are computed over the WHOLE cidr, not just the displayed window — the
+    # `address_records` are already loaded for the full pool, and device/routed
+    # hosts are sparse. Counting only the first `limit` hosts undercounted usage
+    # on pools larger than `limit` and disagreed with the SQL-accurate list view.
+    def _is_usable(ip: ipaddress.IPv4Address) -> bool:
+        if allow_network_broadcast or network.prefixlen >= 31:
+            return True
+        return ip not in (network.network_address, network.broadcast_address)
+
+    used_ips: set[str] = set()
+    reserved_ips: set[str] = set()
+    for record in address_records.values():
+        try:
+            rec_ip = ipaddress.ip_address(str(getattr(record, "address", "") or ""))
+        except ValueError:
+            continue
+        if rec_ip.version != 4 or rec_ip not in network or not _is_usable(rec_ip):
+            continue
+        if _active_assignment(record) or _is_ont_management_allocation(record):
+            used_ips.add(str(rec_ip))
+        elif getattr(record, "is_reserved", False):
+            reserved_ips.add(str(rec_ip))
+
+    # Device-managed and routed-block hosts override available/reserved -> assigned.
+    for host in _device_ipv4_hosts(db):
+        try:
+            hip = ipaddress.ip_address(host)
+        except ValueError:
+            continue
+        if hip.version == 4 and hip in network and _is_usable(hip):
+            used_ips.add(str(hip))
+    for route in (
+        db.query(SubscriberAdditionalRoute)
+        .filter(SubscriberAdditionalRoute.is_active.is_(True))
+        .all()
+    ):
+        try:
+            route_net = ipaddress.ip_network(str(route.cidr), strict=False)
+        except ValueError:
+            continue
+        if route_net.version != 4 or not route_net.overlaps(network):
+            continue
+        for hip in route_net:
+            if hip in network and _is_usable(hip):
+                used_ips.add(str(hip))
+
+    reserved_ips -= used_ips
+    assigned_count = len(used_ips)
+    reserved_count = len(reserved_ips)
 
     return {
         "ip_rows": rows,
@@ -1333,6 +1373,73 @@ def build_ipv4_assignment_form_data(
     }
 
 
+def assign_ipv4_for_import(
+    db,
+    *,
+    pool_id: str,
+    ip_address: str,
+    subscriber_id: str,
+    subscription_id: str | None = None,
+):
+    """Non-committing IPv4 assignment for the bulk-import framework.
+
+    Mirrors ``assign_ipv4_address``'s validation + guards (reserved / device-IP /
+    routed-block) but only flushes — the import orchestrator owns the per-row
+    SAVEPOINT/commit, so this must NOT commit. Returns the IPAssignment.
+    """
+    normalized_subscriber_id = str(subscriber_id or "").strip()
+    if not normalized_subscriber_id:
+        raise ValueError("subscriber_id is required.")
+    state = build_ipv4_assignment_form_data(
+        db, pool_id=str(pool_id), ip_address=str(ip_address)
+    )
+    if state is None:
+        raise ValueError(f"IP {ip_address} is not valid for pool {pool_id}.")
+    pool = state["pool"]
+    address_record = state["address_record"]
+    active_assignment = state["assignment"]
+    target_ip = str(state["ip_address"])
+
+    if address_record and getattr(address_record, "is_reserved", False):
+        raise ValueError(f"{target_ip} is reserved and cannot be assigned.")
+    if target_ip in _device_ipv4_hosts(db):
+        raise ValueError(f"{target_ip} is a network-device IP; cannot assign.")
+    if _additional_route_owners_by_ipv4(db, ip_addresses={target_ip}):
+        raise ValueError(f"{target_ip} belongs to an active routed block.")
+
+    if active_assignment and getattr(active_assignment, "is_active", False):
+        owner = str(getattr(active_assignment, "subscriber_id", "") or "")
+        if owner == normalized_subscriber_id:
+            return active_assignment  # idempotent
+        raise ValueError(f"{target_ip} is already assigned to another subscriber.")
+
+    if address_record is None:
+        address_record = IPv4Address(
+            address=target_ip, pool_id=pool.id, is_reserved=False
+        )
+        db.add(address_record)
+        db.flush()
+    elif address_record.pool_id is None:
+        address_record.pool_id = pool.id
+        db.flush()
+
+    assignment = IPAssignment(
+        subscriber_id=coerce_uuid(normalized_subscriber_id),
+        subscription_id=coerce_uuid(str(subscription_id)) if subscription_id else None,
+        ip_version=IPVersion.ipv4,
+        ipv4_address_id=address_record.id,
+        is_active=True,
+    )
+    db.add(assignment)
+    db.flush()
+
+    if subscription_id:
+        subscription = db.get(Subscription, coerce_uuid(str(subscription_id)))
+        if subscription is not None:
+            subscription.ipv4_address = target_ip
+    return assignment
+
+
 def assign_ipv4_address(
     db,
     *,
@@ -1362,6 +1469,21 @@ def assign_ipv4_address(
 
     if address_record and getattr(address_record, "is_reserved", False):
         raise ValueError("Reserved IPv4 addresses cannot be assigned from this screen.")
+
+    # "device" and "routed" status are derived from live inventory, not the
+    # is_reserved flag, so without these guards an operator could assign a
+    # router/OLT/NAS-management IP or an active routed-block host to a customer.
+    target_ip = str(state["ip_address"])
+    if target_ip in _device_ipv4_hosts(db):
+        raise ValueError(
+            "This IP is in use by a network device (router/OLT/NAS management) "
+            "and cannot be assigned to a subscriber."
+        )
+    if _additional_route_owners_by_ipv4(db, ip_addresses={target_ip}):
+        raise ValueError(
+            "This IP belongs to an active routed block and cannot be assigned as "
+            "a single address."
+        )
 
     if address_record is None:
         address_record = IPv4Address(
@@ -1497,18 +1619,38 @@ def build_ip_management_data(
     # Pagination for addresses
     offset = (page - 1) * address_limit
     search_term = search.strip() if search else None
+    search_like = f"%{search_term.lower()}%" if search_term else None
     pool_id = pool_filter if pool_filter else None
 
-    # Get total counts using SQL
+    # Apply the pool + address-search filters in SQL *before* pagination. The old
+    # code paginated first and filtered the current page in memory, so a search
+    # for an address on page 3 returned "not found" while on page 1.
+    def _addr_filters(stmt, model):
+        if pool_id:
+            stmt = stmt.where(model.pool_id == pool_id)
+        if search_like:
+            stmt = stmt.where(func.lower(model.address).like(search_like))
+        return stmt
+
     total_ipv4 = (
         db.execute(
-            select(func.count(IPv4Address.id)).where(IPv4Address.is_reserved == False)
+            _addr_filters(
+                select(func.count(IPv4Address.id)).where(
+                    IPv4Address.is_reserved == False  # noqa: E712
+                ),
+                IPv4Address,
+            )
         ).scalar()
         or 0
     )
     total_ipv6 = (
         db.execute(
-            select(func.count(IPv6Address.id)).where(IPv6Address.is_reserved == False)
+            _addr_filters(
+                select(func.count(IPv6Address.id)).where(
+                    IPv6Address.is_reserved == False  # noqa: E712
+                ),
+                IPv6Address,
+            )
         ).scalar()
         or 0
     )
@@ -1516,42 +1658,33 @@ def build_ip_management_data(
     # Fetch paginated addresses with pool + assignment eager-loaded for the
     # template's `addr.pool.name` and `addr.assignment.is_active` lookups.
     ipv4_q = (
-        select(IPv4Address)
-        .options(
-            selectinload(IPv4Address.pool),
-            selectinload(IPv4Address.assignment),
+        _addr_filters(
+            select(IPv4Address).options(
+                selectinload(IPv4Address.pool),
+                selectinload(IPv4Address.assignment),
+            ),
+            IPv4Address,
         )
         .order_by(IPv4Address.address.asc())
         .limit(address_limit)
         .offset(offset)
     )
-    if pool_id:
-        ipv4_q = ipv4_q.where(IPv4Address.pool_id == pool_id)
     ipv4_addresses = list(db.scalars(ipv4_q).all())
     _annotate_ipv4_additional_route_owners(db, ipv4_addresses)
 
     ipv6_q = (
-        select(IPv6Address)
-        .options(
-            selectinload(IPv6Address.pool),
-            selectinload(IPv6Address.assignment),
+        _addr_filters(
+            select(IPv6Address).options(
+                selectinload(IPv6Address.pool),
+                selectinload(IPv6Address.assignment),
+            ),
+            IPv6Address,
         )
         .order_by(IPv6Address.address.asc())
         .limit(address_limit)
         .offset(offset)
     )
-    if pool_id:
-        ipv6_q = ipv6_q.where(IPv6Address.pool_id == pool_id)
     ipv6_addresses = list(db.scalars(ipv6_q).all())
-
-    # If there's a search term, filter in-memory for better UX (server-side search)
-    if search_term:
-        ipv4_addresses = [
-            addr for addr in ipv4_addresses if search_term in str(addr.address).lower()
-        ]
-        ipv6_addresses = [
-            addr for addr in ipv6_addresses if search_term in str(addr.address).lower()
-        ]
 
     total_addresses = total_ipv4 + total_ipv6
     total_pages = max(1, (total_addresses + address_limit - 1) // address_limit)
@@ -1714,6 +1847,9 @@ def parse_ip_pool_form(form) -> dict[str, object]:
         "name": form.get("name", "").strip(),
         "ip_version": form.get("ip_version", "").strip(),
         "cidr": form.get("cidr", "").strip(),
+        "delegation_prefix_length": _parse_prefix_length(
+            form.get("delegation_prefix_length")
+        ),
         "gateway": form.get("gateway", "").strip() or None,
         "dns_primary": form.get("dns_primary", "").strip() or None,
         "dns_secondary": form.get("dns_secondary", "").strip() or None,
@@ -1731,6 +1867,17 @@ def parse_ip_pool_form(form) -> dict[str, object]:
     }
 
 
+def _parse_prefix_length(raw: object) -> int | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        value = int(text)
+    except ValueError:
+        return None
+    return value if 1 <= value <= 128 else None
+
+
 def parse_ipv6_network_form(form) -> dict[str, object]:
     network = str(form.get("network") or "").strip()
     prefix = str(form.get("prefix_length") or "").strip() or "64"
@@ -1739,6 +1886,9 @@ def parse_ipv6_network_form(form) -> dict[str, object]:
         "name": str(form.get("title") or "").strip(),
         "ip_version": "ipv6",
         "cidr": cidr,
+        "delegation_prefix_length": _parse_prefix_length(
+            form.get("delegation_prefix_length")
+        ),
         "gateway": str(form.get("gateway") or "").strip() or None,
         "dns_primary": str(form.get("dns_primary") or "").strip() or None,
         "dns_secondary": str(form.get("dns_secondary") or "").strip() or None,
@@ -1761,8 +1911,34 @@ def validate_ip_pool_values(values: dict[str, object]) -> str | None:
         return "Pool name is required."
     if not values.get("ip_version"):
         return "IP version is required."
-    if not values.get("cidr"):
+    cidr = str(values.get("cidr") or "").strip()
+    if not cidr:
         return "CIDR block is required."
+    # Content validation (not just presence): a malformed CIDR must be rejected,
+    # not silently stored — an unparseable pool shows util "N/A", can never receive
+    # assignments, and is treated as "no overlap" by the overlap check.
+    network = _parse_network(cidr)
+    if network is None:
+        return f"CIDR block '{cidr}' is not a valid network (e.g. 10.0.0.0/24)."
+    declared = str(values.get("ip_version") or "").strip().lower()
+    if declared == "ipv4" and network.version != 4:
+        return "CIDR block is an IPv6 network but IP version is set to IPv4."
+    if declared == "ipv6" and network.version != 6:
+        return "CIDR block is an IPv4 network but IP version is set to IPv6."
+    for label, key in (
+        ("Gateway", "gateway"),
+        ("Primary DNS", "dns_primary"),
+        ("Secondary DNS", "dns_secondary"),
+    ):
+        raw = str(values.get(key) or "").strip()
+        if not raw:
+            continue
+        try:
+            addr = ipaddress.ip_address(raw)
+        except ValueError:
+            return f"{label} '{raw}' is not a valid IP address."
+        if key == "gateway" and addr.version != network.version:
+            return f"Gateway '{raw}' must match the CIDR's IP version."
     return None
 
 
@@ -1790,6 +1966,7 @@ def pool_form_snapshot(
         "name": values.get("name"),
         "ip_version": {"value": values.get("ip_version")},
         "cidr": values.get("cidr"),
+        "delegation_prefix_length": values.get("delegation_prefix_length"),
         "gateway": values.get("gateway"),
         "dns_primary": values.get("dns_primary"),
         "dns_secondary": values.get("dns_secondary"),
@@ -1818,6 +1995,7 @@ def pool_form_snapshot_from_model(pool) -> dict[str, object]:
         "name": pool.name,
         "ip_version": {"value": pool.ip_version.value},
         "cidr": pool.cidr,
+        "delegation_prefix_length": getattr(pool, "delegation_prefix_length", None),
         "gateway": pool.gateway,
         "dns_primary": pool.dns_primary,
         "dns_secondary": pool.dns_secondary,
@@ -2293,6 +2471,109 @@ def build_ip_pools_data(db, *, pool_type: str = "all") -> dict[str, object]:
         "fallback_pool_ids": fallback_pool_ids,
         "stats": stats,
     }
+
+
+def build_ipv6_pd_data(db, *, pool_id: str | None = None) -> dict[str, object]:
+    """Admin view of IPv6 prefix-delegation: the v6 pools and the delegated
+    prefixes (state + owner)."""
+    from app.models.network import (
+        IpPool,
+        Ipv6DelegatedPrefix,
+        Ipv6PrefixState,
+        IPVersion,
+    )
+    from app.models.subscriber import Subscriber
+    from app.services.ipv6_pd import pd_enabled, pool_delegation_length
+
+    pools = (
+        db.query(IpPool)
+        .filter(IpPool.ip_version == IPVersion.ipv6)
+        .filter(IpPool.is_active.is_(True))
+        .order_by(IpPool.name.asc())
+        .all()
+    )
+
+    rows_q = db.query(Ipv6DelegatedPrefix)
+    selected_pool = None
+    if pool_id:
+        selected_pool = coerce_uuid(pool_id)
+        rows_q = rows_q.filter(Ipv6DelegatedPrefix.pool_id == selected_pool)
+    rows = rows_q.order_by(Ipv6DelegatedPrefix.prefix.asc()).limit(500).all()
+
+    sub_ids = {r.subscriber_id for r in rows if r.subscriber_id}
+    names: dict = {}
+    if sub_ids:
+        for sub in db.query(Subscriber).filter(Subscriber.id.in_(sub_ids)).all():
+            names[sub.id] = _subscriber_display_name(sub)
+
+    assigned_by_pool: dict = {}
+    for r in rows:
+        if r.state == Ipv6PrefixState.assigned:
+            assigned_by_pool[r.pool_id] = assigned_by_pool.get(r.pool_id, 0) + 1
+
+    pd_rows = [
+        {
+            "id": str(r.id),
+            "pool_id": str(r.pool_id),
+            "cidr": f"{r.prefix}/{r.prefix_length}",
+            "state": r.state.value,
+            "subscriber_id": str(r.subscriber_id) if r.subscriber_id else None,
+            "subscriber_name": names.get(r.subscriber_id),
+        }
+        for r in rows
+    ]
+    pd_pools = [
+        {
+            "id": str(p.id),
+            "name": p.name,
+            "cidr": p.cidr,
+            "delegation_prefix_length": pool_delegation_length(p),
+            "assigned": assigned_by_pool.get(p.id, 0),
+        }
+        for p in pools
+    ]
+    return {
+        "pd_pools": pd_pools,
+        "pd_rows": pd_rows,
+        "pd_pool_filter": str(selected_pool) if selected_pool else None,
+        "pd_enabled": pd_enabled(),
+    }
+
+
+def release_delegated_prefix_action(db, prefix_id: str) -> str | None:
+    """Release one delegated prefix back to its pool. Returns an error or None."""
+    from app.models.network import Ipv6DelegatedPrefix
+    from app.services import ipv6_pd
+
+    row = db.get(Ipv6DelegatedPrefix, coerce_uuid(prefix_id))
+    if row is None:
+        return "Delegated prefix not found."
+    ipv6_pd.release_delegated_prefix(db, row)
+    db.commit()
+    return None
+
+
+def assign_delegated_prefix_action(
+    db, *, pool_id: str, subscriber_id: str
+) -> str | None:
+    """Manually delegate a prefix from an IPv6 PD pool to a subscriber.
+    Returns an error message, or None on success."""
+    from app.models.network import IpPool
+    from app.models.subscriber import Subscriber
+    from app.services import ipv6_pd
+
+    pool = db.get(IpPool, coerce_uuid(pool_id)) if pool_id else None
+    if pool is None:
+        return "Select a valid IPv6 PD pool."
+    if not subscriber_id or db.get(Subscriber, coerce_uuid(subscriber_id)) is None:
+        return "Enter a valid subscriber ID."
+    prefix = ipv6_pd.allocate_delegated_prefix(
+        db, pool=pool, subscriber_id=coerce_uuid(subscriber_id)
+    )
+    if prefix is None:
+        return "Could not delegate a prefix (pool not IPv6/usable or exhausted)."
+    db.commit()
+    return None
 
 
 def build_ipv6_networks_data(

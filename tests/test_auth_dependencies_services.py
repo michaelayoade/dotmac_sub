@@ -443,123 +443,56 @@ class TestRequireAuditAuth:
 
             assert exc_info.value.status_code == 401
 
-    def test_api_key_valid(self, db_session):
-        """Test with valid API key."""
+    def test_api_key_rejected_even_when_valid(self, db_session):
+        """Security fix (2026-06-29): API keys carry no audit scope, so audit
+        auth must reject them even when active and unexpired — accepting them
+        was an unscoped authorization bypass."""
         from app.models.auth import ApiKey
 
-        api_key_value = "test-api-key-123"
         now_naive = datetime.now(UTC).replace(tzinfo=None)
+        api_key = ApiKey(
+            label="Test API Key",
+            key_hash="unused-branch-removed",
+            is_active=True,
+            expires_at=now_naive + timedelta(days=30),
+        )
+        db_session.add(api_key)
+        db_session.commit()
 
-        with patch.object(auth_dependencies, "hash_api_key") as mock_hash:
-            mock_hash.return_value = "hashed-api-key"
-
-            api_key = ApiKey(
-                label="Test API Key",
-                key_hash="hashed-api-key",
-                is_active=True,
-                expires_at=now_naive + timedelta(days=30),
-            )
-            db_session.add(api_key)
-            db_session.commit()
-
-            mock_request = MagicMock()
-
-            result = auth_dependencies.require_audit_auth(
+        with pytest.raises(HTTPException) as exc_info:
+            auth_dependencies.require_audit_auth(
                 authorization=None,
                 x_session_token=None,
-                x_api_key=api_key_value,
-                request=mock_request,
+                x_api_key="test-api-key-123",
+                request=MagicMock(),
                 db=db_session,
             )
 
-            assert result["actor_type"] == "api_key"
-            assert result["actor_id"] == str(api_key.id)
+        assert exc_info.value.status_code == 401
 
-    def test_api_key_no_expiry(self, db_session):
-        """Test with API key that has no expiry."""
+    def test_api_key_rejected_no_expiry(self, db_session):
+        """An unexpiring API key is likewise rejected by audit auth."""
         from app.models.auth import ApiKey
 
-        api_key_value = "test-api-key-123"
+        api_key = ApiKey(
+            label="Test API Key",
+            key_hash="unused-branch-removed",
+            is_active=True,
+            expires_at=None,
+        )
+        db_session.add(api_key)
+        db_session.commit()
 
-        with patch.object(auth_dependencies, "hash_api_key") as mock_hash:
-            mock_hash.return_value = "hashed-api-key"
-
-            api_key = ApiKey(
-                label="Test API Key",
-                key_hash="hashed-api-key",
-                is_active=True,
-                expires_at=None,  # No expiry
-            )
-            db_session.add(api_key)
-            db_session.commit()
-
-            result = auth_dependencies.require_audit_auth(
+        with pytest.raises(HTTPException) as exc_info:
+            auth_dependencies.require_audit_auth(
                 authorization=None,
                 x_session_token=None,
-                x_api_key=api_key_value,
+                x_api_key="test-api-key-123",
                 request=None,
                 db=db_session,
             )
 
-            assert result["actor_type"] == "api_key"
-
-    def test_api_key_inactive(self, db_session):
-        """Test with inactive API key."""
-        from app.models.auth import ApiKey
-
-        api_key_value = "test-api-key-123"
-
-        with patch.object(auth_dependencies, "hash_api_key") as mock_hash:
-            mock_hash.return_value = "hashed-api-key"
-
-            api_key = ApiKey(
-                label="Test API Key",
-                key_hash="hashed-api-key",
-                is_active=False,  # Inactive
-            )
-            db_session.add(api_key)
-            db_session.commit()
-
-            with pytest.raises(HTTPException) as exc_info:
-                auth_dependencies.require_audit_auth(
-                    authorization=None,
-                    x_session_token=None,
-                    x_api_key=api_key_value,
-                    request=None,
-                    db=db_session,
-                )
-
-            assert exc_info.value.status_code == 401
-
-    def test_api_key_revoked(self, db_session):
-        """Test with revoked API key."""
-        from app.models.auth import ApiKey
-
-        api_key_value = "test-api-key-123"
-        now_naive = datetime.now(UTC).replace(tzinfo=None)
-
-        with patch.object(auth_dependencies, "hash_api_key") as mock_hash:
-            mock_hash.return_value = "hashed-api-key"
-
-            api_key = ApiKey(
-                label="Test API Key",
-                key_hash="hashed-api-key",
-                is_active=True,
-                revoked_at=now_naive - timedelta(hours=1),  # Revoked
-            )
-            db_session.add(api_key)
-            db_session.commit()
-
-            with pytest.raises(HTTPException) as exc_info:
-                auth_dependencies.require_audit_auth(
-                    authorization=None,
-                    x_session_token=None,
-                    x_api_key=api_key_value,
-                    request=None,
-                    db=db_session,
-                )
-
-            assert exc_info.value.status_code == 401
+        assert exc_info.value.status_code == 401
 
 
 # =============================================================================

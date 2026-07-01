@@ -6,6 +6,31 @@ from app.db import SessionLocal
 from app.models.rbac import Permission, Role, RolePermission, SubscriberRole
 from app.models.subscriber import Subscriber
 
+ADMIN_ONLY_PERMISSION_KEYS = {
+    "*",
+    "auth:manage",
+    "billing:read",
+    "billing:write",
+    "catalog:read",
+    "catalog:write",
+    "network:read",
+    "network:write",
+    "provisioning:read",
+    "provisioning:write",
+    "rbac:assign",
+    "rbac:permissions:delete",
+    "rbac:permissions:read",
+    "rbac:permissions:write",
+    "rbac:roles:delete",
+    "rbac:roles:read",
+    "rbac:roles:write",
+    "subscriber:impersonate",
+    "subscriber:read",
+    "subscriber:write",
+    "system:settings:read",
+    "system:settings:write",
+}
+
 DEFAULT_PERMISSIONS = [
     ("*", "Full access (wildcard) — grants every permission"),
     # Audit
@@ -14,6 +39,10 @@ DEFAULT_PERMISSIONS = [
     ("auth:manage", "Manage authentication settings"),
     ("system:settings:read", "View system settings"),
     ("system:settings:write", "Modify system settings"),
+    # Secret management (OpenBao) — admin-only; intentionally NOT granted to any
+    # non-admin seeded role, so only wildcard (admin) principals can read/write.
+    ("system:secrets:read", "View secret paths"),
+    ("system:secrets:write", "Create/modify/delete secrets"),
     # RBAC - Granular permissions for role builder
     ("rbac:roles:read", "View roles"),
     ("rbac:roles:write", "Create and update roles"),
@@ -50,6 +79,7 @@ DEFAULT_PERMISSIONS = [
     ("billing:account:read", "View billing accounts"),
     ("billing:account:write", "Manage billing accounts"),
     ("billing:ledger:read", "View ledger entries"),
+    ("billing:ledger:write", "Manage ledger entries"),
     ("billing:tax:read", "View tax rates"),
     ("billing:tax:write", "Manage tax rates"),
     # Billing - Dunning & Collections
@@ -67,6 +97,10 @@ DEFAULT_PERMISSIONS = [
     ("billing:batch:read", "View invoice batch history"),
     ("billing:batch:write", "Generate and manage invoice batches"),
     ("billing:import:write", "Import payment data"),
+    ("billing:proof:read", "View submitted payment proofs"),
+    ("billing:proof:verify", "Verify or reject submitted payment proofs"),
+    ("billing:vas:read", "View value-added-service administration"),
+    ("billing:vas:write", "Manage value-added-service administration"),
     # Catalog
     ("catalog:product:read", "View catalog products"),
     ("catalog:product:write", "Manage catalog products"),
@@ -82,6 +116,10 @@ DEFAULT_PERMISSIONS = [
     ("network:map:read", "View the comprehensive network map"),
     ("network:device:read", "View network devices"),
     ("network:device:write", "Manage network devices"),
+    ("network:olt:read", "View OLT devices and operations"),
+    ("network:olt:write", "Manage OLT devices and operations"),
+    ("network:cpe:read", "View CPE devices"),
+    ("network:cpe:write", "Manage CPE devices"),
     ("network:nas:read", "View NAS device management"),
     ("network:nas:write", "Manage NAS devices"),
     ("network:ont:read", "View ONT units"),
@@ -90,8 +128,24 @@ DEFAULT_PERMISSIONS = [
     ("network:tr069:write", "Manage TR-069 / ACS resources"),
     ("network:speedtest:read", "View network speed tests"),
     ("network:speedtest:write", "Manage network speed tests"),
+    ("network:speed_profile:read", "View network speed profiles"),
+    ("network:speed_profile:write", "Manage network speed profiles"),
     ("network:dns_threat:read", "View DNS threat monitoring"),
     ("network:dns_threat:write", "Manage DNS threat monitoring"),
+    ("network:onu_type:read", "View ONU type catalog"),
+    ("network:onu_type:write", "Manage ONU type catalog"),
+    ("network:pop:read", "View network POP sites"),
+    ("network:pop:write", "Manage network POP sites"),
+    ("network:zone:read", "View network zones"),
+    ("network:zone:write", "Manage network zones"),
+    ("network:pon:read", "View PON interfaces"),
+    ("network:pon:write", "Manage PON interfaces"),
+    ("network:weathermap:read", "View network weathermap"),
+    ("network:weathermap:write", "Manage network weathermap"),
+    ("network:vendor_capability:read", "View network vendor capabilities"),
+    ("network:vendor_capability:write", "Manage network vendor capabilities"),
+    ("network:authorization:read", "View network authorization presets"),
+    ("network:authorization:write", "Manage network authorization presets"),
     ("network:vpn:read", "View VPN infrastructure and tunnels"),
     ("network:vpn:write", "Manage VPN infrastructure and tunnels"),
     # Network - IP Management
@@ -206,6 +260,7 @@ ROLE_PERMISSIONS = {
         "billing:credit_note:read",
         "billing:account:read",
         "billing:ledger:read",
+        "billing:ledger:write",
         "billing:dunning:read",
         "billing:provider:read",
         "billing:channel:read",
@@ -221,6 +276,10 @@ ROLE_PERMISSIONS = {
         "network:map:read",
         "network:device:read",
         "network:device:write",
+        "network:olt:read",
+        "network:olt:write",
+        "network:cpe:read",
+        "network:cpe:write",
         "network:nas:read",
         "network:nas:write",
         "network:ont:read",
@@ -229,8 +288,24 @@ ROLE_PERMISSIONS = {
         "network:tr069:write",
         "network:speedtest:read",
         "network:speedtest:write",
+        "network:speed_profile:read",
+        "network:speed_profile:write",
         "network:dns_threat:read",
         "network:dns_threat:write",
+        "network:onu_type:read",
+        "network:onu_type:write",
+        "network:pop:read",
+        "network:pop:write",
+        "network:zone:read",
+        "network:zone:write",
+        "network:pon:read",
+        "network:pon:write",
+        "network:weathermap:read",
+        "network:weathermap:write",
+        "network:vendor_capability:read",
+        "network:vendor_capability:write",
+        "network:authorization:read",
+        "network:authorization:write",
         "network:vpn:read",
         "network:vpn:write",
         "network:ip:read",
@@ -241,8 +316,6 @@ ROLE_PERMISSIONS = {
         "network:radius:write",
         "monitoring:read",
         "monitoring:write",
-        "network:read",
-        "network:write",
         "provisioning:read",
         "provisioning:write",
         "customer:read",
@@ -301,6 +374,10 @@ ROLE_PERMISSIONS = {
         "billing:batch:read",
         "billing:batch:write",
         "billing:import:write",
+        "billing:proof:read",
+        "billing:proof:verify",
+        "billing:vas:read",
+        "billing:vas:write",
         "billing_account:read",
         "billing_account:write",
         "billing_account:distribute",
@@ -334,12 +411,19 @@ def _ensure_role(db, name, description):
 
 def _ensure_permission(db, key, description):
     permission = db.query(Permission).filter(Permission.key == key).first()
+    is_ui_assignable = key not in ADMIN_ONLY_PERMISSION_KEYS
     if not permission:
-        permission = Permission(key=key, description=description, is_active=True)
+        permission = Permission(
+            key=key,
+            description=description,
+            is_active=True,
+            is_ui_assignable=is_ui_assignable,
+        )
         db.add(permission)
     else:
         if not permission.is_active:
             permission.is_active = True
+        permission.is_ui_assignable = is_ui_assignable
         if description and not permission.description:
             permission.description = description
     return permission
@@ -388,6 +472,19 @@ def main():
             role = roles.get(role_name)
             if not role:
                 continue
+            if role_name != "admin":
+                hidden_permission_ids = [
+                    permission.id
+                    for key, permission in permissions.items()
+                    if key in ADMIN_ONLY_PERMISSION_KEYS
+                ]
+                if hidden_permission_ids:
+                    (
+                        db.query(RolePermission)
+                        .filter(RolePermission.role_id == role.id)
+                        .filter(RolePermission.permission_id.in_(hidden_permission_ids))
+                        .delete(synchronize_session=False)
+                    )
             for key in permission_keys:
                 permission = permissions.get(key)
                 if not permission:

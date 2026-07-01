@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../config/env.dart';
 import '../../core/api_exception.dart';
@@ -224,12 +225,25 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen> {
 }
 
 /// Renders uploaded attachments as a horizontal row of thumbnails (images) /
-/// file chips (PDFs). Tapping an image opens it full-screen; tapping a PDF chip
-/// is a no-op placeholder (no in-app document viewer wired).
+/// file chips (PDFs/other). Tapping an image opens it full-screen; tapping a
+/// file chip opens it in the device's default viewer/browser.
 class _AttachmentStrip extends StatelessWidget {
   const _AttachmentStrip({required this.attachments});
 
   final List<TicketAttachment> attachments;
+
+  Future<void> _openExternal(BuildContext context, TicketAttachment a) async {
+    final raw = a.url;
+    if (raw == null) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final uri = Uri.parse(Env.resolveUrl(raw));
+    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!ok) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Could not open this attachment.')),
+      );
+    }
+  }
 
   void _openImage(BuildContext context, TicketAttachment a) {
     final url = a.url;
@@ -290,7 +304,7 @@ class _AttachmentStrip extends StatelessWidget {
               ),
             )
           else
-            Chip(
+            ActionChip(
               avatar: Icon(
                 a.isPdf
                     ? Icons.picture_as_pdf_outlined
@@ -301,6 +315,7 @@ class _AttachmentStrip extends StatelessWidget {
                 a.filename,
                 overflow: TextOverflow.ellipsis,
               ),
+              onPressed: a.url == null ? null : () => _openExternal(context, a),
             ),
       ],
     );

@@ -276,6 +276,47 @@
                 </a>
             </div>
 
+            <div class="mb-4 rounded-xl border-2 border-stone-200 bg-stone-50 p-4 dark:border-stone-700 dark:bg-stone-700/30">
+                <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                        <p class="text-sm font-semibold text-stone-900 dark:text-white">Portal sessions</p>
+                        <p class="mt-1 text-xs text-stone-500 dark:text-stone-400">{{ active_sessions | length }} active</p>
+                    </div>
+                    {% if other_session_count and not (customer and customer.read_only) %}
+                    <button type="submit" form="customer-sign-out-other-sessions" class="inline-flex items-center justify-center gap-2 rounded-xl border border-stone-300 bg-white px-4 py-2 text-sm font-semibold text-stone-700 transition hover:bg-stone-100 dark:border-stone-600 dark:bg-stone-700 dark:text-stone-200 dark:hover:bg-stone-600">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H9m4 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
+                        </svg>
+                        Sign out other sessions
+                    </button>
+                    {% endif %}
+                </div>
+                <div class="mt-4 divide-y divide-stone-200 rounded-xl border border-stone-200 bg-white dark:divide-stone-700 dark:border-stone-700 dark:bg-stone-800">
+                    {% for session in active_sessions %}
+                    <div class="flex flex-col gap-2 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                            <p class="font-semibold text-stone-900 dark:text-white">
+                                {{ 'Current session' if session.is_current else 'Active session' }}
+                            </p>
+                            <p class="mt-1 text-xs text-stone-500 dark:text-stone-400">
+                                Started {{ session.created_at[:16].replace('T', ' ') if session.created_at else 'recently' }}
+                            </p>
+                        </div>
+                        <div class="flex flex-wrap items-center gap-2">
+                            {% if session.remember %}
+                            <span class="rounded-lg bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">Remembered</span>
+                            {% endif %}
+                            {% if session.is_current %}
+                            <span class="rounded-lg bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">Current</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                    {% else %}
+                    <div class="px-4 py-3 text-sm text-stone-500 dark:text-stone-400">No active portal sessions.</div>
+                    {% endfor %}
+                </div>
+            </div>
+
             <div class="rounded-xl border-2 border-amber-200 bg-amber-50 p-4 text-amber-800 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-300">
                 <p class="text-sm font-semibold">Changing credentials can interrupt connectivity.</p>
                 <p class="mt-1 text-xs">We recommend scheduling changes with support to avoid downtime.</p>
@@ -300,6 +341,9 @@
                 Save Changes
             </button>
         </div>
+    </form>
+    <form id="customer-sign-out-other-sessions" method="post" action="/portal/profile/sessions/sign-out-others" class="hidden">
+        {% include "components/forms/csrf_input.html" %}
     </form>
 </div>
 {% endblock %}

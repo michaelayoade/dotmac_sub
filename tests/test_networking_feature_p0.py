@@ -60,6 +60,7 @@ from app.models.notification import (
     NotificationStatus,
 )
 from app.models.radius import RadiusClient, RadiusServer
+from app.models.router_management import Router, RouterStatus
 from app.models.subscriber import Address, AddressType, Subscriber
 from app.models.tr069 import (
     Tr069AcsServer,
@@ -692,6 +693,56 @@ def test_core_devices_list_page_data_includes_uptime_ping_history_and_backup(
     assert payload["uptime_map"][key] is not None
     assert payload["ping_history_map"][key][0]["ok"] is True
     assert payload["backup_map"][key]["status"] == "success"
+
+
+def test_core_devices_list_page_data_prefers_zabbix_live_status(
+    db_session, monkeypatch
+):
+    monkeypatch.setattr(core_devices_forms, "warmer_is_stale", lambda: False)
+    parent = NetworkDevice(
+        name="Live Parent",
+        mgmt_ip="10.220.0.1",
+        status=DeviceStatus.online,
+        is_active=True,
+    )
+    db_session.add(parent)
+    db_session.flush()
+    child = NetworkDevice(
+        name="Live Child",
+        mgmt_ip="10.220.0.2",
+        parent_device_id=parent.id,
+        status=DeviceStatus.degraded,
+        live_status="up",
+        live_status_at=datetime.now(UTC),
+        is_active=True,
+    )
+    db_session.add(child)
+    db_session.commit()
+
+    payload = core_devices_forms.list_page_data(db_session, role=None, status="active")
+
+    assert payload["display_status_map"][str(child.id)] == "online"
+    assert payload["child_impacts"][str(parent.id)]["impacted"] is False
+
+
+def test_core_devices_list_page_data_falls_back_when_zabbix_live_status_stale(
+    db_session, monkeypatch
+):
+    monkeypatch.setattr(core_devices_forms, "warmer_is_stale", lambda: True)
+    device = NetworkDevice(
+        name="Stale Live Device",
+        mgmt_ip="10.220.0.3",
+        status=DeviceStatus.degraded,
+        live_status="up",
+        live_status_at=datetime.now(UTC) - timedelta(hours=1),
+        is_active=True,
+    )
+    db_session.add(device)
+    db_session.commit()
+
+    payload = core_devices_forms.list_page_data(db_session, role=None, status="active")
+
+    assert payload["display_status_map"][str(device.id)] == "degraded"
 
 
 def test_create_bandwidth_graph_add_source_clone_and_public_toggle(db_session):
@@ -2089,6 +2140,12 @@ def test_backup_overview_page_data_classifies_and_filters(db_session):
     assert by_name["NAS Stale"]["backup_status"] == "stale"
     assert by_name["NAS Failed"]["backup_status"] == "failed"
     assert by_name["OLT North"]["backup_status"] == "success"
+    assert by_name["OLT North"]["backup_url"] == (
+        f"/admin/network/olts/backups/{olt_backup.id}"
+    )
+    assert by_name["OLT North"]["history_url"] == (
+        f"/admin/network/olts/{olt.id}/backups"
+    )
     assert page["stats"]["total"] == 4
     assert page["stats"]["stale"] == 1
     assert page["stats"]["failed"] == 1
@@ -2163,6 +2220,27 @@ def test_consolidated_page_data_search_includes_onts_beyond_default_limit(db_ses
     assert "ZZ-TARGET-ONT" in serials
 
 
+def test_consolidated_page_data_includes_ont_signal_data(db_session):
+    ont = OntUnit(
+        serial_number="ONT-CONSOLIDATED-STATUS",
+        is_active=True,
+        olt_status=OnuOnlineStatus.online,
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    payload = core_devices_views.consolidated_page_data(
+        tab="onts",
+        db=db_session,
+        search="ONT-CONSOLIDATED-STATUS",
+    )
+
+    signal_data = payload["signal_data"][str(ont.id)]
+    assert signal_data["operational"] == "up"
+    assert signal_data["operational_label"] == "Up"
+    assert signal_data["operational_reason"] == "olt_online"
+
+
 def test_consolidated_page_data_moves_network_devices_ending_in_olt_to_olt_bucket(
     db_session,
 ):
@@ -2223,6 +2301,94 @@ def test_consolidated_page_data_includes_active_nas_inventory_devices(db_session
         device for device in payload["core_devices"] if device.name == "Fiber POP NAS"
     )
     assert included.detail_url.endswith(f"/admin/network/nas/devices/{included.id}")
+
+
+def test_consolidated_nas_inventory_inherits_linked_monitoring_status(
+    db_session, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.services.device_operational_status.warmer_is_stale",
+        lambda _now=None: False,
+    )
+    monitoring_device = NetworkDevice(
+        name="SPDC",
+        hostname="spdc",
+        mgmt_ip="160.119.127.83",
+        status=DeviceStatus.online,
+        role=DeviceRole.access,
+        live_status="up",
+        live_status_at=datetime.now(UTC),
+        zabbix_hostid="10736",
+    )
+    db_session.add(monitoring_device)
+    db_session.flush()
+    db_session.add(
+        NasDevice(
+            name="SPDC Access",
+            code="spdc-access",
+            vendor=NasVendor.mikrotik,
+            management_ip="160.119.127.83",
+            status=NasDeviceStatus.active,
+            network_device_id=monitoring_device.id,
+            zabbix_host_id="10696",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    payload = core_devices_views.consolidated_page_data(
+        tab="core", db=db_session, search="spdc"
+    )
+
+    included = next(
+        device for device in payload["core_devices"] if device.name == "SPDC Access"
+    )
+    assert included.live_status == "up"
+    assert included.zabbix_hostid == "10736"
+    assert included.operational.status == "up"
+
+
+def test_consolidated_nas_inventory_uses_direct_router_status_without_zabbix(
+    db_session, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.services.device_operational_status.warmer_is_stale",
+        lambda _now=None: False,
+    )
+    nas = NasDevice(
+        name="Direct NAS",
+        code="direct-nas",
+        vendor=NasVendor.mikrotik,
+        management_ip="192.0.2.231",
+        status=NasDeviceStatus.active,
+        is_active=True,
+    )
+    db_session.add(nas)
+    db_session.flush()
+    db_session.add(
+        Router(
+            name="Direct NAS Router",
+            hostname="direct-nas",
+            management_ip="192.0.2.231",
+            rest_api_username="admin",
+            rest_api_password="enc:test",
+            status=RouterStatus.online,
+            nas_device_id=nas.id,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    payload = core_devices_views.consolidated_page_data(
+        tab="core", db=db_session, search="direct nas"
+    )
+
+    included = next(
+        device for device in payload["core_devices"] if device.name == "Direct NAS"
+    )
+    assert included.zabbix_hostid is None
+    assert included.live_status == "up"
+    assert included.operational.status == "up"
 
 
 def test_olts_list_page_data_includes_network_devices_ending_in_olt(
@@ -3372,6 +3538,11 @@ def test_olt_backup_file_resolution_and_preview(
     assert resolved == full.resolve()
     preview = web_network_olts_service.read_backup_preview(backup, limit_chars=8)
     assert preview == "line1\nli"
+    preview_info = web_network_olts_service.read_backup_preview_info(
+        backup, limit_chars=8
+    )
+    assert preview_info["preview"] == "line1\nli"
+    assert preview_info["truncated"] is True
 
     bad = OltConfigBackup(
         olt_device_id=olt.id,
@@ -3448,6 +3619,106 @@ def test_compare_olt_backups_rejects_cross_olt(db_session):
             str(b1.id),
             str(b2.id),
         )
+
+
+def test_compare_olt_backups_rejects_same_backup(db_session):
+    olt = OLTDevice(name="OLT Same Compare", mgmt_ip="198.51.100.45")
+    db_session.add(olt)
+    db_session.flush()
+    backup = OltConfigBackup(
+        olt_device_id=olt.id,
+        backup_type=OltConfigBackupType.auto,
+        file_path="same.txt",
+        file_size_bytes=1,
+    )
+    db_session.add(backup)
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        web_network_olts_service.compare_olt_backups(
+            db_session,
+            str(backup.id),
+            str(backup.id),
+        )
+    assert exc.value.status_code == 400
+    assert "different backups" in str(exc.value.detail).lower()
+
+
+def test_compare_olt_backups_rejects_large_web_diff(
+    db_session, monkeypatch, tmp_path: Path
+):
+    monkeypatch.setenv("OLT_BACKUP_DIR", str(tmp_path))
+    olt = OLTDevice(name="OLT Large Compare", mgmt_ip="198.51.100.46")
+    db_session.add(olt)
+    db_session.flush()
+
+    path1 = tmp_path / "large" / "b1.txt"
+    path2 = tmp_path / "large" / "b2.txt"
+    path1.parent.mkdir(parents=True, exist_ok=True)
+    path1.write_text("a" * 101)
+    path2.write_text("b\n")
+    b1 = OltConfigBackup(
+        olt_device_id=olt.id,
+        backup_type=OltConfigBackupType.auto,
+        file_path="large/b1.txt",
+        file_size_bytes=101,
+    )
+    b2 = OltConfigBackup(
+        olt_device_id=olt.id,
+        backup_type=OltConfigBackupType.manual,
+        file_path="large/b2.txt",
+        file_size_bytes=2,
+    )
+    db_session.add_all([b1, b2])
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        web_network_olts_service.compare_olt_backups(
+            db_session,
+            str(b1.id),
+            str(b2.id),
+            max_bytes=100,
+        )
+    assert exc.value.status_code == 413
+    assert "too large" in str(exc.value.detail).lower()
+
+
+def test_compare_olt_backups_uses_actual_file_size_for_limit(
+    db_session, monkeypatch, tmp_path: Path
+):
+    monkeypatch.setenv("OLT_BACKUP_DIR", str(tmp_path))
+    olt = OLTDevice(name="OLT Stale Size Compare", mgmt_ip="198.51.100.47")
+    db_session.add(olt)
+    db_session.flush()
+
+    path1 = tmp_path / "stale-size" / "b1.txt"
+    path2 = tmp_path / "stale-size" / "b2.txt"
+    path1.parent.mkdir(parents=True, exist_ok=True)
+    path1.write_text("a" * 101)
+    path2.write_text("b\n")
+    b1 = OltConfigBackup(
+        olt_device_id=olt.id,
+        backup_type=OltConfigBackupType.auto,
+        file_path="stale-size/b1.txt",
+        file_size_bytes=1,
+    )
+    b2 = OltConfigBackup(
+        olt_device_id=olt.id,
+        backup_type=OltConfigBackupType.manual,
+        file_path="stale-size/b2.txt",
+        file_size_bytes=1,
+    )
+    db_session.add_all([b1, b2])
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        web_network_olts_service.compare_olt_backups(
+            db_session,
+            str(b1.id),
+            str(b2.id),
+            max_bytes=100,
+        )
+    assert exc.value.status_code == 413
 
 
 def test_test_olt_connection_and_test_backup(db_session, monkeypatch, tmp_path: Path):
@@ -3606,9 +3877,124 @@ def test_olt_backups_page_renders_restore_action(db_session, monkeypatch):
 
     assert response.status_code == 200
     body = response.body.decode()
-    assert f"/admin/network/olts/{olt_id}/backups/{backup_id}/restore" in body
-    assert "Restore" in body
-    assert "save it as startup config" in body
+    assert f"/admin/network/olts/backups/{backup_id}#restore" in body
+    assert "Restore review" in body
+    assert "Manual Config Backup" in body
+
+
+def test_olt_backup_detail_renders_restore_confirmation(
+    db_session, monkeypatch, tmp_path: Path
+):
+    from app.web.admin import network_olts_profiles as network_olts_profiles_web
+
+    monkeypatch.setenv("OLT_BACKUP_DIR", str(tmp_path))
+    olt = OLTDevice(name="Restore Detail OLT", mgmt_ip="198.51.100.52")
+    db_session.add(olt)
+    db_session.flush()
+    path = tmp_path / str(olt.id) / "detail.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("0123456789" * 20)
+    backup = OltConfigBackup(
+        olt_device_id=olt.id,
+        backup_type=OltConfigBackupType.manual,
+        file_path=str(path.relative_to(tmp_path)),
+        file_size_bytes=path.stat().st_size,
+        file_hash="abc123",
+    )
+    db_session.add(backup)
+    db_session.commit()
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": f"/admin/network/olts/backups/{backup.id}",
+            "headers": [],
+        }
+    )
+    monkeypatch.setattr(
+        network_olts_profiles_web,
+        "_base_context",
+        lambda _request, _db, active_page: {
+            "request": _request,
+            "active_page": active_page,
+            "active_menu": "network",
+            "current_user": SimpleNamespace(
+                name="Admin User", email="admin@example.com", initials="AU"
+            ),
+            "sidebar_stats": SimpleNamespace(
+                notifications_unread=0,
+                sidebar_logo_url="",
+                sidebar_logo_dark_url="",
+                app_name="DotMac Subs",
+                module_states={},
+                feature_states={},
+            ),
+            "csrf_token": "test-token",
+        },
+    )
+    monkeypatch.setattr(
+        network_olts_profiles_web.olt_operations_service,
+        "read_backup_preview_info",
+        lambda _backup: {
+            "preview": "01234567",
+            "truncated": True,
+            "limit_chars": 8,
+        },
+    )
+
+    response = network_olts_profiles_web.olt_backup_detail(
+        request=request,
+        backup_id=str(backup.id),
+        db=db_session,
+    )
+
+    assert response.status_code == 200
+    body = response.body.decode()
+    assert "confirm_olt_name" in body
+    assert "Type Restore Detail OLT to confirm" in body
+    assert "abc123" in body
+    assert "Preview is truncated at 8 characters" in body
+
+
+def test_olt_backup_restore_route_requires_exact_olt_name(db_session, monkeypatch):
+    from app.web.admin import network_olts_profiles as network_olts_profiles_web
+
+    olt_id = uuid4()
+    backup_id = uuid4()
+    olt = SimpleNamespace(id=olt_id, name="Restore OLT")
+    calls: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        network_olts_profiles_web,
+        "get_olt_or_none",
+        lambda *_args: olt,
+    )
+    monkeypatch.setattr(
+        network_olts_profiles_web.olt_operations_service,
+        "restore_from_backup",
+        lambda _db, oid, bid: calls.append((oid, bid)) or (True, "restored"),
+    )
+
+    mismatch = network_olts_profiles_web.olt_backup_restore(
+        olt_id=str(olt_id),
+        backup_id=str(backup_id),
+        confirm_olt_name="wrong",
+        db=db_session,
+    )
+    assert mismatch.status_code == 303
+    assert calls == []
+    assert "Type+the+exact+OLT+name" in mismatch.headers["location"]
+
+    matched = network_olts_profiles_web.olt_backup_restore(
+        olt_id=str(olt_id),
+        backup_id=str(backup_id),
+        confirm_olt_name="Restore OLT",
+        db=db_session,
+    )
+    assert matched.status_code == 303
+    assert calls == [(str(olt_id), str(backup_id))]
+    assert "test_status=success" in matched.headers["location"]
 
 
 def test_update_olt_keeps_existing_ssh_password_when_blank(db_session):

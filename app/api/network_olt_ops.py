@@ -26,7 +26,7 @@ router = APIRouter(tags=["network-olt-operations"])
 @router.post(
     "/olt-devices/{olt_id}/authorize-ont",
     response_model=OltOperationResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def authorize_ont(
     request: Request,
@@ -54,7 +54,7 @@ def authorize_ont(
 @router.post(
     "/olt-devices/{olt_id}/ont-status-by-serial",
     response_model=OltOperationResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def get_ont_status_by_serial(
     request: Request,
@@ -78,7 +78,7 @@ def get_ont_status_by_serial(
 @router.get(
     "/olt-devices/{olt_id}/service-ports",
     response_model=OltOperationResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def list_service_ports(
     olt_id: str,
@@ -98,7 +98,7 @@ def list_service_ports(
 @router.post(
     "/olt-devices/{olt_id}/service-ports",
     response_model=OltOperationResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def create_service_port(
     olt_id: str,
@@ -123,7 +123,7 @@ def create_service_port(
 @router.delete(
     "/olt-devices/{olt_id}/service-ports/{index}",
     response_model=OltOperationResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def delete_service_port(
     olt_id: str, index: int, db: Session = Depends(get_db)
@@ -137,7 +137,7 @@ def delete_service_port(
 @router.get(
     "/olt-devices/{olt_id}/service-ports/ont/{ont_id}",
     response_model=OltOperationResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def get_service_ports_for_ont(
     olt_id: str,
@@ -163,7 +163,7 @@ def get_service_ports_for_ont(
 @router.get(
     "/olt-devices/{olt_id}/profiles/line",
     response_model=OltOperationResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def get_line_profiles(
     olt_id: str, db: Session = Depends(get_db)
@@ -181,7 +181,7 @@ def get_line_profiles(
 @router.get(
     "/olt-devices/{olt_id}/profiles/service",
     response_model=OltOperationResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def get_service_profiles(
     olt_id: str, db: Session = Depends(get_db)
@@ -199,7 +199,7 @@ def get_service_profiles(
 @router.get(
     "/olt-devices/{olt_id}/profiles/tr069",
     response_model=OltOperationResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def get_tr069_profiles(
     olt_id: str, db: Session = Depends(get_db)
@@ -217,7 +217,7 @@ def get_tr069_profiles(
 @router.post(
     "/olt-devices/{olt_id}/profiles/tr069",
     response_model=OltOperationResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def create_tr069_profile(
     olt_id: str,
@@ -244,7 +244,7 @@ def create_tr069_profile(
 @router.post(
     "/olt-devices/{olt_id}/config-backup",
     response_model=OltOperationResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def fetch_config_backup(
     olt_id: str, db: Session = Depends(get_db)
@@ -258,7 +258,7 @@ def fetch_config_backup(
 @router.post(
     "/olt-devices/{olt_id}/test-connection",
     response_model=OltOperationResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def test_olt_connection(
     request: Request, olt_id: str, db: Session = Depends(get_db)
@@ -278,7 +278,7 @@ def test_olt_connection(
 @router.post(
     "/olt-devices/{olt_id}/cli-command",
     response_model=OltOperationResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def run_cli_command(
     request: Request,
@@ -300,7 +300,7 @@ def run_cli_command(
 @router.get(
     "/olt-devices/{olt_id}/config-pack/validate",
     response_model=OltOperationResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def validate_config_pack(
     olt_id: str,
@@ -329,7 +329,7 @@ def validate_config_pack(
 @router.get(
     "/olt-devices/{olt_id}/config-pack",
     response_model=OltOperationResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def get_config_pack(
     olt_id: str,

@@ -34,15 +34,17 @@ from app.models.catalog import (
     SubscriptionStatus,
 )
 from app.models.domain_settings import SettingDomain
+from app.models.network import SubscriberAdditionalRoute
 from app.models.subscriber import Address, Subscriber, SubscriberStatus
 from app.services import enforcement_window, settings_spec
 from app.services.billing import _recalculate_invoice_totals
 from app.services.billing.invoices import next_invoice_number
 from app.services.billing.reconcile_unposted import settle_open_invoices_from_credit
 from app.services.billing_settings import (
-    accounts_with_live_service,
+    accounts_with_collectible_service,
     resolve_payment_due_days,
 )
+from app.services.billing_statuses import BILLABLE_SUBSCRIBER_STATUSES
 from app.services.common import coerce_uuid, round_money
 from app.services.events import emit_event
 from app.services.events.types import EventType
@@ -238,19 +240,29 @@ def _effective_unit_price(
     subscription: Subscription,
     catalog_amount: Decimal,
     now: datetime,
+    *,
+    include_override: bool = True,
 ) -> Decimal:
     """Effective per-cycle price for a subscription.
 
-    A positive subscription.unit_price (Splynx-imported or admin-set
+    A positive subscription.unit_price (imported or admin-set
     negotiated price) overrides the catalog amount. Zero is treated as
-    "no override" because the Splynx importer stores 0 when the export
+    "no override" because the legacy importer stores 0 when the export
     carried no per-service price. An enabled discount inside its
     [discount_start_at, discount_end_at] window (open-ended where null,
     bounds inclusive) is then applied: percentage is percent-off, fixed
     is an absolute reduction. Never returns below 0.00.
+
+    ``include_override=False`` skips the per-offer unit_price override (but still
+    applies the subscription-level discount); plan-change proration uses this for
+    the *new* plan's side, whose catalog price hasn't been snapshotted yet.
     """
     base = catalog_amount
-    if subscription.unit_price is not None and subscription.unit_price > 0:
+    if (
+        include_override
+        and subscription.unit_price is not None
+        and subscription.unit_price > 0
+    ):
         base = subscription.unit_price
     price = Decimal(str(base))
     if subscription.discount and subscription.discount_value is not None:
@@ -274,10 +286,51 @@ def _effective_unit_price(
     return round_money(price)
 
 
+def _active_tax_rate_id(db: Session, tax_rate_id) -> bool:
+    rate = db.get(TaxRate, tax_rate_id)
+    return rate is not None and bool(rate.is_active)
+
+
+def _tax_rate_for_catalog_percent(db: Session, vat_percent: Decimal | None):
+    if vat_percent is None:
+        return None
+    percent = Decimal(str(vat_percent))
+    if percent <= Decimal("0.00"):
+        return None
+    candidates = {percent}
+    if percent > Decimal("1.00"):
+        candidates.add(percent / Decimal("100"))
+    else:
+        candidates.add(percent * Decimal("100"))
+    rates = db.query(TaxRate).filter(TaxRate.is_active.is_(True)).all()
+    for rate in rates:
+        current = Decimal(str(rate.rate))
+        if any(current == candidate for candidate in candidates):
+            return rate.id
+    return None
+
+
+def _resolve_offer_tax_rate_id(db: Session, offer: CatalogOffer | None):
+    """Resolve tax from the catalog offer's VAT flags.
+
+    The catalog is the service-level source of truth: a positive ``vat_percent``
+    means taxable even when older imported rows still have ``with_vat=false``;
+    ``with_vat=false`` without a positive percent means VAT-exempt.
+    """
+    if offer is None:
+        return _default_tax_rate_id(db)
+
+    percent = Decimal(str(offer.vat_percent or "0"))
+    if percent > Decimal("0.00"):
+        return _tax_rate_for_catalog_percent(db, percent) or _default_tax_rate_id(db)
+    if bool(offer.with_vat):
+        return _default_tax_rate_id(db)
+    return None
+
+
 def _resolve_tax_rate_id(db: Session, subscription: Subscription):
     def _is_active(tax_rate_id) -> bool:
-        rate = db.get(TaxRate, tax_rate_id)
-        return rate is not None and bool(rate.is_active)
+        return _active_tax_rate_id(db, tax_rate_id)
 
     if subscription.service_address_id:
         address = db.get(Address, subscription.service_address_id)
@@ -286,7 +339,7 @@ def _resolve_tax_rate_id(db: Session, subscription: Subscription):
     subscriber = db.get(Subscriber, subscription.subscriber_id)
     if subscriber and subscriber.tax_rate_id and _is_active(subscriber.tax_rate_id):
         return subscriber.tax_rate_id
-    return _default_tax_rate_id(db)
+    return _resolve_offer_tax_rate_id(db, subscription.offer)
 
 
 def _default_tax_rate_id(db: Session):
@@ -354,30 +407,77 @@ def _addon_recurring_price(db: Session, add_on_id) -> tuple[Decimal, str] | None
     return round_money(price.amount or 0), str(price.currency or "NGN")
 
 
+def _active_ip_route_count(db: Session, subscriber_id, prefix_length: int) -> int:
+    """Count active additional routed blocks of a given prefix for a subscriber.
+
+    The route↔add-on tie is convention-by-prefix (no FK) and is only reconciled
+    when an admin re-saves the subscription form, so a block released or
+    deactivated by any other lifecycle/IPAM path can leave the add-on billing
+    forever. This lets the recurring-add-on biller keep public-IP billing
+    coupled to whether the block is actually still routing.
+    """
+    return (
+        db.query(SubscriberAdditionalRoute)
+        .filter(SubscriberAdditionalRoute.subscriber_id == subscriber_id)
+        .filter(SubscriberAdditionalRoute.prefix_length == prefix_length)
+        .filter(SubscriberAdditionalRoute.is_active.is_(True))
+        .count()
+    )
+
+
 def _bill_recurring_addons(
     db: Session,
     invoice: Invoice,
     subscription: Subscription,
     period_start: datetime,
     period_end: datetime,
+    usage_start: datetime,
+    usage_end: datetime,
     tax_rate_id,
-    run_at: datetime,
 ) -> int:
-    """Add an invoice line per active recurring add-on on this subscription, so
-    the monthly bill is base plan + recurring add-ons (e.g. extra IP blocks).
+    """Add an invoice line per recurring add-on active during the billing period,
+    so the monthly bill is base plan + recurring add-ons (e.g. extra IP blocks).
     Returns the number of lines added. One-time add-ons are skipped (no recurring
-    price); add-ons in a different currency than the invoice are skipped."""
+    price); add-ons in a different currency than the invoice are skipped.
+
+    Each line is prorated to the add-on's own active overlap with the billing
+    period (intersected with the subscription's service window): an add-on that
+    started or ended mid-period is billed only for the portion it was active —
+    not the full period, and not skipped outright. Add-ons that don't overlap the
+    period at all (start in a later period, or already ended before it) are
+    excluded.
+
+    Public-IP add-ons can additionally be coupled to live routing: when the
+    ``billing.bill_ip_addon_requires_active_route`` setting is on, the billed
+    quantity is capped to the number of active matching ``SubscriberAdditionalRoute``
+    blocks (and the line skipped entirely when none remain), so a released or
+    deactivated block stops billing even if the add-on's ``end_at`` was never set.
+    Default OFF keeps the deploy behaviour-neutral until route data is audited.
+    """
+    # Add-ons that OVERLAP [period_start, period_end): started before the period
+    # ends and not yet ended when it begins. (Proration below handles the partial
+    # overlap; a degenerate row that slips through bills 0 and is skipped.)
     rows = (
         db.query(SubscriptionAddOn, AddOn)
         .join(AddOn, AddOn.id == SubscriptionAddOn.add_on_id)
         .filter(SubscriptionAddOn.subscription_id == subscription.id)
         .filter(
-            (SubscriptionAddOn.end_at.is_(None)) | (SubscriptionAddOn.end_at > run_at)
+            (SubscriptionAddOn.start_at.is_(None))
+            | (SubscriptionAddOn.start_at < period_end)
+        )
+        .filter(
+            (SubscriptionAddOn.end_at.is_(None))
+            | (SubscriptionAddOn.end_at > period_start)
         )
         .all()
     )
     added = 0
-    tax_application = _default_tax_application(db)
+    tax_application = (
+        _default_tax_application(db) if tax_rate_id else TaxApplication.exempt
+    )
+    require_active_route = _setting_truthy(
+        db, "bill_ip_addon_requires_active_route", default=False
+    )
     for sub_addon, add_on in rows:
         priced = _addon_recurring_price(db, add_on.id)
         if priced is None:
@@ -386,7 +486,77 @@ def _bill_recurring_addons(
         if currency != (invoice.currency or "NGN"):
             continue
         qty = Decimal(str(sub_addon.quantity or 1))
-        amount = round_money(unit * qty)
+
+        # Keep public-IP add-on billing coupled to live routing: bill at most the
+        # number of active matching routes, skipping entirely when none remain.
+        # Only applies to public-IP add-ons that declare a prefix length.
+        if (
+            require_active_route
+            and add_on.ip_is_public
+            and add_on.ip_prefix_length is not None
+        ):
+            active_routes = _active_ip_route_count(
+                db, subscription.subscriber_id, add_on.ip_prefix_length
+            )
+            billable_qty = min(int(qty), active_routes)
+            if billable_qty <= 0:
+                logger.warning(
+                    "ip_addon_no_active_route_skip",
+                    extra={
+                        "event": "ip_addon_no_active_route_skip",
+                        "subscription_id": str(subscription.id),
+                        "subscriber_id": str(subscription.subscriber_id),
+                        "add_on_id": str(add_on.id),
+                        "prefix_length": add_on.ip_prefix_length,
+                        "addon_quantity": int(qty),
+                    },
+                )
+                continue
+            if billable_qty != int(qty):
+                logger.warning(
+                    "ip_addon_quantity_capped_to_routes",
+                    extra={
+                        "event": "ip_addon_quantity_capped_to_routes",
+                        "subscription_id": str(subscription.id),
+                        "subscriber_id": str(subscription.subscriber_id),
+                        "add_on_id": str(add_on.id),
+                        "prefix_length": add_on.ip_prefix_length,
+                        "addon_quantity": int(qty),
+                        "active_routes": active_routes,
+                    },
+                )
+                qty = Decimal(str(billable_qty))
+
+        # Prorate to the add-on's own active overlap with the billing period,
+        # clipped to the subscription's service window. In the steady case (add-on
+        # active for the whole period) the ratio is 1, so amount == unit * qty;
+        # a mid-period start/end bills only the active portion.
+        addon_start = _as_utc(sub_addon.start_at) or period_start
+        addon_end = _as_utc(sub_addon.end_at) or period_end
+        addon_usage_start = max(usage_start, addon_start)
+        addon_usage_end = min(usage_end, addon_end)
+        if addon_usage_start >= addon_usage_end:
+            continue
+        billing_line_key = _billing_line_key(
+            subscription.id, period_start, period_end, f"addon:{sub_addon.id}"
+        )
+        if _billing_line_key_exists(
+            db, billing_line_key
+        ) or _recurring_addon_line_exists(
+            db,
+            subscription.id,
+            sub_addon.id,
+            period_start,
+            period_end,
+        ):
+            continue
+        amount = _prorated_amount(
+            round_money(unit * qty),
+            period_start,
+            period_end,
+            addon_usage_start,
+            addon_usage_end,
+        )
         if amount <= Decimal("0.00"):
             continue
         db.add(
@@ -401,10 +571,103 @@ def _bill_recurring_addons(
                 amount=amount,
                 tax_rate_id=tax_rate_id,
                 tax_application=tax_application,
+                metadata_={
+                    "kind": "recurring_addon",
+                    "subscription_add_on_id": str(sub_addon.id),
+                    "add_on_id": str(add_on.id),
+                    "billing_period_start": period_start.isoformat(),
+                    "billing_period_end": period_end.isoformat(),
+                },
+                billing_line_key=billing_line_key,
             )
         )
         added += 1
     return added
+
+
+def _billing_line_key(
+    subscription_id,
+    period_start: datetime,
+    period_end: datetime,
+    component: str,
+) -> str:
+    return (
+        f"subscription:{subscription_id}:"
+        f"{period_start.isoformat()}:{period_end.isoformat()}:{component}"
+    )
+
+
+def _billing_line_key_exists(db: Session, billing_line_key: str) -> bool:
+    return (
+        db.query(InvoiceLine.id)
+        .filter(InvoiceLine.billing_line_key == billing_line_key)
+        .filter(InvoiceLine.is_active.is_(True))
+        .first()
+        is not None
+    )
+
+
+def _recurring_addon_line_exists(
+    db: Session,
+    subscription_id,
+    subscription_add_on_id,
+    period_start: datetime,
+    period_end: datetime,
+) -> bool:
+    rows = (
+        db.query(InvoiceLine)
+        .join(Invoice, Invoice.id == InvoiceLine.invoice_id)
+        .filter(InvoiceLine.subscription_id == subscription_id)
+        .filter(Invoice.billing_period_start == period_start)
+        .filter(Invoice.billing_period_end == period_end)
+        .filter(InvoiceLine.is_active.is_(True))
+        .filter(Invoice.is_active.is_(True))
+        .all()
+    )
+    wanted = str(subscription_add_on_id)
+    for line in rows:
+        metadata = line.metadata_ or {}
+        if (
+            metadata.get("kind") == "recurring_addon"
+            and metadata.get("subscription_add_on_id") == wanted
+        ):
+            return True
+    return False
+
+
+def _paid_coverage_end_for_subscription(
+    db: Session,
+    subscription_id,
+    account_id,
+    period_start: datetime,
+    period_end: datetime,
+) -> datetime | None:
+    """Return paid-through coverage overlapping a proposed recurring period.
+
+    Imported Splynx invoices are the migration source of truth for prepaid
+    service coverage during cutover. A locally generated prepaid invoice must
+    not overlap a paid imported period just because ``next_billing_at`` drifted
+    earlier than the actual paid-through date.
+    """
+    row = (
+        db.query(Invoice.billing_period_end)
+        .join(InvoiceLine, InvoiceLine.invoice_id == Invoice.id)
+        .filter(Invoice.account_id == account_id)
+        .filter(InvoiceLine.subscription_id == subscription_id)
+        .filter(Invoice.is_active.is_(True))
+        .filter(InvoiceLine.is_active.is_(True))
+        .filter(Invoice.status == InvoiceStatus.paid)
+        .filter(Invoice.balance_due <= Decimal("0.00"))
+        .filter(Invoice.billing_period_start.isnot(None))
+        .filter(Invoice.billing_period_end.isnot(None))
+        .filter(Invoice.billing_period_start < period_end)
+        .filter(Invoice.billing_period_end > period_start)
+        .order_by(Invoice.billing_period_end.desc())
+        .first()
+    )
+    if row is None:
+        return None
+    return _as_utc(row[0])
 
 
 def _activate_pending_subscription(
@@ -498,7 +761,7 @@ def _emit_invoice_reminders(
         return 0
 
     sent = 0
-    live_accounts = accounts_with_live_service(db)
+    collectible_accounts = accounts_with_collectible_service(db)
     invoices = (
         db.query(Invoice)
         .filter(Invoice.is_active.is_(True))
@@ -511,7 +774,7 @@ def _emit_invoice_reminders(
         # Don't remind on balances for accounts whose services are all
         # terminal (disabled/canceled/expired/…) — a dead service shouldn't
         # keep pinging the customer.
-        if invoice.account_id not in live_accounts:
+        if invoice.account_id not in collectible_accounts:
             continue
         if not invoice.due_at or (invoice.balance_due or Decimal("0.00")) <= Decimal(
             "0.00"
@@ -558,7 +821,7 @@ def _emit_dunning_escalations(
         return 0
 
     sent = 0
-    live_accounts = accounts_with_live_service(db)
+    collectible_accounts = accounts_with_collectible_service(db)
     invoices = (
         db.query(Invoice)
         .filter(Invoice.is_active.is_(True))
@@ -577,7 +840,7 @@ def _emit_dunning_escalations(
         # Skip escalations for accounts whose services are all terminal
         # (disabled/canceled/expired/…): the real dunning workflow already
         # excludes them, and a dead service shouldn't keep escalating.
-        if invoice.account_id not in live_accounts:
+        if invoice.account_id not in collectible_accounts:
             continue
         if not invoice.due_at or (invoice.balance_due or Decimal("0.00")) <= Decimal(
             "0.00"
@@ -696,10 +959,9 @@ def subscription_invoice_eligible(
 ) -> bool:
     """Whether a subscription may enter invoice generation.
 
-    Prepaid subscriptions draw down a deposit balance (see
-    ``app/services/prepaid_billing.py``) and must NOT receive balance-due
-    invoices — doing so double-bills them. Only postpaid subscriptions are
-    invoice-eligible, unless a caller passes an explicit credit/admin override.
+    Production prepaid subscriptions are invoiced in advance only when the
+    caller explicitly opts in (``allow_prepaid=True``). The default remains
+    postpaid-only so ad-hoc invoice paths do not double-bill prepaid services.
     """
     if allow_prepaid:
         return True
@@ -767,8 +1029,8 @@ def run_invoice_cycle(
     """
     run_at = _as_utc(run_at) or datetime.now(UTC)
 
-    # Global kill-switch. While Splynx remains the billing system of record,
-    # local invoice generation must stay off (it duplicates Splynx). dry_run is
+    # Global kill-switch. Before local billing became the system of record,
+    # invoice generation had to stay off to avoid duplicate bills. dry_run is
     # exempt so the shadow reconciler can still compute would-be invoices for
     # validation without writing anything.
     if not dry_run and not _setting_truthy(db, "billing_enabled", default=True):
@@ -822,12 +1084,6 @@ def run_invoice_cycle(
     # Query billable active subscriptions. Network/account enforcement states
     # like blocked/suspended must not suppress invoicing: those accounts still
     # owe for active service periods and may need the invoice to clear the block.
-    billable_account_statuses = (
-        SubscriberStatus.active,
-        SubscriberStatus.blocked,
-        SubscriberStatus.suspended,
-        SubscriberStatus.delinquent,
-    )
     # Postpaid subscriptions are always invoiced. ``prepaid_monthly`` accounts
     # (prepaid billing_mode on a MONTHLY-cycle offer) are invoiced too — billed
     # in advance, due on issue — but ONLY when the cutover flag is enabled;
@@ -851,7 +1107,7 @@ def run_invoice_cycle(
         db.query(Subscription)
         .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
         .filter(Subscription.status == SubscriptionStatus.active)
-        .filter(Subscriber.status.in_(billable_account_statuses))
+        .filter(Subscriber.status.in_(BILLABLE_SUBSCRIBER_STATUSES))
         .filter(mode_filter)
         .all()
     )
@@ -872,13 +1128,13 @@ def run_invoice_cycle(
         db.query(Subscription)
         .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
         .filter(Subscription.status == SubscriptionStatus.active)
-        .filter(Subscriber.status.in_(billable_account_statuses))
+        .filter(Subscriber.status.in_(BILLABLE_SUBSCRIBER_STATUSES))
         .filter(Subscription.billing_mode == BillingMode.prepaid)
         .count()
     )
     if prepaid_skipped:
         logger.info(
-            "Invoice cycle skipped %d prepaid subscription(s) (drawdown-billed)",
+            "Invoice cycle skipped %d prepaid subscription(s) (prepaid opt-in disabled)",
             prepaid_skipped,
         )
 
@@ -927,11 +1183,38 @@ def run_invoice_cycle(
             continue
         period_end = _period_end(period_start, effective_cycle)
 
+        if subscription.billing_mode == BillingMode.prepaid:
+            paid_through = _paid_coverage_end_for_subscription(
+                db,
+                subscription.id,
+                subscription.subscriber_id,
+                period_start,
+                period_end,
+            )
+            if paid_through and paid_through > period_start:
+                current_nb = _as_utc(subscription.next_billing_at)
+                if current_nb is None or current_nb < paid_through:
+                    subscription.next_billing_at = paid_through
+                logger.info(
+                    "billing_prepaid_paid_coverage_skip",
+                    extra={
+                        "event": "billing_prepaid_paid_coverage_skip",
+                        "run_id": str(run_uuid) if run_uuid else None,
+                        "subscription_id": str(subscription.id),
+                        "subscriber_id": str(subscription.subscriber_id),
+                        "period_start": period_start.isoformat(),
+                        "period_end": period_end.isoformat(),
+                        "paid_through": paid_through.isoformat(),
+                    },
+                )
+                summary["skipped"] += 1
+                continue
+
         # Skip wholly-past billing periods instead of invoicing every missed
-        # month. Migrated (Splynx) subscribers carry next_billing_at/start_at at
+        # month. Migrated subscribers carry next_billing_at/start_at at
         # their original signup date — without this, the runner generated a
         # backdated invoice per missed period per run, double-billing periods
-        # already settled in Splynx (the 2026-05/06 phantom-invoice incident).
+        # already settled before local billing cutover.
         # We fast-forward next_billing_at to the current period and bill only
         # that. Set billing.bill_backdated_periods=true to restore arrears
         # billing if an operator genuinely needs it.
@@ -968,12 +1251,22 @@ def run_invoice_cycle(
             summary["skipped"] += 1
             continue
 
-        # Idempotency check 1: verify no invoice line exists for this subscription+period
+        offer_name = (
+            subscription.offer.name
+            if subscription.offer
+            else f"Subscription {subscription.id}"
+        )
+        description = f"{offer_name} ({period_start.date()} - {period_end.date()})"
+
+        # Idempotency check 1: verify no base invoice line exists for this
+        # subscription+period. Recurring add-ons have their own lines and must
+        # not cause the base service line to be skipped after a partial failure.
         # This catches cases where the invoice was created but next_billing_at wasn't updated
         existing_line_for_period = (
             db.query(InvoiceLine)
             .join(Invoice, Invoice.id == InvoiceLine.invoice_id)
             .filter(InvoiceLine.subscription_id == subscription.id)
+            .filter(InvoiceLine.description == description)
             .filter(Invoice.billing_period_start == period_start)
             .filter(Invoice.billing_period_end == period_end)
             .filter(InvoiceLine.is_active.is_(True))
@@ -1066,6 +1359,7 @@ def run_invoice_cycle(
             db.query(InvoiceLine)
             .filter(InvoiceLine.invoice_id == invoice.id)
             .filter(InvoiceLine.subscription_id == subscription.id)
+            .filter(InvoiceLine.description == description)
             .filter(InvoiceLine.is_active.is_(True))
             .first()
         )
@@ -1073,13 +1367,14 @@ def run_invoice_cycle(
             summary["skipped"] += 1
             continue
 
-        tax_rate_id = _resolve_tax_rate_id(db, subscription)
-        offer_name = (
-            subscription.offer.name
-            if subscription.offer
-            else f"Subscription {subscription.id}"
+        billing_line_key = _billing_line_key(
+            subscription.id, period_start, period_end, "base"
         )
-        description = f"{offer_name} ({period_start.date()} - {period_end.date()})"
+        if _billing_line_key_exists(db, billing_line_key):
+            summary["skipped"] += 1
+            continue
+
+        tax_rate_id = _resolve_tax_rate_id(db, subscription)
         line = InvoiceLine(
             invoice_id=invoice.id,
             subscription_id=subscription.id,
@@ -1088,14 +1383,29 @@ def run_invoice_cycle(
             unit_price=round_money(line_amount),
             amount=round_money(line_amount),
             tax_rate_id=tax_rate_id,
-            tax_application=_default_tax_application(db),
+            tax_application=(
+                _default_tax_application(db) if tax_rate_id else TaxApplication.exempt
+            ),
+            metadata_={
+                "kind": "base_subscription",
+                "billing_period_start": period_start.isoformat(),
+                "billing_period_end": period_end.isoformat(),
+            },
+            billing_line_key=billing_line_key,
         )
         db.add(line)
         summary["subscriptions_billed"] += 1
         summary["lines_created"] += 1
         # Bill active recurring add-ons (e.g. extra IP blocks) on the same invoice.
         summary["lines_created"] += _bill_recurring_addons(
-            db, invoice, subscription, period_start, period_end, tax_rate_id, run_at
+            db,
+            invoice,
+            subscription,
+            period_start,
+            period_end,
+            usage_start,
+            usage_end,
+            tax_rate_id,
         )
         subscription.next_billing_at = period_end
 
@@ -1131,11 +1441,11 @@ def run_invoice_cycle(
 
         # Inline credit settlement is DISABLED by default. It was found to be
         # unsafe on the migrated dataset: per-invoice balance_due/allocations are
-        # not authoritative (Splynx paid many invoices from the account deposit
+        # not authoritative (many invoices were paid from the account deposit
         # with no invoice-linked allocation, and some allocations were synced
         # without recomputing balance_due), so settling against local "open"
         # invoices destroyed real credit on already-paid invoices. "Paid but
-        # walled" must be solved at the account level (deposit/Splynx-truth), not
+        # walled" must be solved at the account level, not
         # by per-invoice settlement here. Re-enable only after that redesign.
         if newly_created_invoices and _setting_truthy(
             db, "settle_credit_on_invoice_enabled", default=False
@@ -1237,8 +1547,13 @@ def run_invoice_cycle(
             summary["invoice_reminders_sent"] = 0
             summary["dunning_escalations_sent"] = 0
         else:
-            summary["invoice_reminders_sent"] = _emit_invoice_reminders(db, run_at)
-            summary["dunning_escalations_sent"] = _emit_dunning_escalations(db, run_at)
+            notification_summary = run_billing_notifications(db, run_at)
+            summary["invoice_reminders_sent"] = int(
+                notification_summary.get("invoice_reminders_sent", 0)
+            )
+            summary["dunning_escalations_sent"] = int(
+                notification_summary.get("dunning_escalations_sent", 0)
+            )
         db.commit()
 
         summary["run_id"] = run_id_str
@@ -1384,12 +1699,15 @@ def generate_prorated_invoice(
     if line_amount <= Decimal("0.00"):
         return None
 
-    # Check for existing prorated invoice for this period
+    # Check for existing prorated invoice for this period. Key on the
+    # day-floored period_start (not the raw activation timestamp): two
+    # activations on the same day would otherwise carry sub-second-different
+    # billing_period_start values, miss this dedupe, and mint a second proration.
     existing = (
         db.query(InvoiceLine)
         .join(Invoice, Invoice.id == InvoiceLine.invoice_id)
         .filter(InvoiceLine.subscription_id == subscription.id)
-        .filter(Invoice.billing_period_start == activation_date)
+        .filter(Invoice.billing_period_start == period_start)
         .filter(Invoice.billing_period_end == period_end)
         .filter(InvoiceLine.is_active.is_(True))
         .filter(Invoice.is_active.is_(True))
@@ -1411,7 +1729,9 @@ def generate_prorated_invoice(
         invoice_number=next_invoice_number(db),
         status=InvoiceStatus.issued,
         currency=currency or "NGN",
-        billing_period_start=activation_date,
+        # Store the day-floored period_start so the dedupe above is stable across
+        # re-activations on the same day (issued_at keeps the exact instant).
+        billing_period_start=period_start,
         billing_period_end=period_end,
         issued_at=activation_date,
         due_at=activation_date + timedelta(days=due_days),
@@ -1660,7 +1980,7 @@ def mark_overdue_invoices(db: Session) -> dict[str, int]:
         # Check idempotency flag before changing status
         metadata = dict(invoice.metadata_ or {})
         # Reconciliation hold: invoices flagged as under reconciliation (e.g. the
-        # phantom Splynx duplicate-billing cleanup) must not be marked overdue or
+        # phantom duplicate-billing cleanup) must not be marked overdue or
         # drive suspension/dunning. Setting this flag immediately stops dunning
         # before the invoices are voided.
         if metadata.get("reconciliation_hold"):
@@ -1771,11 +2091,16 @@ def generate_cancellation_credit(
     if not last_line or not last_line.amount:
         return  # Never billed
 
-    # Calculate unused portion
-    _as_utc(subscription.start_at) or now
-    cycle = BillingCycle.monthly  # fallback
-    if subscription.offer and subscription.offer.billing_cycle:
-        cycle = subscription.offer.billing_cycle
+    # Calculate unused portion. Resolve the cycle the same way the invoice
+    # runner and proration do — from the active recurring price (version-aware) —
+    # so the credit window matches how the subscription was actually billed,
+    # falling back to the offer's cycle then monthly.
+    _, _, resolved_cycle = _resolve_price(db, subscription)
+    cycle = resolved_cycle or (
+        subscription.offer.billing_cycle
+        if subscription.offer and subscription.offer.billing_cycle
+        else BillingCycle.monthly
+    )
 
     period_start = _as_utc(subscription.next_billing_at)
     if period_start:

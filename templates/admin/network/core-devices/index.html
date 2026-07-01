@@ -225,7 +225,10 @@
                             {% endif %}
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
+                            {% set status_val = display_status_map.get(device.id|string) if display_status_map else none %}
+                            {% if not status_val %}
                             {% set status_val = device.status.value if device.status else 'offline' %}
+                            {% endif %}
                             {{ status_badge(status_val | title, variant=device_status_variants.get(status_val, 'offline')) }}
                             {% set child_impact = child_impacts.get(device.id|string) if child_impacts else None %}
                             {% if child_impact and child_impact.impacted %}

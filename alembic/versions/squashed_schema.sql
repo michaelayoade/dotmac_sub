@@ -5872,7 +5872,7 @@ CREATE TABLE public.routers (
     hostname character varying(255) NOT NULL,
     management_ip character varying(255) NOT NULL,
     rest_api_port integer NOT NULL,
-    rest_api_username character varying(255) NOT NULL,
+    rest_api_username character varying(512) NOT NULL,
     rest_api_password character varying(512) NOT NULL,
     use_ssl boolean NOT NULL,
     verify_tls boolean NOT NULL,

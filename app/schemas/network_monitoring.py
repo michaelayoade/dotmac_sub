@@ -159,7 +159,10 @@ class DeviceInterfaceUpdate(BaseModel):
 class UptimeReportRequest(BaseModel):
     period_start: datetime
     period_end: datetime
-    group_by: str = Field(default="device", pattern="^(device|pop_site|area|fdh)$")
+    group_by: str = Field(
+        default="device",
+        pattern="^(device|pop_site|area|fdh|access_point|pon)$",
+    )
 
 
 class UptimeReportItem(BaseModel):
@@ -170,6 +173,11 @@ class UptimeReportItem(BaseModel):
     total_seconds: int
     downtime_seconds: int
     uptime_percent: Decimal | None
+    # ``derived`` marks rows whose availability is estimated rather than measured
+    # from uptime alerts (e.g. PON ports, whose % comes from the live ONT-online
+    # ratio — there are no per-PON uptime alerts). The UI labels these as
+    # estimates, not contractual SLA. See INFRASTRUCTURE_SLA_PERFORMANCE.md R2.
+    derived: bool = False
 
 
 class UptimeReportResponse(BaseModel):

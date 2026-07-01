@@ -3,13 +3,15 @@ import logging
 import time
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.orm import selectinload
 
 from app.celery_app import celery_app
 from app.models.router_management import (
     Router,
     RouterConfigPush,
     RouterConfigPushStatus,
+    RouterConfigSnapshot,
     RouterPushResultStatus,
     RouterSnapshotSource,
     RouterStatus,
@@ -83,7 +85,9 @@ def capture_scheduled_snapshots() -> dict:
     try:
         routers = list(
             db.execute(
-                select(Router).where(
+                select(Router)
+                .options(selectinload(Router.jump_host))
+                .where(
                     Router.is_active.is_(True),
                     Router.status == RouterStatus.online,
                 )
@@ -91,6 +95,16 @@ def capture_scheduled_snapshots() -> dict:
             .scalars()
             .all()
         )
+        # Detach the routers and close the read transaction BEFORE the slow
+        # per-router REST /export loop. Otherwise expire_on_commit re-loads each
+        # router's attributes on the next iteration, reopening a transaction
+        # that then sits idle through the network call (one router is
+        # unreachable → full timeout) and trips Postgres'
+        # idle_in_transaction_session_timeout, aborting the whole run with zero
+        # snapshots. jump_host is eager-loaded so the connection layer can still
+        # read it while detached.
+        db.expunge_all()
+        db.rollback()
 
         success = 0
         failed = 0
@@ -98,16 +112,23 @@ def capture_scheduled_snapshots() -> dict:
             try:
                 data = RouterConnectionService.execute(router, "GET", "/export")
                 config_text = data if isinstance(data, str) else str(data)
+                # store_snapshot commits its own short transaction.
                 RouterConfigService.store_snapshot(
                     db,
                     router_id=router.id,
                     config_export=config_text,
                     source=RouterSnapshotSource.scheduled,
                 )
-                router.last_config_sync_at = datetime.now(UTC)
+                # router is detached; update the timestamp with a targeted UPDATE.
+                db.execute(
+                    update(Router)
+                    .where(Router.id == router.id)
+                    .values(last_config_sync_at=datetime.now(UTC))
+                )
                 db.commit()
                 success += 1
             except Exception as exc:
+                db.rollback()
                 logger.warning("Failed to snapshot %s: %s", router.name, exc)
                 failed += 1
 
@@ -120,6 +141,55 @@ def capture_scheduled_snapshots() -> dict:
 def cleanup_idle_tunnels() -> dict:
     closed = RouterConnectionService.cleanup_idle_tunnels()
     return {"closed": closed}
+
+
+def _capture_post_snapshot(db, router: Router) -> RouterConfigSnapshot | None:
+    """Best-effort post-change snapshot of the router's CURRENT state.
+
+    Returns ``None`` (rather than raising) when the export fails, so a push
+    result is still recorded even if the router is now unreachable.
+    """
+    try:
+        post_data = RouterConnectionService.execute(router, "GET", "/export")
+        post_text = post_data if isinstance(post_data, str) else str(post_data)
+        return RouterConfigService.store_snapshot(
+            db,
+            router_id=router.id,
+            config_export=post_text,
+            source=RouterSnapshotSource.post_change,
+        )
+    except Exception as exc:
+        logger.warning("Post-change snapshot failed for %s: %s", router.name, exc)
+        return None
+
+
+def _parse_routeros_rest_command(cmd: str) -> tuple[str, dict | None, str | None]:
+    """Parse one push command into RouterOS REST path and optional JSON payload."""
+    parts = cmd.strip().split(" ", 1)
+    path = parts[0]
+    payload: dict | None = None
+    warning: str | None = None
+    if len(parts) == 2:
+        try:
+            parsed = json.loads(parts[1])
+            if isinstance(parsed, dict):
+                payload = parsed
+            else:
+                warning = "Payload JSON is not an object; sending without payload."
+        except json.JSONDecodeError:
+            warning = "Payload JSON could not be parsed; sending without payload."
+    return path, payload, warning
+
+
+def _preview_commands(commands: list[str]) -> list[dict[str, object]]:
+    preview = []
+    for cmd in commands:
+        path, payload, warning = _parse_routeros_rest_command(cmd)
+        row: dict[str, object] = {"command": cmd, "path": path, "payload": payload}
+        if warning:
+            row["warning"] = warning
+        preview.append(row)
+    return preview
 
 
 @celery_app.task(name="router_sync.execute_config_push")
@@ -135,16 +205,29 @@ def execute_config_push(push_id: str) -> dict:
 
         success_count = 0
         fail_count = 0
+        skipped_count = 0
+        abort_remaining = False
 
         for result in push.results:
+            if abort_remaining:
+                result.status = RouterPushResultStatus.skipped
+                result.error_message = (
+                    "Skipped because failure policy aborted after a prior failure."
+                )
+                db.commit()
+                skipped_count += 1
+                continue
+
             router = db.get(Router, result.router_id)
             if not router or not router.is_active:
                 result.status = RouterPushResultStatus.skipped
                 result.error_message = "Router inactive or not found"
                 db.commit()
+                skipped_count += 1
                 continue
 
             start_time = time.time()
+            responses: list = []
             try:
                 pre_data = RouterConnectionService.execute(router, "GET", "/export")
                 pre_text = pre_data if isinstance(pre_data, str) else str(pre_data)
@@ -157,37 +240,32 @@ def execute_config_push(push_id: str) -> dict:
                 result.pre_snapshot_id = pre_snap.id
                 db.commit()
 
-                # Commands are RouterOS REST API paths, optionally followed by
-                # a space-separated JSON payload string, e.g.:
-                #   "/ip/address/add" '{"address":"192.168.1.1/24","interface":"ether1"}'
-                responses = []
+                if push.dry_run:
+                    result.response_data = {
+                        "dry_run": True,
+                        "planned_commands": _preview_commands(push.commands),
+                    }
+                    result.status = RouterPushResultStatus.success
+                    result.duration_ms = int((time.time() - start_time) * 1000)
+                    db.commit()
+                    success_count += 1
+                    continue
+
+                # Each command is a RouterOS REST API path, optionally followed
+                # by a single space and a JSON object payload, e.g.:
+                #   /ip/address/add {"address":"192.168.1.1/24","interface":"ether1"}
                 for cmd in push.commands:
-                    parts = cmd.strip().split(" ", 1)
-                    path = parts[0]
-                    payload: dict | None = None
-                    if len(parts) == 2:
-                        try:
-                            payload = json.loads(parts[1])
-                        except json.JSONDecodeError:
-                            logger.warning(
-                                "Could not parse payload for command %r — sending without payload",
-                                cmd,
-                            )
+                    path, payload, warning = _parse_routeros_rest_command(cmd)
+                    if warning:
+                        logger.warning("%s Command: %r", warning, cmd)
                     resp = RouterConnectionService.execute(
                         router, "POST", path, payload=payload
                     )
                     responses.append(resp)
 
-                post_data = RouterConnectionService.execute(router, "GET", "/export")
-                post_text = post_data if isinstance(post_data, str) else str(post_data)
-                post_snap = RouterConfigService.store_snapshot(
-                    db,
-                    router_id=router.id,
-                    config_export=post_text,
-                    source=RouterSnapshotSource.post_change,
-                )
-
-                result.post_snapshot_id = post_snap.id
+                post_snap = _capture_post_snapshot(db, router)
+                if post_snap is not None:
+                    result.post_snapshot_id = post_snap.id
                 result.response_data = responses
                 result.status = RouterPushResultStatus.success
                 result.duration_ms = int((time.time() - start_time) * 1000)
@@ -199,9 +277,19 @@ def execute_config_push(push_id: str) -> dict:
                 result.status = RouterPushResultStatus.failed
                 result.error_message = str(exc)[:500]
                 result.duration_ms = int((time.time() - start_time) * 1000)
+                # An earlier command may already have mutated the router before
+                # the failure. Persist the partial responses and snapshot the
+                # router's current state so the partial application is auditable.
+                if responses:
+                    result.response_data = responses
+                post_snap = _capture_post_snapshot(db, router)
+                if post_snap is not None:
+                    result.post_snapshot_id = post_snap.id
                 db.commit()
                 fail_count += 1
                 logger.warning("Push to %s failed: %s", router.name, exc)
+                if push.failure_policy == "abort":
+                    abort_remaining = True
 
         if fail_count == 0:
             push.status = RouterConfigPushStatus.completed
@@ -217,6 +305,9 @@ def execute_config_push(push_id: str) -> dict:
             "status": push.status.value,
             "success": success_count,
             "failed": fail_count,
+            "skipped": skipped_count,
+            "dry_run": push.dry_run,
+            "failure_policy": push.failure_policy,
         }
     finally:
         db.close()

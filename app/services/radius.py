@@ -1,11 +1,9 @@
 import hashlib
 import logging
-import os
 import re
 import threading
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import HTTPException
 from sqlalchemy import (
@@ -51,7 +49,7 @@ from app.schemas.radius import (
     RadiusSyncJobCreate,
     RadiusSyncJobUpdate,
 )
-from app.services import settings_spec
+from app.services import radius_dsn, settings_spec
 from app.services.common import (
     apply_ordering,
     apply_pagination,
@@ -161,7 +159,7 @@ def _radius_sync_subscription_for_subscriber(
         .where(Subscription.status.in_(RADIUS_SYNC_ELIGIBLE_STATUSES))
         .order_by(
             # Prefer an active subscription when the subscriber has more than
-            # one eligible (Splynx duplicate-service customers carry active +
+            # one eligible (migrated duplicate-service customers carry active +
             # canceled/suspended rows). Without this, the latest-by-date pick
             # could be a canceled subscription, so RADIUS state — including
             # additional-IP Framed-Routes — gets synced from the wrong service.
@@ -804,65 +802,20 @@ def _active_radius_servers(db: Session) -> list[RadiusServer]:
     )
 
 
-def _normalize_external_db_url(value: str | None) -> str | None:
-    if not value:
-        return None
-    db_url = value.strip()
-    if not db_url:
-        return None
-    if db_url.startswith("postgresql://"):
-        return "postgresql+psycopg://" + db_url[len("postgresql://") :]
-    return db_url
-
-
-def _container_safe_external_db_url(value: str | None) -> str | None:
-    db_url = _normalize_external_db_url(value)
-    if not db_url:
-        return None
-    parsed = urlsplit(db_url)
-    hostname = (parsed.hostname or "").strip().lower()
-    if hostname not in {"localhost", "127.0.0.1"}:
-        return db_url
-
-    # If the URL already uses a non-default port (host-mapped), keep it as-is.
-    # Only rewrite to Docker hostname when port is the default 5432.
-    if parsed.port and parsed.port != 5432:
-        return db_url
-
-    host = (os.getenv("RADIUS_DB_HOST") or "radius-db").strip()
-    port = os.getenv("RADIUS_DB_PORT") or "5432"
-    username = parsed.username or ""
-    password = parsed.password or ""
-    auth = username
-    if password:
-        auth = f"{auth}:{password}"
-    netloc = f"{auth}@{host}:{port}" if auth else f"{host}:{port}"
-    return urlunsplit(
-        (parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)
-    )
+# Thin re-exports — the single authority lives in app.services.radius_dsn so the
+# population sweep and the event-time sync resolve the bundled radius DB the
+# *same* way and cannot split-brain.
+_normalize_external_db_url = radius_dsn.normalize_external_db_url
+_container_safe_external_db_url = radius_dsn.container_safe_external_db_url
 
 
 def _bundled_external_db_config() -> dict | None:
-    """Fallback external RADIUS DB config for the bundled Docker stack."""
-    db_url = _container_safe_external_db_url(os.getenv("RADIUS_SYNC_DB_URL"))
-    if not db_url:
-        db_url = _container_safe_external_db_url(os.getenv("RADIUS_DB_DSN"))
-    if not db_url:
-        host = (os.getenv("RADIUS_DB_HOST") or "radius-db").strip()
-        database = (os.getenv("RADIUS_DB_NAME") or "radius").strip()
-        username = (os.getenv("RADIUS_DB_USER") or "radius").strip()
-        from app.services.secrets import get_env_or_secret
+    """Fallback external RADIUS DB config for the bundled Docker stack.
 
-        password = get_env_or_secret(
-            "RADIUS_DB_PASS",
-            "radius",
-            "db_password",
-            default="l2f3clS-Ws9WgTXcsW3HoznBnEq3n7N-",
-        ).strip()
-        if host and database and username and password:
-            db_url = (
-                f"postgresql+psycopg://{username}:{password}@{host}:5432/{database}"
-            )
+    Resolves through ``radius_dsn.resolve_radius_dsn()`` — the same authority the
+    population sweep uses — so both writers target one radius DB.
+    """
+    db_url = radius_dsn.resolve_radius_dsn()
     if not db_url:
         return None
     return {
@@ -1147,6 +1100,17 @@ def _external_db_config(db: Session, job: RadiusSyncJob) -> dict | None:
     }
 
 
+def _subscriber_captive_opted_in(db: Session, subscriber_id) -> bool:
+    """True if the subscriber opted into the soft captive walled-garden, so a
+    suspended sub gets the pay-page treatment instead of a hard reject."""
+    if not subscriber_id:
+        return False
+    from app.models.subscriber import Subscriber
+
+    subscriber = db.get(Subscriber, subscriber_id)
+    return bool(getattr(subscriber, "captive_redirect_enabled", False))
+
+
 def _external_sync_users(
     db: Session,
     config: dict,
@@ -1211,6 +1175,68 @@ def _external_sync_users(
                             radusergroup_table.c.username == username
                         )
                     )
+                captive = (
+                    subscription.status == SubscriptionStatus.suspended
+                    and _subscriber_captive_opted_in(db, subscription.subscriber_id)
+                )
+                if captive:
+                    # Opted-in suspended customer: walled-garden, not hard-reject —
+                    # a usable password plus a captive radreply (Address-List, no
+                    # routes), mirroring the authoritative sweep's captive treatment
+                    # so the two writers agree instead of flapping the customer
+                    # between the pay-page and fully-offline.
+                    password_row = _external_password_row(
+                        credential,
+                        default_attribute=password_attr,
+                        default_op=password_op,
+                    )
+                    if password_row:
+                        conn.execute(
+                            insert(radcheck_table).values(
+                                username=username,
+                                attribute=password_row[0],
+                                op=password_row[1],
+                                value=password_row[2],
+                            )
+                        )
+                    cap_profile_id = (
+                        credential.radius_profile_id or subscription.radius_profile_id
+                    )
+                    cap_profile = (
+                        db.get(RadiusProfile, cap_profile_id)
+                        if cap_profile_id
+                        else None
+                    )
+                    cap_attrs = [
+                        a
+                        for a in build_radius_reply_attributes(
+                            db, subscription, profile=cap_profile
+                        )
+                        if a["attribute"] != "Framed-Route"
+                    ]
+                    cap_attrs.append(
+                        {
+                            "attribute": "Mikrotik-Address-List",
+                            "op": ":=",
+                            "value": "suspended",
+                        }
+                    )
+                    seen_cap: set[str] = set()
+                    for attr_dict in cap_attrs:
+                        key = attr_dict["attribute"].lower()
+                        if key in seen_cap and attr_dict["op"] != "+=":
+                            continue
+                        seen_cap.add(key)
+                        conn.execute(
+                            insert(radreply_table).values(
+                                username=username,
+                                attribute=attr_dict["attribute"],
+                                op=attr_dict.get("op") or default_reply_op,
+                                value=attr_dict["value"],
+                            )
+                        )
+                    created += 1
+                    continue
                 if subscription.status == SubscriptionStatus.suspended:
                     conn.execute(
                         insert(radcheck_table).values(

@@ -174,7 +174,7 @@ def _olt_delete_impact(db: Session, olt: OLTDevice) -> dict[str, object]:
 @router.get(
     "/pon-interfaces",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def pon_interfaces_list(
     request: Request,
@@ -200,7 +200,7 @@ def pon_interfaces_list(
 @router.post(
     "/pon-interfaces/alias",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def pon_interface_save_alias(
     olt_id: str = Form(""),
@@ -226,7 +226,7 @@ def pon_interface_save_alias(
 @router.get(
     "/olts",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def olts_list(
     request: Request,
@@ -248,7 +248,7 @@ def olts_list(
 @router.get(
     "/olts/new",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def olt_new(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
     context = _base_context(request, db, active_page="olts")
@@ -268,7 +268,7 @@ def olt_new(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
 @router.post(
     "/olts",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_create(request: Request, db: Session = Depends(get_db)):
     values = olt_web_forms_service.parse_form_values(parse_form_data_sync(request))
@@ -310,7 +310,7 @@ def olt_create(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/olts/{olt_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def olt_edit(
     request: Request, olt_id: str, db: Session = Depends(get_db)
@@ -343,7 +343,7 @@ def olt_edit(
 @router.post(
     "/olts/{olt_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_update(request: Request, olt_id: str, db: Session = Depends(get_db)):
     olt = get_olt_or_none(db, olt_id)
@@ -397,7 +397,7 @@ def olt_update(request: Request, olt_id: str, db: Session = Depends(get_db)):
 @router.get(
     "/olts/{olt_id}/config-pack-validation",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def olt_config_pack_validation_badge(
     request: Request, olt_id: str, db: Session = Depends(get_db)
@@ -443,7 +443,7 @@ def olt_config_pack_validation_badge(
 @router.get(
     "/olts/{olt_id}/config-pack-validation-details",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def olt_config_pack_validation_details(
     request: Request, olt_id: str, db: Session = Depends(get_db)
@@ -498,7 +498,7 @@ def olt_config_pack_validation_details(
 @router.get(
     "/olts/{olt_id}/delete-preview",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_delete_preview(
     request: Request, olt_id: str, db: Session = Depends(get_db)
@@ -519,7 +519,7 @@ def olt_delete_preview(
 
 @router.post(
     "/olts/{olt_id}/delete",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_delete(
     request: Request, olt_id: str, db: Session = Depends(get_db)
@@ -582,7 +582,7 @@ def olt_delete(
 @router.get(
     "/olts/{olt_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def olt_detail(
     request: Request,
@@ -622,7 +622,7 @@ def olt_detail(
 @router.get(
     "/olts/{olt_id}/events",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def olt_device_events(
     request: Request,
@@ -641,7 +641,7 @@ def olt_device_events(
 @router.get(
     "/olts/{olt_id}/preview",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def olt_detail_preview(
     request: Request,
@@ -681,7 +681,7 @@ def olt_detail_preview(
 
 @router.post(
     "/olts/{olt_id}/pon-port-identifier",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_save_pon_port_identifier(
     request: Request,
@@ -763,7 +763,7 @@ def olt_save_pon_port_identifier(
 
 @router.post(
     "/olts/{olt_id}/vlans/assign",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_assign_vlan(
     request: Request,
@@ -779,7 +779,7 @@ def olt_assign_vlan(
 
 @router.post(
     "/olts/{olt_id}/vlans/unassign",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_unassign_vlan(
     request: Request,
@@ -795,7 +795,7 @@ def olt_unassign_vlan(
 
 @router.post(
     "/olts/{olt_id}/ip-pools/assign",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_assign_ip_pool(
     request: Request,
@@ -811,7 +811,7 @@ def olt_assign_ip_pool(
 
 @router.post(
     "/olts/{olt_id}/ip-pools/unassign",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_unassign_ip_pool(
     request: Request,
@@ -828,7 +828,7 @@ def olt_unassign_ip_pool(
 @router.post(
     "/olts/{olt_id}/cli",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_run_cli_command(
     request: Request,
@@ -909,7 +909,7 @@ def _olt_status_by_serial_html(
 @router.post(
     "/olts/{olt_id}/ont-status-by-serial",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def olt_ont_status_by_serial(
     request: Request,
@@ -926,7 +926,7 @@ def olt_ont_status_by_serial(
 
 @router.post(
     "/olts/{olt_id}/test-ssh",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_test_ssh_connection(
     request: Request, olt_id: str, db: Session = Depends(get_db)
@@ -950,7 +950,7 @@ def olt_test_ssh_connection(
 
 @router.post(
     "/olts/{olt_id}/ssh-get-config",
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def olt_ssh_get_config(
     request: Request, olt_id: str, db: Session = Depends(get_db)
@@ -987,7 +987,7 @@ def olt_ssh_get_config(
 
 @router.post(
     "/olts/{olt_id}/refresh-telemetry",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_refresh_ont_telemetry(
     request: Request, olt_id: str, db: Session = Depends(get_db)
@@ -1019,7 +1019,7 @@ def olt_refresh_ont_telemetry(
 
 @router.get(
     "/olts/{olt_id}/refresh-telemetry",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_refresh_ont_telemetry_get_fallback(olt_id: str) -> RedirectResponse:
     """GET fallback for auth-refresh redirects targeting the telemetry POST endpoint."""
@@ -1034,7 +1034,7 @@ def olt_refresh_ont_telemetry_get_fallback(olt_id: str) -> RedirectResponse:
 
 @router.post(
     "/olts/{olt_id}/repair-pon-ports",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_repair_pon_ports(
     request: Request, olt_id: str, db: Session = Depends(get_db)
@@ -1058,7 +1058,7 @@ def olt_repair_pon_ports(
 
 @router.get(
     "/olts/{olt_id}/repair-pon-ports",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_repair_pon_ports_get_fallback(olt_id: str) -> RedirectResponse:
     message = quote_plus(
@@ -1072,7 +1072,7 @@ def olt_repair_pon_ports_get_fallback(olt_id: str) -> RedirectResponse:
 
 @router.post(
     "/olts/{olt_id}/discover-hardware",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_discover_hardware(
     request: Request, olt_id: str, db: Session = Depends(get_db)
@@ -1115,7 +1115,7 @@ def olt_discover_hardware(
 
 @router.get(
     "/unconfigured-onts",
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def unconfigured_onts_list(
     search: str | None = None,
@@ -1138,7 +1138,7 @@ def unconfigured_onts_list(
 
 @router.post(
     "/unconfigured-onts/{candidate_id}/restore",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def restore_autofind_candidate(
     request: Request, candidate_id: str, db: Session = Depends(get_db)
@@ -1167,7 +1167,7 @@ def restore_autofind_candidate(
 
 @router.post(
     "/unconfigured-onts/refresh",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def refresh_autofind_candidates(
     request: Request,
@@ -1204,7 +1204,7 @@ def refresh_autofind_candidates(
 
 @router.post(
     "/olts/{olt_id}/authorize-ont",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def olt_authorize_ont(
     request: Request,
@@ -1397,7 +1397,7 @@ def olt_authorize_ont(
 
 @router.get(
     "/olts/{olt_id}/authorize-ont",
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:olt:read"))],
 )
 def olt_authorize_ont_redirect(olt_id: str) -> RedirectResponse:
     """Redirect accidental GET replays back to the OLT autofind tab."""

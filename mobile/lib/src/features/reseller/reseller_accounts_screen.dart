@@ -150,6 +150,7 @@ class _ResellerAccountsScreenState
                     ? null
                     : IconButton(
                         icon: const Icon(Icons.clear),
+                        tooltip: 'Clear search',
                         onPressed: () {
                           _searchController.clear();
                           _onSearchChanged('');

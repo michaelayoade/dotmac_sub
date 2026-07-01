@@ -25,6 +25,7 @@ from sse_starlette.sse import EventSourceResponse
 from app.db import get_db
 from app.services import auth_flow as auth_flow_service
 from app.services import autopay as autopay_service
+from app.services import chat_session as chat_session_service
 from app.services import crm_portal, customer_portal
 from app.services import customer_portal_bandwidth as customer_portal_bandwidth_service
 from app.services import customer_portal_contacts as customer_portal_contacts_service
@@ -49,6 +50,105 @@ router = APIRouter(prefix="/portal", tags=["web-customer"])
 
 logger = logging.getLogger(__name__)
 _emit_customer_event = emit_customer_event
+PAYMENT_VERIFICATION_ERROR_MESSAGE = (
+    "We could not confirm this payment yet. If you were charged, please do not "
+    "retry immediately; check your billing history or contact support with this "
+    "payment reference."
+)
+PAYMENT_CHARGE_ERROR_MESSAGE = (
+    "We could not charge that saved card. Please use another payment method or "
+    "try again later."
+)
+PAYMENT_START_ERROR_MESSAGE = (
+    "Unable to start the payment. If your card was charged, the payment will "
+    "be reconciled automatically."
+)
+CARD_SAVE_SUCCESS_MESSAGE = "Your card was saved for future payments."
+CARD_SAVE_ERROR_MESSAGE = (
+    "Payment was recorded, but we could not save this card. You can add a card "
+    "from Payment Methods."
+)
+
+
+def _payment_verification_error_response(
+    request: Request,
+    exc: Exception,
+    *,
+    status_code: int = 400,
+) -> Response:
+    logger.info(
+        "Customer payment verification failed",
+        exc_info=(type(exc), exc, exc.__traceback__),
+    )
+    return templates.TemplateResponse(
+        "customer/errors/400.html",
+        {"request": request, "message": PAYMENT_VERIFICATION_ERROR_MESSAGE},
+        status_code=status_code,
+    )
+
+
+def _render_payment_return_status(
+    request: Request,
+    *,
+    reference: str,
+    provider: str | None,
+    flow: str,
+    exc: Exception,
+) -> Response:
+    is_decline = isinstance(exc, (ValueError, HTTPException)) and not (
+        isinstance(exc, HTTPException) and exc.status_code >= 500
+    )
+    if is_decline:
+        status_kind = "declined"
+        title = "Payment not confirmed"
+        message = (
+            "The payment provider did not confirm a successful payment. "
+            "No duplicate payment was recorded."
+        )
+    else:
+        status_kind = "pending"
+        title = "Payment verification pending"
+        message = (
+            "We could not confirm the payment provider response right now. "
+            "If you were debited, the payment will be reconciled automatically."
+        )
+        logger.warning(
+            "Customer payment verification returned pending state",
+            extra={"reference": reference, "provider": provider, "flow": flow},
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
+    return templates.TemplateResponse(
+        "customer/billing/payment_status.html",
+        {
+            "request": request,
+            "status_kind": status_kind,
+            "title": title,
+            "message": message,
+            "reference": reference,
+            "provider": provider,
+            "flow": flow,
+            "active_page": "billing",
+        },
+        status_code=200,
+    )
+
+
+def _capture_card_save_status(
+    db: Session,
+    *,
+    account_id: str,
+    reference: str,
+    provider: str | None,
+    requested: bool,
+) -> dict[str, str] | None:
+    if requested is not True:
+        return None
+    try:
+        customer_cards.capture_card_after_payment(db, account_id, reference, provider)
+    except Exception:
+        logger.warning("Customer card capture failed", exc_info=True)
+        return {"status": "failed", "message": CARD_SAVE_ERROR_MESSAGE}
+    return {"status": "saved", "message": CARD_SAVE_SUCCESS_MESSAGE}
 
 
 def _format_bps(value: float | int | None) -> str:
@@ -169,6 +269,24 @@ def customer_dashboard(request: Request, db: Session = Depends(get_db)) -> Respo
             url="/portal/auth/login?next=/portal/dashboard", status_code=303
         )
     return _render_dashboard(request, db, customer, "/portal/dashboard")
+
+
+@router.post("/chat/session")
+def customer_portal_chat_session(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Open a CRM live-chat session for a browser-authenticated portal user."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    subscriber_id = customer.get("subscriber_id") or customer.get("session", {}).get(
+        "subscriber_id"
+    )
+    if not subscriber_id:
+        raise HTTPException(status_code=409, detail="Customer account is incomplete")
+    return chat_session_service.broker_customer_session(db, str(subscriber_id))
 
 
 @router.get("/support", response_class=HTMLResponse)
@@ -507,6 +625,7 @@ def customer_usage(
     usage_data = customer_portal.get_usage_page(
         db, customer, period=period, page=page, per_page=per_page
     )
+    usage_history = customer_portal.get_usage_history(db, customer, months=12)
 
     return templates.TemplateResponse(
         "customer/usage/index.html",
@@ -514,12 +633,16 @@ def customer_usage(
             "request": request,
             "customer": customer,
             **usage_data,
+            "usage_history": usage_history,
             "usage_chart_records": usage_data.get("chart_records", []),
             "active_page": "usage",
             "bandwidth_chart_initial_stats": _load_initial_bandwidth_stats(
                 db,
                 subscription.id if subscription else None,
             ),
+            # Stream live throughput from /portal/bandwidth/my/live (SSE) when the
+            # customer has a subscription to read against.
+            "bandwidth_chart_live_stream": bool(usage_data.get("has_subscription")),
             "usage_enable_records_chart": True,
             "usage_records_default_view": "chart",
             "usage_records_chart_id": "portal-usage-records-chart",
@@ -1131,6 +1254,7 @@ def customer_profile(
     request: Request,
     saved: str | None = None,
     verify_sent: str | None = None,
+    sessions: str | None = None,
     db: Session = Depends(get_db),
 ) -> Response:
     """Customer profile settings."""
@@ -1153,6 +1277,15 @@ def customer_profile(
         mfa_methods = web_customer_auth_service.list_active_mfa_methods(
             db, subscriber_id
         )
+    current_session_token = request.cookies.get(customer_portal.SESSION_COOKIE_NAME)
+    active_sessions = (
+        customer_portal.list_customer_sessions_for_subscriber(
+            subscriber_id,
+            current_session_token=current_session_token,
+        )
+        if subscriber_id
+        else []
+    )
     return templates.TemplateResponse(
         "customer/profile/index.html",
         {
@@ -1163,11 +1296,41 @@ def customer_profile(
             "mfa_enabled": any(
                 bool(method.enabled and method.is_active) for method in mfa_methods
             ),
+            "active_sessions": active_sessions,
+            "other_session_count": sum(
+                1 for session in active_sessions if not session["is_current"]
+            ),
             "active_page": "profile",
-            "success": "Profile updated successfully" if saved else None,
+            "success": (
+                "Other portal sessions signed out."
+                if sessions == "signed-out"
+                else "Profile updated successfully"
+                if saved
+                else None
+            ),
             "verify_sent": verify_sent,
         },
     )
+
+
+@router.post("/profile/sessions/sign-out-others")
+def customer_profile_sign_out_other_sessions(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Sign out other customer portal sessions while keeping the current one."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+    subscriber_id = customer.get("subscriber_id")
+    current_session_token = request.cookies.get(customer_portal.SESSION_COOKIE_NAME)
+    if subscriber_id and not customer.get("read_only"):
+        customer_portal.revoke_other_customer_sessions_for_subscriber(
+            subscriber_id,
+            current_session_token,
+            db=db,
+        )
+    return RedirectResponse(url="/portal/profile?sessions=signed-out", status_code=303)
 
 
 @router.post("/profile", response_class=HTMLResponse)
@@ -1324,7 +1487,7 @@ def customer_mfa_confirm(
         return RedirectResponse(url="/portal/profile", status_code=303)
 
     try:
-        auth_flow_service.auth_flow.mfa_confirm(
+        method = auth_flow_service.auth_flow.mfa_confirm(
             db, method_id, code.strip(), str(subscriber_id)
         )
     except Exception:
@@ -1340,6 +1503,26 @@ def customer_mfa_confirm(
                 "error": "Invalid verification code. Please try again.",
             },
             status_code=401,
+        )
+
+    recovery_codes = (
+        auth_flow_service.generate_mfa_recovery_codes(db, method)
+        if getattr(method, "id", None)
+        else []
+    )
+    if recovery_codes:
+        return templates.TemplateResponse(
+            "customer/profile/mfa_setup.html",
+            {
+                "request": request,
+                "customer": customer,
+                "active_page": "profile",
+                "method_id": method_id,
+                "secret_key": "",
+                "otpauth_uri": "",
+                "recovery_codes": recovery_codes,
+                "continue_url": "/portal/profile?saved=security",
+            },
         )
 
     return RedirectResponse(url="/portal/profile?saved=security", status_code=303)
@@ -1611,8 +1794,15 @@ def customer_create_invoice_payment_intent(
             redirect_url=str(request.url_for("customer_verify_payment")),
             idempotency_key=idempotency_key,
         )
-    except ValueError as exc:
+    except (ValueError, HTTPException) as exc:
         return JSONResponse({"detail": str(exc)}, status_code=400)
+    except Exception:
+        logger.warning(
+            "Unable to start customer invoice payment intent",
+            extra={"invoice_id": invoice_id, "account_id": customer.get("account_id")},
+            exc_info=True,
+        )
+        return JSONResponse({"detail": PAYMENT_START_ERROR_MESSAGE}, status_code=400)
 
     return JSONResponse(content=jsonable_encoder(result))
 
@@ -1645,12 +1835,13 @@ def customer_verify_payment(
         customer_portal.complete_invoice_payment_intent(
             db, reference, result.get("payment")
         )
-        if save_card is True:
-            # Best-effort, Paystack-only; never breaks the recorded payment.
-            # (`is True` so a direct call's Query default never triggers it.)
-            customer_cards.capture_card_after_payment(
-                db, str(customer.get("account_id") or ""), reference, provider
-            )
+        card_save = _capture_card_save_status(
+            db,
+            account_id=str(customer.get("account_id") or ""),
+            reference=reference,
+            provider=provider,
+            requested=save_card,
+        )
         service_restored = bool(
             was_restricted
             and subscriber_id
@@ -1671,16 +1862,25 @@ def customer_verify_payment(
                 "already_recorded": result.get("already_recorded", False),
                 "was_restricted": was_restricted,
                 "service_restored": service_restored,
+                "card_save": card_save,
                 "active_page": "billing",
             },
         )
     except (ValueError, HTTPException) as exc:
-        status_code = exc.status_code if isinstance(exc, HTTPException) else 400
-        message = exc.detail if isinstance(exc, HTTPException) else str(exc)
-        return templates.TemplateResponse(
-            "customer/errors/400.html",
-            {"request": request, "message": str(message)},
-            status_code=status_code,
+        return _render_payment_return_status(
+            request,
+            reference=reference,
+            provider=provider,
+            flow="invoice_payment",
+            exc=exc,
+        )
+    except Exception as exc:
+        return _render_payment_return_status(
+            request,
+            reference=reference,
+            provider=provider,
+            flow="invoice_payment",
+            exc=exc,
         )
 
 
@@ -1756,8 +1956,15 @@ def customer_create_topup_intent(
             redirect_url=str(request.url_for("customer_verify_topup")),
             idempotency_key=idempotency_key,
         )
-    except ValueError as exc:
+    except (ValueError, HTTPException) as exc:
         return JSONResponse({"detail": str(exc)}, status_code=400)
+    except Exception:
+        logger.warning(
+            "Unable to start customer top-up intent",
+            extra={"account_id": customer.get("account_id")},
+            exc_info=True,
+        )
+        return JSONResponse({"detail": PAYMENT_START_ERROR_MESSAGE}, status_code=400)
 
     return JSONResponse(content=jsonable_encoder(result))
 
@@ -1890,12 +2097,13 @@ def customer_verify_topup(
         result = customer_portal.verify_and_record_topup(
             db, customer, reference, provider=provider
         )
-        if save_card is True:
-            # Best-effort, Paystack-only; never breaks the recorded payment.
-            # (`is True` so a direct call's Query default never triggers it.)
-            customer_cards.capture_card_after_payment(
-                db, str(customer.get("account_id") or ""), reference, provider
-            )
+        card_save = _capture_card_save_status(
+            db,
+            account_id=str(customer.get("account_id") or ""),
+            reference=reference,
+            provider=provider,
+            requested=save_card,
+        )
         service_restored = bool(
             was_restricted
             and subscriber_id
@@ -1917,14 +2125,25 @@ def customer_verify_topup(
                 "policy_warnings": result["policy_warnings"],
                 "was_restricted": was_restricted,
                 "service_restored": service_restored,
+                "card_save": card_save,
                 "active_page": "billing",
             },
         )
-    except ValueError as exc:
-        return templates.TemplateResponse(
-            "customer/errors/400.html",
-            {"request": request, "message": str(exc)},
-            status_code=400,
+    except (ValueError, HTTPException) as exc:
+        return _render_payment_return_status(
+            request,
+            reference=reference,
+            provider=provider,
+            flow="account_topup",
+            exc=exc,
+        )
+    except Exception as exc:
+        return _render_payment_return_status(
+            request,
+            reference=reference,
+            provider=provider,
+            flow="account_topup",
+            exc=exc,
         )
 
 

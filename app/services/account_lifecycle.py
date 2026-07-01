@@ -77,7 +77,7 @@ _SUSPENDABLE = {
 }
 
 # Statuses treated as equivalent to "suspended" in account derivation
-# (Splynx legacy statuses that mean the service is not running)
+# Legacy statuses that mean the service is not running.
 SUSPENDED_EQUIVALENT = {
     SubscriptionStatus.suspended,
     SubscriptionStatus.blocked,
@@ -328,6 +328,17 @@ def restore_subscription(
 
     restored = False
     if remaining is None:
+        if reactivation_blocked_by_active_login(db, subscription):
+            logger.warning(
+                "Subscription %s not restored: subscriber %s already has an "
+                "active subscription on login %r",
+                subscription.id,
+                subscription.subscriber_id,
+                subscription.login,
+            )
+            compute_account_status(db, str(subscription.subscriber_id))
+            return False
+
         prev_status = subscription.status
         subscription.status = SubscriptionStatus.active
         db.flush()

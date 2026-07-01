@@ -2,8 +2,8 @@
 {% from "components/ui/macros.html" import
     ambient_background, detail_header, card, info_grid, info_row,
     metric_row, timeline_item, table_head, status_badge,
-    action_button, animation_styles,
-    icon_edit, icon_invoice
+    animation_styles,
+    icon_invoice
 %}
 
 {% block title %}Invoice Detail - Admin{% endblock %}
@@ -13,45 +13,107 @@
 
 {% set status = invoice.status|default('draft') %}
 {% set status_val = status.value if status is not string else status %}
+{% set invoice_currency = invoice.currency or 'NGN' %}
+{% set status_variant_map = {
+    'paid': 'paid',
+    'issued': 'info',
+    'sent': 'pending',
+    'pending': 'pending',
+    'partially_paid': 'warning',
+    'overdue': 'overdue',
+    'void': 'inactive',
+    'written_off': 'inactive',
+    'draft': 'draft'
+} %}
+{% set status_label = status_val | replace('_', ' ') | title %}
 
 <div class="relative space-y-8">
     {# ── Detail Header ── #}
     {% set status_html %}
-        {% if status_val == 'paid' %}
-        {{ status_badge("Paid", variant="paid") }}
-        {% elif status_val in ['pending', 'sent'] %}
-        {{ status_badge("Pending", variant="pending") }}
-        {% elif status_val == 'overdue' %}
-        {{ status_badge("Overdue", variant="overdue") }}
-        {% else %}
-        {{ status_badge(status_val | title, variant="draft") }}
-        {% endif %}
+        {{ status_badge(status_label, variant=status_variant_map.get(status_val, 'default')) }}
     {% endset %}
 
-    {% call detail_header(
-        title="Invoice",
-        subtitle="Invoice Number: " ~ (invoice.invoice_number | default('N/A')),
-        icon=icon_invoice(),
-        color="emerald",
-        color2="teal",
-        back_href="/admin/billing/invoices",
-        back_label="Invoices",
-        status=status_html
-    ) %}
-        {{ action_button("Edit", href="/admin/billing/invoices/" ~ invoice.id ~ "/edit", icon=icon_edit(), variant="secondary", color="emerald") }}
-        {% if is_proforma %}
-        <form method="post" action="/admin/billing/invoices/{{ invoice.id }}/convert-proforma" class="inline-flex">
-            {% include "components/forms/csrf_input.html" %}
-            <button type="submit" class="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-500 to-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-blue-500/20 transition hover:-translate-y-0.5 hover:shadow-xl">
-                Convert Proforma
+    <div class="relative z-40">
+        {% call detail_header(
+            title="Invoice",
+            subtitle="Invoice Number: " ~ (invoice.invoice_number | default('N/A')),
+            icon=icon_invoice(),
+            color="emerald",
+            color2="teal",
+            back_href="/admin/billing/invoices",
+            back_label="Invoices",
+            status=status_html
+        ) %}
+        <div x-data="{ open: false }" class="relative">
+            <button type="button"
+                    @click="open = !open"
+                    class="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 shadow-sm transition hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-emerald-600 dark:hover:bg-slate-700"
+                    title="More actions"
+                    aria-label="More actions"
+                    :aria-expanded="open.toString()">
+                <svg class="h-5 w-5" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
+                    <path d="M10 6a2 2 0 100-4 2 2 0 000 4zM10 12a2 2 0 100-4 2 2 0 000 4zM10 18a2 2 0 100-4 2 2 0 000 4z"/>
+                </svg>
             </button>
-        </form>
-        {% endif %}
-        {{ action_button("Download PDF", href="/admin/billing/invoices/" ~ invoice.id ~ "/pdf", icon='<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>', variant="secondary", color="emerald") }}
-        {% if status_val in ['draft', 'pending'] %}
-        {{ action_button("Send Invoice", href="#", icon='<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>', variant="primary", color="emerald", color2="teal") }}
-        {% endif %}
-    {% endcall %}
+            <div x-show="open"
+                 x-cloak
+                 x-transition
+                 @click.outside="open = false"
+                 class="absolute right-0 z-50 mt-2 w-56 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 shadow-xl dark:border-slate-700 dark:bg-slate-800">
+                <a href="/admin/billing/invoices/{{ invoice.id }}/edit"
+                   class="flex items-center gap-3 px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-700">
+                    <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                    Edit
+                </a>
+                <a href="/admin/billing/invoices/{{ invoice.id }}/pdf"
+                   class="flex items-center gap-3 px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-700">
+                    <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                    Download PDF
+                </a>
+                {% if status_val in ['issued', 'overdue', 'partially_paid'] %}
+                <a href="/admin/billing/payments/new?invoice={{ invoice.id }}"
+                   class="flex items-center gap-3 px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-700">
+                    <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+                    Record Payment
+                </a>
+                {% endif %}
+                <form method="post" action="/admin/billing/invoices/{{ invoice.id }}/send-and-return">
+                    {% include "components/forms/csrf_input.html" %}
+                    <input type="hidden" name="next_url" value="/admin/billing/invoices/{{ invoice.id }}">
+                    <button type="submit"
+                            class="flex w-full items-center gap-3 px-3 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-700">
+                        <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+                        Send Email
+                    </button>
+                </form>
+                {% if is_proforma %}
+                <form method="post" action="/admin/billing/invoices/{{ invoice.id }}/convert-proforma">
+                    {% include "components/forms/csrf_input.html" %}
+                    <button type="submit"
+                            class="flex w-full items-center gap-3 px-3 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-700">
+                        <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6-2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                        Convert Proforma
+                    </button>
+                </form>
+                {% endif %}
+                {% if status_val not in ['paid', 'void', 'written_off'] %}
+                <div class="my-1 border-t border-slate-100 dark:border-slate-700"></div>
+                <form method="post"
+                      action="/admin/billing/invoices/{{ invoice.id }}/void-and-return"
+                      onsubmit="return confirm('Void this invoice? This should only be used when the invoice should never have existed.');">
+                    {% include "components/forms/csrf_input.html" %}
+                    <input type="hidden" name="next_url" value="/admin/billing/invoices/{{ invoice.id }}">
+                    <button type="submit"
+                            class="flex w-full items-center gap-3 px-3 py-2 text-left text-sm font-medium text-red-700 transition hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-900/20">
+                        <svg class="h-4 w-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
+                        Void
+                    </button>
+                </form>
+                {% endif %}
+            </div>
+        </div>
+        {% endcall %}
+    </div>
 
     {% if error %}
     <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-200">
@@ -107,11 +169,11 @@
                 {% endcall %}
 
                 <div class="border-t border-slate-200 dark:border-slate-700 pt-4 mt-4">
-                    {{ metric_row("Subtotal", "₦" ~ '{:,.2f}'.format(invoice.subtotal or 0), color="slate", mono=True) }}
-                    {{ metric_row("Tax", "₦" ~ '{:,.2f}'.format(invoice.tax_total or 0), color="slate", mono=True) }}
+                    {{ metric_row("Subtotal", invoice_currency ~ " " ~ '{:,.2f}'.format(invoice.subtotal or 0), color="slate", mono=True) }}
+                    {{ metric_row("Tax", invoice_currency ~ " " ~ '{:,.2f}'.format(invoice.tax_total or 0), color="slate", mono=True) }}
                     <div class="flex items-center justify-between py-2.5 mt-2">
                         <span class="text-base font-semibold text-slate-900 dark:text-white">Total</span>
-                        <span class="text-base font-bold text-slate-900 dark:text-white font-mono tabular-nums">₦{{ '{:,.2f}'.format(invoice.total or 0) }}</span>
+                        <span class="text-base font-bold text-slate-900 dark:text-white font-mono tabular-nums">{{ invoice_currency }} {{ '{:,.2f}'.format(invoice.total or 0) }}</span>
                     </div>
                 </div>
             {% endcall %}
@@ -169,8 +231,8 @@
                             <tr>
                                 <td class="px-6 py-4 text-sm text-slate-900 dark:text-white">{{ item.description | default('Service charge') }}</td>
                                 <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ item.quantity | default(1) }}</td>
-                                <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400 font-mono tabular-nums">₦{{ '{:,.2f}'.format(item.unit_amount or item.unit_price or 0) }}</td>
-                                <td class="px-6 py-4 text-right text-sm font-semibold text-slate-900 dark:text-white font-mono tabular-nums">₦{{ '{:,.2f}'.format(item.total_amount or item.amount or 0) }}</td>
+                                <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400 font-mono tabular-nums">{{ invoice_currency }} {{ '{:,.2f}'.format(item.unit_amount or item.unit_price or 0) }}</td>
+                                <td class="px-6 py-4 text-right text-sm font-semibold text-slate-900 dark:text-white font-mono tabular-nums">{{ invoice_currency }} {{ '{:,.2f}'.format(item.total_amount or item.amount or 0) }}</td>
                             </tr>
                             {% endfor %}
                         </tbody>
@@ -208,18 +270,11 @@
                 {% endif %}
 
                 <div class="mb-4">
-                    <p class="text-2xl font-bold text-slate-900 dark:text-white font-mono tabular-nums">₦{{ '{:,.2f}'.format(invoice.balance_due or 0) }}</p>
+                    <p class="text-2xl font-bold text-slate-900 dark:text-white font-mono tabular-nums">{{ invoice_currency }} {{ '{:,.2f}'.format(invoice.balance_due or 0) }}</p>
                     <p class="text-sm text-slate-500 dark:text-slate-400">Balance due</p>
                 </div>
-                {{ metric_row("Payments", "₦" ~ '{:,.2f}'.format(totals.paid), color="emerald", mono=True) }}
-                {{ metric_row("Credits", "₦" ~ '{:,.2f}'.format(totals.credit), color="blue", mono=True) }}
-
-                <div class="mt-4">
-                    <a href="/admin/billing/payments/new?invoice={{ invoice.id }}" class="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-500/25 transition-all hover:shadow-xl hover:-translate-y-0.5">
-                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>
-                        Record Payment
-                    </a>
-                </div>
+                {{ metric_row("Payments", invoice_currency ~ " " ~ '{:,.2f}'.format(totals.paid), color="emerald", mono=True) }}
+                {{ metric_row("Credits", invoice_currency ~ " " ~ '{:,.2f}'.format(totals.credit), color="blue", mono=True) }}
             {% endcall %}
 
             {# Bank Details #}
@@ -262,7 +317,7 @@
                                 {% set available = (note.total or 0) - (note.applied_total or 0) %}
                                 {% if available > 0 %}
                                 <option value="{{ note.id }}">
-                                    {{ note.credit_number | default('Credit Note') }} - ₦{{ '{:,.2f}'.format(available) }} available
+                                    {{ note.credit_number | default('Credit Note') }} - {{ note.currency or invoice_currency }} {{ '{:,.2f}'.format(available) }} available
                                 </option>
                                 {% endif %}
                             {% endfor %}

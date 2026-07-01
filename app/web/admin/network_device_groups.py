@@ -33,7 +33,7 @@ def _base_context(request: Request, db: Session) -> dict:
 @router.get(
     "",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:device:read"))],
 )
 def device_groups_index(
     request: Request,
@@ -55,7 +55,7 @@ def device_groups_index(
 
 @router.post(
     "",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:device:write"))],
 )
 def device_groups_create(
     request: Request,
@@ -95,7 +95,7 @@ def device_groups_create(
 @router.get(
     "/{group_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:device:read"))],
 )
 def device_group_detail(
     request: Request,
@@ -124,7 +124,7 @@ def device_group_detail(
 
 @router.get(
     "/{group_id}/member-candidates",
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:device:read"))],
 )
 def device_group_member_candidates(
     group_id: str,
@@ -147,7 +147,7 @@ def device_group_member_candidates(
 
 @router.post(
     "/{group_id}/settings",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:device:write"))],
 )
 def device_group_update(
     request: Request,
@@ -187,7 +187,7 @@ def device_group_update(
 
 @router.post(
     "/{group_id}/archive",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:device:write"))],
 )
 def device_group_archive(
     request: Request,
@@ -220,7 +220,7 @@ def device_group_archive(
 
 @router.post(
     "/{group_id}/members",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:device:write"))],
 )
 def device_group_add_member(
     request: Request,
@@ -267,7 +267,7 @@ def device_group_add_member(
 
 @router.post(
     "/{group_id}/members/import",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:device:write"))],
 )
 def device_group_import_members(
     request: Request,
@@ -311,7 +311,7 @@ def device_group_import_members(
 
 @router.post(
     "/{group_id}/members/import-filter",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:device:write"))],
 )
 def device_group_import_members_by_filter(
     request: Request,
@@ -352,7 +352,7 @@ def device_group_import_members_by_filter(
 
 @router.post(
     "/{group_id}/members/{member_id}/remove",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:device:write"))],
 )
 def device_group_remove_member(
     request: Request,
@@ -390,7 +390,7 @@ def device_group_remove_member(
 
 @router.post(
     "/{group_id}/actions",
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:device:write"))],
 )
 def device_group_action(
     request: Request,

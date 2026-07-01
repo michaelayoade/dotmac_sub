@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hmac
 from datetime import UTC, datetime, time
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request, status
@@ -354,6 +355,38 @@ def billing_risk_source(
     return _envelope(rows, {**meta, "total": total})
 
 
+@router.get("/service-extensions", dependencies=[Depends(require_crm_bearer)])
+def service_extensions(
+    request: Request, db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    page, per_page, meta = _pagination(request)
+    rows, total = crm_api.service_extension_rows(db, page=page, per_page=per_page)
+    return _envelope(rows, {**meta, "total": total})
+
+
+@router.get(
+    "/service-extensions/{extension_id}", dependencies=[Depends(require_crm_bearer)]
+)
+def service_extension_detail(
+    extension_id: str, db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    row = crm_api.service_extension_detail(db, extension_id)
+    if row is None:
+        _error(status.HTTP_404_NOT_FOUND, "Service extension not found.")
+    return _envelope(row)
+
+
+@router.get(
+    "/subscribers/{subscriber_id}/service-extensions",
+    dependencies=[Depends(require_crm_bearer)],
+)
+def subscriber_service_extensions(
+    subscriber_id: str, db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    subscriber = _subscriber_or_404(db, subscriber_id)
+    return _envelope(crm_api.service_extensions_for_subscriber(db, subscriber.id))
+
+
 @router.get("/finance/transactions", dependencies=[Depends(require_crm_bearer)])
 def finance_transactions(
     request: Request, db: Session = Depends(get_db)
@@ -382,3 +415,125 @@ def finance_payments(request: Request, db: Session = Depends(get_db)) -> dict[st
         per_page=per_page,
     )
     return _envelope(rows, {**meta, "total": total})
+
+
+@router.post(
+    "/credits",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_crm_bearer)],
+    tags=["credits"],
+)
+def create_crm_credit(
+    payload: dict[str, Any] = Body(default_factory=dict),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Pay a referral reward into a subscriber's VAS wallet (a spendable
+    balance) — used by the CRM to pay out referral rewards. Body:
+    ``{subscriber_id, amount, reason?, external_ref?, currency?}``. Idempotent on
+    ``external_ref``. Individual subscribers only (reseller float wallets are
+    never credited here).
+    """
+    errors: dict[str, list[str]] = {}
+    subscriber_id = str(payload.get("subscriber_id") or "").strip()
+    if not subscriber_id:
+        errors.setdefault("subscriber_id", []).append("Required.")
+    amount = Decimal("0")
+    try:
+        amount = Decimal(str(payload.get("amount")))
+    except (InvalidOperation, TypeError, ValueError):
+        errors.setdefault("amount", []).append("Must be a number.")
+    else:
+        if amount <= 0:
+            errors.setdefault("amount", []).append("Must be greater than 0.")
+    if errors:
+        _error(status.HTTP_400_BAD_REQUEST, "Invalid credit payload.", errors)
+
+    currency = str(payload.get("currency") or "NGN").strip().upper() or "NGN"
+    reason = payload.get("reason")
+    reason = str(reason).strip() if reason not in (None, "") else None
+    external_ref = payload.get("external_ref")
+    external_ref = str(external_ref).strip() if external_ref not in (None, "") else None
+
+    try:
+        entry = crm_api.credit_referral_reward_to_wallet(
+            db,
+            subscriber_id=subscriber_id,
+            amount=amount,
+            reason=reason,
+            external_ref=external_ref,
+            currency=currency,
+        )
+    except LookupError:
+        _error(status.HTTP_404_NOT_FOUND, "Subscriber not found.")
+
+    return _envelope(
+        {
+            "id": str(entry.id),
+            "wallet_id": str(entry.wallet_id),
+            "amount": str(entry.amount),
+            "currency": entry.currency,
+            "reference": entry.reference,
+            "type": "wallet_credit",
+        }
+    )
+
+
+@router.post(
+    "/invoices",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_crm_bearer)],
+    tags=["invoices"],
+)
+def create_crm_invoice(
+    payload: dict[str, Any] = Body(default_factory=dict),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Create a one-time installation invoice for a subscriber (CRM-driven).
+
+    Replaces the CRM's old Splynx installation-invoice call. Body:
+    ``{subscriber_id, amount, description, external_ref?, currency?}``.
+    """
+    errors: dict[str, list[str]] = {}
+    subscriber_id = str(payload.get("subscriber_id") or "").strip()
+    if not subscriber_id:
+        errors.setdefault("subscriber_id", []).append("Required.")
+    description = str(payload.get("description") or "").strip()
+    if not description:
+        errors.setdefault("description", []).append("Required.")
+    amount_raw = payload.get("amount")
+    amount = Decimal("0")
+    try:
+        amount = Decimal(str(amount_raw))
+    except (InvalidOperation, TypeError, ValueError):
+        errors.setdefault("amount", []).append("Must be a number.")
+    else:
+        if amount <= 0:
+            errors.setdefault("amount", []).append("Must be greater than 0.")
+    if errors:
+        _error(status.HTTP_400_BAD_REQUEST, "Invalid invoice payload.", errors)
+
+    currency = str(payload.get("currency") or "NGN").strip().upper() or "NGN"
+    external_ref = payload.get("external_ref")
+    external_ref = str(external_ref).strip() if external_ref not in (None, "") else None
+
+    try:
+        invoice = crm_api.create_installation_invoice(
+            db,
+            subscriber_id=subscriber_id,
+            amount=amount,
+            description=description,
+            external_ref=external_ref,
+            currency=currency,
+        )
+    except LookupError:
+        _error(status.HTTP_404_NOT_FOUND, "Subscriber not found.")
+
+    return _envelope(
+        {
+            "id": str(invoice.id),
+            "invoice_number": invoice.invoice_number,
+            "total": str(invoice.total),
+            "status": invoice.status.value,
+            "account_id": str(invoice.account_id),
+        }
+    )

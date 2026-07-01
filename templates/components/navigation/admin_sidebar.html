@@ -6,6 +6,7 @@
     'subscribers': 'customers', 'customers': 'customers', 'contacts': 'customers',
     'provisioning': 'system', 'provisioning-migrate': 'system', 'workflows': 'system', 'appointments': 'system',
     'support-tickets': 'support-tickets',
+    'service-requests': 'service-requests',
     'billing': 'billing', 'accounts': 'billing', 'invoices': 'billing', 'payments': 'billing',
     'credits': 'billing', 'ar-aging': 'billing', 'dunning': 'billing', 'billing-cache': 'billing',
     'payment_arrangements': 'billing', 'payment_proofs': 'billing', 'payment_providers': 'billing', 'payment_channels': 'billing',
@@ -27,7 +28,7 @@
     'onu-types': 'network', 'speed-profiles': 'network',
     'vendor-capabilities': 'network',
     'vpn': 'vpn', 'wireguard': 'vpn', 'wireguard-peers': 'vpn',
-    'reports': 'reports', 'reports-revenue': 'reports', 'reports-subscribers': 'reports',
+    'reports': 'reports', 'reports-revenue': 'reports', 'reports-customers': 'reports', 'reports-subscribers': 'reports',
     'reports-network': 'reports', 'reports-billing': 'reports',
     'gis': 'gis', 'integrations': 'integrations',
     'notifications': 'notifications', 'alert-policies': 'notifications', 'oncall-rotations': 'notifications',
@@ -167,6 +168,7 @@
     {{ nav_link("Customers", "/admin/customers", icon_customers, "customers", tour_id="nav-customers") }}
     {% endif %}
     {{ nav_link("Support", "/admin/support/tickets", icon_support, "support-tickets") }}
+    {{ nav_link("Service Requests", "/admin/service-requests", icon_provisioning, "service-requests") }}
 
     {{ section_label("Operations") }}
     {% if module_states.get('billing', True) %}

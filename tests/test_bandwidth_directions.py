@@ -99,3 +99,22 @@ def test_live_event_payload_includes_subscriber_directions():
     assert payload["rx_bps"] == 10.0
     assert payload["tx_bps"] == 90.0
     assert "timestamp" in payload
+    # Defaults to a genuine sample (back-compat for producers that don't set it).
+    assert payload["has_sample"] is True
+
+
+def test_live_event_payload_has_sample_flag():
+    """has_sample lets the chart show "Live" only on a real reading. A
+    default-zero event from an unmapped sub (has_sample=False) must be
+    distinguishable from a genuine idle 0 bps (has_sample=True)."""
+    from datetime import UTC, datetime
+
+    from app.services.bandwidth import live_event_payload
+
+    now = datetime.now(UTC)
+    idle = live_event_payload({"rx_bps": 0, "tx_bps": 0}, now, has_sample=True)
+    assert idle["has_sample"] is True
+    assert idle["download_bps"] == 0.0
+
+    no_data = live_event_payload({"rx_bps": 0, "tx_bps": 0}, now, has_sample=False)
+    assert no_data["has_sample"] is False

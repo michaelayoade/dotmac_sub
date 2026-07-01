@@ -7,6 +7,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../../core/api_exception.dart';
+import '../../core/semantic_colors.dart';
 import '../../models/service_location.dart';
 import '../../providers/data_providers.dart';
 
@@ -226,9 +227,9 @@ class _ServiceLocationScreenState extends ConsumerState<ServiceLocationScreen> {
                             point: pendingPoint,
                             width: 36,
                             height: 36,
-                            child: const Icon(
+                            child: Icon(
                               Icons.hourglass_top,
-                              color: Colors.amber,
+                              color: context.semantic.warning,
                               size: 30,
                             ),
                           ),
@@ -254,9 +255,9 @@ class _ServiceLocationScreenState extends ConsumerState<ServiceLocationScreen> {
                                       if (p != null) _reverseGeocode(p);
                                     }
                                   : null,
-                              child: const Icon(
+                              child: Icon(
                                 Icons.place,
-                                color: Colors.red,
+                                color: theme.colorScheme.error,
                                 size: 40,
                               ),
                             ),
@@ -350,7 +351,8 @@ class _ServiceLocationScreenState extends ConsumerState<ServiceLocationScreen> {
           const SizedBox(height: 12),
           Card(
             child: ListTile(
-              leading: const Icon(Icons.hourglass_top, color: Colors.amber),
+              leading:
+                  Icon(Icons.hourglass_top, color: context.semantic.warning),
               title: const Text('Pending review'),
               subtitle: Text(
                 '${pending.latitude.toStringAsFixed(6)}, '

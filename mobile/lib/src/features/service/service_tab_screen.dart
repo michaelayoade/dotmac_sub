@@ -10,6 +10,8 @@ import '../../providers/data_providers.dart';
 import '../../widgets/async_value_view.dart';
 import '../../widgets/skeleton.dart';
 import '../usage/fup_card.dart';
+import '../usage/live_bandwidth_card.dart';
+import '../usage/speed_history_card.dart';
 import '../usage/usage_section.dart';
 
 /// The Service tab — one coherent home for everything about the customer's
@@ -23,6 +25,10 @@ class ServiceTabScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final period = ref.watch(selectedUsagePeriodProvider);
     final summary = ref.watch(usageSummaryProvider(period));
+    // Session-based cycle total — the true usage for unlimited plans, whose
+    // rated bucket reads 0 (independent of the selected period above).
+    final cycleUsedBytes =
+        ref.watch(usageSummaryProvider('cycle')).asData?.value.totalBytes;
     final buckets = ref.watch(quotaBucketsProvider);
     final sessions = ref.watch(accountingSessionsProvider);
     final services = ref.watch(subscriptionsProvider);
@@ -52,6 +58,8 @@ class ServiceTabScreen extends ConsumerWidget {
         onRefresh: () async {
           ref.invalidate(usageSummaryProvider(period));
           ref.invalidate(quotaBucketsProvider);
+          ref.invalidate(usageHistoryProvider);
+          ref.invalidate(bandwidthSeriesProvider);
           ref.invalidate(accountingSessionsProvider);
           ref.invalidate(subscriptionsProvider);
           if (service != null) ref.invalidate(addonsProvider(service.id));
@@ -100,6 +108,9 @@ class ServiceTabScreen extends ConsumerWidget {
               QuotaCard(
                 bucket: b,
                 policyLine: summary.asData?.value.fup?.policySummary,
+                // Unlimited buckets carry no usage; show the real session-based
+                // cycle total instead of "0.0 GB used".
+                actualUsedBytes: b.isUnlimited ? cycleUsedBytes : null,
               ),
               const SizedBox(height: 12),
             ],
@@ -108,6 +119,22 @@ class ServiceTabScreen extends ConsumerWidget {
               _FupHeadroomCard(fup: summary.asData!.value.fup!),
               const SizedBox(height: 12),
             ],
+            // Real-time speed, high on the tab so it's visible without a deep
+            // scroll past the history charts.
+            const LiveBandwidthCard(),
+            const SizedBox(height: 12),
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.add_location_alt_outlined),
+                title: const Text('Get a quote'),
+                subtitle: const Text(
+                  'Pin a new installation address for an instant estimate',
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => context.push('/quotes'),
+              ),
+            ),
+            const SizedBox(height: 12),
             if (service != null && canBuyData) ...[
               Align(
                 alignment: Alignment.centerLeft,
@@ -123,8 +150,10 @@ class ServiceTabScreen extends ConsumerWidget {
               const SizedBox(height: 12),
             ],
             if (activeBundles.isNotEmpty) ...[
-              Text('Active add-ons',
-                  style: Theme.of(context).textTheme.titleMedium),
+              Text(
+                'Active add-ons',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
               const SizedBox(height: 8),
               for (final a in activeBundles) _ActiveAddonTile(addon: a),
               if (service != null)
@@ -168,6 +197,9 @@ class ServiceTabScreen extends ConsumerWidget {
               ),
               const SizedBox(height: 20),
             ],
+            const MonthlyUsageCard(),
+            const SpeedHistoryCard(),
+            const SizedBox(height: 12),
             UsageSection(
               period: period,
               summary: summary,
@@ -215,9 +247,12 @@ class _ServiceHeader extends StatelessWidget {
             Row(
               children: [
                 Expanded(
-                  child: Text(service.displayName,
-                      style: theme.textTheme.titleMedium
-                          ?.copyWith(fontWeight: FontWeight.w600)),
+                  child: Text(
+                    service.displayName,
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                 ),
                 if (showSwitcher)
                   PopupMenuButton<String>(
@@ -226,32 +261,52 @@ class _ServiceHeader extends StatelessWidget {
                     onSelected: onSwitch,
                     itemBuilder: (_) => [
                       for (final s in services)
-                        PopupMenuItem(
-                          value: s.id,
-                          child: Text(s.displayName),
-                        ),
+                        PopupMenuItem(value: s.id, child: Text(s.displayName)),
                     ],
                   ),
               ],
             ),
             const SizedBox(height: 4),
-            Text(details,
-                style: theme.textTheme.bodySmall
-                    ?.copyWith(color: theme.colorScheme.outline)),
+            Text(
+              details,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
+            ),
+            // What the plan provides: provisioned line rate (download/upload).
+            if (service.speedSummary != null) ...[
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  Icon(Icons.speed, size: 15, color: theme.colorScheme.primary),
+                  const SizedBox(width: 5),
+                  Text(
+                    'Plan speed  ${service.speedSummary}',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ],
             // Only show a renewal line for a real, upcoming date-based expiry.
             // An active service with a stale billing date isn't "due"; postpaid
             // has no date expiry. Genuine lapses show "Expired".
             if (service.isExpired) ...[
               const SizedBox(height: 4),
-              Text('Expired',
-                  style: theme.textTheme.bodySmall
-                      ?.copyWith(color: theme.colorScheme.error)),
+              Text(
+                'Expired',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.error,
+                ),
+              ),
             ] else if (days != null && days >= 0) ...[
               const SizedBox(height: 4),
               Text(
                 days == 0 ? 'Renews today' : 'Renews in $days days',
-                style: theme.textTheme.bodySmall
-                    ?.copyWith(color: theme.colorScheme.outline),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
               ),
             ],
           ],
@@ -323,9 +378,12 @@ class _FupHeadroomCard extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text('Fair-use allowance', style: theme.textTheme.bodySmall),
-                Text('Unlimited',
-                    style: theme.textTheme.labelMedium
-                        ?.copyWith(color: theme.colorScheme.primary)),
+                Text(
+                  'Unlimited',
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    color: theme.colorScheme.primary,
+                  ),
+                ),
               ],
             ),
             const SizedBox(height: 12),
@@ -355,14 +413,18 @@ class _FupHeadroomCard extends StatelessWidget {
               const SizedBox(height: 8),
               Row(
                 children: [
-                  Icon(Icons.info_outline,
-                      size: 14, color: theme.colorScheme.outline),
+                  Icon(
+                    Icons.info_outline,
+                    size: 14,
+                    color: theme.colorScheme.outline,
+                  ),
                   const SizedBox(width: 4),
                   Expanded(
                     child: Text(
                       fup.policySummary!,
-                      style: theme.textTheme.bodySmall
-                          ?.copyWith(color: theme.colorScheme.outline),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.outline,
+                      ),
                     ),
                   ),
                 ],

@@ -1,0 +1,48 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Import Runs - System{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex items-center justify-between">
+        <div>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Import Runs</h1>
+            <p class="text-sm text-slate-500 dark:text-slate-400">Durable bulk-import history — dry-run validation and applied runs, with per-row outcomes.</p>
+        </div>
+        <a href="/admin/system/import" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700">Import Wizard</a>
+    </div>
+
+    <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+            <thead class="bg-slate-50 dark:bg-slate-900/50">
+                <tr>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-500">Module</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-500">Mode</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-500">Status</th>
+                    <th class="px-4 py-3 text-right text-xs font-semibold uppercase text-slate-500">Rows</th>
+                    <th class="px-4 py-3 text-right text-xs font-semibold uppercase text-slate-500">OK</th>
+                    <th class="px-4 py-3 text-right text-xs font-semibold uppercase text-slate-500">Failed</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-500">Created</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+                {% for run in runs %}
+                <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/40">
+                    <td class="px-4 py-3 text-sm">
+                        <a href="/admin/system/import-runs/{{ run.id }}" class="font-medium text-primary-600 hover:underline">{{ run.module }}</a>
+                    </td>
+                    <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-300">{{ "dry-run" if run.dry_run else "apply" }}</td>
+                    <td class="px-4 py-3 text-sm">{{ run.status.value }}</td>
+                    <td class="px-4 py-3 text-right text-sm">{{ run.total_rows }}</td>
+                    <td class="px-4 py-3 text-right text-sm text-emerald-600">{{ run.ok_rows }}</td>
+                    <td class="px-4 py-3 text-right text-sm text-red-600">{{ run.failed_rows }}</td>
+                    <td class="px-4 py-3 text-sm text-slate-500">{{ run.created_at.strftime("%Y-%m-%d %H:%M") if run.created_at else "" }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="7" class="px-4 py-8 text-center text-sm text-slate-500">No import runs yet.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
