@@ -2303,6 +2303,76 @@ def test_consolidated_page_data_includes_active_nas_inventory_devices(db_session
     assert included.detail_url.endswith(f"/admin/network/nas/devices/{included.id}")
 
 
+def test_network_devices_zabbix_probe_statuses_use_icmp_and_snmp_only(monkeypatch):
+    class _FakeZabbixClient:
+        @classmethod
+        def from_env(cls):
+            return cls()
+
+        def get_hosts(self, host_ids=None, limit=1000):
+            assert set(host_ids or []) == {"101", "102", "103"}
+            return [
+                {
+                    "hostid": "101",
+                    "status": "0",
+                    "interfaces": [{"type": "2", "available": "1"}],
+                },
+                {
+                    "hostid": "102",
+                    "status": "0",
+                    "interfaces": [
+                        {
+                            "type": "2",
+                            "available": "2",
+                            "error": "SNMP timeout",
+                        }
+                    ],
+                },
+                {
+                    "hostid": "103",
+                    "status": "0",
+                    "interfaces": [{"type": "2", "available": "1"}],
+                },
+            ]
+
+        def get_items(self, host_ids=None, metric=None, limit=100000):
+            assert set(host_ids or []) == {"101", "102", "103"}
+            assert metric == "icmpping"
+            return [
+                {"hostid": "101", "key_": "icmpping", "lastvalue": "1"},
+                {"hostid": "102", "key_": "icmpping", "lastvalue": "0"},
+                {"hostid": "102", "key_": "icmppingloss", "lastvalue": "0"},
+            ]
+
+    monkeypatch.setattr(core_devices_inventory_service, "zabbix_configured", lambda: True)
+    monkeypatch.setattr(
+        core_devices_inventory_service,
+        "ZabbixClient",
+        _FakeZabbixClient,
+    )
+
+    statuses = core_devices_inventory_service._build_zabbix_probe_statuses(
+        [
+            {"id": "device-online", "zabbix_host_id": "101"},
+            {"id": "device-timeout", "zabbix_host_id": "102"},
+            {"id": "device-missing-icmp", "zabbix_host_id": "103"},
+        ]
+    )
+
+    assert statuses["device-online"]["ping_label"] == "Online"
+    assert statuses["device-online"]["ping_state"] == "ok"
+    assert statuses["device-online"]["snmp_label"] == "Online"
+    assert statuses["device-online"]["snmp_state"] == "ok"
+    assert statuses["device-timeout"]["ping_label"] == "Timeout"
+    assert statuses["device-timeout"]["ping_state"] == "fail"
+    assert statuses["device-timeout"]["snmp_label"] == "Timeout"
+    assert statuses["device-timeout"]["snmp_state"] == "fail"
+    assert statuses["device-missing-icmp"]["ping_label"] == "Timeout"
+    assert statuses["device-missing-icmp"]["ping_state"] == "fail"
+    assert statuses["device-missing-icmp"]["snmp_label"] == "Online"
+    assert statuses["device-missing-icmp"]["snmp_state"] == "ok"
+
+
 def test_consolidated_nas_inventory_inherits_linked_monitoring_status(
     db_session, monkeypatch
 ):
