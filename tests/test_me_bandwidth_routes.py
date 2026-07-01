@@ -7,13 +7,33 @@ download/upload.
 """
 
 import asyncio
+import threading
 from types import SimpleNamespace
 
 from app.api import me
 
 
 def _run(coro):
-    return asyncio.run(coro)
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    result = []
+    error = []
+
+    def runner():
+        try:
+            result.append(asyncio.run(coro))
+        except BaseException as exc:  # pragma: no cover - re-raised in caller
+            error.append(exc)
+
+    thread = threading.Thread(target=runner)
+    thread.start()
+    thread.join()
+    if error:
+        raise error[0]
+    return result[0]
 
 
 PRINCIPAL = {"principal_type": "subscriber", "subscriber_id": "sub-uuid"}

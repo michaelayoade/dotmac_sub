@@ -9,6 +9,7 @@ instead of a blank when throughput data exists.
 """
 
 import asyncio
+import threading
 from datetime import UTC, datetime, timedelta
 
 from app.services.metrics_store import MetricsStore, TimeSeriesPoint
@@ -17,6 +18,29 @@ from app.services.metrics_store import MetricsStore, TimeSeriesPoint
 def _window(days=24):
     end = datetime(2026, 6, 25, 12, 0, tzinfo=UTC)
     return end - timedelta(days=days), end
+
+
+def _run(coro):
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    result = []
+    error = []
+
+    def runner():
+        try:
+            result.append(asyncio.run(coro))
+        except BaseException as exc:  # pragma: no cover - re-raised in caller
+            error.append(exc)
+
+    thread = threading.Thread(target=runner)
+    thread.start()
+    thread.join()
+    if error:
+        raise error[0]
+    return result[0]
 
 
 def test_instant_peak_used_when_present():
@@ -33,7 +57,7 @@ def test_instant_peak_used_when_present():
     store.get_subscription_bandwidth = fake_range  # type: ignore[assignment]
 
     start, end = _window()
-    peak = asyncio.run(store.get_peak_bandwidth("sub-1", start, end))
+    peak = _run(store.get_peak_bandwidth("sub-1", start, end))
     assert peak == {"rx_peak_bps": 5000000.0, "tx_peak_bps": 1000000.0}
 
 
@@ -59,7 +83,7 @@ def test_range_fallback_when_instant_empty():
     store.get_subscription_bandwidth = fake_range  # type: ignore[assignment]
 
     start, end = _window()
-    peak = asyncio.run(store.get_peak_bandwidth("sub-1", start, end))
+    peak = _run(store.get_peak_bandwidth("sub-1", start, end))
     assert peak == {"rx_peak_bps": 7_500_000.0, "tx_peak_bps": 1_200_000.0}
 
 
@@ -79,7 +103,7 @@ def test_range_fallback_when_instant_raises():
     store.get_subscription_bandwidth = fake_range  # type: ignore[assignment]
 
     start, end = _window()
-    peak = asyncio.run(store.get_peak_bandwidth("sub-1", start, end))
+    peak = _run(store.get_peak_bandwidth("sub-1", start, end))
     assert peak == {"rx_peak_bps": 3_300_000.0, "tx_peak_bps": 800_000.0}
 
 
@@ -96,7 +120,7 @@ def test_no_data_anywhere_returns_zero():
     store.get_subscription_bandwidth = empty_range  # type: ignore[assignment]
 
     start, end = _window()
-    peak = asyncio.run(store.get_peak_bandwidth("sub-1", start, end))
+    peak = _run(store.get_peak_bandwidth("sub-1", start, end))
     assert peak == {"rx_peak_bps": 0.0, "tx_peak_bps": 0.0}
 
 
@@ -123,7 +147,7 @@ def test_reads_target_ingested_aggregate_series():
     start, end = _window()
 
     # Peak: instant uses _max, range fallback uses _max.
-    asyncio.run(store.get_peak_bandwidth("sub-1", start, end))
+    _run(store.get_peak_bandwidth("sub-1", start, end))
     assert any("bandwidth_rx_bps_max" in q for q in instant_queries)
     assert any("bandwidth_rx_bps_max" in q for q in range_queries)
     assert any("bandwidth_tx_bps_max" in q for q in range_queries)
@@ -133,7 +157,7 @@ def test_reads_target_ingested_aggregate_series():
 
     # Chart series defaults to the _avg aggregate.
     range_queries.clear()
-    asyncio.run(store.get_subscription_bandwidth("sub-1", start, end))
+    _run(store.get_subscription_bandwidth("sub-1", start, end))
     assert all(
         "bandwidth_rx_bps_avg" in q or "bandwidth_tx_bps_avg" in q
         for q in range_queries
@@ -141,5 +165,5 @@ def test_reads_target_ingested_aggregate_series():
 
     # Current bandwidth reads the _avg aggregate too.
     instant_queries.clear()
-    asyncio.run(store.get_current_bandwidth("sub-1"))
+    _run(store.get_current_bandwidth("sub-1"))
     assert all("_avg" in q for q in instant_queries)
