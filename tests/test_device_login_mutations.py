@@ -86,5 +86,7 @@ def test_set_device_login_commit_false_does_not_commit(
     assert system_user.device_login_enabled is True  # applied, pending caller commit
 
     # Default (commit=True) still commits — backward compatible.
-    set_device_login(db_session, user_id=str(system_user.id), enabled=False, secret=None)
+    set_device_login(
+        db_session, user_id=str(system_user.id), enabled=False, secret=None
+    )
     spy.assert_called()
