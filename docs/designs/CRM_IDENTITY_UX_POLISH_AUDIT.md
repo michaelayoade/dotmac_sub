@@ -4,11 +4,50 @@
 **Method:** 2-agent parallel read-only review: (a) CRM sync/tickets/webhook/
 dead-letter/duplicate-merge + the Syncs admin UI, (b) customer-identity
 normalization/resolution + CRM customer upsert / portal / billing-push.
-**Status:** audit only. Part of the remaining-module audit series.
+**Status:** remediation in progress via draft PR. Part of the remaining-module audit series.
 
 > Known: full bidirectional CRM sync is deployed (incremental pull w/ watermark,
 > ticket/comment push, webhooks, billing snapshots); the `crm.ticket_pull`
 > feature-flag resolution bug was recently fixed (PR #506).
+
+## Remediation status
+
+**Last updated:** 2026-07-01
+**Tracking branch:** `codex/crm-identity-ux-polish-remediation`
+
+### Resolved in current draft
+
+- Generic interval scheduling now skips CRM `pull_tickets` integration jobs, so
+  the dedicated CRM ticket-pull beat remains the single scheduled pull path and
+  UI-created interval jobs cannot collide with it.
+- The Integrations overview now renders unresolved CRM push dead letters with
+  count, error, attempts, per-row re-drive, and bulk re-drive controls.
+- CRM dead-letter re-drive now redirects with visible result feedback for
+  dispatched rows or already-resolved/missing selections.
+- CRM customer webhook updates now emit a `crm_customer_identity_update` audit
+  event for existing-subscriber identity overwrites, including old/new values for
+  name, email, phone, address, status, and category fields plus CRM identifiers.
+
+### Still open
+
+- Fix-or-remove remaining dead controls on sync detail: conflict policy,
+  ambiguous-match policy, mapping fields, and scheduled-pull `filter_config`.
+- Improve sync run observability: show stored errors/comments/leads/watermark,
+  distinguish partial success, and log customer match decisions.
+- Move identity/currency/country policy to registered settings:
+  `DEFAULT_COUNTRY_CODE`, `crm_billing_push` currency, and sensitive-automation
+  minimum confidence.
+- Defer lower-risk hardening: CRM client cache/retry/circuit settings,
+  fuzzy-match phone normalization, `crm_billing_push` enable flag, Run Now
+  confirms, outage-as-unavailable portal counts, and routing webhook pushes
+  through `CRMClient`.
+
+### Verification
+
+- `poetry run pytest tests/test_crm_webhooks.py tests/test_crm_dead_letter.py tests/test_scheduler_config_services.py -q`
+  - Result: passed
+- `poetry run ruff check app/services/crm_customers.py app/services/scheduler_config.py app/web/admin/integrations.py tests/test_crm_webhooks.py tests/test_crm_dead_letter.py tests/test_scheduler_config_services.py`
+  - Result: passed
 
 ## What this audit is
 
@@ -99,21 +138,21 @@ write `IntegrationRun` rows and collide on the "already running" guard
 
 | Tier | Items |
 |------|-------|
-| **P0** | Two-scheduler collision → double/duplicate pulls + run-guard collision (C-1); webhook silent identity overwrite, no audit (P-C, merge/data hazard); dead-letter panel not rendered — terminal failures invisible (P-A) |
-| **P1** | Fix-or-remove dead controls: conflict-policy, ambiguous-match, mapping fields, scheduled-pull `filter_config` (P-A/C-2); sync run observability incl. success-masks-errors + redrive flash + match logging (P-B); `DEFAULT_COUNTRY_CODE` + `crm_billing_push` currency → settings (C-3); sensitive-automation confidence as a setting (C-4) |
-| **P2** | CRM cache/retry/circuit env→registered settings (C-3); fuzzy-match phone normalize (C-4); `crm_billing_push` enable flag; Run-Now/redrive-all confirms (P-D); outage-returns-0 → "unavailable" (P-B); route webhook via CRMClient |
+| **P0** | None remaining in this draft; two-scheduler collision, webhook overwrite audit, and CRM dead-letter visibility/re-drive are resolved |
+| **P1** | Fix-or-remove dead controls: conflict-policy, ambiguous-match, mapping fields, scheduled-pull `filter_config` (P-A/C-2); sync run observability incl. success-masks-errors + match logging (P-B); `DEFAULT_COUNTRY_CODE` + `crm_billing_push` currency → settings (C-3); sensitive-automation confidence as a setting (C-4) |
+| **P2** | CRM cache/retry/circuit env→registered settings (C-3); fuzzy-match phone normalize (C-4); `crm_billing_push` enable flag; Run-Now confirm (P-D); outage-returns-0 → "unavailable" (P-B); route webhook via CRMClient |
 
 ## Appendix — full findings
 
 ### CRM sync / tickets / webhook / dead-letter
-- [POLISH] (High) `app/web/admin/integrations.py:61-62` + connectors overview — dead-letter count/list + redrive POST wired but no template renders them, no button → render dead-letter panel + per-row & re-drive-all [recommend]
+- [POLISH] (High) `app/web/admin/integrations.py:61-62` + connectors overview — dead-letter count/list + redrive POST wired but no template renders them, no button → render dead-letter panel + per-row & re-drive-all [resolved in draft]
 - [CONTROL] (High) `web_integration_syncs.py:245` + `syncs/detail.html:111-118` — Conflict Policy selector persisted, never read; hardcoded remote-wins → implement in `sync_ticket` or remove + label fixed [recommend]
-- [CONTROL] (High) `scheduler_config.py:1173` vs `:1872` — UI `interval` job registers a second (full, non-incremental) pull alongside the dedicated incremental beat; collide on run-guard → single source / hide schedule for CRM job [recommend]
+- [CONTROL] (High) `scheduler_config.py:1173` vs `:1872` — UI `interval` job registers a second (full, non-incremental) pull alongside the dedicated incremental beat; collide on run-guard → single source / hide schedule for CRM job [resolved in draft]
 - [CONTROL] (Med) `app/tasks/crm_ticket_pull.py:12-15` + `integration_sync.py:122-124` — scheduled incremental pull ignores job `filter_config`; UI knobs only affect manual run → load filter_config in `run_scheduled_pull` or document manual-only [recommend]
 - [CONTROL] (Med) `crm_client.py:26-36,80` — cache TTL/retry/circuit via os.getenv at import, not registered → promote to settings or document [defer]
 - [CONTROL] (Med) `syncs/detail.html:140-146` + `crm_ticket_pull.py:446` — ambiguous-match `manual_review` unimplemented; mapping_primary/fallback ignored → drop or wire review queue [recommend]
 - [POLISH] (Med) `syncs/detail.html:216-221` + `integration_sync.py:228-239` — metrics omit errors/comments/leads/watermark; run w/ per-ticket errors marked success → show counts + watermark, flag partial [recommend]
-- [POLISH] (Med) `app/web/admin/integrations.py:74-84` — redrive ignores boolean return, no flash → `?redriven=N`/not-found flash [recommend]
+- [POLISH] (Med) `app/web/admin/integrations.py:74-84` — redrive ignores boolean return, no flash → `?redriven=N`/not-found flash [resolved in draft]
 - [POLISH] (Low) `syncs/index.html:87-90`, `detail.html:27-33` — Run Now / re-drive-all no confirm → lightweight confirm [defer]
 - [CONTROL] (Low) `crm_webhook.py:32,76` — duplicate JWT cache + hardcoded timeouts, no retry/circuit → route via `CRMClient` [defer]
 - Verified: `crm_ticket_pull_enabled`/interval are the canonical scheduler controls; duplicate-merge CLI-only w/ dry-run + `--live`.
@@ -121,7 +160,7 @@ write `IntegrationRun` rows and collide on the "already running" guard
 ### Identity normalization/resolution + CRM customer/portal/billing-push
 - [CONTROL] (High) `crm_billing_push.py:54` — snapshot currency via `os.getenv`, bypassing `billing.default_currency` → read from settings [recommend]
 - [CONTROL] (High) `customer_identity_normalization.py:19,30` — `DEFAULT_COUNTRY_CODE="234"` hardcoded for all phone canon (setting exists, unused) → make it a setting (default 234) [recommend]
-- [POLISH] (High) `crm_customers.py:177-206` — webhook overwrites name/email/phone/address/status with no audit/changelog (merge hazard) → emit audit event (old→new per field) [recommend]
+- [POLISH] (High) `crm_customers.py:177-206` — webhook overwrites name/email/phone/address/status with no audit/changelog (merge hazard) → emit audit event (old→new per field) [resolved in draft]
 - [CONTROL] (Med) `customer_identity_resolution.py:84-85,159` — sensitive-automation gate hardcodes `{HIGH,MEDIUM}` → min-confidence setting (default MEDIUM) [recommend]
 - [POLISH] (Med) `crm_customers.py:145-174` — match decision (matched-via/created-new) not logged → log matched_via + field [recommend]
 - [CONTROL] (Med) `crm_customers.py:158-172` — fuzzy-match phone exact-string (no normalize) + mandatory name equality → reuse `normalize_phone_identifier`; make require-name toggle a setting [recommend]

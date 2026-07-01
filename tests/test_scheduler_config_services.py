@@ -654,6 +654,33 @@ class TestBuildBeatSchedule:
         assert schedule["integration_job_job-123"]["schedule"] == timedelta(minutes=15)
         assert schedule["integration_job_job-123"]["args"] == ["job-123"]
 
+    def test_skips_crm_ticket_pull_integration_interval_job(self, monkeypatch):
+        """Dedicated CRM beat must be the only scheduled ticket pull path."""
+        monkeypatch.setenv("GIS_SYNC_ENABLED", "false")
+        monkeypatch.delenv("USAGE_RATING_ENABLED", raising=False)
+        monkeypatch.delenv("DUNNING_ENABLED", raising=False)
+
+        mock_session = MagicMock()
+        mock_session.query.return_value.filter.return_value.filter.return_value.filter.return_value.first.return_value = None
+        mock_session.query.return_value.filter.return_value.all.return_value = []
+        mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
+
+        mock_job = MagicMock()
+        mock_job.id = "crm-job-123"
+        mock_job.adapter_key = "crm"
+        mock_job.action = "pull_tickets"
+        mock_job.interval_minutes = 15
+
+        with patch.object(scheduler_config, "SessionLocal", return_value=mock_session):
+            with patch.object(
+                scheduler_config.integration_service,
+                "list_interval_jobs",
+                return_value=[mock_job],
+            ):
+                schedule = scheduler_config.build_beat_schedule()
+
+        assert "integration_job_crm-job-123" not in schedule
+
     def test_builds_scheduled_task_schedules(self, monkeypatch):
         """Test builds scheduled task schedules."""
         monkeypatch.setenv("GIS_SYNC_ENABLED", "false")

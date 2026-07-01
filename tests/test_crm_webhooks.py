@@ -15,6 +15,7 @@ from fastapi import FastAPI, HTTPException
 from app.api.crm_webhooks import receive_crm_customer, receive_crm_event, router
 from app.config import settings
 from app.db import get_db
+from app.models.audit import AuditEvent
 from app.models.subscriber import Subscriber
 
 SECRET = "test-webhook-secret"
@@ -248,6 +249,52 @@ def test_customer_accepted_retry_returns_existing_subscriber(db_session):
         db_session.query(Subscriber).filter(Subscriber.email == body["email"]).count()
         == 1
     )
+
+
+def test_customer_webhook_audits_identity_overwrite(db_session):
+    body = {
+        "crm_person_id": "4cf4d62b-29a0-493e-8a0d-6409a18e8897",
+        "name": "Original Customer",
+        "email": "original.customer@example.com",
+        "phone": "+09000000003",
+        "status": "new",
+    }
+    changed = {
+        **body,
+        "name": "Changed Customer",
+        "email": "changed.customer@example.com",
+        "phone": "+09000000004",
+        "address": {"city": "Lagos"},
+        "status": "active",
+    }
+
+    with _with_secret(SECRET):
+        first = _post_customer(db_session, body)
+        second = _post_customer(db_session, changed)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["id"] == first.json()["id"]
+
+    event = (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.entity_type == "subscriber")
+        .filter(AuditEvent.entity_id == first.json()["id"])
+        .filter(AuditEvent.action == "crm_customer_identity_update")
+        .one()
+    )
+    changes = event.metadata_["changes"]
+    assert changes["display_name"] == {
+        "old": "Original Customer",
+        "new": "Changed Customer",
+    }
+    assert changes["email"] == {
+        "old": "original.customer@example.com",
+        "new": "changed.customer@example.com",
+    }
+    assert changes["phone"] == {"old": "+09000000003", "new": "+09000000004"}
+    assert changes["city"] == {"old": None, "new": "Lagos"}
+    assert event.metadata_["crm_person_id"] == body["crm_person_id"]
 
 
 def test_shared_project_id_does_not_merge_distinct_customers(db_session):

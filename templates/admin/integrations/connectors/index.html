@@ -31,6 +31,56 @@
         {{ stats_card("Stripe / Twilio", (stats.by_type.stripe or 0) + (stats.by_type.twilio or 0), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>', color="violet", color2="purple") }}
     </div>
 
+    {% if crm_redrive_message %}
+    <div class="rounded-lg border border-cyan-200 bg-cyan-50 px-4 py-3 text-sm font-medium text-cyan-800 dark:border-cyan-900/60 dark:bg-cyan-950/30 dark:text-cyan-200">
+        {{ crm_redrive_message }}
+    </div>
+    {% endif %}
+
+    {% if crm_dead_letter_count %}
+    <div class="animate-fade-in-up" style="animation-delay: 75ms;">
+    {% call card("CRM Dead Letters", color="rose") %}
+        <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <p class="text-sm text-slate-600 dark:text-slate-300">{{ crm_dead_letter_count }} unresolved CRM push failure{{ '' if crm_dead_letter_count == 1 else 's' }}</p>
+            <form method="post" action="/admin/integrations/crm-dead-letters/redrive" onsubmit="return confirm('Re-drive all unresolved CRM dead letters?');">
+                <button type="submit" class="inline-flex items-center rounded-lg bg-rose-600 px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-rose-700">Re-drive All</button>
+            </form>
+        </div>
+        <div class="overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700">
+            <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
+                <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-900 dark:text-slate-400">
+                    <tr>
+                        <th class="px-4 py-3 text-left font-semibold">External ID</th>
+                        <th class="px-4 py-3 text-left font-semibold">System</th>
+                        <th class="px-4 py-3 text-left font-semibold">Attempts</th>
+                        <th class="px-4 py-3 text-left font-semibold">Error</th>
+                        <th class="px-4 py-3 text-right font-semibold">Action</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
+                    {% for failure in crm_dead_letters %}
+                    <tr>
+                        <td class="px-4 py-3 font-mono text-xs text-slate-700 dark:text-slate-300">{{ failure.external_id }}</td>
+                        <td class="px-4 py-3 text-slate-700 dark:text-slate-300">{{ failure.external_system }}</td>
+                        <td class="px-4 py-3 text-slate-700 dark:text-slate-300">{{ failure.attempts }}</td>
+                        <td class="max-w-md px-4 py-3 text-slate-600 dark:text-slate-400">
+                            <span class="line-clamp-2">{{ failure.error or '-' }}</span>
+                        </td>
+                        <td class="px-4 py-3 text-right">
+                            <form method="post" action="/admin/integrations/crm-dead-letters/redrive" onsubmit="return confirm('Re-drive this CRM dead letter?');">
+                                <input type="hidden" name="failure_id" value="{{ failure.id }}">
+                                <button type="submit" class="rounded-lg border border-rose-200 px-3 py-1.5 text-xs font-semibold text-rose-700 transition hover:bg-rose-50 dark:border-rose-900/60 dark:text-rose-300 dark:hover:bg-rose-950/30">Re-drive</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% endcall %}
+    </div>
+    {% endif %}
+
     {# Connectors Table #}
     <div class="animate-fade-in-up" style="animation-delay: 100ms;">
     {% call card(table_title or "Connectors", color="indigo") %}

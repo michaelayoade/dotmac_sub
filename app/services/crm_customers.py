@@ -9,8 +9,11 @@ from fastapi import HTTPException, status
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from app.models.audit import AuditActorType
 from app.models.subscriber import Subscriber, SubscriberCategory, SubscriberStatus
+from app.schemas.audit import AuditEventCreate
 from app.schemas.subscriber import SubscriberCreate
+from app.services import audit as audit_service
 from app.services import subscriber as subscriber_service
 
 
@@ -174,35 +177,105 @@ def _find_existing_customer(
     return None
 
 
+def _record_identity_overwrite_audit(
+    db: Session,
+    *,
+    subscriber: Subscriber,
+    changes: dict[str, dict[str, str | None]],
+    metadata: dict[str, Any],
+) -> None:
+    if not changes:
+        return
+    audit_service.audit_events.create(
+        db=db,
+        payload=AuditEventCreate(
+            actor_type=AuditActorType.service,
+            actor_id="crm_webhook",
+            action="crm_customer_identity_update",
+            entity_type="subscriber",
+            entity_id=str(subscriber.id),
+            status_code=200,
+            is_success=True,
+            metadata_={
+                "source": "crm_customer_webhook",
+                "crm_person_id": metadata.get("crm_person_id"),
+                "crm_quote_id": metadata.get("crm_quote_id"),
+                "crm_sales_order_id": metadata.get("crm_sales_order_id"),
+                "changes": changes,
+            },
+        ),
+    )
+
+
+def _track_change(
+    changes: dict[str, dict[str, str | None]],
+    field: str,
+    before: Any,
+    after: Any,
+) -> None:
+    before_text = None if before is None else str(before)
+    after_text = None if after is None else str(after)
+    if before_text != after_text:
+        changes[field] = {"old": before_text, "new": after_text}
+
+
+def _enum_value(value: Any) -> str | None:
+    return getattr(value, "value", None) if value is not None else None
+
+
 def _update_existing_customer(
     db: Session,
     subscriber: Subscriber,
     payload: dict[str, Any],
     metadata: dict[str, Any],
 ) -> Subscriber:
+    changes: dict[str, dict[str, str | None]] = {}
     first_name, last_name, display_name = _name_parts(payload)
     if first_name:
+        _track_change(changes, "first_name", subscriber.first_name, first_name)
         subscriber.first_name = first_name
     if last_name:
+        _track_change(changes, "last_name", subscriber.last_name, last_name)
         subscriber.last_name = last_name
     if display_name:
+        _track_change(changes, "display_name", subscriber.display_name, display_name)
         subscriber.display_name = display_name
     if _text(payload.get("email")):
-        subscriber.email = _text(payload.get("email"))
+        email = _text(payload.get("email"))
+        _track_change(changes, "email", subscriber.email, email)
+        subscriber.email = email
     if _text(payload.get("phone")):
-        subscriber.phone = _text(payload.get("phone"))
+        phone = _text(payload.get("phone"))
+        _track_change(changes, "phone", subscriber.phone, phone)
+        subscriber.phone = phone
     for key, value in _address_fields(payload).items():
         if value:
+            _track_change(changes, key, getattr(subscriber, key), value)
             setattr(subscriber, key, value)
-    subscriber.status = _status(payload.get("status"))
-    subscriber.category = _category(
+    status_value = _status(payload.get("status"))
+    _track_change(changes, "status", _enum_value(subscriber.status), status_value.value)
+    subscriber.status = status_value
+    category_value = _category(
         payload.get("subscriber_category") or metadata.get("subscriber_category")
     )
+    _track_change(
+        changes,
+        "category",
+        _enum_value(subscriber.category),
+        category_value.value,
+    )
+    subscriber.category = category_value
     merged = dict(subscriber.metadata_ or {})
     merged.update(metadata)
     subscriber.metadata_ = merged
     db.commit()
     db.refresh(subscriber)
+    _record_identity_overwrite_audit(
+        db,
+        subscriber=subscriber,
+        changes=changes,
+        metadata=metadata,
+    )
     return subscriber
 
 
