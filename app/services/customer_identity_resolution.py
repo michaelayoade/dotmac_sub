@@ -14,15 +14,18 @@ from app.metrics import record_customer_identity_resolution
 from app.models.comms import CustomerNotificationEvent
 from app.models.communication_log import CommunicationLog
 from app.models.customer_identity import CustomerIdentityIndex
+from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber, SubscriberChannel, SubscriberContact
 from app.services.customer_identity_normalization import (
     IDENTITY_TYPE_EMAIL,
     IDENTITY_TYPE_PHONE,
+    default_country_code,
     normalize_channel_address,
     normalize_email_identifier,
     normalize_identifier,
     normalize_phone_identifier,
 )
+from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
 
@@ -146,9 +149,18 @@ def identity_resolution_requires_manual_review(
 
 def identity_resolution_allows_sensitive_automation(
     resolution: CustomerIdentityResolution | dict[str, object] | None,
+    db: Session | None = None,
 ) -> bool:
+    min_confidence = _sensitive_automation_min_confidence(db)
+    allowed_confidences = {MATCH_CONFIDENCE_HIGH}
+    if min_confidence == MATCH_CONFIDENCE_MEDIUM:
+        allowed_confidences.add(MATCH_CONFIDENCE_MEDIUM)
     if isinstance(resolution, CustomerIdentityResolution):
-        return resolution.allows_sensitive_automation
+        return (
+            resolution.matched
+            and not resolution.requires_manual_review
+            and resolution.match_confidence in allowed_confidences
+        )
     if not isinstance(resolution, dict):
         return False
     status = str(resolution.get("status") or "").strip().lower()
@@ -156,8 +168,25 @@ def identity_resolution_allows_sensitive_automation(
     return (
         status == "matched"
         and not identity_resolution_requires_manual_review(resolution)
-        and confidence in {MATCH_CONFIDENCE_HIGH, MATCH_CONFIDENCE_MEDIUM}
+        and confidence in allowed_confidences
     )
+
+
+def _sensitive_automation_min_confidence(db: Session | None = None) -> str:
+    if db is None:
+        return MATCH_CONFIDENCE_MEDIUM
+    try:
+        value = resolve_value(
+            db,
+            SettingDomain.subscriber,
+            "identity_sensitive_automation_min_confidence",
+        )
+    except Exception:
+        value = None
+    normalized = str(value or MATCH_CONFIDENCE_MEDIUM).strip().upper()
+    if normalized == MATCH_CONFIDENCE_HIGH:
+        return MATCH_CONFIDENCE_HIGH
+    return MATCH_CONFIDENCE_MEDIUM
 
 
 def rebuild_identity_index_for_subscriber(
@@ -170,6 +199,7 @@ def rebuild_identity_index_for_subscriber(
     subscriber = db.get(Subscriber, subscriber_uuid)
     if subscriber is None:
         return
+    country_code = default_country_code(db)
 
     deleted_count = (
         db.query(CustomerIdentityIndex)
@@ -221,7 +251,9 @@ def rebuild_identity_index_for_subscriber(
     )
     _append_row(
         identity_type=IDENTITY_TYPE_PHONE,
-        normalized_value=normalize_phone_identifier(subscriber.phone),
+        normalized_value=normalize_phone_identifier(
+            subscriber.phone, default_country_code=country_code
+        ),
         source_table=SOURCE_SUBSCRIBERS,
         source_field="phone",
     )
@@ -241,14 +273,18 @@ def rebuild_identity_index_for_subscriber(
         )
         _append_row(
             identity_type=IDENTITY_TYPE_PHONE,
-            normalized_value=normalize_phone_identifier(contact.phone),
+            normalized_value=normalize_phone_identifier(
+                contact.phone, default_country_code=country_code
+            ),
             source_table=SOURCE_SUBSCRIBER_CONTACTS,
             source_field="phone",
             contact_id=contact.id,
         )
         _append_row(
             identity_type=IDENTITY_TYPE_PHONE,
-            normalized_value=normalize_phone_identifier(contact.whatsapp),
+            normalized_value=normalize_phone_identifier(
+                contact.whatsapp, default_country_code=country_code
+            ),
             source_table=SOURCE_SUBSCRIBER_CONTACTS,
             source_field="whatsapp",
             contact_id=contact.id,
@@ -266,7 +302,9 @@ def rebuild_identity_index_for_subscriber(
         )
         _append_row(
             identity_type=identity_type,
-            normalized_value=normalize_channel_address(field, channel.address),
+            normalized_value=normalize_channel_address(
+                field, channel.address, default_country_code=country_code
+            ),
             source_table=SOURCE_SUBSCRIBER_CHANNELS,
             source_field=field or "address",
             channel_id=channel.id,
@@ -290,7 +328,12 @@ def resolve_customer_identity(
     channel_hint: str | None = None,
 ) -> CustomerIdentityResolution:
     raw_identifier = str(identifier or "").strip()
-    normalized = normalize_identifier(raw_identifier, channel_hint)
+    country_code = default_country_code(db)
+    normalized = normalize_identifier(
+        raw_identifier,
+        channel_hint,
+        default_country_code=country_code,
+    )
     inbound_channel = str(channel_hint or "").strip().lower() or None
     identity_type = (
         IDENTITY_TYPE_EMAIL
@@ -322,6 +365,7 @@ def resolve_customer_identity(
             raw_identifier,
             normalized,
             inbound_channel=inbound_channel,
+            country_code=country_code,
         )
 
     _log_resolution(resolution)
@@ -392,6 +436,7 @@ def _resolve_phone_identity(
     normalized: str,
     *,
     inbound_channel: str | None,
+    country_code: str,
 ) -> CustomerIdentityResolution:
     # Historical participant linkage must remain the final fallback so it can
     # never override direct subscriber, linked-contact, or subscriber-channel identities.
@@ -404,7 +449,11 @@ def _resolve_phone_identity(
             matched_via=MATCH_VIA_SUBSCRIBER,
             field_order=("phone",),
         ),
-        lambda: _resolve_live_direct_phone(db, normalized),
+        lambda: _resolve_live_direct_phone(
+            db,
+            normalized,
+            country_code=country_code,
+        ),
         lambda: _resolve_index_stage(
             db,
             identity_type=IDENTITY_TYPE_PHONE,
@@ -413,7 +462,11 @@ def _resolve_phone_identity(
             matched_via=MATCH_VIA_SUBSCRIBER_CONTACT,
             field_order=("phone", "whatsapp"),
         ),
-        lambda: _resolve_live_contact_phone(db, normalized),
+        lambda: _resolve_live_contact_phone(
+            db,
+            normalized,
+            country_code=country_code,
+        ),
         lambda: _resolve_index_stage(
             db,
             identity_type=IDENTITY_TYPE_PHONE,
@@ -422,8 +475,16 @@ def _resolve_phone_identity(
             matched_via=MATCH_VIA_SUBSCRIBER_CHANNEL,
             field_order=("phone", "sms", "whatsapp"),
         ),
-        lambda: _resolve_live_channel_phone(db, normalized),
-        lambda: _resolve_historical_phone(db, normalized),
+        lambda: _resolve_live_channel_phone(
+            db,
+            normalized,
+            country_code=country_code,
+        ),
+        lambda: _resolve_historical_phone(
+            db,
+            normalized,
+            country_code=country_code,
+        ),
     ):
         resolution = _finalize_stage(
             raw_identifier,
@@ -583,7 +644,7 @@ def _resolve_live_direct_email(
 
 
 def _resolve_live_direct_phone(
-    db: Session, normalized_value: str
+    db: Session, normalized_value: str, *, country_code: str
 ) -> tuple[_StageMatch | None, int]:
     subscribers = db.scalars(
         select(Subscriber).where(Subscriber.phone.is_not(None))
@@ -591,7 +652,10 @@ def _resolve_live_direct_phone(
     rows = [
         subscriber.id
         for subscriber in subscribers
-        if normalize_phone_identifier(subscriber.phone) == normalized_value
+        if normalize_phone_identifier(
+            subscriber.phone, default_country_code=country_code
+        )
+        == normalized_value
     ]
     return _collapse_subscriber_rows(
         rows, matched_via=MATCH_VIA_SUBSCRIBER, field="phone"
@@ -637,7 +701,7 @@ def _resolve_live_contact_email(
 
 
 def _resolve_live_contact_phone(
-    db: Session, normalized_value: str
+    db: Session, normalized_value: str, *, country_code: str
 ) -> tuple[_StageMatch | None, int]:
     contacts = db.scalars(
         select(SubscriberContact).where(
@@ -650,13 +714,20 @@ def _resolve_live_contact_phone(
     matches = [
         contact
         for contact in contacts
-        if normalize_phone_identifier(contact.phone) == normalized_value
-        or normalize_phone_identifier(contact.whatsapp) == normalized_value
+        if normalize_phone_identifier(
+            contact.phone, default_country_code=country_code
+        )
+        == normalized_value
+        or normalize_phone_identifier(
+            contact.whatsapp, default_country_code=country_code
+        )
+        == normalized_value
     ]
     return _collapse_contact_rows(
         matches,
         field_order=("phone", "whatsapp"),
         normalized_value=normalized_value,
+        country_code=country_code,
     )
 
 
@@ -665,6 +736,7 @@ def _collapse_contact_rows(
     *,
     field_order: tuple[str, ...],
     normalized_value: str | None = None,
+    country_code: str | None = None,
 ) -> tuple[_StageMatch | None, int]:
     if not contacts:
         return (None, 0)
@@ -678,14 +750,21 @@ def _collapse_contact_rows(
     field_rank = {field: index for index, field in enumerate(field_order)}
 
     def _matched_field(contact: SubscriberContact) -> str:
+        phone_country_code = country_code or default_country_code()
         if (
             "phone" in field_order
-            and normalize_phone_identifier(contact.phone) == normalized_value
+            and normalize_phone_identifier(
+                contact.phone, default_country_code=phone_country_code
+            )
+            == normalized_value
         ):
             return "phone"
         if (
             "whatsapp" in field_order
-            and normalize_phone_identifier(contact.whatsapp) == normalized_value
+            and normalize_phone_identifier(
+                contact.whatsapp, default_country_code=phone_country_code
+            )
+            == normalized_value
         ):
             return "whatsapp"
         return field_order[0]
@@ -723,7 +802,7 @@ def _resolve_live_channel_email(
 
 
 def _resolve_live_channel_phone(
-    db: Session, normalized_value: str
+    db: Session, normalized_value: str, *, country_code: str
 ) -> tuple[_StageMatch | None, int]:
     channels = db.scalars(
         select(SubscriberChannel).where(SubscriberChannel.address.is_not(None))
@@ -731,7 +810,10 @@ def _resolve_live_channel_phone(
     matches = [
         channel
         for channel in channels
-        if normalize_phone_identifier(channel.address) == normalized_value
+        if normalize_phone_identifier(
+            channel.address, default_country_code=country_code
+        )
+        == normalized_value
     ]
     return _collapse_channel_rows(matches, field_order=("phone", "sms", "whatsapp"))
 
@@ -818,7 +900,7 @@ def _resolve_historical_email(
 
 
 def _resolve_historical_phone(
-    db: Session, normalized_value: str
+    db: Session, normalized_value: str, *, country_code: str
 ) -> tuple[_StageMatch | None, int]:
     event_subscribers: set[UUID | None] = set()
     for event_row in db.scalars(
@@ -826,7 +908,12 @@ def _resolve_historical_phone(
             CustomerNotificationEvent.subscriber_id.is_not(None)
         )
     ).all():
-        if normalize_phone_identifier(event_row.recipient) == normalized_value:
+        if (
+            normalize_phone_identifier(
+                event_row.recipient, default_country_code=country_code
+            )
+            == normalized_value
+        ):
             event_subscribers.add(event_row.subscriber_id)
 
     log_subscribers: set[UUID | None] = set()
@@ -834,8 +921,14 @@ def _resolve_historical_phone(
         select(CommunicationLog).where(CommunicationLog.subscriber_id.is_not(None))
     ).all():
         if (
-            normalize_phone_identifier(log_row.recipient) == normalized_value
-            or normalize_phone_identifier(log_row.sender) == normalized_value
+            normalize_phone_identifier(
+                log_row.recipient, default_country_code=country_code
+            )
+            == normalized_value
+            or normalize_phone_identifier(
+                log_row.sender, default_country_code=country_code
+            )
+            == normalized_value
         ):
             log_subscribers.add(log_row.subscriber_id)
 

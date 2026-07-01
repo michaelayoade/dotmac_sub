@@ -109,7 +109,11 @@
                     </div>
                     <div>
                         <p class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Open Tickets</p>
+                        {% if open_tickets is none %}
+                        <p class="mt-1 text-sm font-semibold text-amber-700 dark:text-amber-300">Unavailable</p>
+                        {% else %}
                         <p class="mt-1 text-3xl font-bold text-slate-900 dark:text-white" style="font-family: var(--font-display);">{{ open_tickets }}</p>
+                        {% endif %}
                     </div>
                 </div>
             </div>

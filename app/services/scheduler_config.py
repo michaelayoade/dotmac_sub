@@ -1204,6 +1204,14 @@ def build_beat_schedule() -> dict:
         if not integration_jobs:
             logger.info("EMAIL_POLL_EXIT reason=no_jobs")
         for job in integration_jobs:
+            adapter_key = str(getattr(job, "adapter_key", "") or "").strip().lower()
+            action = str(getattr(job, "action", "") or "").strip().lower()
+            if adapter_key == "crm" and action == "pull_tickets":
+                logger.info(
+                    "integration_interval_job_skipped_dedicated_crm_pull job_id=%s",
+                    getattr(job, "id", ""),
+                )
+                continue
             # Be defensive: tests may use MagicMock jobs and production may have
             # string values depending on where the job was sourced.
             raw_seconds = getattr(job, "interval_seconds", None)

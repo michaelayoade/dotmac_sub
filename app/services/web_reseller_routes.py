@@ -112,8 +112,8 @@ def reseller_dashboard(
         offset=offset,
     )
 
-    # Add open tickets count from CRM (fails silently)
-    open_tickets = 0
+    # Add open tickets count from CRM. None means the CRM was unavailable.
+    open_tickets: int | None = None
     try:
         account_ids = [a["id"] for a in summary.get("accounts", [])]
         if account_ids:

@@ -187,6 +187,27 @@ class TestRateLimitRetry:
                 c._request("GET", "/api/v1/tickets")
         sleep.assert_not_called()
 
+    def test_scheduler_setting_can_disable_retries(self):
+        c = CRMClient("https://crm.example", "user", "pass", settings_db=MagicMock())
+        c._token = "tok"
+        c._token_expires_at = 10**12
+        req = httpx.Request("GET", "https://crm.example/api/v1/tickets")
+        responses = [httpx.Response(429, request=req)]
+
+        def fake_resolve_value(db, domain, key):
+            if key == "crm_retry_max_attempts":
+                return 0
+            return None
+
+        with (
+            patch("app.services.crm_client.resolve_value", side_effect=fake_resolve_value),
+            patch("httpx.Client", side_effect=_seq_client(responses)),
+            patch("app.services.crm_client.time.sleep") as sleep,
+        ):
+            with pytest.raises(CRMClientError, match="429"):
+                c._request("GET", "/api/v1/tickets")
+        sleep.assert_not_called()
+
     def test_retry_delay_prefers_retry_after_header(self):
         req = httpx.Request("GET", "x://y")
         resp = httpx.Response(429, headers={"Retry-After": "3"}, request=req)

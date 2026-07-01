@@ -117,7 +117,7 @@ class TestCrmSyncHandler:
         """Run the handler with enqueue + HTTP mocked; return (enqueue_mock, http_mock)."""
         with (
             patch("app.services.queue_adapter.enqueue_task") as enqueue,
-            patch("app.services.crm_webhook.post") as http,
+            patch("app.services.crm_webhook.get_crm_client") as http,
         ):
             CrmSyncHandler().handle(db, event)
         return enqueue, http

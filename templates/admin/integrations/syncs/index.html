@@ -84,7 +84,7 @@
                             {% endif %}
                         </td>
                         <td class="px-6 py-4 text-right">
-                            <form method="post" action="/admin/integrations/syncs/{{ job.id }}/run" class="inline">
+                            <form method="post" action="/admin/integrations/syncs/{{ job.id }}/run" class="inline" onsubmit="return confirm('Run this sync profile now?');">
                                 {% include "components/forms/csrf_input.html" %}
                                 <button type="submit" class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">Run</button>
                             </form>
