@@ -102,6 +102,13 @@ def _create_credit_note(
     return note
 
 
+def _previous_month_sample(now: datetime) -> datetime:
+    previous_month_end = datetime(now.year, now.month, 1, tzinfo=UTC) - timedelta(
+        days=1
+    )
+    return previous_month_end.replace(day=15)
+
+
 def test_dashboard_stats_include_new_kpis_and_comparison(db_session, subscriber):
     now = datetime.now(UTC)
     _create_invoice(
@@ -222,6 +229,7 @@ def test_dashboard_stats_include_payment_method_and_daily_payments(
 
 def test_dashboard_stats_daily_payments_follow_selected_period(db_session, subscriber):
     now = datetime.now(UTC)
+    previous_month = _previous_month_sample(now)
     cash_method = _create_payment_method(
         db_session,
         account_id=subscriber.id,
@@ -240,7 +248,7 @@ def test_dashboard_stats_daily_payments_follow_selected_period(db_session, subsc
         account_id=subscriber.id,
         status=PaymentStatus.succeeded,
         amount="30.00",
-        created_at=now - timedelta(days=31),
+        created_at=previous_month,
         payment_method_id=cash_method.id,
     )
 
@@ -253,6 +261,7 @@ def test_dashboard_stats_daily_payments_follow_selected_period(db_session, subsc
 
 def test_dashboard_stats_recent_invoices_follow_selected_period(db_session, subscriber):
     now = datetime.now(UTC)
+    previous_month = _previous_month_sample(now)
     current_invoice = _create_invoice(
         db_session,
         account_id=subscriber.id,
@@ -267,7 +276,7 @@ def test_dashboard_stats_recent_invoices_follow_selected_period(db_session, subs
         status=InvoiceStatus.issued,
         total="80.00",
         balance_due="80.00",
-        created_at=now - timedelta(days=31),
+        created_at=previous_month,
     )
 
     this_month = billing_reporting.get_dashboard_stats(db_session, period="this_month")

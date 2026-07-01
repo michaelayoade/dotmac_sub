@@ -8,7 +8,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.billing import InvoiceStatus
@@ -279,6 +279,69 @@ def _load_report_subscribers(
     return list(db.scalars(stmt).all())
 
 
+def _customer_report_usage_window(
+    *,
+    days: int | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> tuple[datetime, datetime, str, str]:
+    from app.services.web_reports_extended import _resolve_report_window
+
+    return _resolve_report_window(
+        date_from=date_from,
+        date_to=date_to,
+        days=days or 30,
+    )
+
+
+def _attach_period_usage_to_subscribers(
+    db: Session,
+    subscribers: list[Subscriber],
+    *,
+    start: datetime,
+    end: datetime,
+) -> float:
+    from app.models.catalog import Subscription
+    from app.services.web_reports_extended import _subscription_bandwidth_usage_subquery
+
+    for sub in subscribers:
+        sub.period_usage_gb = 0.0
+        sub.period_avg_mbps = 0.0
+        sub.period_active_services = 0
+
+    subscriber_ids = [sub.id for sub in subscribers if getattr(sub, "id", None)]
+    if not subscriber_ids:
+        return 0.0
+
+    span_seconds = max(0.0, (end - start).total_seconds())
+    usage = _subscription_bandwidth_usage_subquery(start, end, span_seconds)
+    rows = db.execute(
+        select(
+            Subscription.subscriber_id,
+            func.coalesce(func.sum(usage.c.usage_bytes), 0).label("usage_bytes"),
+            func.coalesce(func.sum(usage.c.avg_total), 0).label("avg_bps"),
+            func.count(usage.c.subscription_id).label("active_services"),
+        )
+        .select_from(usage)
+        .join(Subscription, Subscription.id == usage.c.subscription_id)
+        .where(Subscription.subscriber_id.in_(subscriber_ids))
+        .group_by(Subscription.subscriber_id)
+    ).all()
+
+    by_subscriber = {row.subscriber_id: row for row in rows}
+    total_usage_gb = 0.0
+    for sub in subscribers:
+        row = by_subscriber.get(sub.id)
+        if row is None:
+            continue
+        usage_gb = float(row.usage_bytes or 0) / (1024**3)
+        sub.period_usage_gb = round(usage_gb, 2)
+        sub.period_avg_mbps = round(float(row.avg_bps or 0) / 1_000_000, 2)
+        sub.period_active_services = int(row.active_services or 0)
+        total_usage_gb += usage_gb
+    return round(total_usage_gb, 2)
+
+
 def _invoice_amount_due(invoice: object) -> Decimal | int | float:
     for attr in ("balance_due", "amount_due", "total"):
         value = getattr(invoice, attr, None)
@@ -440,6 +503,15 @@ def get_subscribers_report_data(
         date_to=date_to,
         status=status,
     )
+    usage_start, usage_end, usage_date_from, usage_date_to = (
+        _customer_report_usage_window(date_from=date_from, date_to=date_to)
+    )
+    total_usage_gb = _attach_period_usage_to_subscribers(
+        db,
+        all_subscribers,
+        start=usage_start,
+        end=usage_end,
+    )
     total_subscribers = len(all_subscribers)
     status_breakdown: dict[str, int] = {}
     active_count = 0
@@ -487,6 +559,9 @@ def get_subscribers_report_data(
         "customers": all_subscribers[:200],
         "date_from": date_from or "",
         "date_to": date_to or "",
+        "usage_date_from": usage_date_from,
+        "usage_date_to": usage_date_to,
+        "total_usage_gb": total_usage_gb,
         "status_filter": status or "",
         "status_options": [item.value for item in AccountStatus],
     }
@@ -514,9 +589,31 @@ def build_subscribers_export_csv(
             if (created_at := _ensure_aware_datetime(sub.created_at)) is not None
             and created_at >= cutoff
         ]
+    usage_start, usage_end, _, _ = _customer_report_usage_window(
+        days=days,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    _attach_period_usage_to_subscribers(
+        db,
+        all_subscribers,
+        start=usage_start,
+        end=usage_end,
+    )
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["subscriber_id", "name", "type", "status", "created_at"])
+    writer.writerow(
+        [
+            "subscriber_id",
+            "name",
+            "type",
+            "status",
+            "created_at",
+            "period_usage_gb",
+            "period_avg_mbps",
+            "period_active_services",
+        ]
+    )
     for sub in all_subscribers:
         derived_status = _derive_subscriber_status(sub)
         name = (
@@ -541,6 +638,9 @@ def build_subscribers_export_csv(
                     is not None
                     else ""
                 ),
+                getattr(sub, "period_usage_gb", 0),
+                getattr(sub, "period_avg_mbps", 0),
+                getattr(sub, "period_active_services", 0),
             ]
         )
     content = output.getvalue()
