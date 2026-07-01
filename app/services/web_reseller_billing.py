@@ -150,14 +150,16 @@ def payment_method_remove(request: Request, db: Session, method_id: str):
     )
 
 
-def allocate_subscriber_funds(request: Request, db: Session, subscriber_id: str):
+def allocate_subscriber_funds(
+    request: Request, db: Session, subscriber_id: str, amount: str | None = None
+):
     context = _require_reseller_context(request, db)
     if not context:
         return RedirectResponse(url="/reseller/auth/login", status_code=303)
     reseller_id = str(context["reseller"].id)
     try:
         result = reseller_portal_billing.allocate_unallocated_to_subscriber(
-            db, reseller_id, subscriber_id
+            db, reseller_id, subscriber_id, amount=amount
         )
     except ValueError as exc:
         return RedirectResponse(

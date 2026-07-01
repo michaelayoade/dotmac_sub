@@ -1119,7 +1119,10 @@ class Payments(ListResponseMixin):
 
     @staticmethod
     def allocate_consolidated_balance_to_subscriber(
-        db: Session, billing_account_id: str, subscriber_id: str
+        db: Session,
+        billing_account_id: str,
+        subscriber_id: str,
+        amount: Decimal | int | float | str | None = None,
     ) -> dict:
         """Allocate a reseller billing account's unallocated balance to one subscriber.
 
@@ -1144,6 +1147,18 @@ class Payments(ListResponseMixin):
             raise HTTPException(
                 status_code=400, detail="No unallocated reseller funds available"
             )
+        allocation_limit = available_balance
+        if amount is not None:
+            allocation_limit = round_money(to_decimal(amount))
+            if allocation_limit <= 0:
+                raise HTTPException(
+                    status_code=400, detail="Allocation amount must be greater than 0"
+                )
+            if allocation_limit > available_balance:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Allocation exceeds unallocated reseller funds",
+                )
 
         subscriber = get_by_id(db, Subscriber, subscriber_id)
         if subscriber is None or str(subscriber.reseller_id) != str(ba.reseller_id):
@@ -1209,8 +1224,8 @@ class Payments(ListResponseMixin):
                 Decimal("0.00"),
             )
         )
-        if payment_backing_available < available_balance:
-            backing_amount = round_money(available_balance - payment_backing_available)
+        if payment_backing_available < allocation_limit:
+            backing_amount = round_money(allocation_limit - payment_backing_available)
             backing_payment = Payment(
                 billing_account_id=ba.id,
                 amount=backing_amount,
@@ -1223,7 +1238,7 @@ class Payments(ListResponseMixin):
             db.flush()
             payment_rows.append((backing_payment, Decimal("0.00")))
 
-        remaining_balance = available_balance
+        remaining_balance = allocation_limit
         total_allocated = Decimal("0.00")
         invoice_ids: set = set()
         allocations_by_payment: dict[Payment, list[PaymentAllocation]] = {}

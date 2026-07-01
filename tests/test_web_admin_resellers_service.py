@@ -13,6 +13,27 @@ def _create_reseller(db_session, name: str = "Reseller A") -> Reseller:
     return reseller
 
 
+def test_list_page_context_can_include_inactive_resellers(db_session):
+    active = _create_reseller(db_session, "Active Reseller")
+    inactive = _create_reseller(db_session, "Inactive Reseller")
+    inactive.is_active = False
+    db_session.commit()
+
+    active_context = web_admin_resellers_service.list_page_context(
+        db_session, page=1, per_page=25
+    )
+    inactive_context = web_admin_resellers_service.list_page_context(
+        db_session, page=1, per_page=25, status_filter="inactive"
+    )
+    all_context = web_admin_resellers_service.list_page_context(
+        db_session, page=1, per_page=25, status_filter="all"
+    )
+
+    assert [item.id for item in active_context["resellers"]] == [active.id]
+    assert [item.id for item in inactive_context["resellers"]] == [inactive.id]
+    assert {item.id for item in all_context["resellers"]} == {active.id, inactive.id}
+
+
 @pytest.fixture
 def flag_off():
     # Pin the Layer 3 cutover flag OFF for legacy subscriber-path tests, so they

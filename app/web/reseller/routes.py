@@ -290,10 +290,11 @@ def reseller_billing(
 def reseller_billing_allocate_subscriber(
     request: Request,
     subscriber_id: str,
+    amount: str = Form(...),
     db: Session = Depends(get_db),
 ):
     return web_reseller_billing_service.allocate_subscriber_funds(
-        request, db, subscriber_id
+        request, db, subscriber_id, amount
     )
 
 

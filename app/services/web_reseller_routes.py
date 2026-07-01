@@ -276,9 +276,10 @@ def reseller_account_status_update(
             action=action,
             actor_id=context["principal_id"],
         )
-    except ValueError:
+    except ValueError as exc:
+        message = str(exc) or "Unsupported status action"
         return RedirectResponse(
-            url=f"/reseller/accounts/{account_id}?status_error={quote_plus('Unsupported status action')}",
+            url=f"/reseller/accounts/{account_id}?status_error={quote_plus(message)}",
             status_code=303,
         )
     except Exception:
