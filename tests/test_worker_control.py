@@ -47,3 +47,33 @@ def test_restart_worker_target_runs_configured_command(monkeypatch):
         "celery-worker-billing",
     ]
     assert captured["kwargs"]["timeout"] == 20.0
+
+
+def test_restart_containers_uses_default_mapping(monkeypatch):
+    monkeypatch.delenv("CELERY_WORKER_RESTART_CONTAINERS", raising=False)
+
+    containers = worker_control.restart_containers()
+
+    assert containers["celery-worker-billing"] == "dotmac_sub_celery_worker_billing"
+
+
+def test_restart_worker_target_uses_docker_api_by_default(monkeypatch):
+    captured = {}
+
+    def fake_restart(target):
+        captured["target"] = target
+        return worker_control.WorkerRestartResult(
+            target=target,
+            ok=True,
+            message=f"Restart requested for {target}.",
+            returncode=0,
+        )
+
+    monkeypatch.setenv("CELERY_WORKER_RESTART_ENABLED", "true")
+    monkeypatch.delenv("CELERY_WORKER_RESTART_COMMAND", raising=False)
+    monkeypatch.setattr(worker_control, "_restart_with_docker_api", fake_restart)
+
+    result = worker_control.restart_worker_target("celery-worker-billing")
+
+    assert result.ok is True
+    assert captured["target"] == "celery-worker-billing"
