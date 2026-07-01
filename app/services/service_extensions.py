@@ -181,7 +181,9 @@ def _scope_filters(
         ids = (
             _coerce_resolved_subscriber_ids(subscriber_ids)
             if subscriber_ids_resolved
-            else resolve_subscriber_identifiers(db, list(subscriber_ids or []))
+            else resolve_subscriber_identifiers(
+                db, [str(subscriber_id) for subscriber_id in (subscriber_ids or [])]
+            )
         )
         if not ids:
             raise HTTPException(

@@ -91,9 +91,7 @@ def test_admin_authorize_loads_password_before_mschap():
     fails with 'mschap: No NT-Password. Cannot perform authentication'."""
     block = _authorize_block(_read("config/freeradius/sites-enabled/admin-login"))
     # Strip comment lines so words like "mschap" in comments don't skew ordering.
-    code = "\n".join(
-        ln for ln in block.splitlines() if not ln.strip().startswith("#")
-    )
+    code = "\n".join(ln for ln in block.splitlines() if not ln.strip().startswith("#"))
     assert "sql_admin" in code and "mschap" in code
     assert code.index("sql_admin") < code.index("mschap"), (
         "sql_admin must run before mschap in the admin-login authorize section"

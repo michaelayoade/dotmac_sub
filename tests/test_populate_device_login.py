@@ -325,10 +325,13 @@ def test_deactivated_staff_revoked(
     # First sync projects the user.
     populate_device_login(db_session, dry_run=False, _conn_factory=conn_factory)
     with radius_admin_engine.connect() as conn:
-        assert conn.execute(
-            text("SELECT count(*) FROM radcheck_admin WHERE username=:u"),
-            {"u": "leaver@dotmac"},
-        ).scalar() == 1
+        assert (
+            conn.execute(
+                text("SELECT count(*) FROM radcheck_admin WHERE username=:u"),
+                {"u": "leaver@dotmac"},
+            ).scalar()
+            == 1
+        )
 
     # Offboard: deactivate the account (device-login fields untouched).
     user.is_active = False
@@ -338,14 +341,20 @@ def test_deactivated_staff_revoked(
     assert stats["removed"] >= 1
 
     with radius_admin_engine.connect() as conn:
-        assert conn.execute(
-            text("SELECT count(*) FROM radcheck_admin WHERE username=:u"),
-            {"u": "leaver@dotmac"},
-        ).scalar() == 0
-        assert conn.execute(
-            text("SELECT count(*) FROM radreply_admin WHERE username=:u"),
-            {"u": "leaver@dotmac"},
-        ).scalar() == 0
+        assert (
+            conn.execute(
+                text("SELECT count(*) FROM radcheck_admin WHERE username=:u"),
+                {"u": "leaver@dotmac"},
+            ).scalar()
+            == 0
+        )
+        assert (
+            conn.execute(
+                text("SELECT count(*) FROM radreply_admin WHERE username=:u"),
+                {"u": "leaver@dotmac"},
+            ).scalar()
+            == 0
+        )
 
 
 def test_email_rename_moves_login(
@@ -357,24 +366,33 @@ def test_email_rename_moves_login(
 
     populate_device_login(db_session, dry_run=False, _conn_factory=conn_factory)
     with radius_admin_engine.connect() as conn:
-        assert conn.execute(
-            text("SELECT count(*) FROM radcheck_admin WHERE username=:u"),
-            {"u": "old.name@dotmac"},
-        ).scalar() == 1
+        assert (
+            conn.execute(
+                text("SELECT count(*) FROM radcheck_admin WHERE username=:u"),
+                {"u": "old.name@dotmac"},
+            ).scalar()
+            == 1
+        )
 
     user.email = "new.name@dotmac"
     db_session.commit()
 
     populate_device_login(db_session, dry_run=False, _conn_factory=conn_factory)
     with radius_admin_engine.connect() as conn:
-        assert conn.execute(
-            text("SELECT count(*) FROM radcheck_admin WHERE username=:u"),
-            {"u": "old.name@dotmac"},
-        ).scalar() == 0
-        assert conn.execute(
-            text("SELECT count(*) FROM radcheck_admin WHERE username=:u"),
-            {"u": "new.name@dotmac"},
-        ).scalar() == 1
+        assert (
+            conn.execute(
+                text("SELECT count(*) FROM radcheck_admin WHERE username=:u"),
+                {"u": "old.name@dotmac"},
+            ).scalar()
+            == 0
+        )
+        assert (
+            conn.execute(
+                text("SELECT count(*) FROM radcheck_admin WHERE username=:u"),
+                {"u": "new.name@dotmac"},
+            ).scalar()
+            == 1
+        )
 
 
 def test_idempotent_upsert(db_session, radius_admin_engine, conn_factory, monkeypatch):
