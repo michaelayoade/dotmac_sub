@@ -95,7 +95,9 @@ def normalize_channel_address(
     if normalized_channel == IDENTITY_TYPE_EMAIL:
         return normalize_email_identifier(value)
     if normalized_channel in PHONE_LIKE_HINTS:
-        return normalize_phone_identifier(value, default_country_code=default_country_code)
+        return normalize_phone_identifier(
+            value, default_country_code=default_country_code
+        )
     return normalize_identifier(
         value, normalized_channel, default_country_code=default_country_code
     )

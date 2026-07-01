@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Form, Request
@@ -61,12 +62,17 @@ def _validate_action_value(
         try:
             UUID(team_id)
         except ValueError as exc:
-            raise ValueError("action_value.service_team_id must be a valid UUID.") from exc
+            raise ValueError(
+                "action_value.service_team_id must be a valid UUID."
+            ) from exc
         configured = {
-            item["id"] for item in support_ticket_settings_service.list_service_teams(db)
+            item["id"]
+            for item in support_ticket_settings_service.list_service_teams(db)
         }
         if team_id not in configured:
-            raise ValueError("action_value.service_team_id must match a configured service team.")
+            raise ValueError(
+                "action_value.service_team_id must match a configured service team."
+            )
         return {"service_team_id": team_id}
     if action_type == AutomationActionType.assign_technician:
         person_id = str(action_value.get("technician_person_id") or "").strip()
@@ -92,7 +98,7 @@ def _validate_action_value(
     if action_type == AutomationActionType.set_due_in_hours:
         raw_hours = action_value.get("hours")
         try:
-            hours = int(raw_hours)
+            hours = int(cast(Any, raw_hours))
         except (TypeError, ValueError) as exc:
             raise ValueError("action_value.hours must be a whole number.") from exc
         if hours <= 0:

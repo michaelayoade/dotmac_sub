@@ -79,7 +79,9 @@ def _get(db: Session, path: str, params: dict | None = None) -> dict:
             f"{_base_url(db)}/{path}",
             params=params,
             headers=_get_headers(db),
-            timeout=_timeout(db, "vtpass_get_timeout_seconds", DEFAULT_GET_TIMEOUT_SECONDS),
+            timeout=_timeout(
+                db, "vtpass_get_timeout_seconds", DEFAULT_GET_TIMEOUT_SECONDS
+            ),
         )
         response.raise_for_status()
         body = response.json()

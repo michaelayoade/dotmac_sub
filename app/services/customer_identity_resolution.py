@@ -714,9 +714,7 @@ def _resolve_live_contact_phone(
     matches = [
         contact
         for contact in contacts
-        if normalize_phone_identifier(
-            contact.phone, default_country_code=country_code
-        )
+        if normalize_phone_identifier(contact.phone, default_country_code=country_code)
         == normalized_value
         or normalize_phone_identifier(
             contact.whatsapp, default_country_code=country_code

@@ -2,6 +2,7 @@
 
 import logging
 import os
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from threading import Lock
 from time import monotonic
@@ -74,9 +75,9 @@ _DASHBOARD_INFRASTRUCTURE_TTL_SECONDS = max(
 )
 _dashboard_infrastructure_lock = Lock()
 _dashboard_infrastructure_cached_at = 0.0
-_dashboard_infrastructure_cache: tuple[list[object], object, dict[str, int]] | None = (
-    None
-)
+_dashboard_infrastructure_cache: (
+    tuple[Sequence[object], object, dict[str, int]] | None
+) = None
 
 
 def _invoice_total(inv) -> float:
@@ -933,7 +934,7 @@ def dashboard_server_health_partial(request: Request, db: Session):
 
 def _load_dashboard_infrastructure_health(
     db: Session,
-) -> tuple[list[object], object, dict[str, int]]:
+) -> tuple[Sequence[object], object, dict[str, int]]:
     """Return the infrastructure dashboard snapshot with a short process cache."""
     global _dashboard_infrastructure_cached_at, _dashboard_infrastructure_cache
 
@@ -960,19 +961,18 @@ def _load_dashboard_infrastructure_health(
         worker_health = web_system_health_service._build_worker_health(
             infrastructure_services
         )
-        service_summary = _build_infrastructure_service_summary(
-            infrastructure_services
-        )
-        _dashboard_infrastructure_cache = (
+        service_summary = _build_infrastructure_service_summary(infrastructure_services)
+        snapshot = (
             infrastructure_services,
             worker_health,
             service_summary,
         )
+        _dashboard_infrastructure_cache = snapshot
         _dashboard_infrastructure_cached_at = now
-        return _dashboard_infrastructure_cache
+        return snapshot
 
 
-def _build_infrastructure_service_summary(services: list[object]) -> dict[str, int]:
+def _build_infrastructure_service_summary(services: Sequence[object]) -> dict[str, int]:
     summary = {
         "total": len(services),
         "up": 0,

@@ -1487,6 +1487,7 @@ def get_revenue_summary(
     Aggregates invoice amounts by month and status for the last 12 months.
     """
     from sqlalchemy import extract
+
     from app.services import billing as billing_service
 
     reseller_uuid = coerce_uuid(reseller_id)
