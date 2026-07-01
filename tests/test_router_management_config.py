@@ -233,7 +233,7 @@ def test_execute_config_push_dry_run_captures_preview_without_posting(
 
     def fake_execute(router_arg, method, path, payload=None):
         calls.append((router_arg.name, method, path, payload))
-        if method == "GET" and path == "/export":
+        if path == "/export":  # config read (POST /rest/export), not a change
             return "/exported config"
         raise AssertionError("dry-run must not POST router changes")
 
@@ -260,7 +260,7 @@ def test_execute_config_push_dry_run_captures_preview_without_posting(
         "/system/ntp/client/set"
     )
     assert calls == [
-        ("push-dry-run-test", "GET", "/export", None),
+        ("push-dry-run-test", "POST", "/export", None),
     ]
 
 
@@ -282,7 +282,7 @@ def test_execute_config_push_abort_policy_skips_remaining_after_failure(
 
     def fake_execute(router_arg, method, path, payload=None):
         calls.append((router_arg.name, method, path, payload))
-        if method == "GET" and path == "/export":
+        if path == "/export":  # config read (POST /rest/export), not a change
             return "/exported config"
         if router_arg.name == "push-abort-a":
             raise RuntimeError("router rejected command")
