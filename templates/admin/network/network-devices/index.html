@@ -150,7 +150,8 @@
                             <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Role</th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Vendor / Model</th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Management IP</th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Status</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Ping</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">SNMP</th>
                             <th scope="col" class="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Actions</th>
                         </tr>
                     </thead>
@@ -184,26 +185,24 @@
                                 <span class="font-mono text-sm text-slate-900 dark:text-white">{{ device.mgmt_ip or '-' }}</span>
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap">
-                                {# Derived operational status (NOC truth): live observation + freshness + lifecycle, not raw admin status. See DEVICE_OPERATIONAL_STATUS.md #}
-                                {% set op = device.operational %}
-                                {% set opst = op.status if op else 'unknown' %}
-                                {% set opmap = {
-                                    'up':        ('bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400', 'bg-green-500'),
-                                    'degraded':  ('bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400', 'bg-amber-500'),
-                                    'down':      ('bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400', 'bg-red-500'),
-                                    'unmonitored': ('bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300', 'bg-slate-400'),
-                                    'maintenance': ('bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400', 'bg-indigo-500'),
-                                    'unknown':   ('bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400', 'bg-slate-300')
-                                } %}
-                                {% set cls = opmap.get(opst, opmap['unknown']) %}
-                                <span class="inline-flex items-center gap-1.5 rounded-full {{ cls[0] }} px-2.5 py-0.5 text-xs font-medium" title="{{ op.label if op else 'Unknown' }} — {{ (op.reason if op else 'n/a')|replace('_',' ') }}{% if op and op.admin_status %} · admin: {{ op.admin_status }}{% endif %}">
-                                    <span class="h-1.5 w-1.5 rounded-full {{ cls[1] }}"></span>{{ op.label if op else 'Unknown' }}
+                                {% set ping = device.ping_status or {'label': 'Timeout', 'state': 'fail', 'reason': None} %}
+                                <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium
+                                    {% if ping.state == 'ok' %}bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400
+                                    {% elif ping.state == 'fail' %}bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400
+                                    {% else %}bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300{% endif %}"
+                                    {% if ping.reason %}title="{{ ping.reason }}"{% endif %}>
+                                    <span class="h-1.5 w-1.5 rounded-full {% if ping.state == 'ok' %}bg-green-500{% elif ping.state == 'fail' %}bg-red-500{% else %}bg-slate-400{% endif %}"></span>{{ ping.label }}
                                 </span>
-                                {% if op and op.mismatch %}
-                                <div class="mt-1 text-[10px] font-medium text-amber-600 dark:text-amber-400" title="Admin status conflicts with what monitoring observes">&#9888; admin: {{ op.admin_status }}</div>
-                                {% elif op and op.admin_status %}
-                                <div class="mt-1 text-[10px] text-slate-400">admin: {{ op.admin_status }}</div>
-                                {% endif %}
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                {% set snmp = device.snmp_status or {'label': 'Unknown', 'state': 'unknown', 'reason': None} %}
+                                <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium
+                                    {% if snmp.state == 'ok' %}bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400
+                                    {% elif snmp.state == 'fail' %}bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400
+                                    {% else %}bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300{% endif %}"
+                                    {% if snmp.reason %}title="{{ snmp.reason }}"{% endif %}>
+                                    <span class="h-1.5 w-1.5 rounded-full {% if snmp.state == 'ok' %}bg-green-500{% elif snmp.state == 'fail' %}bg-red-500{% else %}bg-slate-400{% endif %}"></span>{{ snmp.label }}
+                                </span>
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap text-right">
                                 <div class="flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">
@@ -214,7 +213,7 @@
                         </tr>
                         {% else %}
                         <tr>
-                            <td colspan="6" class="px-6 py-12 text-center">
+                            <td colspan="7" class="px-6 py-12 text-center">
                                 <svg class="mx-auto h-12 w-12 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/></svg>
                                 <h3 class="mt-2 text-sm font-medium text-slate-900 dark:text-white">No core network devices</h3>
                                 <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Get started by adding a device.</p>
