@@ -596,6 +596,36 @@ def build_beat_schedule() -> dict:
             enabled=radius_reap_enabled,
             interval_seconds=radius_reap_interval_seconds,
         )
+        # Staff device-login reconcile: authoritative sweep of radcheck_admin /
+        # radreply_admin from active SystemUser device-login state. This is the
+        # backstop that actually revokes router login when staff are deactivated,
+        # deleted, or renamed — populate_device_login otherwise only runs on a
+        # device-login edit, so a deactivation via the normal user-admin path
+        # would never take effect in RADIUS. Default-on (a security control).
+        device_login_sync_enabled = _effective_bool(
+            session,
+            SettingDomain.usage,
+            "device_login_sync_enabled",
+            "DEVICE_LOGIN_SYNC_ENABLED",
+            True,
+        )
+        device_login_sync_interval_seconds = max(
+            _effective_int(
+                session,
+                SettingDomain.usage,
+                "device_login_sync_interval_seconds",
+                "DEVICE_LOGIN_SYNC_INTERVAL_SECONDS",
+                900,
+            ),
+            60,
+        )
+        _sync_scheduled_task(
+            session,
+            name="device_login_sync",
+            task_name="app.tasks.radius_population.sync_device_login",
+            enabled=device_login_sync_enabled,
+            interval_seconds=device_login_sync_interval_seconds,
+        )
         # Roll imported RADIUS accounting into quota buckets (feeds FUP/overage).
         # Gated by the same usage flag; no point metering faster than every 5 min.
         _sync_scheduled_task(

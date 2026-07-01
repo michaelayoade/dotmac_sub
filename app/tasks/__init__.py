@@ -95,7 +95,7 @@ from app.tasks.provisioning import (
     run_service_migration_job,
 )
 from app.tasks.radius import run_radius_sync_job
-from app.tasks.radius_population import refresh_radius_from_subs
+from app.tasks.radius_population import refresh_radius_from_subs, sync_device_login
 from app.tasks.topology_lldp import run_lldp_topology_poll
 from app.tasks.topology_sync import run_topology_reconcile, warm_topology_status
 from app.tasks.tr069 import (
@@ -223,6 +223,7 @@ __all__ = [
     "run_service_migration_job",
     "retry_pending_compensation_failures",
     "refresh_radius_from_subs",
+    "sync_device_login",
     "run_vpn_control_job",
     "run_vpn_health_scan",
     "deliver_webhook",
