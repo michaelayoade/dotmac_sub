@@ -895,7 +895,11 @@ def dashboard(request: Request, db: Session):
     )
 
 
-def dashboard_server_health_partial(request: Request, db: Session):
+def dashboard_server_health_partial(
+    request: Request,
+    db: Session,
+    worker_action_notice: dict[str, str] | None = None,
+):
     server_health = system_health_service.get_system_health()
     thresholds = _build_health_thresholds(db)
     server_health_status = system_health_service.evaluate_health(
@@ -927,8 +931,16 @@ def dashboard_server_health_partial(request: Request, db: Session):
             "infrastructure_services": infrastructure_services,
             "worker_health": worker_health,
             "service_summary": service_summary,
+            "worker_action_notice": worker_action_notice,
         },
     )
+
+
+def clear_dashboard_infrastructure_cache() -> None:
+    global _dashboard_infrastructure_cached_at, _dashboard_infrastructure_cache
+    with _dashboard_infrastructure_lock:
+        _dashboard_infrastructure_cache = None
+        _dashboard_infrastructure_cached_at = 0.0
 
 
 def _load_dashboard_infrastructure_health(
