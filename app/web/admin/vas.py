@@ -20,6 +20,7 @@ from app.models.vas import (
 from app.services import vas_purchases, vas_wallet, vtpass
 from app.services.auth_dependencies import require_permission
 from app.services.domain_settings import vas_settings
+from app.services.payment_gateway_adapter import payment_gateway_adapter
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/vas", tags=["web-admin-vas"])
@@ -75,8 +76,14 @@ def vas_admin_page(request: Request, db: Session = Depends(get_db)):
             rate_cards=rate_cards,
             enabled_categories=enabled_categories,
             categories=sorted({service.category for service in services}),
+            currency_symbol=vas_wallet.currency_symbol(db),
+            auto_deduct_result=vas_wallet.last_auto_deduct_result(db),
             submitted=request.query_params.get("ok"),
             form_error=request.query_params.get("error"),
+            sweep_status=request.query_params.get("sweep_status"),
+            sweep_paid=request.query_params.get("sweep_paid"),
+            sweep_errors=request.query_params.get("sweep_errors"),
+            sweep_total=request.query_params.get("sweep_total"),
         ),
     )
 
@@ -94,6 +101,24 @@ def vas_toggle_service(
     service.is_enabled = not service.is_enabled
     db.commit()
     return RedirectResponse(url="/admin/vas?ok=1", status_code=303)
+
+
+@router.post(
+    "/auto-deduct/run",
+    dependencies=[Depends(require_permission("billing:vas:write"))],
+)
+def vas_run_auto_deduct(db: Session = Depends(get_db)) -> RedirectResponse:
+    result = vas_wallet.run_auto_deduct_sweep(db)
+    return RedirectResponse(
+        url=(
+            "/admin/vas?"
+            f"sweep_status={result.get('status', '')}"
+            f"&sweep_paid={result.get('paid', 0)}"
+            f"&sweep_errors={result.get('errors', 0)}"
+            f"&sweep_total={result.get('swept_total', '0.00')}"
+        ),
+        status_code=303,
+    )
 
 
 @router.post(
@@ -230,14 +255,19 @@ def vas_refund_to_source(
         return RedirectResponse(
             url="/admin/vas?error=This top-up was already refunded", status_code=303
         )
-    from app.services import paystack
-
+    provider = vas_wallet.funding_provider_for_entry(db, entry)
     try:
-        paystack.refund_transaction(db, entry.reference, amount)
+        payment_gateway_adapter.refund(
+            db,
+            provider_type=provider,
+            reference=entry.reference,
+            amount=amount,
+        )
     except Exception as exc:  # noqa: BLE001
         logger.warning("refund-to-source failed for entry %s: %s", entry.id, exc)
         return RedirectResponse(
-            url="/admin/vas?error=Gateway refund failed — see logs", status_code=303
+            url=f"/admin/vas?error=Gateway refund failed for {provider} — see logs",
+            status_code=303,
         )
     vas_wallet.debit_wallet(
         db,
@@ -248,8 +278,9 @@ def vas_refund_to_source(
         memo=f"Refund to source ({entry.reference})",
     )
     logger.info(
-        "vas refund-to-source: entry=%s ref=%s amount=%s",
+        "vas refund-to-source: entry=%s provider=%s ref=%s amount=%s",
         entry.id,
+        provider,
         entry.reference,
         amount,
     )

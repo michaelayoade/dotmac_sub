@@ -198,3 +198,30 @@ def verify_webhook_signature(
 def get_public_key(db: Session | None = None) -> str:
     """Return the Flutterwave public key for frontend use."""
     return _get_public_key(db)
+
+
+def refund_transaction(
+    db: Session,
+    transaction_id: str,
+    amount: Decimal | None = None,
+) -> dict[str, Any]:
+    """Refund a Flutterwave transaction back to its source."""
+    secret_key = _get_secret_key(db)
+    if not secret_key:
+        raise ValueError(
+            "Flutterwave secret key is not configured. Kindly use another payment option"
+        )
+    payload: dict[str, Any] = {}
+    if amount is not None:
+        payload["amount"] = float(Decimal(str(amount)))
+    resp = httpx.post(
+        f"{FLUTTERWAVE_API_BASE}/transactions/{transaction_id}/refund",
+        json=payload,
+        headers={"Authorization": f"Bearer {secret_key}"},
+        timeout=_get_timeout_seconds(db),
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    if data.get("status") != "success":
+        raise ValueError(data.get("message", "Flutterwave refund failed"))
+    return data.get("data") or {}

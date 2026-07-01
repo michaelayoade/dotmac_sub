@@ -11,7 +11,7 @@
         </div>
         <a href="/portal/wallet" class="rounded-2xl border border-stone-200 bg-white px-6 py-4 text-right shadow-premium transition-colors hover:bg-stone-50 dark:border-stone-700 dark:bg-stone-800 dark:hover:bg-stone-700/60">
             <p class="text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">Wallet balance</p>
-            <p class="mt-1 text-2xl font-display font-bold text-stone-900 dark:text-white">₦{{ '%,.2f'|format(balance) }}</p>
+            <p class="mt-1 text-2xl font-display font-bold text-stone-900 dark:text-white">{{ currency_symbol }}{{ '%,.2f'|format(balance) }}</p>
         </a>
     </div>
 
@@ -60,7 +60,7 @@
                             <p class="text-xs text-stone-500 dark:text-stone-400">{{ txn.created_at.strftime('%Y-%m-%d %H:%M') }}</p>
                         </div>
                         <div class="text-right">
-                            <p class="font-mono font-semibold text-stone-900 dark:text-white">₦{{ '%,.2f'|format(txn.amount) }}</p>
+                            <p class="font-mono font-semibold text-stone-900 dark:text-white">{{ currency_symbol }}{{ '%,.2f'|format(txn.amount) }}</p>
                             <span class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium
                                 {% if txn.status.value == 'delivered' %}bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300
                                 {% elif txn.status.value in ['refunded', 'failed'] %}bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-300
@@ -106,17 +106,21 @@
                                 class="mt-1 block w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-2.5 text-sm text-stone-900 focus:border-[var(--color-brand-500)] focus:outline-none dark:border-stone-600 dark:bg-stone-700 dark:text-white">
                             <option value="">Select a plan…</option>
                             <template x-for="v in selected.variations" :key="v.code">
-                                <option :value="v.code" x-text="v.name + (v.amount ? ' — ₦' + v.amount : '')"></option>
+                                <option :value="v.code" x-text="v.name + (v.amount ? ' — {{ currency_symbol }}' + v.amount : '')"></option>
                             </template>
                         </select>
                     </div>
                 </template>
                 <div x-show="!variationHasPrice()">
-                    <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300">Amount (₦)</label>
+                    <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300">Amount ({{ currency_symbol }})</label>
                     <input type="number" name="amount" x-model="amount" min="0.01" step="0.01"
                            oninput="if (this.value && this.value.includes('.') && this.value.split('.')[1].length > 2) { this.value = parseFloat(this.value).toFixed(2); }"
                            class="mt-1 block w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-2.5 text-sm text-stone-900 focus:border-[var(--color-brand-500)] focus:outline-none dark:border-stone-600 dark:bg-stone-700 dark:text-white">
                 </div>
+                <label class="flex items-start gap-2 rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs text-stone-600 dark:border-stone-700 dark:bg-stone-700/30 dark:text-stone-300">
+                    <input type="checkbox" name="confirm_duplicate" value="1" class="mt-0.5 rounded border-stone-300 text-[var(--color-brand-600)]" {% if duplicate_confirm_required %}checked{% endif %}>
+                    <span>Confirm this is an intentional repeat purchase for the same recipient and amount.</span>
+                </label>
                 <button type="submit" :disabled="submitting"
                         class="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[var(--color-brand-500)] to-[var(--color-brand-600)] px-5 py-2.5 text-sm font-semibold text-white shadow-lg transition-all hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60">
                     <svg x-show="submitting" class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
@@ -162,7 +166,7 @@ function billsPage() {
                 const value = parseFloat(this.amount);
                 if (!value || value <= 0) {
                     event.preventDefault();
-                    this.verifyError = 'Enter an amount greater than ₦0.';
+                    this.verifyError = 'Enter an amount greater than {{ currency_symbol }}0.';
                     return false;
                 }
                 if (Math.round(value * 100) !== value * 100) {
