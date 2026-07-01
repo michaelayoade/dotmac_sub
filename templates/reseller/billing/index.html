@@ -212,10 +212,21 @@
           <td class="px-6 py-3 text-right tabular-nums">{{ billing_account.currency }} {{ "{:,.2f}".format(s.open_balance) }}</td>
           <td class="px-6 py-3 text-right">
             <div class="flex justify-end gap-2">
-              <form method="post" action="/reseller/billing/subscribers/{{ s.subscriber_id }}/allocate" class="inline-flex">
+              {% set allocation_max = [s.open_balance, unallocated_balance] | min %}
+              <form method="post" action="/reseller/billing/subscribers/{{ s.subscriber_id }}/allocate" class="inline-flex items-center gap-2"
+                    onsubmit="return confirm('Allocate the entered credit amount to this subscriber?');">
                 {% include "components/forms/csrf_input.html" %}
+                <input type="number"
+                       name="amount"
+                       min="0.01"
+                       max="{{ '%.2f'|format(allocation_max) }}"
+                       step="0.01"
+                       value="{{ '%.2f'|format(allocation_max) }}"
+                       aria-label="Allocation amount for {{ s.subscriber_name }}"
+                       {% if not allocation_max or allocation_max <= 0 %}disabled{% endif %}
+                       class="w-28 rounded-lg border border-slate-200 bg-white px-2 py-2 text-right text-xs tabular-nums text-slate-900 focus:border-emerald-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-white">
                 <button type="submit"
-                        {% if not unallocated_balance or unallocated_balance <= 0 %}disabled{% endif %}
+                        {% if not allocation_max or allocation_max <= 0 %}disabled{% endif %}
                         class="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500 dark:disabled:bg-slate-700 dark:disabled:text-slate-400">
                   <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1"/></svg>
                   Allocate
@@ -252,7 +263,7 @@
       <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
         {% for p in recent_payments %}
         <tr>
-          <td class="px-6 py-3 text-slate-700 dark:text-slate-200">{{ p.paid_at.strftime("%Y-%m-%d %H:%M") if p.paid_at else "—" }}</td>
+          <td class="px-6 py-3 text-slate-700 dark:text-slate-200">{{ p.paid_at.strftime("%Y-%m-%d %H:%M") ~ " UTC" if p.paid_at else "—" }}</td>
           <td class="px-6 py-3 text-slate-700 dark:text-slate-200">{{ p.memo or "" }}</td>
           <td class="px-6 py-3 text-right tabular-nums">{{ p.currency }} {{ "{:,.2f}".format(p.amount) }}</td>
           <td class="px-6 py-3 text-right tabular-nums">{{ p.currency }} {{ "{:,.2f}".format(p.allocated_total) }}</td>
@@ -285,7 +296,7 @@
         <div class="min-w-0 flex-1">
           <p class="truncate text-sm font-semibold text-slate-900 dark:text-white">{{ entry.title }}</p>
           <p class="text-xs text-slate-500 dark:text-slate-400">
-            {{ entry.occurred_at.strftime('%b %d, %Y · %H:%M') if entry.occurred_at else 'Date unavailable' }}
+            {{ entry.occurred_at.strftime('%b %d, %Y · %H:%M') ~ ' UTC' if entry.occurred_at else 'Date unavailable' }}
           </p>
           {% if entry.description and entry.description != entry.title %}
           <p class="mt-0.5 truncate text-xs text-slate-500 dark:text-slate-400">{{ entry.description }}</p>

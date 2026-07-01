@@ -4,7 +4,10 @@
 **Method:** 2-agent parallel read-only review: (a) admin reseller management
 (list/detail/form/user-linking/impersonation), (b) the partner-facing reseller
 portal (dashboard/billing/VAS/reports/contacts/profile).
-**Status:** audit only. Part of the remaining-module audit series.
+**Status:** implementation branch in progress. `codex/reseller-ux-polish-audit`
+addresses the concrete P0/P1/P2 findings that already had backing fields or
+clear UI/service behavior. Structural product/data-model decisions remain
+explicitly pending below.
 
 > Known: a reseller parity loop already shipped revenue/tickets/profile+MFA/
 > billing-pay/fiber-map/view-as/service-requests/bank-transfer-proofs. Findings
@@ -101,6 +104,58 @@ selector the new-reseller form has (`app/web/admin/resellers.py:283-310`).
 | **P0** | VAS page render-500 when VAS enabled (`vas/index.html:15`); deactivated reseller vanishes + can't reactivate (`web_admin_resellers.py:98`); Allocate dumps entire credit, no amount/confirm (`billing/index.html:215`) |
 | **P1** | Reseller economics surface + decision (C-1); confirms on allocate / sell-float / view-as (P-D); money+tz display (P-B); invite-failure + status-update error surfacing (P-C); Contacts in nav + name fields (P-E); catalog-visibility default flag (C-2) |
 | **P2** | per_page consistency, dashboard pager, dual-provider VAS checkout, `policy_set_id` selector (C-3), role selector on detail user-create (C-4), detail not-found notice |
+
+## Implementation update — 2026-07-01
+
+### Resolved in `codex/reseller-ux-polish-audit`
+
+**P0 required**
+- Fixed VAS render crash by replacing invalid `'% ,.2f'`/`'%,.2f'`-style
+  formatting with Python format strings in `templates/reseller/vas/index.html`.
+- Stopped inactive resellers from becoming unreachable: admin list now supports
+  `active` / `inactive` / `all` filters and explicit deactivate/reactivate
+  actions.
+- Reworked reseller credit allocation so the portal requires an allocation
+  amount, confirms the action, and passes the requested cap through to
+  `allocate_consolidated_balance_to_subscriber`.
+
+**P1 concrete**
+- Added confirmations for allocate, sell-from-float, and view-as-reseller.
+- Surfaced reseller account status `ValueError` messages instead of replacing
+  every validation failure with a generic unsupported-action message.
+- Added Contacts and Profile to the reseller desktop/mobile navigation.
+- Rendered the contacts unavailable notice and exposed `full_name` plus
+  `relationship` fields already accepted by the routes.
+- Added currency labels to reseller revenue summary totals/chart/table.
+- Changed the admin reseller billing card from hardcoded naira display to
+  per-currency outstanding balances.
+- Added explicit `UTC` labels to audited admin/portal timestamp renders.
+- Created a partial-success path for reseller creation when portal invite email
+  fails: the reseller/user can remain created while the detail page displays the
+  invite issue.
+
+**P2 concrete**
+- Added dashboard pagination controls for the recent-accounts list.
+- Unified reseller detail user-link/create fallback `per_page` defaults to 25.
+- Exposed `Reseller.policy_set_id` through the admin reseller form and detail
+  page.
+- Added a role selector to detail-page reseller portal user creation.
+- Added a detail not-found notice on redirect back to the reseller list.
+
+### Still pending
+
+- **C-1 partner economics** remains a product/data-model decision. The current
+  model still has no commission rate, markup, credit-limit, payout terms, or
+  global defaults to expose safely.
+- **C-2 catalog visibility default flag** remains pending. There is still no
+  per-reseller "restrict to assigned offers" flag or global
+  `RESELLER_DEFAULT_CATALOG_OPEN` setting to wire into offer visibility.
+- **Dual-provider VAS checkout** remains pending because the VAS flow is still
+  Paystack-specific while consolidated billing already has the reusable
+  multi-provider checkout path.
+- **Full timezone conversion helper** remains pending. This branch labels the
+  audited raw timestamps as `UTC`, but does not introduce a shared app-timezone
+  conversion helper for all admin/portal timestamps.
 
 ## Appendix — full findings
 

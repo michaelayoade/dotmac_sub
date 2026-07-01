@@ -292,7 +292,10 @@ def verify_and_record_consolidated_payment(
 
 
 def allocate_unallocated_to_subscriber(
-    db: Session, reseller_id: str, subscriber_id: str
+    db: Session,
+    reseller_id: str,
+    subscriber_id: str,
+    amount: Decimal | int | float | str | None = None,
 ) -> dict:
     """Apply reseller unallocated credit to one selected subscriber."""
     from fastapi import HTTPException
@@ -300,7 +303,7 @@ def allocate_unallocated_to_subscriber(
     ba = billing_service.billing_accounts.get_for_reseller(db, reseller_id)
     try:
         return billing_service.payments.allocate_consolidated_balance_to_subscriber(
-            db, str(ba.id), subscriber_id
+            db, str(ba.id), subscriber_id, amount=amount
         )
     except HTTPException as exc:
         detail = exc.detail if isinstance(exc.detail, str) else "Allocation failed"

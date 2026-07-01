@@ -30,7 +30,7 @@
                     </div>
                     <div>
                         <p class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Total Revenue</p>
-                        <p class="mt-1 text-3xl font-bold tabular-nums text-slate-900 dark:text-white" style="font-family: var(--font-display);">{{ "{:,.2f}".format(summary.total_paid) }}</p>
+                        <p class="mt-1 text-3xl font-bold tabular-nums text-slate-900 dark:text-white" style="font-family: var(--font-display);">{{ summary.currency }} {{ "{:,.2f}".format(summary.total_paid) }}</p>
                     </div>
                 </div>
             </div>
@@ -47,7 +47,7 @@
                     </div>
                     <div>
                         <p class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Outstanding Balance</p>
-                        <p class="mt-1 text-3xl font-bold tabular-nums text-slate-900 dark:text-white" style="font-family: var(--font-display);">{{ "{:,.2f}".format(summary.total_outstanding) }}</p>
+                        <p class="mt-1 text-3xl font-bold tabular-nums text-slate-900 dark:text-white" style="font-family: var(--font-display);">{{ summary.currency }} {{ "{:,.2f}".format(summary.total_outstanding) }}</p>
                     </div>
                 </div>
             </div>
@@ -104,7 +104,7 @@
                 maintainAspectRatio: false,
                 plugins: { legend: { display: false } },
                 scales: {
-                    y: { beginAtZero: true, ticks: { callback: function(v) { return v.toLocaleString(); } } },
+                    y: { beginAtZero: true, ticks: { callback: function(v) { return '{{ summary.currency }} ' + v.toLocaleString(); } } },
                     x: { grid: { display: false } }
                 }
             }
@@ -144,7 +144,7 @@
                             </span>
                         </td>
                         <td class="px-6 py-4 text-right">
-                            <span class="font-semibold tabular-nums font-mono text-emerald-600 dark:text-emerald-400">{{ "{:,.2f}".format(row.total) }}</span>
+                            <span class="font-semibold tabular-nums font-mono text-emerald-600 dark:text-emerald-400">{{ summary.currency }} {{ "{:,.2f}".format(row.total) }}</span>
                         </td>
                     </tr>
                     {% else %}

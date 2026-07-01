@@ -230,6 +230,42 @@ def test_allocate_consolidated_balance_never_exceeds_unallocated_credit(db_sessi
     assert ba.balance == Decimal("0.00")
 
 
+def test_allocate_consolidated_balance_honors_requested_amount(db_session):
+    reseller = _make_reseller(db_session, name="ManualPartial")
+    ba = billing_service.billing_accounts.create_default_for_reseller(
+        db_session, str(reseller.id)
+    )
+    sub = _make_subscriber(db_session, reseller_id=reseller.id, suffix="PART")
+    inv = _make_invoice(db_session, account_id=sub.id, balance=Decimal("250.00"))
+
+    payment = billing_service.payments.create(
+        db_session,
+        PaymentCreate(
+            billing_account_id=ba.id,
+            amount=Decimal("100.00"),
+            currency="NGN",
+            status=PaymentStatus.succeeded,
+        ),
+        auto_allocate=False,
+    )
+
+    result = billing_service.payments.allocate_consolidated_balance_to_subscriber(
+        db_session, str(ba.id), str(sub.id), amount=Decimal("40.00")
+    )
+
+    db_session.refresh(inv)
+    db_session.refresh(ba)
+    allocation = (
+        db_session.query(PaymentAllocation)
+        .filter(PaymentAllocation.payment_id == payment.id)
+        .one()
+    )
+    assert result["allocated_total"] == Decimal("40.00")
+    assert allocation.amount == Decimal("40.00")
+    assert inv.balance_due == Decimal("210.00")
+    assert ba.balance == Decimal("60.00")
+
+
 def test_allocate_consolidated_balance_with_balance_only_credit(db_session):
     reseller = _make_reseller(db_session, name="BalanceOnly")
     ba = billing_service.billing_accounts.create_default_for_reseller(
