@@ -75,6 +75,7 @@ def test_set_device_login_commit_false_does_not_commit(
     spy = mock.Mock(wraps=db_session.commit)
     monkeypatch.setattr(db_session, "commit", spy)
 
+    # commit=False leaves transaction ownership with the route handler.
     set_device_login(
         db_session,
         user_id=str(system_user.id),
