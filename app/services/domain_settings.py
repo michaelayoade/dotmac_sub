@@ -2,6 +2,7 @@ import builtins
 from typing import Any
 
 from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import DomainSetting, SettingDomain
@@ -250,7 +251,19 @@ class DomainSettings(ListResponseMixin):
             is_secret=is_secret,
             is_active=True,
         )
-        return self.create(db, payload)
+        try:
+            return self.create(db, payload)
+        except IntegrityError:
+            db.rollback()
+            raced = (
+                db.query(DomainSetting)
+                .filter(DomainSetting.domain == self.domain)
+                .filter(DomainSetting.key == key)
+                .first()
+            )
+            if raced:
+                return raced
+            raise
 
     def delete(self, db: Session, setting_id: str):
         setting = db.get(DomainSetting, setting_id)

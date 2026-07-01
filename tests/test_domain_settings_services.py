@@ -1,5 +1,6 @@
 import pytest
 from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
 
 from app.models.domain_settings import SettingDomain
 from app.models.subscription_engine import SettingValueType
@@ -44,3 +45,33 @@ def test_settings_api_invalid_key(db_session):
     with pytest.raises(HTTPException) as exc:
         settings_api_service.get_gis_setting(db_session, "bad_key")
     assert exc.value.status_code == 400
+
+
+def test_ensure_by_key_returns_concurrent_insert(db_session, monkeypatch):
+    settings = domain_settings_service.DomainSettings(domain=SettingDomain.gis)
+    original_create = settings.create
+    original_rollback = db_session.rollback
+    raced_payload = None
+
+    def racing_create(db, payload):
+        nonlocal raced_payload
+        raced_payload = payload
+        raise IntegrityError("insert", {}, Exception("duplicate key"))
+
+    def rollback_with_raced_insert():
+        original_rollback()
+        assert raced_payload is not None
+        original_create(db_session, raced_payload)
+
+    monkeypatch.setattr(settings, "create", racing_create)
+    monkeypatch.setattr(db_session, "rollback", rollback_with_raced_insert)
+
+    setting = settings.ensure_by_key(
+        db_session,
+        "sync_interval_seconds",
+        SettingValueType.integer,
+        value_text="60",
+    )
+
+    assert setting.key == "sync_interval_seconds"
+    assert setting.value_text == "60"
