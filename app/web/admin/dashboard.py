@@ -10,38 +10,48 @@ from app.services.auth_dependencies import require_any_permission
 
 router = APIRouter(tags=["web-admin-dashboard"])
 
+_DASHBOARD_READ_DEPENDENCY = Depends(
+    require_any_permission("billing:invoice:read", "monitoring:read", "customer:read")
+)
+
 
 @router.get(
     "/dashboard",
     response_class=HTMLResponse,
     # The dashboard is the default staff landing page. Allow any staff with a
     # granular read permission to see the overview.
-    dependencies=[
-        Depends(
-            require_any_permission(
-                "billing:invoice:read", "monitoring:read", "customer:read"
-            )
-        )
-    ],
+    dependencies=[_DASHBOARD_READ_DEPENDENCY],
 )
 def dashboard(request: Request, db: Session = Depends(get_db)):
     """Admin dashboard overview page."""
     return web_admin_dashboard_service.dashboard(request, db)
 
 
-@router.get("/dashboard/stats", response_class=HTMLResponse)
+@router.get(
+    "/dashboard/stats",
+    response_class=HTMLResponse,
+    dependencies=[_DASHBOARD_READ_DEPENDENCY],
+)
 def dashboard_stats_partial(request: Request, db: Session = Depends(get_db)):
     """HTMX partial for dashboard stats cards."""
     return web_admin_dashboard_service.dashboard_stats_partial(request, db)
 
 
-@router.get("/dashboard/activity", response_class=HTMLResponse)
+@router.get(
+    "/dashboard/activity",
+    response_class=HTMLResponse,
+    dependencies=[_DASHBOARD_READ_DEPENDENCY],
+)
 def dashboard_activity_partial(request: Request, db: Session = Depends(get_db)):
     """HTMX partial for recent activity feed."""
     return web_admin_dashboard_service.dashboard_activity_partial(request, db)
 
 
-@router.get("/dashboard/server-health", response_class=HTMLResponse)
+@router.get(
+    "/dashboard/server-health",
+    response_class=HTMLResponse,
+    dependencies=[_DASHBOARD_READ_DEPENDENCY],
+)
 def dashboard_server_health_partial(request: Request, db: Session = Depends(get_db)):
     """HTMX partial for server health widget."""
     return web_admin_dashboard_service.dashboard_server_health_partial(request, db)
