@@ -50,6 +50,33 @@
         ) }}
     </div>
 
+    <form method="get" action="/admin/notifications/alert-policies" class="grid gap-3 rounded-2xl border border-slate-200/60 bg-white/80 p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800/80 md:grid-cols-5">
+        <select name="channel" class="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+            <option value="" {{ 'selected' if not channel else '' }}>All channels</option>
+            {% for item in channels %}
+            <option value="{{ item }}" {{ 'selected' if channel == item else '' }}>{{ item | title }}</option>
+            {% endfor %}
+        </select>
+        <select name="status" class="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+            <option value="" {{ 'selected' if not status else '' }}>All alert status</option>
+            {% for item in statuses %}
+            <option value="{{ item }}" {{ 'selected' if status == item else '' }}>{{ item | title }}</option>
+            {% endfor %}
+        </select>
+        <select name="severity_min" class="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+            <option value="" {{ 'selected' if not severity_min else '' }}>All severities</option>
+            {% for item in severities %}
+            <option value="{{ item }}" {{ 'selected' if severity_min == item else '' }}>{{ item | title }}</option>
+            {% endfor %}
+        </select>
+        <select name="active" class="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+            <option value="" {{ 'selected' if not active else '' }}>Active default</option>
+            <option value="active" {{ 'selected' if active == 'active' else '' }}>Active</option>
+            <option value="inactive" {{ 'selected' if active == 'inactive' else '' }}>Inactive</option>
+        </select>
+        <button type="submit" class="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-700">Apply</button>
+    </form>
+
     {# Data table #}
     <div class="animate-fade-in-up overflow-hidden rounded-2xl border border-slate-200/60 bg-white/80 shadow-sm backdrop-blur-sm dark:border-slate-700/60 dark:bg-slate-800/80" style="animation-delay: 100ms;">
         <div class="overflow-x-auto">
@@ -147,6 +174,7 @@
 
         {# Pagination #}
         {% if total_pages > 1 %}
+        {% set _extra %}{% if channel %}&channel={{ channel }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% if severity_min %}&severity_min={{ severity_min }}{% endif %}{% if active %}&active={{ active }}{% endif %}{% endset %}
         <div class="border-t border-slate-200 bg-slate-50/50 px-6 py-3 dark:border-slate-700 dark:bg-slate-800/50">
             <div class="flex items-center justify-between">
                 <p class="text-sm text-slate-500 dark:text-slate-400">
@@ -155,7 +183,7 @@
                 <div class="flex items-center gap-4">
                     <div class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
                         <span>Show</span>
-                        <select onchange="window.location.href='/admin/notifications/alert-policies?page=1&per_page=' + this.value"
+                        <select onchange="window.location.href='/admin/notifications/alert-policies?page=1&per_page=' + this.value + '{{ _extra | e }}'"
                                 class="rounded-lg border-0 bg-slate-100 py-1 pl-2 pr-7 text-sm text-slate-700 focus:ring-2 focus:ring-rose-500 dark:bg-slate-700 dark:text-slate-300">
                             {% for size in [10, 25, 50, 100] %}
                             <option value="{{ size }}" {% if per_page == size %}selected{% endif %}>{{ size }}</option>
@@ -165,11 +193,11 @@
                     </div>
                     <nav class="flex items-center gap-1">
                         {% if page > 1 %}
-                        <a href="/admin/notifications/alert-policies?page={{ page - 1 }}&per_page={{ per_page }}"
+                        <a href="/admin/notifications/alert-policies?page={{ page - 1 }}&per_page={{ per_page }}{{ _extra }}"
                            class="rounded-lg px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-700">Previous</a>
                         {% endif %}
                         {% if page < total_pages %}
-                        <a href="/admin/notifications/alert-policies?page={{ page + 1 }}&per_page={{ per_page }}"
+                        <a href="/admin/notifications/alert-policies?page={{ page + 1 }}&per_page={{ per_page }}{{ _extra }}"
                            class="rounded-lg px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-700">Next</a>
                         {% endif %}
                     </nav>

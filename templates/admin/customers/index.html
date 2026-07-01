@@ -1310,6 +1310,29 @@ function customersPage() {
             this.bulkLoading = true;
             try {
                 const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || document.cookie.match(/csrf_token=([^;]+)/)?.[1] || '';
+                const basePayload = this.buildScopePayload({
+                    channel: this.sendMessageForm.channel,
+                    template_id: template.id,
+                    template_variables: this.sendMessageForm.templateVariables || {}
+                });
+                const previewResponse = await fetch('/admin/customers/bulk/send-message', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest',
+                        ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {})
+                    },
+                    body: JSON.stringify({ ...basePayload, preview_only: true })
+                });
+                if (!previewResponse.ok) {
+                    const error = await previewResponse.json().catch(() => ({}));
+                    alert(error.detail || 'Failed to preview the message. Please try again.');
+                    return;
+                }
+                const preview = await previewResponse.json();
+                const previewMessage = `Matched ${preview.matched_count || 0} customer(s). Queue ${preview.queued_count || 0} message(s), suppress ${preview.suppressed_count || 0}, skip ${(preview.skipped || []).length}. Continue?`;
+                if (!confirm(previewMessage)) return;
+
                 const response = await fetch('/admin/customers/bulk/send-message', {
                     method: 'POST',
                     headers: {
@@ -1317,13 +1340,7 @@ function customersPage() {
                         'X-Requested-With': 'XMLHttpRequest',
                         ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {})
                     },
-                    body: JSON.stringify(
-                        this.buildScopePayload({
-                            channel: this.sendMessageForm.channel,
-                            template_id: template.id,
-                            template_variables: this.sendMessageForm.templateVariables || {}
-                        })
-                    )
+                    body: JSON.stringify({ ...basePayload, confirmed: true })
                 });
 
                 if (response.ok) {

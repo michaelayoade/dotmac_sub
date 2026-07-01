@@ -429,6 +429,61 @@ def seed_notification_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text=os.getenv("NOTIFICATION_QUEUE_INTERVAL_SECONDS", "60"),
     )
+    for key, env_name, default in [
+        ("notification_max_retries", "NOTIFICATION_MAX_RETRIES", "3"),
+        (
+            "notification_sending_timeout_minutes",
+            "NOTIFICATION_SENDING_TIMEOUT_MINUTES",
+            "10",
+        ),
+        (
+            "notification_retry_backoff_minutes",
+            "NOTIFICATION_RETRY_BACKOFF_MINUTES",
+            "1,5,15",
+        ),
+        (
+            "notification_per_channel_rate_limit",
+            "NOTIFICATION_PER_CHANNEL_RATE_LIMIT",
+            "50",
+        ),
+        ("sms_api_timeout_seconds", "SMS_API_TIMEOUT_SECONDS", "30"),
+        ("sms_max_length", "SMS_MAX_LENGTH", "160"),
+        ("notification_quiet_hours_start", "NOTIFICATION_QUIET_HOURS_START", "22:00"),
+        ("notification_quiet_hours_end", "NOTIFICATION_QUIET_HOURS_END", "07:00"),
+        (
+            "notification_dedupe_window_minutes",
+            "NOTIFICATION_DEDUPE_WINDOW_MINUTES",
+            "0",
+        ),
+    ]:
+        notification_settings.ensure_by_key(
+            db,
+            key=key,
+            value_type=SettingValueType.integer
+            if default.isdigit()
+            else SettingValueType.string,
+            value_text=os.getenv(env_name, default),
+        )
+    for key, env_name, default in [
+        (
+            "notification_quiet_hours_enabled",
+            "NOTIFICATION_QUIET_HOURS_ENABLED",
+            "false",
+        ),
+        (
+            "notification_category_preferences_enabled",
+            "NOTIFICATION_CATEGORY_PREFERENCES_ENABLED",
+            "true",
+        ),
+    ]:
+        raw = os.getenv(env_name, default)
+        notification_settings.ensure_by_key(
+            db,
+            key=key,
+            value_type=SettingValueType.boolean,
+            value_text=raw,
+            value_json=raw.lower() in {"1", "true", "yes", "on"},
+        )
 
 
 def _seed_missing_notification_templates(db: Session) -> int:

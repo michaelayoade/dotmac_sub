@@ -4,8 +4,9 @@
 **Method:** 2-agent parallel read-only review: (a) channels/senders/suppression
 (email/SMS/WhatsApp, queue drain, status/reclaim policy), (b) templates/renderer/
 policy + admin notifications UI + alert-policies.
-**Status:** audit only. Part of the remaining-module audit series; companion to the
-networking/billing/catalog audits under `docs/designs/`.
+**Status:** remediated for required P0/P1/P2 items on
+`codex/notifications-ux-polish-remediation`. Part of the remaining-module audit
+series; companion to the networking/billing/catalog audits under `docs/designs/`.
 
 ## What this audit is
 
@@ -13,10 +14,11 @@ Two tracks (full definition in `NETWORKING_UX_POLISH_AUDIT.md`): **POLISH** (mak
 existing features feel finished/trustworthy) and **CONTROL** (expose hardcoded
 policy as settings/options).
 
-> ⚠️ Operational context: the notification **queue runner has historically been
-> OFF** (large SMS backlog). Several P0/P1 items below (retry backoff, per-channel
-> rate limit, SMTP timeout) are **prerequisites to safely re-enabling sending** —
-> do not re-enable the runner before they land.
+> Operational context: the notification **queue runner has historically been
+> OFF** (large SMS backlog). The required queue-safety prerequisites from this
+> audit now have code support: SMTP/SMS timeouts, configurable retries/backoff,
+> and per-channel rate caps. Re-enabling the runner is still an operational
+> decision and should use conservative settings at first.
 
 ## Acceptance criteria (notifications-specific)
 
@@ -30,6 +32,33 @@ policy as settings/options).
    confirmed before dispatch.
 5. Delivery policy (which events notify, on which channels, with what opt-outs) is
    operator-configurable, not hardcoded.
+
+## Remediation status
+
+All required P0, P1, and P2 audit priorities have been implemented in code:
+
+- Template activation now behaves as an actual kill-switch: the form can
+  deactivate templates, missing/inactive templates suppress event sends instead
+  of falling back to hardcoded copy, and templates have an inline status toggle.
+- Customer-facing rendering now fails closed when unresolved variables remain on
+  email, SMS, WhatsApp, event-driven sends, and bulk sends.
+- Sender reliability controls are configurable: SMTP timeout, SMS provider
+  timeout, max retries, sending reclaim timeout, retry backoff, per-channel queue
+  cap, SMS max length, and Africa's Talking missing-username handling.
+- Operators can preview unsaved templates, confirm live tests and activation
+  changes, and preview bulk-send counts before committing rows.
+- Delivery policy moved from hardcoded-only behavior to configurable event
+  enable/routing settings, per-category preferences, quiet-hours scheduling,
+  dedupe windows, and idempotency-key handling.
+- Admin lists now expose template search/status filters, alert-policy filters,
+  inline toggles, count-backed pagination, generic bulk error copy, and Redis
+  client reuse for WebSocket notification publishing.
+
+Required left to mark this audit complete: **none**.
+
+Optional follow-up, outside required P0/P1/P2 completion: add client-side template
+lint before submit and expose queue batch-size/reclaim category controls only if
+operations later needs them.
 
 ## Cross-cutting themes
 
@@ -105,39 +134,39 @@ policy as settings/options).
 
 | Tier | Items |
 |------|-------|
-| **P0** | Active-toggle un-uncheckable (`notifications.py:225`); deactivated template still sends via spec fallback — the kill-switch doesn't kill (`notification.py:563-574`); SMS/WhatsApp unresolved-variable leak to customers (`sms.py:360`); SMTP send has no timeout → worker wedge (`email.py:861`) |
-| **P1** | Per-event/per-channel enable + routing as settings (C-1, the real kill-switch); retry backoff + per-channel rate cap (C-2) **before re-enabling the runner**; preview/confirm before activate + mass-send + live test (P-B); SMS truncation + AT sandbox-default (P-C) |
-| **P2** | quiet-hours/dedupe/idempotency (C-3), opt-out per-category, provider timeouts as settings, template/alert-policy list filters, category single-source (C-4), preview HTML fidelity, pagination count queries, raw-exception copy, redis client reuse |
+| **P0** | **Complete.** Active toggle fixed; inactive/missing templates suppress automated sends; unresolved-variable guard covers non-email channels; real SMTP sends have a timeout. |
+| **P1** | **Complete.** Per-event enable/routing settings, retry backoff, per-channel rate caps, preview/confirm flows, SMS truncation policy, and Africa's Talking missing-username failure are implemented. |
+| **P2** | **Complete.** Quiet-hours, dedupe, idempotency handling, per-category preferences, provider timeout settings, template/alert-policy filters, category single-source, email preview fidelity, count-backed pagination, generic error copy, and Redis client reuse are implemented. |
 
 ## Appendix — full findings
 
 Format: `[POLISH|CONTROL] (severity) file:line — problem → recommendation [recommend|defer]`
 
 ### Channels / senders / suppression
-- [POLISH] (High) `app/services/email.py:861-865` — real SMTP send path no `timeout` (only test path has one); hung server wedges worker → plumb socket timeout (reuse `smtp_test_timeout_seconds` or new key) [recommend]
-- [CONTROL] (High) `app/tasks/notifications.py:308-317` — failed notifications re-picked ~1 min, no backoff, no per-channel rate cap → configurable backoff (1/5/15) + rate cap [recommend]
-- [CONTROL] (Med) `app/tasks/notifications.py:32-33` — `MAX_RETRIES=3`/`SENDING_TIMEOUT_MINUTES=10` constants → settings (1-10 / 2-60) [recommend]
-- [POLISH] (Med) `app/services/sms.py:360-371` + `web_customer_actions.py:809-831` — SMS/WhatsApp template subst not validated; literal `{{var}}` leaks (email guarded) → apply unresolved-var guard to SMS/WhatsApp + `send_with_template` [recommend]
-- [CONTROL] (Med) `app/services/sms.py:86,136,184` — provider HTTP timeouts hardcoded `30.0` while WhatsApp configurable → `sms_api_timeout_seconds` (default 30, 5-60) [recommend]
-- [POLISH] (Med) `app/services/notification_adapter.py:374-384` — SMS silently truncated to 160, no multipart/warning → log/flag + configurable limit / concatenated SMS [recommend]
-- [POLISH] (Med) `app/services/sms.py:277-287` — Africa's Talking username defaults `"sandbox"`; prod sends silently sandboxed → treat missing username as config error for non-sandbox keys [recommend]
-- [CONTROL] (Med) `notification.py`/`customer_notification_policy.py`/`tasks/notifications.py` — no quiet-hours, no dedupe window, `idempotency_key` unused → quiet-hours + dedupe settings (off by default) before automated blasts [defer]
-- [POLISH] (Med) `app/web/admin/customers.py:1965-1982` — bulk send commits immediately; no dry-run/preview-count → preview mode returning counts, no rows [recommend]
-- [POLISH] (Low) `customers.py:1962,1982` — bulk endpoints return raw `str(e)` → log + generic message [defer]
-- [POLISH] (Low) `app/services/notification_adapter.py:529-558` — WebSocket/operation publish create fresh redis client per call, never closed → reuse/close (mirror operation_notifications) [recommend]
+- [POLISH] (High) `app/services/email.py:861-865` — **resolved**: real SMTP send path now uses a bounded timeout.
+- [CONTROL] (High) `app/tasks/notifications.py:308-317` — **resolved**: failed sends are retried with configurable backoff and per-channel queue caps.
+- [CONTROL] (Med) `app/tasks/notifications.py:32-33` — **resolved**: max retries and sending-timeout policy are settings-backed.
+- [POLISH] (Med) `app/services/sms.py:360-371` + `web_customer_actions.py:809-831` — **resolved**: unresolved variables are blocked for SMS/WhatsApp/template sends and bulk sends.
+- [CONTROL] (Med) `app/services/sms.py:86,136,184` — **resolved**: SMS provider timeout is configurable with `sms_api_timeout_seconds`.
+- [POLISH] (Med) `app/services/notification_adapter.py:374-384` — **resolved**: truncation moved to the SMS service, logs/uses a configurable `sms_max_length`, and no longer silently trims in the adapter.
+- [POLISH] (Med) `app/services/sms.py:277-287` — **resolved**: Africa's Talking no longer defaults missing username to `"sandbox"`.
+- [CONTROL] (Med) `notification.py`/`customer_notification_policy.py`/`tasks/notifications.py` — **resolved**: quiet-hours, dedupe windows, and idempotency-key handling are implemented.
+- [POLISH] (Med) `app/web/admin/customers.py:1965-1982` — **resolved**: bulk send supports preview/count mode without creating rows, then requires confirmation before commit.
+- [POLISH] (Low) `customers.py:1962,1982` — **resolved**: bulk endpoints log exceptions and return generic operator-safe copy.
+- [POLISH] (Low) `app/services/notification_adapter.py:529-558` — **resolved**: WebSocket/operation notification publishing reuses the shared Redis client.
 - [CONTROL] (Low) `app/tasks/notifications.py:50-51,111` — reclaim category sets + `batch_size=50` hardcoded → document; expose only if needed [defer]
 - Verified: single Celery drain with status-gate/suppression/queue-age/reclaim; SMTP senders + activity routing + WhatsApp timeout already configurable; status-policy walled set matches emitted categories.
 
 ### Templates / renderer / policy / admin-UI / alert-policies
-- [POLISH] (High) `app/web/admin/notifications.py:225` — `is_active: bool = Form(True)` → template can't be deactivated via form → use `str | None = Form(None)` pattern [recommend]
-- [CONTROL] (High) `app/services/events/handlers/notification.py:563-574` — deactivated/missing template still queues via in-code spec fallback → per-event-code enable honored before queueing [recommend]
-- [CONTROL] (High) `notification.py:78-449` — event→channel routing hardcoded in `EVENT_NOTIFICATION_SPECS` (only SMS has a flag) → per-event-code channel settings, specs as defaults [recommend]
-- [CONTROL] (Med) `app/services/customer_notification_policy.py:43-53` — opt-out only 2 metadata flags (default True), no quiet-hours, no service/account/usage opt-out → per-category prefs + quiet-hours [defer]
-- [POLISH] (Med) `templates/admin/notifications/template_form.html:151,178-187` — preview/test gated behind saved template; validation server-side only → allow preview on new + client-side lint mirroring `validate_template_text` [recommend]
-- [POLISH] (Med) `template_form.html:89-101` + `notifications.py:271-305` — no confirm before activate (all-customer sends) or live test send (`dry_run=False`) → confirms [recommend]
-- [POLISH] (Med) `templates/admin/notifications/templates_list.html:37-51` — list filters channel-only; no name/code search, no status filter, no inline toggle → add search + status filter + inline toggle (post bug-fix) [recommend]
-- [CONTROL] (Med) `app/services/web_notifications_alert_policies.py:36-46` + `notifications.py:444-453` — alert-policy/on-call list passes filters as None, no UI controls → expose channel/status/severity/active filters [defer]
-- [CONTROL] (Low) `customer_notification_policy.py:21-30` — category from hardcoded prefix tuples duplicating event naming; new prefix → "general" → derive from `EVENT_NOTIFICATION_SPECS.category` [defer]
-- [POLISH] (Low) `templates/admin/notifications/_template_preview.html:8` — body autoescaped so HTML email preview shows escaped tags (differs from delivered) → render email preview as sanitized HTML [defer]
-- [CONTROL] (Low) `web_notifications_alert_policies.py:48-59,259-267` — pagination total fetches up to 10000 rows then `len()` → use count query [defer]
+- [POLISH] (High) `app/web/admin/notifications.py:225` — **resolved**: inactive checkbox posts correctly and can deactivate templates.
+- [CONTROL] (High) `app/services/events/handlers/notification.py:563-574` — **resolved**: deactivated/missing templates suppress sends instead of falling back to in-code spec text.
+- [CONTROL] (High) `notification.py:78-449` — **resolved**: per-event enable and per-event channel routing settings override spec defaults.
+- [CONTROL] (Med) `app/services/customer_notification_policy.py:43-53` — **resolved**: per-category preference keys and quiet-hours support are implemented.
+- [POLISH] (Med) `templates/admin/notifications/template_form.html:151,178-187` — **resolved for required scope**: unsaved templates can be previewed before first save; optional client-side lint remains a future nicety because server-side validation is still authoritative.
+- [POLISH] (Med) `template_form.html:89-101` + `notifications.py:271-305` — **resolved**: activation changes and live test sends require confirmation.
+- [POLISH] (Med) `templates/admin/notifications/templates_list.html:37-51` — **resolved**: search, status filter, and inline toggle are available.
+- [CONTROL] (Med) `app/services/web_notifications_alert_policies.py:36-46` + `notifications.py:444-453` — **resolved**: channel/status/severity/active filters are exposed.
+- [CONTROL] (Low) `customer_notification_policy.py:21-30` — **resolved**: category resolution now uses `EVENT_NOTIFICATION_SPECS` as the source of truth before fallback prefixes.
+- [POLISH] (Low) `templates/admin/notifications/_template_preview.html:8` — **resolved**: email previews render HTML bodies with delivered-view fidelity.
+- [CONTROL] (Low) `web_notifications_alert_policies.py:48-59,259-267` — **resolved**: alert-policy pagination uses a count query.
 - Verified: one render contract (single-brace, save-time validated blocking `{{}}`/unknown vars); alert severity options match `AlertSeverity`.
