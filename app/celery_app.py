@@ -204,6 +204,49 @@ def _warn_on_scheduler_registry_drift(component: str) -> None:
     )
 
 
+def _warn_on_task_reliability_contract_drift(component: str) -> None:
+    try:
+        from app.services.task_reliability import (
+            find_missing_task_reliability_contracts,
+            find_stale_task_reliability_contracts,
+        )
+
+        missing = find_missing_task_reliability_contracts(celery_app.tasks.keys())
+        stale = find_stale_task_reliability_contracts(celery_app.tasks.keys())
+    except Exception:
+        logger.warning(
+            "task_reliability_contract_drift_check_failed",
+            exc_info=True,
+            extra={
+                "event": "task_reliability_contract_drift_check_failed",
+                "component": component,
+            },
+        )
+        return
+
+    if not missing and not stale:
+        logger.info(
+            "task_reliability_contract_drift_check_clean",
+            extra={
+                "event": "task_reliability_contract_drift_check_clean",
+                "component": component,
+            },
+        )
+        return
+
+    logger.warning(
+        "task_reliability_contract_drift_detected",
+        extra={
+            "event": "task_reliability_contract_drift_detected",
+            "component": component,
+            "missing_contract_count": len(missing),
+            "missing_contract_tasks": missing,
+            "stale_contract_count": len(stale),
+            "stale_contract_tasks": stale,
+        },
+    )
+
+
 @worker_process_init.connect
 def _dispose_inherited_db_connections(**_kwargs):
     """Celery prefork workers must not reuse parent-created DB connections."""
@@ -216,12 +259,14 @@ def _dispose_inherited_db_connections(**_kwargs):
 def _log_worker_boot(**_kwargs):
     _log_release_metadata("celery-worker")
     _warn_on_scheduler_registry_drift("celery-worker")
+    _warn_on_task_reliability_contract_drift("celery-worker")
 
 
 @beat_init.connect
 def _log_beat_boot(**_kwargs):
     _log_release_metadata("celery-beat")
     _warn_on_scheduler_registry_drift("celery-beat")
+    _warn_on_task_reliability_contract_drift("celery-beat")
 
 
 def _task_extra(task, task_id: str | None, **extra):

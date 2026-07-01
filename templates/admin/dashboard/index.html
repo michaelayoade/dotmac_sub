@@ -103,7 +103,33 @@
     {# ═══════════ Section 3: KPI Grid (single row, 4 cols on desktop) ═══════════ #}
     {% include "admin/dashboard/_stats.html" %}
 
-    {# ═══════════ Section 4: What's New + Quick Actions ═══════════ #}
+    {# ═══════════ Section 4: Infrastructure State ═══════════ #}
+    <section data-tour-id="dashboard-infrastructure"
+             hx-get="/admin/dashboard/server-health"
+             hx-trigger="load, every 60s"
+             hx-swap="innerHTML">
+        <div class="overflow-hidden rounded-2xl border border-slate-200/60 bg-white/95 shadow-sm dark:border-slate-700/60 dark:bg-slate-800/95">
+            <div class="flex items-center justify-between border-b border-slate-200/60 px-5 py-4 dark:border-slate-700/60">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-700 dark:bg-slate-700/50 dark:text-slate-300">
+                        {{ icon_server("h-4 w-4") }}
+                    </div>
+                    <div>
+                        <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Infrastructure</p>
+                        <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Loading infrastructure state</h3>
+                    </div>
+                </div>
+                {{ status_badge("Loading", "default", size="sm") }}
+            </div>
+            <div class="grid gap-3 p-5 sm:grid-cols-2 lg:grid-cols-4">
+                {% for label in ["RAM", "Disk", "Load", "Workers"] %}
+                <div class="h-24 animate-pulse rounded-lg bg-slate-100 dark:bg-slate-700/50" aria-label="Loading {{ label }}"></div>
+                {% endfor %}
+            </div>
+        </div>
+    </section>
+
+    {# ═══════════ Section 5: What's New + Quick Actions ═══════════ #}
     <section class="grid grid-cols-1 gap-6 xl:grid-cols-3 xl:items-stretch">
         <div class="xl:col-span-2">
             <div x-data='dashboardWhatsNew({{ (whats_new_items | default([], true)) | tojson }})'
@@ -274,10 +300,10 @@
         </div>
     </section>
 
-    {# ═══════════ Section 5: PON Outages ═══════════ #}
+    {# ═══════════ Section 6: PON Outages ═══════════ #}
     {% include "admin/dashboard/_pon_outage.html" %}
 
-    {# ═══════════ Section 6: Recent Events Table ═══════════ #}
+    {# ═══════════ Section 7: Recent Events Table ═══════════ #}
     {% if recent_activities %}
     <section data-tour-id="dashboard-recent-events" class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
         <div class="flex items-center justify-between border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">

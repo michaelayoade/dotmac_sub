@@ -29,6 +29,7 @@ from app.models.subscriber import Subscriber
 from app.services import admin_alerts as admin_alerts_service
 from app.services import admin_whats_new as admin_whats_new_service
 from app.services import app_cache
+from app.services import infrastructure_health as infrastructure_health_service
 from app.services import (
     subscriber as subscriber_service,
 )
@@ -38,6 +39,7 @@ from app.services import (
 from app.services import (
     web_admin as web_admin_service,
 )
+from app.services import web_system_health as web_system_health_service
 from app.services.audit_adapter import audit_adapter
 from app.services.audit_helpers import (
     build_recent_activity_feed,
@@ -66,6 +68,15 @@ _DASHBOARD_GLOBAL_TTL_SECONDS = float(
 _dashboard_global_lock = Lock()
 _dashboard_global_cached_at = 0.0
 _dashboard_global_cache: dict[str, object] | None = None
+
+_DASHBOARD_INFRASTRUCTURE_TTL_SECONDS = max(
+    5.0, float(os.getenv("DASHBOARD_INFRASTRUCTURE_CACHE_TTL_SECONDS", "60"))
+)
+_dashboard_infrastructure_lock = Lock()
+_dashboard_infrastructure_cached_at = 0.0
+_dashboard_infrastructure_cache: tuple[list[object], object, dict[str, int]] | None = (
+    None
+)
 
 
 def _invoice_total(inv) -> float:
@@ -890,14 +901,96 @@ def dashboard_server_health_partial(request: Request, db: Session):
     server_health_status = system_health_service.evaluate_health(
         server_health, thresholds
     )
+    try:
+        (
+            infrastructure_services,
+            worker_health,
+            service_summary,
+        ) = _load_dashboard_infrastructure_health(db)
+    except Exception:
+        logger.exception("Failed to load dashboard infrastructure health")
+        infrastructure_services = []
+        worker_health = web_system_health_service._build_worker_health([])
+        service_summary = {
+            "total": 0,
+            "up": 0,
+            "degraded": 0,
+            "down": 0,
+            "unknown": 0,
+        }
     return templates.TemplateResponse(
         "admin/dashboard/_server_health.html",
         {
             "request": request,
             "server_health": server_health,
             "server_health_status": server_health_status,
+            "infrastructure_services": infrastructure_services,
+            "worker_health": worker_health,
+            "service_summary": service_summary,
         },
     )
+
+
+def _load_dashboard_infrastructure_health(
+    db: Session,
+) -> tuple[list[object], object, dict[str, int]]:
+    """Return the infrastructure dashboard snapshot with a short process cache."""
+    global _dashboard_infrastructure_cached_at, _dashboard_infrastructure_cache
+
+    now = monotonic()
+    cached = _dashboard_infrastructure_cache
+    if (
+        cached is not None
+        and now - _dashboard_infrastructure_cached_at
+        < _DASHBOARD_INFRASTRUCTURE_TTL_SECONDS
+    ):
+        return cached
+
+    with _dashboard_infrastructure_lock:
+        now = monotonic()
+        cached = _dashboard_infrastructure_cache
+        if (
+            cached is not None
+            and now - _dashboard_infrastructure_cached_at
+            < _DASHBOARD_INFRASTRUCTURE_TTL_SECONDS
+        ):
+            return cached
+
+        infrastructure_services = infrastructure_health_service.check_all_services(db)
+        worker_health = web_system_health_service._build_worker_health(
+            infrastructure_services
+        )
+        service_summary = _build_infrastructure_service_summary(
+            infrastructure_services
+        )
+        _dashboard_infrastructure_cache = (
+            infrastructure_services,
+            worker_health,
+            service_summary,
+        )
+        _dashboard_infrastructure_cached_at = now
+        return _dashboard_infrastructure_cache
+
+
+def _build_infrastructure_service_summary(services: list[object]) -> dict[str, int]:
+    summary = {
+        "total": len(services),
+        "up": 0,
+        "degraded": 0,
+        "down": 0,
+        "unknown": 0,
+    }
+    for service in services:
+        status = str(getattr(service, "status", "unknown") or "unknown").lower()
+        if status in {"up", "healthy", "ok", "streaming"}:
+            summary["up"] += 1
+        elif status in {"degraded", "partial", "warning"}:
+            summary["degraded"] += 1
+        elif status in {"down", "critical", "failed"}:
+            summary["down"] += 1
+        else:
+            summary["unknown"] += 1
+    return summary
 
 
 def _build_dashboard_stats_summary(db: Session) -> dict:

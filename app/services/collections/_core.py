@@ -364,11 +364,7 @@ def _suspend_account(
     query = (
         db.query(Subscription)
         .filter(Subscription.subscriber_id == account.id)
-        .filter(
-            Subscription.status.in_(
-                [SubscriptionStatus.active, SubscriptionStatus.pending]
-            )
-        )
+        .filter(Subscription.status.in_(COLLECTIBLE_SERVICE_STATUSES))
     )
     subscriptions = query.all()
     suspended_count = 0
@@ -437,7 +433,11 @@ def _restore_account(
     subscriptions = (
         db.query(Subscription)
         .filter(Subscription.subscriber_id == account.id)
-        .filter(Subscription.status == SubscriptionStatus.suspended)
+        .filter(
+            Subscription.status.in_(
+                (SubscriptionStatus.suspended, SubscriptionStatus.blocked)
+            )
+        )
         .all()
     )
     restored_count = 0
@@ -907,6 +907,9 @@ def _execute_dunning_action(
         Outcome string describing what was done
     """
     account_id = str(case.account_id)
+
+    if action == DunningAction.notify and _dunning_shield_reason(db, case.account_id):
+        return "shielded"
 
     # Race + shield guard for enforcing actions. The run reads every account's
     # balance once at the top and only gets here much later, so the decision is
@@ -1418,6 +1421,9 @@ class DunningWorkflow(ListResponseMixin):
             if account_id not in postpaid_account_ids:
                 skipped += 1
                 continue
+            if _dunning_shield_reason(db, account_id):
+                skipped += 1
+                continue
 
             policy_set_id = _resolve_policy_set_for_account(db, str(account_id))
             if not policy_set_id:
@@ -1711,6 +1717,38 @@ class BillingEnforcementReconciler:
                     stats["credit_invoices_touched"] = int(
                         stats["credit_invoices_touched"]
                     ) + len(result.invoices_touched)
+                    if not has_overdue_balance(db, account_id):
+                        db.flush()
+                        from app.services.account_lifecycle import (
+                            compute_account_status,
+                        )
+
+                        invoice_id = (
+                            result.invoices_settled[0]
+                            if result.invoices_settled
+                            else (
+                                result.invoices_touched[0]
+                                if result.invoices_touched
+                                else None
+                            )
+                        )
+                        try:
+                            with db.begin_nested():
+                                restore_account_services(
+                                    db, account_id, invoice_id=invoice_id
+                                )
+                                compute_account_status(db, account_id)
+                        except Exception:
+                            logger.exception(
+                                "billing_enforcement_credit_restore_failed",
+                                extra={
+                                    "event": (
+                                        "billing_enforcement_credit_restore_failed"
+                                    ),
+                                    "account_id": account_id,
+                                    "invoice_id": invoice_id,
+                                },
+                            )
                 db.commit()
             except Exception:
                 db.rollback()
