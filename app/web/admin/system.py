@@ -1320,6 +1320,8 @@ def user_profile(request: Request, db: Session = Depends(get_db)):
         success = "Two-factor authentication enabled successfully."
     elif request.query_params.get("sessions") == "signed-out":
         success = "Other active sessions signed out."
+    elif request.query_params.get("device_login") == "updated":
+        success = "Router device login updated."
     state = web_system_profiles_service.build_profile_page_state(
         db,
         current_user=current_user,
@@ -1337,6 +1339,45 @@ def user_profile(request: Request, db: Session = Depends(get_db)):
         **state,
     }
     return templates.TemplateResponse("admin/system/profile.html", context)
+
+
+def _user_profile_template_response(
+    request: Request,
+    db: Session,
+    *,
+    error: str | None = None,
+    success: str | None = None,
+    status_code: int = 200,
+):
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    current_user = get_current_user(request)
+    auth = getattr(request.state, "auth", None) or {}
+    system_user_id = (
+        auth.get("principal_id")
+        if auth.get("principal_type") == "system_user"
+        else None
+    )
+    state = web_system_profiles_service.build_profile_page_state(
+        db,
+        current_user=current_user,
+        error=error,
+        success=success,
+        system_user_id=system_user_id,
+        current_session_id=auth.get("session_id"),
+    )
+    return templates.TemplateResponse(
+        "admin/system/profile.html",
+        {
+            "request": request,
+            "active_page": "users",
+            "active_menu": "system",
+            "current_user": current_user,
+            "sidebar_stats": get_sidebar_stats(db),
+            **state,
+        },
+        status_code=status_code,
+    )
 
 
 @router.post("/users/profile", response_class=HTMLResponse)
@@ -1398,6 +1439,101 @@ def user_profile_update(
         **state,
     }
     return templates.TemplateResponse("admin/system/profile.html", context)
+
+
+@router.post("/users/profile/device-login", response_class=HTMLResponse)
+def user_profile_device_login(
+    request: Request,
+    form_data=Depends(parse_form_data),
+    db: Session = Depends(get_db),
+):
+    """Allow router admins to set or rotate their own router RADIUS secret."""
+    from app.tasks.radius_population import sync_device_login
+
+    auth = _require_system_user_principal(request)
+    principal_id = str(auth.get("principal_id") or "")
+    if not principal_id:
+        raise HTTPException(status_code=401, detail="Unable to resolve current user")
+
+    person = web_system_profiles_service.get_subscriber(db, principal_id)
+    if not person:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    device_login_state = web_system_profiles_service.get_device_login_state(db, person)
+    if not device_login_state["device_login_eligible"]:
+        raise HTTPException(
+            status_code=403,
+            detail="Router device login is only available to router admins",
+        )
+
+    action = str(form_data.get("device_login_action") or "set")
+    current_password = str(form_data.get("current_password") or "")
+    if not web_system_profiles_service.verify_current_password(
+        db, system_user_id=person.id, password=current_password
+    ):
+        return _user_profile_template_response(
+            request,
+            db,
+            error="Current password is incorrect.",
+            status_code=400,
+        )
+
+    try:
+        if action == "revoke":
+            web_system_user_mutations_service.revoke_device_login(
+                db, user_id=str(person.id)
+            )
+            note = "Router device login revoked."
+        elif action == "set":
+            secret = str(form_data.get("device_login_secret") or "")
+            confirm = str(form_data.get("device_login_secret_confirm") or "")
+            if len(secret) < 12:
+                raise ValueError("Router password must be at least 12 characters.")
+            if not any(ch.isalpha() for ch in secret):
+                raise ValueError("Router password must include at least one letter.")
+            if not any(ch.isdigit() for ch in secret):
+                raise ValueError("Router password must include at least one number.")
+            if not any(not ch.isalnum() for ch in secret):
+                raise ValueError("Router password must include at least one symbol.")
+            if secret != confirm:
+                raise ValueError("Router password confirmation does not match.")
+            web_system_user_mutations_service.set_device_login(
+                db, user_id=str(person.id), enabled=True, secret=secret
+            )
+            note = "Router device login updated."
+        else:
+            raise ValueError("Unsupported device-login action.")
+
+        _log_system_user_event(
+            db,
+            request,
+            action=f"device_login_self_{action}",
+            user_id=str(person.id),
+            metadata={"action": action, "source": "profile"},
+        )
+        sync_device_login.delay()
+    except ValueError as exc:
+        db.rollback()
+        return _user_profile_template_response(
+            request,
+            db,
+            error=str(exc),
+            status_code=400,
+        )
+    except Exception:
+        db.rollback()
+        return _user_profile_template_response(
+            request,
+            db,
+            error="Router device-login update failed.",
+            status_code=500,
+        )
+
+    return RedirectResponse(
+        url="/admin/system/users/profile?device_login=updated",
+        status_code=303,
+        headers={"HX-Trigger": json.dumps({"showToast": {"message": note}})},
+    )
 
 
 @router.post("/users/profile/sessions/sign-out-others")
@@ -1931,6 +2067,8 @@ def user_device_login_set(
     db: Session = Depends(get_db),
 ):
     """Enable/disable device login and set/rotate the router secret."""
+    from app.services.device_login import derive_router_tier
+    from app.services.radius_population import effective_perms, effective_roles
     from app.tasks.radius_population import sync_device_login
 
     action = form_data.get("device_login_action", "set")
@@ -1942,6 +2080,13 @@ def user_device_login_set(
         else:
             enabled = bool(form_data.get("device_login_enabled"))
             secret = form_data.get("device_login_secret") or None
+            if enabled:
+                roles = effective_roles(db, UUID(user_id))
+                perms = effective_perms(db, UUID(user_id))
+                if derive_router_tier(roles, perms) is None:
+                    raise ValueError(
+                        "Router device login is only available to router admins."
+                    )
             web_system_user_mutations_service.set_device_login(
                 db, user_id=user_id, enabled=enabled, secret=secret
             )

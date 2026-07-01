@@ -71,7 +71,10 @@ def sync_device_login() -> dict[str, int]:
     from sqlalchemy import func, select
 
     from app.db import SessionLocal
-    from app.services.radius_population import populate_device_login
+    from app.services.radius_population import (
+        populate_device_login,
+        record_device_login_sync_status,
+    )
 
     logger.info("RADIUS device-login sync starting")
     lock_db = SessionLocal()
@@ -91,7 +94,17 @@ def sync_device_login() -> dict[str, int]:
         try:
             db = SessionLocal()
             try:
-                result = populate_device_login(db, dry_run=False)
+                try:
+                    result = populate_device_login(db, dry_run=False)
+                    record_device_login_sync_status(
+                        db, status="ok", result=result
+                    )
+                except Exception as exc:
+                    db.rollback()
+                    record_device_login_sync_status(
+                        db, status="failed", error=str(exc)
+                    )
+                    raise
             finally:
                 db.close()
         finally:

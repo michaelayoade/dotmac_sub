@@ -468,6 +468,70 @@ if __name__ == "__main__":
 # Staff device-login RADIUS projection
 # ---------------------------------------------------------------------------
 
+DEVICE_LOGIN_SYNC_STATUS_KEY = "device_login_last_sync"
+
+
+def get_device_login_sync_status(db) -> dict | None:
+    """Return the last staff router-login RADIUS sync status, if recorded."""
+    from app.models.domain_settings import DomainSetting, SettingDomain
+
+    row = (
+        db.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.radius)
+        .filter(DomainSetting.key == DEVICE_LOGIN_SYNC_STATUS_KEY)
+        .filter(DomainSetting.is_active.is_(True))
+        .first()
+    )
+    if not row or not isinstance(row.value_json, dict):
+        return None
+    return row.value_json
+
+
+def record_device_login_sync_status(
+    db,
+    *,
+    status: str,
+    result: dict | None = None,
+    error: str | None = None,
+) -> dict:
+    """Persist the last staff router-login RADIUS sync result."""
+    from datetime import UTC, datetime
+
+    from app.models.domain_settings import DomainSetting, SettingDomain
+    from app.models.subscription_engine import SettingValueType
+
+    payload = {
+        "status": status,
+        "synced_at": datetime.now(UTC).isoformat(),
+        "result": dict(result or {}),
+    }
+    if error:
+        payload["error"] = error
+
+    row = (
+        db.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.radius)
+        .filter(DomainSetting.key == DEVICE_LOGIN_SYNC_STATUS_KEY)
+        .first()
+    )
+    if row is None:
+        row = DomainSetting(
+            domain=SettingDomain.radius,
+            key=DEVICE_LOGIN_SYNC_STATUS_KEY,
+            value_type=SettingValueType.json,
+            value_json=payload,
+            is_active=True,
+        )
+        db.add(row)
+    else:
+        row.value_type = SettingValueType.json
+        row.value_json = payload
+        row.value_text = None
+        row.is_secret = False
+        row.is_active = True
+    db.commit()
+    return payload
+
 
 def effective_roles(db, system_user_id) -> set[str]:
     """Return the set of active role names held by a SystemUser.
@@ -556,6 +620,8 @@ def populate_device_login(
         dict with keys: considered, radcheck_upserts, radreply_upserts,
         removed, skipped_ineligible.
     """
+    from datetime import UTC, datetime
+
     from app.models.system_user import SystemUser
     from app.services.credential_crypto import decrypt_credential
     from app.services.device_login import derive_router_tier
@@ -566,6 +632,7 @@ def populate_device_login(
         "radreply_upserts": 0,
         "removed": 0,
         "skipped_ineligible": 0,
+        "app_disabled": 0,
     }
 
     # Fetch all active SystemUsers from the app DB while we still hold the
@@ -573,11 +640,13 @@ def populate_device_login(
     # (avoids holding the app transaction open during RADIUS writes).
     staff = db.query(SystemUser).filter(SystemUser.is_active.is_(True)).all()
 
-    # Build work list: (username, cleartext|None, tier|None, eligible)
-    # tier=None + eligible=True  → skipped_ineligible
-    # tier=None + eligible=False → removed
-    # tier set               → upsert
-    work: list[tuple[str, str | None, str | None, bool]] = []
+    # Build work list: (username, cleartext|None, tier|None, reason)
+    # tier=None + reason="inactive"                → removed
+    # tier=None + reason="permission_ineligible"   → skipped + app flag cleanup
+    # tier=None + reason="secret_unusable"         → skipped only
+    # tier set                                     → upsert
+    work: list[tuple[str, str | None, str | None, str]] = []
+    permission_ineligible_user_ids = []
     for u in staff:
         stats["considered"] += 1
         eligible = bool(
@@ -586,7 +655,7 @@ def populate_device_login(
             and u.device_login_secret
         )
         if not eligible:
-            work.append((u.email, None, None, False))
+            work.append((u.email, None, None, "inactive"))
             continue
 
         roles = effective_roles(db, u.id)
@@ -594,7 +663,8 @@ def populate_device_login(
         tier = derive_router_tier(roles, perms)
 
         if tier is None:
-            work.append((u.email, None, None, True))
+            permission_ineligible_user_ids.append(u.id)
+            work.append((u.email, None, None, "permission_ineligible"))
             continue
 
         try:
@@ -603,14 +673,14 @@ def populate_device_login(
             logger.warning(
                 "populate_device_login: decrypt failed for %s — skipping", u.email
             )
-            work.append((u.email, None, None, True))
+            work.append((u.email, None, None, "secret_unusable"))
             continue
 
         if not cleartext:
-            work.append((u.email, None, None, True))
+            work.append((u.email, None, None, "secret_unusable"))
             continue
 
-        work.append((u.email, cleartext, tier, True))
+        work.append((u.email, cleartext, tier, "eligible"))
 
     # Open RADIUS connection
     if _conn_factory is not None:
@@ -624,13 +694,13 @@ def populate_device_login(
 
     try:
         cur = conn.cursor()
-        for uname, cleartext, tier, ineligible_flag in work:
+        for uname, cleartext, tier, reason in work:
             # Always clean old rows first — idempotent regardless of outcome.
             cur.execute("DELETE FROM radcheck_admin WHERE username=%s", (uname,))
             cur.execute("DELETE FROM radreply_admin WHERE username=%s", (uname,))
 
             if tier is None:
-                if ineligible_flag:
+                if reason != "inactive":
                     # Also counts enabled-but-unusable users (decrypt failure / empty secret), not only permission-ineligible ones
                     stats["skipped_ineligible"] += 1
                 else:
@@ -660,6 +730,20 @@ def populate_device_login(
             conn.rollback()
         else:
             conn.commit()
+            if permission_ineligible_user_ids:
+                now = datetime.now(UTC)
+                stale_users = (
+                    db.query(SystemUser)
+                    .filter(SystemUser.id.in_(permission_ineligible_user_ids))
+                    .all()
+                )
+                for user in stale_users:
+                    if user.device_login_enabled:
+                        user.device_login_enabled = False
+                        user.device_login_revoked_at = now
+                        stats["app_disabled"] += 1
+                if stats["app_disabled"]:
+                    db.commit()
     finally:
         conn.close()
 

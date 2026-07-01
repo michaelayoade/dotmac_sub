@@ -272,6 +272,40 @@ def test_ineligible_skipped(db_session, radius_admin_engine, conn_factory, monke
     assert n == 0
 
 
+def test_read_write_router_perms_disable_stale_device_login_flag(
+    db_session, radius_admin_engine, conn_factory, monkeypatch
+):
+    """Only router admins are projected; stale app flags are disabled."""
+    user = _seed_staff(db_session, email="ops@dotmac", enabled=True)
+
+    monkeypatch.setattr(
+        "app.services.radius_population.effective_perms",
+        lambda db, uid: {"router:read", "router:write", "router:push_config"},
+    )
+    monkeypatch.setattr(
+        "app.services.radius_population.effective_roles",
+        lambda db, uid: set(),
+    )
+
+    stats = populate_device_login(db_session, dry_run=False, _conn_factory=conn_factory)
+
+    assert stats["skipped_ineligible"] == 1
+    assert stats["radcheck_upserts"] == 0
+    assert stats["radreply_upserts"] == 0
+    assert stats["app_disabled"] == 1
+
+    db_session.refresh(user)
+    assert user.device_login_enabled is False
+    assert user.device_login_revoked_at is not None
+
+    with radius_admin_engine.connect() as conn:
+        n = conn.execute(
+            text("SELECT count(*) FROM radcheck_admin WHERE username=:u"),
+            {"u": "ops@dotmac"},
+        ).scalar()
+    assert n == 0
+
+
 def test_dry_run_makes_no_writes(
     db_session, radius_admin_engine, conn_factory, monkeypatch
 ):

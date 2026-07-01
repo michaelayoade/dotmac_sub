@@ -9,10 +9,11 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models.auth import ApiKey, MFAMethod, UserCredential
+from app.models.auth import ApiKey, AuthProvider, MFAMethod, UserCredential
 from app.models.rbac import Permission, Role, SystemUserPermission, SystemUserRole
 from app.models.system_user import SystemUser
 from app.services import session_manager as session_manager_service
+from app.services.auth_flow import verify_password
 from app.services.common import coerce_uuid
 
 logger = logging.getLogger(__name__)
@@ -77,6 +78,61 @@ def get_profile_data(db: Session, person_id: str | UUID | None) -> dict[str, Any
         "mfa_enabled": mfa_enabled,
         "api_key_count": api_key_count,
     }
+
+
+def get_device_login_state(db: Session, person: SystemUser | None) -> dict[str, Any]:
+    """Return self-service router device-login state for a system user."""
+    from app.services.radius_population import get_device_login_sync_status
+
+    sync_status = get_device_login_sync_status(db)
+    if not person:
+        return {
+            "device_login_tier": None,
+            "device_login_eligible": False,
+            "device_login_enabled": False,
+            "device_login_secret_set_at": None,
+            "device_login_revoked_at": None,
+            "device_login_sync_status": sync_status,
+        }
+
+    from app.services.device_login import derive_router_tier
+    from app.services.radius_population import effective_perms, effective_roles
+
+    roles = effective_roles(db, person.id)
+    perms = effective_perms(db, person.id)
+    tier = derive_router_tier(roles, perms)
+    return {
+        "device_login_tier": tier,
+        "device_login_eligible": tier is not None,
+        "device_login_enabled": bool(
+            person.device_login_enabled
+            and person.device_login_revoked_at is None
+            and person.device_login_secret
+        ),
+        "device_login_secret_set_at": person.device_login_secret_set_at,
+        "device_login_revoked_at": person.device_login_revoked_at,
+        "device_login_sync_status": sync_status,
+    }
+
+
+def verify_current_password(
+    db: Session, *, system_user_id: str | UUID, password: str
+) -> bool:
+    """Verify the active local portal password for a system user."""
+    if not password:
+        return False
+    credential = (
+        db.execute(
+            select(UserCredential)
+            .where(UserCredential.system_user_id == coerce_uuid(system_user_id))
+            .where(UserCredential.provider == AuthProvider.local)
+            .where(UserCredential.is_active.is_(True))
+            .limit(1)
+        )
+        .scalars()
+        .first()
+    )
+    return bool(credential and verify_password(password, credential.password_hash))
 
 
 def update_profile(
@@ -215,6 +271,7 @@ def build_profile_page_state(
     if resolved_person_id is None and current_user:
         resolved_person_id = current_user.get("person_id")
     profile_data = get_profile_data(db, resolved_person_id)
+    device_login_state = get_device_login_state(db, profile_data["person"])
     active_sessions = []
     if profile_data["person"]:
         active_sessions = session_manager_service.list_sessions(
@@ -233,6 +290,7 @@ def build_profile_page_state(
         "api_key_count": profile_data["api_key_count"],
         "active_sessions": active_sessions,
         "other_session_count": other_session_count,
+        **device_login_state,
         "error": error,
         "success": success,
     }
