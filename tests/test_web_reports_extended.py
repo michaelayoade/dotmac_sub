@@ -1,6 +1,10 @@
+from datetime import UTC, datetime
+
+import pytest
 from sqlalchemy import func, select
 from sqlalchemy.dialects import postgresql
 
+from app.models.bandwidth import BandwidthSample
 from app.services import web_reports_extended
 
 
@@ -57,3 +61,41 @@ def test_bandwidth_export_contains_filtered_usage_by_plan():
     assert "2026-01-01" in content
     assert "Unlimited Basic,300,9.25,8" in content
     assert "Jane Customer,Unlimited Basic,42,1.29" in content
+
+
+def test_bandwidth_report_aggregates_once_per_subscription(
+    db_session, subscriber, subscription, catalog_offer
+):
+    subscriber.first_name = "Jane"
+    subscriber.last_name = "Customer"
+    db_session.add(
+        BandwidthSample(
+            subscription_id=subscription.id,
+            rx_bps=8_000_000,
+            tx_bps=2_000_000,
+            sample_at=datetime(2026, 1, 15, 12, tzinfo=UTC),
+        )
+    )
+    db_session.commit()
+
+    data = web_reports_extended.get_bandwidth_report_data(
+        db_session,
+        date_from="2026-01-15",
+        date_to="2026-01-15",
+    )
+
+    expected_gb = (10_000_000 / 8 * 86_400) / (1024**3)
+    assert data["total_gb"] == pytest.approx(expected_gb, abs=0.01)
+    assert data["avg_rx_mbps"] == 8
+    assert data["avg_tx_mbps"] == 2
+    assert data["active_subscribers"] == 1
+    assert data["usage_by_plan"] == [
+        {
+            "name": catalog_offer.name,
+            "avg_mbps": 10.0,
+            "usage_gb": pytest.approx(expected_gb, abs=0.01),
+            "subscribers": 1,
+        }
+    ]
+    assert data["top_consumers"][0]["subscriber"] == "Jane Customer"
+    assert data["top_consumers"][0]["plan"] == catalog_offer.name
