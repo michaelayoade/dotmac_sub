@@ -51,6 +51,61 @@ def _parse_json_field(raw: str | None, field: str) -> dict:
     return parsed
 
 
+def _validate_action_value(
+    db: Session, action_type: AutomationActionType, action_value: dict
+) -> dict:
+    if action_type == AutomationActionType.assign_team:
+        team_id = str(action_value.get("service_team_id") or "").strip()
+        if not team_id:
+            raise ValueError("action_value.service_team_id is required.")
+        try:
+            UUID(team_id)
+        except ValueError as exc:
+            raise ValueError("action_value.service_team_id must be a valid UUID.") from exc
+        configured = {
+            item["id"] for item in support_ticket_settings_service.list_service_teams(db)
+        }
+        if team_id not in configured:
+            raise ValueError("action_value.service_team_id must match a configured service team.")
+        return {"service_team_id": team_id}
+    if action_type == AutomationActionType.assign_technician:
+        person_id = str(action_value.get("technician_person_id") or "").strip()
+        if not person_id:
+            raise ValueError("action_value.technician_person_id is required.")
+        try:
+            UUID(person_id)
+        except ValueError as exc:
+            raise ValueError(
+                "action_value.technician_person_id must be a valid UUID."
+            ) from exc
+        return {"technician_person_id": person_id}
+    if action_type == AutomationActionType.set_priority:
+        priority = str(action_value.get("priority") or "").strip()
+        if priority not in support_ticket_settings_service.list_priority_options(db):
+            raise ValueError("action_value.priority must be a configured priority.")
+        return {"priority": priority}
+    if action_type == AutomationActionType.set_status:
+        status = str(action_value.get("status") or "").strip()
+        if status not in support_ticket_settings_service.list_status_options(db):
+            raise ValueError("action_value.status must be a configured status.")
+        return {"status": status}
+    if action_type == AutomationActionType.set_due_in_hours:
+        raw_hours = action_value.get("hours")
+        try:
+            hours = int(raw_hours)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("action_value.hours must be a whole number.") from exc
+        if hours <= 0:
+            raise ValueError("action_value.hours must be greater than zero.")
+        return {"hours": hours}
+    if action_type == AutomationActionType.add_tag:
+        tag = str(action_value.get("tag") or "").strip()
+        if not tag:
+            raise ValueError("action_value.tag is required.")
+        return {"tag": tag}
+    return action_value
+
+
 @router.get(
     "",
     response_class=HTMLResponse,
@@ -92,13 +147,16 @@ def automation_create(
 ):
     try:
         conditions = _parse_json_field(conditions_json, "conditions")
-        action_value = _parse_json_field(action_value_json, "action_value")
+        action = AutomationActionType(action_type)
+        action_value = _validate_action_value(
+            db, action, _parse_json_field(action_value_json, "action_value")
+        )
         automation_service.create_rule(
             db,
             name=name,
             description=description,
             trigger=AutomationTrigger(trigger),
-            action_type=AutomationActionType(action_type),
+            action_type=action,
             conditions=conditions,
             action_value=action_value,
             sort_order=sort_order,
@@ -165,14 +223,17 @@ def automation_update(
 ):
     try:
         conditions = _parse_json_field(conditions_json, "conditions")
-        action_value = _parse_json_field(action_value_json, "action_value")
+        action = AutomationActionType(action_type)
+        action_value = _validate_action_value(
+            db, action, _parse_json_field(action_value_json, "action_value")
+        )
         automation_service.update_rule(
             db,
             str(rule_id),
             name=name,
             description=description,
             trigger=AutomationTrigger(trigger),
-            action_type=AutomationActionType(action_type),
+            action_type=action,
             conditions=conditions,
             action_value=action_value,
             sort_order=sort_order,

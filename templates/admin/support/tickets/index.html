@@ -62,7 +62,7 @@
             </div>
             <div class="lg:col-span-2">
                 <label class="sr-only">Status</label>
-                <select name="status" class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                <select name="status" hx-trigger="change" class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
                     <option value="">All Statuses</option>
                     {% for s in all_statuses %}
                     <option value="{{ s }}" {% if status == s %}selected{% endif %}>{{ s|replace('_', ' ')|title }}</option>
@@ -71,7 +71,7 @@
             </div>
             <div class="lg:col-span-2">
                 <label class="sr-only">Ticket Type</label>
-                <select name="ticket_type" class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                <select name="ticket_type" hx-trigger="change" class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
                     <option value="">All Types</option>
                     {% for t in ticket_type_options %}
                     <option value="{{ t }}" {% if ticket_type == t %}selected{% endif %}>{{ t }}</option>
@@ -80,7 +80,7 @@
             </div>
             <div class="lg:col-span-2">
                 <label class="sr-only">Assignee Scope</label>
-                <select name="assigned_to_me" class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                <select name="assigned_to_me" hx-trigger="change" class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
                     <option value="0" {% if not assigned_to_me %}selected{% endif %}>All Assignees</option>
                     <option value="1" {% if assigned_to_me %}selected{% endif %}>Assigned To Me</option>
                 </select>
@@ -113,21 +113,21 @@
             <div class="mt-3 grid gap-2 md:grid-cols-3">
                 <div>
                     <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Project Manager</label>
-                    <select name="project_manager_person_id" class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700">
+                    <select name="project_manager_person_id" hx-trigger="change" class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700">
                         <option value="">All</option>
                         {% for p in staff_options %}<option value="{{ p.id }}" {% if project_manager_person_id == p.id %}selected{% endif %}>{{ p.label }}</option>{% endfor %}
                     </select>
                 </div>
                 <div>
                     <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Site Coordinator</label>
-                    <select name="site_coordinator_person_id" class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700">
+                    <select name="site_coordinator_person_id" hx-trigger="change" class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700">
                         <option value="">All</option>
                         {% for p in staff_options %}<option value="{{ p.id }}" {% if site_coordinator_person_id == p.id %}selected{% endif %}>{{ p.label }}</option>{% endfor %}
                     </select>
                 </div>
                 <div>
                     <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Subscriber / Customer</label>
-                    <select name="subscriber_id" class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700">
+                    <select name="subscriber_id" hx-trigger="change" class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700">
                         <option value="">All</option>
                         {% for p in subscriber_options %}<option value="{{ p.id }}" {% if subscriber_id == p.id %}selected{% endif %}>{{ p.label }}</option>{% endfor %}
                     </select>

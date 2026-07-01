@@ -60,11 +60,11 @@
                         {{ status_badge("Active" if rule.is_active else "Inactive", "active" if rule.is_active else "inactive", size="sm") }}
                         {% if rule.last_error %}
                         <p class="mt-1 text-[10px] text-rose-600 dark:text-rose-400" title="{{ rule.last_error }}">
-                            ⚠ Last error {{ rule.last_error_at.strftime('%b %d %H:%M') if rule.last_error_at else '' }}
+                            Last error {{ rule.last_error_at.strftime('%b %d %H:%M UTC') if rule.last_error_at else '' }}
                         </p>
                         {% elif rule.last_fired_at %}
                         <p class="mt-1 text-[10px] text-emerald-600 dark:text-emerald-400">
-                            ✓ Fired {{ rule.last_fired_at.strftime('%b %d %H:%M') }}
+                            Fired {{ rule.last_fired_at.strftime('%b %d %H:%M UTC') }}
                         </p>
                         {% else %}
                         <p class="mt-1 text-[10px] text-slate-400">Never fired</p>

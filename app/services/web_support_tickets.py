@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -82,12 +82,8 @@ def parse_dt_or_none(value: str | None) -> datetime | None:
         return None
 
 
-def service_team_options() -> list[dict[str, str]]:
-    return [
-        {"id": "8e4f0b90-2de0-4d8c-8af1-c3f3a5f6ca01", "label": "Field Operations"},
-        {"id": "3ac5eb8c-bdcf-4d03-9c8c-623ee7f8898e", "label": "Core Network"},
-        {"id": "df39d87d-d31e-4dc8-9968-6fd95d7bb67f", "label": "Customer Support"},
-    ]
+def service_team_options(db: Session) -> list[dict[str, str]]:
+    return support_ticket_settings_service.list_service_teams(db)
 
 
 def visible_ticket_columns(raw_cookie: str | None) -> list[str]:
@@ -115,8 +111,8 @@ def _label_lookup(options: list[dict[str, str]]) -> dict[str, str]:
     return {item["id"]: item["label"] for item in options if item.get("id")}
 
 
-def _service_team_lookup() -> dict[str, str]:
-    return {item["id"]: item["label"] for item in service_team_options()}
+def _service_team_lookup(db: Session) -> dict[str, str]:
+    return {item["id"]: item["label"] for item in service_team_options(db)}
 
 
 def _append_missing_option(options: list[str], value: str | None) -> list[str]:
@@ -124,6 +120,26 @@ def _append_missing_option(options: list[str], value: str | None) -> list[str]:
     if not text or text in options:
         return options
     return [*options, text]
+
+
+def _ticket_sla_state(
+    ticket: Ticket, *, now: datetime | None = None
+) -> dict[str, object]:
+    current = now or datetime.now(UTC)
+    due_at = ticket.due_at
+    if due_at and due_at.tzinfo is None:
+        due_at = due_at.replace(tzinfo=UTC)
+    created_at = ticket.created_at
+    if created_at and created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=UTC)
+    terminal = support_ticket_settings_service.status_is_terminal(ticket.status)
+    return {
+        "breached": bool(due_at and due_at < current and not terminal),
+        "age_hours": int((current - created_at).total_seconds() // 3600)
+        if created_at
+        else 0,
+        "terminal": terminal,
+    }
 
 
 def _status_summary_cards(db: Session) -> list[dict[str, str | int]]:
@@ -335,7 +351,7 @@ def build_ticket_form_context(
         "all_channels": [item.value for item in TicketChannel],
         "region_options": support_service.regions(db),
         "ticket_type_options": ticket_type_options,
-        "service_team_options": service_team_options(),
+        "service_team_options": service_team_options(db),
         "staff_options": staff,
         "subscriber_options": support_service.list_people(
             db,
@@ -596,7 +612,10 @@ def link_ticket_from_form(
     link_type: str,
     actor_id: str | None,
 ):
-    payload = TicketLinkCreate(to_ticket_id=UUID(to_ticket_id), link_type=link_type)
+    to_ticket_uuid = parse_uuid_or_none(to_ticket_id)
+    if not to_ticket_uuid:
+        raise ValueError("Target ticket must be a valid ticket UUID.")
+    payload = TicketLinkCreate(to_ticket_id=to_ticket_uuid, link_type=link_type)
     return support_service.tickets.link_ticket(
         db,
         from_ticket_id=ticket_id,
@@ -616,10 +635,13 @@ def merge_ticket_from_form(
     reason: str | None,
     actor_id: str | None,
 ):
+    target_uuid = parse_uuid_or_none(target_ticket_id)
+    if not target_uuid:
+        raise ValueError("Target ticket must be a valid ticket UUID.")
     return support_service.tickets.merge(
         db,
         ticket_id,
-        TicketMergeRequest(target_ticket_id=UUID(target_ticket_id), reason=reason),
+        TicketMergeRequest(target_ticket_id=target_uuid, reason=reason),
         actor_id=actor_id,
         request=request,
     )
@@ -713,7 +735,7 @@ def build_tickets_list_context(
     priority_options = support_ticket_settings_service.list_priority_options(db)
     status_options = _append_missing_option(status_options, status)
     offset = (page - 1) * per_page
-    rows = support_service.tickets.list(
+    rows_plus_one = support_service.tickets.list(
         db,
         search=search,
         status=status,
@@ -724,9 +746,11 @@ def build_tickets_list_context(
         subscriber_id=subscriber_id,
         order_by=order_by,
         order_dir=order_dir,
-        limit=per_page,
+        limit=per_page + 1,
         offset=offset,
     )
+    has_next_page = len(rows_plus_one) > per_page
+    rows = rows_plus_one[:per_page]
     assignment_ids: list[object | None] = []
     subscriber_ids: list[object | None] = [subscriber_id]
     for ticket in rows:
@@ -769,7 +793,7 @@ def build_tickets_list_context(
         "order_dir": order_dir,
         "page": page,
         "per_page": per_page,
-        "has_next_page": len(rows) >= per_page,
+        "has_next_page": has_next_page,
         "status_summary_cards": _status_summary_cards(db),
         "visible_columns": visible_ticket_columns(visible_columns_cookie),
         "ticket_columns": TICKET_COLUMNS,
@@ -780,6 +804,8 @@ def build_tickets_list_context(
         "staff_lookup": _label_lookup(staff),
         "subscriber_options": subscribers,
         "subscriber_lookup": _label_lookup(subscribers),
+        "sla_states": {str(ticket.id): _ticket_sla_state(ticket) for ticket in rows},
+        "status_colors": support_ticket_settings_service.status_color_options(db),
     }
 
 
@@ -845,8 +871,10 @@ def build_ticket_detail_context(db: Session, *, ticket_lookup: str) -> dict:
         "staff_options": staff,
         "staff_lookup": _label_lookup(staff),
         "subscriber_lookup": _label_lookup(subscribers),
-        "service_team_options": service_team_options(),
-        "service_team_lookup": _service_team_lookup(),
+        "service_team_options": service_team_options(db),
+        "service_team_lookup": _service_team_lookup(db),
+        "sla_state": _ticket_sla_state(ticket),
+        "status_colors": support_ticket_settings_service.status_color_options(db),
         "is_merged_source": bool(
             ticket.merged_into_ticket_id
             or support_ticket_settings_service.status_is_merged(ticket.status)

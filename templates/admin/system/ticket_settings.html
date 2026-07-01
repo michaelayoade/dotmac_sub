@@ -12,7 +12,7 @@
                 <span class="text-slate-900 dark:text-white">Ticket Settings</span>
             </nav>
             <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Ticket Settings</h1>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Manage the status, priority, and ticket type options used on the support ticket creation form.</p>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Manage the ticket taxonomy, routing controls, SLA targets, and status display used by support workflows.</p>
         </div>
         <a href="/admin/support/tickets/new" class="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Open Ticket Form</a>
     </div>
@@ -88,6 +88,158 @@
             </section>
         </div>
 
+        <div class="grid gap-6 xl:grid-cols-2">
+            <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="flex items-start justify-between gap-3">
+                    <div>
+                        <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Regions</h2>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Regions are normalized to lowercase keys and used by routing rules.</p>
+                    </div>
+                    <button type="button" @click="regionValues.push('')" class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Add</button>
+                </div>
+                <div class="mt-4 space-y-2">
+                    <template x-for="(value, index) in regionValues" :key="`region-${index}`">
+                        <div class="flex items-center gap-2">
+                            <input type="text" name="region_values" x-model="regionValues[index]" placeholder="north" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <button type="button" @click="removeRow(regionValues, index)" class="rounded-lg border border-red-200 px-3 py-2 text-xs font-medium text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-900/30">Remove</button>
+                        </div>
+                    </template>
+                </div>
+            </section>
+
+            <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="flex items-start justify-between gap-3">
+                    <div>
+                        <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Service Teams</h2>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Team IDs are persisted and shown to automation rules; blank IDs are generated on save.</p>
+                    </div>
+                    <button type="button" @click="serviceTeams.push({id: '', label: ''})" class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Add</button>
+                </div>
+                <div class="mt-4 space-y-2">
+                    <template x-for="(team, index) in serviceTeams" :key="team.id || `team-${index}`">
+                        <div class="grid gap-2 md:grid-cols-[1fr_2fr_auto]">
+                            <input type="text" name="service_team_ids" x-model="team.id" placeholder="auto" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <input type="text" name="service_team_labels" x-model="team.label" placeholder="Field Operations" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <button type="button" @click="removeRow(serviceTeams, index)" class="rounded-lg border border-red-200 px-3 py-2 text-xs font-medium text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-900/30">Remove</button>
+                        </div>
+                    </template>
+                </div>
+            </section>
+        </div>
+
+        <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <div>
+                    <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Routing Rules</h2>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Region rules fill empty assignment fields when a ticket is created or manually auto-assigned.</p>
+                </div>
+                <div class="flex items-center gap-3">
+                    <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
+                        <input type="checkbox" name="auto_assign_enabled" value="1" x-model="autoAssignEnabled" class="rounded border-slate-300 text-amber-600">
+                        Auto-assign enabled
+                    </label>
+                    <button type="button" @click="routingRules.push({region: '', ticket_manager_person_id: '', site_coordinator_person_id: '', technician_person_id: '', service_team_id: '', assignee_person_ids: ''})" class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Add</button>
+                </div>
+            </div>
+            <div class="mt-4 space-y-3">
+                <template x-for="(rule, index) in routingRules" :key="`route-${index}`">
+                    <div class="grid gap-2 rounded-lg border border-slate-200 p-3 dark:border-slate-700 md:grid-cols-3">
+                        <select name="routing_regions" x-model="rule.region" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Region</option>
+                            <template x-for="region in regionValues" :key="region"><option :value="region" x-text="region"></option></template>
+                        </select>
+                        <select name="routing_service_team_ids" x-model="rule.service_team_id" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Service team</option>
+                            <template x-for="team in serviceTeams" :key="team.id"><option :value="team.id" x-text="team.label || team.id"></option></template>
+                        </select>
+                        <input type="text" name="routing_assignee_person_ids" x-model="rule.assignee_person_ids" placeholder="Assignee UUIDs, comma-separated" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <select name="routing_technician_person_ids" x-model="rule.technician_person_id" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Technician</option>
+                            {% for person in staff_options %}<option value="{{ person.id }}">{{ person.label }}</option>{% endfor %}
+                        </select>
+                        <select name="routing_ticket_manager_person_ids" x-model="rule.ticket_manager_person_id" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Project manager</option>
+                            {% for person in staff_options %}<option value="{{ person.id }}">{{ person.label }}</option>{% endfor %}
+                        </select>
+                        <div class="flex gap-2">
+                            <select name="routing_site_coordinator_person_ids" x-model="rule.site_coordinator_person_id" class="min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <option value="">Site coordinator</option>
+                                {% for person in staff_options %}<option value="{{ person.id }}">{{ person.label }}</option>{% endfor %}
+                            </select>
+                            <button type="button" @click="removeRow(routingRules, index)" class="rounded-lg border border-red-200 px-3 py-2 text-xs font-medium text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-900/30">Remove</button>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </section>
+
+        <div class="grid gap-6 xl:grid-cols-2">
+            <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="flex items-start justify-between gap-3">
+                    <div>
+                        <h2 class="text-lg font-semibold text-slate-900 dark:text-white">SLA Policy</h2>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Resolution hours drive automatic due dates when no manual due date is entered.</p>
+                    </div>
+                </div>
+                <div class="mt-4 space-y-2">
+                    <template x-for="(row, index) in slaRows" :key="row.priority">
+                        <div class="grid grid-cols-4 gap-2">
+                            <input type="hidden" name="sla_priorities" x-model="row.priority">
+                            <div class="rounded-lg bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-200" x-text="row.priority"></div>
+                            <input type="number" min="0" name="sla_response_hours" x-model="row.response_hours" placeholder="Response" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <input type="number" min="0" name="sla_resolution_hours" x-model="row.resolution_hours" placeholder="Resolution" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <input type="number" min="0" name="sla_aging_hours" x-model="row.aging_hours" placeholder="Aging" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                    </template>
+                </div>
+            </section>
+
+            <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="flex items-start justify-between gap-3">
+                    <div>
+                        <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Status Colors</h2>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Custom statuses can be assigned a badge color instead of always falling back to grey.</p>
+                    </div>
+                </div>
+                <div class="mt-4 space-y-2">
+                    <template x-for="(row, index) in statusColorRows" :key="row.status">
+                        <div class="grid grid-cols-[1fr_1fr] gap-2">
+                            <input type="hidden" name="status_color_statuses" x-model="row.status">
+                            <div class="rounded-lg bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-200" x-text="row.status"></div>
+                            <select name="status_color_values" x-model="row.color" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                {% for color in status_color_variants %}<option value="{{ color }}">{{ color|title }}</option>{% endfor %}
+                            </select>
+                        </div>
+                    </template>
+                </div>
+            </section>
+        </div>
+
+        <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="flex items-start justify-between gap-3">
+                <div>
+                    <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Team Membership</h2>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Members are added as ticket assignees when their service team is selected by a routing rule.</p>
+                </div>
+                <button type="button" @click="teamMembers.push({team_id: '', person_id: ''})" class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Add</button>
+            </div>
+            <div class="mt-4 space-y-2">
+                <template x-for="(member, index) in teamMembers" :key="`member-${index}`">
+                    <div class="grid gap-2 md:grid-cols-[1fr_1fr_auto]">
+                        <select name="team_member_team_ids" x-model="member.team_id" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Team</option>
+                            <template x-for="team in serviceTeams" :key="team.id"><option :value="team.id" x-text="team.label || team.id"></option></template>
+                        </select>
+                        <select name="team_member_person_ids" x-model="member.person_id" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Member</option>
+                            {% for person in staff_options %}<option value="{{ person.id }}">{{ person.label }}</option>{% endfor %}
+                        </select>
+                        <button type="button" @click="removeRow(teamMembers, index)" class="rounded-lg border border-red-200 px-3 py-2 text-xs font-medium text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-900/30">Remove</button>
+                    </div>
+                </template>
+            </div>
+        </section>
+
         <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-200">
             Keep the built-in status keys <code>resolved</code>, <code>closed</code>, <code>canceled</code>, and <code>merged</code> if you want existing ticket lifecycle timestamps and reporting to keep their current behavior.
         </div>
@@ -101,13 +253,43 @@
 
 <script>
 function ticketSettingsPage() {
+    const routingConfig = {{ routing_rules|tojson }};
+    const membersConfig = {{ service_team_members|tojson }};
+    const slaPolicy = {{ sla_policy|tojson }};
+    const statusColors = {{ status_colors|tojson }};
     return {
         statusValues: {{ status_options|tojson }},
         priorityValues: {{ priority_options|tojson }},
         ticketTypeValues: {{ ticket_type_options|tojson }},
+        regionValues: {{ region_options|tojson }},
+        serviceTeams: {{ service_team_options|tojson }},
+        autoAssignEnabled: {{ auto_assign_enabled|tojson }},
+        routingRules: Object.entries(routingConfig).map(([region, rule]) => ({
+            region,
+            ticket_manager_person_id: rule.ticket_manager_person_id || '',
+            site_coordinator_person_id: rule.site_coordinator_person_id || '',
+            technician_person_id: rule.technician_person_id || '',
+            service_team_id: rule.service_team_id || '',
+            assignee_person_ids: (rule.assignee_person_ids || []).join(', '),
+        })),
+        teamMembers: Object.entries(membersConfig).flatMap(([team_id, members]) =>
+            (members || []).map((person_id) => ({team_id, person_id}))
+        ),
+        slaRows: Object.entries(slaPolicy).map(([priority, row]) => ({
+            priority,
+            response_hours: row.response_hours || 0,
+            resolution_hours: row.resolution_hours || 0,
+            aging_hours: row.aging_hours || 0,
+        })),
+        statusColorRows: {{ status_options|tojson }}.map((status) => ({
+            status,
+            color: statusColors[status] || 'slate',
+        })),
         removeRow(list, index) {
             if (list.length <= 1) {
-                list[index] = '';
+                if (typeof list[index] === 'string') {
+                    list[index] = '';
+                }
                 return;
             }
             list.splice(index, 1);

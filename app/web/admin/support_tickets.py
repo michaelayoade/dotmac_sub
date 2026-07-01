@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from urllib.parse import urlencode
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
@@ -320,13 +321,27 @@ def ticket_add_comment(
 def ticket_auto_assign(
     request: Request, ticket_id: UUID, db: Session = Depends(get_db)
 ):
-    support_web_service.auto_assign_ticket(
+    result = support_web_service.auto_assign_ticket(
         db,
         request=request,
         ticket_id=str(ticket_id),
         actor_id=_actor_id(request),
     )
-    return RedirectResponse(url=f"/admin/support/tickets/{ticket_id}", status_code=303)
+    changes = result.get("changes") if isinstance(result, dict) else None
+    if result.get("matched") and changes:
+        message = f"Auto-assign applied {len(changes)} field(s)."
+        status = "success"
+    elif result.get("matched"):
+        message = "Auto-assign matched, but no empty assignment fields changed."
+        status = "info"
+    else:
+        reason = str(result.get("reason") or "no matching rule").replace("_", " ")
+        message = f"Auto-assign did not run: {reason}."
+        status = "warning"
+    query = urlencode({"auto_assign_status": status, "auto_assign_message": message})
+    return RedirectResponse(
+        url=f"/admin/support/tickets/{ticket_id}?{query}", status_code=303
+    )
 
 
 @router.post(
@@ -341,14 +356,27 @@ def ticket_link(
     link_type: str = Form(...),
     db: Session = Depends(get_db),
 ):
-    support_web_service.link_ticket_from_form(
-        db,
-        request=request,
-        ticket_id=str(ticket_id),
-        to_ticket_id=to_ticket_id,
-        link_type=link_type,
-        actor_id=_actor_id(request),
-    )
+    try:
+        support_web_service.link_ticket_from_form(
+            db,
+            request=request,
+            ticket_id=str(ticket_id),
+            to_ticket_id=to_ticket_id,
+            link_type=link_type,
+            actor_id=_actor_id(request),
+        )
+    except ValueError as exc:
+        db.rollback()
+        context = _ctx(request, db)
+        context.update(
+            support_web_service.build_ticket_detail_context(
+                db, ticket_lookup=str(ticket_id)
+            )
+        )
+        context["action_error"] = str(exc)
+        return templates.TemplateResponse(
+            "admin/support/tickets/detail.html", context, status_code=400
+        )
     return RedirectResponse(url=f"/admin/support/tickets/{ticket_id}", status_code=303)
 
 
@@ -364,14 +392,27 @@ def ticket_merge(
     reason: str | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
-    target = support_web_service.merge_ticket_from_form(
-        db,
-        request=request,
-        ticket_id=str(ticket_id),
-        target_ticket_id=target_ticket_id,
-        reason=reason,
-        actor_id=_actor_id(request),
-    )
+    try:
+        target = support_web_service.merge_ticket_from_form(
+            db,
+            request=request,
+            ticket_id=str(ticket_id),
+            target_ticket_id=target_ticket_id,
+            reason=reason,
+            actor_id=_actor_id(request),
+        )
+    except ValueError as exc:
+        db.rollback()
+        context = _ctx(request, db)
+        context.update(
+            support_web_service.build_ticket_detail_context(
+                db, ticket_lookup=str(ticket_id)
+            )
+        )
+        context["action_error"] = str(exc)
+        return templates.TemplateResponse(
+            "admin/support/tickets/detail.html", context, status_code=400
+        )
     return RedirectResponse(url=f"/admin/support/tickets/{target.id}", status_code=303)
 
 
