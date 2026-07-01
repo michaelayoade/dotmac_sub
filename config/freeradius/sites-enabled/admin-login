@@ -3,26 +3,59 @@
 # Listens on dedicated ports 1822 (auth) / 1823 (acct) and authenticates
 # staff credentials ONLY against the *_admin tables via the sql_admin module.
 # The subscriber default server (port 1812/1813) is completely separate.
+#
+# RADIUS clients for the admin realm ONLY: the routers' management source
+# subnets. The shared secret comes from $ENV{ADMIN_RADIUS_SECRET}; each router's
+# `/radius service=login` entry MUST use the same value. Scoped to the 1822/1823
+# listeners via `clients = admin_clients` below, so it never affects the
+# subscriber server (which loads clients from the SQL `nas` table).
+
+clients admin_clients {
+    client abuja_mgmt {
+        ipaddr = 160.119.124.0/22
+        secret = $ENV{ADMIN_RADIUS_SECRET}
+        nas_type = other
+    }
+    client lagos_mgmt {
+        ipaddr = 102.220.188.0/22
+        secret = $ENV{ADMIN_RADIUS_SECRET}
+        nas_type = other
+    }
+}
 
 server admin-login {
     listen {
         type = auth
         ipaddr = *
         port = 1822
+        clients = admin_clients
     }
 
     listen {
         type = acct
         ipaddr = *
         port = 1823
+        clients = admin_clients
     }
 
     authorize {
         filter_username
         preprocess
-        chap
-        mschap
+        # Load the staff password FIRST: mschap must derive NT-Password from
+        # Cleartext-Password. If sql runs AFTER mschap, MS-CHAPv2 fails with
+        # "mschap: No NT-Password. Cannot perform authentication".
         sql_admin            # ONLY the staff auth set
+        chap
+        # RouterOS device login uses MS-CHAPv2. Explicitly select the MS-CHAP
+        # Auth-Type when its attributes are present, otherwise the mschap module
+        # sets Auth-Type=mschap (lowercase) and the authenticate{} MS-CHAP
+        # handler never matches -> silent reject.
+        if (&MS-CHAP-Challenge && (&MS-CHAP-Response || &MS-CHAP2-Response)) {
+            update control {
+                Auth-Type := MS-CHAP
+            }
+        }
+        mschap
         pap
     }
 

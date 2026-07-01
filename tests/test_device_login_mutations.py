@@ -61,3 +61,33 @@ def test_reenable_without_secret_clears_revoked(db_session, system_user):
     # Both conditions must hold
     assert u.device_login_enabled is True
     assert u.device_login_revoked_at is None
+
+
+def test_set_device_login_commit_false_does_not_commit(
+    db_session, system_user, monkeypatch
+):
+    """commit=False flushes but does not commit, so the caller (route) can commit
+    the credential change and its audit row atomically. It still applies the
+    change in-session for the caller to persist.
+    """
+    import unittest.mock as mock
+
+    spy = mock.Mock(wraps=db_session.commit)
+    monkeypatch.setattr(db_session, "commit", spy)
+
+    # commit=False leaves transaction ownership with the route handler.
+    set_device_login(
+        db_session,
+        user_id=str(system_user.id),
+        enabled=True,
+        secret="P@ss",
+        commit=False,
+    )
+    spy.assert_not_called()
+    assert system_user.device_login_enabled is True  # applied, pending caller commit
+
+    # Default (commit=True) still commits — backward compatible.
+    set_device_login(
+        db_session, user_id=str(system_user.id), enabled=False, secret=None
+    )
+    spy.assert_called()

@@ -99,7 +99,7 @@ from app.tasks.provisioning import (
 )
 from app.tasks.quotes import reconcile_quote_mirror
 from app.tasks.radius import run_radius_sync_job
-from app.tasks.radius_population import refresh_radius_from_subs
+from app.tasks.radius_population import refresh_radius_from_subs, sync_device_login
 from app.tasks.referrals import reconcile_referral_mirror
 from app.tasks.router_sync import (
     capture_scheduled_snapshots,
@@ -234,6 +234,7 @@ __all__ = [
     "run_service_migration_job",
     "retry_pending_compensation_failures",
     "refresh_radius_from_subs",
+    "sync_device_login",
     "run_vpn_control_job",
     "run_vpn_health_scan",
     "deliver_webhook",

@@ -624,20 +624,39 @@ def populate_device_login(
 
     try:
         cur = conn.cursor()
-        for uname, cleartext, tier, ineligible_flag in work:
-            # Always clean old rows first — idempotent regardless of outcome.
+
+        # Desired end-state: eligible active users with a derivable tier.
+        desired = {
+            uname: (cleartext, tier)
+            for (uname, cleartext, tier, _elig) in work
+            if tier is not None
+        }
+        # Eligible (device-login enabled, not revoked, secret present) but with
+        # no usable tier — permission-ineligible, decrypt failure, or empty.
+        stats["skipped_ineligible"] = sum(
+            1 for (_u, _c, tier, elig) in work if tier is None and elig
+        )
+
+        # Authoritative removal: delete ANY admin RADIUS row whose username is
+        # not in the desired set. This is driven off the RADIUS side (not the
+        # active work list) so it also revokes staff who were DEACTIVATED,
+        # DELETED, or RENAMED (email change) after being projected — none of
+        # which appear in `work` (which only scans active users). Without this,
+        # router login can survive staff deactivation.
+        cur.execute(
+            "SELECT username FROM radcheck_admin "
+            "UNION SELECT username FROM radreply_admin"
+        )
+        existing = {row[0] for row in cur.fetchall()}
+        for uname in existing - set(desired):
             cur.execute("DELETE FROM radcheck_admin WHERE username=%s", (uname,))
             cur.execute("DELETE FROM radreply_admin WHERE username=%s", (uname,))
+            stats["removed"] += 1
 
-            if tier is None:
-                if ineligible_flag:
-                    # Also counts enabled-but-unusable users (decrypt failure / empty secret), not only permission-ineligible ones
-                    stats["skipped_ineligible"] += 1
-                else:
-                    stats["removed"] += 1
-                continue
-
-            # Upsert
+        # Upsert desired users (DELETE+INSERT keeps it idempotent).
+        for uname, (cleartext, tier) in desired.items():
+            cur.execute("DELETE FROM radcheck_admin WHERE username=%s", (uname,))
+            cur.execute("DELETE FROM radreply_admin WHERE username=%s", (uname,))
             cur.execute(
                 "INSERT INTO radcheck_admin (username, attribute, op, value) "
                 "VALUES (%s, 'Cleartext-Password', ':=', %s)",
