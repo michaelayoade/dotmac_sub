@@ -235,8 +235,9 @@ def test_disabled_staff_removed(db_session, radius_admin_engine, conn_factory):
     stats = populate_device_login(db_session, dry_run=False, _conn_factory=conn_factory)
 
     assert stats["considered"] >= 1
-    # removed counts the disabled user (enabled=False → treated as removed not skipped_ineligible)
-    assert stats["removed"] == 1
+    # Never projected, so there is nothing to delete: removed counts actual
+    # stale-row deletions, not disabled users scanned.
+    assert stats["removed"] == 0
 
     with radius_admin_engine.connect() as conn:
         n = conn.execute(
@@ -295,6 +296,85 @@ def test_dry_run_makes_no_writes(
     with radius_admin_engine.connect() as conn:
         n = conn.execute(text("SELECT count(*) FROM radcheck_admin")).scalar()
     assert n == 0
+
+
+def _grant_router_admin(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.radius_population.effective_perms",
+        lambda db, uid: {"router:admin"},
+    )
+    monkeypatch.setattr(
+        "app.services.radius_population.effective_roles",
+        lambda db, uid: set(),
+    )
+
+
+def test_deactivated_staff_revoked(
+    db_session, radius_admin_engine, conn_factory, monkeypatch
+):
+    """A projected staff member who is later DEACTIVATED must lose router access.
+
+    Regression: the sync must be authoritative over the whole *_admin set —
+    a deactivated user no longer appears in the active work list, so a
+    per-active-user cleanup would leave their row behind and router login would
+    survive offboarding.
+    """
+    user = _seed_staff(db_session, email="leaver@dotmac", enabled=True)
+    _grant_router_admin(monkeypatch)
+
+    # First sync projects the user.
+    populate_device_login(db_session, dry_run=False, _conn_factory=conn_factory)
+    with radius_admin_engine.connect() as conn:
+        assert conn.execute(
+            text("SELECT count(*) FROM radcheck_admin WHERE username=:u"),
+            {"u": "leaver@dotmac"},
+        ).scalar() == 1
+
+    # Offboard: deactivate the account (device-login fields untouched).
+    user.is_active = False
+    db_session.commit()
+
+    stats = populate_device_login(db_session, dry_run=False, _conn_factory=conn_factory)
+    assert stats["removed"] >= 1
+
+    with radius_admin_engine.connect() as conn:
+        assert conn.execute(
+            text("SELECT count(*) FROM radcheck_admin WHERE username=:u"),
+            {"u": "leaver@dotmac"},
+        ).scalar() == 0
+        assert conn.execute(
+            text("SELECT count(*) FROM radreply_admin WHERE username=:u"),
+            {"u": "leaver@dotmac"},
+        ).scalar() == 0
+
+
+def test_email_rename_moves_login(
+    db_session, radius_admin_engine, conn_factory, monkeypatch
+):
+    """Renaming a staff email must remove the old RADIUS username, not orphan it."""
+    user = _seed_staff(db_session, email="old.name@dotmac", enabled=True)
+    _grant_router_admin(monkeypatch)
+
+    populate_device_login(db_session, dry_run=False, _conn_factory=conn_factory)
+    with radius_admin_engine.connect() as conn:
+        assert conn.execute(
+            text("SELECT count(*) FROM radcheck_admin WHERE username=:u"),
+            {"u": "old.name@dotmac"},
+        ).scalar() == 1
+
+    user.email = "new.name@dotmac"
+    db_session.commit()
+
+    populate_device_login(db_session, dry_run=False, _conn_factory=conn_factory)
+    with radius_admin_engine.connect() as conn:
+        assert conn.execute(
+            text("SELECT count(*) FROM radcheck_admin WHERE username=:u"),
+            {"u": "old.name@dotmac"},
+        ).scalar() == 0
+        assert conn.execute(
+            text("SELECT count(*) FROM radcheck_admin WHERE username=:u"),
+            {"u": "new.name@dotmac"},
+        ).scalar() == 1
 
 
 def test_idempotent_upsert(db_session, radius_admin_engine, conn_factory, monkeypatch):
