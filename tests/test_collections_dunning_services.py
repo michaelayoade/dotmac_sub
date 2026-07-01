@@ -527,6 +527,112 @@ def test_suspend_waits_for_minimum_notice_runway(
     assert not get_active_locks(db_session, subscription_id=str(subscription.id))
 
 
+def test_immediate_suspend_step_waits_until_actual_overdue_runway(
+    db_session, subscriber, subscription, catalog_offer
+):
+    """A day-0 suspend policy still waits until the real overdue age reaches
+    the configured notice runway."""
+    from app.services.account_lifecycle import get_active_locks
+    from app.services.collections._core import _execute_dunning_action
+
+    _setup_overdue_postpaid_account(db_session, subscriber, subscription, catalog_offer)
+    case = DunningCase(
+        account_id=subscriber.id,
+        status=DunningCaseStatus.open,
+        started_at=datetime.now(UTC),
+    )
+    db_session.add(case)
+    db_session.commit()
+
+    outcome = _execute_dunning_action(
+        db_session,
+        case,
+        DunningAction.suspend,
+        day_offset=0,
+        note=None,
+        overdue_days=2,
+    )
+
+    assert outcome == "notice_grace_active"
+    assert not get_active_locks(db_session, subscription_id=str(subscription.id))
+
+
+def test_immediate_suspend_step_uses_actual_overdue_days_for_runway(
+    db_session, subscriber, subscription, catalog_offer
+):
+    """Regression: day-0 policies must not be permanently blocked by the
+    minimum notice runway once the customer is actually old enough."""
+    from app.services.account_lifecycle import get_active_locks
+    from app.services.collections._core import _execute_dunning_action
+
+    _setup_overdue_postpaid_account(db_session, subscriber, subscription, catalog_offer)
+    case = DunningCase(
+        account_id=subscriber.id,
+        status=DunningCaseStatus.open,
+        started_at=datetime.now(UTC),
+    )
+    db_session.add(case)
+    db_session.commit()
+
+    outcome = _execute_dunning_action(
+        db_session,
+        case,
+        DunningAction.suspend,
+        day_offset=0,
+        note=None,
+        overdue_days=3,
+    )
+
+    assert outcome == "suspended"
+    assert get_active_locks(db_session, subscription_id=str(subscription.id))
+
+
+def test_dunning_run_day_zero_suspend_uses_actual_overdue_days(
+    db_session, subscriber, subscription, catalog_offer
+):
+    """The scheduled workflow must pass real overdue age to the runway gate,
+    not the policy step day."""
+    from app.models.catalog import (
+        DunningAction as CatalogDunningAction,
+        PolicyDunningStep,
+        PolicySet,
+    )
+    from app.models.collections import DunningActionLog
+    from app.schemas.collections import DunningRunRequest
+    from app.services.account_lifecycle import get_active_locks
+
+    _setup_overdue_postpaid_account(db_session, subscriber, subscription, catalog_offer)
+    policy_set = PolicySet(name="Immediate Suspend Test Policy")
+    db_session.add(policy_set)
+    db_session.flush()
+    db_session.add(
+        PolicyDunningStep(
+            policy_set_id=policy_set.id,
+            day_offset=0,
+            action=CatalogDunningAction.suspend,
+            note="day-0 suspend",
+        )
+    )
+    catalog_offer.policy_set_id = policy_set.id
+    if subscription.offer_version is not None:
+        subscription.offer_version.policy_set_id = policy_set.id
+    db_session.commit()
+
+    response = collections_service.dunning_workflow.run(
+        db_session, DunningRunRequest()
+    )
+
+    log = (
+        db_session.query(DunningActionLog)
+        .filter(DunningActionLog.action == DunningAction.suspend)
+        .one()
+    )
+    assert response.actions_created == 1
+    assert log.step_day == 0
+    assert log.outcome == "suspended"
+    assert get_active_locks(db_session, subscription_id=str(subscription.id))
+
+
 def test_suspend_not_blocked_by_notification_backlog_by_default(
     db_session, subscriber, subscription, catalog_offer
 ):
