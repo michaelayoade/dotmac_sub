@@ -28,11 +28,24 @@ logger = logging.getLogger(__name__)
 SANDBOX_BASE_URL = "https://sandbox.vtpass.com/api"
 # Lagos is UTC+1, no DST.
 _LAGOS_OFFSET = timedelta(hours=1)
+DEFAULT_GET_TIMEOUT_SECONDS = 20.0
+DEFAULT_POST_TIMEOUT_SECONDS = 45.0
+MIN_TIMEOUT_SECONDS = 1.0
+MAX_TIMEOUT_SECONDS = 120.0
 
 
 def _setting(db: Session, key: str) -> str | None:
     value = settings_spec.resolve_value(db, SettingDomain.vas, key)
     return str(value) if value not in (None, "") else None
+
+
+def _timeout(db: Session, key: str, default: float) -> float:
+    raw = _setting(db, key)
+    try:
+        parsed = float(raw) if raw is not None else default
+    except (TypeError, ValueError):
+        parsed = default
+    return max(MIN_TIMEOUT_SECONDS, min(MAX_TIMEOUT_SECONDS, parsed))
 
 
 def _base_url(db: Session) -> str:
@@ -66,7 +79,7 @@ def _get(db: Session, path: str, params: dict | None = None) -> dict:
             f"{_base_url(db)}/{path}",
             params=params,
             headers=_get_headers(db),
-            timeout=20.0,
+            timeout=_timeout(db, "vtpass_get_timeout_seconds", DEFAULT_GET_TIMEOUT_SECONDS),
         )
         response.raise_for_status()
         body = response.json()
@@ -80,13 +93,22 @@ def _get(db: Session, path: str, params: dict | None = None) -> dict:
     return body
 
 
-def _post(db: Session, path: str, payload: dict, *, timeout: float = 45.0) -> dict:
+def _post(
+    db: Session,
+    path: str,
+    payload: dict,
+    *,
+    timeout: float | None = None,
+    timeout_key: str = "vtpass_post_timeout_seconds",
+) -> dict:
     try:
         response = httpx.post(
             f"{_base_url(db)}/{path}",
             json=payload,
             headers=_post_headers(db),
-            timeout=timeout,
+            timeout=timeout
+            if timeout is not None
+            else _timeout(db, timeout_key, DEFAULT_POST_TIMEOUT_SECONDS),
         )
         response.raise_for_status()
         body = response.json()
@@ -128,7 +150,12 @@ def verify_merchant(
     payload: dict[str, Any] = {"serviceID": service_id, "billersCode": billers_code}
     if variation_type:
         payload["type"] = variation_type
-    body = _post(db, "merchant-verify", payload, timeout=20.0)
+    body = _post(
+        db,
+        "merchant-verify",
+        payload,
+        timeout_key="vtpass_verify_timeout_seconds",
+    )
     content = body.get("content")
     if not isinstance(content, dict) or content.get("error"):
         detail = (
@@ -183,4 +210,9 @@ def pay(
 
 
 def requery(db: Session, request_id: str) -> dict:
-    return _post(db, "requery", {"request_id": request_id}, timeout=20.0)
+    return _post(
+        db,
+        "requery",
+        {"request_id": request_id},
+        timeout_key="vtpass_requery_timeout_seconds",
+    )

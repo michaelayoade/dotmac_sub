@@ -2,6 +2,7 @@
 
 import logging
 from decimal import Decimal, InvalidOperation
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -17,6 +18,12 @@ templates = get_customer_templates()
 router = APIRouter(prefix="/portal", tags=["web-customer"])
 
 logger = logging.getLogger(__name__)
+
+
+def _error_message(detail) -> str:
+    if isinstance(detail, dict):
+        return str(detail.get("message") or detail.get("detail") or detail)
+    return str(detail)
 
 
 def _jsonable_catalog(catalog: list[dict]) -> list[dict]:
@@ -68,9 +75,12 @@ def customer_bills_hub(request: Request, db: Session = Depends(get_db)) -> Respo
             "active_page": "wallet",
             "catalog": catalog,
             "balance": overview["balance"],
+            "currency": overview["currency"],
+            "currency_symbol": overview["currency_symbol"],
             "transactions": transactions,
             "token_for": vas_purchases_service.transaction_token,
             "form_error": request.query_params.get("error"),
+            "duplicate_confirm_required": request.query_params.get("duplicate") == "1",
         },
     )
 
@@ -109,6 +119,7 @@ def customer_bills_purchase(
     variation_code: str = Form(""),
     amount: str = Form(""),
     phone: str = Form(""),
+    confirm_duplicate: bool = Form(False),
     db: Session = Depends(get_db),
 ) -> Response:
     customer = get_current_customer_from_request(request, db)
@@ -131,10 +142,15 @@ def customer_bills_purchase(
             variation_code=variation_code.strip() or None,
             amount=value,
             phone=phone.strip() or None,
+            confirm_duplicate=confirm_duplicate,
         )
     except HTTPException as exc:
+        message = _error_message(exc.detail)
+        params = {"error": message}
+        if exc.status_code == 409:
+            params["duplicate"] = "1"
         return RedirectResponse(
-            url=f"/portal/bills?error={exc.detail}", status_code=303
+            url=f"/portal/bills?{urlencode(params)}", status_code=303
         )
     return RedirectResponse(url=f"/portal/bills/receipt/{txn.id}", status_code=303)
 
@@ -159,5 +175,7 @@ def customer_bills_receipt(
             "active_page": "wallet",
             "txn": txn,
             "token": vas_purchases_service.transaction_token(txn),
+            "currency_symbol": vas_wallet_service.currency_symbol(db),
+            "non_terminal": txn.status.value not in {"delivered", "refunded", "failed"},
         },
     )

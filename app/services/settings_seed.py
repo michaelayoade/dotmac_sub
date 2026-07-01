@@ -1259,6 +1259,54 @@ def seed_vas_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text=os.getenv("VAS_AUTH_THRESHOLD", "5000"),
     )
+    vas_settings.ensure_by_key(
+        db,
+        key="purchase_dedupe_window_seconds",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("VAS_PURCHASE_DEDUPE_WINDOW_SECONDS", "300"),
+    )
+    vas_settings.ensure_by_key(
+        db,
+        key="pay_bill_dedupe_window_seconds",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("VAS_PAY_BILL_DEDUPE_WINDOW_SECONDS", "60"),
+    )
+    vas_settings.ensure_by_key(
+        db,
+        key="requery_max_attempts",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("VAS_REQUERY_MAX_ATTEMPTS", "10"),
+    )
+    vas_settings.ensure_by_key(
+        db,
+        key="slow_settlement_categories",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("VAS_SLOW_SETTLEMENT_CATEGORIES", "electricity-bill"),
+    )
+    vas_settings.ensure_by_key(
+        db,
+        key="vtpass_get_timeout_seconds",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("VTPASS_GET_TIMEOUT_SECONDS", "20"),
+    )
+    vas_settings.ensure_by_key(
+        db,
+        key="vtpass_post_timeout_seconds",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("VTPASS_POST_TIMEOUT_SECONDS", "45"),
+    )
+    vas_settings.ensure_by_key(
+        db,
+        key="vtpass_verify_timeout_seconds",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("VTPASS_VERIFY_TIMEOUT_SECONDS", "20"),
+    )
+    vas_settings.ensure_by_key(
+        db,
+        key="vtpass_requery_timeout_seconds",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("VTPASS_REQUERY_TIMEOUT_SECONDS", "20"),
+    )
 
 
 def seed_scheduler_settings(db: Session) -> None:

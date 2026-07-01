@@ -9,9 +9,12 @@ import pytest
 from fastapi import HTTPException
 
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.subscription_engine import SettingValueType
 from app.models.subscriber import Subscriber
 from app.models.vas import VasEntryCategory
+from app.schemas.settings import DomainSettingUpdate
 from app.services import vas_wallet
+from app.services.domain_settings import billing_settings, vas_settings
 
 
 def _enable_vas(db_session):
@@ -79,6 +82,54 @@ class TestWalletLedger:
             category=VasEntryCategory.purchase,
         )
         assert vas_wallet.wallet_balance(db_session, wallet.id) == Decimal("3799.50")
+
+    def test_currency_and_topup_limits_are_single_sourced(self, db_session):
+        _enable_vas(db_session)
+        billing_settings.upsert_by_key(
+            db_session,
+            "default_currency",
+            DomainSettingUpdate(
+                value_type=SettingValueType.string,
+                value_text="USD",
+            ),
+        )
+        vas_settings.upsert_by_key(
+            db_session,
+            "topup_min",
+            DomainSettingUpdate(value_type=SettingValueType.integer, value_text="250"),
+        )
+        vas_settings.upsert_by_key(
+            db_session,
+            "topup_max_per_txn",
+            DomainSettingUpdate(value_type=SettingValueType.integer, value_text="7500"),
+        )
+        subscriber = _subscriber(db_session)
+
+        overview = vas_wallet.wallet_overview(db_session, str(subscriber.id))
+
+        assert overview["currency"] == "USD"
+        assert overview["currency_symbol"] == "$"
+        assert overview["min_topup"] == 250
+        assert overview["max_topup"] == 7500
+
+    def test_funding_provider_prefers_topup_memo_then_default(self, db_session):
+        _enable_vas(db_session)
+        subscriber = _subscriber(db_session)
+        wallet = vas_wallet.get_or_create_wallet(db_session, str(subscriber.id))
+        entry = vas_wallet.credit_wallet(
+            db_session,
+            wallet,
+            amount=Decimal("1000.00"),
+            category=VasEntryCategory.topup,
+            reference="flutter-ref",
+            memo="Wallet top-up via flutterwave",
+        )
+
+        assert vas_wallet.funding_provider_for_entry(db_session, entry) == "flutterwave"
+
+        entry.memo = None
+        db_session.commit()
+        assert vas_wallet.funding_provider_for_entry(db_session, entry) == "paystack"
 
     def test_get_or_create_is_idempotent(self, db_session):
         subscriber = _subscriber(db_session)

@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime, time
 from decimal import Decimal
+from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
@@ -30,7 +31,10 @@ from app.models.vas import (
 from app.services import settings_spec
 from app.services.billing._common import lock_account
 from app.services.common import coerce_uuid
+from app.services.domain_settings import vas_settings
 from app.services.payment_gateway_adapter import payment_gateway_adapter
+from app.schemas.settings import DomainSettingUpdate
+from app.models.subscription_engine import SettingValueType
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +48,34 @@ def _setting_int(db: Session, key: str, default: int) -> int:
         return int(str(value)) if value is not None else default
     except (TypeError, ValueError):
         return default
+
+
+def _billing_setting(db: Session, key: str, default: str) -> str:
+    value = settings_spec.resolve_value(db, SettingDomain.billing, key)
+    text = str(value or "").strip()
+    return text or default
+
+
+def currency_code(db: Session) -> str:
+    return _billing_setting(db, "default_currency", "NGN").upper()
+
+
+def currency_symbol(db: Session) -> str:
+    symbols = {"NGN": "₦", "USD": "$", "EUR": "€", "GBP": "£"}
+    return symbols.get(currency_code(db), currency_code(db))
+
+
+def topup_limits(db: Session) -> dict[str, int]:
+    return {
+        "min_topup": _setting_int(db, "topup_min", 100),
+        "max_topup": _setting_int(db, "topup_max_per_txn", 50000),
+        "daily_limit": _setting_int(db, "topup_daily_limit", 100000),
+        "auth_threshold": _setting_int(db, "auth_threshold", 5000),
+    }
+
+
+def pay_bill_dedupe_window_seconds(db: Session) -> int:
+    return max(0, _setting_int(db, "pay_bill_dedupe_window_seconds", 60))
 
 
 def is_enabled(db: Session) -> bool:
@@ -143,6 +175,7 @@ def _write_entry(
         entry_type=entry_type,
         category=category,
         amount=amount,
+        currency=currency_code(db),
         reference=reference,
         payment_id=payment_id,
         memo=memo,
@@ -243,9 +276,10 @@ def initiate_reseller_topup(db: Session, reseller_id: str, amount: Decimal) -> d
 
 def _initiate_topup_for_wallet(db: Session, wallet: VasWallet, amount: Decimal) -> dict:
     amount = Decimal(str(amount))
-    min_amount = Decimal(_setting_int(db, "topup_min", 100))
-    max_amount = Decimal(_setting_int(db, "topup_max_per_txn", 50000))
-    daily_limit = Decimal(_setting_int(db, "topup_daily_limit", 100000))
+    limits = topup_limits(db)
+    min_amount = Decimal(limits["min_topup"])
+    max_amount = Decimal(limits["max_topup"])
+    daily_limit = Decimal(limits["daily_limit"])
     if amount < min_amount:
         raise HTTPException(
             status_code=400, detail=f"Minimum top-up is {min_amount:.0f}"
@@ -270,7 +304,7 @@ def _initiate_topup_for_wallet(db: Session, wallet: VasWallet, amount: Decimal) 
         "provider_public_key": context.public_key,
         "reference": context.reference,
         "amount": amount,
-        "currency": "NGN",
+        "currency": currency_code(db),
     }
 
 
@@ -447,10 +481,11 @@ def pay_bill(
                 },
             )
 
-    # Double-submit guard: an identical bill payment within the last minute
-    # is almost certainly a double-click, not intent.
+    # Double-submit guard: an identical bill payment within the configured
+    # window is almost certainly a double-click, not intent.
     from datetime import timedelta
 
+    dedupe_window = pay_bill_dedupe_window_seconds(db)
     recent = (
         db.query(VasWalletEntry)
         .filter(
@@ -458,9 +493,12 @@ def pay_bill(
             VasWalletEntry.entry_type == VasEntryType.debit,
             VasWalletEntry.category == VasEntryCategory.bill_payment,
             VasWalletEntry.amount == amount,
-            VasWalletEntry.created_at >= datetime.now(UTC) - timedelta(seconds=60),
+            VasWalletEntry.created_at
+            >= datetime.now(UTC) - timedelta(seconds=dedupe_window),
         )
         .first()
+        if dedupe_window > 0
+        else None
     )
     if recent:
         if reservation is not None:
@@ -540,6 +578,7 @@ def set_auto_deduct(db: Session, subscriber_id: str, enabled: bool) -> VasWallet
 def wallet_overview(db: Session, subscriber_id: str, *, limit: int = 20) -> dict:
     require_enabled(db)
     wallet = get_or_create_wallet(db, subscriber_id)
+    limits = topup_limits(db)
     entries = (
         db.query(VasWalletEntry)
         .filter(VasWalletEntry.wallet_id == wallet.id)
@@ -550,10 +589,12 @@ def wallet_overview(db: Session, subscriber_id: str, *, limit: int = 20) -> dict
     return {
         "balance": wallet_balance(db, wallet.id),
         "auto_pay_bill_enabled": wallet.auto_pay_bill_enabled,
-        "currency": "NGN",
-        "min_topup": _setting_int(db, "topup_min", 100),
-        "max_topup": _setting_int(db, "topup_max_per_txn", 50000),
-        "auth_threshold": _setting_int(db, "auth_threshold", 5000),
+        "currency": currency_code(db),
+        "currency_symbol": currency_symbol(db),
+        "min_topup": limits["min_topup"],
+        "max_topup": limits["max_topup"],
+        "daily_limit": limits["daily_limit"],
+        "auth_threshold": limits["auth_threshold"],
         "entries": entries,
     }
 
@@ -585,7 +626,9 @@ def run_auto_deduct_sweep(db: Session) -> dict:
     and allocation are the Payments service's responsibility.
     """
     if not is_enabled(db):
-        return {"status": "disabled", "paid": 0}
+        result = {"status": "disabled", "paid": 0}
+        record_auto_deduct_result(db, result)
+        return result
     paid = 0
     errors = 0
     swept_total = Decimal("0.00")
@@ -613,12 +656,35 @@ def run_auto_deduct_sweep(db: Session) -> dict:
         except Exception as exc:
             errors += 1
             logger.warning("vas auto-deduct failed for wallet %s: %s", wallet.id, exc)
-    return {
+    result = {
         "status": "ok",
         "paid": paid,
         "errors": errors,
         "swept_total": str(swept_total),
     }
+    record_auto_deduct_result(db, result)
+    return result
+
+
+def record_auto_deduct_result(db: Session, result: dict[str, Any]) -> None:
+    payload = dict(result)
+    payload["finished_at"] = datetime.now(UTC).isoformat()
+    vas_settings.upsert_by_key(
+        db,
+        "auto_deduct_last_result",
+        DomainSettingUpdate(
+            value_type=SettingValueType.json,
+            value_json=payload,
+        ),
+    )
+
+
+def last_auto_deduct_result(db: Session) -> dict[str, Any] | None:
+    try:
+        setting = vas_settings.get_by_key(db, "auto_deduct_last_result")
+    except Exception:
+        return None
+    return setting.value_json if isinstance(setting.value_json, dict) else None
 
 
 def wallet_entries(db: Session, wallet_id, *, limit: int = 20) -> list[VasWalletEntry]:
@@ -668,3 +734,13 @@ def refund_reference_exists(db: Session, entry_id: str) -> bool:
         .first()
         is not None
     )
+
+
+def funding_provider_for_entry(db: Session, entry: VasWalletEntry) -> str:
+    memo = str(entry.memo or "").strip().lower()
+    prefix = "wallet top-up via "
+    if memo.startswith(prefix):
+        provider = memo.removeprefix(prefix).strip()
+        if provider:
+            return provider
+    return _provider(db)
