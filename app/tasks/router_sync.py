@@ -24,6 +24,31 @@ from app.services.router_management.inventory import RouterInventory
 logger = logging.getLogger(__name__)
 
 
+def _fetch_config_export(router) -> str:
+    """Pull a router's full config via the RouterOS REST API.
+
+    ``/export`` is a RouterOS *command*, so it must be invoked with **POST** —
+    ``GET /rest/export`` returns ``400 "no such command"``. The REST user's group
+    also needs the ``sensitive`` policy or the export comes back empty. The
+    response is a JSON array of config lines (or plain text on some builds);
+    normalise both to a single ``.rsc``-style text blob.
+    """
+    data = RouterConnectionService.execute(router, "POST", "/export")
+    return _export_to_text(data)
+
+
+def _export_to_text(data) -> str:
+    if isinstance(data, str):
+        return data
+    if isinstance(data, list):
+        return "\n".join(
+            item if isinstance(item, str) else json.dumps(item) for item in data
+        )
+    if isinstance(data, dict):
+        return json.dumps(data)
+    return str(data)
+
+
 @celery_app.task(name="router_sync.sync_all_system_info")
 def sync_all_system_info() -> dict:
     db = db_session_adapter.create_session()
@@ -110,8 +135,7 @@ def capture_scheduled_snapshots() -> dict:
         failed = 0
         for router in routers:
             try:
-                data = RouterConnectionService.execute(router, "GET", "/export")
-                config_text = data if isinstance(data, str) else str(data)
+                config_text = _fetch_config_export(router)
                 # store_snapshot commits its own short transaction.
                 RouterConfigService.store_snapshot(
                     db,
@@ -150,8 +174,7 @@ def _capture_post_snapshot(db, router: Router) -> RouterConfigSnapshot | None:
     result is still recorded even if the router is now unreachable.
     """
     try:
-        post_data = RouterConnectionService.execute(router, "GET", "/export")
-        post_text = post_data if isinstance(post_data, str) else str(post_data)
+        post_text = _fetch_config_export(router)
         return RouterConfigService.store_snapshot(
             db,
             router_id=router.id,
@@ -229,8 +252,7 @@ def execute_config_push(push_id: str) -> dict:
             start_time = time.time()
             responses: list = []
             try:
-                pre_data = RouterConnectionService.execute(router, "GET", "/export")
-                pre_text = pre_data if isinstance(pre_data, str) else str(pre_data)
+                pre_text = _fetch_config_export(router)
                 pre_snap = RouterConfigService.store_snapshot(
                     db,
                     router_id=router.id,
