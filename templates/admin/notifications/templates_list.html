@@ -34,15 +34,36 @@
         </div>
     </div>
 
+    <!-- Filters -->
+    <div class="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <form method="get" action="/admin/notifications/templates" class="flex flex-col gap-3 md:flex-row md:items-end">
+            <div class="flex-1">
+                <label for="search" class="mb-1 block text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Search</label>
+                <input id="search" name="search" value="{{ search or '' }}" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white" placeholder="Name, code, or subject">
+            </div>
+            <div>
+                <label for="status" class="mb-1 block text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Status</label>
+                <select id="status" name="status" class="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+                    <option value="" {{ 'selected' if not status else '' }}>All</option>
+                    <option value="active" {{ 'selected' if status == 'active' else '' }}>Active</option>
+                    <option value="inactive" {{ 'selected' if status == 'inactive' else '' }}>Inactive</option>
+                </select>
+            </div>
+            {% if channel %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
+            <button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">Apply</button>
+        </form>
+    </div>
+
     <!-- Channel Filters -->
     <div class="flex flex-wrap items-center gap-2">
-        <a href="/admin/notifications/templates"
+        {% set filter_qs = ('&status=' ~ status if status else '') ~ ('&search=' ~ search|urlencode if search else '') %}
+        <a href="/admin/notifications/templates{% if status or search %}?{{ filter_qs[1:] }}{% endif %}"
            class="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium transition-colors {{ 'bg-primary-100 text-primary-700 dark:bg-primary-900 dark:text-primary-300' if not channel else 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600' }}">
             All
             <span class="rounded-full bg-white/50 px-1.5 py-0.5 text-xs">{{ (channel_counts.email + channel_counts.sms + channel_counts.push + channel_counts.whatsapp + channel_counts.webhook) if channel_counts else 0 }}</span>
         </a>
         {% for ch in channels %}
-        <a href="/admin/notifications/templates?channel={{ ch }}"
+        <a href="/admin/notifications/templates?channel={{ ch }}{{ filter_qs }}"
            class="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium transition-colors {{ 'bg-primary-100 text-primary-700 dark:bg-primary-900 dark:text-primary-300' if channel == ch else 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600' }}">
             {{ ch | capitalize }}
             <span class="rounded-full bg-white/50 px-1.5 py-0.5 text-xs">{{ channel_counts.get(ch, 0) if channel_counts else 0 }}</span>
@@ -97,10 +118,16 @@
                             {% endif %}
                         </td>
                         <td class="px-6 py-4 text-right">
-                            <a href="/admin/notifications/templates/{{ template.id }}"
-                               class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">
-                                Edit
-                            </a>
+                            <div class="flex justify-end gap-3">
+                                <form method="post" action="/admin/notifications/templates/{{ template.id }}/toggle" onsubmit="return confirm('{{ 'Deactivate this template?' if template.is_active else 'Activate this template? It can feed automated customer sends.' }}');">
+                                    {% include "components/forms/csrf_input.html" %}
+                                    <button type="submit" class="text-sm font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">{{ 'Deactivate' if template.is_active else 'Activate' }}</button>
+                                </form>
+                                <a href="/admin/notifications/templates/{{ template.id }}"
+                                   class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">
+                                    Edit
+                                </a>
+                            </div>
                         </td>
                     </tr>
                     {% endfor %}
@@ -122,7 +149,7 @@
         </div>
 
         {% if total_pages > 1 %}
-        {% set _extra %}{% if channel %}&channel={{ channel }}{% endif %}{% endset %}
+        {% set _extra %}{% if channel %}&channel={{ channel }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% if search %}&search={{ search|urlencode }}{% endif %}{% endset %}
         <div class="flex items-center justify-between border-t border-slate-200 bg-white px-6 py-3 dark:border-slate-700 dark:bg-slate-800">
             <div class="text-sm text-slate-500 dark:text-slate-400">
                 Showing {{ ((page - 1) * per_page) + 1 }} to {{ [page * per_page, total] | min }} of {{ total }} templates

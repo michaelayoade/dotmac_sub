@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
+from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.notification import (
     Notification,
     NotificationChannel,
@@ -19,6 +22,18 @@ def _queued_notification(
         status=NotificationStatus.queued,
         is_active=True,
     )
+
+
+def _set_notification_setting(db, key: str, value: str) -> None:
+    db.add(
+        DomainSetting(
+            domain=SettingDomain.notification,
+            key=key,
+            value_text=value,
+            is_active=True,
+        )
+    )
+    db.commit()
 
 
 def test_deliver_notification_queue_handles_sms_and_whatsapp(db_session, monkeypatch):
@@ -196,3 +211,66 @@ def test_deliver_notification_queue_expires_stale_notifications(
     assert stale.status == NotificationStatus.canceled
     assert stale.last_error == "expired_in_queue"
     assert fresh.status == NotificationStatus.delivered
+
+
+def test_deliver_notification_queue_applies_per_channel_rate_limit(
+    db_session, monkeypatch
+):
+    _set_notification_setting(db_session, "notification_per_channel_rate_limit", "1")
+    first = _queued_notification(
+        channel=NotificationChannel.sms,
+        recipient="+2348000000001",
+        body="SMS one",
+    )
+    second = _queued_notification(
+        channel=NotificationChannel.sms,
+        recipient="+2348000000002",
+        body="SMS two",
+    )
+    db_session.add_all([first, second])
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "app.tasks.notifications.sms_service.send_sms", lambda **_: True
+    )
+
+    from app.tasks.notifications import _deliver_notification_queue_stats
+
+    stats = _deliver_notification_queue_stats(db_session, batch_size=10)
+
+    db_session.refresh(first)
+    db_session.refresh(second)
+    assert stats["delivered"] == 1
+    assert stats["rate_limited"] == 1
+    assert first.status == NotificationStatus.delivered
+    assert second.status == NotificationStatus.queued
+
+
+def test_deliver_notification_queue_schedules_failed_retry_with_backoff(
+    db_session, monkeypatch
+):
+    _set_notification_setting(db_session, "notification_max_retries", "3")
+    _set_notification_setting(db_session, "notification_retry_backoff_minutes", "7")
+    sms = _queued_notification(
+        channel=NotificationChannel.sms,
+        recipient="+2348000000001",
+        body="SMS body",
+    )
+    db_session.add(sms)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "app.tasks.notifications.sms_service.send_sms", lambda **_: False
+    )
+
+    from app.tasks.notifications import _deliver_notification_queue_stats
+
+    before_run = datetime.now(UTC)
+    stats = _deliver_notification_queue_stats(db_session, batch_size=10)
+
+    db_session.refresh(sms)
+    assert stats["retried"] == 1
+    assert sms.status == NotificationStatus.failed
+    assert sms.retry_count == 1
+    assert sms.send_at is not None
+    assert sms.send_at.replace(tzinfo=UTC) >= before_run + timedelta(minutes=6)

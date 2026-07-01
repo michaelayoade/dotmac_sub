@@ -79,6 +79,8 @@ def notification_bulk_setup(
 def notification_templates_list(
     request: Request,
     channel: str | None = None,
+    status: str | None = None,
+    search: str | None = None,
     page: int = Query(1, ge=1),
     per_page: int = Query(25, ge=10, le=100),
     db: Session = Depends(get_db),
@@ -93,6 +95,8 @@ def notification_templates_list(
             **web_notifications_service.templates_list_context(
                 db,
                 channel=channel,
+                status=status,
+                search=search,
                 page=page,
                 per_page=per_page,
             ),
@@ -101,6 +105,26 @@ def notification_templates_list(
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
         },
+    )
+
+
+@router.post(
+    "/templates/{template_id}/toggle",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:write"))],
+)
+def notification_template_toggle(
+    request: Request,
+    template_id: UUID,
+    db: Session = Depends(get_db),
+):
+    """Toggle a notification template active/inactive from the list."""
+    template = web_notifications_service.toggle_template(db, template_id=template_id)
+    if request.headers.get("HX-Request"):
+        return Response(status_code=204, headers={"HX-Refresh": "true"})
+    return RedirectResponse(
+        url=f"/admin/notifications/templates?status={'active' if template.is_active else 'inactive'}",
+        status_code=303,
     )
 
 
@@ -222,7 +246,7 @@ def notification_template_update(
     channel: str = Form(...),
     subject: str | None = Form(None),
     body: str = Form(...),
-    is_active: bool = Form(True),
+    is_active: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
     """Update a notification template."""
@@ -235,7 +259,7 @@ def notification_template_update(
             channel=channel,
             subject=subject,
             body=body,
-            is_active=is_active,
+            is_active=is_active is not None,
         )
         return RedirectResponse(
             url=f"/admin/notifications/templates/{template_id}", status_code=303
@@ -303,6 +327,34 @@ def notification_template_test(
         return RedirectResponse(
             url=f"/admin/notifications/templates/{template_id}", status_code=303
         )
+
+
+@router.post(
+    "/templates/preview",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:write"))],
+)
+def notification_template_unsaved_preview(
+    request: Request,
+    channel: str = Form(...),
+    subject: str | None = Form(None),
+    body: str = Form(...),
+    test_variables_json: str | None = Form(None),
+):
+    """Render template preview before the first save."""
+    return templates.TemplateResponse(
+        request,
+        "admin/notifications/_template_preview.html",
+        {
+            "request": request,
+            **web_notifications_service.render_template_preview_from_fields(
+                channel=channel,
+                subject=subject,
+                body=body,
+                test_variables_json=test_variables_json,
+            ),
+        },
+    )
 
 
 @router.post(
@@ -443,13 +495,23 @@ def notification_history(
 )
 def alert_policies_list(
     request: Request,
+    channel: str | None = None,
+    status: str | None = None,
+    severity_min: str | None = None,
+    active: str | None = None,
     page: int = Query(1, ge=1),
     per_page: int = Query(25, ge=10, le=100),
     db: Session = Depends(get_db),
 ):
     """List alert notification policies."""
     state = web_alert_policies_service.alert_policies_list_data(
-        db, page=page, per_page=per_page
+        db,
+        page=page,
+        per_page=per_page,
+        channel=channel,
+        status=status,
+        severity_min=severity_min,
+        active=active,
     )
     from app.web.admin import get_current_user, get_sidebar_stats
 

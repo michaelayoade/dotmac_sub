@@ -167,6 +167,7 @@ def test_queue_bulk_message_from_selected_scope_renders_template_and_skips_missi
             ],
             "channel": "sms",
             "template_id": str(template.id),
+            "confirmed": True,
         },
     )
 
@@ -223,6 +224,7 @@ def test_queue_bulk_email_backfills_common_template_aliases(db_session):
             "customer_ids": [{"id": str(customer.id), "type": "person"}],
             "channel": "email",
             "template_id": str(template.id),
+            "confirmed": True,
         },
     )
 
@@ -262,8 +264,45 @@ def test_queue_bulk_email_rejects_unavailable_template_variables(db_session):
                 "customer_ids": [{"id": str(customer.id), "type": "person"}],
                 "channel": "email",
                 "template_id": str(template.id),
+                "confirmed": True,
             },
         )
 
     assert exc.value.status_code == 400
     assert "{unknown_value}" in exc.value.detail
+
+
+def test_queue_bulk_message_preview_does_not_create_rows(db_session):
+    customer = Subscriber(
+        first_name="Preview",
+        last_name="Only",
+        email="preview@example.com",
+        user_type=UserType.customer,
+        is_active=True,
+    )
+    template = NotificationTemplate(
+        name="Preview Email",
+        code="preview_email",
+        channel=NotificationChannel.email,
+        subject="Hello {customer_name}",
+        body="Body for {account_number}",
+        is_active=True,
+    )
+    db_session.add_all([customer, template])
+    db_session.commit()
+
+    result = web_customer_actions.queue_bulk_message_from_payload(
+        db_session,
+        {
+            "customer_ids": [{"id": str(customer.id), "type": "person"}],
+            "channel": "email",
+            "template_id": str(template.id),
+            "preview_only": True,
+        },
+    )
+
+    assert result["preview"] is True
+    assert result["created_count"] == 1
+    assert result["queued_count"] == 1
+    assert result["notification_ids"] == []
+    assert db_session.query(Notification).count() == 0

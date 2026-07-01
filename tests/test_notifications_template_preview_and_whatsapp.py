@@ -73,3 +73,17 @@ def test_notification_template_preview_renders_variables(db_session):
 
     assert response.context["rendered_subject"] == "Invoice INV-9"
     assert response.context["rendered_body"] == "Hi Jane"
+
+
+def test_notification_template_unsaved_preview_renders_variables():
+    response = notifications_web.notification_template_unsaved_preview(
+        request=_request(),
+        channel="sms",
+        subject="",
+        body="Hi {subscriber_name}, invoice {invoice_number}",
+        test_variables_json='{"subscriber_name":"Jane","invoice_number":"INV-9"}',
+    )
+
+    assert response.context["rendered_subject"] == ""
+    assert response.context["rendered_body"] == "Hi Jane, invoice INV-9"
+    assert response.context["channel"] == "sms"

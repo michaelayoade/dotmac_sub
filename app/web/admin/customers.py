@@ -1940,7 +1940,11 @@ def bulk_update_status(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Bulk customer status update failed")
+        raise HTTPException(
+            status_code=500,
+            detail="Bulk status update failed. Please try again.",
+        ) from e
 
 
 @router.post(
@@ -1959,7 +1963,11 @@ def bulk_update_customers(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Bulk customer update failed")
+        raise HTTPException(
+            status_code=500,
+            detail="Bulk customer update failed. Please try again.",
+        ) from e
 
 
 @router.post(
@@ -1979,7 +1987,11 @@ def bulk_send_customer_message(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Bulk customer message queue failed")
+        raise HTTPException(
+            status_code=500,
+            detail="Bulk message queue failed. Please try again.",
+        ) from e
 
 
 @router.get(

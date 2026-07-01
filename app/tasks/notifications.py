@@ -70,6 +70,55 @@ def _max_queue_age_hours(db) -> int:
         return DEFAULT_MAX_QUEUE_AGE_HOURS
 
 
+def _notification_setting_int(db, key: str, default: int) -> int:
+    value = resolve_value(db, SettingDomain.notification, key)
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _max_retries(db) -> int:
+    return max(1, _notification_setting_int(db, "notification_max_retries", MAX_RETRIES))
+
+
+def _sending_timeout_minutes(db) -> int:
+    return max(
+        2,
+        _notification_setting_int(
+            db,
+            "notification_sending_timeout_minutes",
+            SENDING_TIMEOUT_MINUTES,
+        ),
+    )
+
+
+def _per_channel_rate_limit(db) -> int:
+    return max(
+        1,
+        _notification_setting_int(db, "notification_per_channel_rate_limit", 50),
+    )
+
+
+def _retry_backoff_minutes(db, retry_count: int) -> int:
+    value = resolve_value(
+        db,
+        SettingDomain.notification,
+        "notification_retry_backoff_minutes",
+    )
+    raw_steps = str(value or "1,5,15").split(",")
+    steps: list[int] = []
+    for raw in raw_steps:
+        try:
+            steps.append(max(1, int(raw.strip())))
+        except ValueError:
+            continue
+    if not steps:
+        steps = [1, 5, 15]
+    index = min(max(retry_count - 1, 0), len(steps) - 1)
+    return steps[index]
+
+
 def _expire_stale_notifications(db, now) -> int:
     """Cancel undelivered notifications that have sat in the queue too long."""
     max_age_hours = _max_queue_age_hours(db)
@@ -110,7 +159,9 @@ def _expire_stale_notifications(db, now) -> int:
 
 def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int]:
     now = datetime.now(UTC)
-    stuck_threshold = now - timedelta(minutes=SENDING_TIMEOUT_MINUTES)
+    max_retries = _max_retries(db)
+    stuck_threshold = now - timedelta(minutes=_sending_timeout_minutes(db))
+    channel_limit = _per_channel_rate_limit(db)
 
     expired = _expire_stale_notifications(db, now)
 
@@ -140,7 +191,7 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                 # Failed notifications eligible for retry (under max retries)
                 (
                     (Notification.status == NotificationStatus.failed)
-                    & (Notification.retry_count < MAX_RETRIES)
+                    & (Notification.retry_count < max_retries)
                 ),
             )
         )
@@ -154,7 +205,14 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
     failed = 0
     reclaimed = 0
     stuck_dropped = 0
+    rate_limited = 0
+    channel_counts: dict[NotificationChannel, int] = {}
     for notification in notifications:
+        current_count = channel_counts.get(notification.channel, 0)
+        if current_count >= channel_limit:
+            rate_limited += 1
+            continue
+        channel_counts[notification.channel] = current_count + 1
         # Reclaim handling: a notification still in "sending" was stuck past the
         # timeout — the worker likely crashed mid-send, possibly AFTER the
         # provider was already called. Apply the per-channel reclaim policy
@@ -169,7 +227,7 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                 stuck_dropped += 1
                 db.commit()
                 continue
-            if notification.retry_count > MAX_RETRIES:
+            if notification.retry_count > max_retries:
                 notification.status = NotificationStatus.failed
                 notification.last_error = "stuck_sending_reclaim_exhausted"
                 failed += 1
@@ -186,7 +244,7 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                 "(at-least-once, attempt %d/%d)",
                 notification.id,
                 notification.retry_count,
-                MAX_RETRIES,
+                max_retries,
             )
         # Update status before sending
         notification.status = NotificationStatus.sending
@@ -296,7 +354,7 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
             delivered += 1
         else:
             notification.retry_count = (notification.retry_count or 0) + 1
-            if notification.retry_count >= MAX_RETRIES:
+            if notification.retry_count >= max_retries:
                 notification.status = NotificationStatus.failed
                 failed += 1
                 logger.warning(
@@ -308,12 +366,15 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
             else:
                 # Schedule for retry — set back to failed, will be picked up next run
                 notification.status = NotificationStatus.failed
+                notification.send_at = now + timedelta(
+                    minutes=_retry_backoff_minutes(db, notification.retry_count)
+                )
                 retried += 1
                 logger.info(
                     "Notification %s retry %d/%d scheduled",
                     notification.id,
                     notification.retry_count,
-                    MAX_RETRIES,
+                    max_retries,
                 )
             if not notification.last_error:
                 notification.last_error = "send_failed"
@@ -326,6 +387,7 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
         "expired": expired,
         "reclaimed": reclaimed,
         "stuck_dropped": stuck_dropped,
+        "rate_limited": rate_limited,
     }
 
 
@@ -340,10 +402,11 @@ def deliver_notification_queue() -> dict[str, int]:
         result = _deliver_notification_queue_stats(session)
         logger.info(
             "Notification queue processed: delivered=%d, retried=%d, failed=%d, "
-            "expired=%d",
+            "expired=%d, rate_limited=%d",
             result["delivered"],
             result["retried"],
             result["failed"],
             result["expired"],
+            result["rate_limited"],
         )
         return result
