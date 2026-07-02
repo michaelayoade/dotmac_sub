@@ -26,7 +26,7 @@ from app.models.catalog import (
 from app.models.collections import DunningCase
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.lifecycle import LifecycleEventType, SubscriptionLifecycleEvent
-from app.models.network_monitoring import PopSite
+from app.models.network_monitoring import NetworkDevice, PopSite
 from app.models.service_extension import ServiceExtension, ServiceExtensionEntry
 from app.models.subscriber import Address, Subscriber, SubscriberStatus
 from app.models.system_user import SystemUser
@@ -1385,3 +1385,68 @@ def create_installation_invoice(
     db.commit()
     db.refresh(invoice)
     return invoice
+
+
+def outage_impact(
+    session: Session,
+    *,
+    node: NetworkDevice | None = None,
+    basestation: PopSite | None = None,
+) -> dict:
+    """Subscribers affected by a failed node/basestation, with a coverage report.
+
+    Wraps the topology ``affected_customers`` resolver (OLT/NAS → ONT →
+    OntAssignment → active Subscription, expanded downstream over the LLDP
+    device graph). The coverage block is deliberate: the impact list is only as
+    complete as the e2e topology, and ``affected_customers`` under-reports
+    rather than over-reports when the graph/links are missing — so we surface
+    where the chain dead-ends (matched nodes that yield no subscribers) and how
+    many nodes resolved, letting the caller decide whether to trust the list or
+    fall back to manual selection.
+    """
+    from app.services.topology.affected import (
+        affected_customers,
+        subscriptions_for_node,
+    )
+
+    result = affected_customers(session, node=node, basestation=basestation)
+
+    subscribers: dict = {}
+    for sub in result["subscriptions"]:
+        s = getattr(sub, "subscriber", None)
+        if s is None:
+            continue
+        subscribers[s.id] = {
+            "id": str(s.id),
+            "subscriber_number": s.subscriber_number or s.account_number,
+            "name": subscriber_name(s),
+            "email": s.email,
+            "phone": s.phone,
+        }
+
+    node_ids = result.get("node_ids") or set()
+    dead_ends = []
+    for nid in node_ids:
+        n = session.get(NetworkDevice, nid)
+        if n is None or n.matched_device_type not in ("olt", "nas"):
+            continue
+        if not subscriptions_for_node(session, n):
+            dead_ends.append(
+                {
+                    "node_id": str(nid),
+                    "name": n.name,
+                    "matched_type": n.matched_device_type,
+                }
+            )
+
+    return {
+        "subscribers": list(subscribers.values()),
+        "count": len(subscribers),
+        "coverage": {
+            "resolved_node_count": len(node_ids),
+            # Matched OLT/NAS nodes in the impact set that produced zero
+            # subscribers — a likely-incomplete ONT/assignment chain to close.
+            "nodes_without_subscribers": dead_ends,
+            "has_topology_gaps": bool(dead_ends),
+        },
+    }
