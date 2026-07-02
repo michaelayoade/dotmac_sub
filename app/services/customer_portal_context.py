@@ -439,7 +439,14 @@ def get_restricted_since(subscriber: Subscriber) -> datetime | None:
 
 
 def get_total_outstanding_balance(db: Session, account_id: object) -> float:
-    """Sum all active positive invoice balances for the account."""
+    """Active positive invoice balances, net of available account credit.
+
+    A prepaid account sitting in credit owes nothing even if individual
+    invoices are still open — the credit hasn't been drawn against them yet.
+    Netting here keeps "outstanding" consistent with the delinquency
+    derivation and enforcement (both net-of-credit), so a customer with a
+    balance never sees a phantom "payment outstanding".
+    """
     total = (
         db.query(func.coalesce(func.sum(Invoice.balance_due), 0))
         .filter(Invoice.account_id == coerce_uuid(account_id))
@@ -447,7 +454,10 @@ def get_total_outstanding_balance(db: Session, account_id: object) -> float:
         .filter(Invoice.balance_due > 0)
         .scalar()
     )
-    return float(total or 0)
+    from app.services.billing._common import get_account_credit_balance
+
+    credit = float(get_account_credit_balance(db, str(account_id)) or 0)
+    return max(0.0, float(total or 0) - max(credit, 0.0))
 
 
 def is_subscriber_restricted(db: Session, subscriber_id: object) -> bool:
@@ -852,6 +862,11 @@ def get_outstanding_balance(db: Session, account_id: str) -> dict:
         limit=50,
         offset=0,
     )
-    outstanding_balance = sum(inv.balance_due or 0 for inv in invoices)
+    gross = sum(inv.balance_due or 0 for inv in invoices)
+    # Net against available credit — see get_total_outstanding_balance.
+    from app.services.billing._common import get_account_credit_balance
+
+    credit = get_account_credit_balance(db, str(account_id)) or 0
+    outstanding_balance = max(0, gross - max(credit, 0))
 
     return {"invoices": invoices, "outstanding_balance": outstanding_balance}
