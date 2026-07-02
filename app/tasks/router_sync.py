@@ -34,7 +34,17 @@ def _fetch_config_export(router) -> str:
     normalise both to a single ``.rsc``-style text blob.
     """
     data = RouterConnectionService.execute(router, "POST", "/export")
-    return _export_to_text(data)
+    text = _export_to_text(data)
+    # An empty export means the REST user's group lacks the ``sensitive`` policy
+    # (RouterOS silently returns ``[]``). Storing a zero-length snapshot is worse
+    # than failing: it reads as a "successful" backup and gives false confidence
+    # in disaster recovery. Treat it as a capture failure so callers skip it.
+    if not text.strip():
+        raise RuntimeError(
+            f"Router {router.name} returned an empty config export — the REST API "
+            "user's group is likely missing the 'sensitive' policy"
+        )
+    return text
 
 
 def _export_to_text(data) -> str:

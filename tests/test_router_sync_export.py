@@ -6,7 +6,10 @@ Regression for the keystone snapshot bug: `GET /rest/export` returns
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import patch
+
+import pytest
 
 from app.tasks import router_sync
 
@@ -43,3 +46,16 @@ def test_fetch_config_export_uses_post():
     )  # not GET — GET /rest/export is "no such command"
     assert captured["path"] == "/export"
     assert text == "/system identity set name=r1"
+
+
+def test_fetch_config_export_rejects_empty():
+    # RouterOS returns [] / "" for a REST user without the 'sensitive' policy.
+    # A zero-length snapshot must be a capture failure, never a stored "backup".
+    for empty in ([], "", "   ", None):
+        with patch.object(
+            router_sync.RouterConnectionService,
+            "execute",
+            staticmethod(lambda *a, _e=empty, **k: _e),
+        ):
+            with pytest.raises(RuntimeError, match="empty config export"):
+                router_sync._fetch_config_export(SimpleNamespace(name="r1"))
