@@ -424,6 +424,32 @@
   }
   document.addEventListener("keydown", trapFocus);
 
+  // ── external API: open the widget scoped to a ticket/project ────────────
+  // A "Chat about this" button calls dmLiveChat.openWith(endpoint) with a
+  // scoped broker path (e.g. /api/v1/me/chat/session?ticket_id=…). Re-scoping
+  // tears down any current session so the new (contextual) one starts fresh.
+  function openWith(endpoint) {
+    if (endpoint && endpoint !== sessionEndpoint) {
+      sessionEndpoint = endpoint;
+      try {
+        if (state.ws) state.ws.close();
+      } catch (e) {
+        /* ignore */
+      }
+      state.ws = null;
+      state.started = false;
+      state.session = null;
+      state.conversationId = null;
+      if (els.log) els.log.innerHTML = "";
+    }
+    if (state.open) {
+      start().then(markRead);
+    } else {
+      openPanel();
+    }
+  }
+  window.dmLiveChat = { openWith: openWith };
+
   root.hidden = false;
   updateEmptyState();
 })();
