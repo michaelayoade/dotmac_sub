@@ -52,7 +52,19 @@ def dashboard_activity_partial(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/dashboard/server-health",
     response_class=HTMLResponse,
-    dependencies=[_DASHBOARD_READ_DEPENDENCY],
+    # Infrastructure internals are ops-facing: mirror the show_network flag
+    # rather than the broad dashboard read dependency.
+    dependencies=[
+        Depends(
+            require_any_permission(
+                "network:device:read",
+                "network:olt:read",
+                "network:ont:read",
+                "monitoring:read",
+                "reports:network",
+            )
+        )
+    ],
 )
 def dashboard_server_health_partial(request: Request, db: Session = Depends(get_db)):
     """HTMX partial for server health widget."""

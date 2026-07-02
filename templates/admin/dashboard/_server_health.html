@@ -1,4 +1,4 @@
-{% from "components/ui/macros.html" import status_badge, progress_bar, icon_server, icon_cpu, icon_database, icon_warning %}
+{% from "components/ui/macros.html" import status_badge, progress_bar, icon_server, icon_warning %}
 
 {% macro ops_badge(status) %}
     {% set normalized = status|default('unknown', true) %}
@@ -57,139 +57,94 @@
         </div>
         {% endif %}
 
-        <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <div class="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-700 dark:bg-slate-900/30">
-                <div class="flex items-center justify-between gap-3">
-                    <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">RAM</p>
-                    <span class="text-xs font-semibold text-violet-600 dark:text-violet-300">{{ server_health.memory.used_pct }}</span>
-                </div>
-                <p class="mt-2 text-sm text-slate-600 dark:text-slate-300">{{ server_health.memory.used }} used</p>
-                {% if mem_val is not none %}
-                <div class="mt-3">{{ progress_bar(mem_val, 100, show_text=False, size="sm") }}</div>
-                {% endif %}
-                <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">{{ server_health.memory.available }} available of {{ server_health.memory.total }}</p>
+        {% set busy_queues = worker_health.queue_lengths.items()|selectattr('1')|list if worker_health.queue_lengths else [] %}
+        <div class="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-lg border border-slate-200 bg-slate-50 px-4 py-2.5 dark:border-slate-700 dark:bg-slate-900/30">
+            <div class="flex items-center gap-2" title="{{ server_health.memory.used }} used, {{ server_health.memory.available }} available of {{ server_health.memory.total }}">
+                <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">RAM</span>
+                <span class="text-sm font-semibold tabular-nums text-slate-900 dark:text-white">{{ server_health.memory.used_pct }}</span>
+                {% if mem_val is not none %}<div class="w-14">{{ progress_bar(mem_val, 100, show_text=False, size="sm") }}</div>{% endif %}
             </div>
-
-            <div class="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-700 dark:bg-slate-900/30">
-                <div class="flex items-center justify-between gap-3">
-                    <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Disk</p>
-                    <span class="text-xs font-semibold text-amber-600 dark:text-amber-300">{{ server_health.disk.used_pct }}</span>
-                </div>
-                <p class="mt-2 text-sm text-slate-600 dark:text-slate-300">{{ server_health.disk.used }} used</p>
-                {% if disk_val is not none %}
-                <div class="mt-3">{{ progress_bar(disk_val, 100, show_text=False, size="sm") }}</div>
-                {% endif %}
-                <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">{{ server_health.disk.free }} free of {{ server_health.disk.total }}</p>
+            <div class="flex items-center gap-2" title="{{ server_health.disk.used }} used, {{ server_health.disk.free }} free of {{ server_health.disk.total }}">
+                <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Disk</span>
+                <span class="text-sm font-semibold tabular-nums text-slate-900 dark:text-white">{{ server_health.disk.used_pct }}</span>
+                {% if disk_val is not none %}<div class="w-14">{{ progress_bar(disk_val, 100, show_text=False, size="sm") }}</div>{% endif %}
             </div>
-
-            <div class="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-700 dark:bg-slate-900/30">
-                <div class="flex items-center justify-between gap-3">
-                    <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">CPU Load</p>
-                    {{ icon_cpu("h-4 w-4 text-blue-600 dark:text-blue-300") }}
-                </div>
-                <p class="mt-2 text-2xl font-bold tabular-nums text-slate-900 dark:text-white">
-                    {% if load_value is not none %}{{ "%.2f"|format(load_value) }}{% else %}--{% endif %}
-                </p>
-                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ server_health.cpu_count }} core{{ '' if server_health.cpu_count == 1 else 's' }} / 1-minute average</p>
+            <div class="flex items-center gap-2" title="1-minute load average across {{ server_health.cpu_count }} cores">
+                <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Load</span>
+                <span class="text-sm font-semibold tabular-nums text-slate-900 dark:text-white">{% if load_value is not none %}{{ "%.2f"|format(load_value) }}{% else %}--{% endif %}</span>
+                <span class="text-xs text-slate-500 dark:text-slate-400">/ {{ server_health.cpu_count }} cores</span>
             </div>
-
-            <div class="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-700 dark:bg-slate-900/30">
-                <div class="flex items-center justify-between gap-3">
-                    <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Workers</p>
-                    {{ ops_badge(worker_health.status) }}
-                </div>
-                <p class="mt-2 text-2xl font-bold tabular-nums text-slate-900 dark:text-white">{{ worker_health.worker_count|default(0) }}</p>
-                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ worker_health.active_tasks|default(0) }} active / {{ queue_total }} queued</p>
+            <div class="flex items-center gap-2" title="{{ worker_health.active_tasks|default(0) }} active tasks, {{ queue_total }} queued">
+                <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Workers</span>
+                <span class="text-sm font-semibold tabular-nums text-slate-900 dark:text-white">{{ worker_health.worker_count|default(0) }}</span>
+                {{ ops_badge(worker_health.status) }}
+            </div>
+            <div class="flex items-center gap-2">
+                <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Services</span>
+                <span class="text-sm font-semibold tabular-nums {{ 'text-slate-900 dark:text-white' if service_summary.up == service_summary.total else 'text-amber-700 dark:text-amber-300' }}">{{ service_summary.up }}/{{ service_summary.total }} up</span>
+            </div>
+            <div class="flex items-center gap-2">
+                <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Uptime</span>
+                <span class="text-sm tabular-nums text-slate-700 dark:text-slate-200">{{ server_health.uptime_display }}</span>
             </div>
         </div>
 
-        <div class="grid gap-4 xl:grid-cols-3">
-            <div class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900/20">
-                <div class="flex items-center justify-between gap-3">
-                    <div>
-                        <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Service State</p>
-                        <p class="mt-1 text-sm font-semibold text-slate-900 dark:text-white">{{ service_summary.up }} of {{ service_summary.total }} up</p>
-                    </div>
-                    {{ icon_database("h-5 w-5 text-emerald-600 dark:text-emerald-300") }}
+        {% if worker_health.missing_queues %}
+        <div class="rounded-md border border-rose-200 bg-rose-50 px-3 py-3 dark:border-rose-900/40 dark:bg-rose-900/20">
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                    <p class="text-sm font-semibold text-rose-800 dark:text-rose-100">{{ worker_health.missing_queues|length }} queue{{ '' if worker_health.missing_queues|length == 1 else 's' }} without a worker</p>
+                    <p class="mt-0.5 text-xs text-rose-600 dark:text-rose-300">Restart the mapped service or open the full health page for details.</p>
                 </div>
-                <div class="mt-4 grid grid-cols-3 gap-2">
-                    <div class="rounded-md bg-emerald-50 px-3 py-2 dark:bg-emerald-900/20">
-                        <p class="text-xs text-emerald-600 dark:text-emerald-300">Up</p>
-                        <p class="text-lg font-bold tabular-nums text-emerald-700 dark:text-emerald-200">{{ service_summary.up }}</p>
-                    </div>
-                    <div class="rounded-md bg-amber-50 px-3 py-2 dark:bg-amber-900/20">
-                        <p class="text-xs text-amber-600 dark:text-amber-300">Degraded</p>
-                        <p class="text-lg font-bold tabular-nums text-amber-700 dark:text-amber-200">{{ service_summary.degraded }}</p>
-                    </div>
-                    <div class="rounded-md bg-rose-50 px-3 py-2 dark:bg-rose-900/20">
-                        <p class="text-xs text-rose-600 dark:text-rose-300">Down</p>
-                        <p class="text-lg font-bold tabular-nums text-rose-700 dark:text-rose-200">{{ service_summary.down }}</p>
-                    </div>
-                </div>
-                <p class="mt-3 text-xs text-slate-500 dark:text-slate-400">Host uptime: {{ server_health.uptime_display }}</p>
+                <a href="/admin/system/health" class="text-xs font-semibold text-rose-700 hover:text-rose-800 dark:text-rose-200 dark:hover:text-rose-100">Full health</a>
             </div>
-
-            <div class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900/20 xl:col-span-2">
-                <div class="flex items-center justify-between gap-3">
-                    <div>
-                        <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Celery Queues</p>
-                        <p class="mt-1 text-sm font-semibold text-slate-900 dark:text-white">Backlog and task pressure</p>
-                    </div>
-                    <span class="text-xs text-slate-500 dark:text-slate-400">{{ worker_health.reserved_tasks|default(0) }} reserved / {{ worker_health.scheduled_tasks|default(0) }} scheduled</span>
-                </div>
-                {% if worker_health.queue_lengths %}
-                <div class="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                    {% for queue, length in worker_health.queue_lengths.items() %}
-                    <div class="flex min-w-0 items-center justify-between gap-3 rounded-md bg-slate-50 px-3 py-2 dark:bg-slate-800/70">
-                        <span class="truncate text-sm font-medium text-slate-700 dark:text-slate-200" title="{{ queue }}">{{ queue }}</span>
-                        <span class="shrink-0 text-sm font-bold tabular-nums {{ 'text-amber-700 dark:text-amber-300' if length else 'text-slate-500 dark:text-slate-400' }}">{{ length }}</span>
-                    </div>
-                    {% endfor %}
-                </div>
-                {% else %}
-                <p class="mt-4 rounded-md border border-dashed border-slate-200 px-3 py-3 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">No queue depth data returned by the Celery health check.</p>
+            <div class="mt-3 flex flex-wrap gap-2">
+            {% for queue in worker_health.missing_queues %}
+            {% set restart_target = worker_health.queue_restart_targets.get(queue) if worker_health.queue_restart_targets else none %}
+            <div class="inline-flex items-center gap-2 rounded-md bg-white px-2.5 py-1.5 text-xs font-semibold text-rose-800 ring-1 ring-inset ring-rose-100 dark:bg-rose-950/30 dark:text-rose-100 dark:ring-rose-900/50">
+                <span>{{ queue }}</span>
+                {% if worker_health.restart_enabled and restart_target %}
+                <form method="post"
+                      action="/admin/dashboard/workers/restart"
+                      hx-post="/admin/dashboard/workers/restart"
+                      hx-target="[data-tour-id='dashboard-infrastructure']"
+                      hx-swap="innerHTML"
+                      hx-confirm="Restart {{ restart_target }}?"
+                      class="inline">
+                    {% include "components/forms/csrf_input.html" %}
+                    <input type="hidden" name="target" value="{{ restart_target }}">
+                    <button type="submit" class="rounded bg-rose-600 px-2 py-0.5 text-[11px] font-semibold text-white transition hover:bg-rose-700">
+                        Restart
+                    </button>
+                </form>
                 {% endif %}
-                {% if worker_health.long_running_tasks %}
-                <div class="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200">
-                    {{ worker_health.long_running_tasks|length }} long-running task{{ '' if worker_health.long_running_tasks|length == 1 else 's' }} over 30 minutes.
-                </div>
-                {% endif %}
-                {% if worker_health.missing_queues %}
-                <div class="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-3 dark:border-rose-900/40 dark:bg-rose-900/20">
-                    <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                        <div>
-                            <p class="text-sm font-semibold text-rose-800 dark:text-rose-100">{{ worker_health.missing_queues|length }} queue{{ '' if worker_health.missing_queues|length == 1 else 's' }} without a worker</p>
-                            <p class="mt-0.5 text-xs text-rose-600 dark:text-rose-300">Restart the mapped service or open the full health page for details.</p>
-                        </div>
-                        <a href="/admin/system/health" class="text-xs font-semibold text-rose-700 hover:text-rose-800 dark:text-rose-200 dark:hover:text-rose-100">Full health</a>
-                    </div>
-                    <div class="mt-3 flex flex-wrap gap-2">
-                    {% for queue in worker_health.missing_queues %}
-                    {% set restart_target = worker_health.queue_restart_targets.get(queue) if worker_health.queue_restart_targets else none %}
-                    <div class="inline-flex items-center gap-2 rounded-md bg-white px-2.5 py-1.5 text-xs font-semibold text-rose-800 ring-1 ring-inset ring-rose-100 dark:bg-rose-950/30 dark:text-rose-100 dark:ring-rose-900/50">
-                        <span>{{ queue }}</span>
-                        {% if worker_health.restart_enabled and restart_target %}
-                        <form method="post"
-                              action="/admin/dashboard/workers/restart"
-                              hx-post="/admin/dashboard/workers/restart"
-                              hx-target="[data-tour-id='dashboard-infrastructure']"
-                              hx-swap="innerHTML"
-                              hx-confirm="Restart {{ restart_target }}?"
-                              class="inline">
-                            {% include "components/forms/csrf_input.html" %}
-                            <input type="hidden" name="target" value="{{ restart_target }}">
-                            <button type="submit" class="rounded bg-rose-600 px-2 py-0.5 text-[11px] font-semibold text-white transition hover:bg-rose-700">
-                                Restart
-                            </button>
-                        </form>
-                        {% endif %}
-                    </div>
-                    {% endfor %}
-                    </div>
-                </div>
-                {% endif %}
+            </div>
+            {% endfor %}
             </div>
         </div>
+        {% endif %}
+
+        {% if busy_queues %}
+        <div class="rounded-md border border-amber-200 bg-amber-50 px-3 py-3 dark:border-amber-900/40 dark:bg-amber-900/20">
+            <div class="flex items-center justify-between gap-3">
+                <p class="text-sm font-semibold text-amber-800 dark:text-amber-100">Queue backlog</p>
+                <span class="text-xs text-amber-700 dark:text-amber-300">{{ worker_health.reserved_tasks|default(0) }} reserved / {{ worker_health.scheduled_tasks|default(0) }} scheduled</span>
+            </div>
+            <div class="mt-2 flex flex-wrap gap-2">
+                {% for queue, length in busy_queues %}
+                <span class="inline-flex items-center gap-2 rounded-md bg-white px-2.5 py-1 text-xs font-medium text-amber-800 ring-1 ring-inset ring-amber-100 dark:bg-amber-950/30 dark:text-amber-100 dark:ring-amber-900/50">
+                    {{ queue }} <span class="font-bold tabular-nums">{{ length }}</span>
+                </span>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        {% if worker_health.long_running_tasks %}
+        <div class="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200">
+            {{ worker_health.long_running_tasks|length }} long-running task{{ '' if worker_health.long_running_tasks|length == 1 else 's' }} over 30 minutes.
+        </div>
+        {% endif %}
 
         <div class="overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700">
             <div class="grid grid-cols-12 bg-slate-50 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500 dark:bg-slate-900/40 dark:text-slate-400">

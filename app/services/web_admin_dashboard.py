@@ -655,6 +655,7 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
             "label": f"{net_stats['alarms_critical']} critical alarm{'s' if net_stats['alarms_critical'] != 1 else ''}",
             "href": "/admin/network/alarms",
             "severity": "critical",
+            "domain": "network",
         }
         attention_items.append(item)
         network_attention_items.append(item)
@@ -663,6 +664,7 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
             "label": f"{net_stats['alarms_major']} major alarm{'s' if net_stats['alarms_major'] != 1 else ''}",
             "href": "/admin/network/alarms",
             "severity": "major",
+            "domain": "network",
         }
         attention_items.append(item)
         network_attention_items.append(item)
@@ -671,6 +673,7 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
             "label": f"{net_stats['offline_count']} device{'s' if net_stats['offline_count'] != 1 else ''} offline",
             "href": "/admin/network/monitoring",
             "severity": "warning",
+            "domain": "network",
         }
         attention_items.append(item)
         network_attention_items.append(item)
@@ -680,6 +683,7 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
                 "label": f"₦{overdue_amount:,.0f} overdue receivables",
                 "href": "/admin/billing",
                 "severity": "warning",
+                "domain": "billing",
             }
         )
     if sub_stats["suspended_count"] > 0:
@@ -688,6 +692,7 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
                 "label": f"{sub_stats['suspended_count']} suspended account{'s' if sub_stats['suspended_count'] != 1 else ''}",
                 "href": "/admin/customers",
                 "severity": "info",
+                "domain": "customers",
             }
         )
     if pending_orders > 0:
@@ -696,6 +701,7 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
                 "label": f"{pending_orders} pending service order{'s' if pending_orders != 1 else ''}",
                 "href": "/admin/provisioning",
                 "severity": "info",
+                "domain": "provisioning",
             }
         )
 
@@ -707,6 +713,7 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
             "label": f"{ont_low_signal} ONT{'s' if ont_low_signal != 1 else ''} with low signal",
             "href": "/admin/network/onts?view=diagnostics&signal_quality=warning&order_by=signal&order_dir=asc",
             "severity": "warning",
+            "domain": "network",
         }
         attention_items.append(item)
         network_attention_items.append(item)
@@ -716,6 +723,7 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
             "label": f"{ont_offline} ONT{'s' if ont_offline != 1 else ''} offline",
             "href": "/admin/network/onts?view=list&olt_status=offline",
             "severity": "warning",
+            "domain": "network",
         }
         attention_items.append(item)
         network_attention_items.append(item)
@@ -724,6 +732,7 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
             "label": f"{unconfigured_ont_count} unconfigured ONT{'s' if unconfigured_ont_count != 1 else ''} awaiting authorization",
             "href": "/admin/network/onts?view=unconfigured",
             "severity": "info",
+            "domain": "network",
         }
         attention_items.append(item)
         network_attention_items.append(item)
@@ -747,6 +756,7 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
                 ),
                 "href": "/admin/gis?tab=customer-requests&status=pending",
                 "severity": "info",
+                "domain": "customers",
             }
         )
 
