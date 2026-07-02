@@ -59,6 +59,9 @@ def _build_billing_activity(db: Session, account_id: str, limit: int = 25) -> li
         db.query(Payment)
         .filter(Payment.account_id == account_uuid)
         .filter(Payment.is_active.is_(True))
+        # Failed/canceled payments never moved money; rendering them as
+        # credit-direction "Payment update" lines reads as a double charge.
+        .filter(Payment.status.notin_([PaymentStatus.failed, PaymentStatus.canceled]))
         .order_by(func.coalesce(Payment.paid_at, Payment.created_at).desc())
         .limit(limit)
         .all()
