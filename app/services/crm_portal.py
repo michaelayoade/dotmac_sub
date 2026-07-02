@@ -219,7 +219,9 @@ def _ticket_list_base(request: Request, customer: dict) -> dict[str, Any]:
         "priority_display": TICKET_PRIORITY_DISPLAY,
         "priority_colors": TICKET_PRIORITY_COLORS,
         "max_attachment_bytes": web_support_tickets.MAX_ATTACHMENT_BYTES,
-        "max_attachment_mb": max(1, web_support_tickets.MAX_ATTACHMENT_BYTES // 1048576),
+        "max_attachment_mb": max(
+            1, web_support_tickets.MAX_ATTACHMENT_BYTES // 1048576
+        ),
     }
 
 

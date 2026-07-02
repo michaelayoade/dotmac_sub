@@ -19,7 +19,6 @@ from app.services.customer_notification_policy import (
 )
 from app.services.email_template import html_to_text
 
-
 _READ_METADATA_KEY = "portal_read_notification_keys"
 
 
