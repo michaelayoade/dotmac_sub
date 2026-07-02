@@ -322,4 +322,20 @@ def apply_webhook(db: Session, event_type: str, body: dict) -> dict:
         sync.synced_at = datetime(1970, 1, 1, tzinfo=UTC)
     db.commit()
 
+    # Proactively tell the customer when their installation completes (mirrors
+    # the work-order push). Best-effort: a push failure never breaks the mirror.
+    if event_type == "project.completed":
+        try:
+            from app.services import push as push_service
+
+            push_service.send_push(
+                db,
+                str(subscriber.id),
+                title="Installation complete",
+                body="Your installation project is now complete.",
+                data={"type": "project", "project_id": crm_project_id},
+            )
+        except Exception as exc:  # noqa: BLE001 - notification is advisory
+            logger.warning("project_push_failed project_id=%s: %s", crm_project_id, exc)
+
     return {"status": "ok", "event": event_type}
