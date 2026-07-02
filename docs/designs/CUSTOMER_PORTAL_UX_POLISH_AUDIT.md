@@ -3,9 +3,9 @@
 **Date:** 2026-06-29
 **Method:** 2-agent parallel read-only review: (a) home/dashboard/profile/usage/
 notifications, (b) contracts/installations/contacts/support-from-portal.
-**Status:** audit only. The billing/pay/invoice/top-up customer flows were covered
-separately in `BILLING_UX_POLISH_AUDIT.md`; this covers everything else a customer
-touches.
+**Status:** implemented on branch `codex/customer-portal-ux-polish-audit`.
+The billing/pay/invoice/top-up customer flows were covered separately in
+`BILLING_UX_POLISH_AUDIT.md`; this covers everything else a customer touches.
 
 ## What this audit is
 
@@ -25,6 +25,34 @@ finding crosses into security (read-only/view-as enforcement).
    regressions on legal/critical pages.
 5. Self-service depth where it removes a support contact: reschedule, pay-to-
    restore, mark-as-read, notification preferences.
+
+## Implementation update
+
+**Updated:** 2026-07-02
+
+### Done
+
+- **P0 resolved:** read-only/view-as sessions are blocked from customer mutations
+  across portal POST flows; support timestamp rendering is null-safe; profile
+  save failures render friendly inline errors instead of false success/raw 500.
+- **P1 resolved:** dashboard status and next-bill data are real, customer dates
+  use the portal WAT formatter, restricted accounts get a Pay to Restore CTA,
+  contract signing shows a confirmation banner, the contract signing button uses
+  compiled brand tokens, notification preferences are deeper, notification inbox
+  supports read/unread and mark-as-read, and contact name/relationship fields are
+  available.
+- **P2 resolved:** dead avatar control removed, customer-managed authority flags
+  are gated behind operator control, attachment size copy is config-driven with
+  client-side checks, installation status filters are whitelisted, closed tickets
+  show next-step guidance, notification labels no longer expose delivery status,
+  attachment sync caveat is shown, and notification defaults are aligned.
+
+### Left
+
+- No required P0/P1/P2 work remains from this audit.
+- Optional future enhancement: replace the prefilled support-ticket reschedule/
+  cancel flow with a direct appointment reschedule/cancel workflow when
+  operations is ready to accept customer-side scheduling changes.
 
 ## Cross-cutting themes
 
@@ -90,11 +118,11 @@ validation (bad `?status=` → empty list) (`customer_portal_context.py:686`).
 
 ## Priority
 
-| Tier | Items |
-|------|-------|
-| **P0** | read-only/view-as bypass on non-billing mutations — view-as can edit profile/contacts + reboot ONT (P-A); support `None[:16]` → 500 (P-B); profile-save 500 on dup-email + false success (P-B) |
-| **P1** | misleading status: hardcoded "all operational" + fabricated Next Bill (P-C); money+tz display (P-D); post-sign confirmation + contract-sign re-skin (P-B/E); reschedule/cancel + pay-to-restore CTA (C-1); notification prefs + mark-as-read (C-2/C-1); contacts naming (P-E) |
-| **P2** | avatar dead button, approval gate on authority flags (C-3), attachment client-validation + config-driven copy (C-4), status enum validation, closed-ticket guidance, delivery-status color leak, prefs default alignment |
+| Tier | Items | Current status |
+|------|-------|----------------|
+| **P0** | read-only/view-as bypass on non-billing mutations; support `None[:16]` -> 500; profile-save 500/false success | **Resolved** |
+| **P1** | real dashboard status/next bill; money+tz display; contract confirmation/re-skin; reschedule/cancel entry point; pay-to-restore CTA; notification prefs + mark-as-read; contacts naming | **Resolved** |
+| **P2** | avatar dead button; authority flag approval gate; attachment validation/config copy; status enum validation; closed-ticket guidance; delivery-status color leak; prefs default alignment | **Resolved** |
 
 ## Appendix — full findings
 

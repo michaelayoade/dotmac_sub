@@ -13,6 +13,7 @@ from app.web.customer.branding import get_customer_templates
 
 templates = get_customer_templates()
 router = APIRouter(prefix="/portal/service-orders", tags=["web-customer-contracts"])
+READ_ONLY_MUTATION_MESSAGE = "View-only sessions cannot make changes."
 
 
 @router.get("/{order_id}/contract", response_class=HTMLResponse)
@@ -28,7 +29,6 @@ def view_contract(
             url=f"/portal/auth/login?next=/portal/service-orders/{order_id}/contract",
             status_code=303,
         )
-
     result = contract_signatures.get_contract_context(
         db, str(order_id), customer.get("account_id")
     )
@@ -66,6 +66,17 @@ def sign_contract(
         return RedirectResponse(
             url=f"/portal/auth/login?next=/portal/service-orders/{order_id}/contract",
             status_code=303,
+        )
+    if customer.get("read_only"):
+        return templates.TemplateResponse(
+            "customer/errors/400.html",
+            {
+                "request": request,
+                "customer": customer,
+                "message": READ_ONLY_MUTATION_MESSAGE,
+                "active_page": "service-orders",
+            },
+            status_code=403,
         )
 
     if not agree:

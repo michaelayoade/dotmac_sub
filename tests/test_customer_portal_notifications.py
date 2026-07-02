@@ -106,6 +106,62 @@ class TestPortalNotificationsPage:
         assert preview["has_recent_notifications"] is True
         assert len(preview["recent_notifications"]) == 1
 
+    def test_mark_notifications_read_updates_page_and_preview_counts(
+        self, db_session, subscriber
+    ) -> None:
+        from app.models.notification import (
+            Notification,
+            NotificationChannel,
+            NotificationStatus,
+        )
+        from app.services.customer_portal_notifications import (
+            get_notifications_page,
+            get_notifications_preview,
+            mark_notifications_read,
+        )
+
+        notice = Notification(
+            subscriber_id=subscriber.id,
+            channel=NotificationChannel.email,
+            recipient=subscriber.email,
+            event_type="invoice_paid",
+            category="billing",
+            body="Payment received",
+            status=NotificationStatus.delivered,
+        )
+        db_session.add(notice)
+        db_session.commit()
+
+        page = get_notifications_page(
+            db_session,
+            {"subscriber_id": str(subscriber.id)},
+            page=1,
+            per_page=10,
+        )
+        read_key = page["notifications"][0].read_key
+
+        marked = mark_notifications_read(
+            db_session,
+            {"subscriber_id": str(subscriber.id)},
+            read_key=read_key,
+        )
+        page = get_notifications_page(
+            db_session,
+            {"subscriber_id": str(subscriber.id)},
+            page=1,
+            per_page=10,
+        )
+        preview = get_notifications_preview(
+            db_session,
+            {"subscriber_id": str(subscriber.id)},
+            limit=5,
+        )
+
+        assert marked == 1
+        assert page["notifications"][0].is_read is True
+        assert page["unread_notifications_count"] == 0
+        assert preview["unread_notifications_count"] == 0
+
     def test_notifications_page_prefers_subscriber_id_and_hides_non_visible_statuses(
         self, db_session, subscriber
     ) -> None:
@@ -219,6 +275,7 @@ class TestPortalNotificationsPage:
         subscriber.metadata_ = {
             "billing_notifications": False,
             "sms_updates": False,
+            "push_notifications": False,
         }
         subscriber.phone = "+2348000000011"
         db_session.add_all(
@@ -272,6 +329,12 @@ class TestCustomerProfileNotifications:
                 phone="+2348000000012",
                 billing_notifications=False,
                 sms_updates=True,
+                push_notifications=False,
+                service_notifications=False,
+                account_notifications=True,
+                usage_notifications=False,
+                general_notifications=True,
+                locale="en-NG",
             )
 
         assert updated is not None
@@ -279,6 +342,10 @@ class TestCustomerProfileNotifications:
         assert updated.phone == "+2348000000012"
         assert (updated.metadata_ or {}).get("billing_notifications") is False
         assert (updated.metadata_ or {}).get("sms_updates") is True
+        assert (updated.metadata_ or {}).get("push_notifications") is False
+        assert (updated.metadata_ or {}).get("service_notifications") is False
+        assert (updated.metadata_ or {}).get("usage_notifications") is False
+        assert updated.locale == "en-NG"
         assert emit_event_mock.call_args.args[1] == EventType.subscriber_updated
 
     def test_customer_update_profile_route_passes_notification_preferences(
@@ -306,6 +373,12 @@ class TestCustomerProfileNotifications:
                 phone="+2348000000012",
                 billing_notifications=False,
                 sms_updates=True,
+                push_notifications=False,
+                service_notifications=False,
+                account_notifications=True,
+                usage_notifications=False,
+                general_notifications=True,
+                locale="en-NG",
                 db=MagicMock(),
             )
 
@@ -313,3 +386,7 @@ class TestCustomerProfileNotifications:
         kwargs = update_mock.call_args.kwargs
         assert kwargs["billing_notifications"] is False
         assert kwargs["sms_updates"] is True
+        assert kwargs["push_notifications"] is False
+        assert kwargs["service_notifications"] is False
+        assert kwargs["usage_notifications"] is False
+        assert kwargs["locale"] == "en-NG"
