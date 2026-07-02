@@ -1392,30 +1392,37 @@ def outage_impact(
     *,
     node: NetworkDevice | None = None,
     basestation: PopSite | None = None,
+    olt_id: str | uuid.UUID | None = None,
+    pon_port_id: str | uuid.UUID | None = None,
 ) -> dict:
-    """Subscribers affected by a failed node/basestation, with a coverage report.
+    """Subscribers affected by a failed asset, with a coverage report.
 
-    Wraps the topology ``affected_customers`` resolver (OLT/NAS → ONT →
-    OntAssignment → active Subscription, expanded downstream over the LLDP
-    device graph). The coverage block is deliberate: the impact list is only as
-    complete as the e2e topology, and ``affected_customers`` under-reports
-    rather than over-reports when the graph/links are missing — so we surface
-    where the chain dead-ends (matched nodes that yield no subscribers) and how
-    many nodes resolved, letting the caller decide whether to trust the list or
-    fall back to manual selection.
+    Handles four asset granularities, deduped into one subscriber set:
+      - ``node``/``basestation`` — the LLDP topology (``affected_customers``),
+        which expands a switch/router/cabinet failure downstream.
+      - ``olt_id`` — every active ONT on the OLT (all PON ports).
+      - ``pon_port_id`` — only the ONTs on that PON port (a subset of the OLT).
+
+    OLT and PON-port resolution read straight off ``OntAssignment`` and so are
+    vendor-agnostic (Huawei and Ubiquiti alike). The coverage block is
+    deliberate: impact is only as complete as the e2e topology, and the
+    resolvers under-report rather than over-report when links are missing — so
+    we surface where the chain dead-ends (an asset that yields zero subscribers)
+    to let the caller trust the list or fall back to manual selection.
     """
+    from app.models.network import OntAssignment, OntUnit
     from app.services.topology.affected import (
         affected_customers,
         subscriptions_for_node,
     )
 
-    result = affected_customers(session, node=node, basestation=basestation)
-
     subscribers: dict = {}
-    for sub in result["subscriptions"]:
-        s = getattr(sub, "subscriber", None)
+    gaps: list[dict] = []
+    resolved_node_count = 0
+
+    def _add(s) -> None:
         if s is None:
-            continue
+            return
         subscribers[s.id] = {
             "id": str(s.id),
             "subscriber_number": s.subscriber_number or s.account_number,
@@ -1424,18 +1431,74 @@ def outage_impact(
             "phone": s.phone,
         }
 
-    node_ids = result.get("node_ids") or set()
-    dead_ends = []
-    for nid in node_ids:
-        n = session.get(NetworkDevice, nid)
-        if n is None or n.matched_device_type not in ("olt", "nas"):
-            continue
-        if not subscriptions_for_node(session, n):
-            dead_ends.append(
+    def _add_by_subscriber_ids(rows) -> None:
+        for (sub_id,) in rows:
+            if sub_id is not None:
+                _add(session.get(Subscriber, sub_id))
+
+    if node is not None or basestation is not None:
+        result = affected_customers(session, node=node, basestation=basestation)
+        for sub in result["subscriptions"]:
+            _add(getattr(sub, "subscriber", None))
+        node_ids = result.get("node_ids") or set()
+        resolved_node_count = len(node_ids)
+        for nid in node_ids:
+            n = session.get(NetworkDevice, nid)
+            if (
+                n is not None
+                and n.matched_device_type in ("olt", "nas")
+                and not subscriptions_for_node(session, n)
+            ):
+                gaps.append(
+                    {
+                        "node_id": str(nid),
+                        "name": n.name,
+                        "matched_type": n.matched_device_type,
+                    }
+                )
+
+    if olt_id is not None:
+        before = len(subscribers)
+        ont_ids = [
+            r[0]
+            for r in session.query(OntUnit.id)
+            .filter(OntUnit.olt_device_id == olt_id)
+            .all()
+        ]
+        if ont_ids:
+            _add_by_subscriber_ids(
+                session.query(OntAssignment.subscriber_id)
+                .filter(
+                    OntAssignment.ont_unit_id.in_(ont_ids),
+                    OntAssignment.active.is_(True),
+                    OntAssignment.subscriber_id.isnot(None),
+                )
+                .all()
+            )
+        if len(subscribers) == before:
+            gaps.append(
                 {
-                    "node_id": str(nid),
-                    "name": n.name,
-                    "matched_type": n.matched_device_type,
+                    "olt_id": str(olt_id),
+                    "reason": "no active ONT assignments on this OLT",
+                }
+            )
+
+    if pon_port_id is not None:
+        before = len(subscribers)
+        _add_by_subscriber_ids(
+            session.query(OntAssignment.subscriber_id)
+            .filter(
+                OntAssignment.pon_port_id == pon_port_id,
+                OntAssignment.active.is_(True),
+                OntAssignment.subscriber_id.isnot(None),
+            )
+            .all()
+        )
+        if len(subscribers) == before:
+            gaps.append(
+                {
+                    "pon_port_id": str(pon_port_id),
+                    "reason": "no active ONT assignments on this PON port",
                 }
             )
 
@@ -1443,10 +1506,66 @@ def outage_impact(
         "subscribers": list(subscribers.values()),
         "count": len(subscribers),
         "coverage": {
-            "resolved_node_count": len(node_ids),
-            # Matched OLT/NAS nodes in the impact set that produced zero
-            # subscribers — a likely-incomplete ONT/assignment chain to close.
-            "nodes_without_subscribers": dead_ends,
-            "has_topology_gaps": bool(dead_ends),
+            "resolved_node_count": resolved_node_count,
+            "nodes_without_subscribers": gaps,
+            "has_topology_gaps": bool(gaps),
         },
     }
+
+
+def list_infrastructure_assets(
+    session: Session, *, q: str | None = None, limit: int = 1000
+) -> list[dict]:
+    """Pickable infrastructure items for raising an outage/infrastructure ticket:
+    OLTs (Huawei/Ubiquiti), their PON ports, and basestations. Each item's id +
+    type map onto the outage-impact resolver."""
+    from app.models.network import OLTDevice, PonPort
+
+    like = f"%{q.strip()}%" if q and q.strip() else None
+    assets: list[dict] = []
+
+    olt_query = session.query(OLTDevice)
+    if like is not None:
+        olt_query = olt_query.filter(OLTDevice.name.ilike(like))
+    olts = olt_query.order_by(OLTDevice.name).limit(limit).all()
+    olt_by_id = {o.id: o for o in olts}
+    for olt in olts:
+        vendor = (olt.vendor or "").strip()
+        assets.append(
+            {
+                "id": str(olt.id),
+                "type": "olt",
+                "label": f"{olt.name} ({vendor})" if vendor else olt.name,
+                "vendor": vendor or None,
+            }
+        )
+
+    pon_query = session.query(PonPort)
+    if like is None:
+        # Only list PON ports for the OLTs we returned (avoid dumping thousands).
+        if olt_by_id:
+            pon_query = pon_query.filter(PonPort.olt_id.in_(list(olt_by_id.keys())))
+        else:
+            pon_query = pon_query.filter(False)
+    ports = pon_query.order_by(PonPort.name).limit(limit).all()
+    for port in ports:
+        olt = olt_by_id.get(port.olt_id) or session.get(OLTDevice, port.olt_id)
+        olt_name = olt.name if olt else "OLT"
+        vendor = ((olt.vendor if olt else None) or "").strip()
+        assets.append(
+            {
+                "id": str(port.id),
+                "type": "pon_port",
+                "label": f"{olt_name} - {port.name}",
+                "olt_id": str(port.olt_id),
+                "vendor": vendor or None,
+            }
+        )
+
+    bs_query = session.query(PopSite).filter(PopSite.zabbix_group_id.isnot(None))
+    if like is not None:
+        bs_query = bs_query.filter(PopSite.name.ilike(like))
+    for pop in bs_query.order_by(PopSite.name).limit(limit).all():
+        assets.append({"id": str(pop.id), "type": "basestation", "label": pop.name})
+
+    return assets
