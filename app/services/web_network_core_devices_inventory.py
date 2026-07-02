@@ -32,6 +32,7 @@ _OLT_ZABBIX_SCALAR_KEYS = {
     "pon.port.up",
 }
 _OLT_ZABBIX_FRESH_SECONDS = 15 * 60
+_NETWORK_DEVICE_ZABBIX_CHUNK_SIZE = 100
 
 
 def _network_device_is_olt_candidate(device: NetworkDevice) -> bool:
@@ -176,19 +177,22 @@ def _zabbix_interface_state(host: dict[str, Any] | None) -> tuple[str, str, str 
 
 def _zabbix_icmp_probe_state(
     items: list[dict[str, Any]],
+    host: dict[str, Any] | None = None,
 ) -> tuple[str, str, str | None]:
+    if host and str(host.get("status") or "") == "1":
+        return "Disabled", "unknown", "Zabbix host is disabled"
     item = next(
         (item for item in items if str(item.get("key_") or "") == "icmpping"),
         None,
     )
     if not item:
-        return "Timeout", "fail", "Zabbix ICMP item is missing"
+        return "Not monitored", "unknown", "Zabbix ICMP item is missing"
     value = str(item.get("lastvalue") or "").strip()
     if value == "1":
         return "Online", "ok", None
     if value == "0":
-        return "Timeout", "fail", None
-    return "Timeout", "fail", "Zabbix ICMP value is missing"
+        return "Down", "fail", "Zabbix ICMP ping is down"
+    return "Unknown", "unknown", "Zabbix ICMP value is missing"
 
 
 def _zabbix_snmp_probe_state(
@@ -197,9 +201,29 @@ def _zabbix_snmp_probe_state(
     label, state, reason = _zabbix_interface_state(host)
     if state == "ok":
         return "Online", "ok", None
+    if reason == "Zabbix host is disabled":
+        return "Disabled", "unknown", reason
     if state == "fail":
-        return "Timeout", "fail", reason
+        normalized_reason = str(reason or "").lower()
+        if "timeout" in normalized_reason or "timed out" in normalized_reason:
+            return "Timeout", "fail", reason
+        return "Unavailable", "fail", reason
     return label, state, reason
+
+
+def _zabbix_unavailable_status(reason: str) -> dict[str, str | None]:
+    return {
+        "ping_label": "Zabbix unavailable",
+        "ping_state": "unknown",
+        "ping_reason": reason,
+        "snmp_label": "Zabbix unavailable",
+        "snmp_state": "unknown",
+        "snmp_reason": reason,
+    }
+
+
+def _chunked(items: list[str], size: int) -> list[list[str]]:
+    return [items[index : index + size] for index in range(0, len(items), size)]
 
 
 def _build_zabbix_probe_statuses(
@@ -218,36 +242,33 @@ def _build_zabbix_probe_statuses(
         device_id = str(device.get("id") or "").strip()
         if not device_id:
             continue
-        result[device_id] = {
-            "ping_label": "Timeout",
-            "ping_state": "fail",
-            "ping_reason": "Device is not linked to Zabbix",
-            "snmp_label": "Unknown",
-            "snmp_state": "unknown",
-            "snmp_reason": "Device is not linked to Zabbix",
-        }
+        host_id = str(device.get("zabbix_host_id") or "").strip()
+        if host_id:
+            result[device_id] = _zabbix_unavailable_status(
+                "Could not read current Zabbix status"
+            )
+        else:
+            result[device_id] = {
+                "ping_label": "Not linked",
+                "ping_state": "unknown",
+                "ping_reason": "Device is not linked to Zabbix",
+                "snmp_label": "Not linked",
+                "snmp_state": "unknown",
+                "snmp_reason": "Device is not linked to Zabbix",
+            }
 
-    if not result or not host_ids or not zabbix_configured():
+    if not result or not host_ids:
         return result
 
     try:
+        if not zabbix_configured():
+            for status in result.values():
+                if status.get("ping_reason") != "Device is not linked to Zabbix":
+                    status.update(
+                        _zabbix_unavailable_status("Zabbix API is not configured")
+                    )
+            return result
         client = ZabbixClient.from_env()
-        hosts_by_id: dict[str, dict[str, Any]] = {}
-        host_count = max(len(host_ids), 1)
-        for zabbix_host in client.get_hosts(host_ids=host_ids, limit=host_count):
-            host_id = str(zabbix_host.get("hostid") or "")
-            if host_id:
-                hosts_by_id[host_id] = zabbix_host
-
-        icmp_items_by_host: dict[str, list[dict[str, Any]]] = {
-            host_id: [] for host_id in host_ids
-        }
-        for item in client.get_items(
-            host_ids=host_ids, metric="icmpping", limit=100000
-        ):
-            host_id = str(item.get("hostid") or "")
-            if host_id in icmp_items_by_host:
-                icmp_items_by_host[host_id].append(item)
     except ZabbixClientError as exc:
         logger.warning(
             "network_devices_zabbix_probe_statuses_failed",
@@ -255,24 +276,73 @@ def _build_zabbix_probe_statuses(
         )
         return result
 
+    hosts_by_id: dict[str, dict[str, Any]] = {}
+    icmp_items_by_host: dict[str, list[dict[str, Any]]] = {
+        host_id: [] for host_id in host_ids
+    }
+    icmp_loaded_host_ids: set[str] = set()
+
+    for chunk in _chunked(host_ids, _NETWORK_DEVICE_ZABBIX_CHUNK_SIZE):
+        try:
+            for zabbix_host in client.get_hosts(host_ids=chunk, limit=len(chunk)):
+                host_id = str(zabbix_host.get("hostid") or "")
+                if host_id:
+                    hosts_by_id[host_id] = zabbix_host
+        except ZabbixClientError as exc:
+            logger.warning(
+                "network_devices_zabbix_hosts_chunk_failed",
+                extra={"error": str(exc), "host_count": len(chunk)},
+            )
+
+        try:
+            for item in client.get_items(
+                host_ids=chunk, metric="icmpping", limit=100000
+            ):
+                host_id = str(item.get("hostid") or "")
+                if host_id in icmp_items_by_host:
+                    icmp_items_by_host[host_id].append(item)
+            icmp_loaded_host_ids.update(chunk)
+        except ZabbixClientError as exc:
+            logger.warning(
+                "network_devices_zabbix_items_chunk_failed",
+                extra={"error": str(exc), "host_count": len(chunk)},
+            )
+
     for device in devices:
         device_id = str(device.get("id") or "").strip()
         host_id = str(device.get("zabbix_host_id") or "").strip()
         if not device_id or not host_id:
             continue
-        ping_label, ping_state, ping_reason = _zabbix_icmp_probe_state(
-            icmp_items_by_host.get(host_id, [])
-        )
-        snmp_label, snmp_state, snmp_reason = _zabbix_snmp_probe_state(
-            hosts_by_id.get(host_id)
-        )
+        current_status = result[device_id]
+        if host_id in icmp_loaded_host_ids:
+            ping_label, ping_state, ping_reason = _zabbix_icmp_probe_state(
+                icmp_items_by_host.get(host_id, []), hosts_by_id.get(host_id)
+            )
+            current_status.update(
+                {
+                    "ping_label": ping_label,
+                    "ping_state": ping_state,
+                    "ping_reason": ping_reason,
+                }
+            )
+        if host_id in hosts_by_id:
+            snmp_label, snmp_state, snmp_reason = _zabbix_snmp_probe_state(
+                hosts_by_id.get(host_id)
+            )
+            current_status.update(
+                {
+                    "snmp_label": snmp_label,
+                    "snmp_state": snmp_state,
+                    "snmp_reason": snmp_reason,
+                }
+            )
         result[device_id] = {
-            "ping_label": ping_label,
-            "ping_state": ping_state,
-            "ping_reason": ping_reason,
-            "snmp_label": snmp_label,
-            "snmp_state": snmp_state,
-            "snmp_reason": snmp_reason,
+            "ping_label": current_status.get("ping_label"),
+            "ping_state": current_status.get("ping_state"),
+            "ping_reason": current_status.get("ping_reason"),
+            "snmp_label": current_status.get("snmp_label"),
+            "snmp_state": current_status.get("snmp_state"),
+            "snmp_reason": current_status.get("snmp_reason"),
         }
     return result
 
