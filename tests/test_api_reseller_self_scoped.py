@@ -315,9 +315,19 @@ def test_billing_endpoints_scope_and_translate_errors(monkeypatch):
     monkeypatch.setattr(
         reseller_portal_billing, "get_billing_account_summary", _summary
     )
+
+    def _activity(db, rid, summary=None, **kwargs):
+        captured["activity_rid"] = rid
+        return [{"direction": "credit", "amount": 5}]
+
+    monkeypatch.setattr(reseller_portal_billing, "account_activity", _activity)
     out = reseller_api.my_reseller_billing(db=None, principal=_subscriber_principal())
-    assert out == {"total_outstanding": 5}
+    assert out == {
+        "total_outstanding": 5,
+        "account_activity": [{"direction": "credit", "amount": 5}],
+    }
     assert captured["summary_rid"] == "res-1"
+    assert captured["activity_rid"] == "res-1"
 
     def _bad_amount(db, rid, amount, **kwargs):
         raise ValueError("Payment amount must be greater than 0")
