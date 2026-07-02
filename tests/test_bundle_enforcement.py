@@ -33,3 +33,42 @@ def test_reconcile_converges_divergent_member(
     # anchor active -> the divergent suspended member is restored to active
     assert ip.status == SubscriptionStatus.active
     assert stats["members_converged"] == 1
+
+
+def test_suspend_account_skips_dedicated_bundle(
+    db_session, subscriber, subscription, catalog_offer
+):
+    from app.services.collections._core import (
+        _account_has_dedicated_bundle,
+        _suspend_account,
+    )
+
+    subscription.status = SubscriptionStatus.active
+    db_session.flush()
+    b = bundles.create_bundle(db_session, str(subscriber.id), str(subscription.id))
+    bundles.add_member(db_session, str(b.id), str(subscription.id))
+    catalog_offer.plan_family = "dedicated"
+    db_session.flush()
+    assert bundles.recompute_is_dedicated(db_session, str(b.id)) is True
+    assert _account_has_dedicated_bundle(db_session, subscriber.id) is True
+
+    result = _suspend_account(db_session, str(subscriber.id))
+    db_session.refresh(subscription)
+    assert result is False  # dedicated bundle -> hands-off
+    assert subscription.status == SubscriptionStatus.active
+
+
+def test_suspend_account_suspends_non_dedicated_bundle(
+    db_session, subscriber, subscription, catalog_offer
+):
+    from app.services.collections._core import _suspend_account
+
+    subscription.status = SubscriptionStatus.active
+    db_session.flush()
+    b = bundles.create_bundle(db_session, str(subscriber.id), str(subscription.id))
+    bundles.add_member(db_session, str(b.id), str(subscription.id))
+
+    result = _suspend_account(db_session, str(subscriber.id))
+    db_session.refresh(subscription)
+    assert result is True
+    assert subscription.status == SubscriptionStatus.suspended
