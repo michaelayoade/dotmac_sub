@@ -1233,6 +1233,51 @@ class TestPaymentCRUD:
         assert payment.amount == Decimal("100.00")
         assert payment.currency == "USD"
 
+    def test_succeeded_payment_gets_paid_at_when_not_supplied(
+        self, db_session, subscriber
+    ):
+        # Regression: gateway/top-up reconciliation creates succeeded payments
+        # without an explicit paid_at. Missing paid_at blinds billing-enforcement
+        # health (counts recent settlements by paid_at) and blocks all
+        # collections suspensions. create() must stamp it.
+        payment = billing_service.payments.create(
+            db_session,
+            PaymentCreate(
+                account_id=subscriber.id,
+                amount=Decimal("42.00"),
+                currency="USD",
+                status=PaymentStatus.succeeded,
+            ),
+        )
+        assert payment.status == PaymentStatus.succeeded
+        assert payment.paid_at is not None
+
+    def test_explicit_paid_at_is_preserved(self, db_session, subscriber):
+        supplied = datetime(2026, 6, 1, tzinfo=UTC)
+        payment = billing_service.payments.create(
+            db_session,
+            PaymentCreate(
+                account_id=subscriber.id,
+                amount=Decimal("42.00"),
+                currency="USD",
+                status=PaymentStatus.succeeded,
+                paid_at=supplied,
+            ),
+        )
+        assert payment.paid_at.replace(tzinfo=None) == supplied.replace(tzinfo=None)
+
+    def test_pending_payment_has_no_paid_at(self, db_session, subscriber):
+        payment = billing_service.payments.create(
+            db_session,
+            PaymentCreate(
+                account_id=subscriber.id,
+                amount=Decimal("42.00"),
+                currency="USD",
+                status=PaymentStatus.pending,
+            ),
+        )
+        assert payment.paid_at is None
+
     def test_duplicate_manual_payment_blocked(self, db_session, subscriber):
         # #29: a double-clicked manual "record payment" must not double-credit.
         billing_service.payments.create(
