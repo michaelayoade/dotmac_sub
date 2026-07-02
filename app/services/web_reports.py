@@ -16,7 +16,6 @@ from app.models.network import IPAssignment, IPv4Address, IPv6Address
 from app.models.subscriber import AccountStatus, Subscriber, SubscriberCategory
 from app.services import billing as billing_service
 from app.services import network as network_service
-from app.services import provisioning as operations_service
 from app.services import subscriber as subscriber_service
 
 logger = logging.getLogger(__name__)
@@ -384,7 +383,9 @@ def _percent_change(
 ) -> float | None:
     if not previous:
         return None
-    return round((float(current - previous) / float(previous)) * 100, 1)
+    current_value = float(current)
+    previous_value = float(previous)
+    return round(((current_value - previous_value) / previous_value) * 100, 1)
 
 
 def _month_starts(months: int = 6) -> list[datetime]:
@@ -413,17 +414,14 @@ def _monthly_payment_series(db: Session, *, months: int = 6) -> dict[str, list]:
     for idx, start in enumerate(starts):
         end = starts[idx + 1] if idx + 1 < len(starts) else datetime.now(UTC)
         label = start.strftime("%b")
-        total = (
-            db.scalar(
-                select(func.coalesce(func.sum(Payment.amount), 0)).where(
-                    Payment.is_active.is_(True),
-                    Payment.status == PaymentStatus.succeeded,
-                    Payment.paid_at >= start,
-                    Payment.paid_at < end,
-                )
+        total = db.scalar(
+            select(func.coalesce(func.sum(Payment.amount), 0)).where(
+                Payment.is_active.is_(True),
+                Payment.status == PaymentStatus.succeeded,
+                Payment.paid_at >= start,
+                Payment.paid_at < end,
             )
-            or Decimal("0")
-        )
+        ) or Decimal("0")
         labels.append(label)
         revenue.append(float(total))
         collected.append(float(total))
@@ -504,37 +502,28 @@ def get_revenue_report_data(db: Session) -> dict:
         if current_start.month == 1
         else current_start.replace(month=current_start.month - 1)
     )
-    total_revenue = (
-        db.scalar(
-            select(func.coalesce(func.sum(Payment.amount), 0)).where(
-                Payment.is_active.is_(True),
-                Payment.status == PaymentStatus.succeeded,
-            )
+    total_revenue = db.scalar(
+        select(func.coalesce(func.sum(Payment.amount), 0)).where(
+            Payment.is_active.is_(True),
+            Payment.status == PaymentStatus.succeeded,
         )
-        or Decimal("0")
-    )
-    current_revenue = (
-        db.scalar(
-            select(func.coalesce(func.sum(Payment.amount), 0)).where(
-                Payment.is_active.is_(True),
-                Payment.status == PaymentStatus.succeeded,
-                Payment.paid_at >= current_start,
-                Payment.paid_at < now,
-            )
+    ) or Decimal("0")
+    current_revenue = db.scalar(
+        select(func.coalesce(func.sum(Payment.amount), 0)).where(
+            Payment.is_active.is_(True),
+            Payment.status == PaymentStatus.succeeded,
+            Payment.paid_at >= current_start,
+            Payment.paid_at < now,
         )
-        or Decimal("0")
-    )
-    previous_revenue = (
-        db.scalar(
-            select(func.coalesce(func.sum(Payment.amount), 0)).where(
-                Payment.is_active.is_(True),
-                Payment.status == PaymentStatus.succeeded,
-                Payment.paid_at >= previous_start,
-                Payment.paid_at < previous_end,
-            )
+    ) or Decimal("0")
+    previous_revenue = db.scalar(
+        select(func.coalesce(func.sum(Payment.amount), 0)).where(
+            Payment.is_active.is_(True),
+            Payment.status == PaymentStatus.succeeded,
+            Payment.paid_at >= previous_start,
+            Payment.paid_at < previous_end,
         )
-        or Decimal("0")
-    )
+    ) or Decimal("0")
     recent_payments = billing_service.payments.list(
         db=db,
         account_id=None,
@@ -562,32 +551,26 @@ def get_revenue_report_data(db: Session) -> dict:
         )
     ).one()
     outstanding_amount = outstanding_row.amount or Decimal("0")
-    outstanding_count = int(outstanding_row.count or 0)
-    total_invoiced = (
-        db.scalar(
-            select(func.coalesce(func.sum(Invoice.total), 0)).where(
-                Invoice.is_active.is_(True),
-                Invoice.status != InvoiceStatus.void,
-            )
+    outstanding_count = int(outstanding_row._mapping["count"] or 0)
+    total_invoiced = db.scalar(
+        select(func.coalesce(func.sum(Invoice.total), 0)).where(
+            Invoice.is_active.is_(True),
+            Invoice.status != InvoiceStatus.void,
         )
-        or Decimal("0")
-    )
+    ) or Decimal("0")
     collection_rate = (
         (float(total_revenue) / float(total_invoiced) * 100) if total_invoiced else 0
     )
     try:
         from app.models.catalog import Subscription, SubscriptionStatus
 
-        recurring_revenue = (
-            db.scalar(
-                select(func.coalesce(func.sum(Subscription.unit_price), 0)).where(
-                    Subscription.status.in_(
-                        [SubscriptionStatus.active, SubscriptionStatus.suspended]
-                    )
+        recurring_revenue = db.scalar(
+            select(func.coalesce(func.sum(Subscription.unit_price), 0)).where(
+                Subscription.status.in_(
+                    [SubscriptionStatus.active, SubscriptionStatus.suspended]
                 )
             )
-            or Decimal("0")
-        )
+        ) or Decimal("0")
     except Exception:
         logger.debug("Failed to compute recurring revenue", exc_info=True)
         recurring_revenue = Decimal("0")

@@ -29,7 +29,7 @@ from app.models.ont_autofind import OltAutofindCandidate
 from app.models.subscriber import Subscriber
 from app.services import admin_alerts as admin_alerts_service
 from app.services import admin_whats_new as admin_whats_new_service
-from app.services import app_cache
+from app.services import app_cache, settings_spec
 from app.services import infrastructure_health as infrastructure_health_service
 from app.services import (
     subscriber as subscriber_service,
@@ -40,7 +40,6 @@ from app.services import (
 from app.services import (
     web_admin as web_admin_service,
 )
-from app.services import settings_spec
 from app.services import web_system_health as web_system_health_service
 from app.services.audit_adapter import audit_adapter
 from app.services.audit_helpers import (
