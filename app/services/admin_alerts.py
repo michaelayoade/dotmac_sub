@@ -15,6 +15,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.models.admin_alert import AdminAlert, AdminNotification
+from app.models.domain_settings import SettingDomain
 from app.models.network_monitoring import AlertSeverity, AlertStatus
 from app.models.rbac import (
     Permission,
@@ -24,6 +25,7 @@ from app.models.rbac import (
     SystemUserRole,
 )
 from app.models.system_user import SystemUser
+from app.services import settings_spec
 
 logger = logging.getLogger(__name__)
 
@@ -221,11 +223,15 @@ def alerts_context(
         .all()
     )
     counts = _alert_counts(db)
+    total_pages = max(1, (total + per_page - 1) // per_page)
     return {
         "alerts": alerts,
         "total": total,
         "page": page,
         "per_page": per_page,
+        "total_pages": total_pages,
+        "has_previous_page": page > 1,
+        "has_next_page": page < total_pages,
         "category": category or "",
         "status": status or "",
         "severity": severity or "",
@@ -235,6 +241,15 @@ def alerts_context(
         "statuses": list(AlertStatus),
         "severities": list(AlertSeverity),
     }
+
+
+def _int_setting(db: Session, key: str, default: int) -> int:
+    raw = settings_spec.resolve_value(db, SettingDomain.network_monitoring, key)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
 
 
 def dashboard_alert_summary(db: Session) -> dict[str, object]:
@@ -335,6 +350,21 @@ def _collect_infrastructure_findings(db: Session) -> list[AlertFinding]:
     from app.services import infrastructure_health, web_system_health
 
     findings: list[AlertFinding] = []
+    long_running_minutes = _int_setting(
+        db,
+        "celery_long_running_task_minutes",
+        30,
+    )
+    reserved_backlog_threshold = _int_setting(
+        db,
+        "celery_reserved_backlog_threshold",
+        100,
+    )
+    queue_backlog_threshold = _int_setting(
+        db,
+        "celery_queue_backlog_threshold",
+        500,
+    )
     try:
         for service in infrastructure_health.check_all_services(db):
             service_name = str(service.name or "service")
@@ -342,7 +372,14 @@ def _collect_infrastructure_findings(db: Session) -> list[AlertFinding]:
             if status == "up":
                 continue
             if service_name.lower() == "celery":
-                findings.extend(_celery_findings(service))
+                findings.extend(
+                    _celery_findings(
+                        service,
+                        long_running_minutes=long_running_minutes,
+                        reserved_backlog_threshold=reserved_backlog_threshold,
+                        queue_backlog_threshold=queue_backlog_threshold,
+                    )
+                )
                 continue
             severity = (
                 AlertSeverity.critical if status == "down" else AlertSeverity.warning
@@ -425,7 +462,13 @@ def _collect_infrastructure_findings(db: Session) -> list[AlertFinding]:
     return findings
 
 
-def _celery_findings(service: object) -> list[AlertFinding]:
+def _celery_findings(
+    service: object,
+    *,
+    long_running_minutes: int,
+    reserved_backlog_threshold: int,
+    queue_backlog_threshold: int,
+) -> list[AlertFinding]:
     details = getattr(service, "details", {}) or {}
     status = str(getattr(service, "status", "unknown") or "unknown")
     if status == "down":
@@ -450,12 +493,12 @@ def _celery_findings(service: object) -> list[AlertFinding]:
                 source="celery",
                 severity=AlertSeverity.warning,
                 title="Celery has long-running tasks",
-                summary=f"{len(long_running)} task(s) have run for over 30 minutes.",
+                summary=f"{len(long_running)} task(s) have run for over {long_running_minutes} minutes.",
                 details={"tasks": long_running[:20]},
             )
         )
     reserved_count = int(details.get("reserved_tasks") or 0)
-    if reserved_count > 100:
+    if reserved_count > reserved_backlog_threshold:
         findings.append(
             AlertFinding(
                 fingerprint=f"{INFRASTRUCTURE_ALERT_PREFIX}celery:reserved-backlog",
@@ -464,13 +507,16 @@ def _celery_findings(service: object) -> list[AlertFinding]:
                 severity=AlertSeverity.warning,
                 title="Celery reserved task backlog is high",
                 summary=f"{reserved_count} reserved tasks are waiting.",
-                details={"reserved_tasks": reserved_count},
+                details={
+                    "reserved_tasks": reserved_count,
+                    "threshold": reserved_backlog_threshold,
+                },
             )
         )
     queue_lengths = dict(details.get("queue_lengths") or {})
     for queue_name, length in queue_lengths.items():
         queue_length = int(length or 0)
-        if queue_length <= 500:
+        if queue_length <= queue_backlog_threshold:
             continue
         findings.append(
             AlertFinding(
@@ -480,7 +526,11 @@ def _celery_findings(service: object) -> list[AlertFinding]:
                 severity=AlertSeverity.warning,
                 title=f"Celery queue backlog: {queue_name}",
                 summary=f"{queue_length} task(s) are waiting in {queue_name}.",
-                details={"queue": queue_name, "length": queue_length},
+                details={
+                    "queue": queue_name,
+                    "length": queue_length,
+                    "threshold": queue_backlog_threshold,
+                },
             )
         )
     return findings

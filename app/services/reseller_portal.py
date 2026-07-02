@@ -157,6 +157,12 @@ def _get_customer_account(
     )
 
 
+def owned_account(db: Session, reseller_id: str, account_id: str) -> Subscriber | None:
+    """Return the customer account (Subscriber) iff it belongs to this reseller,
+    else None. Public ownership check for reseller-scoped endpoints."""
+    return _get_customer_account(db, reseller_id, account_id)
+
+
 def _customer_account_join_filter():
     # Lazy import avoids any import cycle with the subscriber service.
     from app.services.subscriber import not_soft_deleted_subscriber_clause

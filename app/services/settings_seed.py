@@ -2569,6 +2569,30 @@ def seed_network_monitoring_settings(db: Session) -> None:
     )
     network_monitoring_settings.ensure_by_key(
         db,
+        key="celery_long_running_task_minutes",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("CELERY_LONG_RUNNING_TASK_MINUTES", "30"),
+    )
+    network_monitoring_settings.ensure_by_key(
+        db,
+        key="celery_reserved_backlog_threshold",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("CELERY_RESERVED_BACKLOG_THRESHOLD", "100"),
+    )
+    network_monitoring_settings.ensure_by_key(
+        db,
+        key="celery_queue_backlog_threshold",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("CELERY_QUEUE_BACKLOG_THRESHOLD", "500"),
+    )
+    network_monitoring_settings.ensure_by_key(
+        db,
+        key="dashboard_sync_healthy_age_seconds",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("DASHBOARD_SYNC_HEALTHY_AGE_SECONDS", "7200"),
+    )
+    network_monitoring_settings.ensure_by_key(
+        db,
         key="core_device_ping_interval_seconds",
         value_type=SettingValueType.integer,
         value_text=os.getenv("CORE_DEVICE_PING_INTERVAL_SECONDS", "120"),

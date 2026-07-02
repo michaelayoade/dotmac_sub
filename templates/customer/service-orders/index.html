@@ -70,7 +70,7 @@
                             </span>
                         </td>
                         <td class="px-5 py-4 text-sm text-stone-500 dark:text-stone-400">
-                            {{ order.created_at.strftime('%b %d, %Y') if order.created_at else '—' }}
+                            {{ order.created_at | portal_datetime('%b %d, %Y', '-') }}
                         </td>
                         <td class="px-5 py-4 text-right">
                             <a href="/portal/service-orders/{{ order.id }}" class="text-sm font-medium text-[var(--color-brand-600)] hover:underline dark:text-[var(--color-brand-400)]">

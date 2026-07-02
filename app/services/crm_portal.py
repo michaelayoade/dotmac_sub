@@ -208,6 +208,8 @@ def _comment_to_dict(comment: Any, customer_subscriber_ids: set[str]) -> dict[st
 
 
 def _ticket_list_base(request: Request, customer: dict) -> dict[str, Any]:
+    from app.services import web_support_tickets
+
     return {
         "request": request,
         "customer": customer,
@@ -216,6 +218,10 @@ def _ticket_list_base(request: Request, customer: dict) -> dict[str, Any]:
         "status_colors": TICKET_STATUS_COLORS,
         "priority_display": TICKET_PRIORITY_DISPLAY,
         "priority_colors": TICKET_PRIORITY_COLORS,
+        "max_attachment_bytes": web_support_tickets.MAX_ATTACHMENT_BYTES,
+        "max_attachment_mb": max(
+            1, web_support_tickets.MAX_ATTACHMENT_BYTES // 1048576
+        ),
     }
 
 

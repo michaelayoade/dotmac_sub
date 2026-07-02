@@ -620,13 +620,44 @@ def _has_open_dunning_case(db: Session, subscriber_id: str) -> bool:
     )
 
 
+def _credit_covers_open_ar(db: Session, subscriber_id: str) -> bool:
+    """True when the account's available balance covers its open AR.
+
+    A prepaid customer sitting in net credit is not "past due" even if an
+    individual invoice's ``balance_due`` is still open: enforcement already
+    treats them as covered (``prepaid_balance_available``) and never suspends
+    them. Deriving ``delinquent`` off that same net figure keeps status/display
+    from diverging from enforcement — the "has balance but shows outstanding"
+    class of bug. Deferred import avoids a collections<->lifecycle cycle.
+    """
+    from app.services.billing._common import get_account_credit_balance
+    from app.services.collections._core import get_available_balance
+
+    try:
+        # Only real, positive credit can cover dues. With no credit, ordinary
+        # delinquency applies (an open case alone still means past-due).
+        if get_account_credit_balance(db, subscriber_id) <= 0:
+            return False
+        return get_available_balance(db, subscriber_id) >= 0
+    except Exception:  # never let a balance-calc hiccup wedge status derivation
+        logger.warning(
+            "available-balance check failed for %s; treating as uncovered",
+            subscriber_id,
+            exc_info=True,
+        )
+        return False
+
+
 def compute_account_status(db: Session, subscriber_id: str) -> SubscriberStatus:
     """Derive subscriber status from subscription states.
 
     Priority order:
       1. Any subscription active →
-            ``delinquent`` if an open dunning case exists (past due, service
-            still running, pre-suspension), else ``active``
+            ``delinquent`` if an open dunning case exists AND available credit
+            does not cover open AR (past due, service still running,
+            pre-suspension), else ``active``. Netting credit here mirrors the
+            enforcement suspend gate so status can't say "delinquent" while
+            enforcement (correctly) treats the account as covered.
       2. Any subscription suspended → suspended
       3. Any subscription blocked/stopped → blocked
       4. Any subscription pending → new
@@ -658,6 +689,7 @@ def compute_account_status(db: Session, subscriber_id: str) -> SubscriberStatus:
         new_status = (
             SubscriberStatus.delinquent
             if _has_open_dunning_case(db, str(subscriber.id))
+            and not _credit_covers_open_ar(db, str(subscriber.id))
             else SubscriberStatus.active
         )
     elif any(s.status == SubscriptionStatus.suspended for s in subs):

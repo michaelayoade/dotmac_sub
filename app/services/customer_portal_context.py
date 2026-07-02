@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 from types import SimpleNamespace
 from typing import cast
 
@@ -19,7 +19,7 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
-from app.models.provisioning import InstallAppointment, ServiceOrder
+from app.models.provisioning import AppointmentStatus, InstallAppointment, ServiceOrder
 from app.models.subscriber import (
     AccountStatus,
     Subscriber,
@@ -299,13 +299,13 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
         next_bill_date = subscriptions[0].next_billing_at
     if not next_bill_date and invoices:
         next_bill_date = invoices[0].due_at or invoices[0].issued_at
-    if not next_bill_date:
-        next_bill_date = datetime.now(UTC) + timedelta(days=30)
+    has_next_bill = bool(next_bill_date or next_bill_amount)
 
     account = SimpleNamespace(
         balance=current_balance,
         next_bill_amount=next_bill_amount,
         next_bill_date=next_bill_date,
+        has_next_bill=has_next_bill,
     )
 
     services = []
@@ -439,7 +439,14 @@ def get_restricted_since(subscriber: Subscriber) -> datetime | None:
 
 
 def get_total_outstanding_balance(db: Session, account_id: object) -> float:
-    """Sum all active positive invoice balances for the account."""
+    """Active positive invoice balances, net of available account credit.
+
+    A prepaid account sitting in credit owes nothing even if individual
+    invoices are still open — the credit hasn't been drawn against them yet.
+    Netting here keeps "outstanding" consistent with the delinquency
+    derivation and enforcement (both net-of-credit), so a customer with a
+    balance never sees a phantom "payment outstanding".
+    """
     total = (
         db.query(func.coalesce(func.sum(Invoice.balance_due), 0))
         .filter(Invoice.account_id == coerce_uuid(account_id))
@@ -447,7 +454,10 @@ def get_total_outstanding_balance(db: Session, account_id: object) -> float:
         .filter(Invoice.balance_due > 0)
         .scalar()
     )
-    return float(total or 0)
+    from app.services.billing._common import get_account_credit_balance
+
+    credit = float(get_account_credit_balance(db, str(account_id)) or 0)
+    return max(0.0, float(total or 0) - max(credit, 0.0))
 
 
 def is_subscriber_restricted(db: Session, subscriber_id: object) -> bool:
@@ -683,7 +693,10 @@ def get_customer_appointments(
     if subscription_id_str:
         filters.append(ServiceOrder.subscription_id == coerce_uuid(subscription_id_str))
     if status:
-        filters.append(InstallAppointment.status == status)
+        normalized_status = str(status).strip().lower()
+        valid_statuses = {item.value for item in AppointmentStatus}
+        if normalized_status in valid_statuses:
+            filters.append(InstallAppointment.status == normalized_status)
 
     count_stmt = (
         select(func.count(InstallAppointment.id))
@@ -849,6 +862,11 @@ def get_outstanding_balance(db: Session, account_id: str) -> dict:
         limit=50,
         offset=0,
     )
-    outstanding_balance = sum(inv.balance_due or 0 for inv in invoices)
+    gross = sum(inv.balance_due or 0 for inv in invoices)
+    # Net against available credit — see get_total_outstanding_balance.
+    from app.services.billing._common import get_account_credit_balance
+
+    credit = get_account_credit_balance(db, str(account_id)) or 0
+    outstanding_balance = max(0, gross - max(credit, 0))
 
     return {"invoices": invoices, "outstanding_balance": outstanding_balance}

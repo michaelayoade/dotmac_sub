@@ -576,6 +576,80 @@ class TestComputeAccountStatus:
         status = compute_account_status(db_session, str(subscriber.id))
         assert status == SubscriberStatus.active
 
+    def _add_open_ar_and_credit(self, db_session, subscriber, ar, credit):
+        from decimal import Decimal
+
+        from app.models.billing import (
+            Invoice,
+            InvoiceStatus,
+            LedgerEntry,
+            LedgerEntryType,
+            LedgerSource,
+        )
+
+        db_session.add(
+            Invoice(
+                account_id=subscriber.id,
+                currency="NGN",
+                subtotal=Decimal(str(ar)),
+                tax_total=Decimal("0"),
+                total=Decimal(str(ar)),
+                balance_due=Decimal(str(ar)),
+                status=InvoiceStatus.overdue,
+                is_active=True,
+            )
+        )
+        db_session.add(
+            LedgerEntry(
+                account_id=subscriber.id,
+                invoice_id=None,
+                entry_type=LedgerEntryType.credit,
+                source=LedgerSource.payment,
+                amount=Decimal(str(credit)),
+                currency="NGN",
+                is_active=True,
+            )
+        )
+        db_session.flush()
+
+    def test_open_dunning_but_credit_covers_ar_is_active(self, db_session):
+        """Open dunning case but available credit covers open AR → active, not
+        delinquent. Status must not diverge from enforcement (which skips these
+        as prepaid_balance_available)."""
+        from app.models.collections import DunningCase, DunningCaseStatus
+
+        subscriber = _make_subscriber(db_session)
+        offer = _make_offer(db_session)
+        _make_subscription(db_session, subscriber, offer)
+        self._add_open_ar_and_credit(db_session, subscriber, ar=5000, credit=8000)
+        db_session.add(
+            DunningCase(account_id=subscriber.id, status=DunningCaseStatus.open)
+        )
+        db_session.flush()
+
+        assert (
+            compute_account_status(db_session, str(subscriber.id))
+            == SubscriberStatus.active
+        )
+
+    def test_open_dunning_with_insufficient_credit_is_delinquent(self, db_session):
+        """Credit present but does NOT cover open AR → still delinquent."""
+        from app.models.collections import DunningCase, DunningCaseStatus
+
+        subscriber = _make_subscriber(db_session)
+        offer = _make_offer(db_session)
+        _make_subscription(db_session, subscriber, offer)
+        self._add_open_ar_and_credit(db_session, subscriber, ar=5000, credit=2000)
+        db_session.add(
+            DunningCase(account_id=subscriber.id, status=DunningCaseStatus.open)
+        )
+        db_session.flush()
+
+        assert (
+            compute_account_status(db_session, str(subscriber.id))
+            == SubscriberStatus.delinquent
+        )
+
     def test_suspended_takes_precedence_over_dunning(self, db_session):
         """A suspended subscription outranks delinquent even with open dunning."""
         from app.models.collections import DunningCase, DunningCaseStatus

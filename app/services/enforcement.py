@@ -87,9 +87,29 @@ def _coa_retries(db: Session) -> int:
 # the attempt for ``_COA_NEG_TTL`` to avoid paying ~6s (timeout * retries)
 # per customer on NASes where CoA isn't enabled. Cleared on first
 # successful CoA. Reset manually via ``reset_coa_cache()``.
+# Fallback default; the live value comes from
+# SettingDomain.network/coa_negative_cache_ttl_minutes via _coa_neg_ttl().
 _COA_NEG_TTL = timedelta(minutes=15)
 _COA_NEG_CACHE: dict[Any, datetime] = {}
 _COA_CACHE_LOCK = threading.Lock()
+
+
+def _coa_neg_ttl() -> timedelta:
+    """CoA negative-cache TTL from settings, falling back to the default.
+    Best-effort — a settings/DB hiccup must not break enforcement."""
+    try:
+        from app.db import SessionLocal
+        from app.services import settings_spec
+
+        with SessionLocal() as session:
+            minutes = settings_spec.resolve_value(
+                session, SettingDomain.network, "coa_negative_cache_ttl_minutes"
+            )
+        if minutes is not None:
+            return timedelta(minutes=int(minutes))
+    except Exception:
+        logger.debug("CoA neg-cache TTL: using default", exc_info=True)
+    return _COA_NEG_TTL
 
 
 def _coa_disabled_for_nas(nas_id: Any) -> bool:
@@ -109,7 +129,7 @@ def _mark_coa_unsupported(nas_id: Any) -> None:
     if nas_id is None:
         return
     with _COA_CACHE_LOCK:
-        _COA_NEG_CACHE[nas_id] = datetime.now(UTC) + _COA_NEG_TTL
+        _COA_NEG_CACHE[nas_id] = datetime.now(UTC) + _coa_neg_ttl()
 
 
 def _mark_coa_supported(nas_id: Any) -> None:

@@ -49,7 +49,16 @@
     {% endcall %}
 
     {% call card("Alerts") %}
-    <p class="mb-4 text-sm text-slate-500 dark:text-slate-400">{{ total }} matching alert{{ "s" if total != 1 else "" }}</p>
+    <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <p class="text-sm text-slate-500 dark:text-slate-400">{{ total }} matching alert{{ "s" if total != 1 else "" }}</p>
+        {% if total_pages > 1 %}
+        <div class="flex items-center gap-2 text-sm">
+            <a href="/admin/alerts?category={{ category }}&status={{ status }}&severity={{ severity }}&source={{ source }}&per_page={{ per_page }}&page={{ page - 1 }}" class="rounded-md border border-slate-200 px-2.5 py-1.5 font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800 {% if not has_previous_page %}pointer-events-none opacity-50{% endif %}">Previous</a>
+            <span class="text-xs font-semibold text-slate-500 dark:text-slate-400">Page {{ page }} of {{ total_pages }}</span>
+            <a href="/admin/alerts?category={{ category }}&status={{ status }}&severity={{ severity }}&source={{ source }}&per_page={{ per_page }}&page={{ page + 1 }}" class="rounded-md border border-slate-200 px-2.5 py-1.5 font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800 {% if not has_next_page %}pointer-events-none opacity-50{% endif %}">Next</a>
+        </div>
+        {% endif %}
+    </div>
     {% if alerts %}
     <div class="overflow-x-auto">
         <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">

@@ -25,16 +25,25 @@
                 <p class="text-base text-rose-200/80 max-w-lg">
                     Your internet service has been {{ account_status_display|lower or 'restricted' }}.
                     {% if outstanding_balance > 0 %}
-                    You have an outstanding balance of <strong class="text-white">&#8358;{{ '{:,.2f}'.format(outstanding_balance) }}</strong>.
-                    Please contact support or settle your outstanding balance to restore service.
+                    You have an outstanding balance of <strong class="text-white">{{ outstanding_balance | currency_amount }} NGN</strong>.
+                    Settle your outstanding balance to restore service.
                     {% else %}
                     Please contact support to restore service.
                     {% endif %}
                 </p>
             </div>
             <div class="flex flex-col gap-3">
-                <a href="/portal/auth/support-info"
+                {% if outstanding_balance > 0 %}
+                <a href="/portal/billing/topup?amount={{ outstanding_balance | int }}"
                    class="inline-flex items-center justify-center gap-2 rounded-xl bg-white px-6 py-3 text-sm font-semibold text-rose-900 shadow-lg transition hover:bg-rose-50">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8V7m0 10v-1"/>
+                    </svg>
+                    Pay to Restore
+                </a>
+                {% endif %}
+                <a href="/portal/auth/support-info"
+                   class="inline-flex items-center justify-center gap-2 rounded-xl border border-white/30 bg-white/10 px-6 py-3 text-sm font-semibold text-white shadow-lg transition hover:bg-white/20">
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z"/>
                     </svg>
@@ -79,13 +88,13 @@
                 {% if account_start_date %}
                 <div class="flex justify-between">
                     <dt class="text-slate-500 dark:text-slate-400">Member since</dt>
-                    <dd class="text-slate-900 dark:text-white">{{ account_start_date.strftime('%b %d, %Y') }}</dd>
+                    <dd class="text-slate-900 dark:text-white">{{ account_start_date | portal_datetime('%b %d, %Y') }}</dd>
                 </div>
                 {% endif %}
                 {% if blocked_since %}
                 <div class="flex justify-between">
                     <dt class="text-slate-500 dark:text-slate-400">{{ account_status_display or 'Restricted' }} since</dt>
-                    <dd class="text-slate-900 dark:text-white">{{ blocked_since.strftime('%b %d, %Y') }}</dd>
+                    <dd class="text-slate-900 dark:text-white">{{ blocked_since | portal_datetime('%b %d, %Y') }}</dd>
                 </div>
                 {% endif %}
             </dl>
@@ -102,7 +111,7 @@
                 <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Outstanding Balance</h3>
             </div>
             <p class="text-3xl font-bold text-slate-900 dark:text-white tabular-nums">
-                &#8358;{{ '{:,.2f}'.format(outstanding_balance) }}
+                {{ outstanding_balance | currency_amount }} NGN
             </p>
             <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">
                 {% if outstanding_balance > 0 %}
@@ -116,7 +125,7 @@
                 {% for inv in recent_invoices %}
                 <div class="flex items-center justify-between text-sm">
                     <span class="text-slate-600 dark:text-slate-400">{{ inv.invoice_number or 'Invoice' }}</span>
-                    <span class="font-mono font-medium text-slate-900 dark:text-white">&#8358;{{ '{:,.2f}'.format(inv.balance_due or 0) }}</span>
+                    <span class="font-mono font-medium text-slate-900 dark:text-white">{{ (inv.balance_due or 0) | currency_amount }} NGN</span>
                 </div>
                 {% endfor %}
             </div>
@@ -137,6 +146,12 @@
                 Contact our support team to resolve your account status or make a payment arrangement.
             </p>
             <div class="space-y-3">
+                {% if outstanding_balance > 0 %}
+                <a href="/portal/billing/topup?amount={{ outstanding_balance | int }}"
+                   class="flex w-full items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300 dark:hover:bg-emerald-900/50">
+                    Pay Now
+                </a>
+                {% endif %}
                 <a href="/portal/support/new"
                    class="flex w-full items-center justify-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 py-2.5 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 dark:border-blue-800 dark:bg-blue-900/30 dark:text-blue-300 dark:hover:bg-blue-900/50">
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
