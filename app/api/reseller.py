@@ -211,9 +211,12 @@ def reseller_work_order_technician_location(
     crm_id = crm_portal_service.resolve_crm_subscriber_id(db, str(account.id))
     if not crm_id:
         return TechnicianLocation(available=False, reason="not_linked")
-    from app.services.crm_client import get_crm_client
+    from app.services.crm_client import CRMClientError, get_crm_client
 
-    data = get_crm_client(db).get_portal_technician_location(crm_id, work_order_id)
+    try:
+        data = get_crm_client(db).get_portal_technician_location(crm_id, work_order_id)
+    except CRMClientError:
+        return TechnicianLocation(available=False, reason="unavailable")
     return TechnicianLocation.model_validate(data)
 
 
@@ -236,11 +239,16 @@ def reseller_rate_technician(
     crm_id = crm_portal_service.resolve_crm_subscriber_id(db, str(account.id))
     if not crm_id:
         raise HTTPException(status_code=404, detail="Account not linked to CRM")
-    from app.services.crm_client import get_crm_client
+    from app.services.crm_client import CRMClientError, get_crm_client
 
-    data = get_crm_client(db).submit_portal_technician_rating(
-        crm_id, work_order_id, rating=payload.rating, comment=payload.comment
-    )
+    try:
+        data = get_crm_client(db).submit_portal_technician_rating(
+            crm_id, work_order_id, rating=payload.rating, comment=payload.comment
+        )
+    except CRMClientError as exc:
+        raise HTTPException(
+            status_code=503, detail="Rating service is temporarily unavailable."
+        ) from exc
     return TechnicianRatingResponse.model_validate(data)
 
 
