@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from sqlalchemy import func, or_, select
@@ -1702,3 +1702,92 @@ def list_catalog_offers(
             }
         )
     return out
+
+
+def _resolve_offer(session: Session, offer_ref: str):
+    from app.models.catalog import CatalogOffer
+
+    oid = coerce_subscriber_id(str(offer_ref))
+    if oid is not None:
+        offer = session.get(CatalogOffer, oid)
+        if offer is not None:
+            return offer
+    return (
+        session.query(CatalogOffer)
+        .filter(CatalogOffer.code == str(offer_ref), CatalogOffer.is_active.is_(True))
+        .order_by(CatalogOffer.created_at.desc())
+        .first()
+    )
+
+
+def create_subscription(
+    session: Session,
+    *,
+    subscriber_id: str,
+    offer_ref: str,
+    external_ref: str,
+    unit_price: Any = None,
+    start_at: datetime | None = None,
+) -> dict:
+    """Create a subscription for a subscriber from a CRM sale and generate its
+    first (subscription-tagged) invoice, so the plan + its charge show in the
+    customer portal. ``offer_ref`` is a sub CatalogOffer id or code — the CRM
+    picks a real offer, so no fuzzy matching. Idempotent on ``external_ref``
+    (recorded on the first invoice's metadata).
+    """
+    from app.models.catalog import SubscriptionStatus
+    from app.schemas.catalog import SubscriptionCreate
+    from app.services.billing.invoices import Invoices
+    from app.services.catalog.subscriptions import Subscriptions
+
+    subscriber = session.get(Subscriber, coerce_subscriber_id(str(subscriber_id)))
+    if subscriber is None:
+        raise LookupError("subscriber not found")
+    offer = _resolve_offer(session, offer_ref)
+    if offer is None:
+        raise LookupError("offer not found")
+
+    # Idempotent: an invoice already tagged with this crm_external_ref means the
+    # subscription was synced before — return it rather than duplicating.
+    for inv in (
+        session.query(Invoice)
+        .filter(Invoice.account_id == subscriber.id, Invoice.is_active.is_(True))
+        .order_by(Invoice.created_at.desc())
+        .all()
+    ):
+        meta = inv.metadata_ or {}
+        if meta.get("crm_external_ref") == str(external_ref) and meta.get(
+            "crm_subscription_id"
+        ):
+            existing = session.get(
+                Subscription, coerce_subscriber_id(str(meta["crm_subscription_id"]))
+            )
+            return {"subscription": existing, "invoice": inv, "created": False}
+
+    price_override = None
+    if unit_price is not None:
+        try:
+            price_override = Decimal(str(unit_price))
+        except (InvalidOperation, TypeError, ValueError):
+            price_override = None
+
+    subscription = Subscriptions.create(
+        session,
+        SubscriptionCreate(
+            subscriber_id=subscriber.id,
+            offer_id=offer.id,
+            status=SubscriptionStatus.pending,
+            start_at=start_at or datetime.now(UTC),
+            unit_price=price_override,
+        ),
+    )
+    invoice = Invoices.create_for_subscription(
+        session, str(subscriber.id), str(subscription.id), allow_prepaid=True
+    )
+    meta = dict(invoice.metadata_ or {})
+    meta["source"] = "dotmac_crm"
+    meta["crm_external_ref"] = str(external_ref)
+    meta["crm_subscription_id"] = str(subscription.id)
+    invoice.metadata_ = meta
+    session.commit()
+    return {"subscription": subscription, "invoice": invoice, "created": True}
