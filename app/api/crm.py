@@ -355,6 +355,40 @@ def billing_risk_source(
     return _envelope(rows, {**meta, "total": total})
 
 
+@router.get("/outages/impact", dependencies=[Depends(require_crm_bearer)])
+def outage_impact(
+    node_id: str | None = None,
+    basestation_id: str | None = None,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Subscribers affected by a failed monitored device or basestation.
+
+    Pass ``node_id`` (a monitored NetworkDevice — OLT/switch/router) and/or
+    ``basestation_id`` (a PopSite). The Zabbix-linked topology resolves the
+    affected subscribers; the response ``coverage`` block flags where the e2e
+    chain is incomplete so the caller can fall back to manual selection.
+    """
+    from app.models.network_monitoring import NetworkDevice, PopSite
+
+    if not node_id and not basestation_id:
+        raise HTTPException(
+            status_code=400, detail="node_id or basestation_id is required"
+        )
+
+    node = None
+    if node_id:
+        node = db.get(NetworkDevice, crm_api.coerce_subscriber_id(node_id))
+        if node is None:
+            raise HTTPException(status_code=404, detail="Network device not found")
+    basestation = None
+    if basestation_id:
+        basestation = db.get(PopSite, crm_api.coerce_subscriber_id(basestation_id))
+        if basestation is None:
+            raise HTTPException(status_code=404, detail="Basestation not found")
+
+    return _envelope(crm_api.outage_impact(db, node=node, basestation=basestation))
+
+
 @router.get("/service-extensions", dependencies=[Depends(require_crm_bearer)])
 def service_extensions(
     request: Request, db: Session = Depends(get_db)
