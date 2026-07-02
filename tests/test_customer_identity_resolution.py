@@ -141,7 +141,9 @@ def test_sensitive_automation_threshold_can_require_high_confidence(
     )
 
     assert identity_resolution_allows_sensitive_automation(resolution) is True
-    assert identity_resolution_allows_sensitive_automation(resolution, db_session) is False
+    assert (
+        identity_resolution_allows_sensitive_automation(resolution, db_session) is False
+    )
 
 
 def test_resolve_matches_verified_subscriber_channel_with_high_confidence(db_session):

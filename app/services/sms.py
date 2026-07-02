@@ -254,7 +254,9 @@ def send_sms(
 
     normalized_phone = _normalize_phone(to_phone)
     try:
-        max_length = int(_get_setting(db, "sms_max_length", "SMS_MAX_LENGTH", "160") or 160)
+        max_length = int(
+            _get_setting(db, "sms_max_length", "SMS_MAX_LENGTH", "160") or 160
+        )
     except ValueError:
         max_length = 160
     if max_length > 0 and len(body) > max_length:

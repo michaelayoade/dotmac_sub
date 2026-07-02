@@ -502,11 +502,7 @@ def _check_celery(db: Session) -> ServiceStatus:
                 if queue in queue_consumers:
                     queue_consumers[queue].append(worker)
             worker_restart_targets = sorted(
-                {
-                    restart_targets[queue]
-                    for queue in queues
-                    if queue in restart_targets
-                }
+                {restart_targets[queue] for queue in queues if queue in restart_targets}
             )
             worker_details.append(
                 {

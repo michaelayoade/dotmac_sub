@@ -594,6 +594,8 @@ def test_dunning_run_day_zero_suspend_uses_actual_overdue_days(
     not the policy step day."""
     from app.models.catalog import (
         DunningAction as CatalogDunningAction,
+    )
+    from app.models.catalog import (
         PolicyDunningStep,
         PolicySet,
     )
@@ -618,9 +620,7 @@ def test_dunning_run_day_zero_suspend_uses_actual_overdue_days(
         subscription.offer_version.policy_set_id = policy_set.id
     db_session.commit()
 
-    response = collections_service.dunning_workflow.run(
-        db_session, DunningRunRequest()
-    )
+    response = collections_service.dunning_workflow.run(db_session, DunningRunRequest())
 
     log = (
         db_session.query(DunningActionLog)

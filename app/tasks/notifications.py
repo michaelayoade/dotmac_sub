@@ -79,7 +79,9 @@ def _notification_setting_int(db, key: str, default: int) -> int:
 
 
 def _max_retries(db) -> int:
-    return max(1, _notification_setting_int(db, "notification_max_retries", MAX_RETRIES))
+    return max(
+        1, _notification_setting_int(db, "notification_max_retries", MAX_RETRIES)
+    )
 
 
 def _sending_timeout_minutes(db) -> int:

@@ -68,7 +68,9 @@ class TestVisibility:
         )
 
     def test_integrations_template_renders_dead_letter_controls(self):
-        template = Path("templates/admin/integrations/connectors/index.html").read_text()
+        template = Path(
+            "templates/admin/integrations/connectors/index.html"
+        ).read_text()
 
         assert "CRM Dead Letters" in template
         assert "/admin/integrations/crm-dead-letters/redrive" in template
@@ -132,6 +134,5 @@ class TestRedrive:
 
         assert response.status_code == 303
         assert (
-            response.headers["location"]
-            == "/admin/integrations/?crm_redrive=not_found"
+            response.headers["location"] == "/admin/integrations/?crm_redrive=not_found"
         )

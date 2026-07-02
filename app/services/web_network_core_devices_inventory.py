@@ -174,7 +174,9 @@ def _zabbix_interface_state(host: dict[str, Any] | None) -> tuple[str, str, str 
     return "Unknown", "unknown", "Zabbix SNMP availability is unknown"
 
 
-def _zabbix_icmp_probe_state(items: list[dict[str, Any]]) -> tuple[str, str, str | None]:
+def _zabbix_icmp_probe_state(
+    items: list[dict[str, Any]],
+) -> tuple[str, str, str | None]:
     item = next(
         (item for item in items if str(item.get("key_") or "") == "icmpping"),
         None,
@@ -240,7 +242,9 @@ def _build_zabbix_probe_statuses(
         icmp_items_by_host: dict[str, list[dict[str, Any]]] = {
             host_id: [] for host_id in host_ids
         }
-        for item in client.get_items(host_ids=host_ids, metric="icmpping", limit=100000):
+        for item in client.get_items(
+            host_ids=host_ids, metric="icmpping", limit=100000
+        ):
             host_id = str(item.get("hostid") or "")
             if host_id in icmp_items_by_host:
                 icmp_items_by_host[host_id].append(item)

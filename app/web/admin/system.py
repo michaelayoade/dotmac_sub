@@ -4269,7 +4269,9 @@ def ticket_settings_update(
     service_team_ids = form.getlist("service_team_ids")
     service_team_labels = form.getlist("service_team_labels")
     routing_regions = form.getlist("routing_regions")
-    routing_ticket_manager_person_ids = form.getlist("routing_ticket_manager_person_ids")
+    routing_ticket_manager_person_ids = form.getlist(
+        "routing_ticket_manager_person_ids"
+    )
     routing_site_coordinator_person_ids = form.getlist(
         "routing_site_coordinator_person_ids"
     )
