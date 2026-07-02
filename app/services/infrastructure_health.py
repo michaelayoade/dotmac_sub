@@ -23,6 +23,26 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _CHECK_TIMEOUT = 3  # seconds for each health check
+_DEFAULT_CELERY_QUEUES = (
+    "celery",
+    "nin",
+    "tr069",
+    "acs",
+    "bandwidth",
+    "ingestion",
+    "crm",
+    "billing",
+)
+_DEFAULT_CELERY_QUEUE_RESTART_TARGETS = {
+    "celery": "celery-worker",
+    "nin": "celery-worker",
+    "crm": "celery-worker",
+    "tr069": "celery-worker-tr069",
+    "acs": "celery-worker-tr069",
+    "bandwidth": "celery-worker-bandwidth",
+    "ingestion": "celery-worker-bandwidth",
+    "billing": "celery-worker-billing",
+}
 
 
 @dataclass
@@ -36,6 +56,53 @@ class ServiceStatus:
     details: dict[str, object] = field(default_factory=dict)
     checked_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     icon: str = ""  # SVG icon for the template
+
+
+def _expected_celery_queues() -> list[str]:
+    raw = os.getenv("CELERY_EXPECTED_QUEUES", "")
+    if not raw.strip():
+        return list(_DEFAULT_CELERY_QUEUES)
+    queues = [item.strip() for item in raw.split(",") if item.strip()]
+    return queues or list(_DEFAULT_CELERY_QUEUES)
+
+
+def _celery_queue_restart_targets() -> dict[str, str]:
+    raw = os.getenv("CELERY_QUEUE_RESTART_TARGETS", "")
+    if not raw.strip():
+        return dict(_DEFAULT_CELERY_QUEUE_RESTART_TARGETS)
+
+    targets: dict[str, str] = {}
+    for item in raw.split(","):
+        if "=" not in item:
+            continue
+        queue, target = item.split("=", 1)
+        queue = queue.strip()
+        target = target.strip()
+        if queue and target:
+            targets[queue] = target
+    return targets or dict(_DEFAULT_CELERY_QUEUE_RESTART_TARGETS)
+
+
+def _celery_worker_restart_enabled() -> bool:
+    return os.getenv("CELERY_WORKER_RESTART_ENABLED", "true").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _celery_unavailable_details(error: str) -> dict[str, object]:
+    expected_queues = _expected_celery_queues()
+    return {
+        "error": error,
+        "workers": [],
+        "worker_details": [],
+        "expected_queues": expected_queues,
+        "missing_queues": expected_queues,
+        "queue_restart_targets": _celery_queue_restart_targets(),
+        "restart_enabled": _celery_worker_restart_enabled(),
+    }
 
 
 def check_all_services(db: Session) -> list[ServiceStatus]:
@@ -408,6 +475,7 @@ def _check_celery(db: Session) -> ServiceStatus:
         active = inspector.active() or {}
         reserved = inspector.reserved() or {}
         scheduled = inspector.scheduled() or {}
+        active_queues = inspector.active_queues() or {}
         elapsed = (time.monotonic() - start) * 1000
 
         if not ping_result:
@@ -415,11 +483,40 @@ def _check_celery(db: Session) -> ServiceStatus:
                 name="Celery",
                 status="down",
                 response_ms=round(elapsed, 1),
-                details={"error": "No workers responding"},
+                details=_celery_unavailable_details("No workers responding"),
                 icon=_ICON_WORKER,
             )
 
-        worker_names = list(ping_result.keys())
+        worker_names = sorted(ping_result.keys())
+        expected_queues = _expected_celery_queues()
+        restart_targets = _celery_queue_restart_targets()
+        queue_consumers: dict[str, list[str]] = {queue: [] for queue in expected_queues}
+        worker_details: list[dict[str, object]] = []
+        for worker in worker_names:
+            queues = [
+                str(queue.get("name"))
+                for queue in active_queues.get(worker, [])
+                if queue.get("name")
+            ]
+            for queue in queues:
+                if queue in queue_consumers:
+                    queue_consumers[queue].append(worker)
+            worker_restart_targets = sorted(
+                {restart_targets[queue] for queue in queues if queue in restart_targets}
+            )
+            worker_details.append(
+                {
+                    "name": worker,
+                    "queues": queues,
+                    "restart_targets": worker_restart_targets,
+                    "active_tasks": len(active.get(worker, []) or []),
+                    "reserved_tasks": len(reserved.get(worker, []) or []),
+                    "scheduled_tasks": len(scheduled.get(worker, []) or []),
+                }
+            )
+        missing_queues = [
+            queue for queue, consumers in queue_consumers.items() if not consumers
+        ]
         now = time.time()
         long_running: list[dict[str, object]] = []
         active_count = 0
@@ -447,12 +544,13 @@ def _check_celery(db: Session) -> ServiceStatus:
         queue_lengths: dict[str, int] = {}
         redis_client = get_redis()
         if redis_client is not None:
-            for queue_name in ("celery", "tr069", "acs"):
+            for queue_name in expected_queues:
                 queue_lengths[queue_name] = int(redis_client.llen(queue_name))
 
         status = "up"
         if (
-            long_running
+            missing_queues
+            or long_running
             or reserved_count > 100
             or any(v > 500 for v in queue_lengths.values())
         ):
@@ -464,6 +562,11 @@ def _check_celery(db: Session) -> ServiceStatus:
             response_ms=round(elapsed, 1),
             details={
                 "workers": worker_names,
+                "worker_details": worker_details,
+                "expected_queues": expected_queues,
+                "missing_queues": missing_queues,
+                "queue_restart_targets": restart_targets,
+                "restart_enabled": _celery_worker_restart_enabled(),
                 "active_tasks": active_count,
                 "reserved_tasks": reserved_count,
                 "scheduled_tasks": scheduled_count,
@@ -478,7 +581,7 @@ def _check_celery(db: Session) -> ServiceStatus:
             name="Celery",
             status="down",
             response_ms=round(elapsed, 1),
-            details={"error": str(exc)[:200]},
+            details=_celery_unavailable_details(str(exc)[:200]),
             icon=_ICON_WORKER,
         )
 

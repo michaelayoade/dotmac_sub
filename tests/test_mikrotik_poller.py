@@ -3,7 +3,12 @@ from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
 import app.poller.mikrotik_poller as mikrotik_poller
-from app.poller.mikrotik_poller import BandwidthPoller, MikroTikConnection, QueueStats
+from app.poller.mikrotik_poller import (
+    BandwidthPoller,
+    MikroTikConnection,
+    QueueStats,
+    _sanitize_exc,
+)
 
 
 def _run_async(coro):
@@ -81,3 +86,11 @@ def test_mikrotik_connection_does_not_pass_unsupported_socket_timeout(monkeypatc
 
     assert _run_async(conn.connect()) is True
     assert "socket_timeout" not in captured_kwargs
+
+
+def test_sanitize_exc_names_blank_exceptions_and_redacts_password():
+    assert _sanitize_exc(TimeoutError()) == "TimeoutError"
+    assert (
+        _sanitize_exc(RuntimeError("failure =password=secret "))
+        == "failure =password=<redacted> "
+    )

@@ -2,6 +2,7 @@
 
 import logging
 import os
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from threading import Lock
 from time import monotonic
@@ -74,9 +75,14 @@ _DASHBOARD_INFRASTRUCTURE_TTL_SECONDS = max(
 )
 _dashboard_infrastructure_lock = Lock()
 _dashboard_infrastructure_cached_at = 0.0
-_dashboard_infrastructure_cache: tuple[list[object], object, dict[str, int]] | None = (
-    None
-)
+_dashboard_infrastructure_cache: (
+    tuple[
+        list[infrastructure_health_service.ServiceStatus],
+        dict[str, object],
+        dict[str, int],
+    ]
+    | None
+) = None
 
 
 def _invoice_total(inv) -> float:
@@ -655,6 +661,7 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
             "label": f"{net_stats['alarms_critical']} critical alarm{'s' if net_stats['alarms_critical'] != 1 else ''}",
             "href": "/admin/network/alarms",
             "severity": "critical",
+            "domain": "network",
         }
         attention_items.append(item)
         network_attention_items.append(item)
@@ -663,6 +670,7 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
             "label": f"{net_stats['alarms_major']} major alarm{'s' if net_stats['alarms_major'] != 1 else ''}",
             "href": "/admin/network/alarms",
             "severity": "major",
+            "domain": "network",
         }
         attention_items.append(item)
         network_attention_items.append(item)
@@ -671,6 +679,7 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
             "label": f"{net_stats['offline_count']} device{'s' if net_stats['offline_count'] != 1 else ''} offline",
             "href": "/admin/network/monitoring",
             "severity": "warning",
+            "domain": "network",
         }
         attention_items.append(item)
         network_attention_items.append(item)
@@ -680,6 +689,7 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
                 "label": f"₦{overdue_amount:,.0f} overdue receivables",
                 "href": "/admin/billing",
                 "severity": "warning",
+                "domain": "billing",
             }
         )
     if sub_stats["suspended_count"] > 0:
@@ -688,6 +698,7 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
                 "label": f"{sub_stats['suspended_count']} suspended account{'s' if sub_stats['suspended_count'] != 1 else ''}",
                 "href": "/admin/customers",
                 "severity": "info",
+                "domain": "customers",
             }
         )
     if pending_orders > 0:
@@ -696,6 +707,7 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
                 "label": f"{pending_orders} pending service order{'s' if pending_orders != 1 else ''}",
                 "href": "/admin/provisioning",
                 "severity": "info",
+                "domain": "provisioning",
             }
         )
 
@@ -707,6 +719,7 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
             "label": f"{ont_low_signal} ONT{'s' if ont_low_signal != 1 else ''} with low signal",
             "href": "/admin/network/onts?view=diagnostics&signal_quality=warning&order_by=signal&order_dir=asc",
             "severity": "warning",
+            "domain": "network",
         }
         attention_items.append(item)
         network_attention_items.append(item)
@@ -716,6 +729,7 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
             "label": f"{ont_offline} ONT{'s' if ont_offline != 1 else ''} offline",
             "href": "/admin/network/onts?view=list&olt_status=offline",
             "severity": "warning",
+            "domain": "network",
         }
         attention_items.append(item)
         network_attention_items.append(item)
@@ -724,6 +738,7 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
             "label": f"{unconfigured_ont_count} unconfigured ONT{'s' if unconfigured_ont_count != 1 else ''} awaiting authorization",
             "href": "/admin/network/onts?view=unconfigured",
             "severity": "info",
+            "domain": "network",
         }
         attention_items.append(item)
         network_attention_items.append(item)
@@ -747,6 +762,7 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
                 ),
                 "href": "/admin/gis?tab=customer-requests&status=pending",
                 "severity": "info",
+                "domain": "customers",
             }
         )
 
@@ -895,7 +911,11 @@ def dashboard(request: Request, db: Session):
     )
 
 
-def dashboard_server_health_partial(request: Request, db: Session):
+def dashboard_server_health_partial(
+    request: Request,
+    db: Session,
+    worker_action_notice: dict[str, str] | None = None,
+):
     server_health = system_health_service.get_system_health()
     thresholds = _build_health_thresholds(db)
     server_health_status = system_health_service.evaluate_health(
@@ -927,13 +947,25 @@ def dashboard_server_health_partial(request: Request, db: Session):
             "infrastructure_services": infrastructure_services,
             "worker_health": worker_health,
             "service_summary": service_summary,
+            "worker_action_notice": worker_action_notice,
         },
     )
 
 
+def clear_dashboard_infrastructure_cache() -> None:
+    global _dashboard_infrastructure_cached_at, _dashboard_infrastructure_cache
+    with _dashboard_infrastructure_lock:
+        _dashboard_infrastructure_cache = None
+        _dashboard_infrastructure_cached_at = 0.0
+
+
 def _load_dashboard_infrastructure_health(
     db: Session,
-) -> tuple[list[object], object, dict[str, int]]:
+) -> tuple[
+    list[infrastructure_health_service.ServiceStatus],
+    dict[str, object],
+    dict[str, int],
+]:
     """Return the infrastructure dashboard snapshot with a short process cache."""
     global _dashboard_infrastructure_cached_at, _dashboard_infrastructure_cache
 
@@ -960,19 +992,20 @@ def _load_dashboard_infrastructure_health(
         worker_health = web_system_health_service._build_worker_health(
             infrastructure_services
         )
-        service_summary = _build_infrastructure_service_summary(
-            infrastructure_services
-        )
-        _dashboard_infrastructure_cache = (
+        service_summary = _build_infrastructure_service_summary(infrastructure_services)
+        snapshot = (
             infrastructure_services,
             worker_health,
             service_summary,
         )
+        _dashboard_infrastructure_cache = snapshot
         _dashboard_infrastructure_cached_at = now
-        return _dashboard_infrastructure_cache
+        return snapshot
 
 
-def _build_infrastructure_service_summary(services: list[object]) -> dict[str, int]:
+def _build_infrastructure_service_summary(
+    services: Sequence[object],
+) -> dict[str, int]:
     summary = {
         "total": len(services),
         "up": 0,

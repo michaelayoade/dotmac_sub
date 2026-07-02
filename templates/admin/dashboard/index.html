@@ -15,87 +15,63 @@
     {# ═══════════ Section 1: Header ═══════════ #}
     <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
-            <h1 class="font-display text-3xl font-bold tracking-tight text-slate-900 dark:text-white">Infrastructure Overview</h1>
-            <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">Real-time monitoring and management dashboard.</p>
+            <h1 class="font-display text-3xl font-bold tracking-tight text-slate-900 dark:text-white">Operations Overview</h1>
+            <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">Customers, billing, and infrastructure at a glance.</p>
         </div>
         <div class="flex gap-3">
-            <button type="button"
-                    data-dashboard-tour-launch
-                    class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:border-amber-300 hover:bg-amber-50 hover:text-amber-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:border-amber-500/40 dark:hover:bg-amber-900/10 dark:hover:text-amber-300">
-                {{ icon_view("h-4 w-4") }}
-                <span>Page Tips</span>
-            </button>
-            {{ action_button("Add Customer", "https://selfcare.dotmac.io/admin/customers/new", icon_plus(), "primary", "amber", "orange") }}
+            {{ action_button("Add Customer", "/admin/customers/new", icon_plus(), "primary", "amber", "orange") }}
         </div>
     </div>
 
-    {# ═══════════ Section 2: Attention Banner (only when issues exist) ═══════════ #}
-    {% if attention_items %}
-    <div data-tour-id="dashboard-attention" class="flex items-center gap-4 rounded-2xl border border-rose-200/70 bg-gradient-to-r from-rose-50 to-amber-50/50 px-5 py-4 dark:border-rose-900/40 dark:from-slate-900 dark:via-rose-950/20 dark:to-slate-800">
-        <div class="flex h-10 w-10 shrink-0 animate-pulse items-center justify-center rounded-xl bg-rose-100 text-rose-600 dark:bg-rose-900/30 dark:text-rose-400">
-            {{ icon_warning("h-5 w-5") }}
-        </div>
-        <div class="min-w-0 flex-1 rounded-xl bg-white/55 px-3 py-2 backdrop-blur-sm dark:bg-slate-900/25">
-            <p class="font-semibold text-slate-900 dark:text-white">{{ attention_items[0].label }}</p>
-            <p class="mt-0.5 text-sm text-slate-700 dark:text-slate-200">{{ attention_items | length }} item{{ 's' if attention_items | length != 1 }} need attention</p>
-        </div>
-        <a href="{{ attention_items[0].href }}" class="shrink-0 rounded-xl bg-rose-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-rose-700">
-            View {{ 'Alarms' if 'alarm' in attention_items[0].label else 'Issues' }}
-        </a>
-    </div>
-    {% endif %}
-
+    {# ═══════════ Section 2: Needs Attention (single unified surface) ═══════════ #}
     {% set infrastructure_alerts = admin_alert_summary.by_category.infrastructure if admin_alert_summary and admin_alert_summary.by_category.infrastructure is defined else {} %}
-    {% if network_attention_items or infrastructure_alerts.total %}
-    <section class="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <div class="rounded-lg border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <div class="flex items-center justify-between gap-3">
-                <div>
-                    <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Network Alerts</h2>
-                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Device, ONT, OLT, and monitoring attention items.</p>
-                </div>
-                <a href="/admin/network/alarms" class="text-xs font-semibold text-rose-600 hover:text-rose-700 dark:text-rose-400">View alarms</a>
+    {% set domain_visible = {
+        "network": show_network,
+        "billing": show_financials,
+        "customers": show_subscribers,
+        "provisioning": show_network or show_subscribers,
+    } %}
+    {% set attention_rows = [] %}
+    {% for item in attention_items %}
+        {% if domain_visible.get(item.domain, true) %}
+            {% if attention_rows.append(item) %}{% endif %}
+        {% endif %}
+    {% endfor %}
+    {% if pon_outages and show_network %}
+        {% if attention_rows.append({
+            "label": "%d PON port%s down" | format(pon_outages | length, 's' if pon_outages | length != 1 else ''),
+            "href": "/admin/network/pon-interfaces?status=down",
+            "severity": "critical",
+        }) %}{% endif %}
+    {% endif %}
+    {% if infrastructure_alerts.total and show_network %}
+        {% if attention_rows.append({
+            "label": "%d infrastructure alert%s (%d critical)" | format(infrastructure_alerts.total, 's' if infrastructure_alerts.total != 1 else '', infrastructure_alerts.critical),
+            "href": "/admin/alerts?category=infrastructure&status=open",
+            "severity": "critical" if infrastructure_alerts.critical else "warning",
+        }) %}{% endif %}
+    {% endif %}
+    {% if attention_rows %}
+    <section data-tour-id="dashboard-attention" class="rounded-2xl border border-rose-200/70 bg-white shadow-sm dark:border-rose-900/40 dark:bg-slate-800">
+        <div class="flex items-center justify-between border-b border-rose-100 px-5 py-3 dark:border-rose-900/30">
+            <div class="flex items-center gap-2.5">
+                <span class="flex h-7 w-7 items-center justify-center rounded-lg bg-rose-100 text-rose-600 dark:bg-rose-900/30 dark:text-rose-400">
+                    {{ icon_warning("h-4 w-4") }}
+                </span>
+                <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Needs attention</h2>
             </div>
-            {% if network_attention_items %}
-            <div class="mt-4 space-y-2">
-                {% for item in network_attention_items[:4] %}
-                <a href="{{ item.href }}" class="flex items-center justify-between rounded-md border border-slate-100 px-3 py-2 text-sm transition hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-700/60">
-                    <span class="truncate text-slate-700 dark:text-slate-200">{{ item.label }}</span>
-                    {{ status_badge(item.severity|title, 'error' if item.severity in ['critical', 'major'] else 'warning' if item.severity == 'warning' else 'info', size='sm') }}
-                </a>
-                {% endfor %}
-            </div>
-            {% else %}
-            <p class="mt-4 rounded-md border border-dashed border-slate-200 px-3 py-3 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">No network alerts currently need attention.</p>
-            {% endif %}
+            <span class="rounded-full bg-rose-50 px-2.5 py-0.5 text-xs font-semibold tabular-nums text-rose-700 dark:bg-rose-900/30 dark:text-rose-300">{{ attention_rows | length }}</span>
         </div>
-
-        <div class="rounded-lg border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <div class="flex items-center justify-between gap-3">
-                <div>
-                    <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Infrastructure Alerts</h2>
-                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Workers, queues, standby replication, services, and scheduled tasks.</p>
-                </div>
-                <a href="/admin/alerts?category=infrastructure&status=open" class="text-xs font-semibold text-rose-600 hover:text-rose-700 dark:text-rose-400">View alerts</a>
-            </div>
-            {% if infrastructure_alerts.total %}
-            <div class="mt-4 grid grid-cols-3 gap-2">
-                <div class="rounded-md bg-red-50 px-3 py-2 dark:bg-red-900/20">
-                    <p class="text-xs text-red-600 dark:text-red-300">Critical</p>
-                    <p class="text-lg font-bold text-red-700 dark:text-red-200">{{ infrastructure_alerts.critical }}</p>
-                </div>
-                <div class="rounded-md bg-amber-50 px-3 py-2 dark:bg-amber-900/20">
-                    <p class="text-xs text-amber-600 dark:text-amber-300">Warning</p>
-                    <p class="text-lg font-bold text-amber-700 dark:text-amber-200">{{ infrastructure_alerts.warning }}</p>
-                </div>
-                <div class="rounded-md bg-blue-50 px-3 py-2 dark:bg-blue-900/20">
-                    <p class="text-xs text-blue-600 dark:text-blue-300">Info</p>
-                    <p class="text-lg font-bold text-blue-700 dark:text-blue-200">{{ infrastructure_alerts.info }}</p>
-                </div>
-            </div>
-            {% else %}
-            <p class="mt-4 rounded-md border border-dashed border-slate-200 px-3 py-3 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">No infrastructure alerts currently need attention.</p>
-            {% endif %}
+        <div class="grid grid-cols-1 divide-y divide-slate-100 sm:grid-cols-2 sm:divide-y-0 dark:divide-slate-700/40">
+            {% for item in attention_rows %}
+            <a href="{{ item.href }}" class="group flex items-center gap-3 px-5 py-2.5 text-sm transition hover:bg-slate-50 dark:hover:bg-slate-700/40">
+                <span class="h-2 w-2 shrink-0 rounded-full {{ 'bg-rose-500' if item.severity in ['critical', 'major'] else 'bg-amber-500' if item.severity == 'warning' else 'bg-sky-500' }}"></span>
+                <span class="min-w-0 flex-1 truncate text-slate-700 group-hover:text-slate-900 dark:text-slate-200 dark:group-hover:text-white">{{ item.label }}</span>
+                <svg class="h-4 w-4 shrink-0 text-slate-300 transition group-hover:text-slate-500 dark:text-slate-600 dark:group-hover:text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                </svg>
+            </a>
+            {% endfor %}
         </div>
     </section>
     {% endif %}
@@ -103,7 +79,8 @@
     {# ═══════════ Section 3: KPI Grid (single row, 4 cols on desktop) ═══════════ #}
     {% include "admin/dashboard/_stats.html" %}
 
-    {# ═══════════ Section 4: Infrastructure State ═══════════ #}
+    {# ═══════════ Section 4: Infrastructure State (ops roles only) ═══════════ #}
+    {% if show_network %}
     <section data-tour-id="dashboard-infrastructure"
              hx-get="/admin/dashboard/server-health"
              hx-trigger="load, every 60s"
@@ -116,192 +93,108 @@
                     </div>
                     <div>
                         <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Infrastructure</p>
-                        <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Loading infrastructure state</h3>
+                        <h3 data-infra-loading-title class="text-sm font-semibold text-slate-900 dark:text-white">Loading infrastructure state</h3>
                     </div>
                 </div>
                 {{ status_badge("Loading", "default", size="sm") }}
             </div>
-            <div class="grid gap-3 p-5 sm:grid-cols-2 lg:grid-cols-4">
-                {% for label in ["RAM", "Disk", "Load", "Workers"] %}
-                <div class="h-24 animate-pulse rounded-lg bg-slate-100 dark:bg-slate-700/50" aria-label="Loading {{ label }}"></div>
-                {% endfor %}
+            <div class="space-y-3 p-5">
+                <div class="h-10 animate-pulse rounded-lg bg-slate-100 dark:bg-slate-700/50" aria-label="Loading host stats"></div>
+                <div class="h-48 animate-pulse rounded-lg bg-slate-100 dark:bg-slate-700/50" aria-label="Loading service table"></div>
             </div>
         </div>
     </section>
+    {% endif %}
 
-    {# ═══════════ Section 5: What's New + Quick Actions ═══════════ #}
-    <section class="grid grid-cols-1 gap-6 xl:grid-cols-3 xl:items-stretch">
-        <div class="xl:col-span-2">
-            <div x-data='dashboardWhatsNew({{ (whats_new_items | default([], true)) | tojson }})'
-                 x-init="init()"
-                 x-on:mouseenter="pause()"
-                 x-on:mouseleave="resume()"
-                 x-on:touchstart.passive="onTouchStart($event)"
-                 x-on:touchend.passive="onTouchEnd($event)"
-                 class="relative h-full overflow-hidden rounded-2xl border border-slate-200/70 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 shadow-sm dark:border-slate-700/70">
-                <div class="absolute inset-0 overflow-hidden">
-                    <div class="absolute -top-16 -right-16 h-48 w-48 rounded-full bg-amber-400/15 blur-3xl"></div>
-                    <div class="absolute -bottom-20 -left-16 h-56 w-56 rounded-full bg-sky-500/10 blur-3xl"></div>
-                    <div class="absolute inset-0 opacity-[0.05]" style="background-image: radial-gradient(circle at 1px 1px, rgba(255,255,255,0.6) 1px, transparent 0); background-size: 24px 24px;"></div>
-                </div>
-
-                <div class="relative flex h-full flex-col p-6 sm:p-7">
-                    <div class="flex items-start justify-between gap-4">
-                        <div>
-                            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-300">What's New</p>
-                        </div>
-                        <a href="/admin/system/whats-new" class="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm font-medium text-white/90 backdrop-blur-sm transition hover:bg-white/10">
-                            Manage slides
-                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
-                            </svg>
-                        </a>
-                    </div>
-
-                    <template x-if="itemCount()">
-                        <div class="mt-6 flex flex-1 flex-col justify-between">
-                            <div class="space-y-5">
-                                <div class="flex items-center gap-3">
-                                    <span x-text="currentItem().status === 'featured' ? 'Featured' : 'Active'"
-                                          class="inline-flex rounded-full bg-amber-400/15 px-3 py-1 text-xs font-semibold text-amber-200 ring-1 ring-inset ring-amber-300/20"></span>
-                                    <span class="text-xs font-medium text-slate-400" x-text="`${active + 1} of ${itemCount()}`"></span>
-                                </div>
-
-                                <div>
-                                    <h3 class="font-display text-3xl font-bold text-white" x-text="currentItem().title"></h3>
-                                    <p class="mt-3 max-w-3xl text-base text-slate-300" x-text="currentItem().message"></p>
-                                </div>
-
-                                <div class="flex flex-wrap gap-2" x-show="currentItem().benefits.length">
-                                    <template x-for="benefit in currentItem().benefits" :key="benefit">
-                                        <span class="inline-flex rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-sm text-slate-200" x-text="benefit"></span>
-                                    </template>
-                                </div>
-                            </div>
-
-                            <div class="mt-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                                <a :href="currentItem().button_link"
-                                   x-on:click="handleAction($event, currentItem().button_link)"
-                                   class="inline-flex items-center justify-center gap-2 rounded-xl bg-amber-500 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-amber-400">
-                                    <span x-text="currentItem().button_text"></span>
-                                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
-                                    </svg>
-                                </a>
-
-                                <div class="flex items-center gap-3" x-show="itemCount() > 1">
-                                    <button type="button"
-                                            x-on:click="prev()"
-                                            class="inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white transition hover:bg-white/10"
-                                            aria-label="Previous slide">
-                                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
-                                        </svg>
-                                    </button>
-                                    <div class="flex items-center gap-2">
-                                        <template x-for="(item, index) in items" :key="item.id">
-                                            <button type="button"
-                                                    x-on:click="goTo(index)"
-                                                    :class="index === active ? 'bg-amber-400' : 'bg-white/25'"
-                                                    class="h-2.5 w-2.5 rounded-full transition"
-                                                    :aria-label="`Go to slide ${index + 1}`"></button>
-                                        </template>
-                                    </div>
-                                    <button type="button"
-                                            x-on:click="next()"
-                                            class="inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white transition hover:bg-white/10"
-                                            aria-label="Next slide">
-                                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
-                                        </svg>
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    </template>
-
-                    <template x-if="!itemCount()">
-                        <div class="mt-6 flex flex-1 items-center justify-center rounded-2xl border border-dashed border-white/15 bg-white/5 px-6 py-12 text-center">
-                            <div>
-                                <p class="text-lg font-semibold text-white">No active updates yet</p>
-                                <p class="mt-2 text-sm text-slate-300">Create featured or active slides in settings to start surfacing new admin features here.</p>
-                            </div>
-                        </div>
-                    </template>
-                </div>
-            </div>
+    {# ═══════════ Section 5: Quick Actions ═══════════ #}
+    <section data-tour-id="dashboard-quick-actions" class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <div class="border-b border-slate-200/60 px-5 py-4 dark:border-slate-700/60">
+            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Quick Actions</p>
+            <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Frequent tasks</h3>
         </div>
+        <div class="grid grid-cols-1 gap-3 p-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {% if show_network %}
+            <a href="/admin/network/network-devices" class="group flex items-center gap-3 rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 transition hover:border-blue-300 hover:bg-blue-50 dark:border-slate-700/70 dark:bg-slate-900/20 dark:hover:border-blue-500/40 dark:hover:bg-blue-900/10">
+                <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">{{ icon_server("h-4 w-4") }}</div>
+                <div class="min-w-0">
+                    <p class="text-sm font-semibold text-slate-900 dark:text-white">Network Devices</p>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">Manage network equipment</p>
+                </div>
+            </a>
+            <a href="/admin/network/onts?view=unconfigured" class="group flex items-center gap-3 rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 transition hover:border-violet-300 hover:bg-violet-50 dark:border-slate-700/70 dark:bg-slate-900/20 dark:hover:border-violet-500/40 dark:hover:bg-violet-900/10">
+                <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300">{{ icon_cpu("h-4 w-4") }}</div>
+                <div class="min-w-0">
+                    <p class="text-sm font-semibold text-slate-900 dark:text-white">Unconfigured ONTs</p>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">{{ unconfigured_ont_count | default(0, true) }} awaiting setup</p>
+                </div>
+            </a>
+            <a href="/admin/network/olts" class="group flex items-center gap-3 rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 transition hover:border-cyan-300 hover:bg-cyan-50 dark:border-slate-700/70 dark:bg-slate-900/20 dark:hover:border-cyan-500/40 dark:hover:bg-cyan-900/10">
+                <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300">{{ icon_clipboard("h-4 w-4") }}</div>
+                <div class="min-w-0">
+                    <p class="text-sm font-semibold text-slate-900 dark:text-white">OLT Devices</p>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">Open OLT device list</p>
+                </div>
+            </a>
+            <a href="/admin/network/onts?view=diagnostics&order_by=signal&order_dir=asc" class="group flex items-center gap-3 rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 transition hover:border-emerald-300 hover:bg-emerald-50 dark:border-slate-700/70 dark:bg-slate-900/20 dark:hover:border-emerald-500/40 dark:hover:bg-emerald-900/10">
+                <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">{{ icon_credit_card("h-4 w-4") }}</div>
+                <div class="min-w-0">
+                    <p class="text-sm font-semibold text-slate-900 dark:text-white">ONT Signal Diagnostics</p>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">Review ONT signal levels</p>
+                </div>
+            </a>
+            <a href="/admin/network/onts" class="group flex items-center gap-3 rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 text-left transition hover:border-slate-400 hover:bg-slate-100 dark:border-slate-700/70 dark:bg-slate-900/20 dark:hover:border-slate-500 dark:hover:bg-slate-700/40">
+                <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300">{{ icon_view("h-4 w-4") }}</div>
+                <div class="min-w-0">
+                    <p class="text-sm font-semibold text-slate-900 dark:text-white">ONTs</p>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">Open ONT list</p>
+                </div>
+            </a>
+            {% endif %}
 
-        <div data-tour-id="dashboard-quick-actions" class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-            <div class="border-b border-slate-200/60 px-5 py-4 dark:border-slate-700/60">
-                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Quick Actions</p>
-                <h3 class="mt-2 font-display text-xl font-bold text-slate-900 dark:text-white">Quick Access to Frequent Tasks</h3>
-            </div>
-            <div class="grid grid-cols-1 gap-3 p-4 sm:grid-cols-2 xl:grid-cols-1">
-                {% if show_network %}
-                <a href="https://selfcare.dotmac.io/admin/network/network-devices" class="group flex items-center gap-3 rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 transition hover:border-blue-300 hover:bg-blue-50 dark:border-slate-700/70 dark:bg-slate-900/20 dark:hover:border-blue-500/40 dark:hover:bg-blue-900/10">
-                    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">{{ icon_server("h-4 w-4") }}</div>
-                    <div class="min-w-0">
-                        <p class="text-sm font-semibold text-slate-900 dark:text-white">Network Devices</p>
-                        <p class="text-xs text-slate-500 dark:text-slate-400">Manage network equipment</p>
-                    </div>
-                </a>
-                <a href="https://selfcare.dotmac.io/admin/network/onts?view=unconfigured" class="group flex items-center gap-3 rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 transition hover:border-violet-300 hover:bg-violet-50 dark:border-slate-700/70 dark:bg-slate-900/20 dark:hover:border-violet-500/40 dark:hover:bg-violet-900/10">
-                    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300">{{ icon_cpu("h-4 w-4") }}</div>
-                    <div class="min-w-0">
-                        <p class="text-sm font-semibold text-slate-900 dark:text-white">Unconfigured ONTs</p>
-                        <p class="text-xs text-slate-500 dark:text-slate-400">{{ unconfigured_ont_count | default(0, true) }} awaiting setup</p>
-                    </div>
-                </a>
-                <a href="https://selfcare.dotmac.io/admin/network/olts" class="group flex items-center gap-3 rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 transition hover:border-cyan-300 hover:bg-cyan-50 dark:border-slate-700/70 dark:bg-slate-900/20 dark:hover:border-cyan-500/40 dark:hover:bg-cyan-900/10">
-                    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300">{{ icon_clipboard("h-4 w-4") }}</div>
-                    <div class="min-w-0">
-                        <p class="text-sm font-semibold text-slate-900 dark:text-white">OLT Devices</p>
-                        <p class="text-xs text-slate-500 dark:text-slate-400">Open OLT device list</p>
-                    </div>
-                </a>
-                {% endif %}
-
-                {% if show_subscribers %}
-                <a href="https://selfcare.dotmac.io/admin/customers/new" class="group flex items-center gap-3 rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 transition hover:border-amber-300 hover:bg-amber-50 dark:border-slate-700/70 dark:bg-slate-900/20 dark:hover:border-amber-500/40 dark:hover:bg-amber-900/10">
-                    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">{{ icon_plus("h-4 w-4") }}</div>
-                    <div class="min-w-0">
-                        <p class="text-sm font-semibold text-slate-900 dark:text-white">Add Customer</p>
-                        <p class="text-xs text-slate-500 dark:text-slate-400">Create a new subscriber record</p>
-                    </div>
-                </a>
-                {% endif %}
-
-                {% if show_financials %}
-                <a href="https://selfcare.dotmac.io/admin/network/onts?view=diagnostics&order_by=signal&order_dir=asc" class="group flex items-center gap-3 rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 transition hover:border-emerald-300 hover:bg-emerald-50 dark:border-slate-700/70 dark:bg-slate-900/20 dark:hover:border-emerald-500/40 dark:hover:bg-emerald-900/10">
-                    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">{{ icon_credit_card("h-4 w-4") }}</div>
-                    <div class="min-w-0">
-                        <p class="text-sm font-semibold text-slate-900 dark:text-white">ONT Signal Diagnostics</p>
-                        <p class="text-xs text-slate-500 dark:text-slate-400">Review ONT signal levels</p>
-                    </div>
-                </a>
-                {% endif %}
-
-                <a href="https://selfcare.dotmac.io/admin/network/onts" class="group flex items-center gap-3 rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 text-left transition hover:border-slate-400 hover:bg-slate-100 dark:border-slate-700/70 dark:bg-slate-900/20 dark:hover:border-slate-500 dark:hover:bg-slate-700/40">
-                    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300">{{ icon_view("h-4 w-4") }}</div>
-                    <div class="min-w-0">
-                        <p class="text-sm font-semibold text-slate-900 dark:text-white">ONTs</p>
-                        <p class="text-xs text-slate-500 dark:text-slate-400">Open ONT list</p>
-                    </div>
-                </a>
-                <a href="https://selfcare.dotmac.io/admin/system/users" class="group flex items-center gap-3 rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 transition hover:border-slate-400 hover:bg-slate-100 dark:border-slate-700/70 dark:bg-slate-900/20 dark:hover:border-slate-500 dark:hover:bg-slate-700/40">
-                    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300">{{ icon_cog("h-4 w-4") }}</div>
-                    <div class="min-w-0">
-                        <p class="text-sm font-semibold text-slate-900 dark:text-white">Users & Roles</p>
-                        <p class="text-xs text-slate-500 dark:text-slate-400">Manage users and roles</p>
-                    </div>
-                </a>
-            </div>
+            {% if show_subscribers %}
+            <a href="/admin/customers/new" class="group flex items-center gap-3 rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 transition hover:border-amber-300 hover:bg-amber-50 dark:border-slate-700/70 dark:bg-slate-900/20 dark:hover:border-amber-500/40 dark:hover:bg-amber-900/10">
+                <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">{{ icon_plus("h-4 w-4") }}</div>
+                <div class="min-w-0">
+                    <p class="text-sm font-semibold text-slate-900 dark:text-white">Add Customer</p>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">Create a new subscriber record</p>
+                </div>
+            </a>
+            {% endif %}
+            <a href="/admin/system/users" class="group flex items-center gap-3 rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 transition hover:border-slate-400 hover:bg-slate-100 dark:border-slate-700/70 dark:bg-slate-900/20 dark:hover:border-slate-500 dark:hover:bg-slate-700/40">
+                <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300">{{ icon_cog("h-4 w-4") }}</div>
+                <div class="min-w-0">
+                    <p class="text-sm font-semibold text-slate-900 dark:text-white">Users & Roles</p>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">Manage users and roles</p>
+                </div>
+            </a>
         </div>
     </section>
 
-    {# ═══════════ Section 6: PON Outages ═══════════ #}
-    {% include "admin/dashboard/_pon_outage.html" %}
+    {# ═══════════ Section 6: What's New (slim, dismissible, only when populated) ═══════════ #}
+    {% if whats_new_items %}
+    {% set whats_new = whats_new_items[0] %}
+    <div x-data="{ dismissed: localStorage.getItem('dotmac_whats_new_dismissed') === '{{ whats_new.id }}' }"
+         x-show="!dismissed"
+         x-cloak
+         class="flex items-center gap-3 rounded-2xl border border-amber-200/70 bg-amber-50/70 px-5 py-3 dark:border-amber-500/20 dark:bg-amber-900/10">
+        <span class="shrink-0 rounded-full bg-amber-500/15 px-2.5 py-0.5 text-xs font-semibold text-amber-700 dark:text-amber-300">What's new</span>
+        <p class="min-w-0 flex-1 truncate text-sm text-slate-700 dark:text-slate-200">
+            <span class="font-semibold text-slate-900 dark:text-white">{{ whats_new.title }}</span>
+            <span class="hidden sm:inline"> — {{ whats_new.message }}</span>
+        </p>
+        {% if whats_new.button_link and whats_new.button_text %}
+        <a href="{{ whats_new.button_link }}" class="shrink-0 text-sm font-semibold text-amber-700 hover:text-amber-800 dark:text-amber-300 dark:hover:text-amber-200">{{ whats_new.button_text }} →</a>
+        {% endif %}
+        <button type="button"
+                x-on:click="dismissed = true; localStorage.setItem('dotmac_whats_new_dismissed', '{{ whats_new.id }}')"
+                class="shrink-0 rounded-md p-1 text-slate-400 transition hover:bg-amber-100 hover:text-slate-600 dark:hover:bg-amber-900/30 dark:hover:text-slate-200"
+                aria-label="Dismiss">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+        </button>
+    </div>
+    {% endif %}
 
     {# ═══════════ Section 7: Recent Events Table ═══════════ #}
     {% if recent_activities %}
@@ -355,143 +248,18 @@
 {% block scripts %}
 {{ super() }}
 <script>
-    window.dashboardWhatsNew = function(items) {
-        return {
-            items: Array.isArray(items) ? items : [],
-            active: 0,
-            timer: null,
-            touchStartX: 0,
-            init() {
-                this.resume();
-            },
-            itemCount() {
-                return this.items.length;
-            },
-            currentItem() {
-                return this.items[this.active] || { benefits: [] };
-            },
-            pause() {
-                if (this.timer) {
-                    window.clearInterval(this.timer);
-                    this.timer = null;
-                }
-            },
-            resume() {
-                this.pause();
-                if (this.itemCount() > 1) {
-                    this.timer = window.setInterval(() => this.next(), 12000);
-                }
-            },
-            goTo(index) {
-                this.active = index;
-                this.resume();
-            },
-            prev() {
-                if (!this.itemCount()) return;
-                this.active = (this.active - 1 + this.itemCount()) % this.itemCount();
-                this.resume();
-            },
-            next() {
-                if (!this.itemCount()) return;
-                this.active = (this.active + 1) % this.itemCount();
-                this.resume();
-            },
-            onTouchStart(event) {
-                this.touchStartX = event.changedTouches[0].screenX;
-            },
-            onTouchEnd(event) {
-                const delta = event.changedTouches[0].screenX - this.touchStartX;
-                if (Math.abs(delta) < 40) {
-                    return;
-                }
-                if (delta > 0) {
-                    this.prev();
-                    return;
-                }
-                this.next();
-            },
-            handleAction(event, link) {
-                if (typeof link === 'string' && link.includes('tour=1') && window.dashboardPageTips) {
-                    event.preventDefault();
-                    window.dashboardPageTips.start({ force: true });
-                }
-            }
-        };
-    };
-
-    document.addEventListener('DOMContentLoaded', function() {
-        if (!window.DotmacTour) {
+    document.body.addEventListener('htmx:responseError', function (event) {
+        const section = event.detail.elt;
+        if (!section.matches || !section.matches('[data-tour-id="dashboard-infrastructure"]')) {
             return;
         }
-
-        const dashboardTour = window.DotmacTour.create({
-            storageKey: 'dotmac_dashboard_tips_seen_v1',
-            autoStart: false,
-            steps: [
-                {
-                    selector: '[data-tour-id="dashboard-attention"]',
-                    title: 'Attention items',
-                    body: 'Check this first when something needs urgent action.',
-                    placement: 'bottom'
-                },
-                {
-                    selector: '[data-tour-id="dashboard-kpis"]',
-                    title: 'Summary cards',
-                    body: 'Use these numbers to spot customer, billing, and network changes fast.',
-                    placement: 'bottom'
-                },
-                {
-                    selector: '[data-tour-id="dashboard-quick-actions"]',
-                    title: 'Quick actions',
-                    body: 'Jump into common work here instead of searching through menus.',
-                    placement: 'top'
-                },
-                {
-                    selector: '[data-tour-id="dashboard-recent-events"]',
-                    title: 'Recent events',
-                    body: 'Review recent changes here to understand what happened across the system.',
-                    placement: 'top'
-                }
-            ]
+        const title = section.querySelector('[data-infra-loading-title]');
+        if (title) {
+            title.textContent = 'Infrastructure state unavailable — retrying every 60s';
+        }
+        section.querySelectorAll('.animate-pulse').forEach(function (el) {
+            el.classList.remove('animate-pulse');
         });
-
-        window.dashboardPageTips = dashboardTour;
-
-        function startDashboardTips(force) {
-            const globalTour = window.adminQuickTour;
-            if (globalTour && globalTour.active) {
-                window.setTimeout(function() {
-                    startDashboardTips(force);
-                }, 500);
-                return;
-            }
-            dashboardTour.start({ force: !!force });
-        }
-
-        const launchButton = document.querySelector('[data-dashboard-tour-launch]');
-        if (launchButton) {
-            launchButton.addEventListener('click', function() {
-                startDashboardTips(true);
-            });
-        }
-
-        const inlineTourButton = document.querySelector('[data-dashboard-tour-inline]');
-        if (inlineTourButton) {
-            inlineTourButton.addEventListener('click', function() {
-                startDashboardTips(true);
-            });
-        }
-
-        const params = new URLSearchParams(window.location.search);
-        const forceTourFromQuery = params.get('tour') === '1';
-        if (forceTourFromQuery) {
-            startDashboardTips(true);
-            params.delete('tour');
-            const query = params.toString();
-            const nextUrl = query ? `${window.location.pathname}?${query}` : window.location.pathname;
-            window.history.replaceState({}, '', nextUrl);
-        }
-
     });
 </script>
 {% endblock %}

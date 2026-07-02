@@ -124,9 +124,7 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "billing", STATE, GUARDED, HEALTH, "Invoice creation must remain idempotent."
     ),
     "app.tasks.catalog.expire_subscriptions": _c("catalog", SWEEP, GUARDED, HEALTH),
-    "app.tasks.catalog.send_expiry_reminders": _c(
-        "catalog", SWEEP, GUARDED, STATUS
-    ),
+    "app.tasks.catalog.send_expiry_reminders": _c("catalog", SWEEP, GUARDED, STATUS),
     "app.tasks.collections.run_billing_enforcement": _c(
         "collections", STATE, GUARDED, HEALTH
     ),
@@ -148,9 +146,7 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "enforcement", SWEEP, IDEMP, HEALTH
     ),
     "app.tasks.events.cleanup_old_events": _c("events", SWEEP, IDEMP, LOG),
-    "app.tasks.events.mark_stale_processing_events": _c(
-        "events", SWEEP, IDEMP, STATUS
-    ),
+    "app.tasks.events.mark_stale_processing_events": _c("events", SWEEP, IDEMP, STATUS),
     "app.tasks.events.retry_failed_events": _c("events", STATE, STATEFUL, STATUS),
     "app.tasks.exports.run_export_job": _c("exports", MANUAL, GUARDED, STATUS),
     "app.tasks.exports.run_scheduled_export": _c("exports", SWEEP, GUARDED, STATUS),
@@ -202,9 +198,7 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.network_operations.cleanup_old_operations": _c(
         "network", SWEEP, IDEMP, LOG
     ),
-    "app.tasks.nin_tasks.verify_nin_task": _c(
-        "identity", AUTORETRY, GUARDED, STATUS
-    ),
+    "app.tasks.nin_tasks.verify_nin_task": _c("identity", AUTORETRY, GUARDED, STATUS),
     "app.tasks.notifications.deliver_notification_queue": _c(
         "notifications", STATE, GUARDED, STATUS
     ),
@@ -212,9 +206,7 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.oauth.refresh_expiring_tokens": _c(
         "integrations", STATE, GUARDED, STATUS
     ),
-    "app.tasks.olt_config_backup.backup_all_olts": _c(
-        "network", SWEEP, IDEMP, STATUS
-    ),
+    "app.tasks.olt_config_backup.backup_all_olts": _c("network", SWEEP, IDEMP, STATUS),
     "app.tasks.olt_health_retry.retry_failed_olt_connections": _c(
         "network", SWEEP, IDEMP, HEALTH
     ),
@@ -237,9 +229,7 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.profile_sync.execute_due_profile_sync_tasks": _c(
         "network", STATE, STATEFUL, STATUS
     ),
-    "app.tasks.projects.reconcile_project_mirror": _c(
-        "crm", SWEEP, IDEMP, HEALTH
-    ),
+    "app.tasks.projects.reconcile_project_mirror": _c("crm", SWEEP, IDEMP, HEALTH),
     "app.tasks.provisioning.reap_stale_provisioning_runs": _c(
         "provisioning", SWEEP, IDEMP, STATUS
     ),
@@ -254,21 +244,15 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     ),
     "app.tasks.quotes.reconcile_quote_mirror": _c("crm", SWEEP, IDEMP, HEALTH),
     "app.tasks.radius.audit_ip_consistency": _c("radius", SWEEP, IDEMP, HEALTH),
-    "app.tasks.radius.audit_suspension_enforcement": _c(
-        "radius", SWEEP, IDEMP, HEALTH
-    ),
+    "app.tasks.radius.audit_suspension_enforcement": _c("radius", SWEEP, IDEMP, HEALTH),
     "app.tasks.radius.connectivity_shadow_audit": _c("radius", SWEEP, IDEMP, HEALTH),
     "app.tasks.radius.reap_radacct_ghosts": _c("radius", SWEEP, IDEMP, HEALTH),
-    "app.tasks.radius.run_enforcement_reconciler": _c(
-        "radius", STATE, GUARDED, STATUS
-    ),
+    "app.tasks.radius.run_enforcement_reconciler": _c("radius", STATE, GUARDED, STATUS),
     "app.tasks.radius.run_radius_sync_job": _c("radius", SWEEP, IDEMP, STATUS),
     "app.tasks.radius_population.refresh_radius_from_subs": _c(
         "radius", SWEEP, IDEMP, STATUS
     ),
-    "app.tasks.radius_population.sync_device_login": _c(
-        "radius", SWEEP, IDEMP, STATUS
-    ),
+    "app.tasks.radius_population.sync_device_login": _c("radius", SWEEP, IDEMP, STATUS),
     "app.tasks.referrals.reconcile_referral_mirror": _c(
         "billing", SWEEP, IDEMP, HEALTH
     ),
@@ -278,9 +262,7 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.topology_sync.run_topology_reconcile": _c(
         "network", SWEEP, IDEMP, HEALTH
     ),
-    "app.tasks.topology_sync.warm_topology_status": _c(
-        "network", SWEEP, IDEMP, HEALTH
-    ),
+    "app.tasks.topology_sync.warm_topology_status": _c("network", SWEEP, IDEMP, HEALTH),
     "app.tasks.tr069.apply_acs_config": _c("tr069", STATE, STATEFUL, STATUS),
     "app.tasks.tr069.apply_saved_ont_service_config": _c(
         "tr069", STATE, STATEFUL, STATUS
@@ -298,13 +280,9 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.tr069.wait_for_ont_bootstrap": _c("tr069", STATE, STATEFUL, STATUS),
     "app.tasks.usage.evaluate_fup_rules": _c("usage", STATE, GUARDED, HEALTH),
     "app.tasks.usage.import_radius_accounting": _c("usage", SWEEP, PER_ITEM, HEALTH),
-    "app.tasks.usage.lift_expired_fup_enforcement": _c(
-        "usage", SWEEP, GUARDED, HEALTH
-    ),
+    "app.tasks.usage.lift_expired_fup_enforcement": _c("usage", SWEEP, GUARDED, HEALTH),
     "app.tasks.usage.meter_usage_into_quota": _c("usage", STATE, GUARDED, HEALTH),
-    "app.tasks.usage.notify_expiring_data_bundles": _c(
-        "usage", STATE, GUARDED, STATUS
-    ),
+    "app.tasks.usage.notify_expiring_data_bundles": _c("usage", STATE, GUARDED, STATUS),
     "app.tasks.usage.reap_stale_radius_sessions": _c("usage", SWEEP, IDEMP, HEALTH),
     "app.tasks.usage.run_usage_rating": _c("usage", STATE, GUARDED, HEALTH),
     "app.tasks.vacation_holds.resume_expired_holds": _c(
@@ -319,9 +297,7 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.vpn.run_vpn_control_job": _c("network", STATE, STATEFUL, STATUS),
     "app.tasks.vpn.run_vpn_health_scan": _c("network", SWEEP, IDEMP, HEALTH),
     "app.tasks.webhooks.deliver_webhook": _c("webhooks", AUTORETRY, GUARDED, STATUS),
-    "app.tasks.webhooks.retry_failed_deliveries": _c(
-        "webhooks", DLQ, GUARDED, STATUS
-    ),
+    "app.tasks.webhooks.retry_failed_deliveries": _c("webhooks", DLQ, GUARDED, STATUS),
     "app.tasks.wireguard.cleanup_connection_logs": _c("network", SWEEP, IDEMP, LOG),
     "app.tasks.wireguard.cleanup_expired_tokens": _c("network", SWEEP, IDEMP, LOG),
     "app.tasks.wireguard.generate_connection_log_report": _c(
@@ -349,9 +325,7 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.zabbix_sync.remove_device_from_zabbix": _c(
         "zabbix", MANUAL, GUARDED, STATUS
     ),
-    "app.tasks.zabbix_sync.sync_devices_to_zabbix": _c(
-        "zabbix", SWEEP, IDEMP, HEALTH
-    ),
+    "app.tasks.zabbix_sync.sync_devices_to_zabbix": _c("zabbix", SWEEP, IDEMP, HEALTH),
     "app.tasks.zabbix_sync.sync_single_nas_to_zabbix": _c(
         "zabbix", MANUAL, IDEMP, STATUS
     ),
@@ -374,7 +348,9 @@ def find_missing_task_reliability_contracts(
     registered_task_names: Iterable[str],
 ) -> list[str]:
     registered = {
-        task_name for task_name in registered_task_names if is_first_party_task(task_name)
+        task_name
+        for task_name in registered_task_names
+        if is_first_party_task(task_name)
     }
     return sorted(registered - set(TASK_RELIABILITY_CONTRACTS))
 
@@ -383,6 +359,8 @@ def find_stale_task_reliability_contracts(
     registered_task_names: Iterable[str],
 ) -> list[str]:
     registered = {
-        task_name for task_name in registered_task_names if is_first_party_task(task_name)
+        task_name
+        for task_name in registered_task_names
+        if is_first_party_task(task_name)
     }
     return sorted(set(TASK_RELIABILITY_CONTRACTS) - registered)

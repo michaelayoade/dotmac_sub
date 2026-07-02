@@ -127,9 +127,7 @@ def list_page_context(
     total_pages = max(1, (total + per_page - 1) // per_page)
     safe_page = min(page, total_pages)
     offset = (safe_page - 1) * per_page
-    resellers = (
-        query.order_by(Reseller.name.asc()).limit(per_page).offset(offset).all()
-    )
+    resellers = query.order_by(Reseller.name.asc()).limit(per_page).offset(offset).all()
     return {
         "resellers": resellers,
         "reseller_subscriber_counts": count_subscribers_by_reseller_ids(
@@ -720,13 +718,15 @@ def get_reseller_detail_context(
                 )
                 .where(Invoice.account_id.in_(linked_subscriber_ids))
                 .where(Invoice.is_active.is_(True))
-                .where(Invoice.status.in_(
-                    [
-                        InvoiceStatus.issued,
-                        InvoiceStatus.partially_paid,
-                        InvoiceStatus.overdue,
-                    ]
-                ))
+                .where(
+                    Invoice.status.in_(
+                        [
+                            InvoiceStatus.issued,
+                            InvoiceStatus.partially_paid,
+                            InvoiceStatus.overdue,
+                        ]
+                    )
+                )
                 .group_by(Invoice.currency)
                 .order_by(Invoice.currency.asc())
             ).all()

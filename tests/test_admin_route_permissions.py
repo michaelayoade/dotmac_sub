@@ -70,6 +70,12 @@ def test_dashboard_routes_require_any_domain_read_permission():
         "GET",
         "billing:invoice:read",
     )
+    assert _route_has_permission(
+        admin_dashboard.router,
+        "/dashboard/workers/restart",
+        "POST",
+        "system:settings:write",
+    )
 
 
 def test_catalog_settings_routes_require_catalog_permissions():

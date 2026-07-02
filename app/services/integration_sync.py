@@ -186,7 +186,9 @@ def run_scheduled_pull(
     )
     if job is not None:
         filter_config = job.filter_config or {}
-        limit = int(filter_config.get("page_size") or filter_config.get("limit") or limit)
+        limit = int(
+            filter_config.get("page_size") or filter_config.get("limit") or limit
+        )
         max_pages = int(filter_config.get("max_pages") or max_pages)
         sync_comments = bool(filter_config.get("sync_comments", True))
     else:

@@ -2344,7 +2344,9 @@ def test_network_devices_zabbix_probe_statuses_use_icmp_and_snmp_only(monkeypatc
                 {"hostid": "102", "key_": "icmppingloss", "lastvalue": "0"},
             ]
 
-    monkeypatch.setattr(core_devices_inventory_service, "zabbix_configured", lambda: True)
+    monkeypatch.setattr(
+        core_devices_inventory_service, "zabbix_configured", lambda: True
+    )
     monkeypatch.setattr(
         core_devices_inventory_service,
         "ZabbixClient",

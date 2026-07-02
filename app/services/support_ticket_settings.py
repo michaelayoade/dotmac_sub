@@ -214,7 +214,9 @@ def _write_bool(db: Session, *, key: str, value: bool) -> None:
     domain_settings_service.settings.upsert_by_key(db, key, payload)
 
 
-def _normalize_uuid(value: object | None, *, allow_generate: bool = False) -> str | None:
+def _normalize_uuid(
+    value: object | None, *, allow_generate: bool = False
+) -> str | None:
     text = str(value or "").strip()
     if not text and allow_generate:
         return str(uuid4())
@@ -333,7 +335,9 @@ def region_assignment_rules(db: Session) -> dict[str, dict[str, Any]]:
             "technician_person_id": _normalize_uuid(rule.get("technician_person_id")),
             "service_team_id": _normalize_uuid(rule.get("service_team_id")),
             "assignee_person_ids": [
-                uid for uid in (_normalize_uuid(item) for item in assignee_values) if uid
+                uid
+                for uid in (_normalize_uuid(item) for item in assignee_values)
+                if uid
             ],
         }
     return normalized
@@ -349,9 +353,7 @@ def service_team_members(db: Session) -> dict[str, list[str]]:
             continue
         values = members if isinstance(members, list) else []
         normalized[uid] = [
-            member
-            for member in (_normalize_uuid(item) for item in values)
-            if member
+            member for member in (_normalize_uuid(item) for item in values) if member
         ]
     return normalized
 
@@ -367,7 +369,9 @@ def sla_policy(db: Session) -> dict[str, dict[str, int]]:
             source = DEFAULT_SLA_POLICY.get(priority, {})
         policy[priority] = {
             "response_hours": _normalize_non_negative_int(source.get("response_hours")),
-            "resolution_hours": _normalize_non_negative_int(source.get("resolution_hours")),
+            "resolution_hours": _normalize_non_negative_int(
+                source.get("resolution_hours")
+            ),
             "aging_hours": _normalize_non_negative_int(source.get("aging_hours")),
         }
     return policy
@@ -445,6 +449,7 @@ def update_options(
     if auto_assign is not None:
         _write_bool(db, key=AUTO_ASSIGN_ENABLED_KEY, value=auto_assign)
     if routing_regions is not None:
+
         def indexed(values: list[str] | None, index: int) -> str | None:
             return values[index] if values and index < len(values) else None
 
