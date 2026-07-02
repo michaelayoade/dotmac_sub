@@ -21,6 +21,22 @@ from app.services.router_management.config import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _rest_export_path(monkeypatch):
+    """These tests mock the REST ``execute`` for config export. Snapshots now
+    default to SSH, so pin this file to the REST path (the SSH path would try to
+    load a real key and fail in CI)."""
+    import types
+
+    from app.tasks import router_sync
+
+    monkeypatch.setattr(
+        router_sync,
+        "settings",
+        types.SimpleNamespace(router_config_export_via_ssh=False),
+    )
+
+
 def _make_router(db_session, name: str) -> Router:
     r = Router(
         name=name,
