@@ -6,13 +6,19 @@ import logging
 import math
 
 from fastapi import Depends, HTTPException, Request, status
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.auth import MFAMethod
 from app.services import auth_flow as auth_flow_service
-from app.services import crm_portal, customer_portal, reseller_portal
+from app.services import (
+    crm_portal,
+    customer_portal,
+    reseller_crm_views,
+    reseller_portal,
+)
+from app.services.crm_client import get_crm_client
 from app.web.reseller.branding import get_reseller_templates
 
 logger = logging.getLogger(__name__)
@@ -898,3 +904,82 @@ def reseller_vas_sell(
             url=f"/reseller/vas?error={exc.detail}", status_code=303
         )
     return RedirectResponse(url="/reseller/vas?funded=sold", status_code=303)
+
+
+# ─── Field-service work orders (technician map + rating, per managed account) ──
+
+
+def reseller_work_orders_page(request: Request, db: Session):
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url="/reseller/auth/login", status_code=303)
+    tracker = reseller_crm_views.work_orders_for_reseller(
+        db, str(context["reseller"].id)
+    )
+    return templates.TemplateResponse(
+        "reseller/work_orders/index.html",
+        {
+            "request": request,
+            "active_page": "work-orders",
+            "current_user": context["current_user"],
+            "reseller": context["reseller"],
+            "tracker": tracker,
+        },
+    )
+
+
+def reseller_technician_location(
+    request: Request, db: Session, account_id: str, work_order_id: str
+):
+    """Live tech position for a managed account's work order (polled). Same-origin,
+    reseller-session-authed; gated to accounts the reseller owns."""
+    context = _require_reseller_context(request, db)
+    if not context:
+        return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+    account = reseller_portal.owned_account(db, str(context["reseller"].id), account_id)
+    if account is None:
+        return JSONResponse({"available": False, "reason": "not_found"})
+    crm_id = crm_portal.resolve_crm_subscriber_id(db, str(account.id))
+    if not crm_id:
+        return JSONResponse({"available": False, "reason": "not_linked"})
+    try:
+        data = get_crm_client(db).get_portal_technician_location(crm_id, work_order_id)
+    except Exception:  # noqa: BLE001 - live position is best-effort
+        logger.warning("reseller_technician_location_failed wo=%s", work_order_id)
+        return JSONResponse({"available": False, "reason": "error"})
+    return JSONResponse(data)
+
+
+def reseller_rate_technician(
+    request: Request,
+    db: Session,
+    account_id: str,
+    work_order_id: str,
+    rating: int,
+    comment: str,
+):
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url="/reseller/auth/login", status_code=303)
+    account = reseller_portal.owned_account(db, str(context["reseller"].id), account_id)
+    status_flag = "ok"
+    if account is None:
+        status_flag = "error"
+    else:
+        crm_id = crm_portal.resolve_crm_subscriber_id(db, str(account.id))
+        if not crm_id:
+            status_flag = "error"
+        else:
+            try:
+                get_crm_client(db).submit_portal_technician_rating(
+                    crm_id,
+                    work_order_id,
+                    rating=max(1, min(5, rating)),
+                    comment=comment or None,
+                )
+            except Exception:  # noqa: BLE001 - rating is best-effort
+                logger.warning("reseller_rate_technician_failed wo=%s", work_order_id)
+                status_flag = "error"
+    return RedirectResponse(
+        url=f"/reseller/work-orders?rated={status_flag}", status_code=303
+    )
