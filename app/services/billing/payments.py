@@ -1054,6 +1054,14 @@ class Payments(ListResponseMixin):
                 if invoice:
                     _validate_invoice_currency(invoice, data.get("currency"))
                     _assert_invoice_allocatable(invoice)
+        # A payment created already in the succeeded state must carry paid_at.
+        # Gateway/top-up reconciliation (e.g. Paystack top-ups via
+        # reconcile_topups) creates succeeded payments without an explicit
+        # paid_at; without it, billing-enforcement health (which counts recent
+        # settlements by paid_at) goes blind and blocks all collections
+        # suspensions. Stamp it here so every caller is covered.
+        if data.get("status") == PaymentStatus.succeeded and not data.get("paid_at"):
+            data["paid_at"] = datetime.now(UTC)
         payment = Payment(**data)
         db.add(payment)
         db.flush()
