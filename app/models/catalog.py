@@ -918,6 +918,9 @@ class NasDevice(Base):
     api_token: Mapped[str | None] = mapped_column(Text)
     api_url: Mapped[str | None] = mapped_column(String(500))
     api_verify_tls: Mapped[bool] = mapped_column(Boolean, default=False)
+    # RouterOS API port for the bandwidth poller (8728 plaintext / 8729 API-SSL).
+    # First-class column replacing the brittle ``mikrotik_api_port:NNNN`` tag.
+    mikrotik_api_port: Mapped[int | None] = mapped_column(Integer)
 
     # SNMP Configuration
     snmp_community: Mapped[str | None] = mapped_column(String(512))

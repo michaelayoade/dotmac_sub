@@ -50,6 +50,11 @@ def _sanitize_exc(exc: BaseException) -> str:
 # saturates the poller process and dwarfs any UI responsiveness benefit. Real
 # customer dashboards display at ~5s granularity; tune via env if needed.
 POLL_INTERVAL_MS = int(os.getenv("BANDWIDTH_POLL_INTERVAL_MS", "5000"))
+# Reported-rate clamp tolerance: a transient reading up to this % of a queue's
+# max-limit is kept as-is; above it is clamped to the cap (glitch absorption).
+MAX_RATE_TOLERANCE = (
+    int(os.getenv("BANDWIDTH_MAX_RATE_TOLERANCE_PERCENT", "105")) / 100.0
+)
 # Hard cap on any single device's blocking socket I/O. Without this a silently-
 # dropping router (firewalled/half-open) can hang its executor thread
 # indefinitely; enough of them exhaust the thread pool and stall polling for ALL
@@ -95,7 +100,9 @@ class QueueStats:
     max_tx: int = 0
 
 
-def _clamp_rate(rate_bps: int, max_bps: int, tolerance: float = 1.05) -> int:
+def _clamp_rate(
+    rate_bps: int, max_bps: int, tolerance: float = MAX_RATE_TOLERANCE
+) -> int:
     """Clamp a reported queue rate to its configured max-limit.
 
     RouterOS occasionally reports a transient ``rate`` above the queue's
@@ -336,11 +343,15 @@ class DevicePool:
     @staticmethod
     def _resolve_mikrotik_api_port(device: NasDevice) -> int:
         """
-        Resolve MikroTik API port from device tags.
+        Resolve MikroTik API port.
 
         The NAS record's management_port is commonly SSH and should not be used
-        for RouterOS API polling. Preferred source is tag `mikrotik_api_port:NNNN`.
+        for RouterOS API polling. Preferred source is the ``mikrotik_api_port``
+        column; falls back to the legacy tag `mikrotik_api_port:NNNN`, then 8728.
         """
+        column_port = getattr(device, "mikrotik_api_port", None)
+        if isinstance(column_port, int) and 1 <= column_port <= 65535:
+            return column_port
         tags = getattr(device, "tags", None)
         if isinstance(tags, list):
             for tag in tags:

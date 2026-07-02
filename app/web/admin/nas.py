@@ -75,7 +75,33 @@ def _extract_enhanced_fields(tags: list | None) -> dict[str, str | list[str] | N
     return nas_service.extract_enhanced_fields(tags)
 
 
-def _generate_radius_shared_secret(length: int = 6) -> str:
+_DEFAULT_RADIUS_SECRET_LENGTH = 32
+
+
+def _radius_secret_length() -> int:
+    """Configured RADIUS shared-secret length (radius/generated_secret_length),
+    default 32. Best-effort — never let a settings/DB hiccup block NAS creation."""
+    length = _DEFAULT_RADIUS_SECRET_LENGTH
+    try:
+        from app.db import SessionLocal
+        from app.models.domain_settings import SettingDomain
+        from app.services import settings_spec
+
+        with SessionLocal() as session:
+            value = settings_spec.resolve_value(
+                session, SettingDomain.radius, "generated_secret_length"
+            )
+        if value is not None:
+            length = int(value)
+    except Exception:
+        pass
+    return max(16, length)
+
+
+def _generate_radius_shared_secret(length: int | None = None) -> str:
+    # Default was a weak 6 chars; now a strong, configurable length (default 32).
+    if length is None:
+        length = _radius_secret_length()
     alphabet = string.ascii_letters + string.digits
     while True:
         secret = "".join(secrets.choice(alphabet) for _ in range(length))

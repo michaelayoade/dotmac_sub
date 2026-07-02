@@ -172,6 +172,9 @@ services:
     - .env
     volumes:
     - ./uploads:/app/uploads
+    # dotmac-ops SSH key for RouterOS config-snapshot export (SSH /export).
+    # Place the key at ./secrets/dotmac-ops.key on the host (gitignored).
+    - ${ROUTER_CONFIG_SSH_KEY_HOST:-./secrets/dotmac-ops.key}:/etc/dotmac/dotmac-ops.key:ro
     command:
     - celery
     - -A

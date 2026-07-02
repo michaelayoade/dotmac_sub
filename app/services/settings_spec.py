@@ -1388,6 +1388,16 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.radius,
+        key="generated_secret_length",
+        env_var="RADIUS_GENERATED_SECRET_LENGTH",
+        value_type=SettingValueType.integer,
+        default=32,
+        label="Auto-generated RADIUS shared-secret length",
+        min_value=16,
+        max_value=64,
+    ),
+    SettingSpec(
+        domain=SettingDomain.radius,
         key="enforce_stopped_disabled",
         env_var="RADIUS_ENFORCE_STOPPED_DISABLED",
         value_type=SettingValueType.boolean,
