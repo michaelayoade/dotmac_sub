@@ -40,6 +40,7 @@ from app.services import (
 from app.services import (
     web_admin as web_admin_service,
 )
+from app.services import settings_spec
 from app.services import web_system_health as web_system_health_service
 from app.services.audit_adapter import audit_adapter
 from app.services.audit_helpers import (
@@ -214,6 +215,8 @@ def _build_cached_ont_status_summary(db: Session) -> dict[str, int]:
     render. Background ingestion keeps these columns fresh enough for overview
     counts, while live diagnostics pages can still query Zabbix directly.
     """
+    thresholds = _build_health_thresholds(db)
+    low_signal_threshold = thresholds.get("ont_signal_warning_dbm") or -25
     counts = (
         db.query(
             func.count(OntUnit.id).label("total"),
@@ -222,7 +225,7 @@ def _build_cached_ont_status_summary(db: Session) -> dict[str, int]:
             .label("online"),
             func.count(OntUnit.id)
             .filter(OntUnit.olt_rx_signal_dbm.is_not(None))
-            .filter(OntUnit.olt_rx_signal_dbm < -25)
+            .filter(OntUnit.olt_rx_signal_dbm < low_signal_threshold)
             .label("low_signal"),
         )
         .filter(OntUnit.is_active.is_(True))
@@ -250,6 +253,7 @@ def _build_health_thresholds(db: Session) -> dict:
         "server_health_load_crit": "load_crit",
         "network_health_warn_pct": "network_warn_pct",
         "network_health_crit_pct": "network_crit_pct",
+        "ont_signal_warning_dbm": "ont_signal_warning_dbm",
     }
     rows = (
         db.query(DomainSetting)
@@ -260,6 +264,15 @@ def _build_health_thresholds(db: Session) -> dict:
     )
     values = {keys[row.key]: _float_setting(_setting_raw_value(row)) for row in rows}
     return {field: values.get(field) for field in keys.values()}
+
+
+def _network_monitoring_int_setting(db: Session, key: str, default: int) -> int:
+    raw = settings_spec.resolve_value(db, SettingDomain.network_monitoring, key)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
 
 
 def _build_dashboard_billing_summary(db: Session) -> dict[str, float]:
@@ -543,6 +556,11 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
 
         last_sync = db.query(func.max(SplynxIdMapping.created_at)).scalar()
         total_mappings = db.query(func.count(SplynxIdMapping.id)).scalar() or 0
+        healthy_age_seconds = _network_monitoring_int_setting(
+            db,
+            "dashboard_sync_healthy_age_seconds",
+            7200,
+        )
         sync_status = {
             "last_sync": last_sync,
             "total_mappings": total_mappings,
@@ -556,7 +574,7 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
                         else last_sync.replace(tzinfo=UTC)
                     )
                 ).total_seconds()
-                < 7200
+                < healthy_age_seconds
             )
             if last_sync
             else False,
@@ -900,7 +918,8 @@ def dashboard(request: Request, db: Session):
         "admin/dashboard/index.html",
         {
             "request": request,
-            "now": datetime.now(),
+            "now": datetime.now(UTC),
+            "data_as_of": datetime.now(UTC),
             "active_page": "dashboard",
             "current_user": current_user,
             "show_financials": show_financials,
