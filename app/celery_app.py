@@ -118,6 +118,7 @@ celery_app.conf.task_routes = {
     "app.tasks.payment_reconciliation.reconcile_topups": {"queue": "billing"},
     "app.tasks.collections.run_billing_enforcement": {"queue": "billing"},
     "app.tasks.collections.run_dunning": {"queue": "billing"},
+    "app.tasks.collections.run_bundle_reconcile": {"queue": "billing"},
     "app.tasks.billing.check_billing_switch": {"queue": "billing"},
     "app.tasks.catalog.expire_subscriptions": {"queue": "billing"},
     "app.tasks.enforcement.cleanup_subscription_block_sessions": {"queue": "billing"},

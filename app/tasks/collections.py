@@ -51,6 +51,31 @@ def run_billing_enforcement() -> dict[str, int | str]:
         session.close()
 
 
+@celery_app.task(name="app.tasks.collections.run_bundle_reconcile")
+def run_bundle_reconcile() -> dict[str, int]:
+    """Converge any divergent bundle members to their anchor's state."""
+    from app.services import bundles
+
+    session = SessionLocal()
+    try:
+        result = bundles.reconcile_bundle_states(session)
+        session.commit()
+        logger.info(
+            "Bundle reconcile completed: bundles_scanned=%d members_converged=%d",
+            result["bundles_scanned"],
+            result["members_converged"],
+        )
+        return {
+            "bundles_scanned": int(result["bundles_scanned"]),
+            "members_converged": int(result["members_converged"]),
+        }
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
 @celery_app.task(name="app.tasks.collections.run_dunning")
 def run_dunning() -> dict[str, int | str]:
     """Backward-compatible task alias for the unified billing enforcer."""

@@ -72,3 +72,15 @@ def test_suspend_account_suspends_non_dedicated_bundle(
     db_session.refresh(subscription)
     assert result is True
     assert subscription.status == SubscriptionStatus.suspended
+
+
+def test_run_bundle_reconcile_task(db_session, monkeypatch):
+    from app.tasks import collections as ctask
+
+    monkeypatch.setattr(ctask, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(db_session, "commit", lambda: None)
+    monkeypatch.setattr(db_session, "close", lambda: None)
+
+    result = ctask.run_bundle_reconcile()
+    assert "bundles_scanned" in result
+    assert "members_converged" in result
