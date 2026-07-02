@@ -1,5 +1,6 @@
 from app.services.bundles._core import (
     add_member,
+    attach_component,
     bundle_members,
     create_bundle,
     expire_bundle,
@@ -11,6 +12,7 @@ from app.services.bundles._core import (
 
 __all__ = [
     "add_member",
+    "attach_component",
     "bundle_members",
     "create_bundle",
     "expire_bundle",

@@ -146,3 +146,51 @@ def reconcile_bundle_states(db, bundle_id=None):
             except ValueError:
                 pass
     return {"bundles_scanned": scanned, "members_converged": converged}
+
+
+def _find_base_internet_sub(db, subscriber_id):
+    """The subscriber's base (non-IP) internet subscription, or None."""
+    from app.models.catalog import SubscriptionStatus
+
+    subs = db.scalars(
+        select(Subscription).where(
+            Subscription.subscriber_id == coerce_uuid(subscriber_id),
+            Subscription.status.in_(
+                [SubscriptionStatus.active, SubscriptionStatus.suspended]
+            ),
+        )
+    ).all()
+    for sub in subs:
+        d = (sub.service_description or "").lower()
+        if "slash" not in d and "pppoe public ip" not in d:
+            return sub
+    return None
+
+
+def attach_component(db, subscriber_id, subscription_id):
+    """Attach a new component subscription (IP, voice, …) to the subscriber's bundle.
+
+    Uses the subscriber's active bundle, or creates one anchored on their base
+    internet subscription. No-op if the component is already bundled, or if the
+    subscriber has no base internet service to anchor on (left unbundled).
+    """
+    sub = db.get(Subscription, coerce_uuid(subscription_id))
+    if sub is None:
+        raise ValueError(f"subscription {subscription_id} not found")
+    if sub.bundle_id is not None:
+        return
+    bundle = db.scalar(
+        select(SubscriptionBundle)
+        .where(
+            SubscriptionBundle.subscriber_id == coerce_uuid(subscriber_id),
+            SubscriptionBundle.is_active.is_(True),
+        )
+        .limit(1)
+    )
+    if bundle is None:
+        anchor = _find_base_internet_sub(db, subscriber_id)
+        if anchor is None:
+            return
+        bundle = create_bundle(db, str(subscriber_id), str(anchor.id))
+        add_member(db, str(bundle.id), str(anchor.id))
+    add_member(db, str(bundle.id), str(subscription_id))
