@@ -243,7 +243,9 @@ def has_recent_notification(
     now = now or datetime.now(UTC)
     cutoff = now - timedelta(minutes=window_minutes)
     normalized_channel = (
-        channel if isinstance(channel, NotificationChannel) else NotificationChannel(str(channel))
+        channel
+        if isinstance(channel, NotificationChannel)
+        else NotificationChannel(str(channel))
     )
     query = (
         db.query(Notification.id)

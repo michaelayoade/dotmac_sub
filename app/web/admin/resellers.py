@@ -1,12 +1,13 @@
 """Admin reseller portal web routes."""
 
+from urllib.parse import quote_plus
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
-from urllib.parse import quote_plus
 
 from app.db import get_db
 from app.services import web_admin_resellers as reseller_svc
@@ -255,8 +256,7 @@ def reseller_status_update(
         raise
     return RedirectResponse(
         url=(
-            f"/admin/resellers?status={return_status}"
-            f"&page={page}&per_page={per_page}"
+            f"/admin/resellers?status={return_status}&page={page}&per_page={per_page}"
         ),
         status_code=303,
     )

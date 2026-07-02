@@ -96,14 +96,10 @@ def sync_device_login() -> dict[str, int]:
             try:
                 try:
                     result = populate_device_login(db, dry_run=False)
-                    record_device_login_sync_status(
-                        db, status="ok", result=result
-                    )
+                    record_device_login_sync_status(db, status="ok", result=result)
                 except Exception as exc:
                     db.rollback()
-                    record_device_login_sync_status(
-                        db, status="failed", error=str(exc)
-                    )
+                    record_device_login_sync_status(db, status="failed", error=str(exc))
                     raise
             finally:
                 db.close()

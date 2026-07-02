@@ -41,7 +41,8 @@ _PASSWORD_RE = re.compile(r"=password=[^\x00 ]*")
 
 def _sanitize_exc(exc: BaseException) -> str:
     """Strip routeros_api's cleartext =password=... from exception text."""
-    return _PASSWORD_RE.sub("=password=<redacted>", str(exc))
+    message = _PASSWORD_RE.sub("=password=<redacted>", str(exc))
+    return message or type(exc).__name__
 
 
 # Configuration
