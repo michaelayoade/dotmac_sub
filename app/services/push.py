@@ -174,7 +174,12 @@ def send_push(
 
 
 def _deactivate(db: Session, token: str) -> None:
+    # Flush, don't commit: send_push runs inside the caller's transaction
+    # (single-entity webhook mirrors, but also the *batched* ticket pull). A
+    # commit here would prematurely commit the whole in-flight batch mid-loop,
+    # breaking its atomicity. The caller owns the commit; if it rolls back, this
+    # best-effort token prune correctly rolls back with it (and re-prunes next time).
     row = db.query(DeviceToken).filter(DeviceToken.token == token).first()
     if row:
         row.is_active = False
-        db.commit()
+        db.flush()

@@ -116,10 +116,14 @@ def test_customer_session_happy_path(db_session):
     assert kwargs["config_id"] == "cfg-1"
 
 
-def test_customer_session_carries_ticket_context(db_session):
+def test_customer_session_carries_owned_ticket_context(db_session):
+    from app.models.support import Ticket
     from app.services import chat_session
 
     sub = _make_subscriber(db_session)
+    ticket = Ticket(title="Router down", subscriber_id=sub.id)
+    db_session.add(ticket)
+    db_session.commit()
     with (
         _chat_settings(),
         _fake_crm({"session_id": "s", "visitor_token": "v"}) as client,
@@ -128,17 +132,26 @@ def test_customer_session_carries_ticket_context(db_session):
             return_value="crm-1",
         ),
     ):
-        chat_session.broker_customer_session(db_session, str(sub.id), ticket_id="tk-77")
+        chat_session.broker_customer_session(
+            db_session, str(sub.id), ticket_id=str(ticket.id)
+        )
     meta = client.create_widget_session.call_args.kwargs["metadata"]
-    assert meta["ticket_id"] == "tk-77"
+    assert meta["ticket_id"] == str(ticket.id)
     assert meta["subject"] == "Chat about a support ticket"
     assert "project_id" not in meta
 
 
-def test_customer_session_carries_project_context(db_session):
+def test_customer_session_carries_owned_project_context(db_session):
+    from app.models.project_mirror import ProjectMirror
     from app.services import chat_session
 
     sub = _make_subscriber(db_session)
+    db_session.add(
+        ProjectMirror(
+            crm_project_id="pj-9", subscriber_id=sub.id, name="Install", status="active"
+        )
+    )
+    db_session.commit()
     with (
         _chat_settings(),
         _fake_crm({"session_id": "s", "visitor_token": "v"}) as client,
@@ -151,6 +164,27 @@ def test_customer_session_carries_project_context(db_session):
     meta = client.create_widget_session.call_args.kwargs["metadata"]
     assert meta["project_id"] == "pj-9"
     assert meta["subject"] == "Chat about an installation project"
+
+
+def test_customer_session_drops_unowned_ticket_context(db_session):
+    from app.services import chat_session
+
+    sub = _make_subscriber(db_session)
+    with (
+        _chat_settings(),
+        _fake_crm({"session_id": "s", "visitor_token": "v"}) as client,
+        patch(
+            "app.services.chat_session.resolve_crm_subscriber_id",
+            return_value="crm-1",
+        ),
+    ):
+        # A ticket id the caller does not own (also not a real row) is dropped.
+        chat_session.broker_customer_session(
+            db_session, str(sub.id), ticket_id="11111111-1111-1111-1111-111111111111"
+        )
+    meta = client.create_widget_session.call_args.kwargs["metadata"]
+    assert "ticket_id" not in meta
+    assert "subject" not in meta
 
 
 def test_customer_session_crm_unavailable_returns_502(db_session):

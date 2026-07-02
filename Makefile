@@ -136,7 +136,7 @@ prod-pin: ## Point .env APP_IMAGE at the freshly-built HEAD image (compose's sou
 	@sha=$$(git rev-parse --short HEAD); \
 	img="dotmac_sub:$$sha"; \
 	if grep -q '^APP_IMAGE=' .env 2>/dev/null; then \
-		sed -i.bak "s#^APP_IMAGE=.*#APP_IMAGE=$$img#" .env; \
+		sed -i.bak "s#^APP_IMAGE=.*#APP_IMAGE=$$img#" .env && rm -f .env.bak; \
 	else \
 		printf 'APP_IMAGE=%s\n' "$$img" >> .env; \
 	fi; \
@@ -168,7 +168,7 @@ GHCR_TAG ?= latest
 prod-ghcr-pin: ## Point .env APP_IMAGE at the GHCR image (GHCR_IMAGE:GHCR_TAG)
 	@img="$(GHCR_IMAGE):$(GHCR_TAG)"; \
 	if grep -q '^APP_IMAGE=' .env 2>/dev/null; then \
-		sed -i.bak "s#^APP_IMAGE=.*#APP_IMAGE=$$img#" .env; \
+		sed -i.bak "s#^APP_IMAGE=.*#APP_IMAGE=$$img#" .env && rm -f .env.bak; \
 	else \
 		printf 'APP_IMAGE=%s\n' "$$img" >> .env; \
 	fi; \
