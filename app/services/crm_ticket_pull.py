@@ -480,10 +480,12 @@ def sync_ticket(
     # Proactively notify the customer when their ticket is newly resolved
     # (mirrors the work-order/project push). Best-effort — a push failure never
     # breaks the sync.
+    # Ticket.status is a plain string column, and transition_ticket_status
+    # writes the enum's *value* — so compare against the string, not the member.
     if (
         subscriber_id
-        and local_ticket.status == TicketStatus.resolved
-        and previous_status != TicketStatus.resolved
+        and local_ticket.status == TicketStatus.resolved.value
+        and previous_status != TicketStatus.resolved.value
     ):
         try:
             from app.services import push as push_service
