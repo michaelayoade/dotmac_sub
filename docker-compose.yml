@@ -168,6 +168,11 @@ services:
       APP_RELEASE: ${APP_RELEASE:-}
       GIT_SHA: ${GIT_SHA:-}
       NETWORK_MONITORING_MAX_WORKERS: ${NETWORK_MONITORING_MAX_WORKERS:-4}
+      # Persist router SSH known_hosts on a named volume so first-seen host keys
+      # (TOFU) survive container recreation; a CHANGED key is then rejected as an
+      # MITM guard. On the ephemeral container layer this would re-pin each
+      # deploy and lose that cross-restart protection.
+      ROUTER_CONFIG_SSH_KNOWN_HOSTS_PATH: /var/lib/dotmac/router_known_hosts
     env_file:
     - .env
     volumes:
@@ -175,6 +180,7 @@ services:
     # dotmac-ops SSH key for RouterOS config-snapshot export (SSH /export).
     # Place the key at ./secrets/dotmac-ops.key on the host (gitignored).
     - ${ROUTER_CONFIG_SSH_KEY_HOST:-./secrets/dotmac-ops.key}:/etc/dotmac/dotmac-ops.key:ro
+    - dotmac_router_ssh:/var/lib/dotmac
     command:
     - celery
     - -A
@@ -672,6 +678,7 @@ volumes:
   genieacs_mongodb_data: null
   victoriametrics_data: null
   promtail_positions: null
+  dotmac_router_ssh: null
 secrets:
   zabbix_db_password:
     file: ${ZABBIX_DB_PASSWORD_FILE:-./secrets/zabbix_db_password}
