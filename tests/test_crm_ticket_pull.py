@@ -1,10 +1,40 @@
 from __future__ import annotations
 
+from unittest.mock import patch
 from uuid import uuid4
 
 from app.models.subscriber import Subscriber
 from app.models.support import Ticket, TicketComment
 from app.services.crm_ticket_pull import pull_tickets
+
+
+def test_pull_pushes_customer_when_ticket_resolved(db_session, subscriber):
+    """A ticket transitioning to resolved during a pull notifies the customer."""
+    subscriber.splynx_customer_id = 24296
+    db_session.commit()
+    tid = str(uuid4())
+
+    # First pull: open → created, no notification.
+    open_client = FakeCrmClient(
+        tickets=[_crm_ticket(tid, "40001", "2026-06-09T10:00:00Z", status="open")],
+        subscribers={},
+        comments={tid: []},
+    )
+    with patch("app.services.push.send_push") as push:
+        pull_tickets(db_session, client=open_client)
+        db_session.commit()
+    push.assert_not_called()
+
+    # Second pull: same ticket now resolved (bumped updated_at) → one push.
+    resolved_client = FakeCrmClient(
+        tickets=[_crm_ticket(tid, "40001", "2026-06-10T10:00:00Z", status="resolved")],
+        subscribers={},
+        comments={tid: []},
+    )
+    with patch("app.services.push.send_push") as push:
+        pull_tickets(db_session, client=resolved_client)
+        db_session.commit()
+    push.assert_called_once()
 
 
 class FakeCrmClient:
