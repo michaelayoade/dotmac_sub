@@ -1647,3 +1647,58 @@ def record_external_payment(
     return billing_service.payments.create(
         session, payload, auto_allocate=(allocations is None)
     )
+
+
+def list_catalog_offers(
+    session: Session,
+    *,
+    q: str | None = None,
+    active_only: bool = True,
+    limit: int = 500,
+) -> list[dict]:
+    """The subscriber-facing plan catalog (offers + their recurring price) for the
+    CRM to read, so a sales quote can pick a real offer instead of the CRM
+    maintaining a parallel plan list. sub is the source of truth for plans."""
+    from app.models.catalog import CatalogOffer, OfferPrice, PriceType
+
+    query = session.query(CatalogOffer)
+    if active_only:
+        query = query.filter(CatalogOffer.is_active.is_(True))
+    if q and q.strip():
+        query = query.filter(CatalogOffer.name.ilike(f"%{q.strip()}%"))
+    offers = query.order_by(CatalogOffer.name).limit(limit).all()
+    if not offers:
+        return []
+
+    prices: dict = {}
+    for price in (
+        session.query(OfferPrice)
+        .filter(
+            OfferPrice.offer_id.in_([o.id for o in offers]),
+            OfferPrice.price_type == PriceType.recurring,
+            OfferPrice.is_active.is_(True),
+        )
+        .all()
+    ):
+        prices.setdefault(price.offer_id, price)  # first active recurring price wins
+
+    out: list[dict] = []
+    for offer in offers:
+        offer_price = prices.get(offer.id)
+        out.append(
+            {
+                "id": str(offer.id),
+                "code": offer.code,
+                "name": offer.name,
+                "recurring_price": str(offer_price.amount)
+                if offer_price is not None
+                else None,
+                "currency": offer_price.currency if offer_price is not None else "NGN",
+                "billing_cycle": offer.billing_cycle.value
+                if offer.billing_cycle
+                else None,
+                "speed_download_mbps": offer.speed_download_mbps,
+                "speed_upload_mbps": offer.speed_upload_mbps,
+            }
+        )
+    return out
