@@ -304,10 +304,11 @@ def _attach_period_usage_to_subscribers(
     from app.models.catalog import Subscription
     from app.services.web_reports_extended import _subscription_bandwidth_usage_subquery
 
+    # Report-only fields stuffed onto ORM instances for template consumption.
     for sub in subscribers:
-        sub.period_usage_gb = 0.0
-        sub.period_avg_mbps = 0.0
-        sub.period_active_services = 0
+        sub.period_usage_gb = 0.0  # type: ignore[attr-defined]
+        sub.period_avg_mbps = 0.0  # type: ignore[attr-defined]
+        sub.period_active_services = 0  # type: ignore[attr-defined]
 
     subscriber_ids = [sub.id for sub in subscribers if getattr(sub, "id", None)]
     if not subscriber_ids:
@@ -335,9 +336,11 @@ def _attach_period_usage_to_subscribers(
         if row is None:
             continue
         usage_gb = float(row.usage_bytes or 0) / (1024**3)
-        sub.period_usage_gb = round(usage_gb, 2)
-        sub.period_avg_mbps = round(float(row.avg_bps or 0) / 1_000_000, 2)
-        sub.period_active_services = int(row.active_services or 0)
+        sub.period_usage_gb = round(usage_gb, 2)  # type: ignore[attr-defined]
+        sub.period_avg_mbps = round(  # type: ignore[attr-defined]
+            float(row.avg_bps or 0) / 1_000_000, 2
+        )
+        sub.period_active_services = int(row.active_services or 0)  # type: ignore[attr-defined]
         total_usage_gb += usage_gb
     return round(total_usage_gb, 2)
 

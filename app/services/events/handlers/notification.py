@@ -69,7 +69,9 @@ def _notification_setting_value(db: Session, key: str) -> str | None:
 
 
 def _event_enabled(db: Session, template_code: str) -> bool:
-    value = _notification_setting_value(db, f"notification_event_{template_code}_enabled")
+    value = _notification_setting_value(
+        db, f"notification_event_{template_code}_enabled"
+    )
     if value is None:
         return True
     return value.strip().lower() in _ENABLED_VALUES
@@ -80,7 +82,9 @@ def _event_channels(
     template_code: str,
     default_channels: tuple[NotificationChannel, ...],
 ) -> tuple[NotificationChannel, ...]:
-    value = _notification_setting_value(db, f"notification_event_{template_code}_channels")
+    value = _notification_setting_value(
+        db, f"notification_event_{template_code}_channels"
+    )
     if not value:
         return default_channels
     channels: list[NotificationChannel] = []

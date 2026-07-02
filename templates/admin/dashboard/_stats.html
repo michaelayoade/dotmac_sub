@@ -38,6 +38,7 @@
 {% set ont_pct = ((ont_on / ont_total * 100) if ont_total > 0 else 0) | round(1) %}
 
 <section data-tour-id="dashboard-kpis" class="grid grid-cols-2 gap-4 lg:grid-cols-4" hx-get="/admin/dashboard/stats" hx-trigger="every 180s" hx-swap="outerHTML">
+    {% if show_subscribers %}
     {{ kpi_tile(
         "Subscribers",
         stats.total_subscribers,
@@ -46,6 +47,8 @@
         "%d active, %+d this month" % (stats.active_subscribers, stats.subscribers_change|default(0)),
         progress=active_pct
     ) }}
+    {% endif %}
+    {% if show_subscribers or show_network %}
     {{ kpi_tile(
         "Online Sessions",
         online_count,
@@ -53,6 +56,8 @@
         "emerald",
         "Authenticated RADIUS sessions"
     ) }}
+    {% endif %}
+    {% if show_network %}
     {{ kpi_tile(
         "Network Devices",
         "%d / %d" | format(dev_online, dev_total),
@@ -68,9 +73,10 @@
         "violet",
         "%d low signal · PON %d/%d" | format(ont_low_signal, ont_olt_on, ont_olt_off)
             if ont_total else
-        "Service status with raw PON overlay",
+        "No ONTs monitored yet",
         progress=ont_pct
     ) }}
+    {% endif %}
     {% if show_financials %}
     {{ kpi_tile(
         "Revenue This Month",
@@ -96,6 +102,7 @@
         "%d critical" % stats.alarms_critical
     ) }}
     {% endif %}
+    {% if show_network %}
     {{ kpi_tile(
         "PON Interfaces",
         "%d / %d" | format(pon_up, pon_total),
@@ -103,4 +110,5 @@
         "cyan",
         "%d down, %d unknown" % (pon_down, pon_unknown) if pon_total else "No monitored PON interfaces"
     ) }}
+    {% endif %}
 </section>

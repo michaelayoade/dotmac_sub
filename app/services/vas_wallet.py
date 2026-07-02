@@ -21,6 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import SettingDomain
+from app.models.subscription_engine import SettingValueType
 from app.models.vas import (
     VasEntryCategory,
     VasEntryType,
@@ -28,13 +29,12 @@ from app.models.vas import (
     VasWallet,
     VasWalletEntry,
 )
+from app.schemas.settings import DomainSettingUpdate
 from app.services import settings_spec
 from app.services.billing._common import lock_account
 from app.services.common import coerce_uuid
 from app.services.domain_settings import vas_settings
 from app.services.payment_gateway_adapter import payment_gateway_adapter
-from app.schemas.settings import DomainSettingUpdate
-from app.models.subscription_engine import SettingValueType
 
 logger = logging.getLogger(__name__)
 

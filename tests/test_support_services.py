@@ -67,9 +67,7 @@ def test_ticket_create_defaults_to_open_and_generates_number(db_session, subscri
     assert ticket.number != ""
 
 
-def test_ticket_create_uses_configured_routing_and_sla_policy(
-    db_session, subscriber
-):
+def test_ticket_create_uses_configured_routing_and_sla_policy(db_session, subscriber):
     team_id = uuid4()
     technician_id = uuid4()
     member_id = uuid4()

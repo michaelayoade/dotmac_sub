@@ -9,8 +9,8 @@ import pytest
 from fastapi import HTTPException
 
 from app.models.domain_settings import DomainSetting, SettingDomain
-from app.models.subscription_engine import SettingValueType
 from app.models.subscriber import Subscriber
+from app.models.subscription_engine import SettingValueType
 from app.models.vas import VasEntryCategory
 from app.schemas.settings import DomainSettingUpdate
 from app.services import vas_wallet
