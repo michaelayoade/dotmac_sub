@@ -142,7 +142,7 @@
 
         {% if worker_health.long_running_tasks %}
         <div class="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200">
-            {{ worker_health.long_running_tasks|length }} long-running task{{ '' if worker_health.long_running_tasks|length == 1 else 's' }} over 30 minutes.
+            {{ worker_health.long_running_tasks|length }} long-running task{{ '' if worker_health.long_running_tasks|length == 1 else 's' }} over the configured threshold.
         </div>
         {% endif %}
 

@@ -59,7 +59,7 @@
 
     {# KPI Cards #}
     <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 animate-fade-in-up" style="animation-delay: 50ms;">
-        {{ stats_card("Total Customers", total_subscribers|default(0), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg>', color="slate", color2="gray", change=subscriber_growth|default(0)) }}
+        {{ stats_card("Total Customers", total_subscribers|default(0), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg>', color="slate", color2="gray", change=subscriber_growth) }}
         {{ stats_card("New This Month", new_this_month|default(0), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/></svg>', color="emerald", color2="teal") }}
         {{ stats_card("Active", active_subscribers|default(0), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="blue", color2="indigo") }}
         {{ stats_card("Suspended", suspended_subscribers|default(0), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>', color="amber", color2="orange") }}
@@ -71,12 +71,13 @@
     </div>
 
     {# Growth Trend Chart #}
+    {% set has_growth_chart = growth_data and ((growth_data.total|sum) > 0 or (growth_data.new|sum) > 0) %}
+    {% if has_growth_chart %}
     <div class="animate-fade-in-up" style="animation-delay: 100ms;">
     {% call card("Customer Growth Trend", color="teal") %}
         <div class="chart-container" style="min-height: 280px;">
             <canvas id="subscriber-growth-chart"></canvas>
         </div>
-        {% set growth_data = growth_data|default({'labels': ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'], 'total': [0,0,0,0,0,0], 'new': [0,0,0,0,0,0]}) %}
         <script>
         document.addEventListener('DOMContentLoaded', function() {
             const ctx = document.getElementById('subscriber-growth-chart');
@@ -109,6 +110,7 @@
         </script>
     {% endcall %}
     </div>
+    {% endif %}
 
     {% call card("Matching Customers", color="teal") %}
         {% if customers %}

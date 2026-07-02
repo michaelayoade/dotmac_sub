@@ -11,12 +11,11 @@ from decimal import Decimal
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models.billing import InvoiceStatus
+from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentStatus
 from app.models.network import IPAssignment, IPv4Address, IPv6Address
 from app.models.subscriber import AccountStatus, Subscriber, SubscriberCategory
 from app.services import billing as billing_service
 from app.services import network as network_service
-from app.services import provisioning as operations_service
 from app.services import subscriber as subscriber_service
 
 logger = logging.getLogger(__name__)
@@ -378,38 +377,162 @@ def _payment_primary_invoice_id(payment) -> str | None:
     return str(allocation.invoice_id)
 
 
+def _percent_change(
+    current: Decimal | int | float,
+    previous: Decimal | int | float,
+) -> float | None:
+    if not previous:
+        return None
+    current_value = float(current)
+    previous_value = float(previous)
+    return round(((current_value - previous_value) / previous_value) * 100, 1)
+
+
+def _month_starts(months: int = 6) -> list[datetime]:
+    now = datetime.now(UTC)
+    first_this_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    starts = []
+    year = first_this_month.year
+    month = first_this_month.month - months + 1
+    while month <= 0:
+        month += 12
+        year -= 1
+    for _ in range(months):
+        starts.append(datetime(year, month, 1, tzinfo=UTC))
+        month += 1
+        if month > 12:
+            month = 1
+            year += 1
+    return starts
+
+
+def _monthly_payment_series(db: Session, *, months: int = 6) -> dict[str, list]:
+    starts = _month_starts(months)
+    labels: list[str] = []
+    revenue: list[float] = []
+    collected: list[float] = []
+    for idx, start in enumerate(starts):
+        end = starts[idx + 1] if idx + 1 < len(starts) else datetime.now(UTC)
+        label = start.strftime("%b")
+        total = db.scalar(
+            select(func.coalesce(func.sum(Payment.amount), 0)).where(
+                Payment.is_active.is_(True),
+                Payment.status == PaymentStatus.succeeded,
+                Payment.paid_at >= start,
+                Payment.paid_at < end,
+            )
+        ) or Decimal("0")
+        labels.append(label)
+        revenue.append(float(total))
+        collected.append(float(total))
+    return {"labels": labels, "revenue": revenue, "collected": collected}
+
+
+def _monthly_customer_growth_series(db: Session, *, months: int = 6) -> dict[str, list]:
+    starts = _month_starts(months)
+    labels: list[str] = []
+    totals: list[int] = []
+    new_counts: list[int] = []
+    for idx, start in enumerate(starts):
+        end = starts[idx + 1] if idx + 1 < len(starts) else datetime.now(UTC)
+        total = (
+            db.scalar(
+                select(func.count(Subscriber.id)).where(
+                    subscriber_service.visible_subscriber_clause(),
+                    Subscriber.created_at < end,
+                )
+            )
+            or 0
+        )
+        new_count = (
+            db.scalar(
+                select(func.count(Subscriber.id)).where(
+                    subscriber_service.visible_subscriber_clause(),
+                    Subscriber.created_at >= start,
+                    Subscriber.created_at < end,
+                )
+            )
+            or 0
+        )
+        labels.append(start.strftime("%b"))
+        totals.append(int(total))
+        new_counts.append(int(new_count))
+    return {"labels": labels, "total": totals, "new": new_counts}
+
+
+def _monthly_churn_series(db: Session, *, months: int = 6) -> dict[str, list]:
+    starts = _month_starts(months)
+    labels: list[str] = []
+    rates: list[float] = []
+    counts: list[int] = []
+    for idx, start in enumerate(starts):
+        end = starts[idx + 1] if idx + 1 < len(starts) else datetime.now(UTC)
+        total = (
+            db.scalar(
+                select(func.count(Subscriber.id)).where(
+                    subscriber_service.visible_subscriber_clause(),
+                    Subscriber.created_at < end,
+                )
+            )
+            or 0
+        )
+        cancelled = (
+            db.scalar(
+                select(func.count(Subscriber.id)).where(
+                    subscriber_service.visible_subscriber_clause(),
+                    Subscriber.status == AccountStatus.canceled,
+                    Subscriber.updated_at >= start,
+                    Subscriber.updated_at < end,
+                )
+            )
+            or 0
+        )
+        labels.append(start.strftime("%b"))
+        counts.append(int(cancelled))
+        rates.append(round((int(cancelled) / int(total) * 100) if total else 0, 1))
+    return {"labels": labels, "rate": rates, "count": counts}
+
+
 def get_revenue_report_data(db: Session) -> dict:
-    payments = billing_service.payments.list(
-        db=db,
-        account_id=None,
-        invoice_id=None,
-        status=None,
-        is_active=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=1000,
-        offset=0,
+    now = datetime.now(UTC)
+    current_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    previous_end = current_start
+    previous_start = (
+        current_start.replace(year=current_start.year - 1, month=12)
+        if current_start.month == 1
+        else current_start.replace(month=current_start.month - 1)
     )
+    total_revenue = db.scalar(
+        select(func.coalesce(func.sum(Payment.amount), 0)).where(
+            Payment.is_active.is_(True),
+            Payment.status == PaymentStatus.succeeded,
+        )
+    ) or Decimal("0")
+    current_revenue = db.scalar(
+        select(func.coalesce(func.sum(Payment.amount), 0)).where(
+            Payment.is_active.is_(True),
+            Payment.status == PaymentStatus.succeeded,
+            Payment.paid_at >= current_start,
+            Payment.paid_at < now,
+        )
+    ) or Decimal("0")
+    previous_revenue = db.scalar(
+        select(func.coalesce(func.sum(Payment.amount), 0)).where(
+            Payment.is_active.is_(True),
+            Payment.status == PaymentStatus.succeeded,
+            Payment.paid_at >= previous_start,
+            Payment.paid_at < previous_end,
+        )
+    ) or Decimal("0")
     recent_payments = billing_service.payments.list(
         db=db,
         account_id=None,
         invoice_id=None,
-        status=None,
+        status=PaymentStatus.succeeded.value,
         is_active=None,
         order_by="paid_at",
         order_dir="desc",
         limit=10,
-        offset=0,
-    )
-    total_revenue = sum(p.amount for p in payments if p.amount)
-    all_invoices = billing_service.invoices.list(
-        db=db,
-        account_id=None,
-        status=None,
-        is_active=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=1000,
         offset=0,
     )
     outstanding_statuses = {
@@ -417,31 +540,85 @@ def get_revenue_report_data(db: Session) -> dict:
         InvoiceStatus.partially_paid,
         InvoiceStatus.overdue,
     }
-    outstanding_invoices = [
-        inv for inv in all_invoices if inv.status in outstanding_statuses
-    ]
-    outstanding_amount = sum(
-        _invoice_amount_due(inv)
-        for inv in outstanding_invoices
-        if _invoice_amount_due(inv)
-    )
-    outstanding_count = len(outstanding_invoices)
-    total_invoiced = sum(
-        _invoice_amount_due(inv) for inv in all_invoices if _invoice_amount_due(inv)
-    )
+    outstanding_row = db.execute(
+        select(
+            func.coalesce(func.sum(Invoice.balance_due), 0).label("amount"),
+            func.count(Invoice.id).label("count"),
+        ).where(
+            Invoice.is_active.is_(True),
+            Invoice.status.in_(outstanding_statuses),
+            Invoice.balance_due > 0,
+        )
+    ).one()
+    outstanding_amount = outstanding_row.amount or Decimal("0")
+    outstanding_count = int(outstanding_row._mapping["count"] or 0)
+    total_invoiced = db.scalar(
+        select(func.coalesce(func.sum(Invoice.total), 0)).where(
+            Invoice.is_active.is_(True),
+            Invoice.status != InvoiceStatus.void,
+        )
+    ) or Decimal("0")
     collection_rate = (
-        (total_revenue / total_invoiced * 100) if total_invoiced > 0 else 0
+        (float(total_revenue) / float(total_invoiced) * 100) if total_invoiced else 0
     )
-    recurring_revenue = total_revenue * Decimal("0.85")
+    try:
+        from app.models.catalog import Subscription, SubscriptionStatus
+
+        recurring_revenue = db.scalar(
+            select(func.coalesce(func.sum(Subscription.unit_price), 0)).where(
+                Subscription.status.in_(
+                    [SubscriptionStatus.active, SubscriptionStatus.suspended]
+                )
+            )
+        ) or Decimal("0")
+    except Exception:
+        logger.debug("Failed to compute recurring revenue", exc_info=True)
+        recurring_revenue = Decimal("0")
+    revenue_data = _monthly_payment_series(db)
+    revenue_growth = _percent_change(current_revenue, previous_revenue)
+    if revenue_growth is None and current_revenue:
+        revenue_growth = 0.0
     return {
         "total_revenue": total_revenue,
-        "revenue_growth": 12.5,
+        "revenue_growth": revenue_growth,
         "recurring_revenue": recurring_revenue,
         "outstanding_amount": outstanding_amount,
         "outstanding_count": outstanding_count,
         "collection_rate": collection_rate,
         "recent_payments": recent_payments,
+        "revenue_data": revenue_data,
     }
+
+
+def _subscriber_growth_percent(db: Session) -> float | None:
+    now = datetime.now(UTC)
+    current_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    previous_start = (
+        current_start.replace(year=current_start.year - 1, month=12)
+        if current_start.month == 1
+        else current_start.replace(month=current_start.month - 1)
+    )
+    current_new = (
+        db.scalar(
+            select(func.count(Subscriber.id)).where(
+                subscriber_service.visible_subscriber_clause(),
+                Subscriber.created_at >= current_start,
+                Subscriber.created_at < now,
+            )
+        )
+        or 0
+    )
+    previous_new = (
+        db.scalar(
+            select(func.count(Subscriber.id)).where(
+                subscriber_service.visible_subscriber_clause(),
+                Subscriber.created_at >= previous_start,
+                Subscriber.created_at < current_start,
+            )
+        )
+        or 0
+    )
+    return _percent_change(current_new, previous_new)
 
 
 def build_revenue_export_csv(db: Session, days: int | None = None) -> str:
@@ -552,7 +729,7 @@ def get_subscribers_report_data(
     )
     return {
         "total_subscribers": total_subscribers,
-        "subscriber_growth": 8.3,
+        "subscriber_growth": _subscriber_growth_percent(db),
         "new_this_month": new_this_month,
         "active_subscribers": active_count,
         "suspended_subscribers": suspended_count,
@@ -567,6 +744,7 @@ def get_subscribers_report_data(
         "total_usage_gb": total_usage_gb,
         "status_filter": status or "",
         "status_options": [item.value for item in AccountStatus],
+        "growth_data": _monthly_customer_growth_series(db),
     }
 
 
@@ -652,14 +830,12 @@ def build_subscribers_export_csv(
 
 
 def get_churn_report_data(db: Session) -> dict:
-    all_subscribers = subscriber_service.subscribers.list(
-        db=db,
-        subscriber_type=None,
-        business_account_id=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=1000,
-        offset=0,
+    all_subscribers = list(
+        db.scalars(
+            select(Subscriber)
+            .where(subscriber_service.visible_subscriber_clause())
+            .order_by(Subscriber.created_at.desc())
+        ).all()
     )
     total_subscribers = len(all_subscribers)
     for sub in all_subscribers:
@@ -684,18 +860,13 @@ def get_churn_report_data(db: Session) -> dict:
         ),
         reverse=True,
     )[:10]
-    churn_reasons = {
-        "price": cancelled_count // 3 if cancelled_count > 0 else 0,
-        "service_quality": cancelled_count // 4 if cancelled_count > 0 else 0,
-        "moved": cancelled_count // 5 if cancelled_count > 0 else 0,
-        "competitor": cancelled_count // 6 if cancelled_count > 0 else 0,
-    }
     return {
         "churn_rate": churn_rate,
         "retention_rate": retention_rate,
         "cancelled_count": cancelled_count,
         "at_risk_count": at_risk_count,
-        "churn_reasons": churn_reasons,
+        "churn_reasons": {},
+        "churn_data": _monthly_churn_series(db),
         "recent_cancellations": recent_cancellations,
     }
 
@@ -778,27 +949,27 @@ def get_technician_report_data(db: Session) -> dict:
         AppointmentStatus,
         InstallAppointment,
         ProvisioningTask,
+        ServiceOrder,
         ServiceOrderStatus,
         TaskStatus,
     )
 
-    all_orders = operations_service.service_orders.list(
-        db=db,
-        subscriber_id=None,
-        subscription_id=None,
-        status=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=1000,
-        offset=0,
+    jobs_completed = (
+        db.scalar(
+            select(func.count(ServiceOrder.id)).where(
+                ServiceOrder.status == ServiceOrderStatus.active
+            )
+        )
+        or 0
     )
-    completed_orders = [o for o in all_orders if o.status == ServiceOrderStatus.active]
-    jobs_completed = len(completed_orders)
-    recent_completions = sorted(
-        completed_orders,
-        key=lambda x: x.updated_at or datetime.min,
-        reverse=True,
-    )[:10]
+    recent_completions = list(
+        db.scalars(
+            select(ServiceOrder)
+            .where(ServiceOrder.status == ServiceOrderStatus.active)
+            .order_by(ServiceOrder.updated_at.desc())
+            .limit(10)
+        ).all()
+    )
 
     # Real technician count from appointments + provisioning tasks
     tech_names: set[str] = set()
@@ -895,10 +1066,15 @@ def get_technician_report_data(db: Session) -> dict:
             }
         )
 
-    job_type_breakdown: dict[str, int] = {}
-    for order in all_orders:
-        status_name = order.status.value if order.status else "unknown"
-        job_type_breakdown[status_name] = job_type_breakdown.get(status_name, 0) + 1
+    job_type_rows = db.execute(
+        select(ServiceOrder.status, func.count(ServiceOrder.id)).group_by(
+            ServiceOrder.status
+        )
+    ).all()
+    job_type_breakdown = {
+        (row.status.value if row.status else "unknown"): int(row[1] or 0)
+        for row in job_type_rows
+    }
 
     return {
         "total_technicians": total_technicians,
@@ -912,29 +1088,8 @@ def get_technician_report_data(db: Session) -> dict:
 
 
 def build_technician_export_csv(db: Session, days: int | None = None) -> str:
-    from app.models.provisioning import ServiceOrderStatus
-
-    all_orders = operations_service.service_orders.list(
-        db=db,
-        subscriber_id=None,
-        subscription_id=None,
-        status=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=5000,
-        offset=0,
-    )
-    if days:
-        cutoff = datetime.now(UTC) - timedelta(days=days)
-        all_orders = [
-            order
-            for order in all_orders
-            if order.created_at and order.created_at >= cutoff
-        ]
-    completed_orders = [
-        order for order in all_orders if order.status == ServiceOrderStatus.active
-    ]
-    technician_stats: list[dict[str, object]] = []
+    report_data = get_technician_report_data(db)
+    technician_stats = list(report_data.get("technician_stats") or [])
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(
@@ -948,7 +1103,7 @@ def build_technician_export_csv(db: Session, days: int | None = None) -> str:
             "report_window_days",
         ]
     )
-    jobs_completed = len(completed_orders)
+    jobs_completed = report_data.get("jobs_completed", 0)
     for tech in technician_stats:
         writer.writerow(
             [

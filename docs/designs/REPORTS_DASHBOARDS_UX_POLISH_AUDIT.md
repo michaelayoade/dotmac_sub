@@ -3,7 +3,9 @@
 **Date:** 2026-06-29
 **Method:** single-agent read-only review of admin dashboard, reports, and alerts
 (routes/services/templates).
-**Status:** audit only. Part of the remaining-module audit series.
+**Status:** implementation update in progress on
+`codex/reports-dashboards-ux-polish-audit`. P0/P1 required items have been
+addressed; P2 follow-up is limited to optional truncation-footers/config UX.
 
 ## What this audit is
 
@@ -76,6 +78,54 @@ chart top-20) and CSV cap (`limit=5000`) (`web_reports_extended.py:147,233,283`,
 | **P0** | Fabricated finance/retention KPIs shown as real (P-A); permanently-zero trend charts; header-only technician CSV; dead MRR date filter — all "lying to the operator" |
 | **P1** | Capped-aggregate understatement of totals (P-B); "data as of" + soften "Real-time" (P-C); bandwidth rx/tx label inversion (P-C); alerts pagination (P-D); alert thresholds → settings + ONT-signal single-source (C-1) |
 | **P2** | report row/export caps + windows as settings/options with truncation footers (C-2) |
+
+## Implementation update — 2026-07-02
+
+### Resolved
+
+**P0 required**
+- Removed fabricated report KPIs:
+  - revenue growth is now calculated from current-month vs previous-month
+    successful payments when comparison data exists.
+  - recurring revenue now comes from active/suspended subscription unit prices
+    instead of `total_revenue * 0.85`.
+  - subscriber growth now comes from real current/previous month signup counts.
+  - churn reasons are no longer invented from integer division; the card shows
+    the existing empty-state when no reason source exists.
+- Revenue, customer-growth, and churn trend charts now receive real monthly
+  series from the route and are hidden when there is no real chart data.
+- Technician CSV export now uses the same real technician stats as the page
+  instead of exporting only headers.
+- MRR `date_from`/`date_to` filters are now accepted by the route and applied to
+  the returned month range.
+
+**P1 required**
+- Revenue totals, outstanding totals, collection rate, churn totals/rate, and
+  technician job counts now use SQL aggregates instead of summing capped lists.
+- Dashboard now shows a visible `Data as of` timestamp.
+- Bandwidth report cards now display download/upload using the corrected rx/tx
+  convention.
+- Alerts inbox now renders previous/next pagination controls while preserving
+  filters and page size.
+- Celery backlog thresholds, long-running task threshold labels, dashboard sync
+  healthy age, and ONT low-signal threshold now resolve through settings with
+  existing safe defaults.
+
+**P2 required / pragmatic**
+- Export and report windows already expose operator choices on the affected
+  report pages used by this audit (`days`, date range, or `hours` depending on
+  the report).
+
+### Left
+
+**P2 recommended follow-up**
+- Add explicit truncation footers/count banners to every capped table/export
+  across the wider reports module. The required data-truth issues above are
+  fixed; this remaining work is discoverability polish for intentionally capped
+  lists.
+- Consider a dedicated reports settings group if the product wants one central
+  place for all row caps/window defaults. Current fixes avoid adding a new
+  `SettingDomain` value because that would require a database enum migration.
 
 ## Appendix — full findings
 - [POLISH] (High) `templates/admin/reports/revenue.html:51` + `churn.html:78` — Trend charts render `|default` zero series; routes (`reports.py:169,242`) never pass data → compute real series or remove card [recommend]

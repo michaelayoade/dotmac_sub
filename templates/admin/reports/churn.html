@@ -71,11 +71,12 @@
     </div>
 
     {# ── Churn Trend Chart ── #}
+    {% set has_churn_chart = churn_data and ((churn_data.rate|sum) > 0 or (churn_data.count|sum) > 0) %}
+    {% if has_churn_chart %}
     {% call card("Churn Trend", icon='<svg class="h-4 w-4 text-teal-600 dark:text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"/></svg>', color="teal") %}
         <div class="chart-container" style="min-height: 280px;">
             <canvas id="churn-trend-chart"></canvas>
         </div>
-        {% set churn_data = churn_data|default({'labels': ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'], 'rate': [0,0,0,0,0,0], 'count': [0,0,0,0,0,0]}) %}
         <script>
         document.addEventListener('DOMContentLoaded', function() {
             const ctx = document.getElementById('churn-trend-chart');
@@ -115,6 +116,7 @@
         });
         </script>
     {% endcall %}
+    {% endif %}
 
     {# ── Churn Reasons and Recent Cancellations ── #}
     <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
