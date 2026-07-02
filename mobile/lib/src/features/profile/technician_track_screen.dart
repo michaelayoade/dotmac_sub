@@ -68,8 +68,7 @@ class TechnicianTrackScreen extends ConsumerWidget {
   }
 
   Widget _etaBanner(BuildContext context, DateTime eta) {
-    final t =
-        '${eta.hour.toString().padLeft(2, '0')}:'
+    final t = '${eta.hour.toString().padLeft(2, '0')}:'
         '${eta.minute.toString().padLeft(2, '0')}';
     return Container(
       width: double.infinity,
