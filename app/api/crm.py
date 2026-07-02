@@ -355,6 +355,87 @@ def billing_risk_source(
     return _envelope(rows, {**meta, "total": total})
 
 
+@router.post(
+    "/payments",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_crm_bearer)],
+    tags=["payments"],
+)
+def record_crm_payment(
+    payload: dict[str, Any] = Body(default_factory=dict),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Record a payment a customer made in the CRM (installation / subscription)
+    into the ledger so it settles the invoice and shows in the customer portal.
+
+    Body: ``{subscriber_id, amount, external_ref, paid_at?, memo?,
+    invoice_external_ref?, currency?}``. Idempotent on ``external_ref``.
+    """
+    errors: dict[str, list[str]] = {}
+    subscriber_id = str(payload.get("subscriber_id") or "").strip()
+    if not subscriber_id:
+        errors.setdefault("subscriber_id", []).append("Required.")
+    external_ref = str(payload.get("external_ref") or "").strip()
+    if not external_ref:
+        errors.setdefault("external_ref", []).append("Required.")
+    amount_raw = payload.get("amount")
+    try:
+        amount = Decimal(str(amount_raw))
+    except (InvalidOperation, TypeError, ValueError):
+        errors.setdefault("amount", []).append("Must be a number.")
+        amount = Decimal("0")
+    else:
+        if amount <= 0:
+            errors.setdefault("amount", []).append("Must be greater than 0.")
+    if errors:
+        _error(status.HTTP_400_BAD_REQUEST, "Invalid payment payload.", errors)
+
+    paid_at_raw = payload.get("paid_at")
+    paid_at = None
+    if paid_at_raw:
+        try:
+            paid_at = datetime.fromisoformat(str(paid_at_raw).replace("Z", "+00:00"))
+        except ValueError:
+            _error(
+                status.HTTP_400_BAD_REQUEST,
+                "Invalid payment payload.",
+                {"paid_at": ["Must be ISO 8601."]},
+            )
+
+    invoice_external_ref = payload.get("invoice_external_ref")
+    invoice_external_ref = (
+        str(invoice_external_ref).strip()
+        if invoice_external_ref not in (None, "")
+        else None
+    )
+
+    try:
+        payment = crm_api.record_external_payment(
+            db,
+            subscriber_id=subscriber_id,
+            amount=amount,
+            external_ref=external_ref,
+            paid_at=paid_at,
+            memo=payload.get("memo"),
+            invoice_external_ref=invoice_external_ref,
+            currency=str(payload.get("currency") or "NGN"),
+        )
+    except LookupError:
+        _error(status.HTTP_404_NOT_FOUND, "Subscriber not found.")
+    except ValueError as exc:
+        _error(status.HTTP_400_BAD_REQUEST, str(exc))
+
+    return _envelope(
+        {
+            "id": str(payment.id),
+            "amount": str(payment.amount),
+            "status": payment.status.value,
+            "account_id": str(payment.account_id) if payment.account_id else None,
+            "external_id": payment.external_id,
+        }
+    )
+
+
 @router.get("/infrastructure/assets", dependencies=[Depends(require_crm_bearer)])
 def infrastructure_assets(
     q: str | None = None,
