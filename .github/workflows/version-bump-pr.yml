@@ -16,7 +16,9 @@ concurrency:
 jobs:
   bump:
     name: Open version bump PR
-    if: github.event.pull_request.merged == true
+    if: >-
+      github.event.pull_request.merged == true &&
+      !startsWith(github.event.pull_request.head.ref, 'automation/version-bump-')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
