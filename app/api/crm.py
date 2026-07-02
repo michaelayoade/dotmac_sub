@@ -436,6 +436,17 @@ def record_crm_payment(
     )
 
 
+@router.get("/offers", dependencies=[Depends(require_crm_bearer)])
+def catalog_offers(
+    q: str | None = None,
+    active_only: bool = True,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """The plan catalog (offers + recurring price) for the CRM to pick from when
+    quoting a subscription — sub owns the plans; the CRM reads them."""
+    return _envelope(crm_api.list_catalog_offers(db, q=q, active_only=active_only))
+
+
 @router.get("/infrastructure/assets", dependencies=[Depends(require_crm_bearer)])
 def infrastructure_assets(
     q: str | None = None,
