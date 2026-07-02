@@ -7,6 +7,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
 
 from app.celery_app import celery_app
+from app.config import settings
 from app.models.router_management import (
     Router,
     RouterConfigPush,
@@ -18,6 +19,7 @@ from app.models.router_management import (
 )
 from app.services.db_session_adapter import db_session_adapter
 from app.services.router_management.config import RouterConfigService
+from app.services.router_management.config_export import export_config_via_ssh
 from app.services.router_management.connection import RouterConnectionService
 from app.services.router_management.inventory import RouterInventory
 
@@ -25,14 +27,20 @@ logger = logging.getLogger(__name__)
 
 
 def _fetch_config_export(router) -> str:
-    """Pull a router's full config via the RouterOS REST API.
+    """Pull a router's full config as text.
 
-    ``/export`` is a RouterOS *command*, so it must be invoked with **POST** —
-    ``GET /rest/export`` returns ``400 "no such command"``. The REST user's group
-    also needs the ``sensitive`` policy or the export comes back empty. The
-    response is a JSON array of config lines (or plain text on some builds);
-    normalise both to a single ``.rsc``-style text blob.
+    Prefers SSH ``/export`` (``ROUTER_CONFIG_EXPORT_VIA_SSH``, default on):
+    RouterOS 7.x cannot return config text over REST — inline ``POST /rest/export``
+    comes back empty and file-exports aren't readable back over REST — so SSH is
+    the only transport that actually delivers the config. Uses the dotmac-ops SSH
+    key, not the REST identity.
+
+    Falls back to REST ``POST /export`` only when SSH is disabled. ``/export`` is a
+    RouterOS *command* (POST, not GET) and the REST user needs ``sensitive``; the
+    response is a JSON array of config lines (or text) normalised to a blob.
     """
+    if settings.router_config_export_via_ssh:
+        return export_config_via_ssh(router)
     data = RouterConnectionService.execute(router, "POST", "/export")
     return _export_to_text(data)
 
