@@ -17,7 +17,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from alembic import op
 
 revision = "173_subscription_bundles"
-down_revision = "90a03dc0c609"
+down_revision = "199_add_nas_mikrotik_api_port"
 branch_labels = None
 depends_on = None
 
@@ -39,15 +39,9 @@ def upgrade() -> None:
             sa.ForeignKey("subscriptions.id"),
             nullable=True,
         ),
-        sa.Column(
-            "is_dedicated", sa.Boolean(), server_default="false", nullable=False
-        ),
-        sa.Column(
-            "status", sa.String(32), server_default="active", nullable=False
-        ),
-        sa.Column(
-            "is_active", sa.Boolean(), server_default="true", nullable=False
-        ),
+        sa.Column("is_dedicated", sa.Boolean(), server_default="false", nullable=False),
+        sa.Column("status", sa.String(32), server_default="active", nullable=False),
+        sa.Column("is_active", sa.Boolean(), server_default="true", nullable=False),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -75,9 +69,7 @@ def upgrade() -> None:
             nullable=True,
         ),
     )
-    op.create_index(
-        "ix_subscriptions_bundle_id", "subscriptions", ["bundle_id"]
-    )
+    op.create_index("ix_subscriptions_bundle_id", "subscriptions", ["bundle_id"])
 
 
 def downgrade() -> None:

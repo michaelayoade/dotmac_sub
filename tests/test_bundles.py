@@ -20,11 +20,17 @@ def test_bundle_model_and_membership(db_session, subscriber, subscription):
 from app.services import bundles
 
 
-def test_create_bundle_and_dedicated_flag(db_session, subscriber, subscription, catalog_offer):
+def test_create_bundle_and_dedicated_flag(
+    db_session, subscriber, subscription, catalog_offer
+):
 
-    b = bundles.create_bundle(db_session, str(subscriber.id), str(subscription.id), label="B")
+    b = bundles.create_bundle(
+        db_session, str(subscriber.id), str(subscription.id), label="B"
+    )
     bundles.add_member(db_session, str(b.id), str(subscription.id))
-    assert [s.id for s in bundles.bundle_members(db_session, str(b.id))] == [subscription.id]
+    assert [s.id for s in bundles.bundle_members(db_session, str(b.id))] == [
+        subscription.id
+    ]
     # dedicated marker follows the member offer's plan_family
     catalog_offer.plan_family = "dedicated"
     db_session.flush()

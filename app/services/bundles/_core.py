@@ -42,7 +42,9 @@ def recompute_is_dedicated(db, bundle_id):
     dedicated = db.scalar(
         select(CatalogOffer.plan_family)
         .join(Subscription, Subscription.offer_id == CatalogOffer.id)
-        .where(Subscription.bundle_id == bundle.id, CatalogOffer.plan_family == "dedicated")
+        .where(
+            Subscription.bundle_id == bundle.id, CatalogOffer.plan_family == "dedicated"
+        )
         .limit(1)
     )
     bundle.is_dedicated = dedicated is not None
@@ -72,7 +74,9 @@ def restore_bundle(db, bundle_id, trigger, resolved_by):
     count = 0
     for sub in bundle_members(db, bundle_id):
         try:
-            restore_subscription(db, str(sub.id), trigger=trigger, resolved_by=resolved_by)
+            restore_subscription(
+                db, str(sub.id), trigger=trigger, resolved_by=resolved_by
+            )
             count += 1
         except ValueError:
             pass
@@ -130,15 +134,18 @@ def reconcile_bundle_states(db, bundle_id=None):
             try:
                 if target_suspended:
                     suspend_subscription(
-                        db, str(sub.id),
-                        reason=EnforcementReason.overdue, source="bundle_reconcile",
+                        db,
+                        str(sub.id),
+                        reason=EnforcementReason.overdue,
+                        source="bundle_reconcile",
                     )
                 else:
                     # The bundle is current (anchor active), so a straggler
                     # member's overdue lock is resolved like any collections
                     # resolution — an ALLOWED_RESTORERS-authorized trigger.
                     restore_subscription(
-                        db, str(sub.id),
+                        db,
+                        str(sub.id),
                         trigger="collections_resolution",
                         resolved_by=f"bundle_reconcile:{bundle.id}",
                     )
