@@ -399,12 +399,17 @@ class ResellerBillingSummary {
     required this.totalOutstanding,
     required this.unallocatedBalance,
     this.recentPayments = const [],
+    this.activity = const [],
     BankTransferConfig? bankTransfer,
   }) : bankTransfer = bankTransfer ?? BankTransferConfig();
 
   final double totalOutstanding;
   final double unallocatedBalance;
   final List<ResellerPaymentSummary> recentPayments;
+
+  /// Consolidated account-activity ledger (payments in / allocations out),
+  /// matching the reseller web billing "Account Activity" section.
+  final List<ResellerActivityEntry> activity;
 
   /// Admin bank account(s) for the bank-transfer pay option (shown inline).
   final BankTransferConfig bankTransfer;
@@ -417,8 +422,46 @@ class ResellerBillingSummary {
             .cast<Map<String, dynamic>>()
             .map(ResellerPaymentSummary.fromJson)
             .toList(),
+        activity: (json['account_activity'] as List? ?? const [])
+            .cast<Map<String, dynamic>>()
+            .map(ResellerActivityEntry.fromJson)
+            .toList(),
         bankTransfer: BankTransferConfig.fromJson(
             json['direct_bank_transfer'] as Map<String, dynamic>?),
+      );
+}
+
+/// One consolidated account-activity (ledger) entry from GET /reseller/billing
+/// `account_activity`. Credits are payments in; debits are allocations out.
+class ResellerActivityEntry {
+  ResellerActivityEntry({
+    required this.direction,
+    required this.title,
+    this.description,
+    this.amount = 0,
+    this.currency = 'NGN',
+    this.occurredAt,
+  });
+
+  final String direction; // 'credit' | 'debit'
+  final String title;
+  final String? description;
+  final double amount;
+  final String currency;
+  final DateTime? occurredAt;
+
+  bool get isCredit => direction == 'credit';
+
+  factory ResellerActivityEntry.fromJson(Map<String, dynamic> json) =>
+      ResellerActivityEntry(
+        direction: (json['direction'] ?? 'debit').toString(),
+        title: (json['title'] ?? 'Activity').toString(),
+        description: json['description']?.toString(),
+        amount: asDouble(json['amount']),
+        currency: json['currency'] as String? ?? 'NGN',
+        occurredAt: json['occurred_at'] == null
+            ? null
+            : DateTime.tryParse(json['occurred_at'].toString())?.toLocal(),
       );
 }
 

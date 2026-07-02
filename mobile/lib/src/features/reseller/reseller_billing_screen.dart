@@ -499,15 +499,61 @@ class _ResellerBillingScreenState extends ConsumerState<ResellerBillingScreen> {
                   label: const Text('Pay by bank transfer'),
                 ),
               const SizedBox(height: 16),
-              Text('Activity', style: Theme.of(context).textTheme.titleSmall),
+              Text('Account activity',
+                  style: Theme.of(context).textTheme.titleSmall),
               const SizedBox(height: 8),
-              if (b.recentPayments.isEmpty)
+              if (b.activity.isEmpty && b.recentPayments.isEmpty)
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 16),
                   child: EmptyState(
-                      icon: Icons.payments_outlined,
-                      message: 'No payments yet'),
+                      icon: Icons.receipt_long_outlined,
+                      message: 'No account activity yet'),
                 )
+              // Consolidated ledger (payments in / allocations out) — parity
+              // with the reseller web billing "Account Activity" section.
+              else if (b.activity.isNotEmpty)
+                for (final e in b.activity)
+                  Card(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    child: ListTile(
+                      dense: true,
+                      leading: CircleAvatar(
+                        radius: 18,
+                        backgroundColor: e.isCredit
+                            ? Colors.green.withValues(alpha: 0.15)
+                            : Theme.of(context)
+                                .colorScheme
+                                .surfaceContainerHighest,
+                        child: Icon(
+                          e.isCredit ? Icons.south_west : Icons.north_east,
+                          size: 18,
+                          color: e.isCredit
+                              ? Colors.green.shade700
+                              : Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                      title: Text(
+                        '${e.isCredit ? '+' : '−'} '
+                        '${Fmt.money(e.amount, e.currency)}',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          color: e.isCredit ? Colors.green.shade700 : null,
+                        ),
+                      ),
+                      subtitle: Text(
+                        e.description ?? e.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      trailing: e.occurredAt == null
+                          ? null
+                          : Text(
+                              Fmt.date(e.occurredAt!),
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                    ),
+                  )
+              // Fallback for an older backend that returns only recent_payments.
               else
                 for (final pmt in b.recentPayments)
                   Card(
