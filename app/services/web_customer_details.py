@@ -14,7 +14,16 @@ from fastapi import HTTPException
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentStatus, TaxRate
+from app.models.billing import (
+    CreditNote,
+    CreditNoteApplication,
+    CreditNoteStatus,
+    Invoice,
+    InvoiceStatus,
+    Payment,
+    PaymentStatus,
+    TaxRate,
+)
 from app.models.catalog import (
     AccessCredential,
     AddOn,
@@ -36,7 +45,9 @@ from app.models.network import (
     OntAssignment,
     SubscriberAdditionalRoute,
 )
+from app.models.payment_proof import PaymentProof, PaymentProofStatus
 from app.models.provisioning import ServiceOrder, ServiceOrderStatus
+from app.models.service_extension import ServiceExtensionEntry
 from app.models.subscriber import (
     ChannelType,
     Reseller,
@@ -724,6 +735,89 @@ def _build_common_financials(db: Session, account_ids):
     }
 
 
+def _build_admin_billing_workspace(
+    db: Session, account_ids: list[UUID]
+) -> dict[str, object]:
+    if not account_ids:
+        return {
+            "payment_proofs": [],
+            "credit_notes": [],
+            "credit_applications": [],
+            "service_extensions": [],
+            "billing_workspace_counts": {
+                "pending_payment_proofs": 0,
+                "open_credit_notes": 0,
+                "open_credit_amount": Decimal("0.00"),
+                "service_extensions": 0,
+            },
+        }
+
+    payment_proofs = (
+        db.query(PaymentProof)
+        .filter(PaymentProof.account_id.in_(account_ids))
+        .order_by(PaymentProof.created_at.desc())
+        .limit(10)
+        .all()
+    )
+    credit_notes = (
+        db.query(CreditNote)
+        .options(selectinload(CreditNote.applications))
+        .filter(CreditNote.account_id.in_(account_ids))
+        .filter(CreditNote.is_active.is_(True))
+        .order_by(CreditNote.created_at.desc())
+        .limit(10)
+        .all()
+    )
+    credit_applications = (
+        db.query(CreditNoteApplication)
+        .options(
+            selectinload(CreditNoteApplication.credit_note),
+            selectinload(CreditNoteApplication.invoice),
+        )
+        .join(CreditNote, CreditNoteApplication.credit_note_id == CreditNote.id)
+        .filter(CreditNote.account_id.in_(account_ids))
+        .order_by(CreditNoteApplication.created_at.desc())
+        .limit(10)
+        .all()
+    )
+    service_extensions = (
+        db.query(ServiceExtensionEntry)
+        .options(selectinload(ServiceExtensionEntry.extension))
+        .filter(ServiceExtensionEntry.subscriber_id.in_(account_ids))
+        .order_by(ServiceExtensionEntry.created_at.desc())
+        .limit(10)
+        .all()
+    )
+
+    open_credit_notes = [
+        note
+        for note in credit_notes
+        if note.status in (CreditNoteStatus.issued, CreditNoteStatus.partially_applied)
+        and (note.total or Decimal("0.00")) > (note.applied_total or Decimal("0.00"))
+    ]
+    open_credit_amount = sum(
+        (note.total or Decimal("0.00")) - (note.applied_total or Decimal("0.00"))
+        for note in open_credit_notes
+    )
+
+    return {
+        "payment_proofs": payment_proofs,
+        "credit_notes": credit_notes,
+        "credit_applications": credit_applications,
+        "service_extensions": service_extensions,
+        "billing_workspace_counts": {
+            "pending_payment_proofs": sum(
+                1
+                for proof in payment_proofs
+                if proof.status == PaymentProofStatus.submitted
+            ),
+            "open_credit_notes": len(open_credit_notes),
+            "open_credit_amount": open_credit_amount,
+            "service_extensions": len(service_extensions),
+        },
+    }
+
+
 def _build_relationship_data(db: Session, account_ids: list[UUID]) -> dict[str, object]:
     if not account_ids:
         empty_summary: dict[str, int] = {
@@ -1383,6 +1477,7 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
     )
     financials["monthly_recurring"] = monthly_recurring
     relationship_data = _build_relationship_data(db, account_ids)
+    billing_workspace = _build_admin_billing_workspace(db, account_ids)
 
     # Address resolution with fallback
     if not addresses:
@@ -1524,6 +1619,7 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
         "customer_user_access": customer_user_access,
         "pppoe_access": pppoe_access,
         "billing_policy": _billing_policy_snapshot(db, accounts),
+        "billing_workspace": billing_workspace,
         "network_connection_status": network_connection_status,
         "connection_by_subscription": connection_by_subscription,
         "network_access_cards": network_access_cards,

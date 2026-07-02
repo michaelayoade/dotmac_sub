@@ -355,6 +355,65 @@ def billing_risk_source(
     return _envelope(rows, {**meta, "total": total})
 
 
+@router.get("/infrastructure/assets", dependencies=[Depends(require_crm_bearer)])
+def infrastructure_assets(
+    q: str | None = None,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Pickable infrastructure items — OLTs (Huawei/Ubiquiti), their PON ports,
+    and basestations — for raising an infrastructure/outage ticket."""
+    return _envelope(crm_api.list_infrastructure_assets(db, q=q))
+
+
+@router.get("/outages/impact", dependencies=[Depends(require_crm_bearer)])
+def outage_impact(
+    node_id: str | None = None,
+    basestation_id: str | None = None,
+    olt_id: str | None = None,
+    pon_port_id: str | None = None,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Subscribers affected by a failed infrastructure asset.
+
+    Pass one of: ``node_id`` (a monitored NetworkDevice — switch/router, with
+    LLDP downstream expansion), ``basestation_id`` (a PopSite), ``olt_id`` (all
+    ONTs on an OLT), or ``pon_port_id`` (only the ONTs on that PON port). OLT and
+    PON-port resolution are vendor-agnostic (Huawei + Ubiquiti). The ``coverage``
+    block flags where the e2e chain is incomplete so the caller can fall back to
+    manual selection.
+    """
+    from app.models.network_monitoring import NetworkDevice, PopSite
+
+    if not any([node_id, basestation_id, olt_id, pon_port_id]):
+        raise HTTPException(
+            status_code=400,
+            detail="One of node_id, basestation_id, olt_id or pon_port_id is required",
+        )
+
+    node = None
+    if node_id:
+        node = db.get(NetworkDevice, crm_api.coerce_subscriber_id(node_id))
+        if node is None:
+            raise HTTPException(status_code=404, detail="Network device not found")
+    basestation = None
+    if basestation_id:
+        basestation = db.get(PopSite, crm_api.coerce_subscriber_id(basestation_id))
+        if basestation is None:
+            raise HTTPException(status_code=404, detail="Basestation not found")
+
+    return _envelope(
+        crm_api.outage_impact(
+            db,
+            node=node,
+            basestation=basestation,
+            olt_id=crm_api.coerce_subscriber_id(olt_id) if olt_id else None,
+            pon_port_id=crm_api.coerce_subscriber_id(pon_port_id)
+            if pon_port_id
+            else None,
+        )
+    )
+
+
 @router.get("/service-extensions", dependencies=[Depends(require_crm_bearer)])
 def service_extensions(
     request: Request, db: Session = Depends(get_db)
