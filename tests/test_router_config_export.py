@@ -117,3 +117,37 @@ def test_fetch_config_export_rest_fallback_when_disabled(monkeypatch):
         rs, "export_config_via_ssh", mock.Mock(side_effect=AssertionError("no SSH"))
     )
     assert rs._fetch_config_export(_router()) == "/ip\nadd x"
+
+
+def test_host_key_policy_tofu_pins_and_persists(monkeypatch, tmp_path):
+    client = mock.MagicMock()
+    kh = tmp_path / "router_known_hosts"
+    monkeypatch.setattr(
+        ce,
+        "settings",
+        types.SimpleNamespace(
+            router_config_ssh_known_hosts_path=str(kh),
+            router_config_ssh_strict_host_key=False,
+        ),
+    )
+    ce._install_host_key_policy(client)
+    # known_hosts is loaded (so a CHANGED key is rejected) + touched for persistence
+    client.load_host_keys.assert_called_once_with(str(kh))
+    assert kh.exists()
+    policy = client.set_missing_host_key_policy.call_args.args[0]
+    assert isinstance(policy, ce.paramiko.AutoAddPolicy)
+
+
+def test_host_key_policy_strict_rejects_unknown(monkeypatch, tmp_path):
+    client = mock.MagicMock()
+    monkeypatch.setattr(
+        ce,
+        "settings",
+        types.SimpleNamespace(
+            router_config_ssh_known_hosts_path=str(tmp_path / "kh"),
+            router_config_ssh_strict_host_key=True,
+        ),
+    )
+    ce._install_host_key_policy(client)
+    policy = client.set_missing_host_key_policy.call_args.args[0]
+    assert isinstance(policy, ce.paramiko.RejectPolicy)

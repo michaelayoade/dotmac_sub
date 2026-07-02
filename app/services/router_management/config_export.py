@@ -15,6 +15,7 @@ is intentionally ``!ssh``. Keeping the two planes separate is deliberate.
 from __future__ import annotations
 
 import logging
+import os
 
 import paramiko
 
@@ -27,10 +28,42 @@ class RouterConfigExportError(RuntimeError):
     """Raised when the SSH config export fails or returns no config."""
 
 
+def _install_host_key_policy(client: paramiko.SSHClient) -> None:
+    """Pin router SSH host keys (trust-on-first-use).
+
+    Loading the known_hosts file means paramiko rejects a *changed* host key
+    (``BadHostKeyException`` — possible MITM) instead of silently trusting it.
+    A first-seen host is added and persisted so it is pinned thereafter. With
+    ``router_config_ssh_strict_host_key`` on, unknown hosts are rejected too
+    (requires a pre-populated known_hosts).
+    """
+    known_hosts = getattr(settings, "router_config_ssh_known_hosts_path", "")
+    if known_hosts:
+        try:
+            directory = os.path.dirname(known_hosts)
+            if directory:
+                os.makedirs(directory, exist_ok=True)
+            if not os.path.exists(known_hosts):
+                open(known_hosts, "a").close()  # touch so first-seen keys persist
+            client.load_host_keys(known_hosts)
+        except OSError as exc:
+            logger.warning("router known_hosts %r unavailable: %s", known_hosts, exc)
+    if getattr(settings, "router_config_ssh_strict_host_key", False):
+        client.set_missing_host_key_policy(paramiko.RejectPolicy())
+    else:
+        # Not blind trust: load_host_keys() above still rejects a *changed* key;
+        # AutoAddPolicy only pins a first-seen host (persisted to known_hosts).
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # nosec B507
+
+
 def _load_private_key(key_path: str, passphrase: str | None = None):
     """Load an SSH private key, trying the common RouterOS-compatible types."""
     last_error: Exception | None = None
-    for key_cls in (paramiko.Ed25519Key, paramiko.RSAKey, paramiko.ECDSAKey):
+    for key_cls in (
+        paramiko.Ed25519Key,  # type: ignore[attr-defined]
+        paramiko.RSAKey,
+        paramiko.ECDSAKey,  # type: ignore[attr-defined]
+    ):
         try:
             return key_cls.from_private_key_file(key_path, password=passphrase or None)
         except Exception as exc:  # wrong key type / format — try the next
@@ -63,9 +96,9 @@ def export_config_via_ssh(
 
     pkey = _load_private_key(key_path)
     client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    _install_host_key_policy(client)
     try:
-        client.connect(
+        client.connect(  # type: ignore[call-arg]
             hostname=router.management_ip,
             port=port,
             username=username,
@@ -76,7 +109,8 @@ def export_config_via_ssh(
             look_for_keys=False,
             allow_agent=False,
         )
-        _stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
+        # Fixed, non-interpolated command (no user input) — not a shell.
+        _stdin, stdout, stderr = client.exec_command(command, timeout=timeout)  # nosec B601
         out = stdout.read().decode("utf-8", "replace")
         err = stderr.read().decode("utf-8", "replace")
         exit_status = stdout.channel.recv_exit_status()

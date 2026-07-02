@@ -40,9 +40,17 @@ def _fetch_config_export(router) -> str:
     response is a JSON array of config lines (or text) normalised to a blob.
     """
     if settings.router_config_export_via_ssh:
-        return export_config_via_ssh(router)
+        return export_config_via_ssh(router)  # raises on empty/failure
     data = RouterConnectionService.execute(router, "POST", "/export")
-    return _export_to_text(data)
+    text = _export_to_text(data)
+    # Never bank a blank snapshot (false DR confidence): an empty REST export
+    # means the user lacks the ``sensitive`` policy. Fail so the caller skips it.
+    if not text.strip():
+        raise RuntimeError(
+            f"Router {router.name} returned an empty config export — the REST API "
+            "user's group is likely missing the 'sensitive' policy"
+        )
+    return text
 
 
 def _export_to_text(data) -> str:

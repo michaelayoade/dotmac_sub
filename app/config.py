@@ -136,6 +136,15 @@ class Settings:
     router_config_ssh_key_path: str = os.getenv(
         "ROUTER_CONFIG_SSH_KEY_PATH", "/etc/dotmac/dotmac-ops.key"
     )
+    # Host-key pinning (TOFU): known_hosts persists first-seen router keys so a
+    # CHANGED key is rejected (MITM guard). Strict mode also rejects unknown
+    # hosts (requires a pre-populated known_hosts file).
+    router_config_ssh_known_hosts_path: str = os.getenv(
+        "ROUTER_CONFIG_SSH_KNOWN_HOSTS_PATH", "/etc/dotmac/router_known_hosts"
+    )
+    router_config_ssh_strict_host_key: bool = os.getenv(
+        "ROUTER_CONFIG_SSH_STRICT_HOST_KEY", "false"
+    ).lower() in ("true", "1", "yes")
 
     # TR-069 settings
     tr069_periodic_inform_interval: int = int(
