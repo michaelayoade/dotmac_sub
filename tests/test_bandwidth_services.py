@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
-from app.models.catalog import NasDevice
+from app.models.catalog import NasDevice, Subscription, SubscriptionStatus
 from app.schemas.bandwidth import BandwidthSampleCreate, BandwidthSampleUpdate
 from app.services import bandwidth as bandwidth_service
 from app.tasks import bandwidth as bandwidth_tasks
@@ -241,9 +241,30 @@ def test_get_user_active_subscription_uses_principal_id(db_session, subscription
 def test_get_user_active_subscription_allows_blocked_subscription(
     db_session, subscription
 ):
-    from app.models.catalog import SubscriptionStatus
-
     subscription.status = SubscriptionStatus.blocked
+    db_session.commit()
+
+    current = bandwidth_service.bandwidth_samples.get_user_active_subscription(
+        db_session,
+        {"account_id": str(subscription.subscriber_id)},
+    )
+
+    assert current.id == subscription.id
+
+
+def test_get_user_active_subscription_prefers_live_subscription_over_newer_canceled(
+    db_session, subscription
+):
+    subscription.status = SubscriptionStatus.active
+    subscription.created_at = datetime(2020, 1, 1, tzinfo=UTC)
+    canceled = Subscription(
+        subscriber_id=subscription.subscriber_id,
+        offer_id=subscription.offer_id,
+        status=SubscriptionStatus.canceled,
+        access_state="terminated",
+        created_at=datetime(2024, 1, 1, tzinfo=UTC),
+    )
+    db_session.add(canceled)
     db_session.commit()
 
     current = bandwidth_service.bandwidth_samples.get_user_active_subscription(

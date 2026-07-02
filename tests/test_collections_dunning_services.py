@@ -346,6 +346,8 @@ def _setup_overdue_postpaid_account(
         DunningAction as CatalogDunningAction,
     )
 
+    subscriber.billing_mode = BillingMode.postpaid
+    subscriber.grace_period_days = 0
     subscription.billing_mode = BillingMode.postpaid
     subscription.status = SubscriptionStatus.active
 
@@ -377,6 +379,71 @@ def _setup_overdue_postpaid_account(
     db_session.add(invoice)
     db_session.commit()
     return invoice
+
+
+def test_dunning_run_ignores_noncollectible_invoice_with_residual_balance(
+    db_session, subscriber, subscription, catalog_offer
+):
+    """A void invoice that still carries a positive balance_due must NOT open a
+    dunning case — only issued/partially_paid/overdue statuses are collectible.
+    Guards against dunning a debt that isn't actually owed."""
+    from datetime import UTC, datetime, timedelta
+    from decimal import Decimal
+
+    from app.models.billing import Invoice, InvoiceStatus
+    from app.models.catalog import (
+        BillingMode,
+        PolicyDunningStep,
+        PolicySet,
+        SubscriptionStatus,
+    )
+    from app.models.catalog import (
+        DunningAction as CatalogDunningAction,
+    )
+    from app.schemas.collections import DunningRunRequest
+
+    subscription.billing_mode = BillingMode.postpaid
+    subscription.status = SubscriptionStatus.active
+    policy_set = PolicySet(name="Void Invoice Policy")
+    db_session.add(policy_set)
+    db_session.flush()
+    db_session.add(
+        PolicyDunningStep(
+            policy_set_id=policy_set.id,
+            day_offset=1,
+            action=CatalogDunningAction.notify,
+            note="d1",
+        )
+    )
+    catalog_offer.policy_set_id = policy_set.id
+    if subscription.offer_version is not None:
+        subscription.offer_version.policy_set_id = policy_set.id
+    # Voided invoice that (wrongly) still carries balance_due — must be ignored.
+    db_session.add(
+        Invoice(
+            account_id=subscriber.id,
+            invoice_number="INV-VOID-1",
+            status=InvoiceStatus.void,
+            total=Decimal("100.00"),
+            balance_due=Decimal("100.00"),
+            due_at=datetime.now(UTC) - timedelta(days=5),
+            metadata_={},
+        )
+    )
+    db_session.commit()
+
+    response = collections_service.dunning_workflow.run(db_session, DunningRunRequest())
+
+    open_cases = (
+        db_session.query(DunningCase)
+        .filter(
+            DunningCase.account_id == subscriber.id,
+            DunningCase.status == DunningCaseStatus.open,
+        )
+        .all()
+    )
+    assert open_cases == []
+    assert response.actions_created == 0
 
 
 def test_dunning_run_skips_paused_case(
@@ -862,7 +929,8 @@ def test_prepaid_balance_skip_does_not_advance_dunning_step(
     subscriber.splynx_customer_id = 987655
     subscriber.deposit = Decimal("500.00")
     subscriber.min_balance = Decimal("0.00")
-    subscription.billing_mode = BillingMode.postpaid
+    subscriber.grace_period_days = 0
+    subscription.billing_mode = BillingMode.prepaid
     subscription.status = SubscriptionStatus.active
     catalog_offer.billing_cycle = BillingCycle.monthly
 
@@ -929,14 +997,91 @@ def test_prepaid_balance_skip_does_not_advance_dunning_step(
     assert log.outcome == "prepaid_balance_available"
 
 
-def test_dunning_run_executes_step_for_active_case(
+def test_prepaid_monthly_dunning_suspends_without_extra_notice_clock(
     db_session, subscriber, subscription, catalog_offer
+):
+    """Prepaid service cuts use policy + billing grace, not postpaid runway."""
+    from decimal import Decimal
+
+    from app.models.billing import Invoice, InvoiceStatus
+    from app.models.catalog import (
+        BillingCycle,
+        BillingMode,
+        PolicyDunningStep,
+        PolicySet,
+        SubscriptionStatus,
+    )
+    from app.models.catalog import DunningAction as CatalogDunningAction
+    from app.models.domain_settings import DomainSetting, SettingDomain
+    from app.schemas.collections import DunningRunRequest
+    from app.services.account_lifecycle import get_active_locks
+
+    subscriber.billing_mode = BillingMode.prepaid
+    subscriber.min_balance = Decimal("0.00")
+    subscriber.grace_period_days = 0
+    subscription.billing_mode = BillingMode.prepaid
+    subscription.status = SubscriptionStatus.active
+    catalog_offer.billing_cycle = BillingCycle.monthly
+    db_session.add_all(
+        [
+            DomainSetting(
+                domain=SettingDomain.billing,
+                key="prepaid_monthly_invoicing_enabled",
+                value_text="true",
+                value_json=True,
+                is_active=True,
+            ),
+            DomainSetting(
+                domain=SettingDomain.collections,
+                key="billing_enforcement_min_enforcing_day_offset",
+                value_text="3",
+                is_active=True,
+            ),
+        ]
+    )
+    policy_set = PolicySet(name="Prepaid Immediate Suspend Policy")
+    db_session.add(policy_set)
+    db_session.flush()
+    db_session.add(
+        PolicyDunningStep(
+            policy_set_id=policy_set.id,
+            day_offset=1,
+            action=CatalogDunningAction.suspend,
+            note="prepaid suspend",
+        )
+    )
+    catalog_offer.policy_set_id = policy_set.id
+    if subscription.offer_version is not None:
+        subscription.offer_version.policy_set_id = policy_set.id
+    invoice = Invoice(
+        account_id=subscriber.id,
+        invoice_number="INV-PREPAID-DUN-RUN-2",
+        status=InvoiceStatus.issued,
+        total=Decimal("100.00"),
+        balance_due=Decimal("100.00"),
+        due_at=datetime.now(UTC) - timedelta(days=1),
+        metadata_={},
+    )
+    db_session.add(invoice)
+    db_session.commit()
+
+    response = collections_service.dunning_workflow.run(db_session, DunningRunRequest())
+
+    db_session.refresh(subscription)
+    assert response.actions_created == 1
+    assert subscription.status == SubscriptionStatus.suspended
+    assert get_active_locks(db_session, subscription_id=str(subscription.id))
+
+
+def test_dunning_run_executes_step_for_active_case(
+    db_session, subscriber, subscription, catalog_offer, monkeypatch
 ):
     """An open case with an overdue invoice executes the configured step."""
     from datetime import UTC, datetime
 
     from app.models.collections import DunningActionLog
     from app.schemas.collections import DunningRunRequest
+    from app.services.events.types import EventType
 
     _setup_overdue_postpaid_account(db_session, subscriber, subscription, catalog_offer)
     case = DunningCase(
@@ -946,6 +1091,13 @@ def test_dunning_run_executes_step_for_active_case(
     )
     db_session.add(case)
     db_session.commit()
+
+    emit_calls = []
+
+    def _capture_emit(_db, event_type, payload, **kwargs):
+        emit_calls.append((event_type, payload, kwargs))
+
+    monkeypatch.setattr("app.services.collections._core.emit_event", _capture_emit)
 
     response = collections_service.dunning_workflow.run(db_session, DunningRunRequest())
 
@@ -961,6 +1113,14 @@ def test_dunning_run_executes_step_for_active_case(
     assert len(logs) == 1
     assert logs[0].action == DunningAction.notify
     assert logs[0].outcome == "notification_sent"
+    warning_calls = [
+        call
+        for call in emit_calls
+        if call[0] == EventType.subscription_suspension_warning
+    ]
+    assert len(warning_calls) == 1
+    assert warning_calls[0][1]["reason"] == "dunning"
+    assert warning_calls[0][1]["invoice_number"] == "INV-DUN-RUN-1"
 
 
 def test_dunning_run_skips_reconciliation_hold_invoice(
@@ -1022,6 +1182,61 @@ def test_billing_enforcement_settles_payment_credit_before_dunning(
             amount=Decimal("100.00"),
             currency="NGN",
             memo="test payment credit",
+        )
+    )
+    db_session.commit()
+
+    response = collections_service.billing_enforcement_reconciler.run(
+        db_session, BillingEnforcementRunRequest()
+    )
+
+    db_session.refresh(invoice)
+    assert response.credit_accounts_settled == 1
+    assert response.credit_invoices_touched == 1
+    assert response.dunning_accounts_scanned == 0
+    assert invoice.status == InvoiceStatus.paid
+    assert invoice.balance_due == Decimal("0.00")
+
+
+def test_billing_enforcement_settles_non_ngn_credit_before_dunning(
+    db_session, subscriber, subscription, catalog_offer
+):
+    """The pre-dunning credit pass must not skip accounts with only USD credit."""
+    from decimal import Decimal
+
+    from app.models.billing import (
+        InvoiceStatus,
+        LedgerEntry,
+        LedgerEntryType,
+        LedgerSource,
+        Payment,
+        PaymentStatus,
+    )
+    from app.schemas.collections import BillingEnforcementRunRequest
+
+    invoice = _setup_overdue_postpaid_account(
+        db_session, subscriber, subscription, catalog_offer
+    )
+    invoice.currency = "USD"
+    payment = Payment(
+        account_id=subscriber.id,
+        amount=Decimal("100.00"),
+        currency="USD",
+        status=PaymentStatus.succeeded,
+        paid_at=datetime.now(UTC) - timedelta(hours=1),
+        is_active=True,
+    )
+    db_session.add(payment)
+    db_session.flush()
+    db_session.add(
+        LedgerEntry(
+            account_id=subscriber.id,
+            payment_id=payment.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.payment,
+            amount=Decimal("100.00"),
+            currency="USD",
+            memo="test USD payment credit",
         )
     )
     db_session.commit()
