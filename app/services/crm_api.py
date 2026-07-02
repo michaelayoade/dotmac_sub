@@ -1540,18 +1540,23 @@ def list_infrastructure_assets(
             }
         )
 
-    pon_query = session.query(PonPort)
-    if like is None:
-        # Only list PON ports for the OLTs we returned (avoid dumping thousands).
-        if olt_by_id:
-            pon_query = pon_query.filter(PonPort.olt_id.in_(list(olt_by_id.keys())))
-        else:
-            pon_query = pon_query.filter(False)
-    ports = pon_query.order_by(PonPort.name).limit(limit).all()
+    # Only list PON ports for OLTs we can attribute (search mode = all matching
+    # OLTs; otherwise the OLTs we already returned) — avoids dumping thousands.
+    ports: list = []
+    if olt_by_id:
+        ports = (
+            session.query(PonPort)
+            .filter(PonPort.olt_id.in_(list(olt_by_id.keys())))
+            .order_by(PonPort.name)
+            .limit(limit)
+            .all()
+        )
     for port in ports:
-        olt = olt_by_id.get(port.olt_id) or session.get(OLTDevice, port.olt_id)
-        olt_name = olt.name if olt else "OLT"
-        vendor = ((olt.vendor if olt else None) or "").strip()
+        parent: OLTDevice | None = olt_by_id.get(port.olt_id) or session.get(
+            OLTDevice, port.olt_id
+        )
+        olt_name = parent.name if parent else "OLT"
+        vendor = ((parent.vendor if parent else None) or "").strip()
         assets.append(
             {
                 "id": str(port.id),
