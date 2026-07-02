@@ -1574,3 +1574,76 @@ def list_infrastructure_assets(
         assets.append({"id": str(pop.id), "type": "basestation", "label": pop.name})
 
     return assets
+
+
+def record_external_payment(
+    session: Session,
+    *,
+    subscriber_id: str,
+    amount: Any,
+    external_ref: str,
+    paid_at: datetime | None = None,
+    memo: str | None = None,
+    invoice_external_ref: str | None = None,
+    currency: str = "NGN",
+) -> Any:
+    """Record a payment the customer made in the CRM (installation / subscription)
+    into this app's ledger, so it settles the matching invoice and shows in the
+    customer portal. Idempotent on ``external_ref`` — a repeat push returns the
+    already-recorded payment. When ``invoice_external_ref`` matches a CRM-created
+    invoice it's allocated there; otherwise it auto-allocates to oldest unpaid.
+    """
+    from decimal import Decimal, InvalidOperation
+
+    from app.models.billing import Invoice, Payment, PaymentStatus
+    from app.schemas.billing import PaymentAllocationApply, PaymentCreate
+    from app.services import billing as billing_service
+
+    sub_uuid = coerce_subscriber_id(str(subscriber_id))
+    subscriber = session.get(Subscriber, sub_uuid) if sub_uuid else None
+    if subscriber is None:
+        raise LookupError("subscriber not found")
+
+    try:
+        amt = Decimal(str(amount))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ValueError("amount must be a number") from exc
+    if amt <= 0:
+        raise ValueError("amount must be greater than 0")
+
+    ext_id = f"crm:{external_ref}"
+    existing = session.query(Payment).filter(Payment.external_id == ext_id).first()
+    if existing is not None:
+        return existing
+
+    allocations: list[PaymentAllocationApply] | None = None
+    if invoice_external_ref:
+        for inv in (
+            session.query(Invoice)
+            .filter(Invoice.account_id == subscriber.id, Invoice.is_active.is_(True))
+            .order_by(Invoice.created_at.desc())
+            .all()
+        ):
+            if (inv.metadata_ or {}).get("crm_external_ref") == str(
+                invoice_external_ref
+            ):
+                due = inv.balance_due if inv.balance_due is not None else amt
+                if due and due > 0:
+                    allocations = [
+                        PaymentAllocationApply(invoice_id=inv.id, amount=min(amt, due))
+                    ]
+                break
+
+    payload = PaymentCreate(
+        account_id=subscriber.id,
+        amount=amt,
+        currency=(currency or "NGN").upper(),
+        status=PaymentStatus.succeeded,
+        paid_at=paid_at,
+        external_id=ext_id,
+        memo=memo or "CRM sales payment",
+        allocations=allocations,
+    )
+    return billing_service.payments.create(
+        session, payload, auto_allocate=(allocations is None)
+    )
