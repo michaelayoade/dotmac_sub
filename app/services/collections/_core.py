@@ -1519,9 +1519,9 @@ class DunningWorkflow(ListResponseMixin):
                 )
                 .all()
             )
-            for case in open_cases:
+            for open_case in open_cases:
                 open_cases_by_account.setdefault(
-                    coerce_uuid(str(case.account_id)), case
+                    coerce_uuid(str(open_case.account_id)), open_case
                 )
         steps_by_policy: dict[str, list[PolicyDunningStep]] = {}
         cases_created = 0
