@@ -1690,7 +1690,9 @@ def list_catalog_offers(
                 "id": str(offer.id),
                 "code": offer.code,
                 "name": offer.name,
-                "recurring_price": str(offer_price.amount) if offer_price is not None else None,
+                "recurring_price": str(offer_price.amount)
+                if offer_price is not None
+                else None,
                 "currency": offer_price.currency if offer_price is not None else "NGN",
                 "billing_cycle": offer.billing_cycle.value
                 if offer.billing_cycle
