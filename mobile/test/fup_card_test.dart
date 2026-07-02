@@ -10,6 +10,8 @@ void main() {
   group('FupCard', () {
     testWidgets('throttled: structured until-line and contextual remedy CTAs',
         (tester) async {
+      final futureReset = DateTime.now().add(const Duration(days: 30));
+
       await tester.pumpWidget(_wrap(FupCard(
         serviceId: 'sub-1',
         canBuyData: true,
@@ -18,7 +20,7 @@ void main() {
           isReduced: true,
           speedReductionPercent: 75,
           activeRuleName: 'Monthly 100GB cap',
-          resetsAt: DateTime(2026, 7, 1),
+          resetsAt: futureReset,
           summary: 'Speed reduced to 25% after 100 GB this month',
         ),
       )));
