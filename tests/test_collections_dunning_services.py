@@ -379,6 +379,71 @@ def _setup_overdue_postpaid_account(
     return invoice
 
 
+def test_dunning_run_ignores_noncollectible_invoice_with_residual_balance(
+    db_session, subscriber, subscription, catalog_offer
+):
+    """A void invoice that still carries a positive balance_due must NOT open a
+    dunning case — only issued/partially_paid/overdue statuses are collectible.
+    Guards against dunning a debt that isn't actually owed."""
+    from datetime import UTC, datetime, timedelta
+    from decimal import Decimal
+
+    from app.models.billing import Invoice, InvoiceStatus
+    from app.models.catalog import (
+        BillingMode,
+        PolicyDunningStep,
+        PolicySet,
+        SubscriptionStatus,
+    )
+    from app.models.catalog import (
+        DunningAction as CatalogDunningAction,
+    )
+    from app.schemas.collections import DunningRunRequest
+
+    subscription.billing_mode = BillingMode.postpaid
+    subscription.status = SubscriptionStatus.active
+    policy_set = PolicySet(name="Void Invoice Policy")
+    db_session.add(policy_set)
+    db_session.flush()
+    db_session.add(
+        PolicyDunningStep(
+            policy_set_id=policy_set.id,
+            day_offset=1,
+            action=CatalogDunningAction.notify,
+            note="d1",
+        )
+    )
+    catalog_offer.policy_set_id = policy_set.id
+    if subscription.offer_version is not None:
+        subscription.offer_version.policy_set_id = policy_set.id
+    # Voided invoice that (wrongly) still carries balance_due — must be ignored.
+    db_session.add(
+        Invoice(
+            account_id=subscriber.id,
+            invoice_number="INV-VOID-1",
+            status=InvoiceStatus.void,
+            total=Decimal("100.00"),
+            balance_due=Decimal("100.00"),
+            due_at=datetime.now(UTC) - timedelta(days=5),
+            metadata_={},
+        )
+    )
+    db_session.commit()
+
+    response = collections_service.dunning_workflow.run(db_session, DunningRunRequest())
+
+    open_cases = (
+        db_session.query(DunningCase)
+        .filter(
+            DunningCase.account_id == subscriber.id,
+            DunningCase.status == DunningCaseStatus.open,
+        )
+        .all()
+    )
+    assert open_cases == []
+    assert response.actions_created == 0
+
+
 def test_dunning_run_skips_paused_case(
     db_session, subscriber, subscription, catalog_offer
 ):

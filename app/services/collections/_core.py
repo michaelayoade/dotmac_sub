@@ -1362,6 +1362,19 @@ class DunningWorkflow(ListResponseMixin):
             .filter(Invoice.due_at.is_not(None))
             .filter(Invoice.due_at <= run_at)
             .filter(Invoice.is_active.is_(True))
+            # Only collectible invoices drive dunning. draft/void/written_off
+            # rows must never create a case even if they retain a positive
+            # balance_due (a stale value elsewhere would otherwise dun a debt
+            # that isn't owed).
+            .filter(
+                Invoice.status.in_(
+                    [
+                        InvoiceStatus.issued,
+                        InvoiceStatus.partially_paid,
+                        InvoiceStatus.overdue,
+                    ]
+                )
+            )
             .all()
         )
         overdue_accounts: dict[UUID, list[Invoice]] = {}

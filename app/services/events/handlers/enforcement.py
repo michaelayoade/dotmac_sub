@@ -742,6 +742,25 @@ class EnforcementHandler:
                 )
                 return
 
+            # Prepaid accounts whose available balance (wallet/ledger credit)
+            # covers the debt must NOT be suspended here. This is the SAME gate
+            # the dunning reconciler applies (it skips them as
+            # ``prepaid_balance_available``); this handler previously bypassed it
+            # and cut off credited customers (a second, ungated writer). Reusing
+            # the one gate keeps both writers on a single decision.
+            from app.services.collections._core import (
+                _prepaid_balance_gate_skip_reason,
+            )
+
+            balance_skip = _prepaid_balance_gate_skip_reason(db, subscriber)
+            if balance_skip:
+                logger.info(
+                    "Skipping overdue auto-suspension for prepaid account %s: %s",
+                    account_id,
+                    balance_skip,
+                )
+                return
+
             # Shields: customers who have an admin-approved payment plan or a
             # bank-transfer proof awaiting review must not be auto-suspended.
             # Reminder notifications still flow (the notification handler
