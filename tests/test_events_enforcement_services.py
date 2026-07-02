@@ -1617,7 +1617,7 @@ class TestInvoiceOverdueSuspensionShields:
     @patch(
         "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
     )
-    def test_defaulted_arrangement_does_not_shield(
+    def test_defaulted_arrangement_does_not_directly_suspend(
         self,
         mock_reject_ip,
         mock_cleanup,
@@ -1636,7 +1636,9 @@ class TestInvoiceOverdueSuspensionShields:
         )
         db_session.refresh(subscription)
 
-        assert subscription.status == SubscriptionStatus.suspended
+        assert subscription.status == SubscriptionStatus.active
+        mock_reject_ip.assert_not_called()
+        mock_cleanup.assert_not_called()
 
     @patch("app.tasks.enforcement.cleanup_subscription_block_sessions.delay")
     @patch(
@@ -1690,7 +1692,7 @@ class TestInvoiceOverdueSuspensionShields:
     @patch(
         "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
     )
-    def test_insufficient_prepaid_credit_still_suspends(
+    def test_insufficient_prepaid_credit_does_not_directly_suspend(
         self,
         mock_reject_ip,
         mock_cleanup,
@@ -1698,7 +1700,7 @@ class TestInvoiceOverdueSuspensionShields:
         subscriber,
         subscription,
     ):
-        """Credit present but below the overdue debt → suspension still fires."""
+        """The overdue event writer never cuts service; dunning owns that."""
         from decimal import Decimal
 
         from app.models.billing import (
@@ -1727,7 +1729,9 @@ class TestInvoiceOverdueSuspensionShields:
         )
         db_session.refresh(subscription)
 
-        assert subscription.status == SubscriptionStatus.suspended
+        assert subscription.status == SubscriptionStatus.active
+        mock_reject_ip.assert_not_called()
+        mock_cleanup.assert_not_called()
 
     @patch("app.tasks.enforcement.cleanup_subscription_block_sessions.delay")
     @patch(
@@ -1759,7 +1763,7 @@ class TestInvoiceOverdueSuspensionShields:
     @patch(
         "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
     )
-    def test_rejected_proof_does_not_shield(
+    def test_rejected_proof_does_not_directly_suspend(
         self,
         mock_reject_ip,
         mock_cleanup,
@@ -1778,13 +1782,15 @@ class TestInvoiceOverdueSuspensionShields:
         )
         db_session.refresh(subscription)
 
-        assert subscription.status == SubscriptionStatus.suspended
+        assert subscription.status == SubscriptionStatus.active
+        mock_reject_ip.assert_not_called()
+        mock_cleanup.assert_not_called()
 
     @patch("app.tasks.enforcement.cleanup_subscription_block_sessions.delay")
     @patch(
         "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
     )
-    def test_no_shield_suspends_past_grace(
+    def test_no_shield_does_not_directly_suspend_past_grace(
         self,
         mock_reject_ip,
         mock_cleanup,
@@ -1800,7 +1806,9 @@ class TestInvoiceOverdueSuspensionShields:
         )
         db_session.refresh(subscription)
 
-        assert subscription.status == SubscriptionStatus.suspended
+        assert subscription.status == SubscriptionStatus.active
+        mock_reject_ip.assert_not_called()
+        mock_cleanup.assert_not_called()
 
     @patch("app.tasks.enforcement.cleanup_subscription_block_sessions.delay")
     @patch(

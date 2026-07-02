@@ -4,13 +4,13 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
+from app.models.catalog import Subscription
 from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber
 from app.models.subscriber import SubscriberStatus as AccountStatus
-from app.services import enforcement_window, settings_spec
 from app.services import radius as radius_service
 from app.services import radius_reject as radius_reject_service
+from app.services import settings_spec
 from app.services.enforcement import (
     _resolve_effective_profile,
     _setting_bool,
@@ -666,7 +666,7 @@ class EnforcementHandler:
         return None
 
     def _handle_invoice_overdue(self, db: Session, event: Event) -> None:
-        """Handle overdue warnings and non-postpaid auto-suspension."""
+        """Handle overdue warnings; dunning owns overdue service cuts."""
         account_id = event.account_id or event.payload.get("account_id")
         if not account_id:
             return
@@ -734,139 +734,14 @@ class EnforcementHandler:
                         )
                         return
 
-            if subscriber.billing_mode == BillingMode.postpaid:
-                logger.info(
-                    "Skipping direct overdue auto-suspension for postpaid account %s; "
-                    "dunning policy owns postpaid suspension",
-                    account_id,
-                )
-                return
-
-            # Prepaid accounts whose available balance (wallet/ledger credit)
-            # covers the debt must NOT be suspended here. This is the SAME gate
-            # the dunning reconciler applies (it skips them as
-            # ``prepaid_balance_available``); this handler previously bypassed it
-            # and cut off credited customers (a second, ungated writer). Reusing
-            # the one gate keeps both writers on a single decision.
-            from app.services.collections._core import (
-                _prepaid_balance_gate_skip_reason,
+            logger.info(
+                "Skipping direct overdue auto-suspension for account %s; "
+                "dunning policy owns overdue suspension",
+                account_id,
             )
-
-            balance_skip = _prepaid_balance_gate_skip_reason(db, subscriber)
-            if balance_skip:
-                logger.info(
-                    "Skipping overdue auto-suspension for prepaid account %s: %s",
-                    account_id,
-                    balance_skip,
-                )
-                return
-
-            # Shields: customers who have an admin-approved payment plan or a
-            # bank-transfer proof awaiting review must not be auto-suspended.
-            # Reminder notifications still flow (the notification handler
-            # reacts to the same invoice_overdue event); only the suspension
-            # itself is skipped. When an arrangement defaults (status changes
-            # away from active) or a proof is rejected, the shield no longer
-            # applies and the next overdue emit suspends as usual.
-            shield_reason = self._suspension_shield_reason(db, subscriber.id)
-            if shield_reason:
-                logger.info(
-                    "Skipping overdue auto-suspension for account %s: %s",
-                    account_id,
-                    shield_reason,
-                )
-                return
-
-            # Phase 6 (audit-first): record whether this overdue auto-suspension
-            # would be deferred by the enforcement time-of-day window — WITHOUT
-            # skipping yet. Flip to actually gating once the would_gate logs
-            # confirm the window config (docs/designs/BILLING_ENFORCEMENT_WINDOW.md).
-            if not enforcement_window.within_enforcement_window(db):
-                logger.info(
-                    "enforcement_window_audit",
-                    extra={
-                        "event": "enforcement_window_audit",
-                        "path": "overdue_event",
-                        "action": "auto_suspend",
-                        "account_id": str(account_id),
-                        "would_gate": True,
-                        "timezone": enforcement_window.resolve_timezone_name(db),
-                    },
-                )
-
-            # Past grace period — suspend via lifecycle enforcement locks.
-            # Use emit=False to prevent re-entrant event dispatch (this handler
-            # already handles the enforcement side effects directly).
-            from app.models.enforcement_lock import EnforcementReason
-            from app.services.account_lifecycle import (
-                compute_account_status,
-                suspend_subscription,
-            )
-
-            invoice_source = (
-                f"invoice:{invoice_id}" if invoice_id else "invoice_overdue"
-            )
-            # Include suspended subscriptions so overdue locks are created
-            # even when a subscription is already suspended by another reason
-            # (e.g., FUP). The lock won't change status but tracks the debt.
-            subscriptions = (
-                db.query(Subscription)
-                .filter(
-                    Subscription.subscriber_id == subscriber.id,
-                    Subscription.status.in_(
-                        [
-                            SubscriptionStatus.active,
-                            SubscriptionStatus.suspended,
-                        ]
-                    ),
-                )
-                .all()
-            )
-            lock_count = 0
-            newly_suspended_ids: list[str] = []
-            for sub in subscriptions:
-                was_active = sub.status == SubscriptionStatus.active
-                try:
-                    suspend_subscription(
-                        db,
-                        str(sub.id),
-                        reason=EnforcementReason.overdue,
-                        source=invoice_source,
-                        emit=False,
-                    )
-                    lock_count += 1
-                    # Only apply RADIUS enforcement for subs that were
-                    # actually active — already-suspended subs are already
-                    # blocked at the network level.
-                    if was_active:
-                        newly_suspended_ids.append(str(sub.id))
-                except ValueError as e:
-                    logger.info("Skipped suspending subscription %s: %s", sub.id, e)
-                except Exception as exc:
-                    logger.error(
-                        "Failed to suspend subscription %s for overdue invoice: %s",
-                        sub.id,
-                        exc,
-                    )
-
-            if lock_count:
-                compute_account_status(db, str(subscriber.id))
-                # Apply RADIUS enforcement only for newly suspended subs
-                # (already-suspended subs are already blocked).
-                for sid in newly_suspended_ids:
-                    self._enforce_subscription_block(
-                        db, sid, reason="overdue", reject_reason="negative"
-                    )
-                logger.info(
-                    "Overdue enforcement: %d lock(s) created, %d newly suspended "
-                    "for account %s",
-                    lock_count,
-                    len(newly_suspended_ids),
-                    account_id,
-                )
         except Exception as exc:
             logger.warning(
-                "Failed to auto-suspend account %s for overdue invoice: %s",
+                "Failed to handle overdue invoice event for account %s: %s",
                 account_id,
                 exc,
             )
