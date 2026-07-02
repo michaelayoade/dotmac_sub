@@ -31,11 +31,13 @@ class InvoicesScreen extends ConsumerWidget {
             onPressed: () => context.go('/billing/transfer-proofs'),
           ),
         ],
-        bottom: const TabBar(tabs: [
-          Tab(text: 'Invoices'),
-          Tab(text: 'Payments'),
-          Tab(text: 'Activity'),
-        ]),
+        bottom: const TabBar(
+          tabs: [
+            Tab(text: 'Invoices'),
+            Tab(text: 'Payments'),
+            Tab(text: 'Activity'),
+          ],
+        ),
       ),
       body: Column(
         children: [
@@ -71,7 +73,9 @@ class InvoicesScreen extends ConsumerWidget {
                         children: [
                           if (outstanding > 0) ...[
                             _OutstandingHeader(
-                                amount: outstanding, currency: currency),
+                              amount: outstanding,
+                              currency: currency,
+                            ),
                             const SizedBox(height: 8),
                           ],
                           _InvoiceFilterBar(
@@ -80,9 +84,9 @@ class InvoicesScreen extends ConsumerWidget {
                               for (final f in InvoiceFilter.values)
                                 f: all.where(f.test).length,
                             },
-                            onChanged: (f) => ref
-                                .read(invoiceFilterProvider.notifier)
-                                .state = f,
+                            onChanged: (f) =>
+                                ref.read(invoiceFilterProvider.notifier).state =
+                                    f,
                           ),
                           const SizedBox(height: 12),
                           if (items.isEmpty)
@@ -205,10 +209,12 @@ class _OutstandingHeader extends StatelessWidget {
         child: Row(
           children: [
             Expanded(
-              child: Text('Outstanding balance',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        color: scheme.onErrorContainer,
-                      )),
+              child: Text(
+                'Outstanding balance',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  color: scheme.onErrorContainer,
+                ),
+              ),
             ),
             const SizedBox(width: 12),
             // Scale the figure down rather than letting it overflow — same
@@ -221,9 +227,9 @@ class _OutstandingHeader extends StatelessWidget {
                   Fmt.money(amount, currency),
                   maxLines: 1,
                   style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        color: scheme.onErrorContainer,
-                        fontWeight: FontWeight.w700,
-                      ),
+                    color: scheme.onErrorContainer,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
             ),
@@ -252,8 +258,9 @@ class _InvoiceFilterBar extends StatelessWidget {
       children: [
         for (final f in InvoiceFilter.values)
           ChoiceChip(
-            label:
-                Text(counts[f] != null ? '${f.label} (${counts[f]})' : f.label),
+            label: Text(
+              counts[f] != null ? '${f.label} (${counts[f]})' : f.label,
+            ),
             selected: f == selected,
             onSelected: (_) => onChanged(f),
           ),
@@ -289,8 +296,10 @@ class _InvoiceTile extends StatelessWidget {
                       style: const TextStyle(fontWeight: FontWeight.w600),
                     ),
                     const SizedBox(height: 2),
-                    Text('Due ${Fmt.date(inv.dueAt)}',
-                        style: Theme.of(context).textTheme.bodySmall),
+                    Text(
+                      'Due ${Fmt.date(inv.dueAt)}',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
                   ],
                 ),
               ),
@@ -298,8 +307,10 @@ class _InvoiceTile extends StatelessWidget {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  Text(Fmt.money(inv.total, inv.currency),
-                      style: const TextStyle(fontWeight: FontWeight.w600)),
+                  Text(
+                    Fmt.money(inv.total, inv.currency),
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
                   const SizedBox(height: 4),
                   StatusChip.forInvoice(inv.isOverdue ? 'overdue' : inv.status),
                 ],
@@ -327,8 +338,8 @@ class _BalanceCard extends StatelessWidget {
     final (label, color) = balance.owes
         ? ('Balance due', scheme.error)
         : balance.inCredit
-            ? ('Account credit', context.semantic.success)
-            : ('Balance', scheme.onSurface);
+        ? ('Account credit', context.semantic.success)
+        : ('Balance', scheme.onSurface);
     return Card(
       color: scheme.surfaceContainerHighest,
       child: Padding(
@@ -336,8 +347,10 @@ class _BalanceCard extends StatelessWidget {
         child: Row(
           children: [
             Expanded(
-              child:
-                  Text(label, style: Theme.of(context).textTheme.titleMedium),
+              child: Text(
+                label,
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
             ),
             const SizedBox(width: 12),
             Flexible(
@@ -346,10 +359,10 @@ class _BalanceCard extends StatelessWidget {
                 child: Text(
                   Fmt.money(balance.creditBalance.abs(), balance.currency),
                   maxLines: 1,
-                  style: Theme.of(context)
-                      .textTheme
-                      .titleLarge
-                      ?.copyWith(color: color, fontWeight: FontWeight.w700),
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                    color: color,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
             ),

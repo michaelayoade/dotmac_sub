@@ -95,8 +95,9 @@ class _WorkOrderCard extends StatelessWidget {
                 Expanded(
                   child: Text(
                     workOrder.title,
-                    style: theme.textTheme.titleMedium
-                        ?.copyWith(fontWeight: FontWeight.bold),
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ),
                 Chip(
@@ -113,17 +114,33 @@ class _WorkOrderCard extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             if (workOrder.scheduledStart != null)
-              _row(theme, Icons.event, 'Scheduled',
-                  _fmt(workOrder.scheduledStart)),
+              _row(
+                theme,
+                Icons.event,
+                'Scheduled',
+                _fmt(workOrder.scheduledStart),
+              ),
             if (workOrder.estimatedArrivalAt != null && !terminal)
-              _row(theme, Icons.schedule, 'Est. arrival',
-                  _fmt(workOrder.estimatedArrivalAt)),
+              _row(
+                theme,
+                Icons.schedule,
+                'Est. arrival',
+                _fmt(workOrder.estimatedArrivalAt),
+              ),
             if (workOrder.technicianName != null)
-              _row(theme, Icons.engineering, 'Technician',
-                  workOrder.technicianName!),
+              _row(
+                theme,
+                Icons.engineering,
+                'Technician',
+                workOrder.technicianName!,
+              ),
             if (workOrder.completedAt != null)
-              _row(theme, Icons.check_circle, 'Completed',
-                  _fmt(workOrder.completedAt)),
+              _row(
+                theme,
+                Icons.check_circle,
+                'Completed',
+                _fmt(workOrder.completedAt),
+              ),
           ],
         ),
       ),
@@ -142,8 +159,9 @@ class _WorkOrderCard extends StatelessWidget {
           Expanded(
             child: Text(
               value,
-              style: theme.textTheme.bodyMedium
-                  ?.copyWith(fontWeight: FontWeight.w500),
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w500,
+              ),
             ),
           ),
         ],

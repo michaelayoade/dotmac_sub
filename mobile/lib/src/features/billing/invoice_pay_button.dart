@@ -72,19 +72,24 @@ class _InvoicePayButtonState extends ConsumerState<InvoicePayButton> {
         );
         if (ok == true && mounted) {
           ref.invalidate(paymentProofsProvider);
-          messenger.showSnackBar(const SnackBar(
-            content: Text(
-                'Receipt submitted — we will verify it and apply it to your invoice.'),
-          ));
+          messenger.showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Receipt submitted — we will verify it and apply it to your invoice.',
+              ),
+            ),
+          );
         }
         return;
       }
 
       setState(() => _busy = true);
-      final cardId =
-          selection.startsWith('card:') ? selection.substring(5) : null;
-      final provider =
-          selection.startsWith('gw:') ? selection.substring(3) : null;
+      final cardId = selection.startsWith('card:')
+          ? selection.substring(5)
+          : null;
+      final provider = selection.startsWith('gw:')
+          ? selection.substring(3)
+          : null;
 
       final initiation = await repo.initiatePayment(
         inv.id,
@@ -93,7 +98,7 @@ class _InvoicePayButtonState extends ConsumerState<InvoicePayButton> {
         idempotencyKey: cardId == null
             ? null
             : 'invpay-${DateTime.now().microsecondsSinceEpoch}-'
-                '${Random().nextInt(0x7fffffff)}',
+                  '${Random().nextInt(0x7fffffff)}',
       );
       if (!mounted) return;
 
@@ -125,9 +130,11 @@ class _InvoicePayButtonState extends ConsumerState<InvoicePayButton> {
 
       messenger.showSnackBar(
         SnackBar(
-          content: Text(result.succeeded
-              ? 'Payment of ${Fmt.money(result.amount, result.currency)} received'
-              : 'Payment recorded (${result.status})'),
+          content: Text(
+            result.succeeded
+                ? 'Payment of ${Fmt.money(result.amount, result.currency)} received'
+                : 'Payment recorded (${result.status})',
+          ),
         ),
       );
     } on ApiException catch (e) {
@@ -154,7 +161,8 @@ class _InvoicePayButtonState extends ConsumerState<InvoicePayButton> {
             ? const SizedBox(
                 height: 16,
                 width: 16,
-                child: CircularProgressIndicator(strokeWidth: 2))
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
             : const Text('Pay'),
       );
     }
@@ -164,7 +172,8 @@ class _InvoicePayButtonState extends ConsumerState<InvoicePayButton> {
           ? const SizedBox(
               height: 18,
               width: 18,
-              child: CircularProgressIndicator(strokeWidth: 2))
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
           : const Icon(Icons.payment),
       label: Text('Pay ${Fmt.money(inv.balanceDue, inv.currency)}'),
       onPressed: _busy ? null : _pay,
@@ -197,7 +206,8 @@ class _PayMethodSheet extends StatelessWidget {
               ListTile(
                 leading: const Icon(Icons.credit_card),
                 title: Text(
-                    c.label ?? '${c.brand ?? 'Card'} •••• ${c.last4 ?? ''}'),
+                  c.label ?? '${c.brand ?? 'Card'} •••• ${c.last4 ?? ''}',
+                ),
                 subtitle: c.expiry != null ? Text('Expires ${c.expiry}') : null,
                 onTap: () => Navigator.of(context).pop('card:${c.id}'),
               ),
@@ -211,8 +221,9 @@ class _PayMethodSheet extends StatelessWidget {
               ListTile(
                 leading: const Icon(Icons.account_balance_outlined),
                 title: const Text('Bank transfer'),
-                subtitle:
-                    const Text('Show account details and upload your receipt'),
+                subtitle: const Text(
+                  'Show account details and upload your receipt',
+                ),
                 onTap: () => Navigator.of(context).pop('transfer'),
               ),
             const SizedBox(height: 8),

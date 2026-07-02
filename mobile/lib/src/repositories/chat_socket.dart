@@ -28,9 +28,9 @@ class ChatSocket {
     required ChatEventHandler onEvent,
     required void Function() onClosed,
   }) async {
-    final uri = Uri.parse(wsUrl).replace(
-      queryParameters: {'token': visitorToken},
-    );
+    final uri = Uri.parse(
+      wsUrl,
+    ).replace(queryParameters: {'token': visitorToken});
     final channel = WebSocketChannel.connect(uri);
     _channel = channel;
 

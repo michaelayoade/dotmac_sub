@@ -115,9 +115,11 @@ class AttachmentPicker extends StatelessWidget {
         OutlinedButton.icon(
           onPressed: canAdd ? () => _openSheet(context) : null,
           icon: const Icon(Icons.attach_file, size: 18),
-          label: Text(attachments.isEmpty
-              ? 'Attach photo'
-              : 'Add photo (${attachments.length}/$kMaxAttachments)'),
+          label: Text(
+            attachments.isEmpty
+                ? 'Attach photo'
+                : 'Add photo (${attachments.length}/$kMaxAttachments)',
+          ),
         ),
         if (attachments.isNotEmpty) ...[
           const SizedBox(height: 8),

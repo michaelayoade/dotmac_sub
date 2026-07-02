@@ -58,9 +58,13 @@ Future<bool> runResellerPay(
   if (parsed == null ||
       parsed <= 0 ||
       !RegExp(r'^\d+(\.\d{1,2})?$').hasMatch(amount.replaceAll(',', ''))) {
-    messenger.showSnackBar(const SnackBar(
-        content:
-            Text('Enter an amount greater than 0 with at most 2 decimals.')));
+    messenger.showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Enter an amount greater than 0 with at most 2 decimals.',
+        ),
+      ),
+    );
     return false;
   }
 
@@ -82,16 +86,23 @@ Future<bool> runResellerPay(
     // A save-card charge may have added a card; refresh that list too.
     ref.invalidate(resellerPaymentMethodsProvider);
     messenger.showSnackBar(
-        const SnackBar(content: Text('Payment recorded — thank you.')));
+      const SnackBar(content: Text('Payment recorded — thank you.')),
+    );
     return true;
   } on ApiException catch (e) {
-    messenger
-        .showSnackBar(SnackBar(content: Text(PaymentError.from(e).message)));
+    messenger.showSnackBar(
+      SnackBar(content: Text(PaymentError.from(e).message)),
+    );
     return false;
   } catch (_) {
-    messenger.showSnackBar(const SnackBar(
-        content: Text('Something went wrong — if you were charged, the payment '
-            'will be reconciled automatically.')));
+    messenger.showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Something went wrong — if you were charged, the payment '
+          'will be reconciled automatically.',
+        ),
+      ),
+    );
     return false;
   }
 }
@@ -115,12 +126,18 @@ class _ResellerBankAccountCard extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(account.bankName,
-                      style: theme.textTheme.bodySmall
-                          ?.copyWith(color: theme.colorScheme.outline)),
-                  Text(account.accountNumber,
-                      style: theme.textTheme.titleMedium
-                          ?.copyWith(fontWeight: FontWeight.w700)),
+                  Text(
+                    account.bankName,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.outline,
+                    ),
+                  ),
+                  Text(
+                    account.accountNumber,
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
                   Text(account.accountName, style: theme.textTheme.bodyMedium),
                 ],
               ),
@@ -192,8 +209,10 @@ class _ResellerTransferSheetState
 
   Future<void> _submit() async {
     if (_netValue <= 0 || _file == null) {
-      setState(() =>
-          _error = 'Enter the amount transferred and choose a receipt image.');
+      setState(
+        () =>
+            _error = 'Enter the amount transferred and choose a receipt image.',
+      );
       return;
     }
     setState(() {
@@ -201,7 +220,9 @@ class _ResellerTransferSheetState
       _error = null;
     });
     try {
-      await ref.read(resellerRepositoryProvider).submitConsolidatedProof(
+      await ref
+          .read(resellerRepositoryProvider)
+          .submitConsolidatedProof(
             amount: _net.text.trim(),
             whtRate: _rate.text.trim(),
             bankName: _bank.text.trim(),
@@ -250,16 +271,19 @@ class _ResellerTransferSheetState
                   widget.instructions!.trim().isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(top: 4),
-                  child: Text(widget.instructions!,
-                      style: theme.textTheme.bodySmall),
+                  child: Text(
+                    widget.instructions!,
+                    style: theme.textTheme.bodySmall,
+                  ),
                 ),
               const Divider(height: 24),
             ],
             const SizedBox(height: 12),
             TextField(
               controller: _net,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
               onChanged: (_) => setState(() {}),
               decoration: const InputDecoration(
                 labelText: 'Amount transferred (NGN) *',
@@ -270,8 +294,9 @@ class _ResellerTransferSheetState
             const SizedBox(height: 8),
             TextField(
               controller: _rate,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
               onChanged: (_) => setState(() {}),
               decoration: const InputDecoration(
                 labelText: 'Withholding tax %',
@@ -284,8 +309,9 @@ class _ResellerTransferSheetState
               Text(
                 'Credited (gross): ${Fmt.money(_gross, 'NGN')}'
                 '${_wht > 0 ? '  ·  WHT receivable: ${Fmt.money(_wht, 'NGN')}' : ''}',
-                style: theme.textTheme.bodyMedium
-                    ?.copyWith(color: theme.colorScheme.primary),
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.primary,
+                ),
               ),
             ],
             const SizedBox(height: 8),
@@ -308,8 +334,9 @@ class _ResellerTransferSheetState
             OutlinedButton.icon(
               onPressed: _pick,
               icon: const Icon(Icons.photo_library_outlined, size: 18),
-              label:
-                  Text(_file == null ? 'Choose receipt image *' : _file!.name),
+              label: Text(
+                _file == null ? 'Choose receipt image *' : _file!.name,
+              ),
             ),
             if (_error != null) ...[
               const SizedBox(height: 8),
@@ -372,10 +399,13 @@ class _ResellerBillingScreenState extends ConsumerState<ResellerBillingScreen> {
     );
     if (ok == true) {
       ref.invalidate(resellerBillingProvider);
-      messenger.showSnackBar(const SnackBar(
-        content: Text(
-            'Receipt submitted — we will verify it and credit your account.'),
-      ));
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Receipt submitted — we will verify it and credit your account.',
+          ),
+        ),
+      );
     }
   }
 
@@ -420,9 +450,7 @@ class _ResellerBillingScreenState extends ConsumerState<ResellerBillingScreen> {
                               child: Text(
                                 Fmt.money(b.totalOutstanding, 'NGN'),
                                 maxLines: 1,
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .titleMedium
+                                style: Theme.of(context).textTheme.titleMedium
                                     ?.copyWith(
                                       fontWeight: FontWeight.w700,
                                       color: b.totalOutstanding > 0
@@ -432,8 +460,10 @@ class _ResellerBillingScreenState extends ConsumerState<ResellerBillingScreen> {
                               ),
                             ),
                             const SizedBox(height: 4),
-                            Text('Outstanding',
-                                style: Theme.of(context).textTheme.bodySmall),
+                            Text(
+                              'Outstanding',
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
                           ],
                         ),
                       ),
@@ -453,15 +483,15 @@ class _ResellerBillingScreenState extends ConsumerState<ResellerBillingScreen> {
                               child: Text(
                                 Fmt.money(b.unallocatedBalance, 'NGN'),
                                 maxLines: 1,
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .titleMedium
+                                style: Theme.of(context).textTheme.titleMedium
                                     ?.copyWith(fontWeight: FontWeight.w700),
                               ),
                             ),
                             const SizedBox(height: 4),
-                            Text('Unallocated credit',
-                                style: Theme.of(context).textTheme.bodySmall),
+                            Text(
+                              'Unallocated credit',
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
                           ],
                         ),
                       ),
@@ -477,24 +507,29 @@ class _ResellerBillingScreenState extends ConsumerState<ResellerBillingScreen> {
                   onPressed: _paying
                       ? null
                       : () => _pay(
-                          prefillAmount: b.totalOutstanding.toStringAsFixed(2)),
+                          prefillAmount: b.totalOutstanding.toStringAsFixed(2),
+                        ),
                   icon: const Icon(Icons.payment, size: 18),
-                  label: Text(_paying
-                      ? 'Starting payment…'
-                      : 'Pay outstanding ${Fmt.money(b.totalOutstanding, 'NGN')}'),
+                  label: Text(
+                    _paying
+                        ? 'Starting payment…'
+                        : 'Pay outstanding ${Fmt.money(b.totalOutstanding, 'NGN')}',
+                  ),
                 ),
               if (b.totalOutstanding > 0) const SizedBox(height: 8),
               OutlinedButton.icon(
                 onPressed: _paying ? null : () => _pay(),
                 icon: const Icon(Icons.payments_outlined, size: 18),
-                label:
-                    Text(_paying ? 'Starting payment…' : 'Pay another amount'),
+                label: Text(
+                  _paying ? 'Starting payment…' : 'Pay another amount',
+                ),
               ),
               const SizedBox(height: 8),
               if (b.bankTransfer.hasAccounts)
                 OutlinedButton.icon(
-                  onPressed:
-                      _paying ? null : () => _payByTransfer(b.bankTransfer),
+                  onPressed: _paying
+                      ? null
+                      : () => _payByTransfer(b.bankTransfer),
                   icon: const Icon(Icons.account_balance_outlined, size: 18),
                   label: const Text('Pay by bank transfer'),
                 ),
@@ -505,8 +540,9 @@ class _ResellerBillingScreenState extends ConsumerState<ResellerBillingScreen> {
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 16),
                   child: EmptyState(
-                      icon: Icons.payments_outlined,
-                      message: 'No payments yet'),
+                    icon: Icons.payments_outlined,
+                    message: 'No payments yet',
+                  ),
                 )
               else
                 for (final pmt in b.recentPayments)
@@ -516,23 +552,27 @@ class _ResellerBillingScreenState extends ConsumerState<ResellerBillingScreen> {
                       dense: true,
                       leading: CircleAvatar(
                         radius: 18,
-                        backgroundColor:
-                            Theme.of(context).colorScheme.primaryContainer,
+                        backgroundColor: Theme.of(
+                          context,
+                        ).colorScheme.primaryContainer,
                         child: Icon(
                           Icons.south_west,
                           size: 18,
-                          color:
-                              Theme.of(context).colorScheme.onPrimaryContainer,
+                          color: Theme.of(
+                            context,
+                          ).colorScheme.onPrimaryContainer,
                         ),
                       ),
                       title: Text(
                         Fmt.money(pmt.amount, pmt.currency),
                         style: const TextStyle(fontWeight: FontWeight.w600),
                       ),
-                      subtitle: Text([
-                        'Payment',
-                        if (pmt.method != null) pmt.method!,
-                      ].join(' · ')),
+                      subtitle: Text(
+                        [
+                          'Payment',
+                          if (pmt.method != null) pmt.method!,
+                        ].join(' · '),
+                      ),
                       trailing: pmt.receivedAt == null
                           ? null
                           : Text(

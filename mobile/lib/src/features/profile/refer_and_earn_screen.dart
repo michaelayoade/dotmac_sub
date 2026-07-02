@@ -242,7 +242,9 @@ class _ReferDialogState extends ConsumerState<_ReferDialog> {
       _error = null;
     });
     try {
-      await ref.read(referralRepositoryProvider).refer(
+      await ref
+          .read(referralRepositoryProvider)
+          .refer(
             name: _name.text.trim(),
             email: _email.text.trim(),
             phone: _phone.text.trim(),
@@ -286,8 +288,9 @@ class _ReferDialogState extends ConsumerState<_ReferDialog> {
       ),
       actions: [
         TextButton(
-          onPressed:
-              _submitting ? null : () => Navigator.of(context).pop(false),
+          onPressed: _submitting
+              ? null
+              : () => Navigator.of(context).pop(false),
           child: const Text('Cancel'),
         ),
         FilledButton(

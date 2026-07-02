@@ -20,8 +20,11 @@ class OfflineBanner extends ConsumerWidget {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         child: Row(
           children: [
-            Icon(Icons.cloud_off_outlined,
-                size: 16, color: scheme.onSecondaryContainer),
+            Icon(
+              Icons.cloud_off_outlined,
+              size: 16,
+              color: scheme.onSecondaryContainer,
+            ),
             const SizedBox(width: 8),
             Expanded(
               child: Text(

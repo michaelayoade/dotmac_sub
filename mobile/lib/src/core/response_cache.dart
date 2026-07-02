@@ -17,8 +17,8 @@ import 'observability.dart';
 /// logout / session expiry so one account never sees another's data.
 class ResponseCache {
   ResponseCache({Directory? directory, Future<Directory> Function()? openDir})
-      : _dir = directory,
-        _openDir = openDir ?? _defaultDir;
+    : _dir = directory,
+      _openDir = openDir ?? _defaultDir;
 
   final Future<Directory> Function() _openDir;
   Directory? _dir;
@@ -116,10 +116,9 @@ class CacheInterceptor extends Interceptor {
   /// Stable signature: method + path + sorted query (so param order can't fork
   /// the cache entry).
   String _key(RequestOptions o) {
-    final params = o.queryParameters.entries
-        .map((e) => '${e.key}=${e.value}')
-        .toList()
-      ..sort();
+    final params =
+        o.queryParameters.entries.map((e) => '${e.key}=${e.value}').toList()
+          ..sort();
     return 'GET ${o.path}?${params.join('&')}';
   }
 

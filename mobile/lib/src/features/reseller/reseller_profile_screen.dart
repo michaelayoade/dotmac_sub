@@ -47,7 +47,9 @@ class _ResellerProfileScreenState extends ConsumerState<ResellerProfileScreen> {
     final messenger = ScaffoldMessenger.of(context);
     setState(() => _saving = true);
     try {
-      await ref.read(resellerRepositoryProvider).updateProfile(
+      await ref
+          .read(resellerRepositoryProvider)
+          .updateProfile(
             contactEmail: _email.text,
             contactPhone: _phone.text,
             notes: _notes.text,
@@ -56,7 +58,8 @@ class _ResellerProfileScreenState extends ConsumerState<ResellerProfileScreen> {
       messenger.showSnackBar(const SnackBar(content: Text('Profile updated.')));
     } catch (_) {
       messenger.showSnackBar(
-          const SnackBar(content: Text('Could not save profile.')));
+        const SnackBar(content: Text('Could not save profile.')),
+      );
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -70,7 +73,8 @@ class _ResellerProfileScreenState extends ConsumerState<ResellerProfileScreen> {
       setup = await repo.mfaSetup();
     } catch (_) {
       messenger.showSnackBar(
-          const SnackBar(content: Text('Could not start 2FA setup.')));
+        const SnackBar(content: Text('Could not start 2FA setup.')),
+      );
       return;
     }
     if (!mounted) return;
@@ -82,7 +86,8 @@ class _ResellerProfileScreenState extends ConsumerState<ResellerProfileScreen> {
     if (ok == true) {
       ref.invalidate(resellerProfileProvider);
       messenger.showSnackBar(
-          const SnackBar(content: Text('Two-factor authentication enabled.')));
+        const SnackBar(content: Text('Two-factor authentication enabled.')),
+      );
     }
   }
 
@@ -102,8 +107,10 @@ class _ResellerProfileScreenState extends ConsumerState<ResellerProfileScreen> {
             children: [
               Text(p.name, style: Theme.of(context).textTheme.titleLarge),
               if (p.code != null)
-                Text('Code: ${p.code}',
-                    style: Theme.of(context).textTheme.bodySmall),
+                Text(
+                  'Code: ${p.code}',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
               const SizedBox(height: 16),
               TextField(
                 controller: _email,
@@ -147,12 +154,16 @@ class _ResellerProfileScreenState extends ConsumerState<ResellerProfileScreen> {
                         ? Theme.of(context).colorScheme.primary
                         : null,
                   ),
-                  title: Text(p.mfaEnabled
-                      ? 'Two-factor authentication is on'
-                      : 'Two-factor authentication is off'),
-                  subtitle: Text(p.mfaEnabled
-                      ? '${p.mfaMethods.where((m) => m.verified).length} verified method(s)'
-                      : 'Protect your reseller account with an authenticator app'),
+                  title: Text(
+                    p.mfaEnabled
+                        ? 'Two-factor authentication is on'
+                        : 'Two-factor authentication is off',
+                  ),
+                  subtitle: Text(
+                    p.mfaEnabled
+                        ? '${p.mfaMethods.where((m) => m.verified).length} verified method(s)'
+                        : 'Protect your reseller account with an authenticator app',
+                  ),
                   trailing: p.mfaEnabled
                       ? null
                       : FilledButton.tonal(
@@ -176,8 +187,9 @@ class _ResellerProfileScreenState extends ConsumerState<ResellerProfileScreen> {
                 child: ListTile(
                   leading: const Icon(Icons.contacts_outlined),
                   title: const Text('Additional contacts'),
-                  subtitle:
-                      const Text('People we can reach about your account'),
+                  subtitle: const Text(
+                    'People we can reach about your account',
+                  ),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () => context.push('/reseller/contacts'),
                 ),
@@ -209,26 +221,40 @@ class _ResellerEmailVerifiedTileState
     final messenger = ScaffoldMessenger.of(context);
     setState(() => _busy = true);
     try {
-      final sent =
-          await ref.read(authRepositoryProvider).resendVerificationEmail();
+      final sent = await ref
+          .read(authRepositoryProvider)
+          .resendVerificationEmail();
       if (sent) {
-        messenger.showSnackBar(const SnackBar(
-            content: Text('Verification email sent — check your inbox.')));
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text('Verification email sent — check your inbox.'),
+          ),
+        );
         // The verified flag lives on /me; refresh in case it just flipped.
         await ref.read(authControllerProvider.notifier).reloadProfile();
       } else {
-        messenger.showSnackBar(const SnackBar(
-            content: Text('Already verified or no email on file.')));
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text('Already verified or no email on file.'),
+          ),
+        );
       }
     } on ApiException catch (e) {
-      messenger.showSnackBar(SnackBar(
-        content: Text(e.statusCode == 429
-            ? 'Please wait a bit before trying again.'
-            : e.message),
-      ));
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            e.statusCode == 429
+                ? 'Please wait a bit before trying again.'
+                : e.message,
+          ),
+        ),
+      );
     } catch (_) {
-      messenger.showSnackBar(const SnackBar(
-          content: Text('Could not send verification email. Try again.')));
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Could not send verification email. Try again.'),
+        ),
+      );
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -262,11 +288,9 @@ class _ResellerEmailVerifiedTileState
               ? const SizedBox(
                   height: 16,
                   width: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2))
-              : TextButton(
-                  onPressed: _resend,
-                  child: const Text('Resend'),
-                ),
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : TextButton(onPressed: _resend, child: const Text('Resend')),
         ],
       ),
     );
@@ -299,10 +323,9 @@ class _MfaSetupSheetState extends ConsumerState<_MfaSetupSheet> {
       _error = null;
     });
     try {
-      await ref.read(resellerRepositoryProvider).mfaConfirm(
-            methodId: widget.setup.methodId,
-            code: _code.text.trim(),
-          );
+      await ref
+          .read(resellerRepositoryProvider)
+          .mfaConfirm(methodId: widget.setup.methodId, code: _code.text.trim());
       if (mounted) Navigator.of(context).pop(true);
     } catch (_) {
       setState(() {
@@ -326,18 +349,23 @@ class _MfaSetupSheetState extends ConsumerState<_MfaSetupSheet> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Set up two-factor authentication',
-              style: theme.textTheme.titleMedium),
+          Text(
+            'Set up two-factor authentication',
+            style: theme.textTheme.titleMedium,
+          ),
           const SizedBox(height: 8),
           const Text(
-              '1. Add this secret to your authenticator app (or open the '
-              'link).\n2. Enter the 6-digit code it shows.'),
+            '1. Add this secret to your authenticator app (or open the '
+            'link).\n2. Enter the 6-digit code it shows.',
+          ),
           const SizedBox(height: 12),
           Card(
             child: ListTile(
               dense: true,
-              title: Text(widget.setup.secret,
-                  style: const TextStyle(fontFamily: 'monospace')),
+              title: Text(
+                widget.setup.secret,
+                style: const TextStyle(fontFamily: 'monospace'),
+              ),
               trailing: IconButton(
                 icon: const Icon(Icons.copy, size: 18),
                 tooltip: 'Copy secret',
@@ -363,8 +391,9 @@ class _MfaSetupSheetState extends ConsumerState<_MfaSetupSheet> {
             mainAxisAlignment: MainAxisAlignment.end,
             children: [
               TextButton(
-                onPressed:
-                    _busy ? null : () => Navigator.of(context).pop(false),
+                onPressed: _busy
+                    ? null
+                    : () => Navigator.of(context).pop(false),
                 child: const Text('Cancel'),
               ),
               const SizedBox(width: 8),

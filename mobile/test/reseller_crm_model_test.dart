@@ -51,7 +51,7 @@ void main() {
               'account_id': 'a1',
               'id': 'q1',
               'status': 'draft',
-              'feasibility': {}
+              'feasibility': {},
             },
             'garbage',
           ],

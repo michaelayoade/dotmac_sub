@@ -16,7 +16,10 @@ void main() {
       expect(
         mid.success,
         Color.lerp(
-            SemanticColors.light.success, SemanticColors.dark.success, 0.5),
+          SemanticColors.light.success,
+          SemanticColors.dark.success,
+          0.5,
+        ),
       );
     });
 
@@ -26,26 +29,32 @@ void main() {
       expect(c.warning, SemanticColors.light.warning);
     });
 
-    testWidgets('context.semantic resolves the registered extension per theme',
-        (tester) async {
-      late SemanticColors seen;
-      Future<void> pump(ThemeMode mode) => tester.pumpWidget(MaterialApp(
+    testWidgets(
+      'context.semantic resolves the registered extension per theme',
+      (tester) async {
+        late SemanticColors seen;
+        Future<void> pump(ThemeMode mode) => tester.pumpWidget(
+          MaterialApp(
             theme: dotmacThemeFor(Brightness.light),
             darkTheme: dotmacThemeFor(Brightness.dark),
             themeMode: mode,
-            home: Builder(builder: (context) {
-              seen = context.semantic;
-              return const SizedBox();
-            }),
-          ));
+            home: Builder(
+              builder: (context) {
+                seen = context.semantic;
+                return const SizedBox();
+              },
+            ),
+          ),
+        );
 
-      await pump(ThemeMode.light);
-      await tester.pumpAndSettle();
-      expect(seen.success, SemanticColors.light.success);
+        await pump(ThemeMode.light);
+        await tester.pumpAndSettle();
+        expect(seen.success, SemanticColors.light.success);
 
-      await pump(ThemeMode.dark);
-      await tester.pumpAndSettle(); // let AnimatedTheme cross-fade complete
-      expect(seen.success, SemanticColors.dark.success);
-    });
+        await pump(ThemeMode.dark);
+        await tester.pumpAndSettle(); // let AnimatedTheme cross-fade complete
+        expect(seen.success, SemanticColors.dark.success);
+      },
+    );
   });
 }

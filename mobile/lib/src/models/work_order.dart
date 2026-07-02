@@ -32,21 +32,20 @@ class WorkOrderItem {
   final DateTime? completedAt;
 
   factory WorkOrderItem.fromJson(Map<String, dynamic> json) => WorkOrderItem(
-        id: json['id'].toString(),
-        title: (json['title'] ?? '').toString(),
-        status: (json['status'] ?? 'scheduled').toString(),
-        workType: json['work_type'] as String?,
-        priority: json['priority'] as String?,
-        technicianName: json['technician_name'] as String?,
-        technicianPhone: json['technician_phone'] as String?,
-        address: json['address'] as String?,
-        scheduledStart: _asDate(json['scheduled_start']),
-        scheduledEnd: _asDate(json['scheduled_end']),
-        estimatedArrivalAt: _asDate(json['estimated_arrival_at']),
-        estimatedDurationMinutes:
-            _asIntOrNull(json['estimated_duration_minutes']),
-        completedAt: _asDate(json['completed_at']),
-      );
+    id: json['id'].toString(),
+    title: (json['title'] ?? '').toString(),
+    status: (json['status'] ?? 'scheduled').toString(),
+    workType: json['work_type'] as String?,
+    priority: json['priority'] as String?,
+    technicianName: json['technician_name'] as String?,
+    technicianPhone: json['technician_phone'] as String?,
+    address: json['address'] as String?,
+    scheduledStart: _asDate(json['scheduled_start']),
+    scheduledEnd: _asDate(json['scheduled_end']),
+    estimatedArrivalAt: _asDate(json['estimated_arrival_at']),
+    estimatedDurationMinutes: _asIntOrNull(json['estimated_duration_minutes']),
+    completedAt: _asDate(json['completed_at']),
+  );
 }
 
 class WorkOrdersSummary {

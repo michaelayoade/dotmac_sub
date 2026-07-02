@@ -22,9 +22,9 @@ void main() {
   // signed-in user invalidates every cached provider.
   test('cacheFor refetches when the account id changes', () async {
     _builds = 0;
-    final c = ProviderContainer(overrides: [
-      accountIdProvider.overrideWith((ref) => ref.watch(_testId)),
-    ]);
+    final c = ProviderContainer(
+      overrides: [accountIdProvider.overrideWith((ref) => ref.watch(_testId))],
+    );
     addTearDown(c.dispose);
 
     c.read(_testId.notifier).state = 'user-a';

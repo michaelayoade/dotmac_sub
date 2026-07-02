@@ -18,18 +18,21 @@ Map<String, dynamic>? _asMap(dynamic v) =>
 /// A self-serve quote scoped to one of the reseller's customers. Reuses [Quote]
 /// for the quote body and adds the owning account.
 class ResellerQuote {
-  ResellerQuote(
-      {required this.accountId, this.accountName, required this.quote});
+  ResellerQuote({
+    required this.accountId,
+    this.accountName,
+    required this.quote,
+  });
 
   final String accountId;
   final String? accountName;
   final Quote quote;
 
   factory ResellerQuote.fromJson(Map<String, dynamic> json) => ResellerQuote(
-        accountId: _str(json['account_id']),
-        accountName: json['account_name'] as String?,
-        quote: Quote.fromJson(json),
-      );
+    accountId: _str(json['account_id']),
+    accountName: json['account_name'] as String?,
+    quote: Quote.fromJson(json),
+  );
 }
 
 class ResellerProject {

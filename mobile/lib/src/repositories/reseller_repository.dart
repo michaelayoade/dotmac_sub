@@ -19,10 +19,10 @@ class ResellerRepository {
   /// GET /reseller/dashboard — KPIs plus a first page of managed accounts.
   Future<ResellerDashboard> dashboard({int limit = 10, int offset = 0}) async {
     final data = await guard(
-      () => dio.get('/reseller/dashboard', queryParameters: {
-        'limit': limit,
-        'offset': offset,
-      }),
+      () => dio.get(
+        '/reseller/dashboard',
+        queryParameters: {'limit': limit, 'offset': offset},
+      ),
     );
     return ResellerDashboard.fromJson(data as Map<String, dynamic>);
   }
@@ -37,17 +37,22 @@ class ResellerRepository {
     int offset = 0,
   }) async {
     final data = await guard(
-      () => dio.get('/reseller/accounts', queryParameters: {
-        if (search != null && search.isNotEmpty) 'search': search,
-        if (status != null && status.isNotEmpty) 'status': status,
-        'order_by': orderBy,
-        'order_dir': orderDir,
-        'limit': limit,
-        'offset': offset,
-      }),
+      () => dio.get(
+        '/reseller/accounts',
+        queryParameters: {
+          if (search != null && search.isNotEmpty) 'search': search,
+          if (status != null && status.isNotEmpty) 'status': status,
+          'order_by': orderBy,
+          'order_dir': orderDir,
+          'limit': limit,
+          'offset': offset,
+        },
+      ),
     );
     return Page.fromJson(
-        data as Map<String, dynamic>, ResellerAccount.fromJson);
+      data as Map<String, dynamic>,
+      ResellerAccount.fromJson,
+    );
   }
 
   /// GET /reseller/revenue — 12-month paid revenue + outstanding totals.
@@ -74,11 +79,16 @@ class ResellerRepository {
     String? contactPhone,
     String? notes,
   }) async {
-    final data = await guard(() => dio.patch('/reseller/profile', data: {
+    final data = await guard(
+      () => dio.patch(
+        '/reseller/profile',
+        data: {
           if (contactEmail != null) 'contact_email': contactEmail,
           if (contactPhone != null) 'contact_phone': contactPhone,
           if (notes != null) 'notes': notes,
-        }));
+        },
+      ),
+    );
     return ResellerProfile.fromJson(data as Map<String, dynamic>);
   }
 
@@ -89,10 +99,16 @@ class ResellerRepository {
   }
 
   /// POST /reseller/profile/mfa/confirm — verify the first code.
-  Future<void> mfaConfirm(
-      {required String methodId, required String code}) async {
-    await guard(() => dio.post('/reseller/profile/mfa/confirm',
-        data: {'method_id': methodId, 'code': code}));
+  Future<void> mfaConfirm({
+    required String methodId,
+    required String code,
+  }) async {
+    await guard(
+      () => dio.post(
+        '/reseller/profile/mfa/confirm',
+        data: {'method_id': methodId, 'code': code},
+      ),
+    );
   }
 
   /// GET /reseller/billing — consolidated statement.
@@ -109,19 +125,27 @@ class ResellerRepository {
     String? paymentMethodId,
     bool saveCard = false,
   }) async {
-    final data =
-        await guard(() => dio.post('/reseller/billing/pay/intent', data: {
-              'amount': amount,
-              if (paymentMethodId != null) 'payment_method_id': paymentMethodId,
-              if (saveCard) 'save_card': true,
-            }));
+    final data = await guard(
+      () => dio.post(
+        '/reseller/billing/pay/intent',
+        data: {
+          'amount': amount,
+          if (paymentMethodId != null) 'payment_method_id': paymentMethodId,
+          if (saveCard) 'save_card': true,
+        },
+      ),
+    );
     return ResellerPayIntent.fromJson(data as Map<String, dynamic>);
   }
 
   /// POST /reseller/billing/pay/verify — confirm + record the charge.
   Future<void> payVerify(String reference) async {
-    await guard(() => dio
-        .post('/reseller/billing/pay/verify', data: {'reference': reference}));
+    await guard(
+      () => dio.post(
+        '/reseller/billing/pay/verify',
+        data: {'reference': reference},
+      ),
+    );
   }
 
   /// POST /payment-proofs/reseller/consolidated — upload a bulk bank-transfer
@@ -146,7 +170,8 @@ class ResellerRepository {
       'file': await MultipartFile.fromFile(filePath, filename: fileName),
     });
     await guard(
-        () => dio.post('/payment-proofs/reseller/consolidated', data: form));
+      () => dio.post('/payment-proofs/reseller/consolidated', data: form),
+    );
   }
 
   /// GET /reseller/payment-methods — the reseller's saved cards.
@@ -195,27 +220,32 @@ class ResellerRepository {
     double? longitude,
     String? notes,
   }) async {
-    final data =
-        await guard(() => dio.post('/reseller/service-requests', data: {
-              if (subscriberId != null) 'subscriber_id': subscriberId,
-              if (contactName != null && contactName.isNotEmpty)
-                'contact_name': contactName,
-              if (contactPhone != null && contactPhone.isNotEmpty)
-                'contact_phone': contactPhone,
-              if (contactEmail != null && contactEmail.isNotEmpty)
-                'contact_email': contactEmail,
-              if (address != null && address.isNotEmpty) 'address': address,
-              if (latitude != null) 'latitude': latitude,
-              if (longitude != null) 'longitude': longitude,
-              if (notes != null && notes.isNotEmpty) 'notes': notes,
-            }));
+    final data = await guard(
+      () => dio.post(
+        '/reseller/service-requests',
+        data: {
+          if (subscriberId != null) 'subscriber_id': subscriberId,
+          if (contactName != null && contactName.isNotEmpty)
+            'contact_name': contactName,
+          if (contactPhone != null && contactPhone.isNotEmpty)
+            'contact_phone': contactPhone,
+          if (contactEmail != null && contactEmail.isNotEmpty)
+            'contact_email': contactEmail,
+          if (address != null && address.isNotEmpty) 'address': address,
+          if (latitude != null) 'latitude': latitude,
+          if (longitude != null) 'longitude': longitude,
+          if (notes != null && notes.isNotEmpty) 'notes': notes,
+        },
+      ),
+    );
     return ResellerServiceRequest.fromJson(data as Map<String, dynamic>);
   }
 
   /// GET /reseller/accounts/{id}/tickets — CRM tickets for a managed account.
   Future<ResellerTicketsPage> accountTickets(String accountId) async {
-    final data =
-        await guard(() => dio.get('/reseller/accounts/$accountId/tickets'));
+    final data = await guard(
+      () => dio.get('/reseller/accounts/$accountId/tickets'),
+    );
     return ResellerTicketsPage.fromJson(data as Map<String, dynamic>);
   }
 
@@ -223,7 +253,8 @@ class ResellerRepository {
   /// customer token for "view as customer".
   Future<ResellerImpersonationGrant> impersonate(String accountId) async {
     final data = await guard(
-        () => dio.post('/reseller/accounts/$accountId/impersonate'));
+      () => dio.post('/reseller/accounts/$accountId/impersonate'),
+    );
     return ResellerImpersonationGrant.fromJson(data as Map<String, dynamic>);
   }
 
@@ -234,8 +265,10 @@ class ResellerRepository {
     int offset = 0,
   }) async {
     final data = await guard(
-      () => dio.get('/reseller/accounts/$accountId/invoices',
-          queryParameters: {'limit': limit, 'offset': offset}),
+      () => dio.get(
+        '/reseller/accounts/$accountId/invoices',
+        queryParameters: {'limit': limit, 'offset': offset},
+      ),
     );
     final items = (data as Map<String, dynamic>)['items'] as List? ?? const [];
     return items
@@ -250,21 +283,30 @@ class ResellerRepository {
   Future<List<ResellerQuote>> quotes() async {
     final data = await guard(() => dio.get('/reseller/quotes'));
     return parseResellerList(
-        data as Map<String, dynamic>, 'quotes', ResellerQuote.fromJson);
+      data as Map<String, dynamic>,
+      'quotes',
+      ResellerQuote.fromJson,
+    );
   }
 
   /// GET /reseller/projects — installations across managed customers.
   Future<List<ResellerProject>> projects() async {
     final data = await guard(() => dio.get('/reseller/projects'));
     return parseResellerList(
-        data as Map<String, dynamic>, 'projects', ResellerProject.fromJson);
+      data as Map<String, dynamic>,
+      'projects',
+      ResellerProject.fromJson,
+    );
   }
 
   /// GET /reseller/work-orders — field-service visits across managed customers.
   Future<List<ResellerWorkOrder>> workOrders() async {
     final data = await guard(() => dio.get('/reseller/work-orders'));
-    return parseResellerList(data as Map<String, dynamic>, 'work_orders',
-        ResellerWorkOrder.fromJson);
+    return parseResellerList(
+      data as Map<String, dynamic>,
+      'work_orders',
+      ResellerWorkOrder.fromJson,
+    );
   }
 
   /// POST /reseller/accounts/{id}/quote-request — request a map-pinned quote on
@@ -278,13 +320,16 @@ class ResellerRepository {
     String? note,
   }) async {
     final data = await guard(
-      () => dio.post('/reseller/accounts/$accountId/quote-request', data: {
-        'latitude': latitude,
-        'longitude': longitude,
-        if (address != null && address.isNotEmpty) 'address': address,
-        if (region != null && region.isNotEmpty) 'region': region,
-        if (note != null && note.isNotEmpty) 'note': note,
-      }),
+      () => dio.post(
+        '/reseller/accounts/$accountId/quote-request',
+        data: {
+          'latitude': latitude,
+          'longitude': longitude,
+          if (address != null && address.isNotEmpty) 'address': address,
+          if (region != null && region.isNotEmpty) 'region': region,
+          if (note != null && note.isNotEmpty) 'note': note,
+        },
+      ),
     );
     return Quote.fromJson(data as Map<String, dynamic>);
   }
@@ -312,12 +357,16 @@ extension ResellerVas on ResellerRepository {
     ];
   }
 
-  Future<String?> vasVerify(
-      {required String serviceId, required String identifier}) async {
-    final data = await guard(() => dio.post('/reseller/vas/verify', data: {
-          'service_id': serviceId,
-          'identifier': identifier,
-        }));
+  Future<String?> vasVerify({
+    required String serviceId,
+    required String identifier,
+  }) async {
+    final data = await guard(
+      () => dio.post(
+        '/reseller/vas/verify',
+        data: {'service_id': serviceId, 'identifier': identifier},
+      ),
+    );
     return (data as Map<String, dynamic>)['customer_name'] as String?;
   }
 
@@ -327,30 +376,45 @@ extension ResellerVas on ResellerRepository {
     String? variationCode,
     double? amount,
   }) async {
-    final data = await guard(() => dio.post('/reseller/vas/purchases', data: {
+    final data = await guard(
+      () => dio.post(
+        '/reseller/vas/purchases',
+        data: {
           'service_id': serviceId,
           'identifier': identifier,
           if (variationCode != null) 'variation_code': variationCode,
           if (amount != null) 'amount': amount,
-        }));
+        },
+      ),
+    );
     return data as Map<String, dynamic>;
   }
 
   Future<List<Map<String, dynamic>>> vasSales({int limit = 30}) async {
-    final data = await guard(() =>
-        dio.get('/reseller/vas/purchases', queryParameters: {'limit': limit}));
+    final data = await guard(
+      () =>
+          dio.get('/reseller/vas/purchases', queryParameters: {'limit': limit}),
+    );
     return [for (final item in (data as List)) item as Map<String, dynamic>];
   }
 
   Future<Map<String, dynamic>> vasTopupInitiate(double amount) async {
-    final data = await guard(() => dio
-        .post('/reseller/vas/wallet/topup/initiate', data: {'amount': amount}));
+    final data = await guard(
+      () => dio.post(
+        '/reseller/vas/wallet/topup/initiate',
+        data: {'amount': amount},
+      ),
+    );
     return data as Map<String, dynamic>;
   }
 
   Future<Map<String, dynamic>> vasTopupVerify(String reference) async {
-    final data = await guard(() => dio.post('/reseller/vas/wallet/topup/verify',
-        data: {'reference': reference}));
+    final data = await guard(
+      () => dio.post(
+        '/reseller/vas/wallet/topup/verify',
+        data: {'reference': reference},
+      ),
+    );
     return data as Map<String, dynamic>;
   }
 }

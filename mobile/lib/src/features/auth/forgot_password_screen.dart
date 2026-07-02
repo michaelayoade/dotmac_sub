@@ -67,8 +67,11 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(Icons.mark_email_read_outlined,
-            size: 56, color: Theme.of(context).colorScheme.primary),
+        Icon(
+          Icons.mark_email_read_outlined,
+          size: 56,
+          color: Theme.of(context).colorScheme.primary,
+        ),
         const SizedBox(height: 16),
         Text('Check your email', style: Theme.of(context).textTheme.titleLarge),
         const SizedBox(height: 8),
@@ -96,12 +99,17 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Icon(Icons.lock_reset,
-              size: 56, color: Theme.of(context).colorScheme.primary),
+          Icon(
+            Icons.lock_reset,
+            size: 56,
+            color: Theme.of(context).colorScheme.primary,
+          ),
           const SizedBox(height: 16),
-          Text('Forgot your password?',
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.titleLarge),
+          Text(
+            'Forgot your password?',
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.titleLarge,
+          ),
           const SizedBox(height: 8),
           const Text(
             'Enter your account email and we\'ll send a reset code.',
@@ -109,9 +117,11 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
           ),
           const SizedBox(height: 24),
           if (_error != null) ...[
-            Text(_error!,
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Theme.of(context).colorScheme.error)),
+            Text(
+              _error!,
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
             const SizedBox(height: 12),
           ],
           TextFormField(
@@ -133,7 +143,8 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
                 ? const SizedBox(
                     height: 20,
                     width: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2))
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
                 : const Text('Send reset code'),
           ),
           TextButton(

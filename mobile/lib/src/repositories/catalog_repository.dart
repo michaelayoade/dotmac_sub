@@ -21,12 +21,16 @@ class CatalogRepository {
     int limit = 50,
     int offset = 0,
   }) async {
-    final data =
-        await guard(() => dio.get('/me/subscriptions', queryParameters: {
-              if (status != null) 'status': status,
-              'limit': limit,
-              'offset': offset,
-            }));
+    final data = await guard(
+      () => dio.get(
+        '/me/subscriptions',
+        queryParameters: {
+          if (status != null) 'status': status,
+          'limit': limit,
+          'offset': offset,
+        },
+      ),
+    );
     return Page.fromJson(data as Map<String, dynamic>, Subscription.fromJson);
   }
 
@@ -47,34 +51,45 @@ class CatalogRepository {
   /// GET /me/subscriptions/{id}/plan-change — plans the customer can switch to.
   Future<PlanChangeOptions> planChangeOptions(String subscriptionId) async {
     final data = await guard(
-        () => dio.get('/me/subscriptions/$subscriptionId/plan-change'));
+      () => dio.get('/me/subscriptions/$subscriptionId/plan-change'),
+    );
     return PlanChangeOptions.fromJson(data as Map<String, dynamic>);
   }
 
   /// GET …/plan-change/quote — prorated quote for one target offer.
   Future<PlanChangeQuote> planChangeQuote(
-      String subscriptionId, String offerId) async {
-    final data = await guard(() => dio.get(
-          '/me/subscriptions/$subscriptionId/plan-change/quote',
-          queryParameters: {'offer_id': offerId},
-        ));
+    String subscriptionId,
+    String offerId,
+  ) async {
+    final data = await guard(
+      () => dio.get(
+        '/me/subscriptions/$subscriptionId/plan-change/quote',
+        queryParameters: {'offer_id': offerId},
+      ),
+    );
     return PlanChangeQuote.fromJson((data as Map).cast<String, dynamic>());
   }
 
   /// GET /me/subscriptions/{id}/add-ons — add-ons available + active + wallet.
   Future<AddonsAvailable> addons(String subscriptionId) async {
-    final data =
-        await guard(() => dio.get('/me/subscriptions/$subscriptionId/add-ons'));
+    final data = await guard(
+      () => dio.get('/me/subscriptions/$subscriptionId/add-ons'),
+    );
     return AddonsAvailable.fromJson(data as Map<String, dynamic>);
   }
 
   /// GET …/add-ons/quote — cost of buying an add-on vs the wallet balance.
   Future<AddonQuote> addonQuote(
-      String subscriptionId, String addOnId, int quantity) async {
-    final data = await guard(() => dio.get(
-          '/me/subscriptions/$subscriptionId/add-ons/quote',
-          queryParameters: {'add_on_id': addOnId, 'quantity': quantity},
-        ));
+    String subscriptionId,
+    String addOnId,
+    int quantity,
+  ) async {
+    final data = await guard(
+      () => dio.get(
+        '/me/subscriptions/$subscriptionId/add-ons/quote',
+        queryParameters: {'add_on_id': addOnId, 'quantity': quantity},
+      ),
+    );
     return AddonQuote.fromJson(data as Map<String, dynamic>);
   }
 
@@ -82,24 +97,31 @@ class CatalogRepository {
   /// idempotency key is built into the request so a transport-level retry
   /// (e.g. the 401-refresh replay) can't charge the wallet twice.
   Future<AddonPurchaseResult> purchaseAddon(
-      String subscriptionId, String addOnId, int quantity) async {
-    final key = 'addon-${DateTime.now().microsecondsSinceEpoch}-'
+    String subscriptionId,
+    String addOnId,
+    int quantity,
+  ) async {
+    final key =
+        'addon-${DateTime.now().microsecondsSinceEpoch}-'
         '${Random().nextInt(1 << 32)}';
-    final data = await guard(() => dio.post(
-          '/me/subscriptions/$subscriptionId/add-ons',
-          data: {
-            'add_on_id': addOnId,
-            'quantity': quantity,
-            'idempotency_key': key,
-          },
-        ));
+    final data = await guard(
+      () => dio.post(
+        '/me/subscriptions/$subscriptionId/add-ons',
+        data: {
+          'add_on_id': addOnId,
+          'quantity': quantity,
+          'idempotency_key': key,
+        },
+      ),
+    );
     return AddonPurchaseResult.fromJson(data as Map<String, dynamic>);
   }
 
   /// DELETE …/add-ons/{id} — cancel an add-on (stops billing next cycle).
   Future<void> cancelAddon(String subscriptionId, String subAddOnId) async {
-    await guard(() =>
-        dio.delete('/me/subscriptions/$subscriptionId/add-ons/$subAddOnId'));
+    await guard(
+      () => dio.delete('/me/subscriptions/$subscriptionId/add-ons/$subAddOnId'),
+    );
   }
 
   /// POST …/plan-change — submit a plan-change request.
@@ -109,13 +131,15 @@ class CatalogRepository {
     required String effectiveDate, // YYYY-MM-DD
     String? notes,
   }) async {
-    await guard(() => dio.post(
-          '/me/subscriptions/$subscriptionId/plan-change',
-          data: {
-            'offer_id': offerId,
-            'effective_date': effectiveDate,
-            if (notes != null) 'notes': notes,
-          },
-        ));
+    await guard(
+      () => dio.post(
+        '/me/subscriptions/$subscriptionId/plan-change',
+        data: {
+          'offer_id': offerId,
+          'effective_date': effectiveDate,
+          if (notes != null) 'notes': notes,
+        },
+      ),
+    );
   }
 }

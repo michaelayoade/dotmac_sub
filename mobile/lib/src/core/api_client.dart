@@ -47,10 +47,7 @@ class ApiClient {
     );
 
     _dio.interceptors.add(
-      InterceptorsWrapper(
-        onRequest: _onRequest,
-        onResponse: _onResponse,
-      ),
+      InterceptorsWrapper(onRequest: _onRequest, onResponse: _onResponse),
     );
 
     // Stale-while-revalidate fallback: serve the last good GET body when a
@@ -58,8 +55,9 @@ class ApiClient {
     // auth interceptor so a post-refresh replay that times out — now rejected as
     // a DioException — also gets served from cache. No-op when no cache wired.
     if (cache != null) {
-      _dio.interceptors
-          .add(CacheInterceptor(cache!, onCacheState: onCacheState));
+      _dio.interceptors.add(
+        CacheInterceptor(cache!, onCacheState: onCacheState),
+      );
     }
 
     // Breadcrumb every call (method + path + status only — never headers/body,
@@ -67,10 +65,7 @@ class ApiClient {
     _dio.interceptors.add(
       InterceptorsWrapper(
         onRequest: (options, handler) {
-          Log.breadcrumb(
-            '${options.method} ${options.path}',
-            category: 'http',
-          );
+          Log.breadcrumb('${options.method} ${options.path}', category: 'http');
           handler.next(options);
         },
         onResponse: (response, handler) {

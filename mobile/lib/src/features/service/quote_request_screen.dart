@@ -114,7 +114,9 @@ class _QuoteRequestScreenState extends ConsumerState<QuoteRequestScreen> {
     }
     setState(() => _submitting = true);
     try {
-      await ref.read(quotesRepositoryProvider).requestQuote(
+      await ref
+          .read(quotesRepositoryProvider)
+          .requestQuote(
             latitude: selected.latitude,
             longitude: selected.longitude,
             address: _resolvedAddress,
@@ -227,8 +229,9 @@ class _QuoteRequestScreenState extends ConsumerState<QuoteRequestScreen> {
                   ),
                   const SizedBox(height: 12),
                   FilledButton(
-                    onPressed:
-                        _submitting || _selected == null ? null : _submit,
+                    onPressed: _submitting || _selected == null
+                        ? null
+                        : _submit,
                     child: _submitting
                         ? const SizedBox(
                             width: 18,

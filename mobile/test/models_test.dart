@@ -124,17 +124,14 @@ void main() {
 
   group('Page', () {
     test('parses envelope and computes hasMore', () {
-      final page = Page.fromJson(
-        {
-          'items': [
-            {'id': 'i1', 'account_id': 'a', 'balance_due': '0', 'total': '0'},
-          ],
-          'count': 5,
-          'limit': 1,
-          'offset': 0,
-        },
-        Invoice.fromJson,
-      );
+      final page = Page.fromJson({
+        'items': [
+          {'id': 'i1', 'account_id': 'a', 'balance_due': '0', 'total': '0'},
+        ],
+        'count': 5,
+        'limit': 1,
+        'offset': 0,
+      }, Invoice.fromJson);
       expect(page.items, hasLength(1));
       expect(page.hasMore, isTrue);
     });
@@ -142,12 +139,16 @@ void main() {
 
   group('Env.resolveUrl', () {
     test('prefixes relative paths with the base url', () {
-      expect(Env.resolveUrl('/static/avatars/x.png'),
-          '${Env.apiBaseUrl}/static/avatars/x.png');
+      expect(
+        Env.resolveUrl('/static/avatars/x.png'),
+        '${Env.apiBaseUrl}/static/avatars/x.png',
+      );
     });
     test('leaves absolute urls unchanged', () {
-      expect(Env.resolveUrl('https://cdn.example.com/a.png'),
-          'https://cdn.example.com/a.png');
+      expect(
+        Env.resolveUrl('https://cdn.example.com/a.png'),
+        'https://cdn.example.com/a.png',
+      );
     });
   });
 
@@ -240,24 +241,26 @@ void main() {
       expect(s.isExpired, isTrue);
     });
 
-    test('prefers server is_expired/expires_at when the backend provides them',
-        () {
-      // Server says: active, no date expiry (prepaid lapses on balance, not
-      // next_billing_at). Client must trust it over local date math.
-      final s = Subscription.fromJson({
-        'id': 's9',
-        'account_id': 'a1',
-        'offer_id': 'o1',
-        'status': 'active',
-        'billing_mode': 'prepaid',
-        'next_billing_at': '2020-01-01T00:00:00Z',
-        'expires_at': null,
-        'is_expired': false,
-      });
-      expect(s.hasServerExpiry, isTrue);
-      expect(s.expiresAt, isNull);
-      expect(s.isExpired, isFalse);
-    });
+    test(
+      'prefers server is_expired/expires_at when the backend provides them',
+      () {
+        // Server says: active, no date expiry (prepaid lapses on balance, not
+        // next_billing_at). Client must trust it over local date math.
+        final s = Subscription.fromJson({
+          'id': 's9',
+          'account_id': 'a1',
+          'offer_id': 'o1',
+          'status': 'active',
+          'billing_mode': 'prepaid',
+          'next_billing_at': '2020-01-01T00:00:00Z',
+          'expires_at': null,
+          'is_expired': false,
+        });
+        expect(s.hasServerExpiry, isTrue);
+        expect(s.expiresAt, isNull);
+        expect(s.isExpired, isFalse);
+      },
+    );
 
     test('falls back to local logic when server fields are absent', () {
       final s = Subscription.fromJson({
@@ -270,7 +273,9 @@ void main() {
       });
       expect(s.hasServerExpiry, isFalse);
       expect(
-          s.expiresAt, isNotNull); // local fallback for older/offline backend
+        s.expiresAt,
+        isNotNull,
+      ); // local fallback for older/offline backend
       expect(s.isExpired, isFalse); // active is never expired
     });
 
@@ -281,8 +286,9 @@ void main() {
         'offer_id': 'o1',
         'status': 'active',
         'billing_mode': 'prepaid',
-        'next_billing_at':
-            DateTime.now().add(const Duration(days: 2)).toIso8601String(),
+        'next_billing_at': DateTime.now()
+            .add(const Duration(days: 2))
+            .toIso8601String(),
       });
       expect(soon.expiresSoon, isTrue);
       final postpaid = Subscription.fromJson({
@@ -291,19 +297,20 @@ void main() {
         'offer_id': 'o1',
         'status': 'active',
         'billing_mode': 'postpaid',
-        'next_billing_at':
-            DateTime.now().add(const Duration(days: 2)).toIso8601String(),
+        'next_billing_at': DateTime.now()
+            .add(const Duration(days: 2))
+            .toIso8601String(),
       });
       expect(postpaid.expiresSoon, isFalse);
     });
 
     Subscription withStatus(String status) => Subscription(
-          id: 's',
-          accountId: 'a',
-          offerId: 'o',
-          status: status,
-          billingMode: 'prepaid',
-        );
+      id: 's',
+      accountId: 'a',
+      offerId: 'o',
+      status: status,
+      billingMode: 'prepaid',
+    );
 
     test('isCurrent excludes terminal/historical statuses', () {
       for (final status in [
@@ -311,7 +318,7 @@ void main() {
         'active',
         'blocked',
         'suspended',
-        'stopped'
+        'stopped',
       ]) {
         expect(withStatus(status).isCurrent, isTrue, reason: status);
       }
@@ -320,7 +327,7 @@ void main() {
         'canceled',
         'expired',
         'hidden',
-        'archived'
+        'archived',
       ]) {
         expect(withStatus(status).isCurrent, isFalse, reason: status);
       }
@@ -398,8 +405,10 @@ void main() {
 
   group('AccountBalance', () {
     test('positive credit / negative owes', () {
-      expect(AccountBalance.fromJson({'credit_balance': '2071.49'}).inCredit,
-          isTrue);
+      expect(
+        AccountBalance.fromJson({'credit_balance': '2071.49'}).inCredit,
+        isTrue,
+      );
       expect(AccountBalance.fromJson({'credit_balance': -500}).owes, isTrue);
       final zero = AccountBalance.fromJson({'credit_balance': '0.00'});
       expect(zero.inCredit, isFalse);
@@ -419,10 +428,10 @@ void main() {
             'currency': 'NGN',
             'min_quantity': 1,
             'max_quantity': 3,
-          }
+          },
         ],
         'active': [
-          {'id': 's1', 'add_on_id': 'a1', 'name': 'Static IP', 'quantity': 2}
+          {'id': 's1', 'add_on_id': 'a1', 'name': 'Static IP', 'quantity': 2},
         ],
         'wallet_balance': '2071.49',
         'currency': 'NGN',
@@ -464,8 +473,11 @@ void main() {
     });
 
     test('falls back to brand + last4 when no label', () {
-      final c = SavedCard.fromJson(
-          {'id': 'p2', 'brand': 'mastercard', 'last4': '1234'});
+      final c = SavedCard.fromJson({
+        'id': 'p2',
+        'brand': 'mastercard',
+        'last4': '1234',
+      });
       expect(c.title, 'mastercard •••• 1234');
       expect(c.expiry, isNull);
     });
@@ -513,7 +525,7 @@ void main() {
         'status': 'active',
         'user_agent':
             'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15) AppleWebKit/537.36 '
-                '(KHTML, like Gecko) Chrome/120 Safari/537.36',
+            '(KHTML, like Gecko) Chrome/120 Safari/537.36',
       });
       expect(s.isCurrent, isFalse);
       expect(s.deviceLabel, contains('Macintosh'));
@@ -592,7 +604,7 @@ void main() {
             'billing_mode': 'prepaid',
             'usable': true,
             'reason': 'low_balance',
-          }
+          },
         ],
       });
       expect(s.isPrepaid, isTrue);
@@ -614,7 +626,7 @@ void main() {
             'billing_mode': 'postpaid',
             'usable': true,
             'reason': 'ok',
-          }
+          },
         ],
       });
       expect(s.needsRenewal, isFalse);

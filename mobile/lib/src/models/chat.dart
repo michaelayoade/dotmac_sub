@@ -16,12 +16,12 @@ class ChatSession {
   final String? conversationId;
 
   factory ChatSession.fromJson(Map<String, dynamic> j) => ChatSession(
-        sessionId: j['session_id'] as String,
-        visitorToken: j['visitor_token'] as String,
-        apiBase: j['api_base'] as String,
-        wsUrl: j['ws_url'] as String? ?? '',
-        conversationId: j['conversation_id'] as String?,
-      );
+    sessionId: j['session_id'] as String,
+    visitorToken: j['visitor_token'] as String,
+    apiBase: j['api_base'] as String,
+    wsUrl: j['ws_url'] as String? ?? '',
+    conversationId: j['conversation_id'] as String?,
+  );
 }
 
 /// Delivery state of one of OUR messages (agent messages are always [sent]).
@@ -59,18 +59,20 @@ class ChatMessage {
   /// Null until read; only meaningful for the subscriber's own messages.
   final DateTime? readAt;
 
-  ChatMessage copyWith(
-          {String? id, MessageStatus? status, DateTime? createdAt}) =>
-      ChatMessage(
-        id: id ?? this.id,
-        body: body,
-        fromAgent: fromAgent,
-        authorName: authorName,
-        authorAvatar: authorAvatar,
-        createdAt: createdAt ?? this.createdAt,
-        readAt: readAt,
-        status: status ?? this.status,
-      );
+  ChatMessage copyWith({
+    String? id,
+    MessageStatus? status,
+    DateTime? createdAt,
+  }) => ChatMessage(
+    id: id ?? this.id,
+    body: body,
+    fromAgent: fromAgent,
+    authorName: authorName,
+    authorAvatar: authorAvatar,
+    createdAt: createdAt ?? this.createdAt,
+    readAt: readAt,
+    status: status ?? this.status,
+  );
 
   static DateTime? _parseDate(Object? v) =>
       v is String ? DateTime.tryParse(v) : null;
@@ -82,30 +84,30 @@ class ChatMessage {
 
   /// From GET /session/{id}/messages (WidgetMessageRead).
   factory ChatMessage.fromHistory(Map<String, dynamic> j) => ChatMessage(
-        id: (j['id'] ?? '').toString(),
-        body: (j['body'] ?? '').toString(),
-        fromAgent: j['direction'] == 'outbound',
-        authorName: _str(j['author_name']),
-        authorAvatar: _str(j['author_avatar']),
-        createdAt: _parseDate(j['created_at']),
-        readAt: _parseDate(j['read_at']),
-      );
+    id: (j['id'] ?? '').toString(),
+    body: (j['body'] ?? '').toString(),
+    fromAgent: j['direction'] == 'outbound',
+    authorName: _str(j['author_name']),
+    authorAvatar: _str(j['author_avatar']),
+    createdAt: _parseDate(j['created_at']),
+    readAt: _parseDate(j['read_at']),
+  );
 
   /// From POST /session/{id}/message (WidgetMessageResponse) — our own message.
   factory ChatMessage.fromSendResponse(Map<String, dynamic> j) => ChatMessage(
-        id: (j['message_id'] ?? '').toString(),
-        body: (j['body'] ?? '').toString(),
-        fromAgent: false,
-        createdAt: _parseDate(j['created_at']),
-      );
+    id: (j['message_id'] ?? '').toString(),
+    body: (j['body'] ?? '').toString(),
+    fromAgent: false,
+    createdAt: _parseDate(j['created_at']),
+  );
 
   /// From a `message_new` WebSocket event (broadcast_to_widget_visitor).
   factory ChatMessage.fromSocket(Map<String, dynamic> j) => ChatMessage(
-        id: (j['message_id'] ?? j['id'] ?? '').toString(),
-        body: (j['body'] ?? '').toString(),
-        fromAgent: j['direction'] == 'outbound',
-        authorName: _str(j['author_name']),
-        authorAvatar: _str(j['author_avatar']),
-        createdAt: _parseDate(j['created_at']),
-      );
+    id: (j['message_id'] ?? j['id'] ?? '').toString(),
+    body: (j['body'] ?? '').toString(),
+    fromAgent: j['direction'] == 'outbound',
+    authorName: _str(j['author_name']),
+    authorAvatar: _str(j['author_avatar']),
+    createdAt: _parseDate(j['created_at']),
+  );
 }

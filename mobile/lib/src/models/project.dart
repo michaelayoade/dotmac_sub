@@ -14,11 +14,11 @@ class ProjectStage {
   final DateTime? completedAt;
 
   factory ProjectStage.fromJson(Map<String, dynamic> json) => ProjectStage(
-        key: json['key'] as String?,
-        title: (json['title'] ?? '').toString(),
-        status: (json['status'] ?? 'pending').toString(),
-        completedAt: _asDate(json['completed_at']),
-      );
+    key: json['key'] as String?,
+    title: (json['title'] ?? '').toString(),
+    status: (json['status'] ?? 'pending').toString(),
+    completedAt: _asDate(json['completed_at']),
+  );
 }
 
 class ProjectItem {
@@ -47,20 +47,20 @@ class ProjectItem {
   final DateTime? createdAt;
 
   factory ProjectItem.fromJson(Map<String, dynamic> json) => ProjectItem(
-        id: json['id'].toString(),
-        name: (json['name'] ?? '').toString(),
-        status: (json['status'] ?? 'open').toString(),
-        projectType: json['project_type'] as String?,
-        progressPct: _asInt(json['progress_pct']),
-        currentStage: json['current_stage'] as String?,
-        stages: ((json['stages'] as List?) ?? const [])
-            .whereType<Map<String, dynamic>>()
-            .map(ProjectStage.fromJson)
-            .toList(),
-        customerAddress: json['customer_address'] as String?,
-        region: json['region'] as String?,
-        createdAt: _asDate(json['created_at']),
-      );
+    id: json['id'].toString(),
+    name: (json['name'] ?? '').toString(),
+    status: (json['status'] ?? 'open').toString(),
+    projectType: json['project_type'] as String?,
+    progressPct: _asInt(json['progress_pct']),
+    currentStage: json['current_stage'] as String?,
+    stages: ((json['stages'] as List?) ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .map(ProjectStage.fromJson)
+        .toList(),
+    customerAddress: json['customer_address'] as String?,
+    region: json['region'] as String?,
+    createdAt: _asDate(json['created_at']),
+  );
 }
 
 class ProjectsSummary {

@@ -21,7 +21,7 @@ void main() {
               {
                 'key': 'project_plan',
                 'title': 'Project Plan',
-                'status': 'done'
+                'status': 'done',
               },
               {
                 'key': 'drop_cable_installation',

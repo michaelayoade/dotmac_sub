@@ -15,7 +15,10 @@ class ResellerPaymentMethodsScreen extends ConsumerWidget {
   const ResellerPaymentMethodsScreen({super.key});
 
   Future<void> _setDefault(
-      BuildContext context, WidgetRef ref, String id) async {
+    BuildContext context,
+    WidgetRef ref,
+    String id,
+  ) async {
     final messenger = ScaffoldMessenger.of(context);
     try {
       await ref.read(resellerRepositoryProvider).setDefaultCard(id);
@@ -26,7 +29,10 @@ class ResellerPaymentMethodsScreen extends ConsumerWidget {
   }
 
   Future<void> _remove(
-      BuildContext context, WidgetRef ref, SavedCard card) async {
+    BuildContext context,
+    WidgetRef ref,
+    SavedCard card,
+  ) async {
     final messenger = ScaffoldMessenger.of(context);
     final ok = await showDialog<bool>(
       context: context,
@@ -35,11 +41,13 @@ class ResellerPaymentMethodsScreen extends ConsumerWidget {
         content: Text('Remove ${card.title}?'),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel')),
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Remove')),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Remove'),
+          ),
         ],
       ),
     );
@@ -60,7 +68,10 @@ class ResellerPaymentMethodsScreen extends ConsumerWidget {
 
   /// Charge a saved card directly (passes payment_method_id to the intent).
   Future<void> _payWith(
-      BuildContext context, WidgetRef ref, SavedCard card) async {
+    BuildContext context,
+    WidgetRef ref,
+    SavedCard card,
+  ) async {
     await runResellerPay(context, ref, paymentMethodId: card.id);
   }
 
@@ -116,10 +127,12 @@ class ResellerPaymentMethodsScreen extends ConsumerWidget {
                     child: ListTile(
                       leading: const Icon(Icons.credit_card),
                       title: Text(c.title),
-                      subtitle: Text([
-                        if (c.expiry != null) 'Expires ${c.expiry}',
-                        if (c.isDefault) 'Default',
-                      ].join(' · ')),
+                      subtitle: Text(
+                        [
+                          if (c.expiry != null) 'Expires ${c.expiry}',
+                          if (c.isDefault) 'Default',
+                        ].join(' · '),
+                      ),
                       trailing: PopupMenuButton<String>(
                         onSelected: (v) {
                           switch (v) {
@@ -133,13 +146,18 @@ class ResellerPaymentMethodsScreen extends ConsumerWidget {
                         },
                         itemBuilder: (_) => [
                           const PopupMenuItem(
-                              value: 'pay', child: Text('Pay with this card')),
+                            value: 'pay',
+                            child: Text('Pay with this card'),
+                          ),
                           if (!c.isDefault)
                             const PopupMenuItem(
-                                value: 'default',
-                                child: Text('Set as default')),
+                              value: 'default',
+                              child: Text('Set as default'),
+                            ),
                           const PopupMenuItem(
-                              value: 'remove', child: Text('Remove')),
+                            value: 'remove',
+                            child: Text('Remove'),
+                          ),
                         ],
                       ),
                     ),

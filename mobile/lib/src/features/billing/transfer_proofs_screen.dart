@@ -174,12 +174,18 @@ class _BankAccountCard extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(account.bankName,
-                      style: theme.textTheme.bodySmall
-                          ?.copyWith(color: theme.colorScheme.outline)),
-                  Text(account.accountNumber,
-                      style: theme.textTheme.titleMedium
-                          ?.copyWith(fontWeight: FontWeight.w700)),
+                  Text(
+                    account.bankName,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.outline,
+                    ),
+                  ),
+                  Text(
+                    account.accountNumber,
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
                   Text(account.accountName, style: theme.textTheme.bodyMedium),
                 ],
               ),
@@ -251,7 +257,9 @@ class _SubmitProofSheetState extends ConsumerState<SubmitProofSheet> {
       _error = null;
     });
     try {
-      await ref.read(billingRepositoryProvider).submitPaymentProof(
+      await ref
+          .read(billingRepositoryProvider)
+          .submitPaymentProof(
             amount: _amount.text.trim(),
             bankName: _bank.text.trim(),
             reference: _reference.text.trim(),

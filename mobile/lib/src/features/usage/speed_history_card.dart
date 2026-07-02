@@ -12,7 +12,7 @@ const _ranges = <int, String>{
   6: '6h',
   24: '24h',
   168: '7d',
-  720: '30d'
+  720: '30d',
 };
 
 String _fmtBps(double bps) {
@@ -59,8 +59,9 @@ class SpeedHistoryCard extends ConsumerWidget {
                 child: Center(
                   child: Text(
                     'Speed data isn\'t available for this connection.',
-                    style: theme.textTheme.bodySmall
-                        ?.copyWith(color: theme.colorScheme.outline),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.outline,
+                    ),
                   ),
                 ),
               ),
@@ -114,12 +115,12 @@ class _SpeedBody extends StatelessWidget {
     final Duration step = hours <= 1
         ? const Duration(minutes: 15)
         : hours <= 6
-            ? const Duration(hours: 1)
-            : hours <= 24
-                ? const Duration(hours: 4)
-                : hours <= 168
-                    ? const Duration(days: 1)
-                    : const Duration(days: 5);
+        ? const Duration(hours: 1)
+        : hours <= 24
+        ? const Duration(hours: 4)
+        : hours <= 168
+        ? const Duration(days: 1)
+        : const Duration(days: 5);
 
     // First round boundary at or after the first sample.
     DateTime boundary;
@@ -128,8 +129,11 @@ class _SpeedBody extends StatelessWidget {
     } else {
       final stepMin = step.inMinutes;
       final mins = (first.hour * 60 + first.minute) ~/ stepMin * stepMin;
-      boundary = DateTime(first.year, first.month, first.day)
-          .add(Duration(minutes: mins));
+      boundary = DateTime(
+        first.year,
+        first.month,
+        first.day,
+      ).add(Duration(minutes: mins));
     }
     if (boundary.isBefore(first)) boundary = boundary.add(step);
 
@@ -156,17 +160,24 @@ class _SpeedBody extends StatelessWidget {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 24),
         child: Center(
-          child: Text('No speed data for this range',
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(color: theme.colorScheme.outline)),
+          child: Text(
+            'No speed data for this range',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.outline,
+            ),
+          ),
         ),
       );
     }
 
-    final peakDown =
-        points.fold<double>(0, (a, p) => p.downloadBps > a ? p.downloadBps : a);
-    final peakUp =
-        points.fold<double>(0, (a, p) => p.uploadBps > a ? p.uploadBps : a);
+    final peakDown = points.fold<double>(
+      0,
+      (a, p) => p.downloadBps > a ? p.downloadBps : a,
+    );
+    final peakUp = points.fold<double>(
+      0,
+      (a, p) => p.uploadBps > a ? p.uploadBps : a,
+    );
     final latest = points.last;
     final maxBps = peakDown > peakUp ? peakDown : peakUp;
 
@@ -174,19 +185,19 @@ class _SpeedBody extends StatelessWidget {
     final (double div, String unit) = maxBps >= g
         ? (g, 'Gbps')
         : maxBps >= m
-            ? (m, 'Mbps')
-            : maxBps >= k
-                ? (k, 'Kbps')
-                : (1, 'bps');
+        ? (m, 'Mbps')
+        : maxBps >= k
+        ? (k, 'Kbps')
+        : (1, 'bps');
     final maxY = maxBps <= 0 ? 1.0 : (maxBps / div) * 1.25;
     final tickLabels = _roundTicks();
     final download = theme.colorScheme.primary;
     final upload = theme.colorScheme.tertiary;
 
     List<FlSpot> spots(double Function(BandwidthPoint) sel) => [
-          for (var i = 0; i < points.length; i++)
-            FlSpot(i.toDouble(), sel(points[i]) / div)
-        ];
+      for (var i = 0; i < points.length; i++)
+        FlSpot(i.toDouble(), sel(points[i]) / div),
+    ];
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -196,10 +207,17 @@ class _SpeedBody extends StatelessWidget {
             // "Latest", not "Now": this is the most recent point in the window,
             // which may be a few minutes old — labelling it "Now" overstated it.
             Expanded(
-                child: _Stat(
-                    label: 'Latest ↓', value: _fmtBps(latest.downloadBps))),
-            Expanded(child: _Stat(label: 'Peak ↓', value: _fmtBps(peakDown))),
-            Expanded(child: _Stat(label: 'Peak ↑', value: _fmtBps(peakUp))),
+              child: _Stat(
+                label: 'Latest ↓',
+                value: _fmtBps(latest.downloadBps),
+              ),
+            ),
+            Expanded(
+              child: _Stat(label: 'Peak ↓', value: _fmtBps(peakDown)),
+            ),
+            Expanded(
+              child: _Stat(label: 'Peak ↑', value: _fmtBps(peakUp)),
+            ),
           ],
         ),
         const SizedBox(height: 16),
@@ -225,17 +243,20 @@ class _SpeedBody extends StatelessWidget {
                     return LineTooltipItem(
                       '$dir ${s.y.toStringAsFixed(1)} $unit\n$at',
                       TextStyle(
-                          color: theme.colorScheme.onInverseSurface,
-                          fontSize: 11),
+                        color: theme.colorScheme.onInverseSurface,
+                        fontSize: 11,
+                      ),
                     );
                   }).toList(),
                 ),
               ),
               titlesData: FlTitlesData(
-                topTitles:
-                    const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                rightTitles:
-                    const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                topTitles: const AxisTitles(
+                  sideTitles: SideTitles(showTitles: false),
+                ),
+                rightTitles: const AxisTitles(
+                  sideTitles: SideTitles(showTitles: false),
+                ),
                 leftTitles: AxisTitles(
                   sideTitles: SideTitles(
                     showTitles: true,
@@ -311,9 +332,12 @@ class _Stat extends StatelessWidget {
       children: [
         Text(value, style: theme.textTheme.titleMedium),
         const SizedBox(height: 2),
-        Text(label,
-            style: theme.textTheme.bodySmall
-                ?.copyWith(color: theme.colorScheme.outline)),
+        Text(
+          label,
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.outline,
+          ),
+        ),
       ],
     );
   }

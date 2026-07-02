@@ -22,12 +22,12 @@ class LoginResult {
   bool get isAuthenticated => accessToken != null && !mfaRequired;
 
   factory LoginResult.fromJson(Map<String, dynamic> json) => LoginResult(
-        accessToken: json['access_token'] as String?,
-        refreshToken: json['refresh_token'] as String?,
-        tokenType: json['token_type'] as String? ?? 'bearer',
-        mfaRequired: json['mfa_required'] as bool? ?? false,
-        mfaToken: json['mfa_token'] as String?,
-      );
+    accessToken: json['access_token'] as String?,
+    refreshToken: json['refresh_token'] as String?,
+    tokenType: json['token_type'] as String? ?? 'bearer',
+    mfaRequired: json['mfa_required'] as bool? ?? false,
+    mfaToken: json['mfa_token'] as String?,
+  );
 }
 
 /// Response from POST /auth/mfa/verify and POST /auth/refresh.
@@ -38,9 +38,9 @@ class TokenPair {
   final String? refreshToken;
 
   factory TokenPair.fromJson(Map<String, dynamic> json) => TokenPair(
-        accessToken: json['access_token'] as String,
-        refreshToken: json['refresh_token'] as String?,
-      );
+    accessToken: json['access_token'] as String,
+    refreshToken: json['refresh_token'] as String?,
+  );
 }
 
 /// Response from GET /auth/me (MeResponse).
@@ -130,55 +130,55 @@ class Me {
   /// same snake_case keys as the API so a cached blob and a fresh `/auth/me`
   /// response are interchangeable.
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'first_name': firstName,
-        'last_name': lastName,
-        'email': email,
-        'display_name': displayName,
-        'avatar_url': avatarUrl,
-        'email_verified': emailVerified,
-        'phone': phone,
-        'date_of_birth': dateOfBirth,
-        'gender': gender,
-        'preferred_contact_method': preferredContactMethod,
-        'address_line1': addressLine1,
-        'address_line2': addressLine2,
-        'city': city,
-        'region': region,
-        'postal_code': postalCode,
-        'country_code': countryCode,
-        'locale': locale,
-        'timezone': timezone,
-        'roles': roles,
-        'scopes': scopes,
-      };
+    'id': id,
+    'first_name': firstName,
+    'last_name': lastName,
+    'email': email,
+    'display_name': displayName,
+    'avatar_url': avatarUrl,
+    'email_verified': emailVerified,
+    'phone': phone,
+    'date_of_birth': dateOfBirth,
+    'gender': gender,
+    'preferred_contact_method': preferredContactMethod,
+    'address_line1': addressLine1,
+    'address_line2': addressLine2,
+    'city': city,
+    'region': region,
+    'postal_code': postalCode,
+    'country_code': countryCode,
+    'locale': locale,
+    'timezone': timezone,
+    'roles': roles,
+    'scopes': scopes,
+  };
 
   factory Me.fromJson(Map<String, dynamic> json) => Me(
-        id: json['id'].toString(),
-        firstName: json['first_name'] as String? ?? '',
-        lastName: json['last_name'] as String? ?? '',
-        email: json['email'] as String? ?? '',
-        displayName: json['display_name'] as String?,
-        avatarUrl: json['avatar_url'] as String?,
-        emailVerified: json['email_verified'] as bool? ?? false,
-        phone: json['phone'] as String?,
-        dateOfBirth: json['date_of_birth'] as String?,
-        gender: json['gender'] as String?,
-        preferredContactMethod: json['preferred_contact_method'] as String?,
-        addressLine1: json['address_line1'] as String?,
-        addressLine2: json['address_line2'] as String?,
-        city: json['city'] as String?,
-        region: json['region'] as String?,
-        postalCode: json['postal_code'] as String?,
-        countryCode: json['country_code'] as String?,
-        locale: json['locale'] as String?,
-        timezone: json['timezone'] as String?,
-        userType: json['user_type'] as String? ?? 'customer',
-        roles: (json['roles'] as List? ?? const [])
-            .map((e) => e.toString())
-            .toList(),
-        scopes: (json['scopes'] as List? ?? const [])
-            .map((e) => e.toString())
-            .toList(),
-      );
+    id: json['id'].toString(),
+    firstName: json['first_name'] as String? ?? '',
+    lastName: json['last_name'] as String? ?? '',
+    email: json['email'] as String? ?? '',
+    displayName: json['display_name'] as String?,
+    avatarUrl: json['avatar_url'] as String?,
+    emailVerified: json['email_verified'] as bool? ?? false,
+    phone: json['phone'] as String?,
+    dateOfBirth: json['date_of_birth'] as String?,
+    gender: json['gender'] as String?,
+    preferredContactMethod: json['preferred_contact_method'] as String?,
+    addressLine1: json['address_line1'] as String?,
+    addressLine2: json['address_line2'] as String?,
+    city: json['city'] as String?,
+    region: json['region'] as String?,
+    postalCode: json['postal_code'] as String?,
+    countryCode: json['country_code'] as String?,
+    locale: json['locale'] as String?,
+    timezone: json['timezone'] as String?,
+    userType: json['user_type'] as String? ?? 'customer',
+    roles: (json['roles'] as List? ?? const [])
+        .map((e) => e.toString())
+        .toList(),
+    scopes: (json['scopes'] as List? ?? const [])
+        .map((e) => e.toString())
+        .toList(),
+  );
 }

@@ -28,8 +28,9 @@ class ImpersonationController extends Notifier<ImpersonationState?> {
   ImpersonationState? build() => null;
 
   Future<ImpersonationState> start(String accountId) async {
-    final grant =
-        await ref.read(resellerRepositoryProvider).impersonate(accountId);
+    final grant = await ref
+        .read(resellerRepositoryProvider)
+        .impersonate(accountId);
     ref.read(apiClientProvider).impersonationToken = grant.accessToken;
     final s = ImpersonationState(
       customerName: grant.customerName,
@@ -55,7 +56,10 @@ class ImpersonationController extends Notifier<ImpersonationState?> {
     if (state == null) return;
     stop();
     rootNavigatorKey.currentContext?.go('/reseller');
-    ref.read(scaffoldMessengerKeyProvider).currentState?.showSnackBar(
+    ref
+        .read(scaffoldMessengerKeyProvider)
+        .currentState
+        ?.showSnackBar(
           const SnackBar(
             content: Text(
               'View-as session expired — returned to your reseller account.',
@@ -78,4 +82,5 @@ class ImpersonationController extends Notifier<ImpersonationState?> {
 
 final impersonationProvider =
     NotifierProvider<ImpersonationController, ImpersonationState?>(
-        ImpersonationController.new);
+      ImpersonationController.new,
+    );

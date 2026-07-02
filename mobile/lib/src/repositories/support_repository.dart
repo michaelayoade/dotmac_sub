@@ -20,12 +20,16 @@ class SupportRepository {
     int limit = 50,
     int offset = 0,
   }) async {
-    final data =
-        await guard(() => dio.get('/me/support/tickets', queryParameters: {
-              if (status != null) 'status': status,
-              'limit': limit,
-              'offset': offset,
-            }));
+    final data = await guard(
+      () => dio.get(
+        '/me/support/tickets',
+        queryParameters: {
+          if (status != null) 'status': status,
+          'limit': limit,
+          'offset': offset,
+        },
+      ),
+    );
     return Page.fromJson(data as Map<String, dynamic>, Ticket.fromJson);
   }
 
@@ -54,21 +58,27 @@ class SupportRepository {
       'priority': priority,
       if (ticketType != null) 'ticket_type': ticketType,
     };
-    final data = await guard(() => dio.post(
-          '/me/support/tickets',
-          data: _bodyFor(fields, attachmentPaths),
-        ));
+    final data = await guard(
+      () => dio.post(
+        '/me/support/tickets',
+        data: _bodyFor(fields, attachmentPaths),
+      ),
+    );
     return Ticket.fromJson(data as Map<String, dynamic>);
   }
 
   /// GET /me/support/tickets/{id}/comments
-  Future<Page<TicketComment>> comments(String ticketId,
-      {int limit = 100, int offset = 0}) async {
-    final data = await guard(() =>
-        dio.get('/me/support/tickets/$ticketId/comments', queryParameters: {
-          'limit': limit,
-          'offset': offset,
-        }));
+  Future<Page<TicketComment>> comments(
+    String ticketId, {
+    int limit = 100,
+    int offset = 0,
+  }) async {
+    final data = await guard(
+      () => dio.get(
+        '/me/support/tickets/$ticketId/comments',
+        queryParameters: {'limit': limit, 'offset': offset},
+      ),
+    );
     return Page.fromJson(data as Map<String, dynamic>, TicketComment.fromJson);
   }
 
@@ -80,10 +90,12 @@ class SupportRepository {
     String body, {
     List<String>? attachmentPaths,
   }) async {
-    final data = await guard(() => dio.post(
-          '/me/support/tickets/$ticketId/comments',
-          data: _bodyFor({'body': body}, attachmentPaths),
-        ));
+    final data = await guard(
+      () => dio.post(
+        '/me/support/tickets/$ticketId/comments',
+        data: _bodyFor({'body': body}, attachmentPaths),
+      ),
+    );
     return TicketComment.fromJson(data as Map<String, dynamic>);
   }
 
@@ -95,14 +107,16 @@ class SupportRepository {
     final form = FormData();
     fields.forEach((k, v) => form.fields.add(MapEntry(k, v.toString())));
     for (final path in attachmentPaths) {
-      form.files.add(MapEntry(
-        'attachments',
-        MultipartFile.fromFileSync(
-          path,
-          filename: path.split('/').last,
-          contentType: _mediaTypeFor(path),
+      form.files.add(
+        MapEntry(
+          'attachments',
+          MultipartFile.fromFileSync(
+            path,
+            filename: path.split('/').last,
+            contentType: _mediaTypeFor(path),
+          ),
         ),
-      ));
+      );
     }
     return form;
   }

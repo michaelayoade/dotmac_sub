@@ -34,10 +34,10 @@ class AuthState {
   bool get isKnown => status != AuthStatus.unknown;
 
   AuthState copyWith({AuthStatus? status, Me? me, bool? locked}) => AuthState(
-        status: status ?? this.status,
-        me: me ?? this.me,
-        locked: locked ?? this.locked,
-      );
+    status: status ?? this.status,
+    me: me ?? this.me,
+    locked: locked ?? this.locked,
+  );
 
   static const unknown = AuthState(status: AuthStatus.unknown);
   static const signedOut = AuthState(status: AuthStatus.unauthenticated);
@@ -47,8 +47,9 @@ class AuthState {
 
 final tokenStorageProvider = Provider<TokenStorage>((ref) => TokenStorage());
 
-final biometricServiceProvider =
-    Provider<BiometricService>((ref) => BiometricService());
+final biometricServiceProvider = Provider<BiometricService>(
+  (ref) => BiometricService(),
+);
 
 /// Single FCM client instance (initialised lazily on first authenticated load).
 final pushServiceProvider = Provider<PushService>((ref) => PushService());
@@ -93,10 +94,11 @@ final authRepositoryProvider = Provider<AuthRepository>((ref) {
 
 // --- Auth state controller -------------------------------------------------
 
-final authControllerProvider =
-    StateNotifierProvider<AuthController, AuthState>((ref) {
-  return AuthController(ref)..bootstrap();
-});
+final authControllerProvider = StateNotifierProvider<AuthController, AuthState>(
+  (ref) {
+    return AuthController(ref)..bootstrap();
+  },
+);
 
 /// Convenience: the signed-in user, or null.
 final currentUserProvider = Provider<Me?>((ref) {
@@ -296,7 +298,8 @@ class AuthController extends StateNotifier<AuthState> {
     _promptActive = true;
     try {
       final ok = await _biometric.authenticate(
-          reason: 'Confirm to enable biometric unlock');
+        reason: 'Confirm to enable biometric unlock',
+      );
       if (ok) {
         _biometricArmed = true;
         await _storage.setBiometricEnabled(true);
@@ -319,8 +322,11 @@ class AuthController extends StateNotifier<AuthState> {
     required String password,
     String? provider,
   }) async {
-    Log.breadcrumb('login attempt',
-        category: 'auth', data: {'provider': provider ?? 'local'});
+    Log.breadcrumb(
+      'login attempt',
+      category: 'auth',
+      data: {'provider': provider ?? 'local'},
+    );
     try {
       final result = await _repo.login(
         username: username,
@@ -335,14 +341,20 @@ class AuthController extends StateNotifier<AuthState> {
       }
       return result;
     } catch (e) {
-      Log.breadcrumb('login failed',
-          category: 'auth', level: SentryLevel.warning, data: {'error': '$e'});
+      Log.breadcrumb(
+        'login failed',
+        category: 'auth',
+        level: SentryLevel.warning,
+        data: {'error': '$e'},
+      );
       rethrow;
     }
   }
 
-  Future<void> verifyMfa(
-      {required String mfaToken, required String code}) async {
+  Future<void> verifyMfa({
+    required String mfaToken,
+    required String code,
+  }) async {
     await _repo.verifyMfa(mfaToken: mfaToken, code: code);
     await _loadMe();
     Log.breadcrumb('mfa verified', category: 'auth');
@@ -356,7 +368,8 @@ class AuthController extends StateNotifier<AuthState> {
     _biometricArmed = await _storage.isBiometricEnabled();
     state = AuthState(status: AuthStatus.authenticated, me: me);
     await Sentry.configureScope(
-        (scope) => scope.setUser(SentryUser(id: me.id)));
+      (scope) => scope.setUser(SentryUser(id: me.id)),
+    );
     // Register this device for push, best-effort and non-blocking. No-op when
     // FCM isn't configured for the build.
     unawaited(_syncPushRegistration());
@@ -378,8 +391,12 @@ class AuthController extends StateNotifier<AuthState> {
       );
       Log.breadcrumb('push: device registered', category: 'push');
     } catch (e) {
-      Log.breadcrumb('push: registration skipped',
-          category: 'push', level: SentryLevel.warning, data: {'error': '$e'});
+      Log.breadcrumb(
+        'push: registration skipped',
+        category: 'push',
+        level: SentryLevel.warning,
+        data: {'error': '$e'},
+      );
     }
   }
 
@@ -393,8 +410,11 @@ class AuthController extends StateNotifier<AuthState> {
       }
       await _push.deleteToken();
     } catch (e) {
-      Log.breadcrumb('push: unregister skipped',
-          category: 'push', data: {'error': '$e'});
+      Log.breadcrumb(
+        'push: unregister skipped',
+        category: 'push',
+        data: {'error': '$e'},
+      );
     }
   }
 

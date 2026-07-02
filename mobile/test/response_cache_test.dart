@@ -16,20 +16,19 @@ class _FakeAdapter implements HttpClientAdapter {
     RequestOptions options,
     Stream<List<int>>? requestStream,
     Future<void>? cancelFuture,
-  ) =>
-      onFetch(options);
+  ) => onFetch(options);
 
   @override
   void close({bool force = false}) {}
 }
 
 ResponseBody _json(String body, int status) => ResponseBody.fromString(
-      body,
-      status,
-      headers: {
-        Headers.contentTypeHeader: [Headers.jsonContentType],
-      },
-    );
+  body,
+  status,
+  headers: {
+    Headers.contentTypeHeader: [Headers.jsonContentType],
+  },
+);
 
 void main() {
   late Directory tmp;
@@ -48,7 +47,7 @@ void main() {
     test('write then read round-trips JSON', () async {
       await cache.write('GET /me/x', {
         'items': [
-          {'id': '1'}
+          {'id': '1'},
         ],
         'count': 1,
       });
@@ -67,49 +66,59 @@ void main() {
 
   group('CacheInterceptor', () {
     Dio buildDio(_FakeAdapter adapter) {
-      final dio = Dio(BaseOptions(
-        baseUrl: 'http://test.local/api/v1',
-        // Mirror ApiClient: 4xx come back as responses, only 5xx/transport throw.
-        validateStatus: (s) => s != null && s < 500,
-      ));
+      final dio = Dio(
+        BaseOptions(
+          baseUrl: 'http://test.local/api/v1',
+          // Mirror ApiClient: 4xx come back as responses, only 5xx/transport throw.
+          validateStatus: (s) => s != null && s < 500,
+        ),
+      );
       dio.interceptors.add(CacheInterceptor(cache));
       dio.httpClientAdapter = adapter;
       return dio;
     }
 
-    test('writes through on a successful GET, then serves it on a timeout',
-        () async {
-      var fail = false;
-      final dio = buildDio(_FakeAdapter((o) async {
-        if (fail) {
-          throw DioException(
-            requestOptions: o,
-            type: DioExceptionType.receiveTimeout,
-          );
+    test(
+      'writes through on a successful GET, then serves it on a timeout',
+      () async {
+        var fail = false;
+        final dio = buildDio(
+          _FakeAdapter((o) async {
+            if (fail) {
+              throw DioException(
+                requestOptions: o,
+                type: DioExceptionType.receiveTimeout,
+              );
+            }
+            return _json('{"count":1}', 200);
+          }),
+        );
+
+        final ok = await dio.get(
+          '/me/subscriptions',
+          queryParameters: {'limit': 50, 'offset': 0},
+        );
+        expect(ok.statusCode, 200);
+
+        // The write is fire-and-forget; wait for it to land.
+        for (var i = 0; i < 50; i++) {
+          if (await cache.read('GET /me/subscriptions?limit=50&offset=0') !=
+              null) {
+            break;
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 5));
         }
-        return _json('{"count":1}', 200);
-      }));
 
-      final ok = await dio.get('/me/subscriptions',
-          queryParameters: {'limit': 50, 'offset': 0});
-      expect(ok.statusCode, 200);
-
-      // The write is fire-and-forget; wait for it to land.
-      for (var i = 0; i < 50; i++) {
-        if (await cache.read('GET /me/subscriptions?limit=50&offset=0') !=
-            null) {
-          break;
-        }
-        await Future<void>.delayed(const Duration(milliseconds: 5));
-      }
-
-      fail = true;
-      final stale = await dio.get('/me/subscriptions',
-          queryParameters: {'limit': 50, 'offset': 0});
-      expect(stale.statusCode, 200);
-      expect(stale.data, {'count': 1});
-      expect(stale.extra['fromCache'], isTrue);
-    });
+        fail = true;
+        final stale = await dio.get(
+          '/me/subscriptions',
+          queryParameters: {'limit': 50, 'offset': 0},
+        );
+        expect(stale.statusCode, 200);
+        expect(stale.data, {'count': 1});
+        expect(stale.extra['fromCache'], isTrue);
+      },
+    );
 
     test('serves stale on a 5xx', () async {
       await cache.write('GET /me/balance?', {'balance': '10'});
@@ -123,8 +132,9 @@ void main() {
 
     test('does NOT serve stale on a 4xx (real answer must surface)', () async {
       await cache.write('GET /me/thing?', {'cached': 'true'});
-      final dio =
-          buildDio(_FakeAdapter((o) async => _json('{"detail":"no"}', 404)));
+      final dio = buildDio(
+        _FakeAdapter((o) async => _json('{"detail":"no"}', 404)),
+      );
 
       final res = await dio.get('/me/thing');
       expect(res.statusCode, 404);
@@ -132,15 +142,16 @@ void main() {
     });
 
     test('errors when nothing is cached', () async {
-      final dio = buildDio(_FakeAdapter((o) async => throw DioException(
+      final dio = buildDio(
+        _FakeAdapter(
+          (o) async => throw DioException(
             requestOptions: o,
             type: DioExceptionType.connectionError,
-          )));
-
-      await expectLater(
-        dio.get('/me/uncached'),
-        throwsA(isA<DioException>()),
+          ),
+        ),
       );
+
+      await expectLater(dio.get('/me/uncached'), throwsA(isA<DioException>()));
     });
   });
 }

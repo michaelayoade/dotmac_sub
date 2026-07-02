@@ -40,12 +40,12 @@ String? notificationRoute(AppNotification n) {
 }
 
 String _sectionLabel(String route) => switch (route) {
-      '/support/chat' => 'chat',
-      '/billing' => 'billing',
-      '/support' => 'support',
-      '/usage' => 'usage',
-      _ => 'details',
-    };
+  '/support/chat' => 'chat',
+  '/billing' => 'billing',
+  '/support' => 'support',
+  '/usage' => 'usage',
+  _ => 'details',
+};
 
 class NotificationsScreen extends ConsumerWidget {
   const NotificationsScreen({super.key});
@@ -60,13 +60,15 @@ class NotificationsScreen extends ConsumerWidget {
         title: const Text('Notifications'),
         actions: [
           if (notifications.asData != null &&
-              notifications.asData!.value.items
-                  .any((n) => !readIds.contains(n.id)))
+              notifications.asData!.value.items.any(
+                (n) => !readIds.contains(n.id),
+              ))
             TextButton(
-              onPressed: () =>
-                  ref.read(readNotificationsProvider.notifier).markAllRead(
-                        notifications.asData!.value.items.map((n) => n.id),
-                      ),
+              onPressed: () => ref
+                  .read(readNotificationsProvider.notifier)
+                  .markAllRead(
+                    notifications.asData!.value.items.map((n) => n.id),
+                  ),
               child: const Text('Mark all read'),
             ),
         ],
@@ -143,12 +145,12 @@ class _NotificationCardState extends State<_NotificationCard> {
   bool _expanded = false;
 
   IconData get _icon => switch (widget.n.channel) {
-        'email' => Icons.mail_outline,
-        'sms' => Icons.sms_outlined,
-        'push' => Icons.notifications_active_outlined,
-        'webhook' => Icons.webhook_outlined,
-        _ => Icons.notifications_none_outlined,
-      };
+    'email' => Icons.mail_outline,
+    'sms' => Icons.sms_outlined,
+    'push' => Icons.notifications_active_outlined,
+    'webhook' => Icons.webhook_outlined,
+    _ => Icons.notifications_none_outlined,
+  };
 
   void _toggle() {
     widget.onMarkRead();
@@ -178,37 +180,44 @@ class _NotificationCardState extends State<_NotificationCard> {
                   CircleAvatar(
                     radius: 18,
                     backgroundColor: theme.colorScheme.secondaryContainer,
-                    child: Icon(_icon,
-                        size: 18,
-                        color: theme.colorScheme.onSecondaryContainer),
+                    child: Icon(
+                      _icon,
+                      size: 18,
+                      color: theme.colorScheme.onSecondaryContainer,
+                    ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(n.title,
-                            style: theme.textTheme.titleSmall?.copyWith(
-                              fontWeight: widget.unread
-                                  ? FontWeight.w700
-                                  : FontWeight.w400,
-                            ),
-                            maxLines: _expanded ? null : 2,
-                            overflow: _expanded
-                                ? TextOverflow.visible
-                                : TextOverflow.ellipsis),
+                        Text(
+                          n.title,
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            fontWeight: widget.unread
+                                ? FontWeight.w700
+                                : FontWeight.w400,
+                          ),
+                          maxLines: _expanded ? null : 2,
+                          overflow: _expanded
+                              ? TextOverflow.visible
+                              : TextOverflow.ellipsis,
+                        ),
                         if (hasBody && !_expanded) ...[
                           const SizedBox(height: 4),
-                          Text(body,
-                              style: theme.textTheme.bodySmall,
-                              maxLines: 3,
-                              overflow: TextOverflow.ellipsis),
+                          Text(
+                            body,
+                            style: theme.textTheme.bodySmall,
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ],
                         const SizedBox(height: 6),
                         Text(
                           '${n.channel} · ${Fmt.dateTime(n.createdAt)}',
-                          style: theme.textTheme.labelSmall
-                              ?.copyWith(color: theme.colorScheme.outline),
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: theme.colorScheme.outline,
+                          ),
                         ),
                       ],
                     ),

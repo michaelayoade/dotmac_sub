@@ -12,8 +12,9 @@ class ContactSaveResult {
 
   factory ContactSaveResult.fromJson(Map<String, dynamic> json) =>
       ContactSaveResult(
-        contact:
-            Contact.fromJson((json['contact'] as Map).cast<String, dynamic>()),
+        contact: Contact.fromJson(
+          (json['contact'] as Map).cast<String, dynamic>(),
+        ),
         warnings: (json['warnings'] as List? ?? const [])
             .map((e) => e.toString())
             .toList(),

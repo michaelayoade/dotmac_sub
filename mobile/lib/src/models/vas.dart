@@ -7,12 +7,12 @@ class VasVariation {
   final double? amount;
 
   factory VasVariation.fromJson(Map<String, dynamic> json) => VasVariation(
-        code: json['code'] as String,
-        name: json['name'] as String? ?? json['code'] as String,
-        amount: json['amount'] != null
-            ? double.tryParse(json['amount'].toString())
-            : null,
-      );
+    code: json['code'] as String,
+    name: json['name'] as String? ?? json['code'] as String,
+    amount: json['amount'] != null
+        ? double.tryParse(json['amount'].toString())
+        : null,
+  );
 }
 
 class VasService {
@@ -35,21 +35,21 @@ class VasService {
   final List<VasVariation> variations;
 
   factory VasService.fromJson(Map<String, dynamic> json) => VasService(
-        serviceId: json['service_id'] as String,
-        name: json['name'] as String? ?? '',
-        identifierLabel: json['identifier_label'] as String? ?? 'Phone number',
-        requiresVerify: json['requires_verify'] as bool? ?? false,
-        minAmount: json['min_amount'] != null
-            ? double.tryParse(json['min_amount'].toString())
-            : null,
-        maxAmount: json['max_amount'] != null
-            ? double.tryParse(json['max_amount'].toString())
-            : null,
-        variations: [
-          for (final item in (json['variations'] as List? ?? const []))
-            VasVariation.fromJson(item as Map<String, dynamic>),
-        ],
-      );
+    serviceId: json['service_id'] as String,
+    name: json['name'] as String? ?? '',
+    identifierLabel: json['identifier_label'] as String? ?? 'Phone number',
+    requiresVerify: json['requires_verify'] as bool? ?? false,
+    minAmount: json['min_amount'] != null
+        ? double.tryParse(json['min_amount'].toString())
+        : null,
+    maxAmount: json['max_amount'] != null
+        ? double.tryParse(json['max_amount'].toString())
+        : null,
+    variations: [
+      for (final item in (json['variations'] as List? ?? const []))
+        VasVariation.fromJson(item as Map<String, dynamic>),
+    ],
+  );
 }
 
 class VasCategory {
@@ -64,12 +64,12 @@ class VasCategory {
       .join(' ');
 
   factory VasCategory.fromJson(Map<String, dynamic> json) => VasCategory(
-        category: json['category'] as String,
-        services: [
-          for (final item in (json['services'] as List? ?? const []))
-            VasService.fromJson(item as Map<String, dynamic>),
-        ],
-      );
+    category: json['category'] as String,
+    services: [
+      for (final item in (json['services'] as List? ?? const []))
+        VasService.fromJson(item as Map<String, dynamic>),
+    ],
+  );
 }
 
 class VasTransaction {
@@ -99,15 +99,15 @@ class VasTransaction {
       status == 'submitted' || status == 'debited' || status == 'pending';
 
   factory VasTransaction.fromJson(Map<String, dynamic> json) => VasTransaction(
-        id: json['id'].toString(),
-        status: json['status'] as String? ?? 'pending',
-        identifier: json['identifier'] as String? ?? '',
-        amount: double.tryParse(json['amount'].toString()) ?? 0,
-        serviceName: json['service_name'] as String?,
-        token: json['token'] as String?,
-        error: json['error'] as String?,
-        createdAt: json['created_at'] != null
-            ? DateTime.tryParse(json['created_at'] as String)
-            : null,
-      );
+    id: json['id'].toString(),
+    status: json['status'] as String? ?? 'pending',
+    identifier: json['identifier'] as String? ?? '',
+    amount: double.tryParse(json['amount'].toString()) ?? 0,
+    serviceName: json['service_name'] as String?,
+    token: json['token'] as String?,
+    error: json['error'] as String?,
+    createdAt: json['created_at'] != null
+        ? DateTime.tryParse(json['created_at'] as String)
+        : null,
+  );
 }

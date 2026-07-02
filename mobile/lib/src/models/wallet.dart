@@ -21,16 +21,16 @@ class WalletEntry {
   bool get isCredit => entryType == 'credit';
 
   factory WalletEntry.fromJson(Map<String, dynamic> json) => WalletEntry(
-        id: json['id'].toString(),
-        entryType: json['entry_type'] as String? ?? 'credit',
-        category: json['category'] as String? ?? 'adjustment',
-        amount: double.tryParse(json['amount'].toString()) ?? 0,
-        currency: json['currency'] as String? ?? 'NGN',
-        memo: json['memo'] as String?,
-        createdAt: json['created_at'] != null
-            ? DateTime.tryParse(json['created_at'] as String)
-            : null,
-      );
+    id: json['id'].toString(),
+    entryType: json['entry_type'] as String? ?? 'credit',
+    category: json['category'] as String? ?? 'adjustment',
+    amount: double.tryParse(json['amount'].toString()) ?? 0,
+    currency: json['currency'] as String? ?? 'NGN',
+    memo: json['memo'] as String?,
+    createdAt: json['created_at'] != null
+        ? DateTime.tryParse(json['created_at'] as String)
+        : null,
+  );
 }
 
 class WalletOverview {
@@ -53,17 +53,17 @@ class WalletOverview {
   final List<WalletEntry> entries;
 
   factory WalletOverview.fromJson(Map<String, dynamic> json) => WalletOverview(
-        balance: double.tryParse(json['balance'].toString()) ?? 0,
-        currency: json['currency'] as String? ?? 'NGN',
-        autoPayBillEnabled: json['auto_pay_bill_enabled'] as bool? ?? false,
-        minTopup: (json['min_topup'] as num?)?.toInt() ?? 100,
-        maxTopup: (json['max_topup'] as num?)?.toInt() ?? 50000,
-        authThreshold: (json['auth_threshold'] as num?)?.toInt() ?? 5000,
-        entries: [
-          for (final item in (json['entries'] as List? ?? const []))
-            WalletEntry.fromJson(item as Map<String, dynamic>),
-        ],
-      );
+    balance: double.tryParse(json['balance'].toString()) ?? 0,
+    currency: json['currency'] as String? ?? 'NGN',
+    autoPayBillEnabled: json['auto_pay_bill_enabled'] as bool? ?? false,
+    minTopup: (json['min_topup'] as num?)?.toInt() ?? 100,
+    maxTopup: (json['max_topup'] as num?)?.toInt() ?? 50000,
+    authThreshold: (json['auth_threshold'] as num?)?.toInt() ?? 5000,
+    entries: [
+      for (final item in (json['entries'] as List? ?? const []))
+        WalletEntry.fromJson(item as Map<String, dynamic>),
+    ],
+  );
 }
 
 class WalletTopupInitiation {

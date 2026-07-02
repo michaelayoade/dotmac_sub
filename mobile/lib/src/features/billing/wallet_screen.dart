@@ -38,8 +38,9 @@ class _WalletScreenState extends ConsumerState<WalletScreen> {
             '${Fmt.money(wallet.minTopup, wallet.currency)} – ${Fmt.money(wallet.maxTopup, wallet.currency)}',
       );
       if (amount == null) return;
-      final initiation =
-          await ref.read(walletRepositoryProvider).initiateTopup(amount);
+      final initiation = await ref
+          .read(walletRepositoryProvider)
+          .initiateTopup(amount);
       if (!mounted) return;
       final reference = await router.push<String>(
         '/pay',
@@ -54,12 +55,17 @@ class _WalletScreenState extends ConsumerState<WalletScreen> {
         ),
       );
       if (reference == null) return; // cancelled
-      final balance =
-          await ref.read(walletRepositoryProvider).verifyTopup(reference);
+      final balance = await ref
+          .read(walletRepositoryProvider)
+          .verifyTopup(reference);
       ref.invalidate(walletProvider);
-      messenger.showSnackBar(SnackBar(
+      messenger.showSnackBar(
+        SnackBar(
           content: Text(
-              'Wallet funded — balance ${Fmt.money(balance, wallet.currency)}')));
+            'Wallet funded — balance ${Fmt.money(balance, wallet.currency)}',
+          ),
+        ),
+      );
     } on ApiException catch (e) {
       if (mounted) showPaymentError(context, e, onRetry: () => _fund(wallet));
     } finally {
@@ -81,9 +87,13 @@ class _WalletScreenState extends ConsumerState<WalletScreen> {
       ref.invalidate(walletProvider);
       ref.invalidate(invoicesProvider);
       ref.invalidate(balanceProvider);
-      messenger.showSnackBar(SnackBar(
+      messenger.showSnackBar(
+        SnackBar(
           content: Text(
-              'Bill paid — wallet balance ${Fmt.money(balance, wallet.currency)}')));
+            'Bill paid — wallet balance ${Fmt.money(balance, wallet.currency)}',
+          ),
+        ),
+      );
     } on ApiException catch (e) {
       if (mounted) showPaymentError(context, e);
     } finally {
@@ -103,8 +113,10 @@ class _WalletScreenState extends ConsumerState<WalletScreen> {
     }
   }
 
-  Future<double?> _promptAmount(
-      {required String title, required String hint}) async {
+  Future<double?> _promptAmount({
+    required String title,
+    required String hint,
+  }) async {
     final controller = TextEditingController();
     final result = await showDialog<double>(
       context: context,
@@ -114,8 +126,10 @@ class _WalletScreenState extends ConsumerState<WalletScreen> {
           controller: controller,
           autofocus: true,
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          decoration:
-              InputDecoration(labelText: 'Amount (₦)', helperText: hint),
+          decoration: InputDecoration(
+            labelText: 'Amount (₦)',
+            helperText: hint,
+          ),
         ),
         actions: [
           TextButton(
@@ -128,9 +142,13 @@ class _WalletScreenState extends ConsumerState<WalletScreen> {
               final value = double.tryParse(raw);
               // Reject ≤0 and more than 2 decimal places (kobo precision).
               if (value == null || value <= 0 || !_validMoney(raw)) {
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
                     content: Text(
-                        'Enter an amount greater than 0 with at most 2 decimals.')));
+                      'Enter an amount greater than 0 with at most 2 decimals.',
+                    ),
+                  ),
+                );
                 return;
               }
               Navigator.of(context).pop(value);
@@ -192,33 +210,38 @@ class _WalletScreenState extends ConsumerState<WalletScreen> {
                   const SizedBox(height: 4),
                   Text(
                     Fmt.money(wallet.balance, wallet.currency),
-                    style: theme.textTheme.headlineMedium
-                        ?.copyWith(fontWeight: FontWeight.bold),
+                    style: theme.textTheme.headlineMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                   const SizedBox(height: 16),
-                  Row(children: [
-                    Expanded(
-                      child: FilledButton.icon(
-                        onPressed: _busy ? null : () => _fund(wallet),
-                        icon: _busy
-                            ? const SizedBox(
-                                width: 18,
-                                height: 18,
-                                child:
-                                    CircularProgressIndicator(strokeWidth: 2))
-                            : const Icon(Icons.add),
-                        label: const Text('Fund'),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: FilledButton.icon(
+                          onPressed: _busy ? null : () => _fund(wallet),
+                          icon: _busy
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.add),
+                          label: const Text('Fund'),
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: FilledButton.tonalIcon(
-                        onPressed: _busy ? null : () => _payBill(wallet),
-                        icon: const Icon(Icons.receipt_long_outlined),
-                        label: const Text('Pay bill'),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: FilledButton.tonalIcon(
+                          onPressed: _busy ? null : () => _payBill(wallet),
+                          icon: const Icon(Icons.receipt_long_outlined),
+                          label: const Text('Pay bill'),
+                        ),
                       ),
-                    ),
-                  ]),
+                    ],
+                  ),
                   // "Airtime, data & bills" (VAS) entry hidden until the VTPass
                   // bill-pay flow goes live — see /bills (PayBillsScreen).
                 ],
@@ -230,7 +253,8 @@ class _WalletScreenState extends ConsumerState<WalletScreen> {
             child: SwitchListTile(
               title: const Text('Auto-pay my DotMac bill'),
               subtitle: const Text(
-                  'Due invoices are paid from the wallet on their due date.'),
+                'Due invoices are paid from the wallet on their due date.',
+              ),
               value: wallet.autoPayBillEnabled,
               onChanged: _busy ? null : (_) => _toggleAutoPay(wallet),
             ),
@@ -242,7 +266,8 @@ class _WalletScreenState extends ConsumerState<WalletScreen> {
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 24),
               child: Center(
-                  child: Text('No activity yet — fund your wallet to begin.')),
+                child: Text('No activity yet — fund your wallet to begin.'),
+              ),
             ),
           for (final entry in wallet.entries)
             ListTile(
@@ -256,8 +281,9 @@ class _WalletScreenState extends ConsumerState<WalletScreen> {
                     ? context.semantic.success
                     : theme.colorScheme.outline,
               ),
-              title: Text(entry.memo ??
-                  entry.category.replaceAll('_', ' ').toUpperCase()),
+              title: Text(
+                entry.memo ?? entry.category.replaceAll('_', ' ').toUpperCase(),
+              ),
               subtitle: entry.createdAt != null
                   ? Text(Fmt.date(entry.createdAt!))
                   : null,

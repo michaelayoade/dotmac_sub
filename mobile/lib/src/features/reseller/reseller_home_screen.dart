@@ -40,8 +40,10 @@ class ResellerHomeScreen extends ConsumerWidget {
           data: (d) => ListView(
             padding: const EdgeInsets.all(12),
             children: [
-              Text('Welcome, $name',
-                  style: Theme.of(context).textTheme.titleMedium),
+              Text(
+                'Welcome, $name',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
               const SizedBox(height: 12),
               _Totals(totals: d.totals),
               const SizedBox(height: 12),
@@ -54,7 +56,8 @@ class ResellerHomeScreen extends ConsumerWidget {
                     dense: true,
                     leading: const Icon(Icons.confirmation_number_outlined),
                     title: Text(
-                        '${d.openTickets} open support ticket${d.openTickets == 1 ? '' : 's'}'),
+                      '${d.openTickets} open support ticket${d.openTickets == 1 ? '' : 's'}',
+                    ),
                   ),
                 ),
               ],
@@ -63,8 +66,10 @@ class ResellerHomeScreen extends ConsumerWidget {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text('Accounts',
-                      style: Theme.of(context).textTheme.titleSmall),
+                  Text(
+                    'Accounts',
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
                   TextButton(
                     onPressed: () => context.push('/reseller/accounts'),
                     child: const Text('View all'),
@@ -76,7 +81,9 @@ class ResellerHomeScreen extends ConsumerWidget {
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 24),
                   child: EmptyState(
-                      icon: Icons.people_outline, message: 'No accounts yet.'),
+                    icon: Icons.people_outline,
+                    message: 'No accounts yet.',
+                  ),
                 )
               else
                 for (final a in d.accounts) _AccountTile(account: a),
@@ -99,7 +106,7 @@ class _SectionTiles extends StatelessWidget {
     (
       Icons.add_business_outlined,
       'Service requests',
-      '/reseller/service-requests'
+      '/reseller/service-requests',
     ),
     (Icons.bolt_outlined, 'Airtime & bills', '/reseller/vas'),
     (Icons.map_outlined, 'Coverage map', '/reseller/fiber-map'),
@@ -155,7 +162,9 @@ class _Totals extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        Expanded(child: _Kpi(label: 'Accounts', value: '${totals.accounts}')),
+        Expanded(
+          child: _Kpi(label: 'Accounts', value: '${totals.accounts}'),
+        ),
         const SizedBox(width: 8),
         Expanded(
           child: _Kpi(

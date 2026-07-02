@@ -68,9 +68,7 @@ class _TicketsScreenState extends ConsumerState<TicketsScreen> {
               onSelectionChanged: (s) => setState(() => _chat = s.first),
             ),
           ),
-          Expanded(
-            child: _chat ? const ChatView() : _ticketList(tickets),
-          ),
+          Expanded(child: _chat ? const ChatView() : _ticketList(tickets)),
         ],
       ),
     );
@@ -107,8 +105,11 @@ class _TicketsScreenState extends ConsumerState<TicketsScreen> {
               return Card(
                 margin: EdgeInsets.zero,
                 child: ListTile(
-                  title: Text(t.title,
-                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                  title: Text(
+                    t.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                   subtitle: Text(
                     '${t.number ?? t.id.substring(0, 8)} · ${Fmt.date(t.createdAt)}',
                   ),

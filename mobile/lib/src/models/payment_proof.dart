@@ -31,21 +31,20 @@ class PaymentProofItem {
   final String? invoiceNumber;
   final String? accountLabel;
 
-  factory PaymentProofItem.fromJson(Map<String, dynamic> json) =>
-      PaymentProofItem(
-        id: json['id'].toString(),
-        amount: double.tryParse(json['amount'].toString()) ?? 0,
-        currency: json['currency'] as String? ?? 'NGN',
-        status: json['status'] as String? ?? 'submitted',
-        bankName: json['bank_name'] as String?,
-        reference: json['reference'] as String?,
-        reviewNotes: json['review_notes'] as String?,
-        invoiceNumber:
-            (json['invoice_number'] ?? json['invoice_id'])?.toString(),
-        accountLabel:
-            (json['account_label'] ?? json['account_name'])?.toString(),
-        createdAt: json['created_at'] == null
-            ? null
-            : DateTime.tryParse(json['created_at'].toString())?.toLocal(),
-      );
+  factory PaymentProofItem.fromJson(
+    Map<String, dynamic> json,
+  ) => PaymentProofItem(
+    id: json['id'].toString(),
+    amount: double.tryParse(json['amount'].toString()) ?? 0,
+    currency: json['currency'] as String? ?? 'NGN',
+    status: json['status'] as String? ?? 'submitted',
+    bankName: json['bank_name'] as String?,
+    reference: json['reference'] as String?,
+    reviewNotes: json['review_notes'] as String?,
+    invoiceNumber: (json['invoice_number'] ?? json['invoice_id'])?.toString(),
+    accountLabel: (json['account_label'] ?? json['account_name'])?.toString(),
+    createdAt: json['created_at'] == null
+        ? null
+        : DateTime.tryParse(json['created_at'].toString())?.toLocal(),
+  );
 }

@@ -62,11 +62,14 @@ class InvoiceDetailScreen extends ConsumerWidget {
                   const Divider(height: 1),
                   _Row('Total', Fmt.money(inv.total, inv.currency), bold: true),
                   const Divider(height: 1),
-                  _Row('Balance due', Fmt.money(inv.balanceDue, inv.currency),
-                      bold: true,
-                      color: inv.balanceDue > 0
-                          ? Theme.of(context).colorScheme.error
-                          : null),
+                  _Row(
+                    'Balance due',
+                    Fmt.money(inv.balanceDue, inv.currency),
+                    bold: true,
+                    color: inv.balanceDue > 0
+                        ? Theme.of(context).colorScheme.error
+                        : null,
+                  ),
                 ],
               ),
             ),

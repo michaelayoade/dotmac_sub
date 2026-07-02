@@ -6,8 +6,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 /// session/grant) can surface a snackbar without a [BuildContext].
 final scaffoldMessengerKeyProvider =
     Provider<GlobalKey<ScaffoldMessengerState>>(
-  (ref) => GlobalKey<ScaffoldMessengerState>(),
-);
+      (ref) => GlobalKey<ScaffoldMessengerState>(),
+    );
 
 /// True when the most recent API GET was served from the stale on-disk cache
 /// because the network failed — i.e. the app is showing last-saved data.
@@ -22,4 +22,5 @@ class OfflineController extends StateNotifier<bool> {
 }
 
 final offlineProvider = StateNotifierProvider<OfflineController, bool>(
-    (ref) => OfflineController());
+  (ref) => OfflineController(),
+);

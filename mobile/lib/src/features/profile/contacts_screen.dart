@@ -12,7 +12,10 @@ class ContactsScreen extends ConsumerWidget {
   const ContactsScreen({super.key});
 
   Future<void> _delete(
-      BuildContext context, WidgetRef ref, Contact contact) async {
+    BuildContext context,
+    WidgetRef ref,
+    Contact contact,
+  ) async {
     final messenger = ScaffoldMessenger.of(context);
     final ok = await showDialog<bool>(
       context: context,
@@ -21,11 +24,13 @@ class ContactsScreen extends ConsumerWidget {
         content: Text('Remove ${contact.displayName}?'),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel')),
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Remove')),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Remove'),
+          ),
         ],
       ),
     );
@@ -86,15 +91,17 @@ class ContactsScreen extends ConsumerWidget {
                     child: ListTile(
                       leading: const Icon(Icons.person_outline),
                       title: Text(c.displayName),
-                      subtitle: Text([
-                        ...c.channels,
+                      subtitle: Text(
                         [
-                          c.contactType,
-                          if (c.relationship != null &&
-                              c.relationship!.trim().isNotEmpty)
-                            c.relationship!.trim(),
-                        ].join(' · '),
-                      ].join('\n')),
+                          ...c.channels,
+                          [
+                            c.contactType,
+                            if (c.relationship != null &&
+                                c.relationship!.trim().isNotEmpty)
+                              c.relationship!.trim(),
+                          ].join(' · '),
+                        ].join('\n'),
+                      ),
                       isThreeLine: c.channels.isNotEmpty,
                       onTap: () => _openForm(context, existing: c),
                       trailing: PopupMenuButton<String>(
@@ -131,14 +138,17 @@ class _ContactFormSheet extends ConsumerStatefulWidget {
 }
 
 class _ContactFormSheetState extends ConsumerState<_ContactFormSheet> {
-  late final _fullName =
-      TextEditingController(text: widget.existing?.fullName ?? '');
+  late final _fullName = TextEditingController(
+    text: widget.existing?.fullName ?? '',
+  );
   late final _phone = TextEditingController(text: widget.existing?.phone ?? '');
   late final _email = TextEditingController(text: widget.existing?.email ?? '');
-  late final _whatsapp =
-      TextEditingController(text: widget.existing?.whatsapp ?? '');
-  late final _relationship =
-      TextEditingController(text: widget.existing?.relationship ?? '');
+  late final _whatsapp = TextEditingController(
+    text: widget.existing?.whatsapp ?? '',
+  );
+  late final _relationship = TextEditingController(
+    text: widget.existing?.relationship ?? '',
+  );
 
   late String _contactType = widget.existing?.contactType ?? 'general';
   late bool _isBillingContact = widget.existing?.isBillingContact ?? false;
@@ -166,8 +176,10 @@ class _ContactFormSheetState extends ConsumerState<_ContactFormSheet> {
 
   Future<void> _save() async {
     if (!_hasChannel) {
-      setState(() => _error =
-          'Add at least one way to reach them (phone, email, or WhatsApp).');
+      setState(
+        () => _error =
+            'Add at least one way to reach them (phone, email, or WhatsApp).',
+      );
       return;
     }
     final messenger = ScaffoldMessenger.of(context);
@@ -202,13 +214,17 @@ class _ContactFormSheetState extends ConsumerState<_ContactFormSheet> {
       ref.invalidate(contactsProvider);
       navigator.pop();
       if (result.warnings.isNotEmpty) {
-        messenger
-            .showSnackBar(SnackBar(content: Text(result.warnings.join('\n'))));
+        messenger.showSnackBar(
+          SnackBar(content: Text(result.warnings.join('\n'))),
+        );
       } else {
-        messenger.showSnackBar(SnackBar(
-            content: Text(widget.existing == null
-                ? 'Contact added'
-                : 'Contact updated')));
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              widget.existing == null ? 'Contact added' : 'Contact updated',
+            ),
+          ),
+        );
       }
     } on ApiException catch (e) {
       setState(() => _error = e.message);
@@ -229,12 +245,16 @@ class _ContactFormSheetState extends ConsumerState<_ContactFormSheet> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(widget.existing == null ? 'Add contact' : 'Edit contact',
-                style: Theme.of(context).textTheme.titleLarge),
+            Text(
+              widget.existing == null ? 'Add contact' : 'Edit contact',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
             const SizedBox(height: 16),
             if (_error != null) ...[
-              Text(_error!,
-                  style: TextStyle(color: Theme.of(context).colorScheme.error)),
+              Text(
+                _error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
               const SizedBox(height: 8),
             ],
             TextField(
@@ -268,7 +288,8 @@ class _ContactFormSheetState extends ConsumerState<_ContactFormSheet> {
               controller: _relationship,
               textCapitalization: TextCapitalization.words,
               decoration: const InputDecoration(
-                  labelText: 'Relationship (e.g. spouse, manager)'),
+                labelText: 'Relationship (e.g. spouse, manager)',
+              ),
             ),
             const SizedBox(height: 12),
             DropdownButtonFormField<String>(
@@ -310,7 +331,8 @@ class _ContactFormSheetState extends ConsumerState<_ContactFormSheet> {
                   ? const SizedBox(
                       height: 20,
                       width: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2))
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
                   : const Text('Save'),
             ),
           ],

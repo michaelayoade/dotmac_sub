@@ -48,21 +48,21 @@ class StatusChip extends StatelessWidget {
     // this reads correctly in both light and dark mode.
     final (Color bg, Color fg) = switch (tone) {
       StatusTone.positive => (
-          semantic.success.withValues(alpha: 0.15),
-          semantic.success
-        ),
+        semantic.success.withValues(alpha: 0.15),
+        semantic.success,
+      ),
       StatusTone.negative => (
-          scheme.error.withValues(alpha: 0.15),
-          scheme.error
-        ),
+        scheme.error.withValues(alpha: 0.15),
+        scheme.error,
+      ),
       StatusTone.warning => (
-          semantic.warning.withValues(alpha: 0.15),
-          semantic.warning
-        ),
+        semantic.warning.withValues(alpha: 0.15),
+        semantic.warning,
+      ),
       StatusTone.neutral => (
-          scheme.surfaceContainerHighest,
-          scheme.onSurfaceVariant
-        ),
+        scheme.surfaceContainerHighest,
+        scheme.onSurfaceVariant,
+      ),
     };
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),

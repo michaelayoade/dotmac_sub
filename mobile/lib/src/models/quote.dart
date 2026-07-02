@@ -50,11 +50,11 @@ class QuoteFeasibility {
   bool get outOfArea => coverage == 'out_of_area';
 
   String get label => switch (coverage) {
-        'covered' => 'Covered — fibre is nearby',
-        'survey_required' => 'Survey required',
-        'out_of_area' => 'Outside current coverage',
-        _ => 'Checking coverage…',
-      };
+    'covered' => 'Covered — fibre is nearby',
+    'survey_required' => 'Survey required',
+    'out_of_area' => 'Outside current coverage',
+    _ => 'Checking coverage…',
+  };
 
   factory QuoteFeasibility.fromJson(Map<String, dynamic>? json) {
     if (json == null) return QuoteFeasibility();
@@ -81,11 +81,11 @@ class QuoteLineItem {
   final String? amount;
 
   factory QuoteLineItem.fromJson(Map<String, dynamic> json) => QuoteLineItem(
-        description: _str(json['description']),
-        quantity: json['quantity'] as String?,
-        unitPrice: json['unit_price'] as String?,
-        amount: json['amount'] as String?,
-      );
+    description: _str(json['description']),
+    quantity: json['quantity'] as String?,
+    unitPrice: json['unit_price'] as String?,
+    amount: json['amount'] as String?,
+  );
 }
 
 class Quote {
@@ -134,37 +134,37 @@ class Quote {
       !isAccepted && !depositPaid && (double.tryParse(depositAmount) ?? 0) > 0;
 
   String get statusLabel => switch (status) {
-        'draft' => depositPaid ? 'Deposit paid' : 'Awaiting deposit',
-        'sent' => 'Awaiting deposit',
-        'accepted' => 'Accepted — installation scheduled',
-        'rejected' => 'Declined',
-        'expired' => 'Expired',
-        _ => status,
-      };
+    'draft' => depositPaid ? 'Deposit paid' : 'Awaiting deposit',
+    'sent' => 'Awaiting deposit',
+    'accepted' => 'Accepted — installation scheduled',
+    'rejected' => 'Declined',
+    'expired' => 'Expired',
+    _ => status,
+  };
 
   factory Quote.fromJson(Map<String, dynamic> json) => Quote(
-        id: _str(json['id']),
-        status: json['status'] as String? ?? 'draft',
-        currency: json['currency'] as String? ?? 'NGN',
-        total: _str(json['total'] ?? '0'),
-        depositAmount: _str(json['deposit_amount'] ?? '0'),
-        depositPercent: json['deposit_percent'] as int?,
-        depositPaid: json['deposit_paid'] as bool? ?? false,
-        estimateProvisional: json['estimate_provisional'] as bool? ?? false,
-        feasibility: QuoteFeasibility.fromJson(_asMap(json['feasibility'])),
-        address: json['address'] as String?,
-        region: json['region'] as String?,
-        latitude: _toDoubleOrNull(json['latitude']),
-        longitude: _toDoubleOrNull(json['longitude']),
-        lineItems: [
-          for (final li in (json['line_items'] as List? ?? const []))
-            if (_asMap(li) case final m?) QuoteLineItem.fromJson(m),
-        ],
-        salesOrderId: json['sales_order_id'] as String?,
-        projectId: json['project_id'] as String?,
-        createdAt: _toDate(json['created_at']),
-        expiresAt: _toDate(json['expires_at']),
-      );
+    id: _str(json['id']),
+    status: json['status'] as String? ?? 'draft',
+    currency: json['currency'] as String? ?? 'NGN',
+    total: _str(json['total'] ?? '0'),
+    depositAmount: _str(json['deposit_amount'] ?? '0'),
+    depositPercent: json['deposit_percent'] as int?,
+    depositPaid: json['deposit_paid'] as bool? ?? false,
+    estimateProvisional: json['estimate_provisional'] as bool? ?? false,
+    feasibility: QuoteFeasibility.fromJson(_asMap(json['feasibility'])),
+    address: json['address'] as String?,
+    region: json['region'] as String?,
+    latitude: _toDoubleOrNull(json['latitude']),
+    longitude: _toDoubleOrNull(json['longitude']),
+    lineItems: [
+      for (final li in (json['line_items'] as List? ?? const []))
+        if (_asMap(li) case final m?) QuoteLineItem.fromJson(m),
+    ],
+    salesOrderId: json['sales_order_id'] as String?,
+    projectId: json['project_id'] as String?,
+    createdAt: _toDate(json['created_at']),
+    expiresAt: _toDate(json['expires_at']),
+  );
 }
 
 class QuoteDepositInitiation {

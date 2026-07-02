@@ -50,12 +50,17 @@ class _LockScreenState extends ConsumerState<LockScreen> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.lock_outline,
-                    size: 64, color: theme.colorScheme.primary),
+                Icon(
+                  Icons.lock_outline,
+                  size: 64,
+                  color: theme.colorScheme.primary,
+                ),
                 const SizedBox(height: 16),
-                Text(Brand.name,
-                    textAlign: TextAlign.center,
-                    style: theme.textTheme.headlineSmall),
+                Text(
+                  Brand.name,
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.headlineSmall,
+                ),
                 const SizedBox(height: 4),
                 Text(
                   _failed
@@ -84,7 +89,7 @@ class _LockScreenState extends ConsumerState<LockScreen> {
                   onPressed: _authenticating
                       ? null
                       : () =>
-                          ref.read(authControllerProvider.notifier).logout(),
+                            ref.read(authControllerProvider.notifier).logout(),
                   child: const Text('Sign out instead'),
                 ),
               ],

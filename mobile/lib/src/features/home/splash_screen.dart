@@ -13,8 +13,11 @@ class SplashScreen extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.wifi,
-                size: 56, color: Theme.of(context).colorScheme.primary),
+            Icon(
+              Icons.wifi,
+              size: 56,
+              color: Theme.of(context).colorScheme.primary,
+            ),
             const SizedBox(height: 24),
             const CircularProgressIndicator(),
           ],

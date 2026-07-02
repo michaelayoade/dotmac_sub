@@ -94,18 +94,16 @@ class _DotMacAppState extends ConsumerState<DotMacApp>
 /// so widget tests can mount the real theme — including the [SemanticColors]
 /// extension that backs `context.semantic.success/warning` in both modes.
 ThemeData dotmacThemeFor(Brightness brightness) => ThemeData(
-      colorScheme: ColorScheme.fromSeed(
-        seedColor: Brand.primaryColor,
-        brightness: brightness,
-      ),
-      useMaterial3: true,
-      appBarTheme: const AppBarTheme(centerTitle: false),
-      inputDecorationTheme: const InputDecorationTheme(
-        border: OutlineInputBorder(),
-      ),
-      extensions: [
-        brightness == Brightness.dark
-            ? SemanticColors.dark
-            : SemanticColors.light,
-      ],
-    );
+  colorScheme: ColorScheme.fromSeed(
+    seedColor: Brand.primaryColor,
+    brightness: brightness,
+  ),
+  useMaterial3: true,
+  appBarTheme: const AppBarTheme(centerTitle: false),
+  inputDecorationTheme: const InputDecorationTheme(
+    border: OutlineInputBorder(),
+  ),
+  extensions: [
+    brightness == Brightness.dark ? SemanticColors.dark : SemanticColors.light,
+  ],
+);

@@ -33,8 +33,9 @@ class AuthSessionInfo {
       return os.isEmpty ? 'Mobile app' : 'Mobile app · $os';
     }
     if (ua.contains('Dart')) return 'Mobile app'; // legacy native sessions
-    final match = RegExp(r'(iPhone|iPad|Android|Macintosh|Windows|Linux|CrOS)')
-        .firstMatch(ua);
+    final match = RegExp(
+      r'(iPhone|iPad|Android|Macintosh|Windows|Linux|CrOS)',
+    ).firstMatch(ua);
     final os = match?.group(1);
     String browser = '';
     if (ua.contains('Edg')) {
@@ -47,8 +48,10 @@ class AuthSessionInfo {
       browser = 'Safari';
     }
     // Never render a blank row: fall back to a generic label.
-    final label =
-        [os, browser].where((e) => e != null && e.isNotEmpty).join(' · ');
+    final label = [
+      os,
+      browser,
+    ].where((e) => e != null && e.isNotEmpty).join(' · ');
     return label.isEmpty ? 'Unknown device' : label;
   }
 

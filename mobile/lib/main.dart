@@ -42,29 +42,26 @@ Future<void> main() async {
     return;
   }
 
-  runZonedGuarded(
-    () async {
-      await Sentry.init((options) {
-        options.dsn = Env.glitchtipDsn;
-        options.environment = Env.glitchtipEnvironment;
-        // Identifies app events in the shared GlitchTip project (filter by
-        // release:dotmac-mobile@* or environment:mobile-*).
-        options.release = 'dotmac-mobile@1.2.2';
-        options.sendDefaultPii = false;
-      });
+  runZonedGuarded(() async {
+    await Sentry.init((options) {
+      options.dsn = Env.glitchtipDsn;
+      options.environment = Env.glitchtipEnvironment;
+      // Identifies app events in the shared GlitchTip project (filter by
+      // release:dotmac-mobile@* or environment:mobile-*).
+      options.release = 'dotmac-mobile@1.2.2';
+      options.sendDefaultPii = false;
+    });
 
-      // Forward framework + platform errors into GlitchTip.
-      FlutterError.onError = (details) {
-        FlutterError.presentError(details);
-        Sentry.captureException(details.exception, stackTrace: details.stack);
-      };
-      PlatformDispatcher.instance.onError = (error, stack) {
-        Sentry.captureException(error, stackTrace: stack);
-        return true;
-      };
+    // Forward framework + platform errors into GlitchTip.
+    FlutterError.onError = (details) {
+      FlutterError.presentError(details);
+      Sentry.captureException(details.exception, stackTrace: details.stack);
+    };
+    PlatformDispatcher.instance.onError = (error, stack) {
+      Sentry.captureException(error, stackTrace: stack);
+      return true;
+    };
 
-      runApp(app);
-    },
-    (error, stack) => Sentry.captureException(error, stackTrace: stack),
-  );
+    runApp(app);
+  }, (error, stack) => Sentry.captureException(error, stackTrace: stack));
 }

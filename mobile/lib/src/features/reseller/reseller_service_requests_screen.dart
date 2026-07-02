@@ -32,17 +32,19 @@ class ResellerServiceRequestsScreen extends ConsumerWidget {
           if (created != null) {
             ref.invalidate(resellerServiceRequestsProvider);
             if (context.mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                content: Text(switch (created.serviceability) {
-                  'serviceable' =>
-                    'Request submitted — location is near our network'
-                        '${created.nearestPlantKm != null ? ' (${created.nearestPlantKm} km)' : ''}.',
-                  'not_serviceable' =>
-                    'Request submitted — note: location looks far from our '
-                        'network; our team will confirm.',
-                  _ => 'Request submitted.',
-                }),
-              ));
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(switch (created.serviceability) {
+                    'serviceable' =>
+                      'Request submitted — location is near our network'
+                          '${created.nearestPlantKm != null ? ' (${created.nearestPlantKm} km)' : ''}.',
+                    'not_serviceable' =>
+                      'Request submitted — note: location looks far from our '
+                          'network; our team will confirm.',
+                    _ => 'Request submitted.',
+                  }),
+                ),
+              );
             }
           }
         },
@@ -58,15 +60,19 @@ class ResellerServiceRequestsScreen extends ConsumerWidget {
           value: requests,
           onRetry: () => ref.invalidate(resellerServiceRequestsProvider),
           data: (items) => items.isEmpty
-              ? ListView(children: const [
-                  Padding(
-                    padding: EdgeInsets.symmetric(vertical: 48),
-                    child: EmptyState(
+              ? ListView(
+                  children: const [
+                    Padding(
+                      padding: EdgeInsets.symmetric(vertical: 48),
+                      child: EmptyState(
                         icon: Icons.assignment_outlined,
-                        message: 'No service requests yet — submit one '
-                            'with the button below.'),
-                  ),
-                ])
+                        message:
+                            'No service requests yet — submit one '
+                            'with the button below.',
+                      ),
+                    ),
+                  ],
+                )
               : ListView(
                   padding: const EdgeInsets.all(12),
                   children: [for (final r in items) _RequestTile(request: r)],
@@ -96,11 +102,13 @@ class _RequestTile extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 8),
       child: ListTile(
         title: Text(r.contactName ?? r.address ?? 'Service request'),
-        subtitle: Text([
-          if (r.address != null) r.address!,
-          if (r.createdAt != null) Fmt.date(r.createdAt!),
-          if (r.adminNotes != null) '“${r.adminNotes}”',
-        ].join('\n')),
+        subtitle: Text(
+          [
+            if (r.address != null) r.address!,
+            if (r.createdAt != null) Fmt.date(r.createdAt!),
+            if (r.adminNotes != null) '“${r.adminNotes}”',
+          ].join('\n'),
+        ),
         isThreeLine: r.adminNotes != null,
         trailing: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -108,14 +116,17 @@ class _RequestTile extends StatelessWidget {
           children: [
             Text(
               r.status.replaceAll('_', ' '),
-              style: theme.textTheme.labelMedium
-                  ?.copyWith(color: statusColor, fontWeight: FontWeight.w700),
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: statusColor,
+                fontWeight: FontWeight.w700,
+              ),
             ),
             if (r.serviceability != 'unknown')
               Text(
                 r.serviceability == 'serviceable' ? 'in coverage' : 'far',
-                style: theme.textTheme.labelSmall
-                    ?.copyWith(color: theme.colorScheme.outline),
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
               ),
           ],
         ),
@@ -177,10 +188,13 @@ class _NewRequestSheetState extends ConsumerState<_NewRequestSheet> {
       _mapController.move(point, 17);
     } on LocationServiceDisabledException {
       setState(
-          () => _error = 'Turn on location services to use your GPS position.');
+        () => _error = 'Turn on location services to use your GPS position.',
+      );
     } catch (_) {
-      setState(() =>
-          _error = 'Location permission is needed to use your GPS position.');
+      setState(
+        () =>
+            _error = 'Location permission is needed to use your GPS position.',
+      );
     } finally {
       if (mounted) setState(() => _locating = false);
     }
@@ -196,16 +210,17 @@ class _NewRequestSheetState extends ConsumerState<_NewRequestSheet> {
       _error = null;
     });
     try {
-      final created =
-          await ref.read(resellerRepositoryProvider).createServiceRequest(
-                contactName: _name.text.trim(),
-                contactPhone: _phone.text.trim(),
-                contactEmail: _email.text.trim(),
-                address: _address.text.trim(),
-                latitude: _pin?.latitude,
-                longitude: _pin?.longitude,
-                notes: _notes.text.trim(),
-              );
+      final created = await ref
+          .read(resellerRepositoryProvider)
+          .createServiceRequest(
+            contactName: _name.text.trim(),
+            contactPhone: _phone.text.trim(),
+            contactEmail: _email.text.trim(),
+            address: _address.text.trim(),
+            latitude: _pin?.latitude,
+            longitude: _pin?.longitude,
+            notes: _notes.text.trim(),
+          );
       if (mounted) Navigator.of(context).pop(created);
     } catch (_) {
       setState(() {
@@ -229,85 +244,106 @@ class _NewRequestSheetState extends ConsumerState<_NewRequestSheet> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Request new service',
-                style: Theme.of(context).textTheme.titleMedium),
+            Text(
+              'Request new service',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
             const SizedBox(height: 12),
             TextField(
               controller: _name,
               decoration: const InputDecoration(
-                  labelText: 'Contact name *', border: OutlineInputBorder()),
+                labelText: 'Contact name *',
+                border: OutlineInputBorder(),
+              ),
             ),
             const SizedBox(height: 8),
             TextField(
               controller: _phone,
               keyboardType: TextInputType.phone,
               decoration: const InputDecoration(
-                  labelText: 'Contact phone *', border: OutlineInputBorder()),
+                labelText: 'Contact phone *',
+                border: OutlineInputBorder(),
+              ),
             ),
             const SizedBox(height: 8),
             TextField(
               controller: _email,
               keyboardType: TextInputType.emailAddress,
               decoration: const InputDecoration(
-                  labelText: 'Contact email', border: OutlineInputBorder()),
+                labelText: 'Contact email',
+                border: OutlineInputBorder(),
+              ),
             ),
             const SizedBox(height: 8),
             TextField(
               controller: _address,
               decoration: const InputDecoration(
-                  labelText: 'Install address', border: OutlineInputBorder()),
+                labelText: 'Install address',
+                border: OutlineInputBorder(),
+              ),
             ),
             const SizedBox(height: 8),
-            Text('Tap the map to pin the install location (optional)',
-                style: Theme.of(context).textTheme.bodySmall),
+            Text(
+              'Tap the map to pin the install location (optional)',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
             const SizedBox(height: 4),
             SizedBox(
               height: 180,
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(12),
-                child: Stack(children: [
-                  FlutterMap(
-                    mapController: _mapController,
-                    options: MapOptions(
-                      initialCenter: _pin ?? const LatLng(6.5244, 3.3792),
-                      initialZoom: 11,
-                      onTap: (_, point) => setState(() => _pin = point),
-                    ),
-                    children: [
-                      TileLayer(
-                        urlTemplate:
-                            'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                        userAgentPackageName: 'io.dotmac.selfcare',
+                child: Stack(
+                  children: [
+                    FlutterMap(
+                      mapController: _mapController,
+                      options: MapOptions(
+                        initialCenter: _pin ?? const LatLng(6.5244, 3.3792),
+                        initialZoom: 11,
+                        onTap: (_, point) => setState(() => _pin = point),
                       ),
-                      if (_pin != null)
-                        MarkerLayer(markers: [
-                          Marker(
-                            point: _pin!,
-                            width: 36,
-                            height: 36,
-                            child: Icon(Icons.location_on,
-                                color: Theme.of(context).colorScheme.error,
-                                size: 32),
+                      children: [
+                        TileLayer(
+                          urlTemplate:
+                              'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                          userAgentPackageName: 'io.dotmac.selfcare',
+                        ),
+                        if (_pin != null)
+                          MarkerLayer(
+                            markers: [
+                              Marker(
+                                point: _pin!,
+                                width: 36,
+                                height: 36,
+                                child: Icon(
+                                  Icons.location_on,
+                                  color: Theme.of(context).colorScheme.error,
+                                  size: 32,
+                                ),
+                              ),
+                            ],
                           ),
-                        ]),
-                    ],
-                  ),
-                  Positioned(
-                    right: 8,
-                    bottom: 8,
-                    child: FloatingActionButton.small(
-                      heroTag: 'sr-gps',
-                      onPressed: _locating ? null : _useMyLocation,
-                      tooltip: 'Use my current location',
-                      child: _locating
-                          ? const SizedBox(
-                              height: 16,
-                              width: 16,
-                              child: CircularProgressIndicator(strokeWidth: 2))
-                          : const Icon(Icons.my_location, size: 18),
+                      ],
                     ),
-                  ),
-                ]),
+                    Positioned(
+                      right: 8,
+                      bottom: 8,
+                      child: FloatingActionButton.small(
+                        heroTag: 'sr-gps',
+                        onPressed: _locating ? null : _useMyLocation,
+                        tooltip: 'Use my current location',
+                        child: _locating
+                            ? const SizedBox(
+                                height: 16,
+                                width: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.my_location, size: 18),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
             const SizedBox(height: 8),
@@ -315,12 +351,16 @@ class _NewRequestSheetState extends ConsumerState<_NewRequestSheet> {
               controller: _notes,
               maxLines: 2,
               decoration: const InputDecoration(
-                  labelText: 'Notes', border: OutlineInputBorder()),
+                labelText: 'Notes',
+                border: OutlineInputBorder(),
+              ),
             ),
             if (_error != null) ...[
               const SizedBox(height: 8),
-              Text(_error!,
-                  style: TextStyle(color: Theme.of(context).colorScheme.error)),
+              Text(
+                _error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
             ],
             const SizedBox(height: 12),
             Row(

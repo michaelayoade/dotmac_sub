@@ -29,32 +29,38 @@ class WalletRepository {
   /// POST /me/wallet/topup/initiate
   Future<WalletTopupInitiation> initiateTopup(double amount) async {
     final data = await guard(
-        () => dio.post('/me/wallet/topup/initiate', data: {'amount': amount}));
+      () => dio.post('/me/wallet/topup/initiate', data: {'amount': amount}),
+    );
     return WalletTopupInitiation.fromJson(data as Map<String, dynamic>);
   }
 
   /// POST /me/wallet/topup/verify — returns the new balance.
   Future<double> verifyTopup(String reference) async {
-    final data = await guard(() =>
-        dio.post('/me/wallet/topup/verify', data: {'reference': reference}));
+    final data = await guard(
+      () => dio.post('/me/wallet/topup/verify', data: {'reference': reference}),
+    );
     return double.tryParse(
-            (data as Map<String, dynamic>)['balance'].toString()) ??
+          (data as Map<String, dynamic>)['balance'].toString(),
+        ) ??
         0;
   }
 
   /// POST /me/wallet/pay-bill — returns the new balance.
   Future<double> payBill(double amount) async {
     final data = await guard(
-        () => dio.post('/me/wallet/pay-bill', data: {'amount': amount}));
+      () => dio.post('/me/wallet/pay-bill', data: {'amount': amount}),
+    );
     return double.tryParse(
-            (data as Map<String, dynamic>)['balance'].toString()) ??
+          (data as Map<String, dynamic>)['balance'].toString(),
+        ) ??
         0;
   }
 
   /// PATCH /me/wallet/auto-deduct
   Future<WalletOverview> setAutoDeduct(bool enabled) async {
     final data = await guard(
-        () => dio.patch('/me/wallet/auto-deduct', data: {'enabled': enabled}));
+      () => dio.patch('/me/wallet/auto-deduct', data: {'enabled': enabled}),
+    );
     return WalletOverview.fromJson(data as Map<String, dynamic>);
   }
 }
@@ -75,10 +81,12 @@ extension VasPurchases on WalletRepository {
     required String serviceId,
     required String identifier,
   }) async {
-    final data = await guard(() => dio.post('/me/vas/verify', data: {
-          'service_id': serviceId,
-          'identifier': identifier,
-        }));
+    final data = await guard(
+      () => dio.post(
+        '/me/vas/verify',
+        data: {'service_id': serviceId, 'identifier': identifier},
+      ),
+    );
     return (data as Map<String, dynamic>)['customer_name'] as String?;
   }
 
@@ -90,20 +98,26 @@ extension VasPurchases on WalletRepository {
     double? amount,
     String? phone,
   }) async {
-    final data = await guard(() => dio.post('/me/vas/purchases', data: {
+    final data = await guard(
+      () => dio.post(
+        '/me/vas/purchases',
+        data: {
           'service_id': serviceId,
           'identifier': identifier,
           if (variationCode != null) 'variation_code': variationCode,
           if (amount != null) 'amount': amount,
           if (phone != null) 'phone': phone,
-        }));
+        },
+      ),
+    );
     return VasTransaction.fromJson(data as Map<String, dynamic>);
   }
 
   /// GET /me/vas/purchases
   Future<List<VasTransaction>> purchases({int limit = 50}) async {
     final data = await guard(
-        () => dio.get('/me/vas/purchases', queryParameters: {'limit': limit}));
+      () => dio.get('/me/vas/purchases', queryParameters: {'limit': limit}),
+    );
     return [
       for (final item in (data as List))
         VasTransaction.fromJson(item as Map<String, dynamic>),

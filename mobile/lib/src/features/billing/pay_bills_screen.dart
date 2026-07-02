@@ -66,8 +66,10 @@ class _PayBillsScreenState extends ConsumerState<PayBillsScreen> {
                   ),
                 for (final category in categories) ...[
                   const SizedBox(height: 16),
-                  Text(category.label,
-                      style: Theme.of(context).textTheme.titleMedium),
+                  Text(
+                    category.label,
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
                   const SizedBox(height: 8),
                   for (final service in category.services)
                     Card(
@@ -94,22 +96,27 @@ class _PayBillsScreenState extends ConsumerState<PayBillsScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Recent purchases',
-            style: Theme.of(context).textTheme.titleMedium),
+        Text(
+          'Recent purchases',
+          style: Theme.of(context).textTheme.titleMedium,
+        ),
         const SizedBox(height: 4),
         for (final txn in purchases.take(10))
           ListTile(
             contentPadding: EdgeInsets.zero,
             dense: true,
             title: Text('${txn.serviceName ?? 'Purchase'} · ${txn.identifier}'),
-            subtitle:
-                txn.createdAt != null ? Text(Fmt.date(txn.createdAt!)) : null,
+            subtitle: txn.createdAt != null
+                ? Text(Fmt.date(txn.createdAt!))
+                : null,
             trailing: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                Text(Fmt.money(txn.amount, 'NGN'),
-                    style: const TextStyle(fontWeight: FontWeight.w600)),
+                Text(
+                  Fmt.money(txn.amount, 'NGN'),
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
                 Text(
                   txn.status.toUpperCase(),
                   style: TextStyle(
@@ -118,8 +125,8 @@ class _PayBillsScreenState extends ConsumerState<PayBillsScreen> {
                     color: txn.isDelivered
                         ? context.semantic.success
                         : txn.isRefunded
-                            ? Theme.of(context).colorScheme.error
-                            : context.semantic.warning,
+                        ? Theme.of(context).colorScheme.error
+                        : context.semantic.warning,
                   ),
                 ),
               ],
@@ -150,48 +157,59 @@ class _PayBillsScreenState extends ConsumerState<PayBillsScreen> {
           txn.isDelivered
               ? Icons.check_circle
               : txn.isRefunded
-                  ? Icons.cancel
-                  : Icons.hourglass_top,
+              ? Icons.cancel
+              : Icons.hourglass_top,
           color: txn.isDelivered
               ? context.semantic.success
               : txn.isRefunded
-                  ? Theme.of(context).colorScheme.error
-                  : context.semantic.warning,
+              ? Theme.of(context).colorScheme.error
+              : context.semantic.warning,
           size: 40,
         ),
-        title: Text(txn.isDelivered
-            ? 'Delivered'
-            : txn.isRefunded
-                ? 'Not delivered'
-                : 'Processing'),
+        title: Text(
+          txn.isDelivered
+              ? 'Delivered'
+              : txn.isRefunded
+              ? 'Not delivered'
+              : 'Processing',
+        ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text('${txn.serviceName ?? 'Purchase'} · ${txn.identifier}'),
             const SizedBox(height: 4),
-            Text(Fmt.money(txn.amount, 'NGN'),
-                style: const TextStyle(fontWeight: FontWeight.bold)),
+            Text(
+              Fmt.money(txn.amount, 'NGN'),
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
             if (txn.isRefunded) ...[
               const SizedBox(height: 8),
-              Text('The money is back in your wallet.',
-                  style: TextStyle(color: context.semantic.success)),
+              Text(
+                'The money is back in your wallet.',
+                style: TextStyle(color: context.semantic.success),
+              ),
             ],
             if (txn.isProcessing) ...[
               const SizedBox(height: 8),
-              const Text('This can take a few minutes — we keep checking and '
-                  'refund automatically if it fails.'),
+              const Text(
+                'This can take a few minutes — we keep checking and '
+                'refund automatically if it fails.',
+              ),
             ],
             if (txn.token != null) ...[
               const SizedBox(height: 12),
-              const Text('Token / PIN',
-                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+              const Text(
+                'Token / PIN',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+              ),
               SelectableText(
                 txn.token!,
                 style: const TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold),
+                  fontFamily: 'monospace',
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ],
           ],
@@ -252,7 +270,9 @@ class _PurchaseSheetState extends ConsumerState<_PurchaseSheet> {
       _verifiedName = null;
     });
     try {
-      final name = await ref.read(walletRepositoryProvider).verifyIdentifier(
+      final name = await ref
+          .read(walletRepositoryProvider)
+          .verifyIdentifier(
             serviceId: widget.service.serviceId,
             identifier: _identifier.text.trim(),
           );
@@ -280,8 +300,10 @@ class _PurchaseSheetState extends ConsumerState<_PurchaseSheet> {
     }
     final wallet = ref.read(walletProvider).asData?.value;
     if (wallet != null && amount > wallet.balance) {
-      setState(() => _error =
-          'Amount exceeds your wallet balance (${Fmt.money(wallet.balance, wallet.currency)}). Fund your wallet first.');
+      setState(
+        () => _error =
+            'Amount exceeds your wallet balance (${Fmt.money(wallet.balance, wallet.currency)}). Fund your wallet first.',
+      );
       return;
     }
     if (widget.service.requiresVerify && _verifiedName == null) {
@@ -290,9 +312,12 @@ class _PurchaseSheetState extends ConsumerState<_PurchaseSheet> {
     }
     final threshold = wallet?.authThreshold ?? 5000;
     if (amount >= threshold) {
-      final approved = await ref.read(biometricServiceProvider).authenticate(
-          reason:
-              'Confirm payment of ${Fmt.money(amount, 'NGN')} from your wallet');
+      final approved = await ref
+          .read(biometricServiceProvider)
+          .authenticate(
+            reason:
+                'Confirm payment of ${Fmt.money(amount, 'NGN')} from your wallet',
+          );
       if (!approved) return;
     }
     setState(() {
@@ -300,7 +325,9 @@ class _PurchaseSheetState extends ConsumerState<_PurchaseSheet> {
       _error = null;
     });
     try {
-      final txn = await ref.read(walletRepositoryProvider).purchase(
+      final txn = await ref
+          .read(walletRepositoryProvider)
+          .purchase(
             serviceId: widget.service.serviceId,
             identifier: _identifier.text.trim(),
             variationCode: _variation?.code,
@@ -333,17 +360,19 @@ class _PurchaseSheetState extends ConsumerState<_PurchaseSheet> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(service.name, style: Theme.of(context).textTheme.titleMedium),
-            Builder(builder: (context) {
-              final wallet = ref.watch(walletProvider).asData?.value;
-              if (wallet == null) return const SizedBox.shrink();
-              return Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Text(
-                  'Wallet balance: ${Fmt.money(wallet.balance, wallet.currency)}',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              );
-            }),
+            Builder(
+              builder: (context) {
+                final wallet = ref.watch(walletProvider).asData?.value;
+                if (wallet == null) return const SizedBox.shrink();
+                return Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    'Wallet balance: ${Fmt.money(wallet.balance, wallet.currency)}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                );
+              },
+            ),
             const SizedBox(height: 12),
             TextField(
               controller: _identifier,
@@ -362,17 +391,22 @@ class _PurchaseSheetState extends ConsumerState<_PurchaseSheet> {
             if (_verifiedName != null)
               Padding(
                 padding: const EdgeInsets.only(top: 6),
-                child: Text(_verifiedName!,
-                    style: TextStyle(
-                        color: context.semantic.success,
-                        fontWeight: FontWeight.w600)),
+                child: Text(
+                  _verifiedName!,
+                  style: TextStyle(
+                    color: context.semantic.success,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ),
             if (service.variations.isNotEmpty) ...[
               const SizedBox(height: 12),
               DropdownButtonFormField<VasVariation>(
                 initialValue: _variation,
                 decoration: const InputDecoration(
-                    labelText: 'Plan', border: OutlineInputBorder()),
+                  labelText: 'Plan',
+                  border: OutlineInputBorder(),
+                ),
                 items: [
                   for (final variation in service.variations)
                     DropdownMenuItem(
@@ -392,18 +426,22 @@ class _PurchaseSheetState extends ConsumerState<_PurchaseSheet> {
               const SizedBox(height: 12),
               TextField(
                 controller: _amount,
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
                 decoration: const InputDecoration(
-                    labelText: 'Amount (₦)', border: OutlineInputBorder()),
+                  labelText: 'Amount (₦)',
+                  border: OutlineInputBorder(),
+                ),
               ),
             ],
             if (_error != null)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
-                child: Text(_error!,
-                    style:
-                        TextStyle(color: Theme.of(context).colorScheme.error)),
+                child: Text(
+                  _error!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
               ),
             const SizedBox(height: 16),
             FilledButton(
@@ -412,7 +450,8 @@ class _PurchaseSheetState extends ConsumerState<_PurchaseSheet> {
                   ? const SizedBox(
                       height: 20,
                       width: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2))
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
                   : const Text('Pay from wallet'),
             ),
             const SizedBox(height: 4),

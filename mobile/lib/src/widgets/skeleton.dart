@@ -28,8 +28,10 @@ class _ShimmerState extends State<Shimmer> with SingleTickerProviderStateMixin {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final base = scheme.surfaceContainerHighest;
-    final highlight =
-        Color.alphaBlend(scheme.onSurface.withValues(alpha: 0.08), base);
+    final highlight = Color.alphaBlend(
+      scheme.onSurface.withValues(alpha: 0.08),
+      base,
+    );
     return AnimatedBuilder(
       animation: _controller,
       child: widget.child,
@@ -67,12 +69,7 @@ class _SlidingGradient extends GradientTransform {
 /// A single rounded placeholder block. Colour is supplied by [Shimmer]'s shader,
 /// so any opaque fill works here.
 class SkeletonBox extends StatelessWidget {
-  const SkeletonBox({
-    super.key,
-    this.width,
-    this.height = 14,
-    this.radius = 8,
-  });
+  const SkeletonBox({super.key, this.width, this.height = 14, this.radius = 8});
 
   final double? width;
   final double height;

@@ -96,7 +96,8 @@ class _ChatViewState extends ConsumerState<ChatView> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-            content: Text('Message failed to send — tap it to retry.')),
+          content: Text('Message failed to send — tap it to retry.'),
+        ),
       );
     }
   }
@@ -119,20 +120,19 @@ class _ChatViewState extends ConsumerState<ChatView> {
     return state.loading
         ? const Center(child: CircularProgressIndicator())
         : state.error != null
-            ? _ErrorView(
-                message: state.error!,
-                onRetry: () => ref
-                    .read(chatControllerProvider(_endpoint).notifier)
-                    .retry(),
-              )
-            : Column(
-                children: [
-                  if (!state.connected) _ReconnectingBar(),
-                  Expanded(child: _buildLog(state)),
-                  const Divider(height: 1),
-                  _buildComposer(state),
-                ],
-              );
+        ? _ErrorView(
+            message: state.error!,
+            onRetry: () =>
+                ref.read(chatControllerProvider(_endpoint).notifier).retry(),
+          )
+        : Column(
+            children: [
+              if (!state.connected) _ReconnectingBar(),
+              Expanded(child: _buildLog(state)),
+              const Divider(height: 1),
+              _buildComposer(state),
+            ],
+          );
   }
 
   Widget _buildLog(ChatState state) {
@@ -149,7 +149,8 @@ class _ChatViewState extends ConsumerState<ChatView> {
       itemCount: count,
       itemBuilder: (context, i) {
         if (i >= state.messages.length) return const _TypingBubble();
-        final showSeen = i == lastMineIdx &&
+        final showSeen =
+            i == lastMineIdx &&
             state.agentReadAt != null &&
             _isSeen(state.messages[i], state.agentReadAt!);
         return _bubble(state.messages[i], showSeen: showSeen);
@@ -175,8 +176,9 @@ class _ChatViewState extends ConsumerState<ChatView> {
     final bubble = Container(
       margin: const EdgeInsets.symmetric(vertical: 4),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      constraints:
-          BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.70),
+      constraints: BoxConstraints(
+        maxWidth: MediaQuery.of(context).size.width * 0.70,
+      ),
       decoration: BoxDecoration(
         color: mine
             ? theme.colorScheme.primary
@@ -184,13 +186,17 @@ class _ChatViewState extends ConsumerState<ChatView> {
         borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
-        crossAxisAlignment:
-            mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        crossAxisAlignment: mine
+            ? CrossAxisAlignment.end
+            : CrossAxisAlignment.start,
         children: [
           if (!mine && m.authorName != null)
-            Text(m.authorName!,
-                style: theme.textTheme.labelSmall
-                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+            Text(
+              m.authorName!,
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
           Text(
             m.body,
             style: TextStyle(
@@ -207,41 +213,53 @@ class _ChatViewState extends ConsumerState<ChatView> {
       if (m.createdAt != null)
         Text(
           TimeOfDay.fromDateTime(m.createdAt!.toLocal()).format(context),
-          style: theme.textTheme.labelSmall
-              ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
         ),
       if (showSeen) ...[
         const SizedBox(width: 6),
         Icon(Icons.done_all, size: 13, color: theme.colorScheme.primary),
         const SizedBox(width: 2),
-        Text('Seen',
-            style: theme.textTheme.labelSmall
-                ?.copyWith(color: theme.colorScheme.primary)),
+        Text(
+          'Seen',
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: theme.colorScheme.primary,
+          ),
+        ),
       ],
       if (mine && m.status == MessageStatus.sending) ...[
         const SizedBox(width: 6),
         const SizedBox(
-            width: 9,
-            height: 9,
-            child: CircularProgressIndicator(strokeWidth: 1.4)),
+          width: 9,
+          height: 9,
+          child: CircularProgressIndicator(strokeWidth: 1.4),
+        ),
         const SizedBox(width: 3),
-        Text('Sending…',
-            style: theme.textTheme.labelSmall
-                ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+        Text(
+          'Sending…',
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
       ],
       if (mine && m.status == MessageStatus.failed) ...[
         const SizedBox(width: 6),
         Icon(Icons.error_outline, size: 13, color: theme.colorScheme.error),
         const SizedBox(width: 2),
-        Text('Failed — tap to retry',
-            style: theme.textTheme.labelSmall
-                ?.copyWith(color: theme.colorScheme.error)),
+        Text(
+          'Failed — tap to retry',
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: theme.colorScheme.error,
+          ),
+        ),
       ],
     ];
 
     final column = Column(
-      crossAxisAlignment:
-          mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+      crossAxisAlignment: mine
+          ? CrossAxisAlignment.end
+          : CrossAxisAlignment.start,
       children: [
         bubble,
         if (meta.isNotEmpty)
@@ -334,11 +352,17 @@ class _AgentAvatar extends StatelessWidget {
       foregroundImage: (url != null) ? NetworkImage(url!) : null,
       child: (url == null)
           ? (initial != null
-              ? Text(initial,
-                  style: theme.textTheme.labelSmall
-                      ?.copyWith(color: theme.colorScheme.onSecondaryContainer))
-              : Icon(Icons.support_agent,
-                  size: 16, color: theme.colorScheme.onSecondaryContainer))
+                ? Text(
+                    initial,
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.onSecondaryContainer,
+                    ),
+                  )
+                : Icon(
+                    Icons.support_agent,
+                    size: 16,
+                    color: theme.colorScheme.onSecondaryContainer,
+                  ))
           : null,
     );
   }
@@ -426,12 +450,17 @@ class _ReconnectingBar extends StatelessWidget {
             width: 11,
             height: 11,
             child: CircularProgressIndicator(
-                strokeWidth: 1.6, color: theme.colorScheme.onSurfaceVariant),
+              strokeWidth: 1.6,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
           ),
           const SizedBox(width: 8),
-          Text('Reconnecting…',
-              style: theme.textTheme.labelMedium
-                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+          Text(
+            'Reconnecting…',
+            style: theme.textTheme.labelMedium?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
         ],
       ),
     );

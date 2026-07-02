@@ -31,7 +31,8 @@ class DashboardScreen extends ConsumerWidget {
     final notifications = ref.watch(notificationsProvider);
     final readIds = ref.watch(readNotificationsProvider);
 
-    final unread = notifications.asData?.value.items
+    final unread =
+        notifications.asData?.value.items
             .where((n) => !readIds.contains(n.id))
             .length ??
         0;
@@ -41,7 +42,8 @@ class DashboardScreen extends ConsumerWidget {
     // Services the customer can fix by paying (blocked/suspended). The
     // provider already drops terminated plans, so this can't false-alarm
     // on history.
-    final needsPayment = subList?.where((s) => s.needsPayment).toList() ??
+    final needsPayment =
+        subList?.where((s) => s.needsPayment).toList() ??
         const <Subscription>[];
 
     // The service the dashboard is "about": the user's switcher pick, else
@@ -82,15 +84,17 @@ class DashboardScreen extends ConsumerWidget {
     if (cycleSummary != null) {
       final cycleStart = cycleSummary.start;
       final sessionSum = (sessItems ?? const <AccountingSession>[])
-          .where((s) =>
-              s.sessionStart != null && !s.sessionStart!.isBefore(cycleStart))
+          .where(
+            (s) =>
+                s.sessionStart != null && !s.sessionStart!.isBefore(cycleStart),
+          )
           .fold<int>(0, (a, s) => a + s.totalOctets);
       final seriesSum = cycleSummary.series.fold<int>(0, (a, p) => a + p.bytes);
       dataPeriod = cycleSummary.totalBytes > 0
           ? cycleSummary.totalBytes
           : (sessionSum > 0
-              ? sessionSum
-              : (seriesSum > 0 ? seriesSum : (dataToday ?? 0)));
+                ? sessionSum
+                : (seriesSum > 0 ? seriesSum : (dataToday ?? 0)));
     }
     // Wallet (account credit) balance for its own at-a-glance card. Uses the
     // always-available credit balance (/me/balance), not the feature-gated VAS
@@ -107,13 +111,14 @@ class DashboardScreen extends ConsumerWidget {
     String mbps(double? b) => (b == null || b <= 0)
         ? '—'
         : (b / 1e6).toStringAsFixed(b >= 1e7 ? 0 : 1);
-    final peakHasData = (peakDownBps != null && peakDownBps > 0) ||
+    final peakHasData =
+        (peakDownBps != null && peakDownBps > 0) ||
         (peakUpBps != null && peakUpBps > 0);
     final peakValue = !peakLoaded
         ? null // still loading
         : (!peakHasData
-            ? '—'
-            : '↑${mbps(peakUpBps)} ↓${mbps(peakDownBps)} Mbps');
+              ? '—'
+              : '↑${mbps(peakUpBps)} ↓${mbps(peakDownBps)} Mbps');
 
     // Current period's quota bucket for the current service, when the plan is
     // capped — drives the usage bar on the service card.
@@ -150,8 +155,10 @@ class DashboardScreen extends ConsumerWidget {
     // (a non-active current service). Postpaid has no date expiry at all.
     final daysLeft = currentService?.daysUntilExpiry;
     // Third stat card: expiry countdown for date-expiry plans, else next-bill.
-    final (expiryStatLabel, expiryStatValue) =
-        _expiryOrBillingStat(subList, currentService);
+    final (expiryStatLabel, expiryStatValue) = _expiryOrBillingStat(
+      subList,
+      currentService,
+    );
     String? renewMessage;
     if (currentService != null && needsPayment.isEmpty) {
       final name = currentService.displayName;
@@ -252,8 +259,9 @@ class DashboardScreen extends ConsumerWidget {
               known: subList != null,
               // A blocked/suspended service is resolved by paying — deep-link
               // to billing.
-              onTap:
-                  needsPayment.isNotEmpty ? () => context.go('/billing') : null,
+              onTap: needsPayment.isNotEmpty
+                  ? () => context.go('/billing')
+                  : null,
             ),
             if (fup != null && (fup.needsAttention || fup.isApproaching)) ...[
               const SizedBox(height: 12),
@@ -270,22 +278,24 @@ class DashboardScreen extends ConsumerWidget {
                 ),
               ),
             ],
-            Consumer(builder: (context, ref, _) {
-              final wallet = ref.watch(walletProvider).asData?.value;
-              if (wallet == null) return const SizedBox.shrink();
-              return Padding(
-                padding: const EdgeInsets.only(top: 12),
-                child: Card(
-                  child: ListTile(
-                    leading: const Icon(Icons.wallet_outlined),
-                    title: Text(Fmt.money(wallet.balance, wallet.currency)),
-                    subtitle: const Text('Wallet — fund once, pay bills'),
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: () => context.push('/wallet'),
+            Consumer(
+              builder: (context, ref, _) {
+                final wallet = ref.watch(walletProvider).asData?.value;
+                if (wallet == null) return const SizedBox.shrink();
+                return Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Card(
+                    child: ListTile(
+                      leading: const Icon(Icons.wallet_outlined),
+                      title: Text(Fmt.money(wallet.balance, wallet.currency)),
+                      subtitle: const Text('Wallet — fund once, pay bills'),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () => context.push('/wallet'),
+                    ),
                   ),
-                ),
-              );
-            }),
+                );
+              },
+            ),
             const SizedBox(height: 16),
 
             // --- At-a-glance summary (rows of 3; grid pads the last row) ---
@@ -297,7 +307,9 @@ class DashboardScreen extends ConsumerWidget {
                   value: balance == null
                       ? null
                       : Fmt.moneyCompact(
-                          balance.creditBalance, balance.currency),
+                          balance.creditBalance,
+                          balance.currency,
+                        ),
                   onTap: () => context.push('/wallet'),
                 ),
                 _StatCard(
@@ -321,7 +333,8 @@ class DashboardScreen extends ConsumerWidget {
                   // Total data used this billing/subscription period.
                   label: 'This period',
                   value: dataPeriod == null ? null : Fmt.bytes(dataPeriod),
-                  highlight: (fup?.isApproaching ?? false) ||
+                  highlight:
+                      (fup?.isApproaching ?? false) ||
                       (fup?.needsAttention ?? false),
                   onTap: () => context.go('/usage'),
                 ),
@@ -331,7 +344,8 @@ class DashboardScreen extends ConsumerWidget {
                     icon: Icons.data_saver_off_outlined,
                     label: quotaLeftLabel,
                     value: quotaLeftValue,
-                    highlight: (currentQuota != null &&
+                    highlight:
+                        (currentQuota != null &&
                             (currentQuota.usedFraction ?? 0) >= 0.9) ||
                         (fup?.isApproaching ?? false) ||
                         (fup?.needsAttention ?? false),
@@ -351,7 +365,8 @@ class DashboardScreen extends ConsumerWidget {
                   label: expiryStatLabel,
                   value: expiryStatValue,
                   // Urgent when expiring within 3 days or genuinely expired.
-                  highlight: (currentService?.expiresSoon ?? false) ||
+                  highlight:
+                      (currentService?.expiresSoon ?? false) ||
                       (currentService?.isExpired ?? false),
                   onTap: () => context.go('/billing'),
                 ),
@@ -362,9 +377,7 @@ class DashboardScreen extends ConsumerWidget {
             // --- Primary payment action ---
             // A single, prominent "Add funds / Pay" entry (the wallet top-up
             // flow), replacing the redundant "Pay bill" + "Top up" chips.
-            _AddFundsCard(
-              onTap: () => context.push('/topup'),
-            ),
+            _AddFundsCard(onTap: () => context.push('/topup')),
             const SizedBox(height: 20),
 
             // --- Current service (with a switcher when there are several) ---
@@ -397,9 +410,11 @@ class DashboardScreen extends ConsumerWidget {
                         _ServiceSwitcher(
                           services: services,
                           selectedId: selected.id,
-                          onSelect: (id) => ref
-                              .read(selectedServiceIdProvider.notifier)
-                              .state = id,
+                          onSelect: (id) =>
+                              ref
+                                      .read(selectedServiceIdProvider.notifier)
+                                      .state =
+                                  id,
                         ),
                         const SizedBox(height: 10),
                       ],
@@ -413,7 +428,8 @@ class DashboardScreen extends ConsumerWidget {
                 return subs.isLoading
                     ? const CardSkeleton()
                     : const _MessageCard(
-                        'Couldn’t load your service. Pull down to refresh.');
+                        'Couldn’t load your service. Pull down to refresh.',
+                      );
               },
             ),
           ],
@@ -554,8 +570,10 @@ class _ConnectionBanner extends StatelessWidget {
           Icon(icon, color: fg),
           const SizedBox(width: 10),
           Expanded(
-            child: Text(text,
-                style: TextStyle(color: fg, fontWeight: FontWeight.w600)),
+            child: Text(
+              text,
+              style: TextStyle(color: fg, fontWeight: FontWeight.w600),
+            ),
           ),
         ],
       ),
@@ -584,21 +602,21 @@ class _StatusBanner extends StatelessWidget {
             scheme.surfaceContainerHighest,
             scheme.onSurface,
             Icons.hourglass_empty,
-            'Loading your account…'
+            'Loading your account…',
           )
         : suspendedMessage != null
-            ? (
-                scheme.errorContainer,
-                scheme.onErrorContainer,
-                Icons.warning_amber_rounded,
-                suspendedMessage!
-              )
-            : (
-                scheme.primaryContainer,
-                scheme.onPrimaryContainer,
-                Icons.check_circle_outline,
-                'All services active'
-              );
+        ? (
+            scheme.errorContainer,
+            scheme.onErrorContainer,
+            Icons.warning_amber_rounded,
+            suspendedMessage!,
+          )
+        : (
+            scheme.primaryContainer,
+            scheme.onPrimaryContainer,
+            Icons.check_circle_outline,
+            'All services active',
+          );
     final radius = BorderRadius.circular(14);
     return Material(
       color: bg,
@@ -613,8 +631,10 @@ class _StatusBanner extends StatelessWidget {
               Icon(icon, color: fg),
               const SizedBox(width: 10),
               Expanded(
-                child: Text(text,
-                    style: TextStyle(color: fg, fontWeight: FontWeight.w600)),
+                child: Text(
+                  text,
+                  style: TextStyle(color: fg, fontWeight: FontWeight.w600),
+                ),
               ),
               if (onTap != null) Icon(Icons.chevron_right, color: fg),
             ],
@@ -657,8 +677,10 @@ class _RenewBanner extends StatelessWidget {
               Icon(expired ? Icons.error_outline : Icons.schedule, color: fg),
               const SizedBox(width: 10),
               Expanded(
-                child: Text(message,
-                    style: TextStyle(color: fg, fontWeight: FontWeight.w600)),
+                child: Text(
+                  message,
+                  style: TextStyle(color: fg, fontWeight: FontWeight.w600),
+                ),
               ),
               if (onTap != null) Icon(Icons.chevron_right, color: fg),
             ],
@@ -682,19 +704,20 @@ class _FupBanner extends StatelessWidget {
     final bg = blocked
         ? scheme.errorContainer
         : approaching
-            ? scheme.secondaryContainer
-            : scheme.tertiaryContainer;
+        ? scheme.secondaryContainer
+        : scheme.tertiaryContainer;
     final fg = blocked
         ? scheme.onErrorContainer
         : approaching
-            ? scheme.onSecondaryContainer
-            : scheme.onTertiaryContainer;
-    final text = fup.summary ??
+        ? scheme.onSecondaryContainer
+        : scheme.onTertiaryContainer;
+    final text =
+        fup.summary ??
         (blocked
             ? 'Service paused — fair-usage limit reached'
             : approaching
-                ? 'Approaching your fair-usage limit'
-                : 'Speed reduced — fair-usage limit reached');
+            ? 'Approaching your fair-usage limit'
+            : 'Speed reduced — fair-usage limit reached');
     return Material(
       color: bg,
       borderRadius: BorderRadius.circular(14),
@@ -709,14 +732,16 @@ class _FupBanner extends StatelessWidget {
                 blocked
                     ? Icons.block
                     : approaching
-                        ? Icons.data_usage
-                        : Icons.speed,
+                    ? Icons.data_usage
+                    : Icons.speed,
                 color: fg,
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: Text(text,
-                    style: TextStyle(color: fg, fontWeight: FontWeight.w600)),
+                child: Text(
+                  text,
+                  style: TextStyle(color: fg, fontWeight: FontWeight.w600),
+                ),
               ),
               if (onTap != null) Icon(Icons.chevron_right, color: fg),
             ],
@@ -750,8 +775,11 @@ class _ServiceSwitcher extends StatelessWidget {
         itemBuilder: (_, i) {
           final s = services[i];
           return ChoiceChip(
-            label: Text(s.displayName,
-                maxLines: 1, overflow: TextOverflow.ellipsis),
+            label: Text(
+              s.displayName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
             selected: s.id == selectedId,
             avatar: Icon(
               s.isActive ? Icons.circle : Icons.pause_circle_outline,
@@ -782,16 +810,19 @@ class _StatGrid extends StatelessWidget {
       for (var j = 0; j < perRow; j++) {
         if (j > 0) cells.add(const SizedBox(width: gap));
         final idx = i + j;
-        cells.add(Expanded(
-          child: idx < tiles.length ? tiles[idx] : const SizedBox(),
-        ));
+        cells.add(
+          Expanded(child: idx < tiles.length ? tiles[idx] : const SizedBox()),
+        );
       }
       if (rows.isNotEmpty) rows.add(const SizedBox(height: gap));
-      rows.add(IntrinsicHeight(
+      rows.add(
+        IntrinsicHeight(
           child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: cells,
-      )));
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: cells,
+          ),
+        ),
+      );
     }
     return Column(children: rows);
   }
@@ -839,18 +870,23 @@ class _StatCard extends StatelessWidget {
                 FittedBox(
                   fit: BoxFit.scaleDown,
                   alignment: Alignment.centerLeft,
-                  child: Text(value!,
-                      maxLines: 1,
-                      softWrap: false,
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
-                        color: highlight ? theme.colorScheme.error : null,
-                      )),
+                  child: Text(
+                    value!,
+                    maxLines: 1,
+                    softWrap: false,
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                      color: highlight ? theme.colorScheme.error : null,
+                    ),
+                  ),
                 ),
               const SizedBox(height: 2),
-              Text(label,
-                  style: theme.textTheme.bodySmall
-                      ?.copyWith(color: theme.colorScheme.outline)),
+              Text(
+                label,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
+              ),
             ],
           ),
         ),
@@ -932,22 +968,23 @@ class _CurrentServiceCard extends StatelessWidget {
         : switch (days) {
             // Postpaid / no date expiry: show the next bill date, not a
             // (meaningless) validity countdown.
-            null => s.nextBillingAt != null
-                ? (
-                    theme.colorScheme.outline,
-                    'Next bill',
-                    Fmt.date(s.nextBillingAt)
-                  )
-                : (theme.colorScheme.outline, null, null),
+            null =>
+              s.nextBillingAt != null
+                  ? (
+                      theme.colorScheme.outline,
+                      'Next bill',
+                      Fmt.date(s.nextBillingAt),
+                    )
+                  : (theme.colorScheme.outline, null, null),
             0 => (theme.colorScheme.error, 'Validity', 'Expires today'),
             // Active service with a momentarily-stale billing date: running, not
             // expired — show nothing rather than alarm next to the IP.
             < 0 => (theme.colorScheme.outline, null, null),
             <= 3 => (
-                context.semantic.warning,
-                'Validity',
-                '$days day${days == 1 ? '' : 's'} left'
-              ),
+              context.semantic.warning,
+              'Validity',
+              '$days day${days == 1 ? '' : 's'} left',
+            ),
             _ => (context.semantic.success, 'Validity', '$days days left'),
           };
 
@@ -965,19 +1002,24 @@ class _CurrentServiceCard extends StatelessWidget {
                   const Icon(Icons.router_outlined),
                   const SizedBox(width: 10),
                   Expanded(
-                    child: Text(s.displayName,
-                        style: theme.textTheme.titleMedium,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis),
+                    child: Text(
+                      s.displayName,
+                      style: theme.textTheme.titleMedium,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
                   StatusChip.forSubscription(s.status),
                 ],
               ),
               if (s.planType != null) ...[
                 const SizedBox(height: 2),
-                Text(s.planType!,
-                    style: theme.textTheme.bodySmall
-                        ?.copyWith(color: theme.colorScheme.outline)),
+                Text(
+                  s.planType!,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.outline,
+                  ),
+                ),
               ],
               const Divider(height: 20),
               Row(
@@ -1002,66 +1044,70 @@ class _CurrentServiceCard extends StatelessWidget {
               ),
               if (quota?.usedFraction != null) ...[
                 const SizedBox(height: 10),
-                Builder(builder: (context) {
-                  final q = quota!;
-                  final fraction = q.usedFraction!;
-                  final nearCap = fraction >= 0.9;
-                  final color = nearCap
-                      ? theme.colorScheme.error
-                      : theme.colorScheme.primary;
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                Builder(
+                  builder: (context) {
+                    final q = quota!;
+                    final fraction = q.usedFraction!;
+                    final nearCap = fraction >= 0.9;
+                    final color = nearCap
+                        ? theme.colorScheme.error
+                        : theme.colorScheme.primary;
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: LinearProgressIndicator(
+                            value: fraction,
+                            minHeight: 6,
+                            color: color,
+                            backgroundColor:
+                                theme.colorScheme.surfaceContainerHighest,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '${q.usedGb.toStringAsFixed(1)} of '
+                          '${q.allowanceGb!.toStringAsFixed(0)} GB used',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: nearCap
+                                ? theme.colorScheme.error
+                                : theme.colorScheme.outline,
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ],
+              const SizedBox(height: 8),
+              Builder(
+                builder: (context) {
+                  // Surface a pay CTA when the service needs attention: suspended,
+                  // or expiring within 3 days / already expired.
+                  final needsAttention =
+                      !s.isActive || (days != null && days <= 3);
+                  return Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
                     children: [
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(4),
-                        child: LinearProgressIndicator(
-                          value: fraction,
-                          minHeight: 6,
-                          color: color,
-                          backgroundColor:
-                              theme.colorScheme.surfaceContainerHighest,
+                      if (needsAttention)
+                        Expanded(
+                          child: FilledButton.icon(
+                            icon: const Icon(Icons.payment, size: 18),
+                            onPressed: () => context.go('/billing'),
+                            label: Text(s.isActive ? 'Renew' : 'Reactivate'),
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        '${q.usedGb.toStringAsFixed(1)} of '
-                        '${q.allowanceGb!.toStringAsFixed(0)} GB used',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: nearCap
-                              ? theme.colorScheme.error
-                              : theme.colorScheme.outline,
-                        ),
+                      if (needsAttention) const SizedBox(width: 8),
+                      TextButton(
+                        onPressed: () =>
+                            context.push('/service/${s.id}', extra: s),
+                        child: const Text('Manage'),
                       ),
                     ],
                   );
-                }),
-              ],
-              const SizedBox(height: 8),
-              Builder(builder: (context) {
-                // Surface a pay CTA when the service needs attention: suspended,
-                // or expiring within 3 days / already expired.
-                final needsAttention =
-                    !s.isActive || (days != null && days <= 3);
-                return Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    if (needsAttention)
-                      Expanded(
-                        child: FilledButton.icon(
-                          icon: const Icon(Icons.payment, size: 18),
-                          onPressed: () => context.go('/billing'),
-                          label: Text(s.isActive ? 'Renew' : 'Reactivate'),
-                        ),
-                      ),
-                    if (needsAttention) const SizedBox(width: 8),
-                    TextButton(
-                      onPressed: () =>
-                          context.push('/service/${s.id}', extra: s),
-                      child: const Text('Manage'),
-                    ),
-                  ],
-                );
-              }),
+                },
+              ),
             ],
           ),
         ),
@@ -1094,8 +1140,10 @@ class _MiniStat extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(label, style: theme.textTheme.labelSmall),
-            Text(value,
-                style: TextStyle(fontWeight: FontWeight.w600, color: color)),
+            Text(
+              value,
+              style: TextStyle(fontWeight: FontWeight.w600, color: color),
+            ),
           ],
         ),
       ],
@@ -1121,9 +1169,6 @@ class _MessageCard extends StatelessWidget {
   final String message;
   @override
   Widget build(BuildContext context) => Card(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Text(message),
-        ),
-      );
+    child: Padding(padding: const EdgeInsets.all(16), child: Text(message)),
+  );
 }

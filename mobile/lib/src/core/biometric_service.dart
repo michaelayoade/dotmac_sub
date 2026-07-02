@@ -8,7 +8,7 @@ import 'package:local_auth/local_auth.dart';
 /// the caller never traps the user behind a lock they can't satisfy.
 class BiometricService {
   BiometricService([LocalAuthentication? auth])
-      : _auth = auth ?? LocalAuthentication();
+    : _auth = auth ?? LocalAuthentication();
 
   final LocalAuthentication _auth;
 

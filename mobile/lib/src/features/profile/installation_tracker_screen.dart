@@ -82,8 +82,9 @@ class _ProjectCard extends StatelessWidget {
                 Expanded(
                   child: Text(
                     project.name,
-                    style: theme.textTheme.titleMedium
-                        ?.copyWith(fontWeight: FontWeight.bold),
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ),
                 Chip(
@@ -114,8 +115,9 @@ class _ProjectCard extends StatelessWidget {
                 ),
                 Text(
                   '${project.progressPct}%',
-                  style: theme.textTheme.titleSmall
-                      ?.copyWith(fontWeight: FontWeight.bold),
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ],
             ),
@@ -151,8 +153,9 @@ class _StageRow extends StatelessWidget {
     final IconData icon = done
         ? Icons.check_circle
         : (inProgress ? Icons.radio_button_checked : Icons.circle_outlined);
-    final Color color =
-        done ? Colors.green : (inProgress ? Colors.blue : Colors.grey);
+    final Color color = done
+        ? Colors.green
+        : (inProgress ? Colors.blue : Colors.grey);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(

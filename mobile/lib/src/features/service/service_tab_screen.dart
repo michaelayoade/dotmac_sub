@@ -27,8 +27,11 @@ class ServiceTabScreen extends ConsumerWidget {
     final summary = ref.watch(usageSummaryProvider(period));
     // Session-based cycle total — the true usage for unlimited plans, whose
     // rated bucket reads 0 (independent of the selected period above).
-    final cycleUsedBytes =
-        ref.watch(usageSummaryProvider('cycle')).asData?.value.totalBytes;
+    final cycleUsedBytes = ref
+        .watch(usageSummaryProvider('cycle'))
+        .asData
+        ?.value
+        .totalBytes;
     final buckets = ref.watch(quotaBucketsProvider);
     final sessions = ref.watch(accountingSessionsProvider);
     final services = ref.watch(subscriptionsProvider);
@@ -84,7 +87,8 @@ class ServiceTabScreen extends ConsumerWidget {
               skeleton: const CardSkeleton(height: 120),
               data: (s) {
                 final fup = s.fup;
-                final show = fup != null &&
+                final show =
+                    fup != null &&
                     (fup.needsAttention ||
                         fup.isApproaching ||
                         fup.policySummary != null);
@@ -328,8 +332,8 @@ class _ActiveAddonTile extends StatelessWidget {
     final gb = a.totalGrantGb != null ? ' — ${a.totalGrantGb} GB' : '';
     final expiry = a.expiresAt != null
         ? (a.daysLeft != null && a.daysLeft! <= 3
-            ? 'expires in ${a.daysLeft} day${a.daysLeft == 1 ? '' : 's'}'
-            : 'expires ${Fmt.date(a.expiresAt!)}')
+              ? 'expires in ${a.daysLeft} day${a.daysLeft == 1 ? '' : 's'}'
+              : 'expires ${Fmt.date(a.expiresAt!)}')
         : 'lasts this billing period';
     final urgent = a.daysLeft != null && a.daysLeft! <= 3;
 

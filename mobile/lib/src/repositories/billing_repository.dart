@@ -51,11 +51,16 @@ class BillingRepository {
     int limit = 50,
     int offset = 0,
   }) async {
-    final data = await guard(() => dio.get('/me/invoices', queryParameters: {
+    final data = await guard(
+      () => dio.get(
+        '/me/invoices',
+        queryParameters: {
           if (status != null) 'status': status,
           'limit': limit,
           'offset': offset,
-        }));
+        },
+      ),
+    );
     return Page.fromJson(data as Map<String, dynamic>, Invoice.fromJson);
   }
 
@@ -67,10 +72,12 @@ class BillingRepository {
 
   /// GET /me/payments — the subscriber's own payment history (self-scoped).
   Future<Page<Payment>> payments({int limit = 50, int offset = 0}) async {
-    final data = await guard(() => dio.get('/me/payments', queryParameters: {
-          'limit': limit,
-          'offset': offset,
-        }));
+    final data = await guard(
+      () => dio.get(
+        '/me/payments',
+        queryParameters: {'limit': limit, 'offset': offset},
+      ),
+    );
     return Page.fromJson(data as Map<String, dynamic>, Payment.fromJson);
   }
 
@@ -96,9 +103,14 @@ class BillingRepository {
 
   /// POST /me/autopay — enable autopay (default card unless one is given).
   Future<AutopayStatus> enableAutopay({String? paymentMethodId}) async {
-    final data = await guard(() => dio.post('/me/autopay', data: {
+    final data = await guard(
+      () => dio.post(
+        '/me/autopay',
+        data: {
           if (paymentMethodId != null) 'payment_method_id': paymentMethodId,
-        }));
+        },
+      ),
+    );
     return AutopayStatus.fromJson((data as Map).cast<String, dynamic>());
   }
 
@@ -121,10 +133,12 @@ class BillingRepository {
 
   /// GET /me/ledger — the subscriber's account ledger (transaction history).
   Future<Page<LedgerTxn>> ledger({int limit = 50, int offset = 0}) async {
-    final data = await guard(() => dio.get('/me/ledger', queryParameters: {
-          'limit': limit,
-          'offset': offset,
-        }));
+    final data = await guard(
+      () => dio.get(
+        '/me/ledger',
+        queryParameters: {'limit': limit, 'offset': offset},
+      ),
+    );
     return Page.fromJson(data as Map<String, dynamic>, LedgerTxn.fromJson);
   }
 
@@ -144,15 +158,17 @@ class BillingRepository {
     String? paymentMethodId,
     String? idempotencyKey,
   }) async {
-    final data = await guard(() => dio.post(
-          '/payments/initiate',
-          data: {
-            'invoice_id': invoiceId,
-            if (provider != null) 'provider': provider,
-            if (paymentMethodId != null) 'payment_method_id': paymentMethodId,
-            if (idempotencyKey != null) 'idempotency_key': idempotencyKey,
-          },
-        ));
+    final data = await guard(
+      () => dio.post(
+        '/payments/initiate',
+        data: {
+          'invoice_id': invoiceId,
+          if (provider != null) 'provider': provider,
+          if (paymentMethodId != null) 'payment_method_id': paymentMethodId,
+          if (idempotencyKey != null) 'idempotency_key': idempotencyKey,
+        },
+      ),
+    );
     return PaymentInitiation.fromJson(data as Map<String, dynamic>);
   }
 
@@ -161,13 +177,15 @@ class BillingRepository {
     String reference, {
     String? provider,
   }) async {
-    final data = await guard(() => dio.post(
-          '/payments/verify',
-          data: {
-            'reference': reference,
-            if (provider != null) 'provider': provider,
-          },
-        ));
+    final data = await guard(
+      () => dio.post(
+        '/payments/verify',
+        data: {
+          'reference': reference,
+          if (provider != null) 'provider': provider,
+        },
+      ),
+    );
     return PaymentVerification.fromJson(data as Map<String, dynamic>);
   }
 
@@ -190,22 +208,31 @@ class BillingRepository {
     String? paymentMethodId,
     String? idempotencyKey,
   }) async {
-    final data = await guard(() => dio.post('/me/topup/initiate', data: {
+    final data = await guard(
+      () => dio.post(
+        '/me/topup/initiate',
+        data: {
           'amount': amount,
           if (provider != null) 'provider': provider,
           if (paymentMethodId != null) 'payment_method_id': paymentMethodId,
           if (idempotencyKey != null) 'idempotency_key': idempotencyKey,
-        }));
+        },
+      ),
+    );
     return TopupInitiation.fromJson(data as Map<String, dynamic>);
   }
 
   /// POST /me/topup/verify — confirm + credit the account.
-  Future<TopupResult> verifyTopup(String reference,
-      {bool saveCard = false}) async {
-    final data = await guard(() => dio.post('/me/topup/verify', data: {
-          'reference': reference,
-          if (saveCard) 'save_card': true,
-        }));
+  Future<TopupResult> verifyTopup(
+    String reference, {
+    bool saveCard = false,
+  }) async {
+    final data = await guard(
+      () => dio.post(
+        '/me/topup/verify',
+        data: {'reference': reference, if (saveCard) 'save_card': true},
+      ),
+    );
     return TopupResult.fromJson(data as Map<String, dynamic>);
   }
 }

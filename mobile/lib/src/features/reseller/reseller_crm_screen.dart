@@ -27,11 +27,7 @@ class ResellerCrmScreen extends ConsumerWidget {
           ),
         ),
         body: TabBarView(
-          children: [
-            _QuotesTab(),
-            _ProjectsTab(),
-            _WorkOrdersTab(),
-          ],
+          children: [_QuotesTab(), _ProjectsTab(), _WorkOrdersTab()],
         ),
       ),
     );
@@ -109,8 +105,8 @@ Widget _list<T>(
       children: [
         const SizedBox(height: 140),
         Center(
-            child:
-                Text(emptyMsg, style: Theme.of(context).textTheme.bodyMedium)),
+          child: Text(emptyMsg, style: Theme.of(context).textTheme.bodyMedium),
+        ),
       ],
     );
   }
@@ -123,11 +119,11 @@ Widget _list<T>(
 }
 
 Widget _accountHeader(BuildContext context, String? name) => Text(
-      name ?? 'Customer',
-      style: Theme.of(context).textTheme.labelMedium?.copyWith(
-            color: Theme.of(context).colorScheme.primary,
-          ),
-    );
+  name ?? 'Customer',
+  style: Theme.of(context).textTheme.labelMedium?.copyWith(
+    color: Theme.of(context).colorScheme.primary,
+  ),
+);
 
 class _QuoteTile extends StatelessWidget {
   const _QuoteTile({required this.item});
@@ -144,17 +140,23 @@ class _QuoteTile extends StatelessWidget {
           children: [
             _accountHeader(context, item.accountName),
             const SizedBox(height: 2),
-            Text(q.address ?? 'Installation quote',
-                style: Theme.of(context).textTheme.titleSmall),
+            Text(
+              q.address ?? 'Installation quote',
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
             const SizedBox(height: 4),
-            Text('${q.feasibility.label} · ${q.statusLabel}',
-                style: Theme.of(context).textTheme.bodySmall),
+            Text(
+              '${q.feasibility.label} · ${q.statusLabel}',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
             const SizedBox(height: 6),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('Estimate ${naira(q.total)}',
-                    style: Theme.of(context).textTheme.bodyMedium),
+                Text(
+                  'Estimate ${naira(q.total)}',
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
                 Text(
                   q.depositPaid
                       ? 'Deposit paid'
@@ -187,7 +189,8 @@ class _ProjectTile extends StatelessWidget {
             Text(item.name, style: Theme.of(context).textTheme.titleSmall),
             const SizedBox(height: 6),
             LinearProgressIndicator(
-                value: (item.progressPct.clamp(0, 100)) / 100),
+              value: (item.progressPct.clamp(0, 100)) / 100,
+            ),
             const SizedBox(height: 4),
             Text(
               '${item.currentStage ?? item.status} · ${item.progressPct}%',

@@ -42,8 +42,9 @@ class _AutopayTileState extends ConsumerState<_AutopayTile> {
         child: SwitchListTile(
           secondary: const Icon(Icons.autorenew),
           title: const Text('Autopay'),
-          subtitle:
-              const Text('Automatically pay invoices from your default card'),
+          subtitle: const Text(
+            'Automatically pay invoices from your default card',
+          ),
           value: s.enabled,
           onChanged: _busy ? null : _toggle,
         ),
@@ -59,7 +60,10 @@ class PaymentMethodsScreen extends ConsumerWidget {
   const PaymentMethodsScreen({super.key});
 
   Future<void> _setDefault(
-      BuildContext context, WidgetRef ref, String id) async {
+    BuildContext context,
+    WidgetRef ref,
+    String id,
+  ) async {
     final messenger = ScaffoldMessenger.of(context);
     try {
       await ref.read(billingRepositoryProvider).setDefaultCard(id);
@@ -70,7 +74,10 @@ class PaymentMethodsScreen extends ConsumerWidget {
   }
 
   Future<void> _remove(
-      BuildContext context, WidgetRef ref, SavedCard card) async {
+    BuildContext context,
+    WidgetRef ref,
+    SavedCard card,
+  ) async {
     final messenger = ScaffoldMessenger.of(context);
     final ok = await showDialog<bool>(
       context: context,
@@ -79,11 +86,13 @@ class PaymentMethodsScreen extends ConsumerWidget {
         content: Text('Remove ${card.title}?'),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel')),
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Remove')),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Remove'),
+          ),
         ],
       ),
     );
@@ -159,10 +168,12 @@ class PaymentMethodsScreen extends ConsumerWidget {
               _badge(context, 'Expires soon', scheme.error),
           ],
         ),
-        subtitle: Text([
-          if (c.expiry != null) 'Expires ${c.expiry}',
-          if (c.isDefault) 'Default',
-        ].join(' · ')),
+        subtitle: Text(
+          [
+            if (c.expiry != null) 'Expires ${c.expiry}',
+            if (c.isDefault) 'Default',
+          ].join(' · '),
+        ),
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -179,7 +190,9 @@ class PaymentMethodsScreen extends ConsumerWidget {
               itemBuilder: (_) => [
                 if (!c.isDefault)
                   const PopupMenuItem(
-                      value: 'default', child: Text('Set as default')),
+                    value: 'default',
+                    child: Text('Set as default'),
+                  ),
                 const PopupMenuItem(value: 'remove', child: Text('Remove')),
               ],
             ),
@@ -201,7 +214,10 @@ class PaymentMethodsScreen extends ConsumerWidget {
         child: Text(
           text,
           style: TextStyle(
-              color: color, fontSize: 11, fontWeight: FontWeight.w700),
+            color: color,
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+          ),
         ),
       ),
     );

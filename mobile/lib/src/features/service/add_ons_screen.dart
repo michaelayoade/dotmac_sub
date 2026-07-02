@@ -53,10 +53,7 @@ class _AddOnsScreenState extends ConsumerState<AddOnsScreen> {
     final qty = await showModalBottomSheet<int>(
       context: context,
       isScrollControlled: true,
-      builder: (_) => _BuySheet(
-        option: option,
-        subscriptionId: _subId,
-      ),
+      builder: (_) => _BuySheet(option: option, subscriptionId: _subId),
     );
     if (qty == null) return;
     await _purchase(option, qty);
@@ -72,20 +69,24 @@ class _AddOnsScreenState extends ConsumerState<AddOnsScreen> {
       if (result.success) {
         ref.invalidate(balanceProvider);
         ref.invalidate(ledgerProvider);
-        messenger.showSnackBar(
-          SnackBar(content: Text('${option.name} added')),
-        );
+        messenger.showSnackBar(SnackBar(content: Text('${option.name} added')));
         await _load();
       } else if (result.insufficient) {
-        messenger.showSnackBar(SnackBar(
-          content: Text(
-              'Insufficient balance — top up ${Fmt.money(result.shortfall ?? 0, result.currency)}'),
-        ));
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              'Insufficient balance — top up ${Fmt.money(result.shortfall ?? 0, result.currency)}',
+            ),
+          ),
+        );
       } else if (result.serviceNotActive) {
-        messenger.showSnackBar(const SnackBar(
-          content: Text(
-              'Your service is not active — purchases resume once it is restored'),
-        ));
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Your service is not active — purchases resume once it is restored',
+            ),
+          ),
+        );
       } else {
         messenger.showSnackBar(
           const SnackBar(content: Text('Could not add this add-on')),
@@ -104,15 +105,19 @@ class _AddOnsScreenState extends ConsumerState<AddOnsScreen> {
       context: context,
       builder: (_) => AlertDialog(
         title: Text('Cancel ${addon.name}?'),
-        content: const Text('It stays active until the end of the current '
-            'billing cycle, then stops.'),
+        content: const Text(
+          'It stays active until the end of the current '
+          'billing cycle, then stops.',
+        ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Keep')),
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Keep'),
+          ),
           FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Cancel add-on')),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Cancel add-on'),
+          ),
         ],
       ),
     );
@@ -120,8 +125,9 @@ class _AddOnsScreenState extends ConsumerState<AddOnsScreen> {
     setState(() => _busy = true);
     try {
       await ref.read(catalogRepositoryProvider).cancelAddon(_subId, addon.id);
-      messenger
-          .showSnackBar(SnackBar(content: Text('${addon.name} cancelled')));
+      messenger.showSnackBar(
+        SnackBar(content: Text('${addon.name} cancelled')),
+      );
       await _load();
     } on ApiException catch (e) {
       messenger.showSnackBar(SnackBar(content: Text(e.message)));
@@ -137,22 +143,19 @@ class _AddOnsScreenState extends ConsumerState<AddOnsScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _data == null
-              ? _ErrorRetry(error: _error, onRetry: _load)
-              : Stack(
-                  children: [
-                    RefreshIndicator(
-                      onRefresh: _load,
-                      child: _list(_data!),
+          ? _ErrorRetry(error: _error, onRetry: _load)
+          : Stack(
+              children: [
+                RefreshIndicator(onRefresh: _load, child: _list(_data!)),
+                if (_busy)
+                  const Positioned.fill(
+                    child: ColoredBox(
+                      color: Colors.black26,
+                      child: Center(child: CircularProgressIndicator()),
                     ),
-                    if (_busy)
-                      const Positioned.fill(
-                        child: ColoredBox(
-                          color: Colors.black26,
-                          child: Center(child: CircularProgressIndicator()),
-                        ),
-                      ),
-                  ],
-                ),
+                  ),
+              ],
+            ),
     );
   }
 
@@ -181,8 +184,10 @@ class _AddOnsScreenState extends ConsumerState<AddOnsScreen> {
             Card(
               margin: const EdgeInsets.only(bottom: 8),
               child: ListTile(
-                leading:
-                    Icon(Icons.check_circle, color: context.semantic.success),
+                leading: Icon(
+                  Icons.check_circle,
+                  color: context.semantic.success,
+                ),
                 title: Text(a.name),
                 subtitle: a.quantity > 1 ? Text('x${a.quantity}') : null,
                 trailing: TextButton(
@@ -207,10 +212,12 @@ class _AddOnsScreenState extends ConsumerState<AddOnsScreen> {
             margin: const EdgeInsets.only(bottom: 8),
             child: ListTile(
               title: Text(o.name),
-              subtitle: Text([
-                if (o.description != null) o.description!,
-                '${Fmt.money(o.amount, o.currency)} each',
-              ].join('\n')),
+              subtitle: Text(
+                [
+                  if (o.description != null) o.description!,
+                  '${Fmt.money(o.amount, o.currency)} each',
+                ].join('\n'),
+              ),
               isThreeLine: o.description != null,
               trailing: FilledButton.tonal(
                 onPressed: _busy ? null : () => _buy(o),
@@ -290,8 +297,9 @@ class _BuySheetState extends ConsumerState<_BuySheet> {
                   const Text('Quantity'),
                   const Spacer(),
                   IconButton.filledTonal(
-                    onPressed:
-                        _qty > o.minQuantity ? () => _setQty(_qty - 1) : null,
+                    onPressed: _qty > o.minQuantity
+                        ? () => _setQty(_qty - 1)
+                        : null,
                     icon: const Icon(Icons.remove),
                   ),
                   Padding(
@@ -368,7 +376,10 @@ class _BuySheetState extends ConsumerState<_BuySheet> {
       padding: const EdgeInsets.symmetric(vertical: 3),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [Text(label, style: style), Text(value, style: style)],
+        children: [
+          Text(label, style: style),
+          Text(value, style: style),
+        ],
       ),
     );
   }

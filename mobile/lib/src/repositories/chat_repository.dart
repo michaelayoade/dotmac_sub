@@ -27,24 +27,27 @@ class ChatRepository {
 
   /// Open (or resume) a session. [endpoint] is the broker path:
   /// `/me/chat/session` (customer) or `/reseller/chat/session` (reseller).
-  Future<ChatSession> openSession(
-      {String endpoint = '/me/chat/session'}) async {
+  Future<ChatSession> openSession({
+    String endpoint = '/me/chat/session',
+  }) async {
     final data = await guard(() => _dio.post(endpoint, data: const {}));
     final session = ChatSession.fromJson(data as Map<String, dynamic>);
-    _crm = Dio(BaseOptions(
-      baseUrl: session.apiBase,
-      connectTimeout: const Duration(seconds: 15),
-      receiveTimeout: const Duration(seconds: 20),
-      contentType: Headers.jsonContentType,
-      headers: {
-        'X-Visitor-Token': session.visitorToken,
-        // Native clients send no browser Origin; the CRM widget endpoints
-        // enforce an allowed-domains check, so present the app's configured
-        // origin (must be in the ChatWidgetConfig.allowed_domains).
-        'Origin': _crmOrigin,
-      },
-      validateStatus: (s) => s != null && s < 500,
-    ));
+    _crm = Dio(
+      BaseOptions(
+        baseUrl: session.apiBase,
+        connectTimeout: const Duration(seconds: 15),
+        receiveTimeout: const Duration(seconds: 20),
+        contentType: Headers.jsonContentType,
+        headers: {
+          'X-Visitor-Token': session.visitorToken,
+          // Native clients send no browser Origin; the CRM widget endpoints
+          // enforce an allowed-domains check, so present the app's configured
+          // origin (must be in the ChatWidgetConfig.allowed_domains).
+          'Origin': _crmOrigin,
+        },
+        validateStatus: (s) => s != null && s < 500,
+      ),
+    );
     return session;
   }
 
@@ -57,10 +60,12 @@ class ChatRepository {
   }
 
   Future<List<ChatMessage>> history(ChatSession s, {int limit = 50}) async {
-    final data = await guard(() => _crmClient.get(
-          '/session/${s.sessionId}/messages',
-          queryParameters: {'limit': limit},
-        ));
+    final data = await guard(
+      () => _crmClient.get(
+        '/session/${s.sessionId}/messages',
+        queryParameters: {'limit': limit},
+      ),
+    );
     final list =
         (data as Map<String, dynamic>)['messages'] as List? ?? const [];
     return list
@@ -71,11 +76,17 @@ class ChatRepository {
   /// Returns the sent message plus the (possibly newly created) conversation id,
   /// so the caller can subscribe a brand-new conversation over the WebSocket.
   Future<({ChatMessage message, String? conversationId})> send(
-      ChatSession s, String body) async {
-    final data = await guard(() => _crmClient.post(
-          '/session/${s.sessionId}/message',
-          data: {'body': body},
-        )) as Map<String, dynamic>;
+    ChatSession s,
+    String body,
+  ) async {
+    final data =
+        await guard(
+              () => _crmClient.post(
+                '/session/${s.sessionId}/message',
+                data: {'body': body},
+              ),
+            )
+            as Map<String, dynamic>;
     return (
       message: ChatMessage.fromSendResponse(data),
       conversationId: data['conversation_id']?.toString(),

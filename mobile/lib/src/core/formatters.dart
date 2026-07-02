@@ -14,10 +14,7 @@ class Fmt {
   /// Currency using the ISO code as the symbol (e.g. "NGN 1,250.00"), which
   /// avoids guessing a locale-specific glyph for arbitrary backend currencies.
   static String money(num amount, String currencyCode) {
-    final f = NumberFormat.currency(
-      symbol: '$currencyCode ',
-      decimalDigits: 2,
-    );
+    final f = NumberFormat.currency(symbol: '$currencyCode ', decimalDigits: 2);
     return f.format(amount);
   }
 

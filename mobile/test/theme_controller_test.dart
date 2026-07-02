@@ -16,20 +16,20 @@ void main() {
     store = <String, String>{};
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
-      final args = (call.arguments as Map?) ?? const {};
-      switch (call.method) {
-        case 'write':
-          store[args['key'] as String] = args['value'] as String;
-          return null;
-        case 'read':
-          return store[args['key'] as String];
-        case 'delete':
-          store.remove(args['key'] as String);
-          return null;
-        default:
-          return null;
-      }
-    });
+          final args = (call.arguments as Map?) ?? const {};
+          switch (call.method) {
+            case 'write':
+              store[args['key'] as String] = args['value'] as String;
+              return null;
+            case 'read':
+              return store[args['key'] as String];
+            case 'delete':
+              store.remove(args['key'] as String);
+              return null;
+            default:
+              return null;
+          }
+        });
   });
 
   tearDown(() {

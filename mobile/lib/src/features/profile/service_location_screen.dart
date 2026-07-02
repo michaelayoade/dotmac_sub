@@ -129,7 +129,9 @@ class _ServiceLocationScreenState extends ConsumerState<ServiceLocationScreen> {
     if (selected == null) return;
     setState(() => _submitting = true);
     try {
-      await ref.read(locationRepositoryProvider).submitCorrection(
+      await ref
+          .read(locationRepositoryProvider)
+          .submitCorrection(
             latitude: selected.latitude,
             longitude: selected.longitude,
             note: _note.text.trim(),
@@ -173,10 +175,12 @@ class _ServiceLocationScreenState extends ConsumerState<ServiceLocationScreen> {
   Widget _body(BuildContext context, ServiceLocation data) {
     final theme = Theme.of(context);
     final pending = data.pendingRequest;
-    final current =
-        data.hasPin ? LatLng(data.latitude!, data.longitude!) : null;
-    final pendingPoint =
-        pending != null ? LatLng(pending.latitude, pending.longitude) : null;
+    final current = data.hasPin
+        ? LatLng(data.latitude!, data.longitude!)
+        : null;
+    final pendingPoint = pending != null
+        ? LatLng(pending.latitude, pending.longitude)
+        : null;
     final canEdit = data.canSubmitRequest;
     final center = _selected ?? pendingPoint ?? current ?? _fallbackCenter;
 
@@ -244,8 +248,9 @@ class _ServiceLocationScreenState extends ConsumerState<ServiceLocationScreen> {
                             child: GestureDetector(
                               onPanUpdate: canEdit
                                   ? (d) {
-                                      final p =
-                                          _globalToLatLng(d.globalPosition);
+                                      final p = _globalToLatLng(
+                                        d.globalPosition,
+                                      );
                                       if (p != null) _dragTo(p);
                                     }
                                   : null,
@@ -291,12 +296,12 @@ class _ServiceLocationScreenState extends ConsumerState<ServiceLocationScreen> {
         Text(
           canEdit
               ? 'Tap the map or use the GPS button to drop the pin, then drag '
-                  'it to where your service is actually installed.'
+                    'it to where your service is actually installed.'
               : pending != null
-                  ? 'A correction is waiting for review. Cancel it to '
-                      'submit a different one.'
-                  : 'No service address is on file yet — contact support '
-                      'first so the address record can be created.',
+              ? 'A correction is waiting for review. Cancel it to '
+                    'submit a different one.'
+              : 'No service address is on file yet — contact support '
+                    'first so the address record can be created.',
           style: theme.textTheme.bodySmall,
         ),
         if (_selected != null) ...[
@@ -351,8 +356,10 @@ class _ServiceLocationScreenState extends ConsumerState<ServiceLocationScreen> {
           const SizedBox(height: 12),
           Card(
             child: ListTile(
-              leading:
-                  Icon(Icons.hourglass_top, color: context.semantic.warning),
+              leading: Icon(
+                Icons.hourglass_top,
+                color: context.semantic.warning,
+              ),
               title: const Text('Pending review'),
               subtitle: Text(
                 '${pending.latitude.toStringAsFixed(6)}, '

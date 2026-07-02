@@ -154,10 +154,10 @@ class ResellerTotals {
   final int openInvoices;
 
   factory ResellerTotals.fromJson(Map<String, dynamic> json) => ResellerTotals(
-        accounts: _toNum(json['accounts']).toInt(),
-        openBalance: _toNum(json['open_balance']),
-        openInvoices: _toNum(json['open_invoices']).toInt(),
-      );
+    accounts: _toNum(json['accounts']).toInt(),
+    openBalance: _toNum(json['open_balance']),
+    openInvoices: _toNum(json['open_invoices']).toInt(),
+  );
 }
 
 class ResellerAlert {
@@ -168,10 +168,10 @@ class ResellerAlert {
   final String? actionUrl;
 
   factory ResellerAlert.fromJson(Map<String, dynamic> json) => ResellerAlert(
-        level: json['level'] as String? ?? 'info',
-        message: json['message'] as String? ?? '',
-        actionUrl: json['action_url'] as String?,
-      );
+    level: json['level'] as String? ?? 'info',
+    message: json['message'] as String? ?? '',
+    actionUrl: json['action_url'] as String?,
+  );
 }
 
 class ResellerDashboard {
@@ -196,7 +196,8 @@ class ResellerDashboard {
             .map(ResellerAccount.fromJson)
             .toList(),
         totals: ResellerTotals.fromJson(
-            (json['totals'] as Map<String, dynamic>?) ?? const {}),
+          (json['totals'] as Map<String, dynamic>?) ?? const {},
+        ),
         alerts: (json['alerts'] as List? ?? const [])
             .cast<Map<String, dynamic>>()
             .map(ResellerAlert.fromJson)
@@ -228,14 +229,14 @@ class ResellerTicket {
       status == 'waiting_on_agent';
 
   factory ResellerTicket.fromJson(Map<String, dynamic> json) => ResellerTicket(
-        id: json['id'].toString(),
-        subject: json['subject'] as String? ?? 'Ticket',
-        status: json['status'] as String?,
-        priority: json['priority'] as String?,
-        createdAt: json['created_at'] == null
-            ? null
-            : DateTime.tryParse(json['created_at'].toString())?.toLocal(),
-      );
+    id: json['id'].toString(),
+    subject: json['subject'] as String? ?? 'Ticket',
+    status: json['status'] as String?,
+    priority: json['priority'] as String?,
+    createdAt: json['created_at'] == null
+        ? null
+        : DateTime.tryParse(json['created_at'].toString())?.toLocal(),
+  );
 }
 
 /// Tickets payload with the CRM-availability soft-failure flag.
@@ -418,7 +419,8 @@ class ResellerBillingSummary {
             .map(ResellerPaymentSummary.fromJson)
             .toList(),
         bankTransfer: BankTransferConfig.fromJson(
-            json['direct_bank_transfer'] as Map<String, dynamic>?),
+          json['direct_bank_transfer'] as Map<String, dynamic>?,
+        ),
       );
 }
 
@@ -471,8 +473,9 @@ class ResellerPayIntent {
         amount: asDouble(json['requested_amount']),
         currency: json['currency'] as String? ?? 'NGN',
         publicKey: json['provider_public_key'] as String?,
-        metadata: ((json['checkout_metadata'] as Map?) ?? const {})
-            .map((k, v) => MapEntry(k.toString(), v.toString())),
+        metadata: ((json['checkout_metadata'] as Map?) ?? const {}).map(
+          (k, v) => MapEntry(k.toString(), v.toString()),
+        ),
       );
 }
 
@@ -523,12 +526,14 @@ class ResellerFiberMap {
       if (type == 'Point') {
         final c = (geom['coordinates'] as List?) ?? const [];
         if (c.length >= 2 && c[0] != null && c[1] != null) {
-          points.add(FiberMapPoint(
-            lng: (c[0] as num).toDouble(),
-            lat: (c[1] as num).toDouble(),
-            type: props['type']?.toString() ?? 'point',
-            name: props['name']?.toString(),
-          ));
+          points.add(
+            FiberMapPoint(
+              lng: (c[0] as num).toDouble(),
+              lat: (c[1] as num).toDouble(),
+              type: props['type']?.toString() ?? 'point',
+              name: props['name']?.toString(),
+            ),
+          );
         }
       } else if (type == 'LineString') {
         lines.add(_lineToLatLng(geom['coordinates'] as List? ?? const []));
@@ -557,10 +562,10 @@ class FiberMapPoint {
 }
 
 List<LatLng> _lineToLatLng(List coords) => [
-      for (final c in coords)
-        if (c is List && c.length >= 2 && c[0] != null && c[1] != null)
-          LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble()),
-    ];
+  for (final c in coords)
+    if (c is List && c.length >= 2 && c[0] != null && c[1] != null)
+      LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble()),
+];
 
 /// A reseller new-service / installation request
 /// (POST/GET /reseller/service-requests).

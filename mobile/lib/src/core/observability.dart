@@ -42,7 +42,10 @@ class Log {
     if (kDebugMode) debugPrint('[$category:error] $message — $error');
     Sentry.addBreadcrumb(
       Breadcrumb(
-          message: message, category: category, level: SentryLevel.error),
+        message: message,
+        category: category,
+        level: SentryLevel.error,
+      ),
     );
   }
 }

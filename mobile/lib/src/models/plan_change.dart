@@ -18,12 +18,12 @@ class PlanOffer {
   final String periodLabel;
 
   factory PlanOffer.fromJson(Map<String, dynamic> json) => PlanOffer(
-        id: json['id'].toString(),
-        name: json['name'] as String? ?? 'Plan',
-        amount: asDouble(json['amount']),
-        currency: json['currency'] as String? ?? 'NGN',
-        periodLabel: json['period_label'] as String? ?? '/cycle',
-      );
+    id: json['id'].toString(),
+    name: json['name'] as String? ?? 'Plan',
+    amount: asDouble(json['amount']),
+    currency: json['currency'] as String? ?? 'NGN',
+    periodLabel: json['period_label'] as String? ?? '/cycle',
+  );
 }
 
 class PlanChangeOptions {
@@ -50,9 +50,9 @@ class PlanChangeOptions {
           .map(PlanOffer.fromJson)
           .toList(),
       walletBalance: asDoubleOrNull(json['wallet_balance']),
-      nextBillingDate:
-          DateTime.tryParse(json['next_billing_date']?.toString() ?? '')
-              ?.toLocal(),
+      nextBillingDate: DateTime.tryParse(
+        json['next_billing_date']?.toString() ?? '',
+      )?.toLocal(),
       billingMessage: json['billing_message'] as String?,
     );
   }

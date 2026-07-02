@@ -99,30 +99,30 @@ class _QuotesScreenState extends ConsumerState<QuotesScreen> {
   }
 
   Widget _empty(BuildContext context) => ListView(
-        children: [
-          const SizedBox(height: 120),
-          Icon(
-            Icons.map_outlined,
-            size: 64,
-            color: Theme.of(context).colorScheme.outline,
-          ),
-          const SizedBox(height: 16),
-          Center(
-            child: Text(
-              'No quotes yet',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-          ),
-          const SizedBox(height: 8),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 32),
-            child: Text(
-              'Pin your installation address to get an instant feasibility check and estimate.',
-              textAlign: TextAlign.center,
-            ),
-          ),
-        ],
-      );
+    children: [
+      const SizedBox(height: 120),
+      Icon(
+        Icons.map_outlined,
+        size: 64,
+        color: Theme.of(context).colorScheme.outline,
+      ),
+      const SizedBox(height: 16),
+      Center(
+        child: Text(
+          'No quotes yet',
+          style: Theme.of(context).textTheme.titleMedium,
+        ),
+      ),
+      const SizedBox(height: 8),
+      const Padding(
+        padding: EdgeInsets.symmetric(horizontal: 32),
+        child: Text(
+          'Pin your installation address to get an instant feasibility check and estimate.',
+          textAlign: TextAlign.center,
+        ),
+      ),
+    ],
+  );
 }
 
 class _QuoteCard extends StatelessWidget {
@@ -220,15 +220,15 @@ class _QuoteCard extends StatelessWidget {
   }
 
   Widget _row(BuildContext context, String label, String value) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 2),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text(label, style: Theme.of(context).textTheme.bodyMedium),
-            Text(value, style: Theme.of(context).textTheme.titleSmall),
-          ],
-        ),
-      );
+    padding: const EdgeInsets.symmetric(vertical: 2),
+    child: Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(label, style: Theme.of(context).textTheme.bodyMedium),
+        Text(value, style: Theme.of(context).textTheme.titleSmall),
+      ],
+    ),
+  );
 }
 
 class _StatusChip extends StatelessWidget {

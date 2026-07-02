@@ -59,8 +59,11 @@ class _LiveBandwidthCardState extends ConsumerState<LiveBandwidthCard> {
               children: [
                 Row(
                   children: [
-                    Icon(Icons.speed,
-                        size: 18, color: theme.colorScheme.primary),
+                    Icon(
+                      Icons.speed,
+                      size: 18,
+                      color: theme.colorScheme.primary,
+                    ),
                     const SizedBox(width: 6),
                     Text('Live bandwidth', style: theme.textTheme.titleMedium),
                   ],
@@ -78,8 +81,9 @@ class _LiveBandwidthCardState extends ConsumerState<LiveBandwidthCard> {
             if (!enabled)
               Text(
                 'Tap Start to measure your connection speed in real time.',
-                style: theme.textTheme.bodyMedium
-                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
               )
             else ...[
               Row(
@@ -113,8 +117,9 @@ class _LiveBandwidthCardState extends ConsumerState<LiveBandwidthCard> {
                 const SizedBox(height: 12),
                 Text(
                   'Peak (last hour)  ↑ ${Fmt.bps(v?.peakUploadBps)}   ↓ ${Fmt.bps(v?.peakDownloadBps)}',
-                  style: theme.textTheme.bodySmall
-                      ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
                 ),
               ],
               if (waiting) ...[
@@ -127,9 +132,12 @@ class _LiveBandwidthCardState extends ConsumerState<LiveBandwidthCard> {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     ),
                     const SizedBox(width: 8),
-                    Text('Measuring…',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant)),
+                    Text(
+                      'Measuring…',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
                   ],
                 ),
               ],
@@ -166,9 +174,12 @@ class _Meter extends StatelessWidget {
           children: [
             Icon(icon, size: 14, color: color),
             const SizedBox(width: 4),
-            Text(label,
-                style: theme.textTheme.labelMedium
-                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+            Text(
+              label,
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
           ],
         ),
         const SizedBox(height: 4),
