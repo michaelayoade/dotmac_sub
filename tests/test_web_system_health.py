@@ -38,6 +38,32 @@ def test_worker_health_summarizes_celery_service_details():
         response_ms=12.5,
         details={
             "workers": ["celery@worker-a", "celery@worker-b"],
+            "worker_details": [
+                {
+                    "name": "celery@worker-a",
+                    "queues": ["celery", "crm"],
+                    "restart_targets": ["celery-worker"],
+                    "active_tasks": 2,
+                    "reserved_tasks": 0,
+                    "scheduled_tasks": 1,
+                },
+                {
+                    "name": "celery@worker-b",
+                    "queues": ["billing"],
+                    "restart_targets": ["celery-worker-billing"],
+                    "active_tasks": 1,
+                    "reserved_tasks": 2,
+                    "scheduled_tasks": 0,
+                },
+            ],
+            "expected_queues": ["celery", "crm", "billing", "tr069"],
+            "missing_queues": ["tr069"],
+            "queue_restart_targets": {
+                "celery": "celery-worker",
+                "billing": "celery-worker-billing",
+                "tr069": "celery-worker-tr069",
+            },
+            "restart_enabled": True,
             "active_tasks": 3,
             "reserved_tasks": 2,
             "scheduled_tasks": 1,
@@ -50,6 +76,12 @@ def test_worker_health_summarizes_celery_service_details():
 
     assert health["status"] == "up"
     assert health["worker_count"] == 2
+    assert health["worker_details"][0]["queues"] == ["celery", "crm"]
+    assert health["worker_details"][0]["restart_targets"] == ["celery-worker"]
+    assert health["expected_queues"] == ["celery", "crm", "billing", "tr069"]
+    assert health["missing_queues"] == ["tr069"]
+    assert health["queue_restart_targets"]["tr069"] == "celery-worker-tr069"
+    assert health["restart_enabled"] is True
     assert health["active_tasks"] == 3
     assert health["queue_lengths"] == {"celery": 4, "billing": 0}
     assert health["long_running_tasks"] == [{"task_name": "slow.task"}]

@@ -23,6 +23,7 @@ from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
 
+
 # Response cache TTLs (seconds). Portal list/detail pages are read-heavy and
 # tolerate brief staleness; caching them stops every page load from fanning
 # out live HTTP calls per subscriber account.
@@ -61,7 +62,7 @@ def _resolve_scheduler_int(
     if value is None:
         return _env_int(env_name, default)
     try:
-        return int(value)
+        return int(value)  # type: ignore[call-overload]
     except (TypeError, ValueError):
         return _env_int(env_name, default)
 

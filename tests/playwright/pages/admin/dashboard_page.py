@@ -35,7 +35,7 @@ class AdminDashboardPage(BasePage):
     def expect_loaded(self) -> None:
         """Assert the dashboard is loaded."""
         expect(
-            self.page.get_by_role("heading", name="Infrastructure Overview", exact=True)
+            self.page.get_by_role("heading", name="Operations Overview", exact=True)
         ).to_be_visible()
 
     def expect_stats_visible(self) -> None:

@@ -768,7 +768,9 @@ def queue_bulk_message_from_payload(
 
     preview_only = bool(payload.get("preview_only"))
     if not preview_only and not bool(payload.get("confirmed")):
-        raise HTTPException(status_code=400, detail="Bulk message confirmation required")
+        raise HTTPException(
+            status_code=400, detail="Bulk message confirmation required"
+        )
     notifications: list[Notification] = []
     skipped: list[dict[str, str]] = []
     queued_count = 0

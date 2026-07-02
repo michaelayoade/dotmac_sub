@@ -200,7 +200,9 @@ class TestRateLimitRetry:
             return None
 
         with (
-            patch("app.services.crm_client.resolve_value", side_effect=fake_resolve_value),
+            patch(
+                "app.services.crm_client.resolve_value", side_effect=fake_resolve_value
+            ),
             patch("httpx.Client", side_effect=_seq_client(responses)),
             patch("app.services.crm_client.time.sleep") as sleep,
         ):

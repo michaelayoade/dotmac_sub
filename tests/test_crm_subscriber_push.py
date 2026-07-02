@@ -40,9 +40,7 @@ def _resp(status_code=200, body=None):
 def test_push_signs_body_and_posts_to_hmac_webhook():
     client = MagicMock()
     client.post_signed_webhook.return_value = _resp()
-    with _settings(), patch.object(
-        crm_webhook, "get_crm_client", return_value=client
-    ):
+    with _settings(), patch.object(crm_webhook, "get_crm_client", return_value=client):
         result = crm_webhook.push_subscriber_change(
             10291, {"balance": "10.00", "currency": "NGN"}, external_system="splynx"
         )
@@ -71,9 +69,7 @@ def test_push_noop_without_secret():
 def test_push_returns_ok_when_response_has_no_id():
     client = MagicMock()
     client.post_signed_webhook.return_value = _resp(body={})
-    with _settings(), patch.object(
-        crm_webhook, "get_crm_client", return_value=client
-    ):
+    with _settings(), patch.object(crm_webhook, "get_crm_client", return_value=client):
         assert (
             crm_webhook.push_subscriber_change(1, {}, external_system="dotmac") == "ok"
         )

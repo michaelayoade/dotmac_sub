@@ -861,7 +861,7 @@ def _prepaid_balance_gate_skip_reason(db: Session, account: Subscriber) -> str |
 
 
 def _minimum_enforcement_age_skip_reason(
-    db: Session, account: Subscriber, day_offset: int
+    db: Session, account: Subscriber, overdue_days: int
 ) -> str | None:
     """Block service-affecting action until the notice runway has elapsed."""
     value = settings_spec.resolve_value(
@@ -875,12 +875,12 @@ def _minimum_enforcement_age_skip_reason(
         minimum_days = 3
     if minimum_days <= 0:
         return None
-    if day_offset < minimum_days:
+    if overdue_days < minimum_days:
         logger.info(
-            "Dunning enforcement skipped for account %s: day_offset %s < "
+            "Dunning enforcement skipped for account %s: overdue_days %s < "
             "minimum enforcing day %s",
             account.id,
-            day_offset,
+            overdue_days,
             minimum_days,
         )
         return "notice_grace_active"
@@ -893,6 +893,7 @@ def _execute_dunning_action(
     action: DunningAction,
     day_offset: int,
     note: str | None,
+    overdue_days: int | None = None,
 ) -> str:
     """Execute a dunning action and return the outcome.
 
@@ -900,8 +901,9 @@ def _execute_dunning_action(
         db: Database session
         case: The dunning case
         action: The action to execute (notify, throttle, suspend, reject)
-        day_offset: Days overdue
+        day_offset: Policy step day
         note: Optional note for the action
+        overdue_days: Actual account overdue age after grace, when known
 
     Returns:
         Outcome string describing what was done
@@ -938,7 +940,7 @@ def _execute_dunning_action(
             )
             return "shielded"
         minimum_age_skip = _minimum_enforcement_age_skip_reason(
-            db, subscriber, day_offset
+            db, subscriber, day_offset if overdue_days is None else overdue_days
         )
         if minimum_age_skip:
             return minimum_age_skip
@@ -1507,7 +1509,12 @@ class DunningWorkflow(ListResponseMixin):
                 if not payload.dry_run:
                     # Execute the dunning action (notify, suspend, throttle, reject)
                     outcome = _execute_dunning_action(
-                        db, case, step.action, step.day_offset, step.note
+                        db,
+                        case,
+                        step.action,
+                        step.day_offset,
+                        step.note,
+                        overdue_days=max_days,
                     )
                     _create_action_log(
                         db,
@@ -1530,6 +1537,7 @@ class DunningWorkflow(ListResponseMixin):
                             "account_id": str(account_id),
                             "action": step.action.value,
                             "day_offset": step.day_offset,
+                            "overdue_days": max_days,
                             "outcome": outcome,
                             "invoice_id": str(oldest_invoice.id),
                         },
