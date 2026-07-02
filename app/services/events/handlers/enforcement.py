@@ -710,6 +710,14 @@ class EnforcementHandler:
                         metadata = dict(invoice.metadata_ or {})
                         if metadata.get("suspension_warning_sent_at"):
                             return
+                        shield = self._suspension_shield_reason(db, subscriber.id)
+                        if shield:
+                            logger.info(
+                                "Skipping suspension warning for account %s: %s",
+                                account_id,
+                                shield,
+                            )
+                            return
                         # Within grace period — emit warning, don't suspend yet
                         emit_event(
                             db,

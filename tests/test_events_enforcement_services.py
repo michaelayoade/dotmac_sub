@@ -1357,6 +1357,74 @@ class TestNotificationHandler:
         assert emit_calls == [EventType.subscription_suspension_warning]
         assert (invoice.metadata_ or {}).get("suspension_warning_sent_at")
 
+    def test_handle_invoice_overdue_shield_suppresses_warning(
+        self,
+        db_session,
+        subscriber,
+        monkeypatch,
+    ):
+        from app.models.domain_settings import DomainSetting, SettingDomain
+        from app.models.subscription_engine import SettingValueType
+
+        subscriber.status = AccountStatus.active
+        invoice = Invoice(
+            account_id=subscriber.id,
+            invoice_number="INV-GRACE-2",
+            status=InvoiceStatus.overdue,
+            total=100,
+            balance_due=100,
+            due_at=datetime.now(UTC) - timedelta(hours=6),
+            metadata_={},
+        )
+        db_session.add(invoice)
+        db_session.add_all(
+            [
+                DomainSetting(
+                    domain=SettingDomain.billing,
+                    key="auto_suspend_on_overdue",
+                    value_type=SettingValueType.boolean,
+                    value_text="true",
+                    value_json=True,
+                    is_active=True,
+                ),
+                DomainSetting(
+                    domain=SettingDomain.billing,
+                    key="suspension_grace_hours",
+                    value_type=SettingValueType.integer,
+                    value_text="48",
+                    is_active=True,
+                ),
+            ]
+        )
+        db_session.commit()
+
+        # An in-force service extension (or arrangement/proof) shields the
+        # account: no scary suspension warning while the shield holds.
+        monkeypatch.setattr(
+            "app.services.service_extensions.extension_shield_reason",
+            lambda _db, _account_id: "service extension test in force",
+        )
+
+        handler = EnforcementHandler()
+        event = Event(
+            event_type=EventType.invoice_overdue,
+            payload={"invoice_id": str(invoice.id)},
+            invoice_id=invoice.id,
+            account_id=subscriber.id,
+        )
+
+        emit_calls: list[EventType] = []
+        monkeypatch.setattr(
+            "app.services.events.handlers.enforcement.emit_event",
+            lambda *args, **kwargs: emit_calls.append(args[1]),
+        )
+
+        handler.handle(db_session, event)
+        db_session.refresh(invoice)
+
+        assert emit_calls == []
+        assert not (invoice.metadata_ or {}).get("suspension_warning_sent_at")
+
 
 # ---------------------------------------------------------------------------
 # Payment-received restore guard tests
