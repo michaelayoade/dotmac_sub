@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.catalog import NasDevice, Subscription, SubscriptionStatus
@@ -219,7 +219,7 @@ def _scope_filters(
     # Suspended subscriptions are in scope on purpose: ops reach for an
     # extension precisely when a customer lapsed during an outage window, and
     # silently skipping them left customers extended-on-paper but offline.
-    filters = [
+    filters: list[ColumnElement[bool]] = [
         Subscription.status.in_(
             (SubscriptionStatus.active, SubscriptionStatus.suspended)
         )
