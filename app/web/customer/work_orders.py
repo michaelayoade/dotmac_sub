@@ -93,7 +93,7 @@ def customer_rate_technician(
                 crm_id,
                 work_order_id,
                 rating=max(1, min(5, rating)),
-                comment=comment or None,
+                comment=(comment or "")[:2000] or None,
             )
         except Exception:  # noqa: BLE001 - rating is best-effort
             logger.warning("technician_rating_proxy_failed wo=%s", work_order_id)

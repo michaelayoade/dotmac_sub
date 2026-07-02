@@ -40,10 +40,12 @@ from app.services.auth_dependencies import require_permission
 from app.services.bandwidth import bandwidth_samples
 from app.services.customer_portal_context import resolve_customer_subscription
 from app.services.queue_adapter import enqueue_task
+from app.web.customer.branding import register_customer_portal_filters
 from app.web.request_parsing import parse_json_body
 
 logger = logging.getLogger(__name__)
 templates = Jinja2Templates(directory="templates")
+register_customer_portal_filters(templates)
 router = APIRouter(prefix="/customers", tags=["web-admin-customers"])
 
 _NOTIFICATION_QUEUE_TASK = "app.tasks.notifications.deliver_notification_queue"
