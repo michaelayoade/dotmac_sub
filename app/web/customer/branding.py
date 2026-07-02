@@ -82,6 +82,13 @@ def _format_portal_datetime(
     return f"{dt.strftime(fmt)}{suffix}"
 
 
+def register_customer_portal_filters(templates: Jinja2Templates) -> Jinja2Templates:
+    """Register filters used by shared customer portal templates."""
+    templates.env.filters["currency_amount"] = _format_currency_amount
+    templates.env.filters["portal_datetime"] = _format_portal_datetime
+    return templates
+
+
 def _get_cached_branding() -> tuple[dict, str, str] | None:
     """Return cached branding (stats, portal_name, favicon) if valid, else None."""
     with _branding_cache_lock:
@@ -174,6 +181,4 @@ def get_customer_templates() -> Jinja2Templates:
         directory="templates",
         context_processors=[customer_branding_context],
     )
-    templates.env.filters["currency_amount"] = _format_currency_amount
-    templates.env.filters["portal_datetime"] = _format_portal_datetime
-    return templates
+    return register_customer_portal_filters(templates)
