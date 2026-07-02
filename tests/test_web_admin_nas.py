@@ -6,10 +6,11 @@ from fastapi import Request
 from app.web.admin import nas
 
 
-def test_generate_radius_shared_secret_is_six_char_alphanumeric_mixed() -> None:
+def test_generate_radius_shared_secret_is_strong_alphanumeric_mixed() -> None:
     secret = nas._generate_radius_shared_secret()
 
-    assert len(secret) == 6
+    # Default is now a strong 32 chars (was a weak 6); floor of 16, configurable.
+    assert len(secret) == 32
     assert secret.isalnum()
     assert any(char.isalpha() for char in secret)
     assert any(char.isdigit() for char in secret)
@@ -35,7 +36,7 @@ def test_device_form_new_includes_generated_radius_secret() -> None:
     assert render.call_args.args[0] == "admin/network/nas/device_form.html"
     context = render.call_args.args[1]
     secret = context["generated_radius_secret"]
-    assert len(secret) == 6
+    assert len(secret) == 32
     assert secret.isalnum()
     assert any(char.isalpha() for char in secret)
     assert any(char.isdigit() for char in secret)
