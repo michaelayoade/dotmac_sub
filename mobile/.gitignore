@@ -43,3 +43,8 @@ dart_defines.json
 # (they identify the Firebase project; kept out of the repo). See PUSH_SETUP.md.
 android/app/google-services.json
 ios/Runner/GoogleService-Info.plist
+lib/firebase_options.dart
+
+# Android release signing — reconstructed from CI secrets, never committed.
+android/key.properties
+*.jks
