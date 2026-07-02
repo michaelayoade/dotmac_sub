@@ -39,6 +39,37 @@ def reseller_dashboard(
     return web_reseller_routes_service.reseller_dashboard(request, db, page, per_page)
 
 
+@router.get("/work-orders", response_class=HTMLResponse)
+def reseller_work_orders(request: Request, db: Session = Depends(get_db)):
+    return web_reseller_routes_service.reseller_work_orders_page(request, db)
+
+
+@router.get("/work-orders/{account_id}/{work_order_id}/technician-location")
+def reseller_work_order_technician_location(
+    account_id: str,
+    work_order_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    return web_reseller_routes_service.reseller_technician_location(
+        request, db, account_id, work_order_id
+    )
+
+
+@router.post("/work-orders/{account_id}/{work_order_id}/rate-technician")
+def reseller_rate_technician_route(
+    account_id: str,
+    work_order_id: str,
+    request: Request,
+    rating: int = Form(...),
+    comment: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    return web_reseller_routes_service.reseller_rate_technician(
+        request, db, account_id, work_order_id, rating, comment
+    )
+
+
 @router.get("/vas", response_class=HTMLResponse)
 def reseller_vas(request: Request, db: Session = Depends(get_db)):
     return web_reseller_routes_service.reseller_vas_page(request, db)
