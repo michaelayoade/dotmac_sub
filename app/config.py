@@ -122,6 +122,29 @@ class Settings:
     router_tunnel_cleanup_interval_min: int = int(
         os.getenv("ROUTER_TUNNEL_CLEANUP_MIN", "5")
     )
+    # Config snapshots are captured over SSH `/export`: RouterOS 7.x REST cannot
+    # return config text (inline /export is empty; exported files aren't readable
+    # back over REST). Uses the dedicated dotmac-ops SSH key, not the API/REST
+    # identity. Set ROUTER_CONFIG_EXPORT_VIA_SSH=false to fall back to REST.
+    router_config_export_via_ssh: bool = os.getenv(
+        "ROUTER_CONFIG_EXPORT_VIA_SSH", "true"
+    ).lower() in ("true", "1", "yes")
+    router_config_ssh_username: str = os.getenv(
+        "ROUTER_CONFIG_SSH_USERNAME", "dotmac-ops"
+    )
+    router_config_ssh_port: int = int(os.getenv("ROUTER_CONFIG_SSH_PORT", "120"))
+    router_config_ssh_key_path: str = os.getenv(
+        "ROUTER_CONFIG_SSH_KEY_PATH", "/etc/dotmac/dotmac-ops.key"
+    )
+    # Host-key pinning (TOFU): known_hosts persists first-seen router keys so a
+    # CHANGED key is rejected (MITM guard). Strict mode also rejects unknown
+    # hosts (requires a pre-populated known_hosts file).
+    router_config_ssh_known_hosts_path: str = os.getenv(
+        "ROUTER_CONFIG_SSH_KNOWN_HOSTS_PATH", "/etc/dotmac/router_known_hosts"
+    )
+    router_config_ssh_strict_host_key: bool = os.getenv(
+        "ROUTER_CONFIG_SSH_STRICT_HOST_KEY", "false"
+    ).lower() in ("true", "1", "yes")
 
     # TR-069 settings
     tr069_periodic_inform_interval: int = int(
