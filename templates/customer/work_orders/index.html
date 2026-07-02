@@ -38,13 +38,13 @@
                 {% if w.scheduled_start %}
                 <div>
                     <dt class="text-xs font-semibold uppercase tracking-wide text-stone-400 dark:text-stone-500">Scheduled</dt>
-                    <dd class="mt-0.5 text-sm text-stone-900 dark:text-white">{{ w.scheduled_start[:16] | replace('T', ' ') }}{% if w.scheduled_end %} – {{ w.scheduled_end[11:16] }}{% endif %}</dd>
+                    <dd class="mt-0.5 text-sm text-stone-900 dark:text-white">{{ w.scheduled_start | portal_datetime('%b %d, %Y %H:%M') }}{% if w.scheduled_end %} &ndash; {{ w.scheduled_end | portal_datetime('%H:%M') }}{% endif %}</dd>
                 </div>
                 {% endif %}
                 {% if w.estimated_arrival_at and w.status not in ['completed', 'canceled'] %}
                 <div>
                     <dt class="text-xs font-semibold uppercase tracking-wide text-stone-400 dark:text-stone-500">Estimated arrival</dt>
-                    <dd class="mt-0.5 text-sm font-semibold text-stone-900 dark:text-white">{{ w.estimated_arrival_at[:16] | replace('T', ' ') }}</dd>
+                    <dd class="mt-0.5 text-sm font-semibold text-stone-900 dark:text-white">{{ w.estimated_arrival_at | portal_datetime('%b %d, %Y %H:%M') }}</dd>
                 </div>
                 {% endif %}
                 {% if w.technician_name %}
@@ -58,7 +58,7 @@
                 {% if w.completed_at %}
                 <div>
                     <dt class="text-xs font-semibold uppercase tracking-wide text-stone-400 dark:text-stone-500">Completed</dt>
-                    <dd class="mt-0.5 text-sm text-stone-900 dark:text-white">{{ w.completed_at[:16] | replace('T', ' ') }}</dd>
+                    <dd class="mt-0.5 text-sm text-stone-900 dark:text-white">{{ w.completed_at | portal_datetime('%b %d, %Y %H:%M') }}</dd>
                 </div>
                 {% endif %}
             </dl>

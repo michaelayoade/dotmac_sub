@@ -204,7 +204,8 @@ def upload_ticket_attachments(
             if not payload:
                 continue
             if len(payload) > MAX_ATTACHMENT_BYTES:
-                raise ValueError(f"{filename}: max file size is 5 MB")
+                max_mb = max(1, MAX_ATTACHMENT_BYTES // 1048576)
+                raise ValueError(f"{filename}: max file size is {max_mb} MB")
             content_type = (
                 getattr(attachment, "content_type", None) or "application/octet-stream"
             ).lower()

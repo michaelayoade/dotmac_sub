@@ -58,6 +58,7 @@ def get_subscriber_notification_preferences(
             True,
         ),
         "sms_updates": _metadata_flag(metadata.get("sms_updates"), True),
+        "push_notifications": _metadata_flag(metadata.get("push_notifications"), True),
         **{
             f"{category}_notifications": _metadata_flag(
                 metadata.get(f"{category}_notifications"),
@@ -162,6 +163,8 @@ def is_notification_enabled_for_subscriber(
     if category == "billing" and not preferences["billing_notifications"]:
         return False
     if normalized_channel in {"sms", "whatsapp"} and not preferences["sms_updates"]:
+        return False
+    if normalized_channel == "push" and not preferences["push_notifications"]:
         return False
 
     matching_contacts = _contact_preference_rows(

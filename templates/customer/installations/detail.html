@@ -37,16 +37,16 @@
         <div class="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm dark:border-stone-700 dark:bg-stone-800">
             <p class="text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">Date</p>
             <p class="mt-2 text-xl font-semibold text-stone-900 dark:text-white">
-                {{ appointment.scheduled_start.strftime('%b %d, %Y') if appointment.scheduled_start else 'TBD' }}
+                {{ appointment.scheduled_start | portal_datetime('%b %d, %Y') if appointment.scheduled_start else 'TBD' }}
             </p>
         </div>
         <div class="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm dark:border-stone-700 dark:bg-stone-800">
             <p class="text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">Time Window</p>
             <p class="mt-2 text-xl font-semibold text-stone-900 dark:text-white">
                 {% if appointment.scheduled_start and appointment.scheduled_end %}
-                {{ appointment.scheduled_start.strftime('%I:%M %p') }} &ndash; {{ appointment.scheduled_end.strftime('%I:%M %p') }}
+                {{ appointment.scheduled_start | portal_datetime('%I:%M %p') }} &ndash; {{ appointment.scheduled_end | portal_datetime('%I:%M %p') }}
                 {% elif appointment.scheduled_start %}
-                {{ appointment.scheduled_start.strftime('%I:%M %p') }}
+                {{ appointment.scheduled_start | portal_datetime('%I:%M %p') }}
                 {% else %}
                 TBD
                 {% endif %}
@@ -110,7 +110,12 @@
                     <li>Ensure someone over 18 is present at the installation address.</li>
                     <li>Clear access to where the fiber cable enters the building.</li>
                     <li>Have a power outlet available near the planned router location.</li>
-                    <li>If you need to reschedule, please contact support.</li>
+                    <li>
+                        Need a different time?
+                        <a href="/portal/support/new?title=Reschedule%20installation&description=I%20need%20to%20reschedule%20appointment%20{{ appointment.id }}" class="font-semibold underline hover:no-underline">Request reschedule</a>
+                        or
+                        <a href="/portal/support/new?title=Cancel%20installation&description=I%20need%20to%20cancel%20appointment%20{{ appointment.id }}" class="font-semibold underline hover:no-underline">request cancellation</a>.
+                    </li>
                 </ul>
             </div>
         </div>

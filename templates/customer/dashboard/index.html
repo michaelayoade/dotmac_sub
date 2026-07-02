@@ -36,10 +36,16 @@
             <div class="space-y-3">
                 <div class="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs font-medium text-white/80 backdrop-blur-sm">
                     <span class="relative flex h-2 w-2">
+                        {% if stats_error or crm_error %}
+                        <span class="relative inline-flex rounded-full h-2 w-2 bg-amber-400"></span>
+                        {% elif service.status == 'active' %}
                         <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                         <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-400"></span>
+                        {% else %}
+                        <span class="relative inline-flex rounded-full h-2 w-2 bg-amber-400"></span>
+                        {% endif %}
                     </span>
-                    All systems operational
+                    {% if stats_error or crm_error %}Account details incomplete{% elif service.status == 'active' %}Service active{% else %}Service {{ service.status | replace('_', ' ') }}{% endif %}
                 </div>
                 <h1 class="text-3xl lg:text-4xl font-display font-bold text-white">
                     Welcome back, <span class="text-gradient">{{ user.first_name }}</span>!
@@ -97,13 +103,18 @@
                     </div>
                 </div>
                 <div class="space-y-3">
+                    {% if account.has_next_bill %}
                     <p class="text-2xl font-display font-bold leading-tight text-stone-900 dark:text-white sm:text-3xl">
                         {{ account.next_bill_amount | currency_amount }}
                         <span class="text-base font-medium text-stone-400 sm:text-lg">NGN</span>
                     </p>
                     <p class="text-sm leading-6 text-stone-500 dark:text-stone-400">
-                        Due <span class="font-medium text-stone-700 dark:text-stone-300">{{ account.next_bill_date.strftime('%b %d, %Y') }}</span>
+                        Due <span class="font-medium text-stone-700 dark:text-stone-300">{{ account.next_bill_date | portal_datetime('%b %d, %Y') }}</span>
                     </p>
+                    {% else %}
+                    <p class="text-2xl font-display font-bold leading-tight text-stone-900 dark:text-white sm:text-3xl">No upcoming bill</p>
+                    <p class="text-sm leading-6 text-stone-500 dark:text-stone-400">We will show the next due date when one is available.</p>
+                    {% endif %}
                 </div>
             </div>
         </div>
@@ -284,7 +295,7 @@
                 </div>
                 <div class="flex-1 min-w-0">
                     <p class="text-sm font-medium text-stone-900 dark:text-white">{{ activity.description }}</p>
-                    <p class="text-xs text-stone-500 dark:text-stone-400">{{ activity.date.strftime('%b %d, %Y at %I:%M %p') }}</p>
+                    <p class="text-xs text-stone-500 dark:text-stone-400">{{ activity.date | portal_datetime('%b %d, %Y at %I:%M %p') }}</p>
                 </div>
                 {% if activity.amount %}
                 <span class="text-sm font-semibold tabular-nums {% if activity.type == 'payment' %}text-emerald-600 dark:text-emerald-400{% else %}text-stone-900 dark:text-white{% endif %}">

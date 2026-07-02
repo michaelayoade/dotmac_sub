@@ -50,13 +50,13 @@
                         </div>
                         <div>
                             <p class="text-sm font-semibold text-stone-900 dark:text-white">
-                                {{ appt.scheduled_start.strftime('%A, %B %d, %Y') if appt.scheduled_start else 'Date TBD' }}
+                                {{ appt.scheduled_start | portal_datetime('%A, %B %d, %Y', 'Date TBD') }}
                             </p>
                             <p class="mt-0.5 text-sm text-stone-500 dark:text-stone-400">
                                 {% if appt.scheduled_start and appt.scheduled_end %}
-                                {{ appt.scheduled_start.strftime('%I:%M %p') }} &ndash; {{ appt.scheduled_end.strftime('%I:%M %p') }}
+                                {{ appt.scheduled_start | portal_datetime('%I:%M %p') }} &ndash; {{ appt.scheduled_end | portal_datetime('%I:%M %p') }}
                                 {% elif appt.scheduled_start %}
-                                {{ appt.scheduled_start.strftime('%I:%M %p') }}
+                                {{ appt.scheduled_start | portal_datetime('%I:%M %p') }}
                                 {% else %}
                                 Time TBD
                                 {% endif %}

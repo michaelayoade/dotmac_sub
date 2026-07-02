@@ -66,7 +66,7 @@
                 <tbody class="divide-y divide-stone-100 dark:divide-stone-700/50">
                     {% for row in speedtest_history %}
                     <tr>
-                        <td class="px-3 py-2 text-sm text-stone-700 dark:text-stone-300">{{ row.tested_at.strftime('%Y-%m-%d %H:%M') if row.tested_at else '-' }}</td>
+                        <td class="px-3 py-2 text-sm text-stone-700 dark:text-stone-300">{{ row.tested_at | portal_datetime('%Y-%m-%d %H:%M', '-') }}</td>
                         <td class="px-3 py-2 text-sm font-semibold text-cyan-600 dark:text-cyan-400">{{ '%.2f'|format(row.download_mbps or 0) }} Mbps</td>
                         <td class="px-3 py-2 text-sm font-semibold text-emerald-600 dark:text-emerald-400">{{ '%.2f'|format(row.upload_mbps or 0) }} Mbps</td>
                         <td class="px-3 py-2 text-sm text-amber-600 dark:text-amber-400">{{ '%.2f'|format(row.latency_ms or 0) }} ms</td>

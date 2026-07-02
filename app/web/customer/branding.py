@@ -1,10 +1,12 @@
 """Shared branding context for customer portal templates."""
 
 import logging
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from threading import Lock
 from time import monotonic
 from typing import TypedDict
+from zoneinfo import ZoneInfo
 
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
@@ -43,6 +45,41 @@ def _format_currency_amount(value: object) -> str:
         except (InvalidOperation, ValueError, TypeError):
             return str(value)
     return f"{amount:,.2f}"
+
+
+_PORTAL_DISPLAY_TZ = ZoneInfo("Africa/Lagos")
+_PORTAL_DISPLAY_TZ_LABEL = "WAT"
+
+
+def _coerce_datetime(value: object) -> datetime | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, str):
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(_PORTAL_DISPLAY_TZ)
+
+
+def _format_portal_datetime(
+    value: object,
+    fmt: str = "%b %d, %Y %H:%M",
+    fallback: str = "-",
+    include_tz: bool = True,
+) -> str:
+    """Format customer-facing datetimes in the portal display timezone."""
+    dt = _coerce_datetime(value)
+    if dt is None:
+        return fallback
+    suffix = f" {_PORTAL_DISPLAY_TZ_LABEL}" if include_tz else ""
+    return f"{dt.strftime(fmt)}{suffix}"
 
 
 def _get_cached_branding() -> tuple[dict, str, str] | None:
@@ -138,4 +175,5 @@ def get_customer_templates() -> Jinja2Templates:
         context_processors=[customer_branding_context],
     )
     templates.env.filters["currency_amount"] = _format_currency_amount
+    templates.env.filters["portal_datetime"] = _format_portal_datetime
     return templates
