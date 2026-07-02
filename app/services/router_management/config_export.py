@@ -45,7 +45,7 @@ def _install_host_key_policy(client: paramiko.SSHClient) -> None:
                 os.makedirs(directory, exist_ok=True)
             if not os.path.exists(known_hosts):
                 open(known_hosts, "a").close()  # touch so first-seen keys persist
-            client.load_host_keys(known_hosts)
+            client.load_host_keys(known_hosts)  # type: ignore[attr-defined]
         except OSError as exc:
             logger.warning("router known_hosts %r unavailable: %s", known_hosts, exc)
     if getattr(settings, "router_config_ssh_strict_host_key", False):
