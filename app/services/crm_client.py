@@ -717,6 +717,43 @@ class CRMClient:
         )
         return data if isinstance(data, dict) else {}
 
+    def get_portal_technician_location(
+        self, crm_subscriber_id: str, work_order_id: str, *, actor: str = "subscriber"
+    ) -> dict[str, Any]:
+        """Live technician position for an in-progress work order (polled). Not
+        cached — it's real-time. Returns the CRM's {available, latitude, ...}."""
+        token = self._portal_token(crm_subscriber_id, ["work_orders:read"], actor=actor)
+        data = self._request(
+            "GET",
+            f"/api/v1/portal/work-orders/{work_order_id}/technician-location",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        return data if isinstance(data, dict) else {}
+
+    def submit_portal_technician_rating(
+        self,
+        crm_subscriber_id: str,
+        work_order_id: str,
+        *,
+        rating: int,
+        comment: str | None = None,
+        actor: str = "subscriber",
+    ) -> dict[str, Any]:
+        """Submit a technician rating for a completed work order (CSAT/Survey)."""
+        token = self._portal_token(
+            crm_subscriber_id, ["work_orders:write"], actor=actor
+        )
+        payload: dict[str, Any] = {"rating": rating}
+        if comment:
+            payload["comment"] = comment
+        data = self._request(
+            "POST",
+            f"/api/v1/portal/work-orders/{work_order_id}/rate-technician",
+            json_data=payload,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        return data if isinstance(data, dict) else {}
+
     def create_portal_referral(
         self,
         crm_subscriber_id: str,
