@@ -663,7 +663,9 @@ class EnforcementHandler:
         )
         if proof_id:
             return f"payment proof {proof_id} pending review"
-        return None
+        from app.services.service_extensions import extension_shield_reason
+
+        return extension_shield_reason(db, account_id)
 
     def _handle_invoice_overdue(self, db: Session, event: Event) -> None:
         """Handle overdue warnings; dunning owns overdue service cuts."""

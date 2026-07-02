@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.catalog import NasDevice, Subscription, SubscriptionStatus
@@ -216,7 +216,14 @@ def _scope_filters(
     *,
     subscriber_ids_resolved: bool = False,
 ) -> list:
-    filters = [Subscription.status == SubscriptionStatus.active]
+    # Suspended subscriptions are in scope on purpose: ops reach for an
+    # extension precisely when a customer lapsed during an outage window, and
+    # silently skipping them left customers extended-on-paper but offline.
+    filters: list[ColumnElement[bool]] = [
+        Subscription.status.in_(
+            (SubscriptionStatus.active, SubscriptionStatus.suspended)
+        )
+    ]
     if scope_type == ServiceExtensionScope.nas_device:
         if not scope_id:
             raise HTTPException(status_code=400, detail="NAS device is required")
@@ -482,12 +489,48 @@ def cancel_extension(
     return extension
 
 
+def _resume_billing_suspension(
+    db: Session, subscription: Subscription, extension: ServiceExtension
+) -> bool:
+    """Lift billing-driven suspensions so the extension actually restores service.
+
+    Only ``overdue`` (dunning) and ``prepaid`` (balance-lapse) locks are
+    resolved; admin, fraud, FUP, and customer-hold locks are deliberately left
+    in place — an outage-compensation extension must not override those.
+    Returns True if the subscription came back to active.
+    """
+    from app.models.enforcement_lock import EnforcementReason
+    from app.services.account_lifecycle import restore_subscription
+
+    for reason in (EnforcementReason.overdue, EnforcementReason.prepaid):
+        try:
+            restore_subscription(
+                db,
+                str(subscription.id),
+                trigger="admin",
+                resolved_by=f"service_extension:{extension.id}",
+                reason=reason,
+                notes=f"Service extension +{extension.days}d: {extension.reason}",
+            )
+        except ValueError as exc:
+            logger.warning(
+                "Extension %s could not resume subscription %s (%s): %s",
+                extension.id,
+                subscription.id,
+                reason.value,
+                exc,
+            )
+        if subscription.status == SubscriptionStatus.active:
+            return True
+    return False
+
+
 def apply_extension(
     db: Session, extension_id: str, *, actor_id: str | None = None
 ) -> ServiceExtension:
     """Apply a pending extension exactly once: push next_billing_at by N days
-    on every active in-scope subscription, record an entry per subscription,
-    notify each customer, and audit the batch."""
+    on every in-scope subscription (resuming billing-suspended ones), record an
+    entry per subscription, notify each customer, and audit the batch."""
     from app.models.audit import AuditActorType
     from app.services.audit_adapter import record_audit_event
     from app.services.events import emit_event
@@ -503,6 +546,8 @@ def apply_extension(
     delta = timedelta(days=extension.days)
     applied = 0
     skipped = 0
+    resumed = 0
+    still_suspended: list[str] = []
     processed = 0
     for subscription in _iter_scope_subscriptions(
         db,
@@ -529,6 +574,11 @@ def apply_extension(
                 new_next_billing_at=subscription.next_billing_at,
             )
         )
+        if subscription.status == SubscriptionStatus.suspended:
+            if _resume_billing_suspension(db, subscription, extension):
+                resumed += 1
+            else:
+                still_suspended.append(str(subscription.id))
         emit_event(
             db,
             EventType.service_extended,
@@ -566,6 +616,8 @@ def apply_extension(
             "scope_type": extension.scope_type.value,
             "affected": applied,
             "skipped": skipped,
+            "resumed": resumed,
+            "still_suspended": still_suspended,
             "reason": extension.reason,
         },
         defer_until_commit=True,
@@ -573,6 +625,60 @@ def apply_extension(
     db.commit()
     db.refresh(extension)
     return extension
+
+
+def _shield_window_end(created_at: datetime, days: int) -> datetime:
+    start = created_at if created_at.tzinfo else created_at.replace(tzinfo=UTC)
+    return start + timedelta(days=days)
+
+
+def extension_shield_reason(db: Session, account_id: str | uuid.UUID) -> str | None:
+    """Why billing enforcement should skip this account, or None.
+
+    An applied service extension grants N days of service regardless of
+    arrears (outage compensation / goodwill). Until those N days elapse from
+    the moment the extension was applied, dunning must not suspend the
+    account — otherwise enforcement undoes the extension within hours, which
+    is exactly what happened at cutover.
+    """
+    reasons = bulk_extension_shield_reasons(db, [coerce_uuid(str(account_id))])
+    return next(iter(reasons.values()), None)
+
+
+def bulk_extension_shield_reasons(
+    db: Session, account_ids: Sequence[uuid.UUID] | set[uuid.UUID]
+) -> dict[uuid.UUID, str]:
+    """Return in-force extension shield reasons for a cohort of accounts."""
+    ids = {coerce_uuid(str(account_id)) for account_id in account_ids}
+    if not ids:
+        return {}
+    now = datetime.now(UTC)
+    rows = db.execute(
+        select(
+            ServiceExtensionEntry.subscriber_id,
+            ServiceExtensionEntry.created_at,
+            ServiceExtension.days,
+            ServiceExtension.id,
+        )
+        .join(
+            ServiceExtension, ServiceExtension.id == ServiceExtensionEntry.extension_id
+        )
+        .where(
+            ServiceExtensionEntry.subscriber_id.in_(ids),
+            ServiceExtension.status == ServiceExtensionStatus.applied,
+            ServiceExtensionEntry.created_at
+            >= now - timedelta(days=MAX_ALLOWED_EXTENSION_DAYS),
+        )
+    ).all()
+    reasons: dict[uuid.UUID, str] = {}
+    for subscriber_id, created_at, days, extension_id in rows:
+        until = _shield_window_end(created_at, int(days))
+        if until > now:
+            reasons.setdefault(
+                subscriber_id,
+                f"service extension {extension_id} in force until {until.date().isoformat()}",
+            )
+    return reasons
 
 
 def scope_options(db: Session) -> dict:
