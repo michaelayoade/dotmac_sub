@@ -24,6 +24,12 @@
             <span class="text-stone-900 dark:text-white">{{ ticket.get('ticket_number', ticket.get('id', '')) }}</span>
         </nav>
         <h1 class="text-2xl font-display font-bold text-stone-900 dark:text-white">{{ ticket.get('title', 'Ticket') }}</h1>
+        <button type="button"
+                onclick="window.dmLiveChat && window.dmLiveChat.openWith('/api/v1/me/chat/session?ticket_id={{ ticket.get('id') }}')"
+                class="mt-2 inline-flex items-center gap-2 rounded-xl bg-[var(--color-brand-600)] px-3 py-1.5 text-sm font-semibold text-white hover:opacity-90">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M21 12c0 4.418-4.03 8-9 8a9.9 9.9 0 01-4-.8L3 20l1.3-3.9A7.9 7.9 0 013 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+            Chat about this ticket
+        </button>
         <div class="mt-2 flex flex-wrap items-center gap-2">
             {% set t_status = ticket.get('status', 'open') %}
             {% set t_priority = ticket.get('priority', 'normal') %}
