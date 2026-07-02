@@ -184,6 +184,7 @@ def reports_revenue(request: Request, db: Session = Depends(get_db)):
         "outstanding_count": report_data["outstanding_count"],
         "collection_rate": report_data["collection_rate"],
         "recent_payments": report_data["recent_payments"],
+        "revenue_data": report_data["revenue_data"],
         "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
     }
     return templates.TemplateResponse("admin/reports/revenue.html", context)
@@ -241,6 +242,7 @@ def reports_subscribers(
         "recent_subscribers": report_data["recent_subscribers"],
         "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
         "customers": report_data["customers"],
+        "growth_data": report_data["growth_data"],
         "date_from": report_data["date_from"],
         "date_to": report_data["date_to"],
         "status_filter": report_data["status_filter"],
@@ -289,6 +291,7 @@ def reports_churn(request: Request, db: Session = Depends(get_db)):
         "cancelled_count": report_data["cancelled_count"],
         "at_risk_count": report_data["at_risk_count"],
         "churn_reasons": report_data["churn_reasons"],
+        "churn_data": report_data["churn_data"],
         "recent_cancellations": report_data["recent_cancellations"],
         "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
     }
@@ -506,9 +509,16 @@ def reports_tax(request: Request, db: Session = Depends(get_db)):
 def reports_mrr(
     request: Request,
     year: int | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
     db: Session = Depends(get_db),
 ):
-    data = web_reports_ext_service.get_mrr_data(db, year=year)
+    data = web_reports_ext_service.get_mrr_data(
+        db,
+        year=year,
+        date_from=date_from,
+        date_to=date_to,
+    )
     ctx = _base_context(
         request,
         db,

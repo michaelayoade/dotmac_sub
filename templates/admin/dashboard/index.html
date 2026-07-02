@@ -17,6 +17,7 @@
         <div>
             <h1 class="font-display text-3xl font-bold tracking-tight text-slate-900 dark:text-white">Operations Overview</h1>
             <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">Customers, billing, and infrastructure at a glance.</p>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Data as of {{ data_as_of.strftime('%b %d, %Y %H:%M') if data_as_of else now.strftime('%b %d, %Y %H:%M') }}</p>
         </div>
         <div class="flex gap-3">
             {{ action_button("Add Customer", "/admin/customers/new", icon_plus(), "primary", "amber", "orange") }}

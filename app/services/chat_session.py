@@ -97,24 +97,62 @@ def _mint(
     }
 
 
-def broker_customer_session(db: Session, subscriber_id: str) -> dict:
-    """Mint a chat session for an authenticated customer."""
+def _with_context(
+    metadata: dict, *, ticket_id: str | None, project_id: str | None
+) -> dict:
+    """Attach ticket/project context so the agent sees what the chat is about.
+
+    Carried in session metadata (the CRM merges it onto the chat session), so a
+    customer can 'engage us on this ticket/project' and the agent has the
+    reference. Ticket wins if both are somehow supplied.
+    """
+    if ticket_id:
+        metadata["ticket_id"] = str(ticket_id)
+        metadata["subject"] = "Chat about a support ticket"
+    elif project_id:
+        metadata["project_id"] = str(project_id)
+        metadata["subject"] = "Chat about an installation project"
+    return metadata
+
+
+def broker_customer_session(
+    db: Session,
+    subscriber_id: str,
+    *,
+    ticket_id: str | None = None,
+    project_id: str | None = None,
+) -> dict:
+    """Mint a chat session for an authenticated customer, optionally scoped to a
+    ticket or project the customer is chatting about."""
     _require_enabled()
     sub = db.get(Subscriber, coerce_uuid(subscriber_id))
     if sub is None:
         raise HTTPException(status_code=404, detail="Subscriber not found")
 
     name = sub.display_name or f"{sub.first_name} {sub.last_name}".strip()
+    metadata = _with_context(
+        {"surface": "customer", "subscriber_id": str(sub.id)},
+        ticket_id=ticket_id,
+        project_id=project_id,
+    )
     return _mint(
         email=sub.email or "",
         name=name or None,
         crm_subscriber_id=resolve_crm_subscriber_id(db, str(sub.id)),
-        metadata={"surface": "customer", "subscriber_id": str(sub.id)},
+        metadata=metadata,
     )
 
 
-def broker_reseller_session(db: Session, reseller_id: str, principal: dict) -> dict:
-    """Mint a chat session for an authenticated reseller (general pool).
+def broker_reseller_session(
+    db: Session,
+    reseller_id: str,
+    principal: dict,
+    *,
+    ticket_id: str | None = None,
+    project_id: str | None = None,
+) -> dict:
+    """Mint a chat session for an authenticated reseller (general pool),
+    optionally scoped to a ticket or project.
 
     Identity prefers the reseller_user that is logged in (Layer 3); otherwise it
     falls back to the reseller org's contact details.
@@ -134,9 +172,14 @@ def broker_reseller_session(db: Session, reseller_id: str, principal: dict) -> d
     email = email or reseller.contact_email
     name = name or reseller.name
 
+    metadata = _with_context(
+        {"surface": "reseller_portal", "reseller_id": str(reseller.id)},
+        ticket_id=ticket_id,
+        project_id=project_id,
+    )
     return _mint(
         email=email or "",
         name=name,
         crm_subscriber_id=None,
-        metadata={"surface": "reseller_portal", "reseller_id": str(reseller.id)},
+        metadata=metadata,
     )

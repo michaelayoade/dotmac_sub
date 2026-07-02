@@ -61,7 +61,7 @@
                         </span>
                     </td>
                     <td class="px-6 py-4 text-xs text-stone-500 dark:text-stone-400">
-                        {{ ticket.get('updated_at', ticket.get('created_at', '')) [:16] | replace('T', ' ') }}
+                        {{ (ticket.get('updated_at') or ticket.get('created_at')) | portal_datetime('%b %d, %Y %H:%M') }}
                     </td>
                 </tr>
                 {% else %}

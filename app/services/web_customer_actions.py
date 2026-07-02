@@ -2216,6 +2216,12 @@ def update_customer_profile(
     country_code: str | None = None,
     billing_notifications: bool,
     sms_updates: bool,
+    push_notifications: bool = True,
+    service_notifications: bool = True,
+    account_notifications: bool = True,
+    usage_notifications: bool = True,
+    general_notifications: bool = True,
+    locale: str | None = None,
 ) -> Subscriber | None:
     """Update a customer's profile fields."""
     subscriber = db.get(Subscriber, subscriber_id)
@@ -2224,6 +2230,11 @@ def update_customer_profile(
     metadata = dict(subscriber.metadata_ or {})
     metadata["billing_notifications"] = bool(billing_notifications)
     metadata["sms_updates"] = bool(sms_updates)
+    metadata["push_notifications"] = bool(push_notifications)
+    metadata["service_notifications"] = bool(service_notifications)
+    metadata["account_notifications"] = bool(account_notifications)
+    metadata["usage_notifications"] = bool(usage_notifications)
+    metadata["general_notifications"] = bool(general_notifications)
 
     new_email = email.strip()
     # A changed email address must be re-verified: reset the flag and dispatch a
@@ -2237,6 +2248,7 @@ def update_customer_profile(
         "display_name": display or None,
         "email": new_email,
         "phone": phone.strip() if phone else None,
+        "locale": (locale or "").strip() or None,
         "metadata_": metadata,
     }
 

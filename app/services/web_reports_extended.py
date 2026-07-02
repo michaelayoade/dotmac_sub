@@ -396,12 +396,24 @@ def get_tax_report_data(db: Session) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def get_mrr_data(db: Session, year: int | None = None) -> dict:
+def get_mrr_data(
+    db: Session,
+    year: int | None = None,
+    *,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> dict:
     """Monthly recurring revenue movement with real subscription data."""
     from app.models.catalog import Subscription, SubscriptionStatus
 
+    parsed_from = _parse_date(date_from)
+    parsed_to = _parse_date(date_to)
+    if parsed_from is not None:
+        year = parsed_from.year
     if not year:
         year = datetime.now(UTC).year
+    range_start = parsed_from
+    range_end = parsed_to + timedelta(days=1) if parsed_to is not None else None
 
     months = []
     now = datetime.now(UTC)
@@ -412,6 +424,11 @@ def get_mrr_data(db: Session, year: int | None = None) -> dict:
             month_end = datetime(year, m + 1, 1, tzinfo=UTC)
         else:
             month_end = datetime(year + 1, 1, 1, tzinfo=UTC)
+
+        if range_start is not None and month_end <= range_start:
+            continue
+        if range_end is not None and month_start >= range_end:
+            continue
 
         # Skip future months
         if month_start > now:
@@ -494,7 +511,13 @@ def get_mrr_data(db: Session, year: int | None = None) -> dict:
         or 0
     )
 
-    return {"months": months, "year": year, "total_subscribers": total}
+    return {
+        "months": months,
+        "year": year,
+        "total_subscribers": total,
+        "date_from": date_from or "",
+        "date_to": date_to or "",
+    }
 
 
 # ---------------------------------------------------------------------------

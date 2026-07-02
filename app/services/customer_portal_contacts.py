@@ -69,6 +69,7 @@ def normalize_contact_form(
     receives_notifications: bool,
     is_billing_contact: bool,
     notes: str | None,
+    allow_authority_flags: bool = True,
 ) -> ContactForm:
     normalized_type = (contact_type or "general").strip().lower()
     if normalized_type not in CONTACT_TYPES:
@@ -86,9 +87,13 @@ def normalize_contact_form(
         other_social=_clean(other_social),
         relationship=_clean(relationship),
         contact_type=normalized_type,
-        is_authorized=bool(is_authorized),
+        is_authorized=bool(is_authorized) if allow_authority_flags else False,
         receives_notifications=bool(receives_notifications),
-        is_billing_contact=bool(is_billing_contact or normalized_type == "billing"),
+        is_billing_contact=(
+            bool(is_billing_contact or normalized_type == "billing")
+            if allow_authority_flags
+            else False
+        ),
         notes=_clean(notes),
     )
 

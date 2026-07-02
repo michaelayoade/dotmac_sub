@@ -19,10 +19,28 @@ from app.services.customer_notification_policy import (
 )
 from app.services.email_template import html_to_text
 
+_READ_METADATA_KEY = "portal_read_notification_keys"
+
+
+def _notification_key(source: str, item_id: object) -> str:
+    return f"{source}:{item_id}"
+
+
+def _read_keys(subscriber: Subscriber | None) -> set[str]:
+    if subscriber is None:
+        return set()
+    raw = (subscriber.metadata_ or {}).get(_READ_METADATA_KEY) or []
+    if not isinstance(raw, list):
+        return set()
+    return {str(item) for item in raw if str(item)}
+
 
 def _normalize_portal_notification(item: object) -> SimpleNamespace:
     if isinstance(item, CustomerNotificationEvent):
+        key = _notification_key("customer_event", item.id)
         return SimpleNamespace(
+            id=str(item.id),
+            read_key=key,
             channel=item.channel,
             created_at=item.created_at,
             entity_type=item.entity_type,
@@ -34,6 +52,7 @@ def _normalize_portal_notification(item: object) -> SimpleNamespace:
         )
 
     notification = item
+    key = _notification_key("notification", getattr(notification, "id", ""))
     template = getattr(notification, "template", None)
     event_type = getattr(notification, "event_type", None) or getattr(
         template,
@@ -46,6 +65,8 @@ def _normalize_portal_notification(item: object) -> SimpleNamespace:
         or ""
     )
     return SimpleNamespace(
+        id=str(getattr(notification, "id", "")),
+        read_key=key,
         channel=getattr(
             getattr(notification, "channel", None),
             "value",
@@ -181,6 +202,16 @@ def _load_notifications(
     return merged
 
 
+def _apply_read_state(
+    notifications: list[SimpleNamespace],
+    *,
+    read_keys: set[str],
+) -> list[SimpleNamespace]:
+    for item in notifications:
+        item.is_read = item.read_key in read_keys
+    return notifications
+
+
 def _count_notification_candidates(
     db: Session,
     *,
@@ -244,15 +275,17 @@ def get_notifications_preview(
         db,
         subscriber=subscriber,
         recipients=recipients,
-        candidate_limit=max(limit * 2, limit),
     )
+    read_keys = _read_keys(subscriber)
+    _apply_read_state(notifications, read_keys=read_keys)
     total = _count_notification_candidates(
         db, subscriber=subscriber, recipients=recipients
     )
+    unread_count = sum(1 for item in notifications if not item.is_read)
     return {
         "recent_notifications": notifications[:limit],
         "recent_notifications_total": total,
-        "unread_notifications_count": total,
+        "unread_notifications_count": unread_count,
         "has_recent_notifications": total > 0,
     }
 
@@ -266,9 +299,12 @@ def get_notifications_page(
 ) -> dict[str, object]:
     subscriber, recipients = _resolve_notification_context(db, customer)
     merged = _load_notifications(db, subscriber=subscriber, recipients=recipients)
+    read_keys = _read_keys(subscriber)
+    _apply_read_state(merged, read_keys=read_keys)
     total = len(merged)
     offset = (page - 1) * per_page
     notifications = merged[offset : offset + per_page]
+    unread_count = sum(1 for item in merged if not item.is_read)
 
     preferences = get_subscriber_notification_preferences(subscriber)
     return {
@@ -278,5 +314,34 @@ def get_notifications_page(
         "total": total,
         "billing_notifications_enabled": preferences["billing_notifications"],
         "sms_updates_enabled": preferences["sms_updates"],
-        "unread_notifications_count": total,
+        "push_notifications_enabled": preferences["push_notifications"],
+        "unread_notifications_count": unread_count,
     }
+
+
+def mark_notifications_read(
+    db: Session,
+    customer: dict,
+    *,
+    read_key: str | None = None,
+    all_visible: bool = False,
+) -> int:
+    subscriber, recipients = _resolve_notification_context(db, customer)
+    if subscriber is None:
+        return 0
+    visible = _load_notifications(db, subscriber=subscriber, recipients=recipients)
+    visible_keys = {item.read_key for item in visible}
+    if all_visible:
+        keys_to_mark = visible_keys
+    else:
+        candidate = str(read_key or "").strip()
+        keys_to_mark = {candidate} if candidate in visible_keys else set()
+    if not keys_to_mark:
+        return 0
+    metadata = dict(subscriber.metadata_ or {})
+    current = _read_keys(subscriber)
+    updated = sorted(current | keys_to_mark)
+    metadata[_READ_METADATA_KEY] = updated[-500:]
+    subscriber.metadata_ = metadata
+    db.commit()
+    return len(keys_to_mark - current)

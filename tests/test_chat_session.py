@@ -116,6 +116,43 @@ def test_customer_session_happy_path(db_session):
     assert kwargs["config_id"] == "cfg-1"
 
 
+def test_customer_session_carries_ticket_context(db_session):
+    from app.services import chat_session
+
+    sub = _make_subscriber(db_session)
+    with (
+        _chat_settings(),
+        _fake_crm({"session_id": "s", "visitor_token": "v"}) as client,
+        patch(
+            "app.services.chat_session.resolve_crm_subscriber_id",
+            return_value="crm-1",
+        ),
+    ):
+        chat_session.broker_customer_session(db_session, str(sub.id), ticket_id="tk-77")
+    meta = client.create_widget_session.call_args.kwargs["metadata"]
+    assert meta["ticket_id"] == "tk-77"
+    assert meta["subject"] == "Chat about a support ticket"
+    assert "project_id" not in meta
+
+
+def test_customer_session_carries_project_context(db_session):
+    from app.services import chat_session
+
+    sub = _make_subscriber(db_session)
+    with (
+        _chat_settings(),
+        _fake_crm({"session_id": "s", "visitor_token": "v"}) as client,
+        patch(
+            "app.services.chat_session.resolve_crm_subscriber_id",
+            return_value="crm-1",
+        ),
+    ):
+        chat_session.broker_customer_session(db_session, str(sub.id), project_id="pj-9")
+    meta = client.create_widget_session.call_args.kwargs["metadata"]
+    assert meta["project_id"] == "pj-9"
+    assert meta["subject"] == "Chat about an installation project"
+
+
 def test_customer_session_crm_unavailable_returns_502(db_session):
     from app.services import chat_session
     from app.services.crm_client import CRMClientError

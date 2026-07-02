@@ -1,6 +1,7 @@
 """Customer portal web routes."""
 
 import logging
+from dataclasses import replace
 from datetime import UTC, datetime
 from urllib.parse import quote_plus
 from uuid import UUID
@@ -19,6 +20,7 @@ from fastapi import (
 )
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
@@ -30,6 +32,7 @@ from app.services import crm_portal, customer_portal
 from app.services import customer_portal_bandwidth as customer_portal_bandwidth_service
 from app.services import customer_portal_contacts as customer_portal_contacts_service
 from app.services import customer_portal_flow_payment_methods as customer_cards
+from app.services import customer_portal_notifications as customer_notifications_service
 from app.services import payment_proofs as payment_proofs_service
 from app.services import web_customer_auth as web_customer_auth_service
 from app.services import web_network_speedtests as web_network_speedtests_service
@@ -68,6 +71,29 @@ CARD_SAVE_ERROR_MESSAGE = (
     "Payment was recorded, but we could not save this card. You can add a card "
     "from Payment Methods."
 )
+READ_ONLY_MUTATION_MESSAGE = "View-only sessions cannot make changes."
+
+
+def _is_read_only_customer(customer: dict | None) -> bool:
+    return bool(customer and customer.get("read_only"))
+
+
+def _read_only_response(
+    request: Request,
+    customer: dict | None,
+    *,
+    active_page: str,
+) -> Response:
+    return templates.TemplateResponse(
+        "customer/errors/400.html",
+        {
+            "request": request,
+            "customer": customer,
+            "message": READ_ONLY_MUTATION_MESSAGE,
+            "active_page": active_page,
+        },
+        status_code=403,
+    )
 
 
 def _payment_verification_error_response(
@@ -189,8 +215,14 @@ def _profile_audit_snapshot(subscriber) -> dict[str, object]:
         "region": subscriber.region,
         "postal_code": subscriber.postal_code,
         "country_code": subscriber.country_code,
-        "billing_notifications": bool(metadata.get("billing_notifications")),
-        "sms_updates": bool(metadata.get("sms_updates")),
+        "billing_notifications": bool(metadata.get("billing_notifications", True)),
+        "sms_updates": bool(metadata.get("sms_updates", True)),
+        "push_notifications": bool(metadata.get("push_notifications", True)),
+        "service_notifications": bool(metadata.get("service_notifications", True)),
+        "account_notifications": bool(metadata.get("account_notifications", True)),
+        "usage_notifications": bool(metadata.get("usage_notifications", True)),
+        "general_notifications": bool(metadata.get("general_notifications", True)),
+        "locale": subscriber.locale,
         "email_verified": subscriber.email_verified,
     }
 
@@ -280,6 +312,8 @@ def customer_portal_chat_session(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         raise HTTPException(status_code=401, detail="Unauthorized")
+    if _is_read_only_customer(customer):
+        raise HTTPException(status_code=403, detail=READ_ONLY_MUTATION_MESSAGE)
 
     subscriber_id = customer.get("subscriber_id") or customer.get("session", {}).get(
         "subscriber_id"
@@ -309,6 +343,8 @@ def customer_support(
 @router.get("/support/new", response_class=HTMLResponse)
 def customer_support_new(
     request: Request,
+    title: str | None = None,
+    description: str | None = None,
     db: Session = Depends(get_db),
 ) -> Response:
     customer = get_current_customer_from_request(request, db)
@@ -317,6 +353,12 @@ def customer_support_new(
             url="/portal/auth/login?next=/portal/support/new", status_code=303
         )
     context = crm_portal.ticket_create_context(request, customer)
+    if title or description:
+        context["form_values"] = {
+            "title": title or "",
+            "description": description or "",
+            "priority": "normal",
+        }
     return templates.TemplateResponse("customer/support/new.html", context)
 
 
@@ -332,6 +374,8 @@ def customer_support_create(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="support")
 
     subscriber_id, _subscription_id = customer_portal.resolve_customer_account(
         customer, db
@@ -404,6 +448,8 @@ def customer_support_add_comment(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="support")
 
     subscriber_ids = resolve_allowed_subscriber_ids(customer, db)
     result = crm_portal.handle_ticket_comment(
@@ -888,6 +934,8 @@ def customer_speedtest_submit(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="speedtest")
     account_id, resolved_subscription_id = customer_portal.resolve_customer_account(
         customer, db
     )
@@ -1035,6 +1083,8 @@ def customer_reboot_service_ont(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="services")
 
     from app.services.customer_portal_flow_services import (
         reboot_customer_subscription_ont,
@@ -1067,6 +1117,8 @@ def customer_update_service_wifi(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="services")
 
     from app.services.customer_portal_flow_services import (
         update_customer_subscription_wifi,
@@ -1193,6 +1245,7 @@ def customer_installation_detail(
 def customer_service_order_detail(
     request: Request,
     service_order_id: UUID,
+    signed: str | None = None,
     db: Session = Depends(get_db),
 ) -> Response:
     """Customer service order detail view."""
@@ -1215,6 +1268,7 @@ def customer_service_order_detail(
             "request": request,
             "customer": customer,
             **detail,
+            "signed": signed,
             "active_page": "service-orders",
         },
     )
@@ -1249,23 +1303,38 @@ def customer_notifications(
     )
 
 
-@router.get("/profile", response_class=HTMLResponse)
-def customer_profile(
+@router.post("/notifications/read", response_class=HTMLResponse)
+def customer_notifications_mark_read(
     request: Request,
+    read_key: str | None = Form(None),
+    all_visible: bool = Form(False),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Mark one or all visible customer notifications as read."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="notifications")
+    customer_notifications_service.mark_notifications_read(
+        db,
+        customer,
+        read_key=read_key,
+        all_visible=all_visible,
+    )
+    return RedirectResponse(url="/portal/notifications", status_code=303)
+
+
+def _profile_context(
+    request: Request,
+    db: Session,
+    customer: dict,
+    *,
     saved: str | None = None,
     verify_sent: str | None = None,
     sessions: str | None = None,
-    db: Session = Depends(get_db),
-) -> Response:
-    """Customer profile settings."""
-    customer = get_current_customer_from_request(request, db)
-    if not customer:
-        return RedirectResponse(
-            url="/portal/auth/login?next=/portal/profile", status_code=303
-        )
-    # Hydrate the subscriber so the form pre-fills with actual DB values
-    # rather than the cached session blob (which only carries 'name' as a
-    # display string, not editable fields).
+    error: str | None = None,
+) -> dict[str, object]:
     from app.models.subscriber import Subscriber as _Subscriber
 
     subscriber = None
@@ -1286,30 +1355,54 @@ def customer_profile(
         if subscriber_id
         else []
     )
+    success = None
+    if sessions == "signed-out":
+        success = "Other portal sessions signed out."
+    elif saved:
+        success = "Profile updated successfully"
+    return {
+        "request": request,
+        "customer": customer,
+        "subscriber": subscriber,
+        "mfa_methods": mfa_methods,
+        "mfa_enabled": any(
+            bool(method.enabled and method.is_active) for method in mfa_methods
+        ),
+        "active_sessions": active_sessions,
+        "other_session_count": sum(
+            1 for session in active_sessions if not session["is_current"]
+        ),
+        "active_page": "profile",
+        "success": success,
+        "error": error,
+        "verify_sent": verify_sent,
+    }
+
+
+@router.get("/profile", response_class=HTMLResponse)
+def customer_profile(
+    request: Request,
+    saved: str | None = None,
+    verify_sent: str | None = None,
+    sessions: str | None = None,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Customer profile settings."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(
+            url="/portal/auth/login?next=/portal/profile", status_code=303
+        )
     return templates.TemplateResponse(
         "customer/profile/index.html",
-        {
-            "request": request,
-            "customer": customer,
-            "subscriber": subscriber,
-            "mfa_methods": mfa_methods,
-            "mfa_enabled": any(
-                bool(method.enabled and method.is_active) for method in mfa_methods
-            ),
-            "active_sessions": active_sessions,
-            "other_session_count": sum(
-                1 for session in active_sessions if not session["is_current"]
-            ),
-            "active_page": "profile",
-            "success": (
-                "Other portal sessions signed out."
-                if sessions == "signed-out"
-                else "Profile updated successfully"
-                if saved
-                else None
-            ),
-            "verify_sent": verify_sent,
-        },
+        _profile_context(
+            request,
+            db,
+            customer,
+            saved=saved,
+            verify_sent=verify_sent,
+            sessions=sessions,
+        ),
     )
 
 
@@ -1322,9 +1415,11 @@ def customer_profile_sign_out_other_sessions(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="profile")
     subscriber_id = customer.get("subscriber_id")
     current_session_token = request.cookies.get(customer_portal.SESSION_COOKIE_NAME)
-    if subscriber_id and not customer.get("read_only"):
+    if subscriber_id:
         customer_portal.revoke_other_customer_sessions_for_subscriber(
             subscriber_id,
             current_session_token,
@@ -1352,13 +1447,32 @@ def customer_update_profile(
     country_code: str = Form(None),
     billing_notifications: bool = Form(False),
     sms_updates: bool = Form(False),
+    push_notifications: bool = Form(False),
+    service_notifications: bool = Form(False),
+    account_notifications: bool = Form(False),
+    usage_notifications: bool = Form(False),
+    general_notifications: bool = Form(False),
+    locale: str | None = Form(None),
     db: Session = Depends(get_db),
 ) -> Response:
     """Update customer profile."""
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="profile")
     subscriber_id = customer.get("subscriber_id")
+    if not subscriber_id:
+        return templates.TemplateResponse(
+            "customer/profile/index.html",
+            _profile_context(
+                request,
+                db,
+                customer,
+                error="We could not find your customer account. Please contact support.",
+            ),
+            status_code=404,
+        )
     if subscriber_id:
         from app.models.subscriber import Subscriber
         from app.services.web_customer_actions import update_customer_profile
@@ -1367,26 +1481,70 @@ def customer_update_profile(
         before_snapshot = (
             _profile_audit_snapshot(subscriber_before) if subscriber_before else {}
         )
-        updated = update_customer_profile(
-            db,
-            subscriber_id=subscriber_id,
-            first_name=first_name,
-            last_name=last_name,
-            display_name=display_name,
-            email=email,
-            phone=phone,
-            date_of_birth=date_of_birth,
-            gender=gender,
-            preferred_contact_method=preferred_contact_method,
-            address_line1=address_line1,
-            address_line2=address_line2,
-            city=city,
-            region=region,
-            postal_code=postal_code,
-            country_code=country_code,
-            billing_notifications=billing_notifications,
-            sms_updates=sms_updates,
-        )
+        try:
+            updated = update_customer_profile(
+                db,
+                subscriber_id=subscriber_id,
+                first_name=first_name,
+                last_name=last_name,
+                display_name=display_name,
+                email=email,
+                phone=phone,
+                date_of_birth=date_of_birth,
+                gender=gender,
+                preferred_contact_method=preferred_contact_method,
+                address_line1=address_line1,
+                address_line2=address_line2,
+                city=city,
+                region=region,
+                postal_code=postal_code,
+                country_code=country_code,
+                billing_notifications=billing_notifications,
+                sms_updates=sms_updates,
+                push_notifications=push_notifications,
+                service_notifications=service_notifications,
+                account_notifications=account_notifications,
+                usage_notifications=usage_notifications,
+                general_notifications=general_notifications,
+                locale=locale,
+            )
+        except (ValueError, IntegrityError) as exc:
+            db.rollback()
+            logger.info("customer_profile_update_rejected", exc_info=True)
+            return templates.TemplateResponse(
+                "customer/profile/index.html",
+                _profile_context(
+                    request,
+                    db,
+                    customer,
+                    error=str(exc) or "We could not save those profile changes.",
+                ),
+                status_code=400,
+            )
+        except Exception:
+            db.rollback()
+            logger.exception("customer_profile_update_failed")
+            return templates.TemplateResponse(
+                "customer/profile/index.html",
+                _profile_context(
+                    request,
+                    db,
+                    customer,
+                    error="We could not save your profile right now. Please try again.",
+                ),
+                status_code=500,
+            )
+        if updated is None:
+            return templates.TemplateResponse(
+                "customer/profile/index.html",
+                _profile_context(
+                    request,
+                    db,
+                    customer,
+                    error="We could not find your customer account. Please contact support.",
+                ),
+                status_code=404,
+            )
         if updated is not None:
             after_snapshot = _profile_audit_snapshot(updated)
             changes = _profile_audit_changes(before_snapshot, after_snapshot)
@@ -1422,9 +1580,11 @@ def customer_resend_email_verification(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="profile")
     sent = False
     subscriber_id = customer.get("subscriber_id")
-    if subscriber_id and not customer.get("read_only"):
+    if subscriber_id:
         try:
             sent = auth_flow_service.send_email_verification(db, str(subscriber_id))
         except Exception:
@@ -1443,6 +1603,8 @@ def customer_mfa_setup(request: Request, db: Session = Depends(get_db)) -> Respo
         return RedirectResponse(
             url="/portal/auth/login?next=/portal/profile", status_code=303
         )
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="profile")
     subscriber_id = customer.get("subscriber_id")
     if not subscriber_id:
         return RedirectResponse(url="/portal/profile", status_code=303)
@@ -1482,6 +1644,8 @@ def customer_mfa_confirm(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="profile")
     subscriber_id = customer.get("subscriber_id")
     if not subscriber_id:
         return RedirectResponse(url="/portal/profile", status_code=303)
@@ -1575,6 +1739,8 @@ def customer_contacts_create(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="contacts")
 
     form = customer_portal_contacts_service.normalize_contact_form(
         full_name=full_name,
@@ -1593,6 +1759,7 @@ def customer_contacts_create(
         receives_notifications=receives_notifications,
         is_billing_contact=is_billing_contact,
         notes=notes,
+        allow_authority_flags=False,
     )
     try:
         warnings = customer_portal_contacts_service.create_contact(db, customer, form)
@@ -1650,6 +1817,8 @@ def customer_contacts_update(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="contacts")
 
     if intent == "delete":
         try:
@@ -1695,7 +1864,17 @@ def customer_contacts_update(
         receives_notifications=receives_notifications,
         is_billing_contact=is_billing_contact,
         notes=notes,
+        allow_authority_flags=False,
     )
+    existing_contact = customer_portal_contacts_service.get_owned_contact(
+        db, customer, contact_id
+    )
+    if existing_contact:
+        form = replace(
+            form,
+            is_authorized=bool(existing_contact.is_authorized),
+            is_billing_contact=bool(existing_contact.is_billing_contact),
+        )
     try:
         warnings = customer_portal_contacts_service.update_contact(
             db, customer, contact_id, form
@@ -1937,6 +2116,8 @@ def customer_create_topup_intent(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+    if _is_read_only_customer(customer):
+        return JSONResponse({"detail": READ_ONLY_MUTATION_MESSAGE}, status_code=403)
 
     amount_value = payload.get("amount")
     if amount_value is None:
@@ -2157,6 +2338,12 @@ def customer_autopay_enable(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return RedirectResponse(
+            url="/portal/billing/topup?autopay_error="
+            + quote_plus("View-only sessions cannot change autopay."),
+            status_code=303,
+        )
     # Only a real, non-empty form value selects a card; otherwise the default
     # saved card is used (also keeps a direct call's Form default inert).
     method_id = (
@@ -2187,6 +2374,12 @@ def customer_autopay_disable(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return RedirectResponse(
+            url="/portal/billing/topup?autopay_error="
+            + quote_plus("View-only sessions cannot change autopay."),
+            status_code=303,
+        )
     autopay_service.disable(db, str(customer.get("account_id") or ""))
     return RedirectResponse(
         url="/portal/billing/topup?autopay_success=" + quote_plus("Autopay is off."),
@@ -2357,6 +2550,8 @@ def customer_submit_change_plan(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="services")
     try:
         result = customer_portal.apply_instant_plan_change(
             db=db,
@@ -2471,6 +2666,8 @@ def customer_request_plan_migration(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="services")
     try:
         result = customer_portal.request_plan_migration(
             db=db,
@@ -2561,6 +2758,8 @@ def customer_submit_suspend_service(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="services")
 
     from app.services.customer_portal_flow_services import (
         apply_service_suspend,
@@ -2647,6 +2846,8 @@ def customer_submit_resume_service(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="services")
 
     from app.services.customer_portal_flow_services import (
         apply_service_resume,
@@ -2792,6 +2993,8 @@ def customer_submit_payment_arrangement(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="billing")
 
     try:
         customer_portal.submit_payment_arrangement(
@@ -2839,6 +3042,8 @@ def customer_cancel_payment_arrangement(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="billing")
 
     try:
         customer_portal.cancel_customer_arrangement(db, customer, str(arrangement_id))

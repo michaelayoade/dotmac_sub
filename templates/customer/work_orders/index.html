@@ -3,11 +3,19 @@
 {% block title %}Technician Visits - My Account{% endblock %}
 
 {% block content %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 <div class="space-y-8">
     <div>
         <h1 class="text-3xl font-display font-bold text-stone-900 dark:text-white">Technician Visits</h1>
         <p class="mt-1 text-base text-stone-500 dark:text-stone-400">Field-service appointments — status, schedule, and who's coming.</p>
     </div>
+
+    {% if request.query_params.get('rated') == 'ok' %}
+    <div class="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">Thanks for rating your technician!</div>
+    {% elif request.query_params.get('rated') == 'error' %}
+    <div class="rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-800 dark:bg-rose-900/30 dark:text-rose-300">We couldn't submit your rating. Please try again.</div>
+    {% endif %}
 
     {% set status_styles = {
         'draft': 'bg-stone-100 text-stone-700 dark:bg-stone-700 dark:text-stone-300',
@@ -38,13 +46,13 @@
                 {% if w.scheduled_start %}
                 <div>
                     <dt class="text-xs font-semibold uppercase tracking-wide text-stone-400 dark:text-stone-500">Scheduled</dt>
-                    <dd class="mt-0.5 text-sm text-stone-900 dark:text-white">{{ w.scheduled_start[:16] | replace('T', ' ') }}{% if w.scheduled_end %} – {{ w.scheduled_end[11:16] }}{% endif %}</dd>
+                    <dd class="mt-0.5 text-sm text-stone-900 dark:text-white">{{ w.scheduled_start | portal_datetime('%b %d, %Y %H:%M') }}{% if w.scheduled_end %} &ndash; {{ w.scheduled_end | portal_datetime('%H:%M') }}{% endif %}</dd>
                 </div>
                 {% endif %}
                 {% if w.estimated_arrival_at and w.status not in ['completed', 'canceled'] %}
                 <div>
                     <dt class="text-xs font-semibold uppercase tracking-wide text-stone-400 dark:text-stone-500">Estimated arrival</dt>
-                    <dd class="mt-0.5 text-sm font-semibold text-stone-900 dark:text-white">{{ w.estimated_arrival_at[:16] | replace('T', ' ') }}</dd>
+                    <dd class="mt-0.5 text-sm font-semibold text-stone-900 dark:text-white">{{ w.estimated_arrival_at | portal_datetime('%b %d, %Y %H:%M') }}</dd>
                 </div>
                 {% endif %}
                 {% if w.technician_name %}
@@ -58,10 +66,33 @@
                 {% if w.completed_at %}
                 <div>
                     <dt class="text-xs font-semibold uppercase tracking-wide text-stone-400 dark:text-stone-500">Completed</dt>
-                    <dd class="mt-0.5 text-sm text-stone-900 dark:text-white">{{ w.completed_at[:16] | replace('T', ' ') }}</dd>
+                    <dd class="mt-0.5 text-sm text-stone-900 dark:text-white">{{ w.completed_at | portal_datetime('%b %d, %Y %H:%M') }}</dd>
                 </div>
                 {% endif %}
             </dl>
+
+            {% if w.status == 'in_progress' %}
+            <div class="mt-4" data-wo-track="{{ w.id }}">
+                <p class="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-brand-600)]" data-wo-eta></p>
+                <div class="hidden h-56 w-full overflow-hidden rounded-xl border border-stone-200 dark:border-stone-700" data-wo-map></div>
+                <p class="text-sm text-stone-500 dark:text-stone-400" data-wo-msg>Locating your technician…</p>
+            </div>
+            {% endif %}
+
+            {% if w.status == 'completed' %}
+            <form method="post" action="/portal/work-orders/{{ w.id }}/rate-technician" class="mt-4 border-t border-stone-100 pt-4 dark:border-stone-700" x-data="{ rating: 0 }">
+                {% include "components/forms/csrf_input.html" %}
+                <p class="text-xs font-semibold uppercase tracking-wide text-stone-400 dark:text-stone-500">Rate your technician</p>
+                <div class="mt-1 flex items-center gap-1">
+                    <template x-for="i in 5" :key="i">
+                        <button type="button" @click="rating = i" class="text-2xl leading-none" :class="i <= rating ? 'text-amber-400' : 'text-stone-300 dark:text-stone-600'">★</button>
+                    </template>
+                    <input type="hidden" name="rating" :value="rating" />
+                </div>
+                <textarea name="comment" rows="2" maxlength="2000" placeholder="Comment (optional)" class="mt-2 w-full rounded-xl border border-stone-200 bg-stone-50 p-2 text-sm dark:border-stone-600 dark:bg-stone-700 dark:text-white"></textarea>
+                <button type="submit" x-bind:disabled="rating === 0" class="mt-2 rounded-xl bg-[var(--color-brand-600)] px-4 py-1.5 text-sm font-semibold text-white disabled:opacity-50">Submit rating</button>
+            </form>
+            {% endif %}
         </div>
         {% endfor %}
     </div>
@@ -71,4 +102,49 @@
     </div>
     {% endif %}
 </div>
+
+<script>
+(function () {
+    var reasons = {
+        not_in_progress: 'Live tracking starts when the technician begins your visit.',
+        sharing_off: "The technician's live location isn't being shared right now.",
+        no_fix: "Waiting for the technician's location…",
+        not_linked: "Live tracking isn't available for this visit."
+    };
+    document.querySelectorAll('[data-wo-track]').forEach(function (node) {
+        var id = node.getAttribute('data-wo-track');
+        var mapEl = node.querySelector('[data-wo-map]');
+        var msgEl = node.querySelector('[data-wo-msg]');
+        var etaEl = node.querySelector('[data-wo-eta]');
+        var map = null, marker = null;
+        function poll() {
+            fetch('/portal/work-orders/' + id + '/technician-location', { headers: { 'Accept': 'application/json' } })
+                .then(function (r) { return r.json(); })
+                .then(function (data) {
+                    if (data.available && data.latitude != null && data.longitude != null) {
+                        msgEl.classList.add('hidden');
+                        mapEl.classList.remove('hidden');
+                        var ll = [data.latitude, data.longitude];
+                        if (!map) {
+                            map = L.map(mapEl).setView(ll, 15);
+                            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap', maxZoom: 19 }).addTo(map);
+                            marker = L.marker(ll).addTo(map);
+                        } else {
+                            marker.setLatLng(ll); map.panTo(ll);
+                        }
+                        if (etaEl) { etaEl.textContent = data.estimated_arrival_at ? ('Estimated arrival ' + String(data.estimated_arrival_at).slice(11, 16)) : ''; }
+                    } else {
+                        mapEl.classList.add('hidden');
+                        msgEl.classList.remove('hidden');
+                        msgEl.textContent = reasons[data.reason] || "Live tracking isn't available right now.";
+                        if (etaEl) { etaEl.textContent = ''; }
+                    }
+                })
+                .catch(function () { /* keep last state */ });
+        }
+        poll();
+        setInterval(poll, 20000);
+    });
+})();
+</script>
 {% endblock %}

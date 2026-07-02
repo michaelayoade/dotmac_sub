@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 from types import SimpleNamespace
 from typing import cast
 
@@ -19,7 +19,7 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
-from app.models.provisioning import InstallAppointment, ServiceOrder
+from app.models.provisioning import AppointmentStatus, InstallAppointment, ServiceOrder
 from app.models.subscriber import (
     AccountStatus,
     Subscriber,
@@ -299,13 +299,13 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
         next_bill_date = subscriptions[0].next_billing_at
     if not next_bill_date and invoices:
         next_bill_date = invoices[0].due_at or invoices[0].issued_at
-    if not next_bill_date:
-        next_bill_date = datetime.now(UTC) + timedelta(days=30)
+    has_next_bill = bool(next_bill_date or next_bill_amount)
 
     account = SimpleNamespace(
         balance=current_balance,
         next_bill_amount=next_bill_amount,
         next_bill_date=next_bill_date,
+        has_next_bill=has_next_bill,
     )
 
     services = []
@@ -693,7 +693,10 @@ def get_customer_appointments(
     if subscription_id_str:
         filters.append(ServiceOrder.subscription_id == coerce_uuid(subscription_id_str))
     if status:
-        filters.append(InstallAppointment.status == status)
+        normalized_status = str(status).strip().lower()
+        valid_statuses = {item.value for item in AppointmentStatus}
+        if normalized_status in valid_statuses:
+            filters.append(InstallAppointment.status == normalized_status)
 
     count_stmt = (
         select(func.count(InstallAppointment.id))
