@@ -41,6 +41,8 @@ jobs:
         working-directory: mobile
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -52,8 +54,22 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Verify formatting
-        run: dart format --output=none --set-exit-if-changed lib test test_live
+      # Format-check only the Dart files this PR/push changed. A whole-tree check
+      # couples every mobile PR to pre-existing drift AND to the automated
+      # version-bump commits (which touch main.dart/env.dart), so it could never
+      # pass while main churns. Scoping to the diff enforces format on what you
+      # touch without that coupling.
+      - name: Verify formatting (changed files)
+        run: |
+          if [ -n "${{ github.event.pull_request.base.sha }}" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          else
+            base="${{ github.event.before }}"
+          fi
+          files=$(cd .. && git diff --name-only "$base"...HEAD -- 'mobile/**/*.dart' 2>/dev/null | sed 's|^mobile/||')
+          if [ -z "$files" ]; then echo "No changed Dart files to format-check."; exit 0; fi
+          echo "Format-checking:"; echo "$files"
+          echo "$files" | xargs dart format --output=none --set-exit-if-changed
 
       - name: Analyze
         run: flutter analyze
