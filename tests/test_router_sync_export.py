@@ -25,7 +25,15 @@ def test_export_to_text_normalises_shapes():
     assert router_sync._export_to_text([]) == ""
 
 
-def test_fetch_config_export_uses_post():
+def test_fetch_config_export_uses_post(monkeypatch):
+    # Config export now defaults to SSH; pin this REST-path test to the fallback.
+    import types
+
+    monkeypatch.setattr(
+        router_sync,
+        "settings",
+        types.SimpleNamespace(router_config_export_via_ssh=False),
+    )
     captured = {}
 
     def _fake_execute(router, method, path, payload=None):
@@ -36,7 +44,7 @@ def test_fetch_config_export_uses_post():
     with patch.object(
         router_sync.RouterConnectionService, "execute", staticmethod(_fake_execute)
     ):
-        text = router_sync._fetch_config_export(object())
+        text = router_sync._fetch_config_export(types.SimpleNamespace(name="r1"))
 
     assert (
         captured["method"] == "POST"
