@@ -756,6 +756,9 @@ class Subscription(Base):
     service_address_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("addresses.id")
     )
+    bundle_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscription_bundles.id"), nullable=True, index=True
+    )
 
     # Provisioning - which NAS handles this subscription
     provisioning_nas_device_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -840,6 +843,33 @@ class Subscription(Base):
     bandwidth_samples = relationship("BandwidthSample", back_populates="subscription")
     usage_charges = relationship("UsageCharge", back_populates="subscription")
     quota_buckets = relationship("QuotaBucket", back_populates="subscription")
+
+
+class SubscriptionBundle(Base):
+    __tablename__ = "subscription_bundles"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    subscriber_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False, index=True
+    )
+    label: Mapped[str | None] = mapped_column(String(160))
+    anchor_subscription_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscriptions.id"), nullable=True
+    )
+    is_dedicated: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str] = mapped_column(String(32), default="active")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
 
 
 class SubscriptionAddOn(Base):
