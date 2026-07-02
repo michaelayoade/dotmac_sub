@@ -19,7 +19,13 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.schemas.chat import ChatSessionResponse
+from app.schemas.portal import (
+    TechnicianLocation,
+    TechnicianRatingRequest,
+    TechnicianRatingResponse,
+)
 from app.services import chat_session as chat_session_service
+from app.services import crm_portal as crm_portal_service
 from app.services import quotes_mirror, reseller_crm_views, reseller_portal
 from app.services.auth_dependencies import require_user_auth
 
@@ -179,6 +185,58 @@ def my_reseller_account(
     if detail is None:
         raise HTTPException(status_code=404, detail="Account not found")
     return detail
+
+
+@router.get(
+    "/accounts/{account_id}/work-orders/{work_order_id}/technician-location",
+    response_model=TechnicianLocation,
+)
+def reseller_work_order_technician_location(
+    account_id: str,
+    work_order_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> TechnicianLocation:
+    """Live technician position for a managed account's in-progress work order
+    (poll for the map). 404 if the account isn't one of the caller's."""
+    reseller_id = _reseller_id(db, principal)
+    account = reseller_portal.owned_account(db, reseller_id, account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="Account not found")
+    crm_id = crm_portal_service.resolve_crm_subscriber_id(db, str(account.id))
+    if not crm_id:
+        return TechnicianLocation(available=False, reason="not_linked")
+    from app.services.crm_client import get_crm_client
+
+    data = get_crm_client(db).get_portal_technician_location(crm_id, work_order_id)
+    return TechnicianLocation.model_validate(data)
+
+
+@router.post(
+    "/accounts/{account_id}/work-orders/{work_order_id}/rate-technician",
+    response_model=TechnicianRatingResponse,
+)
+def reseller_rate_technician(
+    account_id: str,
+    work_order_id: str,
+    payload: TechnicianRatingRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> TechnicianRatingResponse:
+    """Rate the technician on a managed account's completed work order."""
+    reseller_id = _reseller_id(db, principal)
+    account = reseller_portal.owned_account(db, reseller_id, account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="Account not found")
+    crm_id = crm_portal_service.resolve_crm_subscriber_id(db, str(account.id))
+    if not crm_id:
+        raise HTTPException(status_code=404, detail="Account not linked to CRM")
+    from app.services.crm_client import get_crm_client
+
+    data = get_crm_client(db).submit_portal_technician_rating(
+        crm_id, work_order_id, rating=payload.rating, comment=payload.comment
+    )
+    return TechnicianRatingResponse.model_validate(data)
 
 
 @router.get("/profile")

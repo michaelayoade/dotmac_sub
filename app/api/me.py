@@ -84,6 +84,9 @@ from app.schemas.portal import (
     QuoteRequestCreate,
     ReferAFriendRequest,
     ReferAFriendResponse,
+    TechnicianLocation,
+    TechnicianRatingRequest,
+    TechnicianRatingResponse,
 )
 from app.schemas.service_status import ServiceStatusResponse
 from app.schemas.subscriber import (
@@ -129,6 +132,7 @@ from app.services import autopay as autopay_service
 from app.services import billing as billing_service
 from app.services import catalog as catalog_service
 from app.services import chat_session as chat_session_service
+from app.services import crm_portal as crm_portal_service
 from app.services import customer_location_requests as location_service
 from app.services import customer_portal_contacts as contacts_service
 from app.services import customer_portal_flow_addons as customer_addons
@@ -846,6 +850,51 @@ def my_work_orders(
     status — served from the local mirror (refreshed from the CRM lazily)."""
     subscriber_id = _subscriber_id(principal)
     return work_orders_mirror.read_for_subscriber(db, subscriber_id)
+
+
+@router.get(
+    "/work-orders/{work_order_id}/technician-location",
+    response_model=TechnicianLocation,
+)
+def my_work_order_technician_location(
+    work_order_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Live technician position for an in-progress work order (poll for the
+    'where's my technician' map). Proxies the CRM portal; returns
+    available=False when the map should be hidden."""
+    subscriber_id = _subscriber_id(principal)
+    crm_id = crm_portal_service.resolve_crm_subscriber_id(db, subscriber_id)
+    if not crm_id:
+        return TechnicianLocation(available=False, reason="not_linked")
+    from app.services.crm_client import get_crm_client
+
+    data = get_crm_client(db).get_portal_technician_location(crm_id, work_order_id)
+    return TechnicianLocation.model_validate(data)
+
+
+@router.post(
+    "/work-orders/{work_order_id}/rate-technician",
+    response_model=TechnicianRatingResponse,
+)
+def my_rate_technician(
+    work_order_id: str,
+    payload: TechnicianRatingRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Rate the technician after a completed work order (1-5 + optional comment)."""
+    subscriber_id = _subscriber_id(principal)
+    crm_id = crm_portal_service.resolve_crm_subscriber_id(db, subscriber_id)
+    if not crm_id:
+        raise HTTPException(status_code=404, detail="Account not linked to CRM")
+    from app.services.crm_client import get_crm_client
+
+    data = get_crm_client(db).submit_portal_technician_rating(
+        crm_id, work_order_id, rating=payload.rating, comment=payload.comment
+    )
+    return TechnicianRatingResponse.model_validate(data)
 
 
 @router.get("/quotes", response_model=MyQuotesResponse)
