@@ -793,15 +793,22 @@ def my_account_deletion_request(
 def my_chat_session(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
+    ticket_id: str | None = None,
+    project_id: str | None = None,
 ):
     """Open (or resume) a live-chat session with support.
 
     The sub asserts the authenticated subscriber's identity to the CRM and
     returns an opaque visitor token plus the URLs the client uses to talk to the
     CRM chat widget directly (WebSocket for real-time, REST for send/history).
+
+    Pass ``ticket_id`` or ``project_id`` to start the chat about that record —
+    the reference rides in the session so the agent has context.
     """
     subscriber_id = _subscriber_id(principal)
-    return chat_session_service.broker_customer_session(db, subscriber_id)
+    return chat_session_service.broker_customer_session(
+        db, subscriber_id, ticket_id=ticket_id, project_id=project_id
+    )
 
 
 @router.post("/portal/session", response_model=PortalSessionResponse)

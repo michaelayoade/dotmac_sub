@@ -103,14 +103,19 @@ def _reseller_id(db: Session, principal: dict) -> str:
 def my_reseller_chat_session(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
+    ticket_id: str | None = None,
+    project_id: str | None = None,
 ):
     """Open (or resume) a live-chat session with DotMac support.
 
     Reseller chats land in the same general support pool as customer chats; the
-    session is tagged with the reseller for agent context only.
+    session is tagged with the reseller for agent context only. Pass
+    ``ticket_id``/``project_id`` to scope the chat to a customer's record.
     """
     reseller_id = _reseller_id(db, principal)
-    return chat_session_service.broker_reseller_session(db, reseller_id, principal)
+    return chat_session_service.broker_reseller_session(
+        db, reseller_id, principal, ticket_id=ticket_id, project_id=project_id
+    )
 
 
 @router.get("/dashboard")
