@@ -2507,7 +2507,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
         domain=SettingDomain.network,
         key="router_rest_retry_backoff_base",
         env_var="NETWORK_ROUTER_REST_RETRY_BACKOFF_BASE",
-        value_type=SettingValueType.decimal,
+        value_type=SettingValueType.string,
         default="2.0",
         label="Router REST retry backoff base (wait = base^attempt)",
     ),
