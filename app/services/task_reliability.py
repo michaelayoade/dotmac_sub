@@ -129,6 +129,9 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "collections", STATE, GUARDED, HEALTH
     ),
     "app.tasks.collections.run_dunning": _c("collections", STATE, GUARDED, HEALTH),
+    "app.tasks.collections.run_bundle_reconcile": _c(
+        "collections", STATE, GUARDED, HEALTH
+    ),
     "app.tasks.crm_billing_push.push_crm_billing_snapshots": _c(
         "crm", DLQ, PER_ITEM, DEAD
     ),

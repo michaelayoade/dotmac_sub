@@ -757,7 +757,10 @@ class Subscription(Base):
         UUID(as_uuid=True), ForeignKey("addresses.id")
     )
     bundle_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscription_bundles.id"), nullable=True, index=True
+        UUID(as_uuid=True),
+        ForeignKey("subscription_bundles.id"),
+        nullable=True,
+        index=True,
     )
 
     # Provisioning - which NAS handles this subscription
