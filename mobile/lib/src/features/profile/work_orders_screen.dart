@@ -8,49 +8,60 @@ import 'technician_track_screen.dart';
 
 /// Technician Visits — the customer's field-service work orders (status,
 /// schedule, ETA, technician), served from the sub's local work-order mirror.
-class WorkOrdersScreen extends ConsumerWidget {
+class WorkOrdersScreen extends StatelessWidget {
   const WorkOrdersScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Technician Visits')),
+      body: const WorkOrdersView(),
+    );
+  }
+}
+
+/// The visits list body (pull-to-refresh + async states), extracted so it can
+/// be shown both as the standalone Technician Visits screen and inside the
+/// Help → Visits segment.
+class WorkOrdersView extends ConsumerWidget {
+  const WorkOrdersView({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final workOrders = ref.watch(workOrdersProvider);
-    return Scaffold(
-      appBar: AppBar(title: const Text('Technician Visits')),
-      body: RefreshIndicator(
-        onRefresh: () async {
-          ref.invalidate(workOrdersProvider);
-          await ref.read(workOrdersProvider.future);
-        },
-        child: AsyncValueView<WorkOrdersSummary>(
-          value: workOrders,
-          onRetry: () => ref.invalidate(workOrdersProvider),
-          data: (summary) {
-            if (summary.workOrders.isEmpty) {
-              return ListView(
-                children: const [
-                  SizedBox(height: 80),
-                  Center(
-                    child: Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 32),
-                      child: Text(
-                        'No technician visits scheduled. When a visit is booked '
-                        "you'll see the schedule and technician here.",
-                        textAlign: TextAlign.center,
-                      ),
+    return RefreshIndicator(
+      onRefresh: () async {
+        ref.invalidate(workOrdersProvider);
+        await ref.read(workOrdersProvider.future);
+      },
+      child: AsyncValueView<WorkOrdersSummary>(
+        value: workOrders,
+        onRetry: () => ref.invalidate(workOrdersProvider),
+        data: (summary) {
+          if (summary.workOrders.isEmpty) {
+            return ListView(
+              children: const [
+                SizedBox(height: 80),
+                Center(
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 32),
+                    child: Text(
+                      'No technician visits scheduled. When a visit is booked '
+                      "you'll see the schedule and technician here.",
+                      textAlign: TextAlign.center,
                     ),
                   ),
-                ],
-              );
-            }
-            return ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-                for (final w in summary.workOrders)
-                  _WorkOrderCard(workOrder: w),
+                ),
               ],
             );
-          },
-        ),
+          }
+          return ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              for (final w in summary.workOrders) _WorkOrderCard(workOrder: w),
+            ],
+          );
+        },
       ),
     );
   }

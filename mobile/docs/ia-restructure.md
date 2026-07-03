@@ -116,12 +116,16 @@ new homes exist.
 - Onboarding Home state: install stepper from `projectsProvider` /
   `ProjectStage`, auto-selected pre-activation; retires on activation.
 
-### PR 3 — Service "Grow your service" + Help "Visits"
-- **Service** tab: Upgrade plan + Add-a-location/Get-a-quote entries (Sales).
-- **Help** tab: a **Visits** section listing past & scheduled technician visits
-  (the Projects history that used to be a Profile row).
-- **Accept:** Service shows sales entries wired to existing quote/upgrade flows;
-  Help lists visits from `/me/work-orders`.
+### PR 3 — Service "Grow your service" + Help "Visits" + reseller Ledger  ✅
+- **Service** tab: a "Grow your service" section header over the existing
+  Get-a-quote (add-location) + Upgrade entries (Sales — already present).
+- **Help** tab: a third segment **Visits** (Tickets · Chat · Visits) rendering
+  the technician visits. `WorkOrdersScreen` body extracted to a reusable
+  `WorkOrdersView` (used by both `/profile/technician-visits` and Help).
+- **Reseller** billing label → **"Ledger"** (mobile). *Follow-up:* the reseller
+  web billing label wasn't found in this checkout — relabel when located.
+- **Accept:** Help shows Tickets/Chat/Visits; Visits lists `/me/work-orders`
+  with Track (in-progress) and Rate (completed); reseller mobile shows "Ledger".
 
 ### PR 4 — Account = settings only  *(cleanup, lands last)*
 - Remove **Technician visits** and **Installation progress** rows from Account
