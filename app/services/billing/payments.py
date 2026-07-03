@@ -740,7 +740,9 @@ def _prepaid_invoice_needs_payment_date_anchor(
     period_start = invoice.billing_period_start
     if period_start is None:
         return False
-    period_start = period_start if period_start.tzinfo else period_start.replace(tzinfo=UTC)
+    period_start = (
+        period_start if period_start.tzinfo else period_start.replace(tzinfo=UTC)
+    )
     if paid_at_day <= period_start:
         return False
 
@@ -755,9 +757,7 @@ def _prepaid_invoice_needs_payment_date_anchor(
     next_billing = subscription.next_billing_at
     if next_billing is not None:
         next_billing = (
-            next_billing
-            if next_billing.tzinfo
-            else next_billing.replace(tzinfo=UTC)
+            next_billing if next_billing.tzinfo else next_billing.replace(tzinfo=UTC)
         )
         if next_billing <= paid_at_day:
             return True
@@ -787,9 +787,7 @@ def _prepaid_extension_delta_after_invoice(
     return next_billing - period_end
 
 
-def _reanchor_paid_prepaid_invoice_if_lapsed(
-    db: Session, invoice: Invoice
-) -> bool:
+def _reanchor_paid_prepaid_invoice_if_lapsed(db: Session, invoice: Invoice) -> bool:
     """Start lapsed prepaid renewals from the settlement date.
 
     Prepaid customers should not lose paid entitlement to a historical unpaid
@@ -806,7 +804,9 @@ def _reanchor_paid_prepaid_invoice_if_lapsed(
     if payment is None:
         return False
     effective_at = payment.paid_at or payment.created_at or datetime.now(UTC)
-    paid_at_utc = effective_at if effective_at.tzinfo else effective_at.replace(tzinfo=UTC)
+    paid_at_utc = (
+        effective_at if effective_at.tzinfo else effective_at.replace(tzinfo=UTC)
+    )
     paid_at_day = paid_at_utc.replace(hour=0, minute=0, second=0, microsecond=0)
 
     resolved = _invoice_subscription_lines(db, invoice)
@@ -855,7 +855,9 @@ def _reanchor_paid_prepaid_invoice_if_lapsed(
     if current_next is None:
         subscription.next_billing_at = target_next_billing
     else:
-        current_next = current_next if current_next.tzinfo else current_next.replace(tzinfo=UTC)
+        current_next = (
+            current_next if current_next.tzinfo else current_next.replace(tzinfo=UTC)
+        )
         if current_next < target_next_billing:
             subscription.next_billing_at = target_next_billing
 

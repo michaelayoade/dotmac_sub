@@ -14,13 +14,14 @@ instead of leaving it unchecked forever. Source of detail: each domain's
 
 ## Tier 0 — verify-and-tick (already believed fixed; confirm, then close)
 
-- [ ] SECURITY #2: connector `auth_config` encrypted at rest — APP_INTEGRATIONS
-  status says shipped via #534; verify ciphertext in DB + update
-  SECURITY_REVIEW_ADMIN_AUTHZ.md status column
-- [ ] SECURITY #12: connector `headers`/`metadata_` masked on render — says
-  shipped via #540; verify + update the security doc
-- [ ] SECURITY #13: API-key scopes model — says shipped via #539/#541; verify +
-  update the security doc
+- [x] SECURITY #2: connector `auth_config` encrypted at rest — code verified
+  (`EncryptedJSON`, #534); prod DB check found 2 pre-migration rows still
+  PLAINTEXT (one held a live DB password) → re-encrypted + round-trip verified
+  2026-07-03; security doc updated
+- [x] SECURITY #12: header/metadata masking verified in code
+  (`mask_secret_values`, #540); security doc updated 2026-07-03
+- [x] SECURITY #13: scopes model + enforcement verified in code (#539/#541);
+  security doc updated 2026-07-03
 
 ## Tier 1 — remaining correctness / security-adjacent work
 
