@@ -2173,6 +2173,68 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default="0.00",
         label="Postpaid Default Minimum Balance",
     ),
+    # --- Direct bank transfer (customer-visible payment instructions) ---
+    # Consumed by app.services.customer_portal_flow_payments.direct_bank_transfer_*
+    # (plus the reseller/me variants), which read value_text directly. The
+    # ``_accounts`` value holds a JSON *string* in value_text (not value_json),
+    # so it is typed ``string`` deliberately — a ``json`` type would move it to
+    # value_json and the readers would see an empty transfer config.
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="direct_bank_transfer_enabled",
+        env_var="BILLING_DIRECT_BANK_TRANSFER_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=False,
+        label="Direct Bank Transfer Enabled",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="direct_bank_transfer_bank_name",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="",
+        label="Direct Bank Transfer Bank Name",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="direct_bank_transfer_account_name",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="",
+        label="Direct Bank Transfer Account Name",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="direct_bank_transfer_account_number",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="",
+        label="Direct Bank Transfer Account Number",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="direct_bank_transfer_sort_code",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="",
+        label="Direct Bank Transfer Sort Code",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="direct_bank_transfer_instructions",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="",
+        label="Direct Bank Transfer Instructions",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="direct_bank_transfer_accounts",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="",
+        label="Direct Bank Transfer Accounts (JSON)",
+    ),
     SettingSpec(
         domain=SettingDomain.billing,
         key="invoice_number_enabled",

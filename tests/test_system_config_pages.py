@@ -212,3 +212,179 @@ def test_radius_config_template_shows_save_feedback():
 
     assert "{% elif error %}" in template
     assert "{% elif saved %}" in template
+
+
+def _billing_rows(db_session):
+    return {
+        row.key: row
+        for row in db_session.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.billing)
+        .all()
+    }
+
+
+def _collections_rows(db_session):
+    return {
+        row.key: row
+        for row in db_session.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.collections)
+        .all()
+    }
+
+
+# --- 8.12 Billing config: spec-backed save ---
+def test_billing_config_save_roundtrips_and_applies_spec_types(db_session):
+    web_system_config_service.save_billing_config(
+        db_session,
+        {
+            "billing_enabled": "true",
+            "payment_period": "Monthly",  # normaliser lower-cases
+            "suspension_grace_hours": "72",
+            "minimum_balance": "10.50",
+            "auto_suspend_on_overdue": "false",
+        },
+    )
+
+    rows = _billing_rows(db_session)
+    # Spec-backed boolean gets coerced + typed.
+    assert rows["billing_enabled"].value_text == "true"
+    assert rows["billing_enabled"].value_type == SettingValueType.boolean
+    assert rows["auto_suspend_on_overdue"].value_text == "false"
+    assert rows["auto_suspend_on_overdue"].value_type == SettingValueType.boolean
+    # Spec-backed integer keeps its whole-number text and integer type.
+    assert rows["suspension_grace_hours"].value_text == "72"
+    assert rows["suspension_grace_hours"].value_type == SettingValueType.integer
+    # Decimal-ish value stays a string spec (byte-identical formatting).
+    assert rows["minimum_balance"].value_text == "10.50"
+    assert rows["minimum_balance"].value_type == SettingValueType.string
+    # Orphan (reader-less) key keeps its prior raw-string behaviour.
+    assert rows["payment_period"].value_text == "monthly"
+    assert rows["payment_period"].value_type == SettingValueType.string
+
+
+def test_billing_config_save_rejects_non_numeric_integer(db_session):
+    with pytest.raises(ValueError):
+        web_system_config_service.save_billing_config(
+            db_session,
+            {"billing_enabled": "true", "suspension_grace_hours": "abc"},
+        )
+
+    # Nothing is committed when validation fails.
+    assert "billing_enabled" not in _billing_rows(db_session)
+
+
+# --- 8.12 Direct bank transfer: newly spec-backed save ---
+def test_direct_bank_transfer_save_coerces_boolean_and_preserves_json(db_session):
+    web_system_config_service.save_direct_bank_transfer_config(
+        db_session,
+        {
+            # No bespoke normaliser here: spec coercion turns "on" -> "true".
+            "direct_bank_transfer_enabled": "on",
+            "direct_bank_transfer_instructions": "Pay to the account below.",
+            "account_id": "acc-1",
+            "account_enabled": "acc-1",
+            "account_bank_name": "GTBank",
+            "account_account_name": "DotMac Ltd",
+            "account_account_number": "0123456789",
+        },
+    )
+
+    rows = _billing_rows(db_session)
+    assert rows["direct_bank_transfer_enabled"].value_text == "true"
+    assert rows["direct_bank_transfer_enabled"].value_type == SettingValueType.boolean
+    assert rows["direct_bank_transfer_bank_name"].value_text == "GTBank"
+    # The accounts blob is a JSON *string* held in value_text (not value_json)
+    # so the customer-portal readers keep working.
+    accounts_row = rows["direct_bank_transfer_accounts"]
+    assert accounts_row.value_type == SettingValueType.string
+    assert accounts_row.value_json is None
+    assert '"bank_name": "GTBank"' in accounts_row.value_text
+
+
+def test_direct_bank_transfer_save_rejects_invalid_boolean(db_session):
+    with pytest.raises(ValueError):
+        web_system_config_service.save_direct_bank_transfer_config(
+            db_session,
+            {"direct_bank_transfer_enabled": "maybe"},
+        )
+
+    assert "direct_bank_transfer_enabled" not in _billing_rows(db_session)
+
+
+# --- 8.16 Reminders: routed through spec path (all keys reader-less) ---
+def test_reminders_save_roundtrips_raw_strings(db_session):
+    web_system_config_service.save_reminders(
+        db_session,
+        {"reminders_enabled": "yes", "reminder_channel": "email"},
+    )
+
+    rows = _collections_rows(db_session)
+    assert rows["reminders_enabled"].value_text == "yes"
+    assert rows["reminders_enabled"].value_type == SettingValueType.string
+    assert rows["reminder_channel"].value_text == "email"
+
+
+# --- 8.17 Billing notifications: send-hour is spec-backed ---
+def test_billing_notifications_save_types_send_hour(db_session):
+    web_system_config_service.save_billing_notifications(
+        db_session,
+        {"billing_notif_send_hour": "9", "blocking_wave_enabled": "true"},
+    )
+
+    rows = _collections_rows(db_session)
+    assert rows["billing_notif_send_hour"].value_text == "9"
+    assert rows["billing_notif_send_hour"].value_type == SettingValueType.integer
+    # Orphan key retains raw-string behaviour.
+    assert rows["blocking_wave_enabled"].value_type == SettingValueType.string
+
+
+def test_billing_notifications_save_rejects_out_of_range_send_hour(db_session):
+    with pytest.raises(ValueError):
+        web_system_config_service.save_billing_notifications(
+            db_session,
+            {"billing_notif_send_hour": "30"},
+        )
+
+    assert "billing_notif_send_hour" not in _collections_rows(db_session)
+
+
+# --- 8.19 Plan change: spec-backed save keeps enum canonicalisation ---
+def test_plan_change_save_roundtrips_and_applies_spec_types(db_session):
+    web_system_config_service.save_plan_change(
+        db_session,
+        {
+            "refund_policy": "Prorated",  # canonicalised to lower-case
+            "upgrade_fee": "5.00",
+            "downgrade_fee": "0.00",
+            "fee_tax_rate": "7.50",
+            "invoice_timing": "immediate",
+            "prepaid_rollover": "true",
+            "discount_transfer": "false",
+            "minimum_invoice_amount": "1.00",
+        },
+    )
+
+    rows = _billing_rows(db_session)
+    assert rows["refund_policy"].value_text == "prorated"
+    assert rows["refund_policy"].value_type == SettingValueType.string
+    assert rows["prepaid_rollover"].value_text == "true"
+    assert rows["prepaid_rollover"].value_type == SettingValueType.boolean
+    assert rows["discount_transfer"].value_text == "false"
+    assert rows["discount_transfer"].value_type == SettingValueType.boolean
+    assert rows["upgrade_fee"].value_text == "5.00"
+    assert rows["upgrade_fee"].value_type == SettingValueType.string
+
+
+def test_plan_change_save_rejects_invalid_enum(db_session):
+    with pytest.raises(ValueError):
+        web_system_config_service.save_plan_change(
+            db_session,
+            {
+                "refund_policy": "bogus",
+                "invoice_timing": "immediate",
+                "prepaid_rollover": "true",
+                "discount_transfer": "false",
+            },
+        )
+
+    assert "refund_policy" not in _billing_rows(db_session)
