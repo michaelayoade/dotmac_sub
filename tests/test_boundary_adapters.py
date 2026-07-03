@@ -342,7 +342,7 @@ def test_billing_adapter_uses_default_currency_when_intent_omits_currency(
     fake_billing = SimpleNamespace(invoices=FakeInvoices(), payments=FakePayments())
     adapter = BillingAdapter(billing_service=fake_billing)
     monkeypatch.setattr(
-        "app.services.billing_adapter.settings_spec.resolve_value",
+        "app.services.settings_spec.resolve_value",
         lambda *_args, **_kwargs: "USD",
     )
 

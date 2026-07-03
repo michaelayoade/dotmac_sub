@@ -10,8 +10,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models.domain_settings import SettingDomain
-from app.services import settings_spec
+from app.services import display_format
 from app.services import web_consolidated_billing as web_consolidated_billing_service
 from app.services.auth_dependencies import require_permission
 
@@ -25,9 +24,7 @@ _CONSOLIDATED_PAYMENT_SUCCESS = "Consolidated payment recorded and distributed."
 
 
 def _default_currency(db: Session) -> str:
-    value = settings_spec.resolve_value(db, SettingDomain.billing, "default_currency")
-    code = str(value or "NGN").strip().upper()
-    return code or "NGN"
+    return display_format.default_currency(db)
 
 
 def _consolidated_detail_url(
