@@ -53,6 +53,7 @@ class Ticket {
     this.updatedAt,
     this.resolvedAt,
     this.closedAt,
+    this.csatRating,
   });
 
   final String id;
@@ -70,8 +71,14 @@ class Ticket {
   final DateTime? resolvedAt;
   final DateTime? closedAt;
 
+  /// Support-satisfaction score (1-5) if the customer has rated this ticket.
+  final int? csatRating;
+
   bool get isOpen =>
       closedAt == null && status != 'closed' && status != 'resolved';
+
+  /// A resolved/closed ticket can be rated (CSAT on the support experience).
+  bool get canRate => status == 'resolved' || status == 'closed';
 
   factory Ticket.fromJson(Map<String, dynamic> json) => Ticket(
         id: json['id'].toString(),
@@ -90,6 +97,7 @@ class Ticket {
         updatedAt: _toDate(json['updated_at']),
         resolvedAt: _toDate(json['resolved_at']),
         closedAt: _toDate(json['closed_at']),
+        csatRating: (json['csat_rating'] as num?)?.toInt(),
       );
 }
 

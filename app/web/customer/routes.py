@@ -469,6 +469,31 @@ def customer_support_add_comment(
     return RedirectResponse(url=f"/portal/support/{ticket_id}", status_code=303)
 
 
+@router.post("/support/{ticket_id}/rate")
+def customer_support_rate(
+    request: Request,
+    ticket_id: str,
+    rating: int = Form(...),
+    comment: str = Form(""),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Submit a support-satisfaction (CSAT) rating on a resolved/closed ticket,
+    then redirect back to the ticket with a toast flag."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+    if _is_read_only_customer(customer):
+        return _read_only_response(request, customer, active_page="support")
+    subscriber_ids = resolve_allowed_subscriber_ids(customer, db)
+    result = crm_portal.handle_ticket_rating(
+        db, subscriber_ids, ticket_id, rating, comment=comment
+    )
+    status = "ok" if result.get("success") else "error"
+    return RedirectResponse(
+        url=f"/portal/support/{ticket_id}?rated={status}", status_code=303
+    )
+
+
 # ── Work Orders (CRM-backed) ─────────────────────────────────────────────
 
 
