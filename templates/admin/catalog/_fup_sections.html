@@ -310,7 +310,30 @@
         </div>
     </div>
 
-    <div x-data="{ showForm: false }" class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+    <div x-data="{
+            showForm: false,
+            preview: null,
+            previewLoading: false,
+            async previewImpact() {
+                const amount = document.getElementById('new_rule_threshold').value;
+                if (!amount || parseFloat(amount) <= 0) { this.preview = null; return; }
+                this.previewLoading = true;
+                const params = new URLSearchParams({
+                    threshold_amount: amount,
+                    threshold_unit: document.getElementById('new_rule_unit').value,
+                    direction: document.getElementById('new_rule_direction').value,
+                    consumption_period: document.getElementById('new_rule_period').value,
+                    action: document.getElementById('new_rule_action').value,
+                });
+                try {
+                    const resp = await fetch('/admin/catalog/offers/{{ offer.id }}/fup/rule-impact-preview?' + params.toString());
+                    this.preview = await resp.json();
+                } catch(e) {
+                    this.preview = {error: e.message};
+                }
+                this.previewLoading = false;
+            }
+        }" class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
         <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700 flex items-center justify-between">
             <h2 class="font-semibold text-slate-900 dark:text-white">Add New Rule</h2>
             <button @click="showForm = !showForm" type="button" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 transition-colors">
@@ -330,7 +353,7 @@
                     </div>
                     <div>
                         <label for="new_rule_period" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Consumption Period</label>
-                        <select id="new_rule_period" name="consumption_period" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <select id="new_rule_period" name="consumption_period" @change="previewImpact()" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                             {% for opt in consumption_periods %}
                             <option value="{{ opt.value }}">{{ opt.label }}</option>
                             {% endfor %}
@@ -338,7 +361,7 @@
                     </div>
                     <div>
                         <label for="new_rule_direction" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Direction</label>
-                        <select id="new_rule_direction" name="direction" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <select id="new_rule_direction" name="direction" @change="previewImpact()" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                             {% for opt in directions %}
                             <option value="{{ opt.value }}">{{ opt.label }}</option>
                             {% endfor %}
@@ -349,11 +372,11 @@
                 <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                     <div>
                         <label for="new_rule_threshold" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Threshold Amount</label>
-                        <input type="number" id="new_rule_threshold" name="threshold_amount" required step="0.01" min="0" placeholder="100" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <input type="number" id="new_rule_threshold" name="threshold_amount" required step="0.01" min="0" placeholder="100" @input.debounce.400ms="previewImpact()" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                     </div>
                     <div>
                         <label for="new_rule_unit" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Unit</label>
-                        <select id="new_rule_unit" name="threshold_unit" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <select id="new_rule_unit" name="threshold_unit" @change="previewImpact()" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                             {% for opt in data_units %}
                             <option value="{{ opt.value }}" {% if opt.value == 'gb' %}selected{% endif %}>{{ opt.label }}</option>
                             {% endfor %}
@@ -361,7 +384,7 @@
                     </div>
                     <div>
                         <label for="new_rule_action" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Action</label>
-                        <select id="new_rule_action" name="action" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <select id="new_rule_action" name="action" @change="previewImpact()" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                             {% for opt in actions %}
                             <option value="{{ opt.value }}">{{ opt.label }}</option>
                             {% endfor %}
@@ -421,6 +444,32 @@
                             class="h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700">
                         Enabled
                     </label>
+                </div>
+
+                <!-- Blast-radius preview (#5b): how many subscribers this draft rule hits right now -->
+                <div x-show="preview" x-cloak class="rounded-lg border px-4 py-3 text-sm"
+                     :class="preview && preview.error
+                        ? 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-200'
+                        : (preview && preview.matched_count > 0
+                            ? 'border-rose-300 bg-rose-50 text-rose-800 dark:border-rose-700 dark:bg-rose-900/30 dark:text-rose-200'
+                            : 'border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-200')">
+                    <template x-if="preview && preview.error">
+                        <span x-text="preview.error"></span>
+                    </template>
+                    <template x-if="preview && !preview.error">
+                        <span>
+                            <span class="font-medium">Impact preview:</span>
+                            This rule would immediately affect
+                            <span class="font-semibold" x-text="preview.matched_count"></span>
+                            of
+                            <span class="font-semibold" x-text="preview.total_active_on_offer"></span>
+                            active subscribers on this offer
+                            (<span x-text="preview.consumption_period"></span> usage &ge; <span x-text="preview.threshold_gb"></span> GB now).
+                            <span x-show="preview.capped" class="mt-1 block text-xs opacity-80">
+                                Only the first <span x-text="preview.scanned_count"></span> were scanned; the true figure may be higher.
+                            </span>
+                        </span>
+                    </template>
                 </div>
 
                 <div class="flex justify-end">
