@@ -720,6 +720,17 @@ def get_customer_appointments(
     return {"appointments": appointments, "total": total, "total_pages": total_pages}
 
 
+def _reseller_default_catalog_open(db: Session) -> bool:
+    """Global default: True = resellers see all unrestricted offers (open)."""
+    from app.models.domain_settings import SettingDomain
+    from app.services import settings_spec
+
+    raw = settings_spec.resolve_value(
+        db, SettingDomain.catalog, "reseller_default_catalog_open"
+    )
+    return str(raw).lower() in {"true", "1", "on", "yes"}
+
+
 def _filter_by_reseller_availability(
     db: Session,
     offers: list[CatalogOffer],
@@ -731,8 +742,14 @@ def _filter_by_reseller_availability(
     subscribers whose reseller is listed; offers with no rows stay
     unrestricted. Callers without subscriber context never see restricted
     offers (fail closed).
+
+    A reseller in "restrict to assigned offers" mode (its own
+    ``restrict_to_assigned_offers`` flag, or the inverse of the global
+    ``reseller_default_catalog_open`` default when the flag is NULL) sees ONLY
+    offers explicitly assigned to it — unrestricted offers are hidden too.
     """
     from app.models.offer_availability import OfferResellerAvailability
+    from app.models.subscriber import Reseller
 
     if not offers:
         return offers
@@ -748,14 +765,37 @@ def _filter_by_reseller_availability(
     restricted: dict[object, set[object]] = {}
     for offer_id, reseller_id in rows:
         restricted.setdefault(offer_id, set()).add(reseller_id)
+
+    # Resolve the caller's reseller + its restrict flag in one query.
+    caller_reseller_id = None
+    caller_restrict_flag: bool | None = None
+    if subscriber_id:
+        row = db.execute(
+            select(Subscriber.reseller_id, Reseller.restrict_to_assigned_offers)
+            .join(Reseller, Reseller.id == Subscriber.reseller_id, isouter=True)
+            .where(Subscriber.id == subscriber_id)
+        ).first()
+        if row:
+            caller_reseller_id, caller_restrict_flag = row
+
+    # Restrict mode only applies to a caller with a resolved reseller.
+    restrict_mode = False
+    if caller_reseller_id is not None:
+        restrict_mode = (
+            bool(caller_restrict_flag)
+            if caller_restrict_flag is not None
+            else not _reseller_default_catalog_open(db)
+        )
+
+    if restrict_mode:
+        return [
+            offer
+            for offer in offers
+            if offer.id in restricted and caller_reseller_id in restricted[offer.id]
+        ]
+
     if not restricted:
         return offers
-
-    caller_reseller_id = None
-    if subscriber_id:
-        caller_reseller_id = db.execute(
-            select(Subscriber.reseller_id).where(Subscriber.id == subscriber_id)
-        ).scalar()
 
     return [
         offer
