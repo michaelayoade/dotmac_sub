@@ -1175,7 +1175,7 @@ function customersPage() {
         whatsappMappingStorageKey() {
             const template = this.selectedTemplate();
             if (!template) return '';
-            return `whatsapp-template-mapping:${template.code || template.name}:${template.language || ''}`;
+            return `whatsapp-template-mapping:${template.provider_template_name || template.code || template.name}:${template.language || ''}`;
         },
 
         applySavedWhatsappMapping(values) {
@@ -1224,7 +1224,7 @@ function customersPage() {
             this.whatsappTemplateLoading = true;
             try {
                 const params = new URLSearchParams({
-                    name: template.code || template.name,
+                    name: template.provider_template_name || template.code || template.name,
                     language: template.language || ''
                 });
                 const response = await fetch(`/admin/customers/bulk/whatsapp-template?${params.toString()}`, {

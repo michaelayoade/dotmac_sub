@@ -62,7 +62,16 @@ from app.services.customer_notification_policy import (
     resolve_notification_category,
 )
 from app.services.integrations.connectors import whatsapp as whatsapp_connector
+from app.services.notification_template_conditions import (
+    NotificationTemplateConditionError,
+    conditions_match,
+)
 from app.services.notification_template_renderer import render_template_text
+from app.services.whatsapp_notification_templates import (
+    build_provider_template_body,
+    provider_template_from_template,
+    sync_whatsapp_registry_templates,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -701,6 +710,33 @@ def _whatsapp_registry_template(db: Session, template_id: str) -> dict[str, str]
     return None
 
 
+def _notification_template_for_whatsapp(
+    db: Session, template_id: str
+) -> NotificationTemplate | None:
+    registry_template = _whatsapp_registry_template(db, template_id)
+    if registry_template:
+        for template in (
+            db.query(NotificationTemplate)
+            .filter(NotificationTemplate.channel == NotificationChannel.whatsapp)
+            .all()
+        ):
+            provider_template = provider_template_from_template(template)
+            if provider_template and (
+                provider_template["name"],
+                provider_template.get("language") or "en",
+            ) == (
+                registry_template["name"],
+                registry_template["language"],
+            ):
+                return template
+        return None
+    try:
+        template_uuid = coerce_uuid(template_id)
+    except Exception:
+        return None
+    return db.get(NotificationTemplate, template_uuid)
+
+
 def whatsapp_template_details(
     db: Session, *, name: str, language: str | None
 ) -> dict[str, Any]:
@@ -746,21 +782,19 @@ def queue_bulk_message_from_payload(
             status_code=400, detail="Unsupported notification channel"
         ) from exc
 
+    sync_whatsapp_registry_templates(db)
     template = None
-    whatsapp_template = None
     if channel == NotificationChannel.whatsapp:
-        whatsapp_template = _whatsapp_registry_template(db, template_id)
-        if not whatsapp_template:
-            raise HTTPException(status_code=404, detail="WhatsApp template not found")
+        template = _notification_template_for_whatsapp(db, template_id)
     else:
         template = db.get(NotificationTemplate, coerce_uuid(template_id))
-        if not template or not template.is_active:
-            raise HTTPException(status_code=404, detail="Template not found")
-        if template.channel != channel:
-            raise HTTPException(
-                status_code=400,
-                detail="Template channel does not match selected channel",
-            )
+    if not template or not template.is_active:
+        raise HTTPException(status_code=404, detail="Template not found")
+    if template.channel != channel:
+        raise HTTPException(
+            status_code=400,
+            detail="Template channel does not match selected channel",
+        )
 
     customers, scope = resolve_bulk_customer_scope(db, payload)
     if not customers:
@@ -793,7 +827,8 @@ def queue_bulk_message_from_payload(
             continue
 
         variables = _notification_template_variables(db, subscriber)
-        if whatsapp_template:
+        provider_template = provider_template_from_template(template)
+        if provider_template:
             subject = None
             payload_variables = payload.get("template_variables") or {}
             if not isinstance(payload_variables, dict):
@@ -806,17 +841,12 @@ def queue_bulk_message_from_payload(
                     value,
                     variables,
                 )
-            body = json.dumps(
-                {
-                    "__whatsapp_template__": True,
-                    "name": whatsapp_template["name"],
-                    "language": whatsapp_template["language"],
-                    "variables": resolved_variables,
-                }
+            body = build_provider_template_body(
+                name=str(provider_template["name"]),
+                language=str(provider_template.get("language") or "en"),
+                variables=resolved_variables,
             )
         else:
-            if template is None:
-                raise HTTPException(status_code=404, detail="Template not found")
             subject = _render_manual_template_text(
                 template.subject or "Service Update", variables
             )
@@ -860,10 +890,26 @@ def queue_bulk_message_from_payload(
             last_error = "Suppressed by notification dedupe window"
             suppressed_count += 1
         else:
-            queued_count += 1
+            try:
+                condition_matched = conditions_match(
+                    db,
+                    subscriber_id=subscriber.id,
+                    conditions=template.conditions,
+                )
+            except NotificationTemplateConditionError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Template conditions are invalid: {exc}",
+                ) from exc
+            if not condition_matched:
+                status = NotificationStatus.canceled
+                last_error = "Suppressed by template conditions"
+                suppressed_count += 1
+            else:
+                queued_count += 1
 
         notification = Notification(
-            template_id=template.id if template else None,
+            template_id=template.id,
             subscriber_id=subscriber.id,
             channel=channel,
             event_type="service_bulk_message",

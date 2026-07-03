@@ -22,6 +22,7 @@ from app.services.db_session_adapter import db_session_adapter
 from app.services.email_template import render_email_bodies
 from app.services.integrations.connectors import whatsapp as whatsapp_service
 from app.services.settings_spec import resolve_value
+from app.services.whatsapp_notification_templates import provider_template_from_template
 
 logger = logging.getLogger(__name__)
 
@@ -298,11 +299,21 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                         dry_run=False,
                     )
                 elif notification.template:
+                    provider_template = provider_template_from_template(
+                        notification.template
+                    )
                     result = whatsapp_service.send_template_message(
                         db=db,
                         recipient=notification.recipient,
-                        template_name=notification.template.code,
-                        variables={},
+                        template_name=str(
+                            (provider_template or {}).get("name")
+                            or notification.template.code
+                        ),
+                        language=str(
+                            (provider_template or {}).get("language") or ""
+                        )
+                        or None,
+                        variables=(provider_template or {}).get("variables") or {},
                         dry_run=False,
                     )
                 else:

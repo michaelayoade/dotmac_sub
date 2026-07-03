@@ -11,13 +11,20 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
+from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.notification import (
     Notification,
     NotificationChannel,
     NotificationTemplate,
 )
 from app.models.subscriber import Subscriber, UserType
+from app.models.subscription_engine import SettingValueType
+from app.models.support import Ticket
 from app.services import web_customer_actions
+from app.services.whatsapp_notification_templates import (
+    parse_provider_template_body,
+    sync_whatsapp_registry_templates,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -306,3 +313,100 @@ def test_queue_bulk_message_preview_does_not_create_rows(db_session):
     assert result["queued_count"] == 1
     assert result["notification_ids"] == []
     assert db_session.query(Notification).count() == 0
+
+
+def test_whatsapp_registry_templates_sync_into_notification_templates(db_session):
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.comms,
+            key="whatsapp_message_templates",
+            value_type=SettingValueType.json,
+            value_text=None,
+            value_json=[
+                {"name": "service_restoration", "language": "en_US"},
+                {"name": "closed", "language": "en_US"},
+                {"name": "closed", "language": "en"},
+            ],
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    templates = sync_whatsapp_registry_templates(db_session)
+    provider_rows = {
+        (
+            parse_provider_template_body(template.body)["name"],
+            parse_provider_template_body(template.body)["language"],
+        ): template
+        for template in templates
+        if parse_provider_template_body(template.body)
+    }
+
+    assert ("service_restoration", "en_US") in provider_rows
+    assert ("closed", "en_US") in provider_rows
+    assert ("closed", "en") in provider_rows
+    assert provider_rows[("service_restoration", "en_US")].channel == (
+        NotificationChannel.whatsapp
+    )
+    assert provider_rows[("closed", "en_US")].code != provider_rows[
+        ("closed", "en")
+    ].code
+
+
+def test_queue_bulk_whatsapp_respects_template_conditions(db_session):
+    customer = Subscriber(
+        first_name="Wale",
+        last_name="Ticketed",
+        email="wale-ticketed@example.com",
+        phone="+2348022222222",
+        user_type=UserType.customer,
+        is_active=True,
+    )
+    template = NotificationTemplate(
+        name="Service Restoration",
+        code="service_restoration",
+        channel=NotificationChannel.whatsapp,
+        body=(
+            '{"__whatsapp_template__": true, "name": "service_restoration", '
+            '"language": "en_US", "variables": {}}'
+        ),
+        conditions={
+            "all": [
+                {
+                    "field": "customer_has_open_ticket",
+                    "operator": "=",
+                    "value": False,
+                }
+            ]
+        },
+        is_active=True,
+    )
+    ticket = Ticket(
+        subscriber_id=customer.id,
+        title="Service issue",
+        status="open",
+        priority="normal",
+    )
+    db_session.add_all([customer, template])
+    db_session.flush()
+    ticket.subscriber_id = customer.id
+    db_session.add(ticket)
+    db_session.commit()
+
+    result = web_customer_actions.queue_bulk_message_from_payload(
+        db_session,
+        {
+            "customer_ids": [{"id": str(customer.id), "type": "person"}],
+            "channel": "whatsapp",
+            "template_id": str(template.id),
+            "confirmed": True,
+        },
+    )
+
+    assert result["created_count"] == 1
+    assert result["queued_count"] == 0
+    assert result["suppressed_count"] == 1
+    notification = db_session.get(Notification, result["notification_ids"][0])
+    assert notification is not None
+    assert notification.status.value == "canceled"
+    assert notification.last_error == "Suppressed by template conditions"
