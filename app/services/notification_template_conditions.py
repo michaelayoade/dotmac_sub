@@ -260,7 +260,9 @@ class _ConditionEvaluator:
             return self._active_subscription_count()
         if field == "has_active_subscription":
             return self._active_subscription_count() > 0
-        raise NotificationTemplateConditionError(f"Unsupported condition field: {field}")
+        raise NotificationTemplateConditionError(
+            f"Unsupported condition field: {field}"
+        )
 
     def _open_ticket_count(self) -> int:
         if self.subscriber_id is None:
@@ -355,7 +357,9 @@ def _compare(actual: object, operator: str, expected: object) -> bool:
         return actual_number < expected_number
     if operator == "<=":
         return actual_number <= expected_number
-    raise NotificationTemplateConditionError(f"Unsupported condition operator: {operator}")
+    raise NotificationTemplateConditionError(
+        f"Unsupported condition operator: {operator}"
+    )
 
 
 def _normalized(value: object) -> object:
