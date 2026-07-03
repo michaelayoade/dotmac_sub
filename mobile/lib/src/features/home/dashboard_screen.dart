@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/formatters.dart';
 import '../../core/semantic_colors.dart';
 import '../auth/biometric_enrollment_prompt.dart';
+import '../../models/project.dart';
 import '../../models/service_status.dart';
 import '../../models/subscription.dart';
 import '../../models/usage.dart';
@@ -325,6 +326,45 @@ class DashboardScreen extends ConsumerWidget {
                     subtitle: Text('$who · ${_visitEta(v)}'),
                     trailing: const Icon(Icons.chevron_right),
                     onTap: () => context.push('/track/${v.id}'),
+                  ),
+                ),
+              );
+            }),
+            // Installation progress — a modest, secondary banner shown only
+            // while an install is under way. Onboarding is a one-time activity,
+            // so it's deliberately low-key (muted, no accent) vs. the visit
+            // banner; it links to the tracker and disappears once complete.
+            Consumer(builder: (context, ref, _) {
+              final projects =
+                  ref.watch(projectsProvider).asData?.value.projects ??
+                      const <ProjectItem>[];
+              ProjectItem? install;
+              for (final p in projects) {
+                if (p.progressPct < 100) {
+                  install = p;
+                  break;
+                }
+              }
+              if (install == null) return const SizedBox.shrink();
+              final p = install;
+              final scheme = Theme.of(context).colorScheme;
+              final stage = (p.currentStage?.isNotEmpty ?? false)
+                  ? p.currentStage!
+                  : 'Setting up your service';
+              return Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Card(
+                  color: scheme.surfaceContainerHighest,
+                  elevation: 0,
+                  child: ListTile(
+                    leading: Icon(
+                      Icons.timeline_outlined,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                    title: const Text('Installation in progress'),
+                    subtitle: Text('$stage · ${p.progressPct}%'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => context.push('/profile/installation-progress'),
                   ),
                 ),
               );
