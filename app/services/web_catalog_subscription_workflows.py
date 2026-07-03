@@ -402,3 +402,34 @@ def bulk_change_plan_response(
         actor_id=actor_id,
     )
     return _bulk_result_payload("Changed plan for", result)
+
+
+def change_plan_quote_response(
+    db: Session,
+    *,
+    subscription_id: str,
+    target_offer_id: str,
+) -> dict[str, object]:
+    """Proration quote for an admin change-plan preview.
+
+    Reuses the customer-portal quote builder so the admin modal shows the same
+    credit/charge/net numbers the change will actually produce.
+    """
+    from fastapi import HTTPException
+
+    from app.models.catalog import CatalogOffer
+    from app.services.common import coerce_uuid
+    from app.services.customer_portal_flow_changes import (
+        _build_plan_change_quote,
+        _serialize_plan_change_quote,
+    )
+
+    subscription = catalog_service.subscriptions.get(db, subscription_id)
+    target = db.get(CatalogOffer, coerce_uuid(target_offer_id))
+    if not target:
+        raise HTTPException(status_code=404, detail="Target offer not found")
+    quote = _build_plan_change_quote(db, subscription, target)
+    return {
+        "quote": _serialize_plan_change_quote(quote),
+        "target_offer_name": target.name,
+    }

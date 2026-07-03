@@ -1194,3 +1194,60 @@ def test_change_plan_page_flags_arrears(db_session, subscriber):
     page = get_change_plan_page(db_session, cust, str(subscription.id))
     assert page["in_arrears"] is True
     assert page["arrears_amount"] == 5000.0
+
+
+def test_admin_change_plan_quote_response(db_session, subscriber):
+    from app.services.web_catalog_subscription_workflows import (
+        change_plan_quote_response,
+    )
+
+    now = datetime.now(UTC)
+    source = _make_offer(
+        db_session, name="Quote Src", amount=Decimal("20000.00"), plan_family="u"
+    )
+    target = _make_offer(
+        db_session, name="Quote Tgt", amount=Decimal("35000.00"), plan_family="u"
+    )
+    sub = _make_subscription(
+        db_session,
+        subscriber,
+        source,
+        start_at=now - timedelta(days=10),
+        next_billing_at=now + timedelta(days=20),
+    )
+
+    payload = change_plan_quote_response(
+        db_session, subscription_id=str(sub.id), target_offer_id=str(target.id)
+    )
+
+    quote = payload["quote"]
+    assert payload["target_offer_name"] == "Quote Tgt"
+    assert quote["days_in_cycle"] > 0
+    assert quote["days_remaining"] > 0
+    assert quote["charge_amount"] > 0
+    # Upgrading mid-cycle must cost something net.
+    assert quote["net_amount"] > 0
+
+
+def test_admin_change_plan_quote_unknown_offer_404(db_session, subscriber):
+    from app.services.web_catalog_subscription_workflows import (
+        change_plan_quote_response,
+    )
+
+    now = datetime.now(UTC)
+    source = _make_offer(
+        db_session, name="Quote Only", amount=Decimal("20000.00"), plan_family="u"
+    )
+    sub = _make_subscription(
+        db_session,
+        subscriber,
+        source,
+        start_at=now - timedelta(days=1),
+        next_billing_at=now + timedelta(days=29),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        change_plan_quote_response(
+            db_session, subscription_id=str(sub.id), target_offer_id=str(uuid4())
+        )
+    assert exc.value.status_code == 404

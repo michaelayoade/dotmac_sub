@@ -773,6 +773,25 @@ def subscription_bulk_cancel(
     )
 
 
+@router.get(
+    "/subscriptions/{subscription_id}/change-plan-quote",
+    dependencies=[Depends(require_permission("catalog:read"))],
+)
+def subscription_change_plan_quote(
+    subscription_id: str,
+    target_offer_id: str,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Proration preview for the change-plan modal (no side effects)."""
+    return JSONResponse(
+        web_catalog_subscription_workflows_service.change_plan_quote_response(
+            db,
+            subscription_id=subscription_id,
+            target_offer_id=target_offer_id,
+        )
+    )
+
+
 @router.post(
     "/subscriptions/bulk/change-plan",
     dependencies=[Depends(require_permission("catalog:write"))],
