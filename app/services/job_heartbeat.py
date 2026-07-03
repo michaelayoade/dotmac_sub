@@ -108,9 +108,7 @@ def record_result(
             "at": (now or datetime.now(UTC)).isoformat(),
             "detail": detail if isinstance(detail, dict) else None,
         }
-        client.set(
-            _RESULT_KEY_PREFIX + task_name, json.dumps(payload), ex=_TTL_SECONDS
-        )
+        client.set(_RESULT_KEY_PREFIX + task_name, json.dumps(payload), ex=_TTL_SECONDS)
         return True
     except Exception:
         logger.debug(

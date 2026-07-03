@@ -81,7 +81,7 @@ class RunnerHeartbeat:
 
     @property
     def last_result_status(self) -> str | None:
-        """"ok" / "error" / None (unknown)."""
+        """ "ok" / "error" / None (unknown)."""
         if not isinstance(self.last_result, dict):
             return None
         status = self.last_result.get("status")
@@ -333,9 +333,7 @@ def runner_heartbeats(
         else:
             stale = last is None
         out.append(
-            RunnerHeartbeat(
-                task_name, True, interval, last, age, stale, last_result
-            )
+            RunnerHeartbeat(task_name, True, interval, last, age, stale, last_result)
         )
     return out
 
