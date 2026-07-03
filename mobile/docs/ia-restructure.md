@@ -45,12 +45,15 @@ Result:
 `DOTMAC` wordmark (left) · notification bell + **avatar** (right). Avatar →
 Account (`/profile`), pushed above the shell.
 
-### Home (lifecycle-aware)
-- **Active** (service live): connection status; an **active-visit card** (live
-  technician map + ETA + Track/Message) *only while a work order is
-  `in_progress`*; balance/usage; Add funds.
-- **Onboarding** (pre-activation): install stepper (Quote → Survey → Install →
-  Activation) + the same live-visit card; retires on activation.
+### Home (calm, with transient status banners)
+Home stays a normal dashboard. Transient, time-bound events surface as **slim
+banners** that link to their own screens — they never take Home over:
+- **Active-visit banner** (accented): while a work order is `in_progress` —
+  "Technician on the way · $tech · $eta ›" → the full tracking map.
+- **Installation-progress banner** (muted/secondary): while an install is under
+  way. Onboarding is a *one-time* activity, so it's deliberately low-key — not
+  as pronounced as going-concern surfaces (support, service, billing). It links
+  to the install tracker and disappears once complete.
 
 ### Feature placement
 
@@ -58,7 +61,7 @@ Account (`/profile`), pushed above the shell.
 |---|---|---|---|
 | Get a quote · upgrade · add location | Sales | Profile row | **Service** ("Grow your service") + Home prompt |
 | Technician visit · live map | Projects | Profile → 404 | Slim **Home banner** → full map on its own screen (`/track/:id`); also in **Help → Visits**. The map is *not* embedded on Home. |
-| Installation progress | Projects | Profile row | **Onboarding Home**, retires on activation |
+| Installation progress | Projects | Profile row | **Muted Home banner** (one-time; low-key) → install tracker; retires on activation |
 | Tickets · live chat | Support | Support tab | **Help** tab (renamed) |
 | Refer & Earn | Sales | Profile row | **Account** (fine — low frequency) |
 | Map-pin, Payment, Contacts, Sessions, Settings, Change password | — | Profile (mixed) | **Account** (settings only) |
@@ -112,9 +115,11 @@ new homes exist.
 - **Accept:** in-progress visit → banner appears and opens the live map; no
   active visit → no banner, no error.
 
-### PR 2b — Home onboarding stepper  *(follow-up)*
-- Onboarding Home state: install stepper from `projectsProvider` /
-  `ProjectStage`, auto-selected pre-activation; retires on activation.
+### PR 2b — Onboarding banner  ✅ *(folded into PR 4)*
+- **Not** a Home takeover. Onboarding is a one-time activity, so it's a **muted,
+  secondary banner** on Home (via `projectsProvider`, shown while an install's
+  `progressPct < 100`) that links to the install tracker and retires on
+  completion — far less pronounced than the accented visit banner.
 
 ### PR 3 — Service "Grow your service" + Help "Visits" + reseller Ledger  ✅
 - **Service** tab: a "Grow your service" section header over the existing
@@ -127,11 +132,13 @@ new homes exist.
 - **Accept:** Help shows Tickets/Chat/Visits; Visits lists `/me/work-orders`
   with Track (in-progress) and Rate (completed); reseller mobile shows "Ledger".
 
-### PR 4 — Account = settings only  *(cleanup, lands last)*
-- Remove **Technician visits** and **Installation progress** rows from Account
-  (now surfaced on Home and Help respectively).
-- **Accept:** Account lists only config rows; removed features reachable from
-  their new homes.
+### PR 4 — Account = settings only (+ onboarding banner)  ✅
+- Remove **Technician visits** and **Installation progress** rows from Account —
+  now surfaced in **Help → Visits** and a **muted Home banner** respectively.
+- Adds the onboarding banner (PR 2b, folded in) so Installation keeps a Home
+  entry point exactly as it leaves Account (routes `/profile/*` still exist).
+- **Accept:** Account lists only config rows; both features reachable from their
+  new homes; Account is now purely settings/identity.
 
 ### (Separate) Bug fixes surfaced during the walkthrough
 1. `GET /me/work-orders` 404-for-no-data → return `200 []` + friendly empty state.
