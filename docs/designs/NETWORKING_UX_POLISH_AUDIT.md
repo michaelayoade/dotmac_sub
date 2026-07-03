@@ -4,7 +4,7 @@
 **Method:** 7-agent parallel read-only review across the networking admin surface
 (~33 admin pages, ~50 services): router-management, RADIUS/enforcement,
 OLT/ONT/PON, TR-069/CPE, topology/monitoring, IPAM/fiber/sites, WireGuard/DNS/speed.
-**Status:** audit only — nothing implemented from this doc yet. Companion to
+**Status:** remediated (see "Remediation status" at the end). Companion to
 [BILLING_UX_POLISH_AUDIT.md](BILLING_UX_POLISH_AUDIT.md).
 
 > Note: a separate PR (#505) already landed adjacent router/MikroTik hardening
@@ -254,3 +254,37 @@ Format: `[POLISH|CONTROL] (severity) file:line — problem → recommendation [r
 - [CONTROL] (Low) `app/services/wireguard.py:1274` — log retention default 90d hardcoded → `wireguard_log_retention_days` setting [defer]
 - [CONTROL] (Low) `app/services/wireguard.py:423` — handshake "connected" window `< 180s` hardcoded → optional `wireguard_handshake_online_secs` [defer]
 - Already-configurable: listen-port/MTU/VPN-address/interface via `get_vpn_defaults`; map customer cap (`network_map.py:307`).
+
+
+## Remediation status
+
+Shipped across four merged PRs (#510, #514, #515, #517 — the latter three landed
+via the #565 integration stack), plus the control-plane config audit follow-ons
+(#591/#592/#594/#599):
+
+### Resolved
+
+- Suspended-subscriber MikroTik address-list name centralized behind the
+  `radius.suspended_address_list` setting (population, reconciliation,
+  enforcement) — the top duplicated-constant finding (#510).
+- Internet VLAN classification behind `network.internet_service_vlans`
+  (default 203); core-device backup SSH default port 120 → 22 (#510).
+- Confirms on disruptive ONT/CPE/TR-069 bulk, VPN, NAS, RADIUS import, and
+  config-push actions (#510).
+- Fleet config-push safety controls: persisted `dry_run`, `failure_policy`,
+  per-push `allow_dangerous_commands`; dry runs snapshot and record planned
+  calls without POSTing; abort policy stops after first router failure (#514).
+- Async action feedback: TR-069 HTMX panels re-render (no stale values), busy/
+  loading states on CPE refresh/reboot/factory-reset/port toggles, router
+  Test-Connection + Sync endpoints with visible toasts, ONT busy states (#515).
+- Freshness labels: "Live RADIUS active sessions" claim removed in favor of an
+  explicit UTC `snapshot_at`; single-point ONU chart retitled to snapshot;
+  topology legend explains both utilization and node-status colors (#517).
+- Router REST + CoA tunables made configurable; SSH config-snapshot capture
+  with persisted known_hosts (control-plane audit phases 1–3, #592/#594/#591/
+  #599).
+
+### Still open / deferred
+
+- The [defer]-tagged WireGuard items (keepalive default, `router_api_ssl_verify`,
+  log retention, handshake window) and other appendix entries not covered above.
