@@ -2365,14 +2365,102 @@ def test_network_devices_zabbix_probe_statuses_use_icmp_and_snmp_only(monkeypatc
     assert statuses["device-online"]["ping_state"] == "ok"
     assert statuses["device-online"]["snmp_label"] == "Online"
     assert statuses["device-online"]["snmp_state"] == "ok"
-    assert statuses["device-timeout"]["ping_label"] == "Timeout"
+    assert statuses["device-timeout"]["ping_label"] == "Down"
     assert statuses["device-timeout"]["ping_state"] == "fail"
     assert statuses["device-timeout"]["snmp_label"] == "Timeout"
     assert statuses["device-timeout"]["snmp_state"] == "fail"
-    assert statuses["device-missing-icmp"]["ping_label"] == "Timeout"
-    assert statuses["device-missing-icmp"]["ping_state"] == "fail"
+    assert statuses["device-missing-icmp"]["ping_label"] == "Not monitored"
+    assert statuses["device-missing-icmp"]["ping_state"] == "unknown"
     assert statuses["device-missing-icmp"]["snmp_label"] == "Online"
     assert statuses["device-missing-icmp"]["snmp_state"] == "ok"
+
+
+def test_network_devices_zabbix_probe_statuses_do_not_call_linked_failures_unlinked(
+    monkeypatch,
+):
+    class _FailingZabbixClient:
+        @classmethod
+        def from_env(cls):
+            return cls()
+
+        def get_hosts(self, host_ids=None, limit=1000):
+            raise core_devices_inventory_service.ZabbixClientError("boom")
+
+        def get_items(self, host_ids=None, metric=None, limit=100000):
+            raise core_devices_inventory_service.ZabbixClientError("boom")
+
+    monkeypatch.setattr(
+        core_devices_inventory_service, "zabbix_configured", lambda: True
+    )
+    monkeypatch.setattr(
+        core_devices_inventory_service,
+        "ZabbixClient",
+        _FailingZabbixClient,
+    )
+
+    statuses = core_devices_inventory_service._build_zabbix_probe_statuses(
+        [
+            {"id": "linked", "zabbix_host_id": "101"},
+            {"id": "unlinked", "zabbix_host_id": None},
+        ]
+    )
+
+    assert statuses["linked"]["ping_label"] == "Zabbix unavailable"
+    assert statuses["linked"]["ping_state"] == "unknown"
+    assert statuses["linked"]["ping_reason"] == "Could not read current Zabbix status"
+    assert statuses["linked"]["snmp_label"] == "Zabbix unavailable"
+    assert statuses["unlinked"]["ping_label"] == "Not linked"
+    assert statuses["unlinked"]["ping_reason"] == "Device is not linked to Zabbix"
+
+
+def test_network_devices_zabbix_probe_statuses_keep_successful_chunks(monkeypatch):
+    monkeypatch.setattr(
+        core_devices_inventory_service, "_NETWORK_DEVICE_ZABBIX_CHUNK_SIZE", 1
+    )
+
+    class _PartiallyFailingZabbixClient:
+        @classmethod
+        def from_env(cls):
+            return cls()
+
+        def get_hosts(self, host_ids=None, limit=1000):
+            if host_ids == ["bad"]:
+                raise core_devices_inventory_service.ZabbixClientError("boom")
+            return [
+                {
+                    "hostid": "good",
+                    "status": "0",
+                    "interfaces": [{"type": "2", "available": "1"}],
+                }
+            ]
+
+        def get_items(self, host_ids=None, metric=None, limit=100000):
+            if host_ids == ["bad"]:
+                raise core_devices_inventory_service.ZabbixClientError("boom")
+            return [{"hostid": "good", "key_": "icmpping", "lastvalue": "1"}]
+
+    monkeypatch.setattr(
+        core_devices_inventory_service, "zabbix_configured", lambda: True
+    )
+    monkeypatch.setattr(
+        core_devices_inventory_service,
+        "ZabbixClient",
+        _PartiallyFailingZabbixClient,
+    )
+
+    statuses = core_devices_inventory_service._build_zabbix_probe_statuses(
+        [
+            {"id": "device-good", "zabbix_host_id": "good"},
+            {"id": "device-bad", "zabbix_host_id": "bad"},
+        ]
+    )
+
+    assert statuses["device-good"]["ping_label"] == "Online"
+    assert statuses["device-good"]["ping_state"] == "ok"
+    assert statuses["device-good"]["snmp_label"] == "Online"
+    assert statuses["device-good"]["snmp_state"] == "ok"
+    assert statuses["device-bad"]["ping_label"] == "Zabbix unavailable"
+    assert statuses["device-bad"]["snmp_label"] == "Zabbix unavailable"
 
 
 def test_consolidated_nas_inventory_inherits_linked_monitoring_status(

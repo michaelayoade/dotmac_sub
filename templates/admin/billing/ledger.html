@@ -30,13 +30,13 @@
         </div>
         {# Filter Pills #}
         <div class="flex items-center gap-1 rounded-xl bg-slate-100 p-1 dark:bg-slate-800">
-            <a href="/admin/billing/ledger{% if customer_ref or date_range or category or selected_partner_id %}?{% endif %}{% if customer_ref %}customer_ref={{ customer_ref }}{% endif %}{% if customer_ref and (date_range or category or selected_partner_id) %}&{% endif %}{% if date_range %}date_range={{ date_range }}{% endif %}{% if date_range and (category or selected_partner_id) %}&{% endif %}{% if category %}category={{ category }}{% endif %}{% if category and selected_partner_id %}&{% endif %}{% if selected_partner_id %}partner_id={{ selected_partner_id }}{% endif %}" class="rounded-lg px-4 py-2 text-sm font-medium transition-all {% if not entry_type %}bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white{% else %}text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white{% endif %}">
+            <a href="/admin/billing/ledger{% if customer_ref or start_date or end_date or category or selected_partner_id %}?{% endif %}{% if customer_ref %}customer_ref={{ customer_ref }}{% endif %}{% if customer_ref and (start_date or end_date or category or selected_partner_id) %}&{% endif %}{% if start_date %}start_date={{ start_date }}{% endif %}{% if start_date and (end_date or category or selected_partner_id) %}&{% endif %}{% if end_date %}end_date={{ end_date }}{% endif %}{% if end_date and (category or selected_partner_id) %}&{% endif %}{% if category %}category={{ category }}{% endif %}{% if category and selected_partner_id %}&{% endif %}{% if selected_partner_id %}partner_id={{ selected_partner_id }}{% endif %}" class="rounded-lg px-4 py-2 text-sm font-medium transition-all {% if not entry_type %}bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white{% else %}text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white{% endif %}">
                 All
             </a>
-            <a href="/admin/billing/ledger?entry_type=credit{% if customer_ref %}&customer_ref={{ customer_ref }}{% endif %}{% if date_range %}&date_range={{ date_range }}{% endif %}{% if category %}&category={{ category }}{% endif %}{% if selected_partner_id %}&partner_id={{ selected_partner_id }}{% endif %}" class="rounded-lg px-4 py-2 text-sm font-medium transition-all {% if entry_type == 'credit' %}bg-white text-emerald-600 shadow-sm dark:bg-slate-700 dark:text-emerald-400{% else %}text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white{% endif %}">
+            <a href="/admin/billing/ledger?entry_type=credit{% if customer_ref %}&customer_ref={{ customer_ref }}{% endif %}{% if start_date %}&start_date={{ start_date }}{% endif %}{% if end_date %}&end_date={{ end_date }}{% endif %}{% if category %}&category={{ category }}{% endif %}{% if selected_partner_id %}&partner_id={{ selected_partner_id }}{% endif %}" class="rounded-lg px-4 py-2 text-sm font-medium transition-all {% if entry_type == 'credit' %}bg-white text-emerald-600 shadow-sm dark:bg-slate-700 dark:text-emerald-400{% else %}text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white{% endif %}">
                 Credits
             </a>
-            <a href="/admin/billing/ledger?entry_type=debit{% if customer_ref %}&customer_ref={{ customer_ref }}{% endif %}{% if date_range %}&date_range={{ date_range }}{% endif %}{% if category %}&category={{ category }}{% endif %}{% if selected_partner_id %}&partner_id={{ selected_partner_id }}{% endif %}" class="rounded-lg px-4 py-2 text-sm font-medium transition-all {% if entry_type == 'debit' %}bg-white text-amber-600 shadow-sm dark:bg-slate-700 dark:text-amber-400{% else %}text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white{% endif %}">
+            <a href="/admin/billing/ledger?entry_type=debit{% if customer_ref %}&customer_ref={{ customer_ref }}{% endif %}{% if start_date %}&start_date={{ start_date }}{% endif %}{% if end_date %}&end_date={{ end_date }}{% endif %}{% if category %}&category={{ category }}{% endif %}{% if selected_partner_id %}&partner_id={{ selected_partner_id }}{% endif %}" class="rounded-lg px-4 py-2 text-sm font-medium transition-all {% if entry_type == 'debit' %}bg-white text-amber-600 shadow-sm dark:bg-slate-700 dark:text-amber-400{% else %}text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white{% endif %}">
                 Debits
             </a>
         </div>
@@ -80,27 +80,26 @@
                     <option value="other" {% if category == 'other' %}selected{% endif %}>Other</option>
                 </select>
             </div>
-            <div class="w-full sm:w-52">
-                <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Date Range</label>
-                <select name="date_range" class="block w-full rounded-xl border-0 bg-slate-100 py-3 pl-4 pr-10 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:focus:bg-slate-600">
-                    <option value="" {% if not date_range %}selected{% endif %}>All Time</option>
-                    <option value="today" {% if date_range == 'today' %}selected{% endif %}>Today</option>
-                    <option value="week" {% if date_range == 'week' %}selected{% endif %}>This Week</option>
-                    <option value="month" {% if date_range == 'month' %}selected{% endif %}>This Month</option>
-                    <option value="quarter" {% if date_range == 'quarter' %}selected{% endif %}>This Quarter</option>
-                    <option value="year" {% if date_range == 'year' %}selected{% endif %}>This Year</option>
-                </select>
+            <div class="grid w-full gap-3 sm:w-[25rem] sm:grid-cols-2">
+                <div>
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Start Date</label>
+                    <input type="date" name="start_date" value="{{ start_date or '' }}" class="block w-full rounded-xl border-0 bg-slate-100 py-3 pl-4 pr-4 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:focus:bg-slate-600">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">End Date</label>
+                    <input type="date" name="end_date" value="{{ end_date or '' }}" class="block w-full rounded-xl border-0 bg-slate-100 py-3 pl-4 pr-4 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:focus:bg-slate-600">
+                </div>
             </div>
             <div class="flex items-center gap-2">
                 <button type="submit" class="inline-flex items-center rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700">
                     Apply
                 </button>
-                <a href="/admin/billing/ledger/export.csv?entry_type={{ entry_type or '' }}&customer_ref={{ customer_ref or '' }}&date_range={{ date_range or '' }}&category={{ category or '' }}&partner_id={{ selected_partner_id or '' }}"
+                <a href="/admin/billing/ledger/export.csv?entry_type={{ entry_type or '' }}&customer_ref={{ customer_ref or '' }}&start_date={{ start_date or '' }}&end_date={{ end_date or '' }}&category={{ category or '' }}&partner_id={{ selected_partner_id or '' }}"
                    class="inline-flex items-center rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">
                     Export CSV
                 </a>
                 {% if customer_ref %}
-                <a href="/admin/billing/ledger{% if entry_type or date_range or category or selected_partner_id %}?{% endif %}{% if entry_type %}entry_type={{ entry_type }}{% endif %}{% if entry_type and (date_range or category or selected_partner_id) %}&{% endif %}{% if date_range %}date_range={{ date_range }}{% endif %}{% if date_range and (category or selected_partner_id) %}&{% endif %}{% if category %}category={{ category }}{% endif %}{% if category and selected_partner_id %}&{% endif %}{% if selected_partner_id %}partner_id={{ selected_partner_id }}{% endif %}" class="text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">
+                <a href="/admin/billing/ledger{% if entry_type or start_date or end_date or category or selected_partner_id %}?{% endif %}{% if entry_type %}entry_type={{ entry_type }}{% endif %}{% if entry_type and (start_date or end_date or category or selected_partner_id) %}&{% endif %}{% if start_date %}start_date={{ start_date }}{% endif %}{% if start_date and (end_date or category or selected_partner_id) %}&{% endif %}{% if end_date %}end_date={{ end_date }}{% endif %}{% if end_date and (category or selected_partner_id) %}&{% endif %}{% if category %}category={{ category }}{% endif %}{% if category and selected_partner_id %}&{% endif %}{% if selected_partner_id %}partner_id={{ selected_partner_id }}{% endif %}" class="text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">
                     Clear customer
                 </a>
                 {% endif %}
@@ -239,7 +238,7 @@
                     {% else %}
                     {{ empty_state(
                         title="No ledger entries found",
-                        message=("No entries match the current filters — try clearing the partner, customer, category or date range." if (selected_partner_id or customer_ref or category or date_range or entry_type) else "Entries will appear here when billing activity occurs"),
+                        message=("No entries match the current filters — try clearing the partner, customer, category or date range." if (selected_partner_id or customer_ref or category or start_date or end_date or entry_type) else "Entries will appear here when billing activity occurs"),
                         icon='<svg class="h-8 w-8 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>',
                         color="emerald",
                         colspan=8
