@@ -28,7 +28,11 @@ instead of leaving it unchecked forever. Source of detail: each domain's
 - [ ] SECURITY (systemic): extend the build-failing route-permission arch test
   from `/api/v1`-only to **all `/admin` web routers**, with a quarantine list
   burned down over time
-- [ ] SECURITY: move API-key hashing from unsalted sha256 to HMAC-with-key
+- [x] SECURITY: API-key hashing → HMAC-SHA256 keyed with a derived subkey of
+  the credential-encryption key. Dual-read + rehash-on-use: legacy sha256 rows
+  keep authenticating and upgrade to HMAC on next call — NO key rotation, NO
+  external (ERP/CRM) changes, zero downtime. Legacy sha256 verify path can be
+  retired once all active keys have re-authenticated (2 prod keys).
 - [ ] BILLING: currency cleanup remainder — forms, adapters, **Flutterwave init
   (blocks non-NGN today)**, integrity SQL, `crm_billing_push` (`os.getenv`)
 - [ ] APP-INTEGRATIONS P-C: fix fake observability — connector health is
