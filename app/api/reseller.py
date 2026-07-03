@@ -551,7 +551,10 @@ def my_reseller_vas_topup_initiate(
     return {
         key: str(value) if isinstance(value, _Decimal) else value
         for key, value in vas_wallet.initiate_reseller_topup(
-            db, reseller_id, _Decimal(str(payload.get("amount") or "0"))
+            db,
+            reseller_id,
+            _Decimal(str(payload.get("amount") or "0")),
+            provider=(str(payload.get("provider") or "").strip() or None),
         ).items()
     }
 

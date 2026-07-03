@@ -13,6 +13,16 @@ from app.services.bulk_tariff_change import bulk_tariff_change
 logger = logging.getLogger(__name__)
 
 
+def _include_suspended(form: FormData) -> bool:
+    """Read the opt-in "also change suspended subscriptions" checkbox.
+
+    Unchecked (absent) means the historical active-only behavior; standard HTML
+    checkbox truthy values map to opt-in.
+    """
+    raw = str(form.get("include_suspended") or "").strip().lower()
+    return raw in {"1", "true", "on", "yes"}
+
+
 def page_context(request: Request, db: Session) -> dict:
     """Build initial page context with offers list and subscription counts."""
     offers = bulk_tariff_change.list_offers(db)
@@ -29,6 +39,7 @@ def preview_context(request: Request, db: Session, form: FormData) -> dict:
     """After preview form submission, returns preview data."""
     source_offer_id = str(form.get("source_offer_id") or "").strip()
     target_offer_id = str(form.get("target_offer_id") or "").strip()
+    include_suspended = _include_suspended(form)
 
     errors: list[str] = []
     if not source_offer_id:
@@ -50,12 +61,14 @@ def preview_context(request: Request, db: Session, form: FormData) -> dict:
             "form_errors": errors,
             "form_source_offer_id": source_offer_id,
             "form_target_offer_id": target_offer_id,
+            "form_include_suspended": include_suspended,
         }
 
     preview_data = bulk_tariff_change.preview(
         db,
         source_offer_id=source_offer_id,
         target_offer_id=target_offer_id,
+        include_suspended=include_suspended,
     )
 
     return {
@@ -65,6 +78,7 @@ def preview_context(request: Request, db: Session, form: FormData) -> dict:
         "preview": preview_data,
         "form_source_offer_id": source_offer_id,
         "form_target_offer_id": target_offer_id,
+        "form_include_suspended": include_suspended,
     }
 
 
@@ -72,6 +86,7 @@ def execute_context(request: Request, db: Session, form: FormData) -> dict:
     """Execute the change and return result context."""
     source_offer_id = str(form.get("source_offer_id") or "").strip()
     target_offer_id = str(form.get("target_offer_id") or "").strip()
+    include_suspended = _include_suspended(form)
 
     offers = bulk_tariff_change.list_offers(db)
     counts = bulk_tariff_change.count_by_offer(db)
@@ -81,6 +96,7 @@ def execute_context(request: Request, db: Session, form: FormData) -> dict:
             db,
             source_offer_id=source_offer_id,
             target_offer_id=target_offer_id,
+            include_suspended=include_suspended,
         )
     except Exception as e:
         logger.error("Bulk tariff change execution failed: %s", e)
@@ -92,6 +108,7 @@ def execute_context(request: Request, db: Session, form: FormData) -> dict:
             "execution_error": str(e),
             "form_source_offer_id": source_offer_id,
             "form_target_offer_id": target_offer_id,
+            "form_include_suspended": include_suspended,
         }
 
     # Refresh counts after the change
@@ -104,4 +121,5 @@ def execute_context(request: Request, db: Session, form: FormData) -> dict:
         "result": result,
         "form_source_offer_id": source_offer_id,
         "form_target_offer_id": target_offer_id,
+        "form_include_suspended": include_suspended,
     }

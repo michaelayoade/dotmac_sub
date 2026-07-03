@@ -190,6 +190,14 @@
                 {% endfor %}
             </select>
         </div>
+        <div class="mt-4 flex items-start gap-2">
+            <input type="checkbox" id="bulk-include-suspended" x-model="includeSuspended"
+                   class="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700">
+            <label for="bulk-include-suspended" class="text-sm text-slate-700 dark:text-slate-300">
+                Also change suspended subscriptions
+                <span class="block text-xs text-slate-500 dark:text-slate-400">By default only active subscriptions are changed.</span>
+            </label>
+        </div>
         <div class="mt-6 flex justify-end gap-3">
             <button @click="showChangePlanModal = false"
                     class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300">
@@ -213,6 +221,7 @@ function subscriptionBulkActions() {
         selectedIds: [],
         showChangePlanModal: false,
         targetOfferId: '',
+        includeSuspended: false,
         subscriptionIds: [{% for subscription in subscriptions %}'{{ subscription.id }}'{% if not loop.last %}, {% endif %}{% endfor %}],
 
         toggleSelection(id) {
@@ -320,13 +329,14 @@ function subscriptionBulkActions() {
                         'Content-Type': 'application/x-www-form-urlencoded',
                         'X-CSRF-Token': csrfToken
                     },
-                    body: `subscription_ids=${this.selectedIds.join(',')}&target_offer_id=${this.targetOfferId}`
+                    body: `subscription_ids=${this.selectedIds.join(',')}&target_offer_id=${this.targetOfferId}&include_suspended=${this.includeSuspended}`
                 });
 
                 if (response.ok) {
                     const result = await response.json();
                     this.showChangePlanModal = false;
                     this.targetOfferId = '';
+                    this.includeSuspended = false;
                     const skipped = result.skipped_ids || [];
                     const failed = result.failed_ids || [];
                     if (failed.length > 0 || skipped.length > 0) {

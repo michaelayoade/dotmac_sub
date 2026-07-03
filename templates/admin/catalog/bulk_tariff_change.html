@@ -95,6 +95,17 @@
                     </div>
                 </div>
 
+                {# Opt-in: also migrate suspended subscriptions (default off = active-only) #}
+                <div class="flex items-start gap-3">
+                    <input type="checkbox" id="include_suspended" name="include_suspended" value="true"
+                           {% if form_include_suspended|default(false) %}checked{% endif %}
+                           class="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700">
+                    <label for="include_suspended" class="text-sm text-slate-700 dark:text-slate-300">
+                        Also change suspended subscriptions
+                        <span class="block text-xs text-slate-500 dark:text-slate-400">By default only active subscriptions are migrated.</span>
+                    </label>
+                </div>
+
                 <div class="flex justify-end">
                     <button type="submit"
                             class="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-violet-700 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800">
@@ -143,7 +154,9 @@
                         </svg>
                         <div class="text-sm">
                             <p class="font-medium text-blue-800 dark:text-blue-200">
-                                {{ preview.total_count }} active subscription{{ 's' if preview.total_count != 1 else '' }} will be changed
+                                {{ preview.total_count }}
+                                {% if preview.include_suspended %}active or suspended{% else %}active{% endif %}
+                                subscription{{ 's' if preview.total_count != 1 else '' }} will be changed
                             </p>
                             <p class="mt-1 text-blue-700 dark:text-blue-300">
                                 From <span class="font-semibold">{{ preview.source_offer.name }}</span>
@@ -214,8 +227,9 @@
                     {% include "components/forms/csrf_input.html" %}
                     <input type="hidden" name="source_offer_id" value="{{ form_source_offer_id }}">
                     <input type="hidden" name="target_offer_id" value="{{ form_target_offer_id }}">
+                    {% if form_include_suspended|default(false) %}<input type="hidden" name="include_suspended" value="true">{% endif %}
                     <button type="submit"
-                            onclick="return confirm('Are you sure you want to change {{ preview.total_count }} subscription{{ 's' if preview.total_count != 1 else '' }}? This action cannot be undone.')"
+                            onclick="return confirm('Are you sure you want to change {{ preview.total_count }} {% if preview.include_suspended %}active or suspended {% endif %}subscription{{ 's' if preview.total_count != 1 else '' }}? This action cannot be undone.')"
                             class="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800">
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>

@@ -355,3 +355,96 @@ class TestReviewFixes:
         # A different amount goes through.
         result = vas_wallet.pay_bill(db_session, str(subscriber.id), Decimal("1000"))
         assert result["balance"] == Decimal("7000.00")
+
+
+class TestTopupPaymentOptions:
+    def test_only_paystack_when_no_flutterwave_provider(self, db_session):
+        _enable_vas(db_session)
+        assert vas_wallet.topup_payment_options(db_session) == [
+            {"provider_type": "paystack", "label": "Pay with Paystack"},
+        ]
+
+    def test_surfaces_active_flutterwave_provider(self, db_session):
+        from app.models.billing import PaymentProvider, PaymentProviderType
+
+        _enable_vas(db_session)
+        db_session.add_all(
+            [
+                PaymentProvider(
+                    name="Paystack",
+                    provider_type=PaymentProviderType.paystack,
+                    is_active=True,
+                ),
+                PaymentProvider(
+                    name="Flutterwave",
+                    provider_type=PaymentProviderType.flutterwave,
+                    is_active=True,
+                ),
+                PaymentProvider(
+                    name="Disabled Flutterwave",
+                    provider_type=PaymentProviderType.flutterwave,
+                    is_active=False,
+                ),
+            ]
+        )
+        db_session.commit()
+        assert vas_wallet.topup_payment_options(db_session) == [
+            {"provider_type": "paystack", "label": "Pay with Paystack"},
+            {"provider_type": "flutterwave", "label": "Pay with Flutterwave"},
+        ]
+
+    def test_overview_exposes_payment_options(self, db_session):
+        _enable_vas(db_session)
+        subscriber = _subscriber(db_session)
+        overview = vas_wallet.wallet_overview(db_session, str(subscriber.id))
+        assert overview["payment_options"] == [
+            {"provider_type": "paystack", "label": "Pay with Paystack"},
+        ]
+
+    def test_initiate_threads_chosen_provider(self, db_session):
+        _enable_vas(db_session)
+        subscriber = _subscriber(db_session)
+        seen: dict[str, str] = {}
+
+        def _fake_build_context(_db, *, provider_type, **_kwargs):
+            seen["provider_type"] = provider_type
+            return SimpleNamespace(
+                provider_type=provider_type,
+                public_key="pk_test",
+                reference="vas-ref-flw",
+            )
+
+        with patch.object(
+            vas_wallet.payment_gateway_adapter,
+            "build_context",
+            _fake_build_context,
+        ):
+            result = vas_wallet.initiate_topup(
+                db_session,
+                str(subscriber.id),
+                Decimal("1000"),
+                provider="flutterwave",
+            )
+        assert seen["provider_type"] == "flutterwave"
+        assert result["provider_type"] == "flutterwave"
+
+    def test_initiate_defaults_provider_when_absent(self, db_session):
+        _enable_vas(db_session)
+        subscriber = _subscriber(db_session)
+        seen: dict[str, str] = {}
+
+        def _fake_build_context(_db, *, provider_type, **_kwargs):
+            seen["provider_type"] = provider_type
+            return SimpleNamespace(
+                provider_type=provider_type,
+                public_key="pk_test",
+                reference="vas-ref-default",
+            )
+
+        with patch.object(
+            vas_wallet.payment_gateway_adapter,
+            "build_context",
+            _fake_build_context,
+        ):
+            vas_wallet.initiate_topup(db_session, str(subscriber.id), Decimal("1000"))
+        assert seen["provider_type"] == "paystack"
