@@ -800,10 +800,15 @@ def subscription_bulk_change_plan(
     request: Request,
     subscription_ids: str = Form(...),
     target_offer_id: str = Form(...),
+    effective_timing: str = Form("instant"),
     include_suspended: bool = Form(False),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
-    """Bulk change plan/offer for subscriptions."""
+    """Bulk change plan/offer for subscriptions.
+
+    ``effective_timing`` is ``instant`` (default, swap now with proration) or
+    ``next_cycle`` (schedule the swap for each sub's next billing date).
+    """
     return JSONResponse(
         web_catalog_subscription_workflows_service.bulk_change_plan_response(
             db,
@@ -811,8 +816,31 @@ def subscription_bulk_change_plan(
             target_offer_id=target_offer_id,
             request=request,
             actor_id=_get_actor_id(request),
+            effective_timing=effective_timing,
             include_suspended=include_suspended,
         )
+    )
+
+
+@router.post(
+    "/subscriptions/{subscription_id}/scheduled-change/{request_id}/cancel",
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
+def subscription_cancel_scheduled_change(
+    request: Request,
+    subscription_id: str,
+    request_id: str,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """Cancel a scheduled next-cycle plan change before it takes effect."""
+    return RedirectResponse(
+        web_catalog_subscription_workflows_service.cancel_scheduled_plan_change_redirect(
+            db,
+            subscription_id=subscription_id,
+            request_id=request_id,
+            actor_id=_get_actor_id(request),
+        ),
+        status_code=303,
     )
 
 

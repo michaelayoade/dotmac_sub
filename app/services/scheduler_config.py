@@ -1057,6 +1057,34 @@ def build_beat_schedule() -> dict:
             enabled=subscription_expiration_enabled,
             interval_seconds=subscription_expiration_interval_seconds,
         )
+        # Apply admin-scheduled next-cycle plan changes once their effective
+        # (next-billing) date arrives. Hourly so a change lands promptly after
+        # the boundary; the applier is idempotent (only picks up approved,
+        # unapplied rows whose effective_date has passed).
+        scheduled_plan_change_enabled = _effective_bool(
+            session,
+            SettingDomain.catalog,
+            "scheduled_plan_change_enabled",
+            "SCHEDULED_PLAN_CHANGE_ENABLED",
+            True,
+        )
+        scheduled_plan_change_interval_seconds = _effective_int(
+            session,
+            SettingDomain.catalog,
+            "scheduled_plan_change_interval_seconds",
+            "SCHEDULED_PLAN_CHANGE_INTERVAL_SECONDS",
+            3600,  # Hourly
+        )
+        scheduled_plan_change_interval_seconds = max(
+            scheduled_plan_change_interval_seconds, 300
+        )
+        _sync_scheduled_task(
+            session,
+            name="scheduled_plan_change_applier",
+            task_name="app.tasks.catalog.apply_due_subscription_changes",
+            enabled=scheduled_plan_change_enabled,
+            interval_seconds=scheduled_plan_change_interval_seconds,
+        )
         # Infrastructure availability snapshot - daily rollup powering the
         # performance/SLA trend charts (see INFRASTRUCTURE_SLA_PERFORMANCE.md).
         # Safe to run regardless of SLA_AVAILABILITY_LOG_ENABLED: it records the
