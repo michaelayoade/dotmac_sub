@@ -183,6 +183,8 @@ def _period_end(start: datetime, cycle: BillingCycle) -> datetime:
         return start + timedelta(weeks=1)
     if cycle == BillingCycle.monthly:
         return _add_months(start, 1)
+    if cycle == BillingCycle.quarterly:
+        return _add_months(start, 3)
     if cycle == BillingCycle.annual:
         return _add_months(start, 12)
     # Default to monthly
