@@ -65,12 +65,19 @@ theme.
 - The inert global System FUP config page was removed from the Settings Hub/admin
   router because its reset/threshold/notification keys had no runtime consumers;
   live FUP controls remain on catalog offer FUP policies.
+- Billing/collections config saves (`save_billing_config`,
+  `save_direct_bank_transfer_config`, `save_reminders`,
+  `save_billing_notifications`, `save_plan_change`) now route through the typed
+  `settings_spec` path (`use_specs=True`). Registered keys gain spec type
+  coercion/validation while keeping their bespoke normalisation (enum
+  lower-casing, decimal formatting, CSV day-list checks); the seven
+  `direct_bank_transfer_*` keys were registered as specs since the customer
+  portal reads them. Reader-less keys (payment_period, use_creation_date, the
+  invoice/receipt/credit-note number formats, proforma/zero-total/caching
+  toggles, and every reminder/blocking-wave/pre-block key) are deliberately
+  left un-spec'd to avoid orphaning specs with no consumer.
 
 ### Still open
-
-- Remaining billing/collections config saves still use bespoke helpers, but those
-  pages belong to the Billing/Notifications audit PRs rather than this
-  System/Config PR.
 - Broader bespoke-save validation consistency should continue in the domain audit
   PR for each remaining form.
 

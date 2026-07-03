@@ -41,8 +41,14 @@ instead of leaving it unchecked forever. Source of detail: each domain's
 
 ## Tier 2 — structural / settings-system unification
 
-- [ ] SYSTEM-CONFIG C-1: migrate the remaining **billing/collections bespoke
+- [x] SYSTEM-CONFIG C-1: migrate the remaining **billing/collections bespoke
   string-save forms** to typed `settings_spec` (the two-settings-systems split)
+  — all five saves (`save_billing_config`, `save_direct_bank_transfer_config`,
+  `save_reminders`, `save_billing_notifications`, `save_plan_change`) now pass
+  `use_specs=True`; registered keys get spec type coercion/validation, and the
+  seven `direct_bank_transfer_*` keys gained specs (they have portal readers).
+  Reader-less keys (payment_period, invoice/proforma toggles, the reminder/
+  blocking-wave waves) are intentionally left un-spec'd to avoid orphans.
 - [ ] SYSTEM-CONFIG: bespoke-save validation/feedback consistency for the
   remaining untyped forms (monitoring/preferences/portal/radius already typed)
 - [ ] BILLING: bulk/scheduled money-job **result history** surface (autopay,
