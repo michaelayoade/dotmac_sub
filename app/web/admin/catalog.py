@@ -801,6 +801,7 @@ def subscription_bulk_change_plan(
     subscription_ids: str = Form(...),
     target_offer_id: str = Form(...),
     effective_timing: str = Form("instant"),
+    include_suspended: bool = Form(False),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Bulk change plan/offer for subscriptions.
@@ -816,6 +817,7 @@ def subscription_bulk_change_plan(
             request=request,
             actor_id=_get_actor_id(request),
             effective_timing=effective_timing,
+            include_suspended=include_suspended,
         )
     )
 

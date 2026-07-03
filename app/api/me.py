@@ -1571,7 +1571,9 @@ def my_wallet_topup_initiate(
     principal: dict = Depends(require_user_auth),
 ):
     subscriber_id = _subscriber_id(principal)
-    result = vas_wallet_service.initiate_topup(db, subscriber_id, payload.amount)
+    result = vas_wallet_service.initiate_topup(
+        db, subscriber_id, payload.amount, provider=payload.provider
+    )
     customer = _customer(db, principal)
     return VasTopupInitiateResponse(
         **result, customer_email=customer.get("username") or None

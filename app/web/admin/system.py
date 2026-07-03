@@ -357,8 +357,16 @@ def modules_manager_save(request: Request, db: Session = Depends(get_db)):
                 str(form.get(f"feature__{feature_name}") or "").lower() == "true"
             )
 
+    provider_payload: dict[str, bool] = {}
+    for provider in module_manager_service.list_payment_providers(db):
+        provider_id = provider["id"]
+        provider_payload[provider_id] = (
+            str(form.get(f"provider__{provider_id}") or "").lower() == "true"
+        )
+
     module_manager_service.update_module_flags(db, payload=module_payload)
     module_manager_service.update_feature_flags(db, payload=feature_payload)
+    module_manager_service.update_provider_flags(db, payload=provider_payload)
     return RedirectResponse("/admin/system/modules?saved=1", status_code=303)
 
 

@@ -3893,11 +3893,13 @@ def bulk_change_plan(
     request: object,
     actor_id: str | None,
     effective_timing: str = "instant",
+    include_suspended: bool = False,
 ) -> dict[str, Any]:
     """Bulk-change plan/offer for subscriptions, logging audit events.
 
-    Only changes active subscriptions. Returns ``{changed, skipped_ids,
-    failed_ids}`` so callers can surface partial success.
+    Only changes active subscriptions by default; when ``include_suspended`` is
+    true, suspended subscriptions are eligible too. Returns ``{changed,
+    skipped_ids, failed_ids}`` so callers can surface partial success.
 
     ``effective_timing`` selects when the change lands:
 
@@ -3915,6 +3917,9 @@ def bulk_change_plan(
 
     if effective_timing not in ("instant", "next_cycle"):
         raise ValueError("Invalid effective_timing")
+    allowed_from = {SubscriptionStatus.active}
+    if include_suspended:
+        allowed_from.add(SubscriptionStatus.suspended)
 
     changed = 0
     skipped_ids: list[str] = []
@@ -3925,7 +3930,7 @@ def bulk_change_plan(
             continue
         try:
             sub = catalog_service.subscriptions.get(db, sub_id)
-            if not sub or sub.status != SubscriptionStatus.active:
+            if not sub or sub.status not in allowed_from:
                 skipped_ids.append(sub_id)
                 continue
             if effective_timing == "next_cycle":

@@ -32,6 +32,11 @@ def test_bulk_notification_setup_context_reports_channel_readiness(monkeypatch):
         lambda **_kwargs: templates,
     )
     monkeypatch.setattr(
+        web_notifications_service,
+        "sync_whatsapp_registry_templates",
+        lambda _db: [],
+    )
+    monkeypatch.setattr(
         web_notifications_service.email_service,
         "list_smtp_senders",
         lambda _db: [{"sender_key": "default"}],
@@ -83,6 +88,11 @@ def test_bulk_notification_setup_context_reports_missing_channel_config(monkeypa
         web_notifications_service.notification_service.templates,
         "list",
         lambda **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        web_notifications_service,
+        "sync_whatsapp_registry_templates",
+        lambda _db: [],
     )
     monkeypatch.setattr(
         web_notifications_service.email_service,

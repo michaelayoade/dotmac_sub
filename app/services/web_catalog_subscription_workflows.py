@@ -415,11 +415,13 @@ def bulk_change_plan_response(
     request: object,
     actor_id: str | None,
     effective_timing: str = "instant",
+    include_suspended: bool = False,
 ) -> dict[str, object]:
     """Bulk change subscription plans and return API response payload.
 
     ``effective_timing`` is ``instant`` (swap now, prorate) or ``next_cycle``
     (schedule the swap for each subscription's next billing date).
+    ``include_suspended`` also changes suspended subscriptions, not just active.
     """
     result = core.bulk_change_plan(
         db,
@@ -428,6 +430,7 @@ def bulk_change_plan_response(
         request=request,
         actor_id=actor_id,
         effective_timing=effective_timing,
+        include_suspended=include_suspended,
     )
     verb = (
         "Scheduled next-cycle plan change for"

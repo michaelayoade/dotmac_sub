@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/formatters.dart';
 import '../../providers/data_providers.dart';
+import '../../widgets/account_avatar_button.dart';
 import '../../widgets/async_value_view.dart';
 import '../../widgets/skeleton.dart';
 import '../../widgets/status_chip.dart';
@@ -34,7 +35,10 @@ class _TicketsScreenState extends ConsumerState<TicketsScreen> {
     );
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Support')),
+      appBar: AppBar(
+        title: const Text('Help'),
+        actions: const [AccountAvatarButton()],
+      ),
       floatingActionButton: _chat
           ? null
           : FloatingActionButton.extended(

@@ -47,17 +47,33 @@ class BulkTariffChange:
         return list(db.scalars(stmt).all())
 
     @staticmethod
+    def _eligible_statuses(include_suspended: bool) -> list[SubscriptionStatus]:
+        """Statuses a bulk tariff change applies to.
+
+        Default is active-only (byte-identical to prior behavior); opting in adds
+        suspended subscriptions to the set.
+        """
+        statuses = [SubscriptionStatus.active]
+        if include_suspended:
+            statuses.append(SubscriptionStatus.suspended)
+        return statuses
+
+    @staticmethod
     def preview(
         db: Session,
         *,
         source_offer_id: str,
         target_offer_id: str,
+        include_suspended: bool = False,
     ) -> dict:
         """Preview what will happen if we change all subscribers from source to target plan.
 
         The change is applied immediately on execute — there is deliberately no
         start-date or balance option (previous form fields collected both and
         ignored them, implying behavior that never existed).
+
+        When ``include_suspended`` is true, suspended subscriptions on the source
+        plan are included alongside active ones; otherwise only active ones match.
 
         Returns dict with:
         - source_offer: CatalogOffer
@@ -74,7 +90,9 @@ class BulkTariffChange:
 
         stmt = select(Subscription).where(
             Subscription.offer_id == coerce_uuid(source_offer_id),
-            Subscription.status == SubscriptionStatus.active,
+            Subscription.status.in_(
+                BulkTariffChange._eligible_statuses(include_suspended)
+            ),
         )
         subscriptions = list(db.scalars(stmt).all())
 
@@ -92,6 +110,7 @@ class BulkTariffChange:
             "source_price": source_price,
             "target_price": target_price,
             "price_delta": price_delta,
+            "include_suspended": include_suspended,
         }
 
     @staticmethod
@@ -100,8 +119,12 @@ class BulkTariffChange:
         *,
         source_offer_id: str,
         target_offer_id: str,
+        include_suspended: bool = False,
     ) -> dict:
         """Execute the bulk tariff change (immediately).
+
+        When ``include_suspended`` is true, suspended subscriptions are changed
+        alongside active ones; otherwise only active ones are touched.
 
         Returns dict with: changed, skipped, errors counts plus failed_ids so a
         partial failure is triageable from the UI, not just "check the logs".
@@ -115,7 +138,9 @@ class BulkTariffChange:
 
         stmt = select(Subscription).where(
             Subscription.offer_id == source_uuid,
-            Subscription.status == SubscriptionStatus.active,
+            Subscription.status.in_(
+                BulkTariffChange._eligible_statuses(include_suspended)
+            ),
         )
         subscriptions = list(db.scalars(stmt).all())
 

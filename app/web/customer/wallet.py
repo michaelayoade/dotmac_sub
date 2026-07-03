@@ -69,7 +69,10 @@ def customer_wallet_topup_intent(
         return JSONResponse({"detail": "Invalid amount"}, status_code=400)
     try:
         result = vas_wallet_service.initiate_topup(
-            db, str(customer.get("subscriber_id") or ""), amount
+            db,
+            str(customer.get("subscriber_id") or ""),
+            amount,
+            provider=(str(payload.get("provider") or "").strip() or None),
         )
     except HTTPException as exc:
         return JSONResponse({"detail": str(exc.detail)}, status_code=exc.status_code)

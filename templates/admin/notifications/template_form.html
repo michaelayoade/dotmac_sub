@@ -131,7 +131,7 @@
                     </div>
 
                     <div class="mt-4">
-                        <label for="conditions_json" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Automated Send Conditions</label>
+                        <label for="conditions_json" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Send Conditions</label>
                         <textarea
                             id="conditions_json"
                             name="conditions_json"
@@ -140,7 +140,7 @@
                             placeholder='{"all":[{"field":"customer_has_open_ticket","operator":"=","value":true}]}'
                         >{{ conditions_json or '' }}</textarea>
                         <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                            Optional JSON gate for automated event sends. Leave empty to send normally.
+                            Optional JSON gate for automated and manual sends. Leave empty to send normally.
                         </p>
                     </div>
                 </div>
