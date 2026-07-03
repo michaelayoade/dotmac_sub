@@ -150,6 +150,17 @@
                                 to <span class="font-semibold">{{ preview.target_offer.name }}</span> —
                                 applied immediately on confirm.
                             </p>
+                            {% if preview.source_price or preview.target_price %}
+                            <p class="mt-1 text-blue-700 dark:text-blue-300">
+                                Price:
+                                {% if preview.source_price %}{{ preview.source_price.currency }} {{ '%,.2f'|format(preview.source_price.amount) }}{% else %}n/a{% endif %}
+                                &rarr;
+                                {% if preview.target_price %}{{ preview.target_price.currency }} {{ '%,.2f'|format(preview.target_price.amount) }}{% else %}n/a{% endif %}
+                                {% if preview.price_delta is not none %}
+                                <span class="font-semibold">({{ '+' if preview.price_delta >= 0 }}{{ '%,.2f'|format(preview.price_delta) }} per cycle)</span>
+                                {% endif %}
+                            </p>
+                            {% endif %}
                         </div>
                     </div>
                 </div>

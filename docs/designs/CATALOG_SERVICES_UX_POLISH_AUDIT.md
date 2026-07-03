@@ -258,13 +258,25 @@ Format: `[POLISH|CONTROL] (severity) file:line — problem → recommendation [r
   customers filtered-bulk update **and** bulk message queue confirm with the
   actual scope count ("apply to N customers?").
 
+### Resolved (P1 pass, 2026-07-03)
+
+- **P-C partial success** — subscription bulk activate/suspend/cancel/change-plan
+  return `{changed, skipped_ids, failed_ids}`; the UI surfaces skipped/failed
+  IDs in a blocking summary instead of a bare success count.
+- **P-E double-submit** — bulk change-plan and bulk actions guard on a busy
+  flag (button disabled + "Applying…"); the success toast now survives the
+  page reload (sessionStorage replay) instead of being destroyed by it.
+- **P-B (partial)** — bulk-tariff preview shows source→target recurring price
+  and the per-cycle delta (real currency code, not hardcoded ₦).
+- **C-2 (partial)** — `fup_submonthly_rules_enabled` registered in
+  settings_spec (usage domain, default off); FUP warn-ratio fallback 0.8
+  centralized as `usage.DEFAULT_FUP_WARN_RATIO`.
+
 ### Still open
 
-- **P1**: preview-before-apply (change-plan proration quote, bulk-tariff price
-  deltas, FUP impact); full partial-success shape on subscription bulk ops;
-  FUP control-surface consolidation (`fup_submonthly_rules_enabled` spec
-  registration, centralize 0.8); currency/tz display; change-plan
-  instant│next-cycle timing; double-submit guards on bulk change-plan.
+- **P1 remainder**: change-plan proration preview quote; FUP rule impact
+  preview; currency/tz display sweep (customer detail, calculator);
+  change-plan instant│next-cycle timing (product decision).
 - **P2**: tunable thresholds (serviceable radius, SLA aging, reset throttle,
   PPPoE reveal limit, 60d staleness); GiB labeling; usage-priced offers in UI;
   calculator VAT/proration accuracy.

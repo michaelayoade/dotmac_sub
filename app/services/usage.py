@@ -839,6 +839,11 @@ def reap_stale_radius_sessions(
     return {"reaped": reaped, "stale_after_seconds": stale_after_seconds}
 
 
+# Single source of truth for the FUP warn ratio fallback (matches the first
+# value of the usage_warning_thresholds spec default "0.8,0.9").
+DEFAULT_FUP_WARN_RATIO = 0.8
+
+
 def _parse_warning_thresholds(value: str | None) -> list[Decimal]:
     if not value:
         return []
