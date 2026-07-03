@@ -120,14 +120,25 @@
                             {% endfor %}
                         </select>
                     </div>
-                    <div x-show="quoteLoading" class="mt-3 text-sm text-slate-500 dark:text-slate-400">Calculating proration…</div>
-                    <div x-show="quote && !quoteLoading" x-cloak class="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-700 dark:bg-slate-900/40">
+                    <div class="mt-4">
+                        <label for="change-plan-timing" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Effective</label>
+                        <select id="change-plan-timing" x-model="effectiveTiming"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-violet-500 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="instant">Immediately (with proration)</option>
+                            <option value="next_cycle">At next billing cycle</option>
+                        </select>
+                    </div>
+                    <div x-show="quoteLoading && effectiveTiming === 'instant'" class="mt-3 text-sm text-slate-500 dark:text-slate-400">Calculating proration…</div>
+                    <div x-show="quote && !quoteLoading && effectiveTiming === 'instant'" x-cloak class="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-700 dark:bg-slate-900/40">
                         <p class="font-medium text-slate-800 dark:text-slate-200">Proration preview</p>
                         <dl class="mt-1 space-y-0.5 text-slate-600 dark:text-slate-300">
                             <div class="flex justify-between"><dt>Credit for unused time (<span x-text="quote?.days_remaining"></span>/<span x-text="quote?.days_in_cycle"></span> days)</dt><dd x-text="fmtMoney(quote?.current_remaining_value)"></dd></div>
                             <div class="flex justify-between"><dt>New plan charge (prorated)</dt><dd x-text="fmtMoney(quote?.charge_amount)"></dd></div>
                             <div class="flex justify-between font-semibold text-slate-900 dark:text-white"><dt>Net now</dt><dd x-text="(quote && quote.net_amount < 0 ? 'credit ' : '') + fmtMoney(quote ? Math.abs(quote.net_amount) : 0)"></dd></div>
                         </dl>
+                    </div>
+                    <div x-show="effectiveTiming === 'next_cycle'" x-cloak class="mt-3 rounded-lg border border-sky-200 bg-sky-50 p-3 text-sm text-sky-800 dark:border-sky-800 dark:bg-sky-900/30 dark:text-sky-300">
+                        The plan swap is deferred to the next billing cycle. No proration is charged now — the new plan price applies from the next cycle.
                     </div>
                     <div x-show="quoteError" x-cloak class="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300" x-text="quoteError"></div>
                     <div class="mt-6 flex items-center justify-end gap-3">
@@ -154,6 +165,7 @@
                 quote: null,
                 quoteLoading: false,
                 quoteError: '',
+                effectiveTiming: 'instant',
                 fmtMoney(v) {
                     if (v === null || v === undefined) return '-';
                     return Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -206,7 +218,10 @@
                     if (!this.targetOfferId) return;
                     const select = document.getElementById('change-plan-target');
                     const planLabel = select ? select.options[select.selectedIndex].text.trim() : 'the selected plan';
-                    if (!confirm(`Change this subscription to "${planLabel}" now? This applies immediately and generates a proration invoice or credit.`)) {
+                    const confirmMsg = this.effectiveTiming === 'next_cycle'
+                        ? `Schedule this subscription to change to "${planLabel}" at the next billing cycle? No charge is applied now.`
+                        : `Change this subscription to "${planLabel}" now? This applies immediately and generates a proration invoice or credit.`;
+                    if (!confirm(confirmMsg)) {
                         return;
                     }
                     this.busy = true;
@@ -214,6 +229,7 @@
                         const body = new URLSearchParams({
                             subscription_ids: this.subscriptionId,
                             target_offer_id: this.targetOfferId,
+                            effective_timing: this.effectiveTiming,
                             _csrf_token: decodeURIComponent(this.csrfToken),
                         });
                         const resp = await fetch('/admin/catalog/subscriptions/bulk/change-plan', {
@@ -245,6 +261,24 @@
     {% if error %}
     <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">
         {{ error }}
+    </div>
+    {% endif %}
+    {% if scheduled_plan_change %}
+    <div class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800 dark:border-sky-800 dark:bg-sky-900/30 dark:text-sky-300">
+        <div>
+            <span class="font-medium">Scheduled plan change:</span>
+            moves to <span class="font-semibold">{{ scheduled_plan_change.offer_name }}</span>
+            on <span class="font-semibold">{{ scheduled_plan_change.effective_date.strftime('%b %d, %Y') }}</span>.
+        </div>
+        <form method="post"
+              action="/admin/catalog/subscriptions/{{ subscription.id }}/scheduled-change/{{ scheduled_plan_change.id }}/cancel"
+              onsubmit="return confirm('Cancel this scheduled plan change?');">
+            {% include "components/forms/csrf_input.html" %}
+            <button type="submit"
+                    class="rounded-lg border border-sky-300 px-3 py-1.5 text-xs font-medium text-sky-700 transition hover:bg-sky-100 dark:border-sky-700 dark:text-sky-300 dark:hover:bg-sky-900/50">
+                Cancel scheduled change
+            </button>
+        </form>
     </div>
     {% endif %}
 
