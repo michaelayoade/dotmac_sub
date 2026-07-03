@@ -18,6 +18,7 @@ from app.schemas.notification import (
 )
 from app.services import email as email_service
 from app.services import notification as notification_service
+from app.services import notification_template_conditions as condition_service
 from app.services import notification_template_renderer as template_renderer
 from app.services import sms as sms_service
 from app.services.integrations.connectors import whatsapp as whatsapp_connector
@@ -111,9 +112,11 @@ def template_form_context(
         else "New Notification Template",
         "submit_label": "Update Template" if is_edit else "Create Template",
         "template_variables": template_renderer.TEMPLATE_VARIABLES,
+        "condition_fields": condition_service.CONDITION_FIELD_HELP,
     }
     if template is not None:
         context["template"] = template
+        context["conditions_json"] = _conditions_to_json(template.conditions)
     if error:
         context["error"] = error
     return context
@@ -131,15 +134,18 @@ def create_template(
     channel: str,
     subject: str | None,
     body: str,
+    conditions_json: str | None = None,
 ):
     normalized_code = _normalize_template_code(code)
     template_renderer.validate_template_text(subject, body, code=normalized_code)
+    conditions = _parse_conditions_json(conditions_json)
     payload = NotificationTemplateCreate(
         name=name.strip(),
         code=normalized_code,
         channel=NotificationChannel(channel),
         subject=subject.strip() if subject else None,
         body=body.strip(),
+        conditions=conditions,
     )
     return notification_service.templates.create(db=db, payload=payload)
 
@@ -154,20 +160,44 @@ def update_template(
     subject: str | None,
     body: str,
     is_active: bool,
+    conditions_json: str | None = None,
 ):
     normalized_code = _normalize_template_code(code)
     template_renderer.validate_template_text(subject, body, code=normalized_code)
+    conditions = _parse_conditions_json(conditions_json)
     payload = NotificationTemplateUpdate(
         name=name.strip(),
         code=normalized_code,
         channel=NotificationChannel(channel),
         subject=subject.strip() if subject else None,
         body=body.strip(),
+        conditions=conditions,
         is_active=is_active,
     )
     return notification_service.templates.update(
         db=db, template_id=str(template_id), payload=payload
     )
+
+
+def _parse_conditions_json(raw: str | None) -> dict:
+    text = (raw or "").strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Conditions must be valid JSON: {exc.msg}") from exc
+    return condition_service.validate_conditions(parsed)
+
+
+def _conditions_to_json(conditions: object) -> str:
+    try:
+        normalized = condition_service.validate_conditions(conditions)
+    except condition_service.NotificationTemplateConditionError:
+        return json.dumps(conditions or {}, indent=2, sort_keys=True)
+    if not normalized:
+        return ""
+    return json.dumps(normalized, indent=2, sort_keys=True)
 
 
 def delete_template(db: Session, *, template_id: UUID) -> None:

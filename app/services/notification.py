@@ -49,6 +49,7 @@ from app.services.customer_notification_policy import (
     resolve_notification_category,
     resolve_subscriber_id_for_recipient,
 )
+from app.services.notification_template_conditions import validate_conditions
 from app.services.response import ListResponseMixin, list_response
 
 logger = logging.getLogger(__name__)
@@ -121,7 +122,9 @@ def _setting_str(
 class Templates(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: NotificationTemplateCreate):
-        template = NotificationTemplate(**payload.model_dump())
+        data = payload.model_dump()
+        data["conditions"] = validate_conditions(data.get("conditions"))
+        template = NotificationTemplate(**data)
         db.add(template)
         db.commit()
         db.refresh(template)
@@ -220,6 +223,8 @@ class Templates(ListResponseMixin):
         if not template:
             raise HTTPException(status_code=404, detail="Template not found")
         for key, value in payload.model_dump(exclude_unset=True).items():
+            if key == "conditions":
+                value = validate_conditions(value)
             setattr(template, key, value)
         db.commit()
         db.refresh(template)
