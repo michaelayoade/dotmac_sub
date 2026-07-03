@@ -12,7 +12,7 @@ import logging
 from collections.abc import Iterable
 from typing import Any
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.models.subscriber import Subscriber
@@ -171,6 +171,8 @@ def _ok_context() -> dict[str, Any]:
 
 def _ticket_to_dict(ticket: Any) -> dict[str, Any]:
     """Map a local support Ticket to the dict shape the portal templates expect."""
+    meta = ticket.metadata_ if isinstance(ticket.metadata_, dict) else {}
+    csat = meta.get("csat") if isinstance(meta.get("csat"), dict) else {}
     return {
         "id": str(ticket.id),
         "ticket_number": ticket.number,
@@ -181,7 +183,39 @@ def _ticket_to_dict(ticket: Any) -> dict[str, Any]:
         "subscriber_id": str(ticket.subscriber_id) if ticket.subscriber_id else None,
         "created_at": ticket.created_at.isoformat() if ticket.created_at else None,
         "updated_at": ticket.updated_at.isoformat() if ticket.updated_at else None,
+        "csat_rating": csat.get("rating"),
     }
+
+
+def handle_ticket_rating(
+    db: Session,
+    subscriber_ids: list[str],
+    ticket_id: str,
+    rating: int,
+    comment: str | None = None,
+) -> dict[str, Any]:
+    """Record a customer CSAT rating on a local support ticket the caller owns.
+
+    Returns a dict with a 'success' bool (mirrors handle_ticket_comment)."""
+    from app.services import support as support_service
+
+    allowed = {str(s or "").strip() for s in subscriber_ids if str(s or "").strip()}
+    try:
+        ticket = support_service.Tickets.get(db, ticket_id)
+    except Exception:  # noqa: BLE001 - not found / invalid id
+        return {"success": False, "error": "Ticket not found."}
+    if not ticket.subscriber_id or str(ticket.subscriber_id) not in allowed:
+        return {"success": False, "error": "Ticket not found."}
+    try:
+        support_service.Tickets.set_satisfaction(
+            db,
+            ticket,
+            rating=max(1, min(5, int(rating))),
+            comment=(comment or "")[:2000] or None,
+        )
+    except HTTPException:
+        return {"success": False, "error": "You can rate support once resolved."}
+    return {"success": True}
 
 
 def _comment_to_dict(comment: Any, customer_subscriber_ids: set[str]) -> dict[str, Any]:
