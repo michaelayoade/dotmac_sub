@@ -105,6 +105,18 @@ def seed_auth_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text=os.getenv("API_KEY_RATE_MAX", "5"),
     )
+    auth_settings.ensure_by_key(
+        db,
+        key="api_key_max_ttl_days",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("API_KEY_MAX_TTL_DAYS", "0"),
+    )
+    auth_settings.ensure_by_key(
+        db,
+        key="api_key_max_per_owner",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("API_KEY_MAX_PER_OWNER", "0"),
+    )
     jwt_secret = os.getenv("JWT_SECRET")
     if jwt_secret and is_openbao_ref(jwt_secret):
         auth_settings.ensure_by_key(
