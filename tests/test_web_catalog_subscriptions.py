@@ -2552,3 +2552,157 @@ def test_bulk_update_status_reports_partial_success(
     assert str(pending.id) in result["skipped_ids"]
     db_session.refresh(active)
     assert active.status == SubscriptionStatus.suspended
+
+
+def _make_active_and_suspended(db_session, subscriber, offer):
+    """Create one active + one suspended subscription on ``offer``."""
+    active = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=subscriber.id,
+            offer_id=offer.id,
+            status=SubscriptionStatus.active,
+        ),
+    )
+    other = Subscriber(
+        first_name="Susp",
+        last_name="Ended",
+        email=f"susp-{uuid4().hex[:8]}@t.example",
+    )
+    db_session.add(other)
+    db_session.commit()
+    suspended = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=other.id,
+            offer_id=offer.id,
+            status=SubscriptionStatus.suspended,
+        ),
+    )
+    return active, suspended
+
+
+def test_bulk_change_plan_excludes_suspended_by_default(
+    db_session, subscriber, catalog_offer
+):
+    from app.models.catalog import AccessType, PriceBasis, ServiceType
+    from app.schemas.catalog import CatalogOfferCreate
+    from app.services.web_catalog_subscriptions import bulk_change_plan
+
+    # Same plan_family so the change-plan family guard permits the migration.
+    catalog_offer.plan_family = "std"
+    target = catalog_service.offers.create(
+        db_session,
+        CatalogOfferCreate(
+            name="Target Plan",
+            code=f"TGT-{uuid4().hex[:6]}",
+            service_type=ServiceType.residential,
+            access_type=AccessType.fiber,
+            price_basis=PriceBasis.flat,
+            plan_family="std",
+        ),
+    )
+    db_session.commit()
+    active, suspended = _make_active_and_suspended(
+        db_session, subscriber, catalog_offer
+    )
+
+    result = bulk_change_plan(
+        db_session,
+        f"{active.id},{suspended.id}",
+        str(target.id),
+        request=None,
+        actor_id=None,
+    )
+
+    assert result["changed"] == 1
+    assert str(suspended.id) in result["skipped_ids"]
+    db_session.refresh(active)
+    db_session.refresh(suspended)
+    assert active.offer_id == target.id
+    assert suspended.offer_id == catalog_offer.id
+
+
+def test_bulk_change_plan_include_suspended_opt_in(
+    db_session, subscriber, catalog_offer
+):
+    from app.models.catalog import AccessType, PriceBasis, ServiceType
+    from app.schemas.catalog import CatalogOfferCreate
+    from app.services.web_catalog_subscriptions import bulk_change_plan
+
+    # Same plan_family so the change-plan family guard permits the migration.
+    catalog_offer.plan_family = "std"
+    target = catalog_service.offers.create(
+        db_session,
+        CatalogOfferCreate(
+            name="Target Plan",
+            code=f"TGT-{uuid4().hex[:6]}",
+            service_type=ServiceType.residential,
+            access_type=AccessType.fiber,
+            price_basis=PriceBasis.flat,
+            plan_family="std",
+        ),
+    )
+    db_session.commit()
+    active, suspended = _make_active_and_suspended(
+        db_session, subscriber, catalog_offer
+    )
+
+    result = bulk_change_plan(
+        db_session,
+        f"{active.id},{suspended.id}",
+        str(target.id),
+        request=None,
+        actor_id=None,
+        include_suspended=True,
+    )
+
+    assert result["changed"] == 2
+    assert result["skipped_ids"] == []
+    db_session.refresh(active)
+    db_session.refresh(suspended)
+    assert active.offer_id == target.id
+    assert suspended.offer_id == target.id
+
+
+def test_bulk_tariff_change_preview_excludes_suspended_by_default(
+    db_session, subscriber, catalog_offer
+):
+    from app.services.bulk_tariff_change import bulk_tariff_change
+
+    active, _suspended = _make_active_and_suspended(
+        db_session, subscriber, catalog_offer
+    )
+
+    preview = bulk_tariff_change.preview(
+        db_session,
+        source_offer_id=str(catalog_offer.id),
+        target_offer_id=str(catalog_offer.id),
+    )
+
+    assert preview["total_count"] == 1
+    assert preview["include_suspended"] is False
+    ids = {str(s.id) for s in preview["affected_subscriptions"]}
+    assert ids == {str(active.id)}
+
+
+def test_bulk_tariff_change_include_suspended_opt_in(
+    db_session, subscriber, catalog_offer
+):
+    from app.services.bulk_tariff_change import bulk_tariff_change
+
+    active, suspended = _make_active_and_suspended(
+        db_session, subscriber, catalog_offer
+    )
+
+    preview = bulk_tariff_change.preview(
+        db_session,
+        source_offer_id=str(catalog_offer.id),
+        target_offer_id=str(catalog_offer.id),
+        include_suspended=True,
+    )
+
+    assert preview["total_count"] == 2
+    assert preview["include_suspended"] is True
+    ids = {str(s.id) for s in preview["affected_subscriptions"]}
+    assert ids == {str(active.id), str(suspended.id)}
