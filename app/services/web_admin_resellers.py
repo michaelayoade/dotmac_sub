@@ -204,6 +204,11 @@ def parse_reseller_payload(form) -> dict[str, object]:
         "policy_set_id": form_str("policy_set_id").strip() or None,
         "notes": form_str("notes").strip() or None,
         "is_active": bool(form.get("is_active")),
+        # Checked = opt into assigned-only (True); unchecked = inherit the
+        # global reseller_default_catalog_open setting (NULL).
+        "restrict_to_assigned_offers": (
+            True if form.get("restrict_to_assigned_offers") else None
+        ),
     }
 
 

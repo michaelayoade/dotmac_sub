@@ -149,6 +149,11 @@ class Reseller(Base):
     is_house: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"
     )
+    # C-2: catalog visibility override. NULL = inherit the global
+    # ``reseller_default_catalog_open`` setting; True = this reseller sees ONLY
+    # offers explicitly assigned to it (assigned-only); False = open (all
+    # unrestricted offers, today's behavior).
+    restrict_to_assigned_offers: Mapped[bool | None] = mapped_column(Boolean)
     notes: Mapped[str | None] = mapped_column(Text)
 
     created_at: Mapped[datetime] = mapped_column(
