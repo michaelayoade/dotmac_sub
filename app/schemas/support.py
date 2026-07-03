@@ -149,6 +149,18 @@ class TicketRead(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+    # Support-satisfaction rating (1-5) if the customer has rated this resolved
+    # ticket. Read from the ORM's `Ticket.csat_rating` property (backed by
+    # metadata.csat) so the apps can show the score / hide the rate prompt.
+    csat_rating: int | None = None
+
+
+class TicketSatisfactionRequest(BaseModel):
+    """Customer CSAT on a resolved/closed support ticket."""
+
+    rating: int = Field(ge=1, le=5)
+    comment: str | None = Field(default=None, max_length=2000)
+
 
 class TicketBulkUpdateItem(BaseModel):
     ticket_id: UUID

@@ -145,6 +145,17 @@ class Ticket(Base):
         onupdate=lambda: datetime.now(UTC),
     )
 
+    @property
+    def csat_rating(self) -> int | None:
+        """Support-satisfaction score (1-5) if the customer rated this ticket.
+        Backed by ``metadata.csat.rating`` (see support.Tickets.set_satisfaction)
+        and surfaced as a first-class field on TicketRead."""
+        meta = self.metadata_ if isinstance(self.metadata_, dict) else None
+        csat = meta.get("csat") if meta else None
+        if isinstance(csat, dict) and isinstance(csat.get("rating"), int | float):
+            return int(csat["rating"])
+        return None
+
     comments = relationship(
         "TicketComment", back_populates="ticket", cascade="all, delete-orphan"
     )
