@@ -360,6 +360,35 @@ def offer_fup_simulate(offer_id: str, request: Request, db: Session = Depends(ge
     return JSONResponse(result, status_code=400 if result.get("error") else 200)
 
 
+@router.get(
+    "/offers/{offer_id}/fup/rule-impact-preview",
+    dependencies=[Depends(require_permission("catalog:read"))],
+)
+def offer_fup_rule_impact_preview(
+    offer_id: str,
+    threshold_amount: str,
+    threshold_unit: str = "gb",
+    direction: str = "up_down",
+    consumption_period: str = "monthly",
+    action: str = "reduce_speed",
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Blast-radius preview: how many active subs a draft FUP rule would hit now.
+
+    Read-only, no side effects — mirrors the change-plan-quote preview pattern.
+    """
+    result = web_fup_service.preview_rule_impact(
+        db,
+        offer_id,
+        threshold_amount=threshold_amount,
+        threshold_unit=threshold_unit,
+        direction=direction,
+        consumption_period=consumption_period,
+        action=action,
+    )
+    return JSONResponse(result, status_code=400 if result.get("error") else 200)
+
+
 # ---------------------------------------------------------------------------
 # Tariff Plan Usage Graph
 # ---------------------------------------------------------------------------
