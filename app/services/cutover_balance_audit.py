@@ -76,6 +76,18 @@ def _rows(db: Session):
                   AND i.created_at >= :activity_at
                 GROUP BY i.account_id
             ),
+            ledger_charges AS (
+                SELECT le.account_id, COALESCE(SUM(le.amount), 0) AS amount
+                FROM ledger_entries le
+                JOIN seeded seeded ON seeded.account_id = le.account_id
+                WHERE le.is_active
+                  AND le.invoice_id IS NULL
+                  AND le.entry_type = 'debit'
+                  AND le.source = 'invoice'
+                  AND le.currency = 'NGN'
+                  AND le.created_at >= :activity_at
+                GROUP BY le.account_id
+            ),
             seed_sums AS (
                 SELECT le.account_id,
                        COALESCE(SUM(CASE
@@ -130,9 +142,11 @@ def _rows(db: Session):
                    COALESCE(s.deposit, 0) AS deposit,
                    COALESCE(ln.net, 0) - COALESCE(oa.due, 0) AS current_available,
                    COALESCE(s.deposit, 0) + COALESCE(pp.amount, 0)
-                     + COALESCE(ta.net, 0) - COALESCE(pi.amount, 0) AS target_available,
+                     + COALESCE(ta.net, 0) - COALESCE(pi.amount, 0)
+                     - COALESCE(lc.amount, 0) AS target_available,
                    COALESCE(pp.amount, 0) AS post_cutover_payments,
-                   COALESCE(pi.amount, 0) AS post_cutover_invoices,
+                   COALESCE(pi.amount, 0) + COALESCE(lc.amount, 0)
+                     AS post_cutover_invoices,
                    COALESCE(ss.active_seed_net, 0) AS active_seed_net,
                    COALESCE(ss.inactive_seed_net, 0) AS inactive_seed_net,
                    COALESCE(ss.inactive_opening_debits, 0) AS inactive_opening_debits,
@@ -150,6 +164,7 @@ def _rows(db: Session):
             LEFT JOIN open_ar oa ON oa.account_id = s.id
             LEFT JOIN post_payments pp ON pp.account_id = s.id
             LEFT JOIN post_invoices pi ON pi.account_id = s.id
+            LEFT JOIN ledger_charges lc ON lc.account_id = s.id
             LEFT JOIN seed_sums ss ON ss.account_id = s.id
             LEFT JOIN all_post_adjustments apa ON apa.account_id = s.id
             LEFT JOIN target_adjustments ta ON ta.account_id = s.id

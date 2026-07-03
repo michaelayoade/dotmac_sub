@@ -162,7 +162,7 @@ def _post_cutover_succeeded_payment_map(
             Payment.account_id.in_(account_ids),
             Payment.is_active.is_(True),
             Payment.status == PaymentStatus.succeeded,
-            func.coalesce(Payment.paid_at, Payment.created_at) >= CUTOVER_AT,
+            Payment.created_at >= CUTOVER_AT,
         ).group_by(Payment.account_id)
     ).all()
     return {account_id: _money(total) for account_id, total in rows}
@@ -173,7 +173,7 @@ def _post_cutover_invoice_total_map(
 ) -> dict[uuid.UUID, Decimal]:
     if not account_ids:
         return {}
-    rows = session.execute(
+    invoice_rows = session.execute(
         select(Invoice.account_id, func.coalesce(func.sum(Invoice.total), 0)).where(
             Invoice.account_id.in_(account_ids),
             Invoice.is_active.is_(True),
@@ -182,7 +182,24 @@ def _post_cutover_invoice_total_map(
             Invoice.created_at >= CUTOVER_AT,
         ).group_by(Invoice.account_id)
     ).all()
-    return {account_id: _money(total) for account_id, total in rows}
+    totals = {account_id: _money(total) for account_id, total in invoice_rows}
+    ledger_charge_rows = session.execute(
+        select(
+            LedgerEntry.account_id,
+            func.coalesce(func.sum(LedgerEntry.amount), 0),
+        ).where(
+            LedgerEntry.account_id.in_(account_ids),
+            LedgerEntry.is_active.is_(True),
+            LedgerEntry.invoice_id.is_(None),
+            LedgerEntry.entry_type == LedgerEntryType.debit,
+            LedgerEntry.source == LedgerSource.invoice,
+            LedgerEntry.currency == "NGN",
+            LedgerEntry.created_at >= CUTOVER_AT,
+        ).group_by(LedgerEntry.account_id)
+    ).all()
+    for account_id, total in ledger_charge_rows:
+        totals[account_id] = _money(totals.get(account_id, Decimal("0")) + _money(total))
+    return totals
 
 
 def _current_available_map(
