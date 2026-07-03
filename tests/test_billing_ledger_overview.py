@@ -4,7 +4,6 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
-
 from fastapi import HTTPException
 
 from app.models.billing import LedgerEntry, LedgerEntryType, LedgerSource
@@ -137,9 +136,7 @@ def test_build_ledger_entries_data_applies_custom_date_range(db_session, subscri
     assert state["end_date"] == "2026-02-28"
 
 
-def test_build_ledger_entries_data_rejects_reversed_date_range(
-    db_session, subscriber
-):
+def test_build_ledger_entries_data_rejects_reversed_date_range(db_session, subscriber):
     with pytest.raises(HTTPException) as exc_info:
         build_ledger_entries_data(
             db_session,
