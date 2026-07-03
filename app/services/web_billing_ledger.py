@@ -5,11 +5,13 @@ from __future__ import annotations
 import csv
 import io
 import logging
-from datetime import UTC, datetime, timedelta
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from uuid import UUID
 
+from fastapi import HTTPException
 from sqlalchemy import Date, cast, func
 from sqlalchemy.orm import joinedload
 
@@ -71,22 +73,44 @@ _CATEGORY_SOURCES: dict[str, tuple[LedgerSource, ...]] = {
 _LEDGER_CUTOVER = datetime(2026, 3, 15, 23, 59, 59, tzinfo=UTC)
 
 
-def _range_start(date_range: str | None) -> datetime | None:
-    if date_range not in {"today", "week", "month", "quarter", "year"}:
-        return None
-    now = datetime.now(UTC)
-    if date_range == "today":
-        return datetime(now.year, now.month, now.day, tzinfo=UTC)
-    if date_range == "week":
-        return datetime(now.year, now.month, now.day, tzinfo=UTC) - timedelta(
-            days=now.weekday()
+@dataclass(frozen=True)
+class LedgerDateRange:
+    start: datetime | None
+    end: datetime | None
+    start_date: date | None
+    end_date: date | None
+
+
+def _parse_date_range(
+    start_date: str | None,
+    end_date: str | None,
+) -> LedgerDateRange:
+    start_value = (start_date or "").strip()
+    end_value = (end_date or "").strip()
+    try:
+        start_d = date.fromisoformat(start_value) if start_value else None
+        end_d = date.fromisoformat(end_value) if end_value else None
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail="start_date and end_date must be ISO dates"
+        ) from exc
+
+    if start_d and end_d and start_d > end_d:
+        raise HTTPException(
+            status_code=400,
+            detail="start_date must be before or equal to end_date",
         )
-    if date_range == "month":
-        return datetime(now.year, now.month, 1, tzinfo=UTC)
-    if date_range == "quarter":
-        quarter_start_month = ((now.month - 1) // 3) * 3 + 1
-        return datetime(now.year, quarter_start_month, 1, tzinfo=UTC)
-    return datetime(now.year, 1, 1, tzinfo=UTC)
+
+    return LedgerDateRange(
+        start=datetime.combine(start_d, time.min, tzinfo=UTC) if start_d else None,
+        end=(
+            datetime.combine(end_d + timedelta(days=1), time.min, tzinfo=UTC)
+            if end_d
+            else None
+        ),
+        start_date=start_d,
+        end_date=end_d,
+    )
 
 
 def _invoice_as_ledger_row(invoice: Invoice) -> SimpleNamespace:
@@ -155,12 +179,13 @@ def build_ledger_entries_data(
     *,
     customer_ref: str | None,
     entry_type: str | None,
-    date_range: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
     category: str | None = None,
     partner_id: str | None = None,
     limit: int = 200,
 ) -> dict[str, object]:
-    range_start = _range_start(date_range)
+    date_range = _parse_date_range(start_date, end_date)
 
     account_ids = []
     if customer_ref:
@@ -216,18 +241,12 @@ def build_ledger_entries_data(
             query = query.filter(
                 LedgerEntry.source.in_(_CATEGORY_SOURCES[selected_category])
             )
-        if range_start is not None:
-            query = query.filter(
-                func.coalesce(LedgerEntry.effective_date, LedgerEntry.created_at)
-                >= range_start
-            )
-        ledger_rows = (
-            query.order_by(
-                func.coalesce(LedgerEntry.effective_date, LedgerEntry.created_at).desc()
-            )
-            .limit(limit)
-            .all()
-        )
+        ledger_date = func.coalesce(LedgerEntry.effective_date, LedgerEntry.created_at)
+        if date_range.start is not None:
+            query = query.filter(ledger_date >= date_range.start)
+        if date_range.end is not None:
+            query = query.filter(ledger_date < date_range.end)
+        ledger_rows = query.order_by(ledger_date.desc()).limit(limit).all()
 
         # Merge post-cutover invoices as synthetic debit rows so the ledger view
         # reflects ongoing billing (native invoices don't post to ledger_entries).
@@ -256,8 +275,10 @@ def build_ledger_entries_data(
                         Subscriber.reseller_id == UUID(selected_partner_id)
                     )
                 )
-            if range_start is not None:
-                inv_q = inv_q.filter(Invoice.issued_at >= range_start)
+            if date_range.start is not None:
+                inv_q = inv_q.filter(Invoice.issued_at >= date_range.start)
+            if date_range.end is not None:
+                inv_q = inv_q.filter(Invoice.issued_at < date_range.end)
             invoice_rows = [
                 _invoice_as_ledger_row(invoice)
                 for invoice in inv_q.order_by(Invoice.issued_at.desc())
@@ -276,7 +297,9 @@ def build_ledger_entries_data(
         # top-N — running the (correlated) dedup scan there is pure cost for zero
         # rows. Only evaluate it when the view is scoped to a customer/partner or
         # a date range, i.e. when a pre-cutover row could actually surface.
-        is_scoped = bool(account_ids or selected_partner_id or range_start)
+        is_scoped = bool(
+            account_ids or selected_partner_id or date_range.start or date_range.end
+        )
         splynx_credit_rows: list[SimpleNamespace] = []
         if (
             is_scoped
@@ -323,9 +346,13 @@ def build_ledger_entries_data(
                 )
             if selected_partner_id:
                 sx_q = sx_q.filter(Subscriber.reseller_id == UUID(selected_partner_id))
-            if range_start is not None:
+            if date_range.start_date is not None:
                 sx_q = sx_q.filter(
-                    SplynxBillingTransaction.transaction_date >= range_start.date()
+                    SplynxBillingTransaction.transaction_date >= date_range.start_date
+                )
+            if date_range.end_date is not None:
+                sx_q = sx_q.filter(
+                    SplynxBillingTransaction.transaction_date <= date_range.end_date
                 )
             splynx_credit_rows = [
                 _splynx_credit_as_ledger_row(txn, account)
@@ -390,11 +417,21 @@ def build_ledger_entries_data(
         "ledger_totals": ledger_totals,
         "entry_type": entry_type,
         "customer_ref": customer_ref,
-        "date_range": date_range,
+        "start_date": date_range.start_date.isoformat()
+        if date_range.start_date
+        else "",
+        "end_date": date_range.end_date.isoformat() if date_range.end_date else "",
         "category": category,
         "selected_partner_id": selected_partner_id,
         "partner_options": partner_options,
     }
+
+
+def _entry_customer_name(entry: LedgerEntry) -> str:
+    account = getattr(entry, "account", None)
+    if account is None:
+        return ""
+    return str(getattr(account, "name", "") or "").strip()
 
 
 def render_ledger_csv(entries: list[LedgerEntry]) -> str:
@@ -403,7 +440,7 @@ def render_ledger_csv(entries: list[LedgerEntry]) -> str:
     writer.writerow(
         [
             "entry_id",
-            "account_id",
+            "customer_name",
             "entry_type",
             "source",
             "debit_amount",
@@ -422,7 +459,7 @@ def render_ledger_csv(entries: list[LedgerEntry]) -> str:
         writer.writerow(
             [
                 str(entry.id),
-                str(entry.account_id) if entry.account_id else "",
+                _entry_customer_name(entry),
                 entry_type,
                 getattr(getattr(entry, "source", None), "value", "") or "",
                 f"{amount:.2f}" if entry_type == "debit" else "",

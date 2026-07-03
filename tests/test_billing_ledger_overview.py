@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
+from fastapi import HTTPException
 
 from app.models.billing import LedgerEntry, LedgerEntryType, LedgerSource
 from app.models.subscriber import Reseller, Subscriber
@@ -99,34 +100,53 @@ def test_build_ledger_entries_data_groups_totals_by_currency(db_session, subscri
     assert state["ledger_totals"]["net_display"] == "NGN 90.00, USD 20.00"
 
 
-def test_build_ledger_entries_data_applies_date_range(db_session, subscriber):
+def test_build_ledger_entries_data_applies_custom_date_range(db_session, subscriber):
     old_entry = _create_ledger_entry(
         db_session,
         account_id=subscriber.id,
         entry_type=LedgerEntryType.credit,
         amount="10.00",
     )
-    old_entry.created_at = datetime.now(UTC) - timedelta(days=40)
+    old_entry.created_at = datetime(2026, 1, 20, 12, 0, tzinfo=UTC)
     db_session.add(old_entry)
-    db_session.commit()
 
-    _create_ledger_entry(
+    in_range_entry = _create_ledger_entry(
         db_session,
         account_id=subscriber.id,
         entry_type=LedgerEntryType.debit,
         amount="5.00",
     )
+    in_range_entry.created_at = datetime(2026, 2, 28, 18, 30, tzinfo=UTC)
+    db_session.add(in_range_entry)
+    db_session.commit()
 
     state = build_ledger_entries_data(
         db_session,
         customer_ref=str(subscriber.id),
         entry_type=None,
-        date_range="month",
+        start_date="2026-02-01",
+        end_date="2026-02-28",
     )
 
     assert len(state["entries"]) == 1
+    assert state["entries"][0].id == in_range_entry.id
     assert state["ledger_totals"]["credit_count"] == 0
     assert state["ledger_totals"]["debit_count"] == 1
+    assert state["start_date"] == "2026-02-01"
+    assert state["end_date"] == "2026-02-28"
+
+
+def test_build_ledger_entries_data_rejects_reversed_date_range(db_session, subscriber):
+    with pytest.raises(HTTPException) as exc_info:
+        build_ledger_entries_data(
+            db_session,
+            customer_ref=str(subscriber.id),
+            entry_type=None,
+            start_date="2026-03-01",
+            end_date="2026-02-28",
+        )
+
+    assert exc_info.value.status_code == 400
 
 
 def test_build_ledger_entries_data_filters_by_category(db_session, subscriber):
@@ -223,8 +243,10 @@ def test_render_ledger_csv_contains_split_debit_and_credit(db_session, subscribe
     csv_text = render_ledger_csv([debit_entry, credit_entry])
 
     assert (
-        "entry_id,account_id,entry_type,source,debit_amount,credit_amount,currency,description,date"
+        "entry_id,customer_name,entry_type,source,debit_amount,credit_amount,currency,description,date"
         in csv_text
     )
+    assert subscriber.name in csv_text
+    assert str(subscriber.id) not in csv_text
     assert ",debit,invoice,15.00,,NGN," in csv_text
     assert ",credit,payment,,22.00,NGN," in csv_text
