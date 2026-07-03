@@ -125,6 +125,13 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     ),
     "app.tasks.catalog.expire_subscriptions": _c("catalog", SWEEP, GUARDED, HEALTH),
     "app.tasks.catalog.send_expiry_reminders": _c("catalog", SWEEP, GUARDED, STATUS),
+    "app.tasks.catalog.apply_due_subscription_changes": _c(
+        "catalog",
+        SWEEP,
+        GUARDED,
+        HEALTH,
+        "Applying a scheduled plan change must be idempotent (apply() status guard).",
+    ),
     "app.tasks.collections.run_billing_enforcement": _c(
         "collections", STATE, GUARDED, HEALTH
     ),
