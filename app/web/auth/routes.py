@@ -101,19 +101,23 @@ def forgot_password_submit(
 @router.get("/reset-password", response_class=HTMLResponse)
 def reset_password_page(
     request: Request,
-    token: str,
+    token: str | None = None,
     error: str | None = None,
     next_login: str | None = None,
     db: Session = Depends(get_db),
 ):
-    """Display the password reset page."""
+    """Display the password reset page.
+
+    ``token`` is optional: the forced-reset-at-login flow supplies it via an
+    HttpOnly cookie rather than the URL.
+    """
     return web_auth_service.reset_password_page(request, db, token, error, next_login)
 
 
 @router.post("/reset-password", response_class=HTMLResponse)
 def reset_password_submit(
     request: Request,
-    token: str = Form(...),
+    token: str = Form(""),
     password: str = Form(...),
     password_confirm: str = Form(...),
     next_login: str | None = Form(None),

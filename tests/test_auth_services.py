@@ -150,6 +150,35 @@ def test_admin_login_page_uses_configured_remember_duration(db_session):
     assert "Remember me for 10 days" in response.body.decode()
 
 
+def _make_get_request_with_cookie(path: str, cookie: str) -> Request:
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": path,
+        "headers": [
+            (b"user-agent", b"pytest"),
+            (b"cookie", cookie.encode("utf-8")),
+        ],
+        "client": ("127.0.0.1", 12345),
+        "query_string": b"",
+    }
+    return Request(scope)
+
+
+def test_reset_password_page_reads_token_from_cookie(db_session):
+    # Forced-reset flow delivers the token via an HttpOnly cookie, not the URL.
+    response = web_auth_service.reset_password_page(
+        _make_get_request_with_cookie(
+            "/auth/reset-password",
+            f"{web_auth_service.PASSWORD_RESET_COOKIE}=cookie-token-xyz",
+        ),
+        db_session,
+        None,
+    )
+    body = response.body.decode()
+    assert "cookie-token-xyz" in body
+
+
 def test_reset_password_page_uses_configured_min_length(db_session):
     db_session.add(
         DomainSetting(

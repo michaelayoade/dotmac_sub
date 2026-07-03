@@ -22,6 +22,11 @@ MFA_ENROLLMENT_COOKIE = "mfa_enrollment_pending"
 # Marker so refresh/MFA hops know whether the login asked to be remembered;
 # without it every rotated refresh cookie silently became persistent.
 REMEMBER_COOKIE = "admin_remember"
+# Carries a forced-reset token from the login POST to the reset page WITHOUT
+# putting it in the redirect URL (which lands in browser history / access
+# logs). HttpOnly, short-lived, cleared once the reset succeeds.
+PASSWORD_RESET_COOKIE = "pwd_reset_token"
+PASSWORD_RESET_COOKIE_TTL = 15 * 60
 
 
 def _session_cookie_settings(db: Session) -> dict:
@@ -199,16 +204,27 @@ def login_submit(
                 isinstance(detail, dict)
                 and detail.get("code") == "PASSWORD_RESET_REQUIRED"
             ):
-                # Short TTL: this token lands in a redirect URL (browser
-                # history, access logs), so keep its replay window small.
                 reset = auth_flow_service.request_password_reset(
                     db=db, email=username, ttl_minutes=15
                 )
                 if reset and reset.get("token"):
-                    return RedirectResponse(
-                        url=f"/auth/reset-password?token={reset['token']}",
-                        status_code=303,
+                    # Hand the token to the reset page via a short-lived
+                    # HttpOnly cookie instead of the URL, so it never lands in
+                    # browser history or access logs.
+                    redirect = RedirectResponse(
+                        url="/auth/reset-password", status_code=303
                     )
+                    cookie_cfg = _session_cookie_settings(db)
+                    redirect.set_cookie(
+                        key=PASSWORD_RESET_COOKIE,
+                        value=reset["token"],
+                        max_age=PASSWORD_RESET_COOKIE_TTL,
+                        httponly=True,
+                        secure=cookie_cfg["secure"],
+                        samesite=cookie_cfg["samesite"],
+                        path="/auth/reset-password",
+                    )
+                    return redirect
                 error_msg = (
                     "Password reset required. Use the forgot password "
                     "page to set a new password."
@@ -473,16 +489,18 @@ def forgot_password_submit(request: Request, db: Session, email: str):
 def reset_password_page(
     request: Request,
     db: Session,
-    token: str,
+    token: str | None = None,
     error: str | None = None,
     next_login: str | None = None,
 ):
     safe_next_login = _safe_next(next_login, "/auth/login")
+    # Forced-reset flow delivers the token via an HttpOnly cookie, not the URL.
+    resolved_token = token or request.cookies.get(PASSWORD_RESET_COOKIE) or ""
     return templates.TemplateResponse(
         "auth/reset-password.html",
         {
             "request": request,
-            "token": token,
+            "token": resolved_token,
             "error": error,
             "next_login": safe_next_login,
             "password_min_length": auth_flow_service.password_min_length(db),
@@ -500,6 +518,8 @@ def reset_password_submit(
     next_login: str | None = None,
 ):
     safe_next_login = _safe_next(next_login, "/auth/login")
+    # Forced-reset flow carries the token in an HttpOnly cookie, not the form.
+    token = token or request.cookies.get(PASSWORD_RESET_COOKIE) or ""
     if password != password_confirm:
         return templates.TemplateResponse(
             "auth/reset-password.html",
@@ -516,9 +536,11 @@ def reset_password_submit(
     try:
         auth_flow_service.reset_password(db=db, token=token, new_password=password)
         separator = "&" if "?" in safe_next_login else "?"
-        return RedirectResponse(
+        redirect = RedirectResponse(
             url=f"{safe_next_login}{separator}reset=success", status_code=303
         )
+        redirect.delete_cookie(PASSWORD_RESET_COOKIE, path="/auth/reset-password")
+        return redirect
     except Exception as exc:
         error_msg = "Invalid or expired reset link"
         if (
