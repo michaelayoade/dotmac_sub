@@ -973,6 +973,18 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.catalog,
+        key="reseller_default_catalog_open",
+        env_var="RESELLER_DEFAULT_CATALOG_OPEN",
+        value_type=SettingValueType.boolean,
+        default=True,
+        label=(
+            "Resellers see all unrestricted offers by default (on = today's "
+            "open catalog; off = a reseller sees only offers explicitly "
+            "assigned to it, unless the reseller's own override says otherwise)"
+        ),
+    ),
+    SettingSpec(
+        domain=SettingDomain.catalog,
         key="default_billing_mode",
         env_var="CATALOG_DEFAULT_BILLING_MODE",
         value_type=SettingValueType.string,
