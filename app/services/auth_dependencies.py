@@ -17,7 +17,11 @@ from app.models.rbac import (
     SystemUserPermission,
     SystemUserRole,
 )
-from app.services.auth import hash_api_key
+from app.services.auth import (
+    hash_api_key,
+    hash_api_key_candidates,
+    is_legacy_api_key_hash,
+)
 from app.services.auth_flow import (
     _load_rbac_claims,
     decode_access_token,
@@ -78,6 +82,22 @@ def _touch_api_key_last_used(db: Session, api_key: ApiKey, now: datetime) -> Non
     if last_used is not None and now - last_used < _API_KEY_LAST_USED_REFRESH:
         return
     api_key.last_used_at = now
+    db.commit()
+
+
+def _maybe_upgrade_api_key_hash(db: Session, api_key: ApiKey, raw_key: str) -> None:
+    """Rehash a legacy (unsalted-sha256) key to HMAC on successful auth.
+
+    One-time per key: after the upgrade the stored hash is no longer legacy, so
+    later requests skip this. Committed unconditionally (not subject to the
+    last-used throttle) so the upgrade always persists.
+    """
+    if not is_legacy_api_key_hash(api_key.key_hash):
+        return
+    upgraded = hash_api_key(raw_key)
+    if is_legacy_api_key_hash(upgraded):
+        return  # no server secret configured (dev/test) — nothing to upgrade to
+    api_key.key_hash = upgraded
     db.commit()
 
 
@@ -159,13 +179,14 @@ def require_audit_auth(
     if x_api_key:
         api_key = (
             db.query(ApiKey)
-            .filter(ApiKey.key_hash == hash_api_key(x_api_key))
+            .filter(ApiKey.key_hash.in_(hash_api_key_candidates(x_api_key)))
             .filter(ApiKey.is_active.is_(True))
             .filter(ApiKey.revoked_at.is_(None))
             .filter((ApiKey.expires_at.is_(None)) | (ApiKey.expires_at > now))
             .first()
         )
         if api_key and _has_audit_scope({"scopes": list(api_key.scopes or [])}):
+            _maybe_upgrade_api_key_hash(db, api_key, x_api_key)
             _touch_api_key_last_used(db, api_key, now)
             if request is not None:
                 request.state.actor_id = str(api_key.id)
@@ -186,7 +207,7 @@ def _api_key_principal(
     now = datetime.now(UTC)
     api_key = (
         db.query(ApiKey)
-        .filter(ApiKey.key_hash == hash_api_key(raw_key))
+        .filter(ApiKey.key_hash.in_(hash_api_key_candidates(raw_key)))
         .filter(ApiKey.is_active.is_(True))
         .filter(ApiKey.revoked_at.is_(None))
         .filter((ApiKey.expires_at.is_(None)) | (ApiKey.expires_at > now))
@@ -194,6 +215,7 @@ def _api_key_principal(
     )
     if not api_key:
         return None
+    _maybe_upgrade_api_key_hash(db, api_key, raw_key)
     _touch_api_key_last_used(db, api_key, now)
     actor_id = str(api_key.id)
     owner = str(api_key.subscriber_id) if api_key.subscriber_id else actor_id

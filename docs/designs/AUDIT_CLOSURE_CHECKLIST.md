@@ -28,7 +28,11 @@ instead of leaving it unchecked forever. Source of detail: each domain's
 - [ ] SECURITY (systemic): extend the build-failing route-permission arch test
   from `/api/v1`-only to **all `/admin` web routers**, with a quarantine list
   burned down over time
-- [ ] SECURITY: move API-key hashing from unsalted sha256 to HMAC-with-key
+- [x] SECURITY: API-key hashing → HMAC-SHA256 keyed with a derived subkey of
+  the credential-encryption key. Dual-read + rehash-on-use: legacy sha256 rows
+  keep authenticating and upgrade to HMAC on next call — NO key rotation, NO
+  external (ERP/CRM) changes, zero downtime. Legacy sha256 verify path can be
+  retired once all active keys have re-authenticated (2 prod keys).
 - [ ] BILLING: currency cleanup remainder — forms, adapters, **Flutterwave init
   (blocks non-NGN today)**, integrity SQL, `crm_billing_push` (`os.getenv`)
 - [ ] APP-INTEGRATIONS P-C: fix fake observability — connector health is
@@ -41,8 +45,14 @@ instead of leaving it unchecked forever. Source of detail: each domain's
 
 ## Tier 2 — structural / settings-system unification
 
-- [ ] SYSTEM-CONFIG C-1: migrate the remaining **billing/collections bespoke
+- [x] SYSTEM-CONFIG C-1: migrate the remaining **billing/collections bespoke
   string-save forms** to typed `settings_spec` (the two-settings-systems split)
+  — all five saves (`save_billing_config`, `save_direct_bank_transfer_config`,
+  `save_reminders`, `save_billing_notifications`, `save_plan_change`) now pass
+  `use_specs=True`; registered keys get spec type coercion/validation, and the
+  seven `direct_bank_transfer_*` keys gained specs (they have portal readers).
+  Reader-less keys (payment_period, invoice/proforma toggles, the reminder/
+  blocking-wave waves) are intentionally left un-spec'd to avoid orphans.
 - [ ] SYSTEM-CONFIG: bespoke-save validation/feedback consistency for the
   remaining untyped forms (monitoring/preferences/portal/radius already typed)
 - [ ] BILLING: bulk/scheduled money-job **result history** surface (autopay,
