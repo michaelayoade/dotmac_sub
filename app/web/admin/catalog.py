@@ -800,6 +800,7 @@ def subscription_bulk_change_plan(
     request: Request,
     subscription_ids: str = Form(...),
     target_offer_id: str = Form(...),
+    include_suspended: bool = Form(False),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Bulk change plan/offer for subscriptions."""
@@ -810,6 +811,7 @@ def subscription_bulk_change_plan(
             target_offer_id=target_offer_id,
             request=request,
             actor_id=_get_actor_id(request),
+            include_suspended=include_suspended,
         )
     )
 
