@@ -16,6 +16,7 @@ import '../features/profile/contacts_screen.dart';
 import '../features/profile/installation_tracker_screen.dart';
 import '../features/profile/refer_and_earn_screen.dart';
 import '../features/profile/service_location_screen.dart';
+import '../features/profile/technician_track_screen.dart';
 import '../features/profile/work_orders_screen.dart';
 import '../features/billing/invoice_detail_screen.dart';
 import '../features/billing/invoices_screen.dart';
@@ -153,6 +154,14 @@ final routerProvider = Provider<GoRouter>((ref) {
             TopUpScreen(saveCardInitial: state.extra == true),
       ),
       GoRoute(path: '/wallet', builder: (_, __) => const WalletScreen()),
+      // Live technician tracking for an in-progress visit — a full-screen map
+      // on its own, reached from the Home visit banner or Help → Visits (kept
+      // off the dashboard so Home stays calm).
+      GoRoute(
+        path: '/track/:id',
+        builder: (_, state) =>
+            TechnicianTrackScreen(workOrderId: state.pathParameters['id']!),
+      ),
       // Live chat now lives INSIDE the Support tab (so the bottom bar stays and
       // it's not a detached full-screen page). Keep /chat as a redirect so push
       // notifications and old deep links land on the nested screen.
