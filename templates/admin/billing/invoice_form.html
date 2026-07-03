@@ -81,6 +81,9 @@
                                 <select name="{{ 'currency_display' if invoice else 'currency' }}" x-model="currency"
                                         {% if invoice %}disabled aria-disabled="true"{% endif %}
                                         class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white dark:disabled:bg-slate-800 dark:disabled:text-slate-400">
+                                    {% if invoice_currency not in ('NGN', 'USD', 'EUR', 'GBP') %}
+                                    <option value="{{ invoice_currency }}" selected>{{ invoice_currency }}</option>
+                                    {% endif %}
                                     <option value="NGN" {% if invoice_currency == 'NGN' %}selected{% endif %}>NGN - Nigerian Naira</option>
                                     <option value="USD" {% if invoice_currency == 'USD' %}selected{% endif %}>USD - US Dollar</option>
                                     <option value="EUR" {% if invoice_currency == 'EUR' %}selected{% endif %}>EUR - Euro</option>

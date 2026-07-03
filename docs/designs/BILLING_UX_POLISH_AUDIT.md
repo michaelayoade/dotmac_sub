@@ -114,6 +114,12 @@ settings/integrity/reconcilers.
 - Credit and collection-account forms, consolidated payment routing, and the
   billing adapter now use `billing.default_currency` when no explicit currency is
   provided.
+- C-4 remainder: Flutterwave payment init now sends the invoice's own currency
+  (falling back to `billing.default_currency`), the billing-health
+  covered-but-locked SQL parameterizes its currency filter from the same
+  setting, and the manual payment form/currency partial plus payment-import
+  copy source their default currency from the setting instead of a hardcoded
+  NGN literal.
 - Admin Billing now has a read-only Billing Health page that combines billing
   health signals, integrity-launch blockers, runner heartbeats, and autopay
   mandate/failure visibility.

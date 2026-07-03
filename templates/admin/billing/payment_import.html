@@ -147,7 +147,7 @@
                                     <td class="px-4 py-3 text-sm text-slate-500" x-text="index + 1"></td>
                                     <td class="px-4 py-3 text-sm text-slate-900 dark:text-white" x-text="row.account_number || row.account_id"></td>
                                     <td class="px-4 py-3 text-sm text-slate-900 dark:text-white font-medium" x-text="row.amount"></td>
-                                    <td class="px-4 py-3 text-sm text-slate-500" x-text="row.currency || 'NGN'"></td>
+                                    <td class="px-4 py-3 text-sm text-slate-500" x-text="row.currency || '{{ default_currency|default('NGN') }}'"></td>
                                     <td class="px-4 py-3 text-sm text-slate-500" x-text="row.reference || '-'"></td>
                                     <td class="px-4 py-3 text-sm text-slate-500" x-text="row.date || '-'"></td>
                                     <td class="px-4 py-3">
@@ -315,7 +315,7 @@
                         <span class="inline-flex h-5 w-5 items-center justify-center rounded bg-slate-100 text-xs font-bold text-slate-500 dark:bg-slate-700 dark:text-slate-400">3</span>
                         <div>
                             <span class="font-medium text-slate-700 dark:text-slate-300">currency</span>
-                            <span class="text-slate-500 dark:text-slate-400"> (optional, default: NGN)</span>
+                            <span class="text-slate-500 dark:text-slate-400"> (optional, default: {{ default_currency|default('NGN') }})</span>
                         </div>
                     </li>
                     <li class="flex items-start gap-2">
