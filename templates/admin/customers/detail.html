@@ -2730,7 +2730,7 @@ function customerDetail(config = {}) {
         syncTemplateForChannel() {
             const matching = this.templatesForSelectedChannel();
             if (!matching.find((template) => template.id === this.sendMessageForm.templateId)) {
-                this.sendMessageForm.templateId = matching[0] ? matching[0].id : '';
+                this.sendMessageForm.templateId = '';
             }
             this.handleTemplateSelection();
         },
@@ -2854,6 +2854,46 @@ function customerDetail(config = {}) {
             this.messageLoading = true;
             try {
                 const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || document.cookie.match(/csrf_token=([^;]+)/)?.[1] || '';
+                const payload = {
+                    customer_ids: [{ id: this.customerId, type: this.customerType }],
+                    filters: {},
+                    channel: this.sendMessageForm.channel,
+                    template_id: template.id,
+                    template_variables: this.sendMessageForm.templateVariables || {}
+                };
+                const previewResponse = await fetch('/admin/customers/bulk/send-message', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest',
+                        ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {})
+                    },
+                    body: JSON.stringify({ ...payload, preview_only: true })
+                });
+                if (!previewResponse.ok) {
+                    const error = await previewResponse.json().catch(() => ({}));
+                    alert(error.detail || 'Failed to preview the message. Please try again.');
+                    return;
+                }
+                const preview = await previewResponse.json();
+                const previewSuppressed = preview.suppressed || [];
+                const previewOpenTicketExcluded = previewSuppressed.filter((item) => item.reason_code === 'open_ticket');
+                const previewOtherSuppressed = Math.max((preview.suppressed_count || 0) - previewOpenTicketExcluded.length, 0);
+                const previewMessageParts = [
+                    `Send ${selectedChannelMeta().label} template "${template.label || template.name}" to this customer?`,
+                    `Queue ${preview.queued_count || 0} message(s).`
+                ];
+                if (previewOpenTicketExcluded.length) {
+                    previewMessageParts.push(`Exclude ${previewOpenTicketExcluded.length} customer(s) with open tickets.`);
+                }
+                if (previewOtherSuppressed) {
+                    previewMessageParts.push(`Suppress ${previewOtherSuppressed} other customer(s).`);
+                }
+                if ((preview.skipped || []).length) {
+                    previewMessageParts.push(`Skip ${(preview.skipped || []).length} customer(s) with missing contact details.`);
+                }
+                if (!confirm(previewMessageParts.join(' '))) return;
+
                 const response = await fetch('/admin/customers/bulk/send-message', {
                     method: 'POST',
                     headers: {
@@ -2861,14 +2901,7 @@ function customerDetail(config = {}) {
                         'X-Requested-With': 'XMLHttpRequest',
                         ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {})
                     },
-                    body: JSON.stringify({
-                        customer_ids: [{ id: this.customerId, type: this.customerType }],
-                        filters: {},
-                        channel: this.sendMessageForm.channel,
-                        template_id: template.id,
-                        template_variables: this.sendMessageForm.templateVariables || {},
-                        confirmed: true
-                    })
+                    body: JSON.stringify({ ...payload, confirmed: true })
                 });
 
                 if (response.ok) {

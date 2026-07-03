@@ -55,6 +55,9 @@ def test_customer_send_email_action_opens_template_modal_for_email_channel():
     assert "detailUrl" in detail_template
     assert "closeSendMessageModal" in detail_template
     assert "@change=\"handleTemplateSelection()\"" in detail_template
+    assert "this.sendMessageForm.templateId = '';" in detail_template
+    assert "preview_only: true" in detail_template
+    assert "Send ${selectedChannelMeta().label} template" in detail_template
     assert "whatsappTemplateVariables" in detail_template
     assert "template.provider_template_name || template.code || template.name" in (
         detail_template
