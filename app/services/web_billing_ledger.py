@@ -348,8 +348,7 @@ def build_ledger_entries_data(
                 sx_q = sx_q.filter(Subscriber.reseller_id == UUID(selected_partner_id))
             if date_range.start_date is not None:
                 sx_q = sx_q.filter(
-                    SplynxBillingTransaction.transaction_date
-                    >= date_range.start_date
+                    SplynxBillingTransaction.transaction_date >= date_range.start_date
                 )
             if date_range.end_date is not None:
                 sx_q = sx_q.filter(
