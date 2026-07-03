@@ -11,6 +11,7 @@ Same cached-client, never-raise pattern as radius_reconciliation's audit store.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from datetime import UTC, datetime
@@ -19,8 +20,19 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 _KEY_PREFIX = "job:heartbeat:success:"
+_RESULT_KEY_PREFIX = "job:heartbeat:result:"
 _TTL_SECONDS = int(30 * 24 * 3600)  # 30 days; freshness is judged by age, not TTL
 _redis_client: Any = None
+
+# Scheduled money jobs whose LAST-RUN result (status + returned counts) we surface
+# in billing-health. Only these are instrumented — not every celery task.
+MONEY_JOB_TASKS = (
+    "app.tasks.billing.run_invoice_cycle",
+    "app.tasks.billing.run_billing_notifications",
+    "app.tasks.collections.run_billing_enforcement",
+    "app.tasks.collections.run_bundle_reconcile",
+    "app.tasks.collections.run_dunning",
+)
 
 
 def _get_redis() -> Any:
@@ -68,4 +80,62 @@ def get_last_success(task_name: str) -> datetime | None:
         return datetime.fromisoformat(raw)
     except Exception:
         logger.debug("job_heartbeat: load failed for %s", task_name, exc_info=True)
+        return None
+
+
+def record_result(
+    task_name: str,
+    *,
+    status: str,
+    detail: dict[str, Any] | None = None,
+    now: datetime | None = None,
+) -> bool:
+    """Store the LAST-RUN result of a task as a small JSON blob. Never raises.
+
+    Blob shape: ``{"status": "ok"|"error", "at": iso8601, "detail": {...}|None}``.
+    ``detail`` is the task's returned counts on success, or ``{"error": msg}`` on
+    failure. Recorded under a separate key from the last-success heartbeat so the
+    two never clobber each other.
+    """
+    if not task_name or not status:
+        return False
+    client = _get_redis()
+    if client is None:
+        return False
+    try:
+        payload = {
+            "status": status,
+            "at": (now or datetime.now(UTC)).isoformat(),
+            "detail": detail if isinstance(detail, dict) else None,
+        }
+        client.set(_RESULT_KEY_PREFIX + task_name, json.dumps(payload), ex=_TTL_SECONDS)
+        return True
+    except Exception:
+        logger.debug(
+            "job_heartbeat: result store failed for %s", task_name, exc_info=True
+        )
+        return False
+
+
+def get_last_result(task_name: str) -> dict[str, Any] | None:
+    """Last-run result blob for a task, or None if unset. Never raises."""
+    if not task_name:
+        return None
+    client = _get_redis()
+    if client is None:
+        return None
+    try:
+        raw = client.get(_RESULT_KEY_PREFIX + task_name)
+        if not raw:
+            return None
+        if isinstance(raw, bytes):
+            raw = raw.decode()
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            return None
+        return data
+    except Exception:
+        logger.debug(
+            "job_heartbeat: result load failed for %s", task_name, exc_info=True
+        )
         return None

@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from app.models.scheduler import ScheduledTask, ScheduleType
-from app.services import billing_health
+from app.services import billing_health, job_heartbeat
 from app.services.billing_health import BillingHealthSnapshot, RunnerHeartbeat
 
 ENF = "app.tasks.collections.run_billing_enforcement"
@@ -100,3 +100,93 @@ def test_anomalies_for_new_signals():
     assert _snap(runners=(stale_rh,)).stale_runners == [ENF]
     assert "enforcement_covered_but_locked" in _snap(covered_but_locked=2).anomalies
     assert _snap().anomalies == []  # healthy default
+
+
+# ---- last-run result store (round-trip + never-raise) --------------------
+
+
+class _FakeRedis:
+    """Minimal in-memory stand-in for the Redis client used by job_heartbeat."""
+
+    def __init__(self) -> None:
+        self.store: dict[str, str] = {}
+
+    def set(self, key, value, ex=None):  # noqa: D401 - signature match
+        self.store[key] = value
+
+    def get(self, key):
+        return self.store.get(key)
+
+
+def test_record_result_round_trip(monkeypatch):
+    fake = _FakeRedis()
+    monkeypatch.setattr(job_heartbeat, "_get_redis", lambda: fake)
+    now = datetime(2026, 7, 3, 9, 0, tzinfo=UTC)
+    assert job_heartbeat.record_result(
+        ENF, status="ok", detail={"processed": 42, "failed": 0}, now=now
+    )
+    blob = job_heartbeat.get_last_result(ENF)
+    assert blob is not None
+    assert blob["status"] == "ok"
+    assert blob["at"] == now.isoformat()
+    assert blob["detail"] == {"processed": 42, "failed": 0}
+    # It writes under its own key prefix, leaving the success heartbeat untouched.
+    assert job_heartbeat._RESULT_KEY_PREFIX + ENF in fake.store
+    assert job_heartbeat._KEY_PREFIX + ENF not in fake.store
+
+
+def test_record_result_error_status(monkeypatch):
+    fake = _FakeRedis()
+    monkeypatch.setattr(job_heartbeat, "_get_redis", lambda: fake)
+    assert job_heartbeat.record_result(ENF, status="error", detail={"error": "boom"})
+    blob = job_heartbeat.get_last_result(ENF)
+    assert blob["status"] == "error" and blob["detail"] == {"error": "boom"}
+
+
+def test_get_last_result_missing_key_returns_none(monkeypatch):
+    monkeypatch.setattr(job_heartbeat, "_get_redis", lambda: _FakeRedis())
+    assert job_heartbeat.get_last_result(ENF) is None
+
+
+def test_result_store_never_raises_when_redis_down(monkeypatch):
+    monkeypatch.setattr(job_heartbeat, "_get_redis", lambda: None)
+    assert job_heartbeat.record_result(ENF, status="ok", detail={"x": 1}) is False
+    assert job_heartbeat.get_last_result(ENF) is None
+
+
+# ---- last-run result surfaced in the view-model --------------------------
+
+
+def test_runner_heartbeats_include_last_result(db_session, monkeypatch):
+    _task(db_session, ENF, enabled=True, interval=3600)
+    now = datetime(2026, 7, 3, 9, 0, tzinfo=UTC)
+    monkeypatch.setattr(billing_health, "get_last_success", lambda tn: now)
+    result_blob = {
+        "status": "ok",
+        "at": now.isoformat(),
+        "detail": {"processed": 42, "failed": 0},
+    }
+    monkeypatch.setattr(
+        billing_health,
+        "get_last_result",
+        lambda tn: result_blob if tn == ENF else None,
+    )
+    by = {r.task_name: r for r in billing_health.runner_heartbeats(db_session, now=now)}
+    rh = by[ENF]
+    assert rh.last_result == result_blob
+    assert rh.last_result_status == "ok"
+    assert rh.last_result_at == now
+    assert "processed=42" in rh.last_result_summary
+
+
+def test_runner_heartbeat_last_result_helpers_defaults():
+    rh = RunnerHeartbeat(ENF, True, 3600, None, None, True)
+    assert rh.last_result is None
+    assert rh.last_result_status is None
+    assert rh.last_result_at is None
+    assert rh.last_result_detail is None
+    assert rh.last_result_summary == "No result yet"
+    err = RunnerHeartbeat(
+        ENF, True, 3600, None, None, True, {"status": "error", "detail": {"error": "x"}}
+    )
+    assert err.last_result_summary == "errored: x"

@@ -115,6 +115,14 @@
                     <div class="min-w-0">
                         <p class="truncate text-sm font-semibold text-slate-800 dark:text-slate-100">{{ runner.task_name }}</p>
                         <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{{ runner.interval_seconds or "No interval" }} sec interval; {{ runner.last_success.strftime('%Y-%m-%d %H:%M UTC') if runner.last_success else "No heartbeat" }}</p>
+                        {% set _lr_status = runner.last_result_status %}
+                        <p class="mt-0.5 truncate text-xs {{ 'text-rose-600 dark:text-rose-400' if _lr_status == 'error' else 'text-slate-500 dark:text-slate-400' }}">
+                            Last result:
+                            {% if runner.last_result_at %}
+                                <span class="font-medium text-slate-600 dark:text-slate-300">{{ runner.last_result_at.strftime('%Y-%m-%d %H:%M UTC') }}</span> —
+                            {% endif %}
+                            {{ runner.last_result_summary }}
+                        </p>
                     </div>
                     {% if runner.stale %}
                         {{ status_badge("Stale", variant="overdue") }}
