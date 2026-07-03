@@ -22,7 +22,7 @@ from scripts.one_off.reconcile_phantom_opening_debits import (
     REVERSAL_MEMO,
     _apply,
     _classify,
-    _existing_reversal_amounts,
+    _reversal_amounts,
     _load_candidates,
 )
 
@@ -115,8 +115,9 @@ def test_already_compensated_debit_is_idempotent(db_session):
     )
     db_session.flush()
 
-    reversals = _existing_reversal_amounts(db_session, [entry.id])
+    reversals, inactive_reversals = _reversal_amounts(db_session, [entry.id])
     assert reversals[str(entry.id)] == Decimal("1000.00")
+    assert inactive_reversals == {}
 
     cand = _candidate_for(_load_candidates(db_session, "active"), entry.id)
     assert cand.existing_reversal == Decimal("1000.00")
@@ -161,22 +162,27 @@ def test_classify_pure_unit_behavior(db_session):
     scope = {SubscriberStatus.active}
 
     # Already compensated wins first (remaining <= 0).
-    assert _classify(sub, Decimal("0.00"), Decimal("0.00"), scope) == (
+    assert _classify(sub, Decimal("0.00"), Decimal("0.00"), Decimal("0.00"), scope) == (
         "already_compensated",
         False,
     )
     # Null deposit -> review.
-    assert _classify(sub, None, Decimal("10.00"), scope) == (
+    assert _classify(sub, None, Decimal("10.00"), Decimal("0.00"), scope) == (
         "deposit_null_review",
         False,
     )
     # Negative deposit -> legit arrears.
-    assert _classify(sub, Decimal("-1.00"), Decimal("10.00"), scope) == (
+    assert _classify(sub, Decimal("-1.00"), Decimal("10.00"), Decimal("0.00"), scope) == (
         "legit_negative_deposit",
         False,
     )
+    # Inactive prior reversal -> hard non-eligible review, before deposit rules.
+    assert _classify(sub, Decimal("0.00"), Decimal("10.00"), Decimal("5.00"), scope) == (
+        "previously_reversed_inactive_review",
+        False,
+    )
     # In-scope, non-negative deposit -> eligible.
-    assert _classify(sub, Decimal("0.00"), Decimal("10.00"), scope) == (
+    assert _classify(sub, Decimal("0.00"), Decimal("10.00"), Decimal("0.00"), scope) == (
         "eligible_phantom_debit",
         True,
     )
@@ -213,3 +219,37 @@ def test_apply_writes_compensating_credit_for_eligible(db_session):
     assert credit.category == LedgerCategory.deposit
     assert credit.amount == Decimal("2000.00")
     assert credit.account_id == entry.account_id
+
+
+def test_inactive_reversal_blocks_re_reversal(db_session):
+    """Restored construction debits (their reversal credits soft-deleted) must
+    never re-classify as eligible — the June 24 re-run guard."""
+    sub = _subscriber(db_session, deposit=Decimal("0.00"))
+    entry = _opening_debit(db_session, sub, amount=Decimal("1000.00"))
+    db_session.add(
+        LedgerEntry(
+            account_id=sub.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.adjustment,
+            category=LedgerCategory.deposit,
+            amount=Decimal("1000.00"),
+            currency="NGN",
+            memo=REVERSAL_MEMO.format(id=entry.id),
+            is_active=False,
+        )
+    )
+    db_session.flush()
+
+    active_reversals, inactive_reversals = _reversal_amounts(db_session, [entry.id])
+    assert active_reversals == {}
+    assert inactive_reversals[str(entry.id)] == Decimal("1000.00")
+
+    cand = _candidate_for(_load_candidates(db_session, "active"), entry.id)
+    assert cand.inactive_reversal == Decimal("1000.00")
+    assert cand.classification == "previously_reversed_inactive_review"
+    assert cand.eligible is False
+
+    before = db_session.query(LedgerEntry).count()
+    written = _apply(db_session, [cand])
+    assert written == 0
+    assert db_session.query(LedgerEntry).count() == before

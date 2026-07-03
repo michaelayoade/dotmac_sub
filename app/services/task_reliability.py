@@ -115,6 +115,9 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "bandwidth", SWEEP, PER_ITEM, HEALTH
     ),
     "app.tasks.bandwidth.trim_redis_stream": _c("bandwidth", SWEEP, IDEMP, LOG),
+    "app.tasks.billing.audit_cutover_balance_invariant": _c(
+        "billing", SWEEP, IDEMP, HEALTH, "Read-only drift audit; safe to re-run."
+    ),
     "app.tasks.billing.check_billing_switch": _c("billing", SWEEP, IDEMP, HEALTH),
     "app.tasks.billing.mark_invoices_overdue": _c("billing", SWEEP, IDEMP, HEALTH),
     "app.tasks.billing.run_billing_notifications": _c(
