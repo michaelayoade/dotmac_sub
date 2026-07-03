@@ -1,4 +1,5 @@
 import hashlib
+import hmac
 import logging
 import secrets
 import time
@@ -48,8 +49,67 @@ from app.services.response import ListResponseMixin
 logger = logging.getLogger(__name__)
 
 
-def hash_api_key(value: str) -> str:
+# API-key hashing: HMAC-SHA256 keyed with a server secret (defense-in-depth
+# over the historical unsalted sha256 — an unsalted digest is offline-guessable
+# / rainbow-able if the DB leaks; an HMAC is not without the key). New hashes
+# carry an ``hmac256:`` prefix so the verify path can tell schemes apart and
+# transparently upgrade legacy rows on next use (no key rotation needed).
+_HMAC_SCHEME_PREFIX = "hmac256:"
+_HMAC_DERIVATION_INFO = b"api-key-hash-v1"
+
+
+def _api_key_hmac_secret() -> bytes | None:
+    """Derive a dedicated HMAC subkey from the credential-encryption key.
+
+    Reuses the always-present Fernet key (connector encryption already depends
+    on it) but derives a *separate* subkey rather than using it directly, so
+    the two purposes stay cryptographically independent. Returns None only when
+    no encryption key is configured (dev/test) — then we fall back to legacy
+    sha256 so nothing breaks.
+    """
+    from app.services.credential_crypto import get_encryption_key
+
+    key = get_encryption_key()
+    if not key:
+        return None
+    key_bytes = key if isinstance(key, bytes) else str(key).encode("utf-8")
+    return hmac.new(key_bytes, _HMAC_DERIVATION_INFO, hashlib.sha256).digest()
+
+
+def _legacy_sha256(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def hash_api_key(value: str) -> str:
+    """Hash a raw API key for storage/lookup.
+
+    HMAC-SHA256 (prefixed) when a server secret is available; legacy unsalted
+    sha256 only when it is not (keeps dev/test working). Prod always has the
+    key, so prod always stores the HMAC form.
+    """
+    secret = _api_key_hmac_secret()
+    if secret is None:
+        return _legacy_sha256(value)
+    digest = hmac.new(secret, value.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"{_HMAC_SCHEME_PREFIX}{digest}"
+
+
+def hash_api_key_candidates(value: str) -> list[str]:
+    """Every stored-hash form a raw key may currently match: the preferred
+    (HMAC) hash first, plus the legacy sha256 so pre-migration rows still
+    authenticate until they are rehashed-on-use."""
+    candidates = [hash_api_key(value)]
+    legacy = _legacy_sha256(value)
+    if legacy not in candidates:
+        candidates.append(legacy)
+    return candidates
+
+
+def is_legacy_api_key_hash(stored_hash: str | None) -> bool:
+    """True when a stored hash is the pre-HMAC unsalted-sha256 form."""
+    if not stored_hash:
+        return False
+    return not stored_hash.startswith(_HMAC_SCHEME_PREFIX)
 
 
 _API_KEY_WINDOW_SECONDS = 60
