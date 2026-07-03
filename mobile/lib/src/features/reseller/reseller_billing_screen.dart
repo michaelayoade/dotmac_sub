@@ -499,8 +499,9 @@ class _ResellerBillingScreenState extends ConsumerState<ResellerBillingScreen> {
                   label: const Text('Pay by bank transfer'),
                 ),
               const SizedBox(height: 16),
-              Text('Account activity',
-                  style: Theme.of(context).textTheme.titleSmall),
+              // Resellers are a business audience — "Ledger" reads more precise
+              // than the consumer "Activity" used in the customer app.
+              Text('Ledger', style: Theme.of(context).textTheme.titleSmall),
               const SizedBox(height: 8),
               if (b.activity.isEmpty && b.recentPayments.isEmpty)
                 const Padding(

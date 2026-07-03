@@ -126,7 +126,12 @@ class ServiceTabScreen extends ConsumerWidget {
             // Real-time speed, high on the tab so it's visible without a deep
             // scroll past the history charts.
             const LiveBandwidthCard(),
-            const SizedBox(height: 12),
+            const SizedBox(height: 16),
+            Text(
+              'Grow your service',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
             Card(
               child: ListTile(
                 leading: const Icon(Icons.add_location_alt_outlined),
