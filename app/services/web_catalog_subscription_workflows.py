@@ -62,9 +62,31 @@ def subscription_detail_page_context(
         "subscription": subscription,
         "activities": build_audit_activities(db, "subscription", str(subscription_id)),
         "offer_options": core.active_offer_options(db),
+        "scheduled_plan_change": _scheduled_plan_change_context(db, subscription_id),
     }
     context.update(core.subscription_detail_context(db, subscription))
     return context
+
+
+def _scheduled_plan_change_context(
+    db: Session,
+    subscription_id: str,
+) -> dict[str, object] | None:
+    """Summarize the outstanding scheduled (next-cycle) plan change, if any."""
+    from app.models.catalog import CatalogOffer
+    from app.services.subscription_changes import subscription_change_requests
+
+    scheduled = subscription_change_requests.get_scheduled_for_subscription(
+        db, subscription_id
+    )
+    if scheduled is None:
+        return None
+    target_offer = db.get(CatalogOffer, scheduled.requested_offer_id)
+    return {
+        "id": str(scheduled.id),
+        "offer_name": target_offer.name if target_offer else "New plan",
+        "effective_date": scheduled.effective_date,
+    }
 
 
 def customer_detail_url_for_subscriber_id(db: Session, subscriber_id: str) -> str:
@@ -392,18 +414,62 @@ def bulk_change_plan_response(
     target_offer_id: str,
     request: object,
     actor_id: str | None,
+    effective_timing: str = "instant",
     include_suspended: bool = False,
 ) -> dict[str, object]:
-    """Bulk change subscription plans and return API response payload."""
+    """Bulk change subscription plans and return API response payload.
+
+    ``effective_timing`` is ``instant`` (swap now, prorate) or ``next_cycle``
+    (schedule the swap for each subscription's next billing date).
+    ``include_suspended`` also changes suspended subscriptions, not just active.
+    """
     result = core.bulk_change_plan(
         db,
         subscription_ids,
         target_offer_id,
         request=request,
         actor_id=actor_id,
+        effective_timing=effective_timing,
         include_suspended=include_suspended,
     )
-    return _bulk_result_payload("Changed plan for", result)
+    verb = (
+        "Scheduled next-cycle plan change for"
+        if effective_timing == "next_cycle"
+        else "Changed plan for"
+    )
+    return _bulk_result_payload(verb, result)
+
+
+def cancel_scheduled_plan_change_redirect(
+    db: Session,
+    *,
+    subscription_id: str,
+    request_id: str,
+    actor_id: str | None,
+) -> str:
+    """Cancel a scheduled next-cycle plan change; return a redirect URL."""
+    from app.services.audit_adapter import record_audit_event
+    from app.services.subscription_changes import subscription_change_requests
+
+    base = f"/admin/catalog/subscriptions/{subscription_id}"
+    try:
+        subscription_change_requests.cancel_scheduled(
+            db,
+            request_id=request_id,
+            notes="Canceled via admin subscription detail",
+        )
+    except Exception as exc:
+        detail = getattr(exc, "detail", None) or str(exc)
+        return f"{base}?error={quote_plus(str(detail))}"
+    record_audit_event(
+        db,
+        action="cancel_scheduled_plan_change",
+        entity_type="subscription",
+        entity_id=subscription_id,
+        actor_id=actor_id,
+        metadata={"change_request_id": request_id},
+    )
+    return f"{base}?notice={quote_plus('Scheduled plan change canceled.')}"
 
 
 def change_plan_quote_response(

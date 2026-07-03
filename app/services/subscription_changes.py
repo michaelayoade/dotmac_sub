@@ -99,12 +99,140 @@ class SubscriptionChangeRequests(ListResponseMixin):
         return request
 
     @staticmethod
+    def schedule(
+        db: Session,
+        subscription_id: str,
+        new_offer_id: str,
+        effective_date: date,
+        requested_by_person_id: str | None = None,
+        notes: str | None = None,
+    ) -> SubscriptionChangeRequest:
+        """Schedule an admin-initiated plan change to apply at a future date.
+
+        Records the change as an already-``approved`` request effective on
+        ``effective_date`` (typically the subscription's next billing date).
+        The periodic applier (``app.tasks.catalog.apply_due_subscription_changes``)
+        swaps the offer once the effective date arrives — no mid-cycle proration
+        is generated, so the customer simply moves to the new plan at the cycle
+        boundary. Unlike :meth:`create` this needs no review: the admin has
+        authority, so the row skips straight to ``approved``.
+
+        Args:
+            db: Database session
+            subscription_id: The subscription to change
+            new_offer_id: The new offer to switch to
+            effective_date: When the change should take effect (next cycle)
+            requested_by_person_id: Person scheduling the change
+            notes: Optional notes
+
+        Returns:
+            The created (approved, not yet applied) change request
+        """
+        subscription = db.get(Subscription, coerce_uuid(subscription_id))
+        if not subscription:
+            raise HTTPException(status_code=404, detail="Subscription not found")
+
+        if not subscription.offer_id:
+            raise HTTPException(
+                status_code=400, detail="Subscription has no current offer"
+            )
+
+        from app.models.catalog import CatalogOffer
+
+        new_offer = db.get(CatalogOffer, coerce_uuid(new_offer_id))
+        if not new_offer:
+            raise HTTPException(status_code=404, detail="Requested offer not found")
+
+        if not new_offer.is_active:
+            raise HTTPException(status_code=400, detail="Requested offer is not active")
+
+        # Reject scheduling onto the current offer — that's a no-op change.
+        if str(new_offer.id) == str(subscription.offer_id):
+            raise HTTPException(
+                status_code=400,
+                detail="Subscription is already on the requested offer",
+            )
+
+        # One outstanding change per subscription: guard against both an
+        # unreviewed customer request (pending) and an already-scheduled admin
+        # change (approved, not yet applied).
+        existing = (
+            db.query(SubscriptionChangeRequest)
+            .filter(SubscriptionChangeRequest.subscription_id == subscription.id)
+            .filter(
+                SubscriptionChangeRequest.status.in_(
+                    [
+                        SubscriptionChangeStatus.pending,
+                        SubscriptionChangeStatus.approved,
+                    ]
+                )
+            )
+            .filter(SubscriptionChangeRequest.applied_at.is_(None))
+            .filter(SubscriptionChangeRequest.is_active.is_(True))
+            .first()
+        )
+        if existing:
+            raise HTTPException(
+                status_code=400,
+                detail="An outstanding plan change already exists for this subscription",
+            )
+
+        now = datetime.now(UTC)
+        request = SubscriptionChangeRequest(
+            subscription_id=subscription.id,
+            current_offer_id=subscription.offer_id,
+            requested_offer_id=new_offer.id,
+            effective_date=effective_date,
+            requested_by_subscriber_id=coerce_uuid(requested_by_person_id)
+            if requested_by_person_id
+            else None,
+            reviewed_by_subscriber_id=coerce_uuid(requested_by_person_id)
+            if requested_by_person_id
+            else None,
+            reviewed_at=now,
+            notes=notes,
+            status=SubscriptionChangeStatus.approved,
+        )
+        db.add(request)
+        db.commit()
+        db.refresh(request)
+
+        logger.info(
+            "Scheduled subscription change %s for subscription %s effective %s",
+            request.id,
+            subscription_id,
+            effective_date,
+        )
+        return request
+
+    @staticmethod
     def get(db: Session, request_id: str) -> SubscriptionChangeRequest:
         """Get a subscription change request by ID."""
         request = db.get(SubscriptionChangeRequest, coerce_uuid(request_id))
         if not request:
             raise HTTPException(status_code=404, detail="Change request not found")
         return request
+
+    @staticmethod
+    def get_scheduled_for_subscription(
+        db: Session,
+        subscription_id: str,
+    ) -> SubscriptionChangeRequest | None:
+        """Return the outstanding scheduled (approved, unapplied) change, if any."""
+        return (
+            db.query(SubscriptionChangeRequest)
+            .filter(
+                SubscriptionChangeRequest.subscription_id
+                == coerce_uuid(subscription_id)
+            )
+            .filter(
+                SubscriptionChangeRequest.status == SubscriptionChangeStatus.approved
+            )
+            .filter(SubscriptionChangeRequest.applied_at.is_(None))
+            .filter(SubscriptionChangeRequest.is_active.is_(True))
+            .order_by(SubscriptionChangeRequest.effective_date.asc())
+            .first()
+        )
 
     @staticmethod
     def list(
@@ -348,6 +476,81 @@ class SubscriptionChangeRequests(ListResponseMixin):
 
         logger.info(f"Canceled subscription change request {request_id}")
         return request
+
+    @staticmethod
+    def cancel_scheduled(
+        db: Session,
+        request_id: str,
+        notes: str | None = None,
+    ) -> SubscriptionChangeRequest:
+        """Cancel an admin-scheduled (approved, not yet applied) change.
+
+        The plain :meth:`cancel` only accepts ``pending`` rows (the customer
+        request-review flow). Scheduled next-cycle changes live in ``approved``
+        until the applier runs, so this cancels those before they take effect.
+        """
+        request = db.get(SubscriptionChangeRequest, coerce_uuid(request_id))
+        if not request:
+            raise HTTPException(status_code=404, detail="Change request not found")
+
+        if (
+            request.status != SubscriptionChangeStatus.approved
+            or request.applied_at is not None
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot cancel scheduled change with status {request.status.value}",
+            )
+
+        request.status = SubscriptionChangeStatus.canceled
+        if notes:
+            request.notes = (request.notes + "\n" + notes) if request.notes else notes
+
+        db.commit()
+        db.refresh(request)
+
+        logger.info(f"Canceled scheduled subscription change {request_id}")
+        return request
+
+    @classmethod
+    def apply_due_changes(cls, db: Session) -> dict[str, object]:
+        """Apply every scheduled change whose effective date has arrived.
+
+        Processes ``approved`` (admin-scheduled next-cycle) changes with
+        ``effective_date <= today`` and no ``applied_at`` yet, swapping the offer
+        via :meth:`apply` with proration artifacts skipped (the change is aligned
+        to the billing boundary, so there is nothing to prorate). Each request is
+        applied in isolation; a failure on one does not abort the rest.
+
+        Returns ``{applied, failed_ids}`` for observability.
+        """
+        today = datetime.now(UTC).date()
+        due = (
+            db.query(SubscriptionChangeRequest)
+            .filter(
+                SubscriptionChangeRequest.status == SubscriptionChangeStatus.approved
+            )
+            .filter(SubscriptionChangeRequest.applied_at.is_(None))
+            .filter(SubscriptionChangeRequest.is_active.is_(True))
+            .filter(SubscriptionChangeRequest.effective_date <= today)
+            .order_by(SubscriptionChangeRequest.effective_date.asc())
+            .all()
+        )
+        applied = 0
+        failed_ids: list[str] = []
+        for request in due:
+            try:
+                cls.apply(db, str(request.id), skip_proration_artifacts=True)
+                applied += 1
+            except Exception as exc:
+                db.rollback()
+                failed_ids.append(str(request.id))
+                logger.error(
+                    "Failed to apply scheduled subscription change %s: %s",
+                    request.id,
+                    exc,
+                )
+        return {"applied": applied, "failed_ids": failed_ids}
 
 
 subscription_change_requests = SubscriptionChangeRequests()
