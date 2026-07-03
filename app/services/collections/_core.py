@@ -845,7 +845,9 @@ def _dunning_shield_reason(db: Session, account_id) -> str | None:
     )
     if proof_id:
         return f"payment proof {proof_id} pending review"
-    return None
+    from app.services.service_extensions import extension_shield_reason
+
+    return extension_shield_reason(db, account_id)
 
 
 def _bulk_dunning_shield_reasons(
@@ -880,6 +882,11 @@ def _bulk_dunning_shield_reasons(
     )
     for account_id, proof_id in proof_rows:
         reasons.setdefault(account_id, f"payment proof {proof_id} pending review")
+
+    from app.services.service_extensions import bulk_extension_shield_reasons
+
+    for account_id, reason in bulk_extension_shield_reasons(db, ids).items():
+        reasons.setdefault(account_id, reason)
     return reasons
 
 

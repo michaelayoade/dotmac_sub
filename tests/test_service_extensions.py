@@ -457,3 +457,127 @@ def test_long_digit_identifier_not_treated_as_splynx_id(db_session):
         svc._find_subscriber_by_identifier(db_session, "99999999999")
     assert exc.value.status_code == 400
     assert "could not find" in exc.value.detail.lower()
+
+
+def _suspend(db_session, subscription, reason):
+    from app.services.account_lifecycle import suspend_subscription
+
+    suspend_subscription(
+        db_session, str(subscription.id), reason=reason, source="test", emit=False
+    )
+    db_session.commit()
+    db_session.refresh(subscription)
+    assert subscription.status == SubscriptionStatus.suspended
+
+
+def test_apply_resumes_billing_suspended_subscription(
+    db_session, subscriber, catalog_offer
+):
+    from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+
+    sub = _sub(db_session, subscriber, catalog_offer)
+    _suspend(db_session, sub, EnforcementReason.overdue)
+
+    ext = svc.create_extension(
+        db_session,
+        reason="outage compensation",
+        window_start=_WIN_START,
+        window_end=_WIN_END,
+        days=5,
+        scope_type=ServiceExtensionScope.subscribers,
+        subscriber_ids=[str(subscriber.id)],
+        created_by="admin-1",
+    )
+    applied = svc.apply_extension(db_session, str(ext.id), actor_id="admin-1")
+
+    assert applied.affected_count == 1
+    db_session.refresh(sub)
+    assert sub.status == SubscriptionStatus.active
+    assert _naive(sub.next_billing_at) == datetime(2026, 7, 6)
+    lock = (
+        db_session.query(EnforcementLock)
+        .filter(EnforcementLock.subscription_id == sub.id)
+        .one()
+    )
+    assert lock.is_active is False
+    assert f"service_extension:{ext.id}" == lock.resolved_by
+
+
+def test_apply_does_not_lift_admin_or_fraud_suspension(
+    db_session, subscriber, catalog_offer
+):
+    from app.models.enforcement_lock import EnforcementReason
+
+    sub = _sub(db_session, subscriber, catalog_offer)
+    _suspend(db_session, sub, EnforcementReason.fraud)
+
+    ext = svc.create_extension(
+        db_session,
+        reason="outage compensation",
+        window_start=_WIN_START,
+        window_end=_WIN_END,
+        days=5,
+        scope_type=ServiceExtensionScope.subscribers,
+        subscriber_ids=[str(subscriber.id)],
+        created_by="admin-1",
+    )
+    svc.apply_extension(db_session, str(ext.id), actor_id="admin-1")
+
+    db_session.refresh(sub)
+    # Validity still extended, but the fraud hold stays.
+    assert sub.status == SubscriptionStatus.suspended
+    assert _naive(sub.next_billing_at) == datetime(2026, 7, 6)
+
+
+def test_extension_shield_covers_window_then_expires(
+    db_session, subscriber, catalog_offer
+):
+    from datetime import timedelta
+
+    _sub(db_session, subscriber, catalog_offer)
+    ext = svc.create_extension(
+        db_session,
+        reason="outage compensation",
+        window_start=_WIN_START,
+        window_end=_WIN_END,
+        days=5,
+        scope_type=ServiceExtensionScope.subscribers,
+        subscriber_ids=[str(subscriber.id)],
+        created_by="admin-1",
+    )
+    svc.apply_extension(db_session, str(ext.id), actor_id="admin-1")
+
+    reason = svc.extension_shield_reason(db_session, subscriber.id)
+    assert reason is not None and str(ext.id) in reason
+
+    # Age the entry past its window: no shield.
+    entry = (
+        db_session.query(ServiceExtensionEntry)
+        .filter(ServiceExtensionEntry.extension_id == ext.id)
+        .one()
+    )
+    entry.created_at = datetime.now(UTC) - timedelta(days=6)
+    db_session.commit()
+    assert svc.extension_shield_reason(db_session, subscriber.id) is None
+
+
+def test_dunning_shield_includes_extension(db_session, subscriber, catalog_offer):
+    from app.services.collections._core import _dunning_shield_reason
+
+    _sub(db_session, subscriber, catalog_offer)
+    assert _dunning_shield_reason(db_session, subscriber.id) is None
+
+    ext = svc.create_extension(
+        db_session,
+        reason="outage compensation",
+        window_start=_WIN_START,
+        window_end=_WIN_END,
+        days=5,
+        scope_type=ServiceExtensionScope.subscribers,
+        subscriber_ids=[str(subscriber.id)],
+        created_by="admin-1",
+    )
+    svc.apply_extension(db_session, str(ext.id), actor_id="admin-1")
+
+    reason = _dunning_shield_reason(db_session, subscriber.id)
+    assert reason is not None and "service extension" in reason

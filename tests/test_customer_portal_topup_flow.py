@@ -326,6 +326,51 @@ def test_get_billing_page_includes_payments_and_credit_notes_in_activity(
     assert "Duplicate payment ledger" not in titles
 
 
+def test_get_billing_page_activity_excludes_failed_and_canceled_payments(
+    monkeypatch, db_session, subscriber
+):
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_billing.get_available_balance",
+        lambda *_args, **_kwargs: Decimal("2500.00"),
+    )
+    failed = Payment(
+        account_id=subscriber.id,
+        amount=Decimal("188125.00"),
+        currency="NGN",
+        status=PaymentStatus.failed,
+        memo="Pay by Paystack",
+        is_active=True,
+    )
+    canceled = Payment(
+        account_id=subscriber.id,
+        amount=Decimal("99999.00"),
+        currency="NGN",
+        status=PaymentStatus.canceled,
+        memo="Abandoned checkout",
+        is_active=True,
+    )
+    succeeded = Payment(
+        account_id=subscriber.id,
+        amount=Decimal("17500.00"),
+        currency="NGN",
+        status=PaymentStatus.succeeded,
+        memo="Paid by Paystack",
+        is_active=True,
+    )
+    db_session.add_all([failed, canceled, succeeded])
+    db_session.commit()
+
+    page = get_billing_page(
+        db_session,
+        {"account_id": str(subscriber.id), "username": "customer@example.com"},
+    )
+
+    amounts = [item.amount for item in page["billing_activity"]]
+    assert Decimal("17500.00") in amounts
+    assert Decimal("188125.00") not in amounts
+    assert Decimal("99999.00") not in amounts
+
+
 def test_create_topup_intent_persists_server_owned_reference(
     monkeypatch, db_session, subscriber
 ):

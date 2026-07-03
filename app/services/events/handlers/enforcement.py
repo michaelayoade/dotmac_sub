@@ -663,7 +663,9 @@ class EnforcementHandler:
         )
         if proof_id:
             return f"payment proof {proof_id} pending review"
-        return None
+        from app.services.service_extensions import extension_shield_reason
+
+        return extension_shield_reason(db, account_id)
 
     def _handle_invoice_overdue(self, db: Session, event: Event) -> None:
         """Handle overdue warnings; dunning owns overdue service cuts."""
@@ -707,6 +709,14 @@ class EnforcementHandler:
                     if hours_overdue < grace_hours:
                         metadata = dict(invoice.metadata_ or {})
                         if metadata.get("suspension_warning_sent_at"):
+                            return
+                        shield = self._suspension_shield_reason(db, subscriber.id)
+                        if shield:
+                            logger.info(
+                                "Skipping suspension warning for account %s: %s",
+                                account_id,
+                                shield,
+                            )
                             return
                         # Within grace period — emit warning, don't suspend yet
                         emit_event(
