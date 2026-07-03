@@ -123,12 +123,16 @@ def _subscriber_name(subscriber: Subscriber | None) -> str:
 
 
 def _collect_pairs(session: Session) -> list[Pair]:
-    reversals = session.execute(
-        select(LedgerEntry).where(
-            LedgerEntry.memo.like(f"{PHANTOM_REVERSAL_PREFIX}%"),
-            LedgerEntry.entry_type == LedgerEntryType.credit,
+    reversals = (
+        session.execute(
+            select(LedgerEntry).where(
+                LedgerEntry.memo.like(f"{PHANTOM_REVERSAL_PREFIX}%"),
+                LedgerEntry.entry_type == LedgerEntryType.credit,
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     pairs: list[Pair] = []
     for reversal in reversals:
         original_id = _referenced_id(reversal.memo)
@@ -158,12 +162,14 @@ def _post_cutover_succeeded_payment_map(
     if not account_ids:
         return {}
     rows = session.execute(
-        select(Payment.account_id, func.coalesce(func.sum(Payment.amount), 0)).where(
+        select(Payment.account_id, func.coalesce(func.sum(Payment.amount), 0))
+        .where(
             Payment.account_id.in_(account_ids),
             Payment.is_active.is_(True),
             Payment.status == PaymentStatus.succeeded,
             Payment.created_at >= CUTOVER_AT,
-        ).group_by(Payment.account_id)
+        )
+        .group_by(Payment.account_id)
     ).all()
     return {account_id: _money(total) for account_id, total in rows}
 
@@ -174,20 +180,23 @@ def _post_cutover_invoice_total_map(
     if not account_ids:
         return {}
     invoice_rows = session.execute(
-        select(Invoice.account_id, func.coalesce(func.sum(Invoice.total), 0)).where(
+        select(Invoice.account_id, func.coalesce(func.sum(Invoice.total), 0))
+        .where(
             Invoice.account_id.in_(account_ids),
             Invoice.is_active.is_(True),
             Invoice.status != InvoiceStatus.void,
             Invoice.is_proforma.isnot(True),
             Invoice.created_at >= CUTOVER_AT,
-        ).group_by(Invoice.account_id)
+        )
+        .group_by(Invoice.account_id)
     ).all()
     totals = {account_id: _money(total) for account_id, total in invoice_rows}
     ledger_charge_rows = session.execute(
         select(
             LedgerEntry.account_id,
             func.coalesce(func.sum(LedgerEntry.amount), 0),
-        ).where(
+        )
+        .where(
             LedgerEntry.account_id.in_(account_ids),
             LedgerEntry.is_active.is_(True),
             LedgerEntry.invoice_id.is_(None),
@@ -195,10 +204,13 @@ def _post_cutover_invoice_total_map(
             LedgerEntry.source == LedgerSource.invoice,
             LedgerEntry.currency == "NGN",
             LedgerEntry.created_at >= CUTOVER_AT,
-        ).group_by(LedgerEntry.account_id)
+        )
+        .group_by(LedgerEntry.account_id)
     ).all()
     for account_id, total in ledger_charge_rows:
-        totals[account_id] = _money(totals.get(account_id, Decimal("0")) + _money(total))
+        totals[account_id] = _money(
+            totals.get(account_id, Decimal("0")) + _money(total)
+        )
     return totals
 
 
@@ -215,15 +227,18 @@ def _current_available_map(
         select(
             LedgerEntry.account_id,
             func.coalesce(func.sum(ledger_signed), 0),
-        ).where(
+        )
+        .where(
             LedgerEntry.account_id.in_(account_ids),
             LedgerEntry.is_active.is_(True),
             LedgerEntry.invoice_id.is_(None),
             LedgerEntry.currency == "NGN",
-        ).group_by(LedgerEntry.account_id)
+        )
+        .group_by(LedgerEntry.account_id)
     ).all()
     open_rows = session.execute(
-        select(Invoice.account_id, func.coalesce(func.sum(Invoice.balance_due), 0)).where(
+        select(Invoice.account_id, func.coalesce(func.sum(Invoice.balance_due), 0))
+        .where(
             Invoice.account_id.in_(account_ids),
             Invoice.is_active.is_(True),
             Invoice.balance_due > 0,
@@ -235,7 +250,8 @@ def _current_available_map(
                 ]
             ),
             Invoice.currency == "NGN",
-        ).group_by(Invoice.account_id)
+        )
+        .group_by(Invoice.account_id)
     ).all()
     ledger_by_account = {account_id: _money(total) for account_id, total in ledger_rows}
     open_by_account = {account_id: _money(total) for account_id, total in open_rows}
@@ -262,14 +278,16 @@ def _post_adjustment_warning_map(
             LedgerEntry.account_id,
             func.count(LedgerEntry.id),
             func.coalesce(func.sum(signed), 0),
-        ).where(
+        )
+        .where(
             LedgerEntry.account_id.in_(account_ids),
             LedgerEntry.is_active.is_(True),
             LedgerEntry.invoice_id.is_(None),
             LedgerEntry.source == LedgerSource.adjustment,
             LedgerEntry.memo != OPENING_MEMO,
             LedgerEntry.created_at >= CUTOVER_AT,
-        ).group_by(LedgerEntry.account_id)
+        )
+        .group_by(LedgerEntry.account_id)
     ).all()
     return {
         account_id: (int(count or 0), _money(total))
@@ -311,9 +329,7 @@ def _status_event_count(
     )
 
 
-def _event_store_count(
-    session: Session, account_id: uuid.UUID, since: datetime
-) -> int:
+def _event_store_count(session: Session, account_id: uuid.UUID, since: datetime) -> int:
     return int(
         session.execute(
             text(
@@ -430,16 +446,18 @@ def _build_reviews(
                 (
                     row.original.amount
                     for row in rows
-                    if row.valid
-                    and row.original is not None
-                    and row.original.is_active
+                    if row.valid and row.original is not None and row.original.is_active
                 ),
                 Decimal("0"),
             )
         )
         active_reversal_amount = _money(
             sum(
-                (row.reversal.amount for row in rows if row.valid and row.reversal.is_active),
+                (
+                    row.reversal.amount
+                    for row in rows
+                    if row.valid and row.reversal.is_active
+                ),
                 Decimal("0"),
             )
         )
@@ -461,15 +479,21 @@ def _build_reviews(
         first_reversal_at = min(row.reversal.created_at for row in rows)
         dunning_events = status_events = event_store_events = 0
         if include_events:
-            dunning_events = _dunning_event_count(session, account_id, first_reversal_at)
+            dunning_events = _dunning_event_count(
+                session, account_id, first_reversal_at
+            )
             status_events = _status_event_count(session, account_id, first_reversal_at)
-            event_store_events = _event_store_count(session, account_id, first_reversal_at)
+            event_store_events = _event_store_count(
+                session, account_id, first_reversal_at
+            )
 
         if invalid_pairs:
             status = "invalid_pair_review"
         elif active_reversal_amount > 0:
             status = "active_reversal_review"
-        elif inactive_original_amount > 0 and _eq(restore_needed, inactive_original_amount):
+        elif inactive_original_amount > 0 and _eq(
+            restore_needed, inactive_original_amount
+        ):
             status = (
                 "eligible_restore_construction"
                 if _eq(adjustment_net, Decimal("0"))
@@ -499,7 +523,9 @@ def _build_reviews(
             Review(
                 account_id=account_id,
                 subscriber_name=_subscriber_name(subscriber),
-                subscriber_status=getattr(getattr(subscriber, "status", None), "value", ""),
+                subscriber_status=getattr(
+                    getattr(subscriber, "status", None), "value", ""
+                ),
                 status=status,
                 pair_count=len(rows),
                 invalid_pairs=invalid_pairs,
@@ -524,9 +550,7 @@ def _build_reviews(
                 residual_after_pair_restore=residual_after_pair_restore,
                 cause_bucket=cause_bucket,
                 original_ids=", ".join(
-                    str(row.original.id)
-                    for row in rows
-                    if row.original is not None
+                    str(row.original.id) for row in rows if row.original is not None
                 ),
                 reversal_ids=", ".join(str(row.reversal.id) for row in rows),
             )
@@ -644,7 +668,9 @@ def _restore_eligible(
     for review in reviews:
         if review.account_id not in eligible_account_ids:
             continue
-        expected_after = _money(review.current_available - review.inactive_original_amount)
+        expected_after = _money(
+            review.current_available - review.inactive_original_amount
+        )
         if printed < print_limit:
             print(
                 f"  {review.subscriber_name}: {review.current_available} -> "
@@ -695,10 +721,9 @@ def _print_summary(reviews: list[Review]) -> None:
             cause_counts[review.cause_bucket] = (
                 cause_counts.get(review.cause_bucket, 0) + 1
             )
-            cause_residuals[review.cause_bucket] = (
-                cause_residuals.get(review.cause_bucket, Decimal("0"))
-                + abs(review.residual_after_pair_restore)
-            )
+            cause_residuals[review.cause_bucket] = cause_residuals.get(
+                review.cause_bucket, Decimal("0")
+            ) + abs(review.residual_after_pair_restore)
     for status in sorted(counts):
         print(
             f"  {status}: {counts[status]} accounts, "

@@ -178,7 +178,9 @@ def _rows(db: Session):
     ).mappings()
 
 
-def audit_cutover_balance_invariant(db: Session, *, sample_limit: int = 25) -> dict[str, Any]:
+def audit_cutover_balance_invariant(
+    db: Session, *, sample_limit: int = 25
+) -> dict[str, Any]:
     population = 0
     drift_rows: list[dict[str, Any]] = []
     overcredited_total = Decimal("0")
@@ -198,7 +200,9 @@ def audit_cutover_balance_invariant(db: Session, *, sample_limit: int = 25) -> d
         post_adjustment_net += _money(row["post_adjustment_net"])
         target_adjustment_entry_count += int(row["target_adjustment_entry_count"] or 0)
         target_adjustment_net += _money(row["target_adjustment_net"])
-        excluded_adjustment_entry_count += int(row["excluded_adjustment_entry_count"] or 0)
+        excluded_adjustment_entry_count += int(
+            row["excluded_adjustment_entry_count"] or 0
+        )
         excluded_adjustment_net += _money(row["excluded_adjustment_net"])
 
         current = _money(row["current_available"])

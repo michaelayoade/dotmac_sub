@@ -176,12 +176,16 @@ def _mirror_sum_excl_deleted(session: Session, splynx_customer_id: int) -> Decim
 def _mirror_row_deleted(
     session: Session, splynx_customer_id: int, splynx_payment_id: int
 ) -> bool | None:
-    deleted = session.execute(
-        select(SplynxBillingTransaction.deleted).where(
-            SplynxBillingTransaction.splynx_customer_id == splynx_customer_id,
-            SplynxBillingTransaction.splynx_payment_id == splynx_payment_id,
+    deleted = (
+        session.execute(
+            select(SplynxBillingTransaction.deleted).where(
+                SplynxBillingTransaction.splynx_customer_id == splynx_customer_id,
+                SplynxBillingTransaction.splynx_payment_id == splynx_payment_id,
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     if not deleted:
         return None
     return all(deleted)
@@ -224,7 +228,11 @@ def _pre_seed_residue(
 
 def _classify(session: Session, entry: LedgerEntry, payment: Payment) -> Finding:
     subscriber = session.get(Subscriber, entry.account_id)
-    deposit = _money(subscriber.deposit) if subscriber and subscriber.deposit is not None else None
+    deposit = (
+        _money(subscriber.deposit)
+        if subscriber and subscriber.deposit is not None
+        else None
+    )
     seed = _active_seed(session, entry.account_id)
     seed_total = seed[0] if seed else None
     pre_seed_residue = (
@@ -232,7 +240,9 @@ def _classify(session: Session, entry: LedgerEntry, payment: Payment) -> Finding
     )
     implied_open_ar = (
         _money(seed_total - deposit + pre_seed_residue)
-        if seed_total is not None and deposit is not None and pre_seed_residue is not None
+        if seed_total is not None
+        and deposit is not None
+        and pre_seed_residue is not None
         else None
     )
     mirror_excl: Decimal | None = None
@@ -279,7 +289,9 @@ def _classify(session: Session, entry: LedgerEntry, payment: Payment) -> Finding
     return finding("review_no_seed", suggested=amount)
 
 
-def _post_cutover_succeeded_payments(session: Session, account_id: uuid.UUID) -> Decimal:
+def _post_cutover_succeeded_payments(
+    session: Session, account_id: uuid.UUID
+) -> Decimal:
     total = session.execute(
         select(func.coalesce(func.sum(Payment.amount), 0)).where(
             Payment.account_id == account_id,
@@ -304,7 +316,9 @@ def _post_cutover_invoice_totals(session: Session, account_id: uuid.UUID) -> Dec
     return _money(total)
 
 
-def _post_adjustment_warning(session: Session, account_id: uuid.UUID) -> tuple[int, Decimal]:
+def _post_adjustment_warning(
+    session: Session, account_id: uuid.UUID
+) -> tuple[int, Decimal]:
     signed = case(
         (LedgerEntry.entry_type == LedgerEntryType.credit, LedgerEntry.amount),
         else_=-LedgerEntry.amount,
@@ -357,9 +371,7 @@ def _status_event_count(
     )
 
 
-def _event_store_count(
-    session: Session, account_id: uuid.UUID, since: datetime
-) -> int:
+def _event_store_count(session: Session, account_id: uuid.UUID, since: datetime) -> int:
     return int(
         session.execute(
             text(
@@ -391,21 +403,25 @@ def _matching_inactive_construction_debit(
 ) -> LedgerEntry | None:
     if amount <= 0:
         return None
-    rows = session.execute(
-        select(LedgerEntry)
-        .where(
-            LedgerEntry.account_id == account_id,
-            LedgerEntry.is_active.is_(False),
-            LedgerEntry.entry_type == LedgerEntryType.debit,
-            LedgerEntry.source == LedgerSource.adjustment,
-            LedgerEntry.memo == OPENING_MEMO,
-            LedgerEntry.invoice_id.is_(None),
-            LedgerEntry.payment_id.is_(None),
-            LedgerEntry.amount >= amount - TOLERANCE,
-            LedgerEntry.amount <= amount + TOLERANCE,
+    rows = (
+        session.execute(
+            select(LedgerEntry)
+            .where(
+                LedgerEntry.account_id == account_id,
+                LedgerEntry.is_active.is_(False),
+                LedgerEntry.entry_type == LedgerEntryType.debit,
+                LedgerEntry.source == LedgerSource.adjustment,
+                LedgerEntry.memo == OPENING_MEMO,
+                LedgerEntry.invoice_id.is_(None),
+                LedgerEntry.payment_id.is_(None),
+                LedgerEntry.amount >= amount - TOLERANCE,
+                LedgerEntry.amount <= amount + TOLERANCE,
+            )
+            .order_by(LedgerEntry.created_at.desc())
         )
-        .order_by(LedgerEntry.created_at.desc())
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     reversed_rows: list[LedgerEntry] = []
     for row in rows:
         reversal_count = session.execute(
@@ -479,9 +495,13 @@ def _counterfactual_reviews(
                 status=status,
                 post_adjustment_rows=adjustment_rows,
                 post_adjustment_net=adjustment_net,
-                dunning_events=_dunning_event_count(session, account_id, first_debit_at),
+                dunning_events=_dunning_event_count(
+                    session, account_id, first_debit_at
+                ),
                 status_events=_status_event_count(session, account_id, first_debit_at),
-                event_store_events=_event_store_count(session, account_id, first_debit_at),
+                event_store_events=_event_store_count(
+                    session, account_id, first_debit_at
+                ),
                 construction_entry=construction_entry,
                 construction_amount=construction_amount,
             )
@@ -612,7 +632,9 @@ def _soft_delete_eligible(
     session: Session, reviews: list[AccountReview], apply: bool
 ) -> int:
     eligible = [review for review in reviews if review.status == "eligible_exact"]
-    entries = [entry for review in eligible for entry in review.entries if entry.is_active]
+    entries = [
+        entry for review in eligible for entry in review.entries if entry.is_active
+    ]
     total = _money(sum((entry.amount for entry in entries), Decimal("0")))
     print(
         f"{'APPLY' if apply else 'DRY-RUN'}: soft-delete "
@@ -658,7 +680,8 @@ def _restore_construction_eligible(
     construction_entries = [
         review.construction_entry
         for review in eligible
-        if review.construction_entry is not None and not review.construction_entry.is_active
+        if review.construction_entry is not None
+        and not review.construction_entry.is_active
     ]
     contra_total = _money(sum((entry.amount for entry in contra_entries), Decimal("0")))
     construction_total = _money(
@@ -672,9 +695,7 @@ def _restore_construction_eligible(
     )
     for review in eligible:
         expected_after = _money(
-            review.current_available
-            + review.suspect_total
-            - review.construction_amount
+            review.current_available + review.suspect_total - review.construction_amount
         )
         print(
             f"  {review.subscriber_name}: {review.current_available} -> "
@@ -751,20 +772,24 @@ def _post_seed_credit(
         print("--seed-credit amount must be positive")
         return 1
 
-    existing = session.execute(
-        select(LedgerEntry).where(
-            LedgerEntry.account_id == account_id,
-            LedgerEntry.is_active.is_(True),
-            LedgerEntry.entry_type == LedgerEntryType.credit,
-            LedgerEntry.source == LedgerSource.adjustment,
-            LedgerEntry.category == LedgerCategory.deposit,
-            LedgerEntry.memo == OPENING_MEMO,
-            LedgerEntry.invoice_id.is_(None),
-            LedgerEntry.payment_id.is_(None),
-            LedgerEntry.amount >= amount - TOLERANCE,
-            LedgerEntry.amount <= amount + TOLERANCE,
+    existing = (
+        session.execute(
+            select(LedgerEntry).where(
+                LedgerEntry.account_id == account_id,
+                LedgerEntry.is_active.is_(True),
+                LedgerEntry.entry_type == LedgerEntryType.credit,
+                LedgerEntry.source == LedgerSource.adjustment,
+                LedgerEntry.category == LedgerCategory.deposit,
+                LedgerEntry.memo == OPENING_MEMO,
+                LedgerEntry.invoice_id.is_(None),
+                LedgerEntry.payment_id.is_(None),
+                LedgerEntry.amount >= amount - TOLERANCE,
+                LedgerEntry.amount <= amount + TOLERANCE,
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     before = _money(get_available_balance(session, str(account_id)))
     if len(existing) > 1:
         print(
@@ -880,7 +905,9 @@ def main() -> int:
                 session,
                 args.seed_credit_account,
                 args.seed_credit,
-                _money(args.expected_after) if args.expected_after is not None else None,
+                _money(args.expected_after)
+                if args.expected_after is not None
+                else None,
                 args.apply,
             )
 
@@ -892,7 +919,9 @@ def main() -> int:
         for finding in findings:
             by_class.setdefault(finding.classification, []).append(finding)
 
-        print(f"{'APPLY' if args.apply else 'DRY-RUN'}: {len(findings)} lone refund debits")
+        print(
+            f"{'APPLY' if args.apply else 'DRY-RUN'}: {len(findings)} lone refund debits"
+        )
         for classification in sorted(by_class):
             rows = by_class[classification]
             total = _money(sum((row.entry.amount for row in rows), Decimal("0")))
@@ -913,9 +942,13 @@ def main() -> int:
             totals: dict[str, Decimal] = {}
             for review in reviews:
                 counts[review.status] = counts.get(review.status, 0) + 1
-                totals[review.status] = totals.get(review.status, Decimal("0")) + review.suspect_total
+                totals[review.status] = (
+                    totals.get(review.status, Decimal("0")) + review.suspect_total
+                )
             for status in sorted(counts):
-                print(f"  {status}: {counts[status]} accounts, total {_money(totals[status])}")
+                print(
+                    f"  {status}: {counts[status]} accounts, total {_money(totals[status])}"
+                )
             if args.soft_delete_eligible:
                 return _soft_delete_eligible(session, reviews, args.apply)
             if args.restore_construction_eligible:
