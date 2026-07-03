@@ -60,7 +60,7 @@
                      hx-include="closest form"
                      hx-target="#payment-currency-field"
                      hx-swap="outerHTML">
-                    {% set currency_value = payment.currency if payment and payment.currency else (prefill.currency if prefill and prefill.currency else 'NGN') %}
+                    {% set currency_value = payment.currency if payment and payment.currency else (prefill.currency if prefill and prefill.currency else default_currency|default('NGN')) %}
                     {% include "admin/billing/_payment_currency_field.html" with context %}
                 </div>
             </div>

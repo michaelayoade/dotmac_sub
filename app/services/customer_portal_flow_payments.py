@@ -649,6 +649,7 @@ def _init_flutterwave_checkout(
     redirect_url: str | None,
     metadata: dict,
     default_callback_path: str,
+    currency: str | None = None,
 ) -> str:
     """Start a Flutterwave hosted checkout and return its link.
 
@@ -677,6 +678,7 @@ def _init_flutterwave_checkout(
                 f"{callback_url}{separator}reference={reference}&provider=flutterwave"
             ),
             metadata=metadata,
+            currency=currency,
         )
     except ValueError:
         raise
@@ -898,6 +900,7 @@ def create_invoice_payment_intent(
             redirect_url=redirect_url,
             metadata=checkout_metadata,
             default_callback_path="/portal/billing/pay/verify",
+            currency=getattr(invoice, "currency", None),
         )
     return result
 

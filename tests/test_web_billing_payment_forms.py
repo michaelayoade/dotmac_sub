@@ -33,3 +33,25 @@ def test_unset_balance_falls_back_to_total():
     value, display = invoice_balance_info(_invoice(None, Decimal("15000.00")))
     assert value == "15000.00"
     assert "15,000.00" in display
+
+
+def test_load_invoice_currency_state_honors_default_currency_setting(db_session):
+    # C-4 currency cleanup: the manual-payment currency default must come from
+    # the billing.default_currency setting, not a hardcoded NGN literal.
+    from app.models.domain_settings import DomainSetting, SettingDomain
+    from app.models.subscription_engine import SettingValueType
+    from app.services.web_billing_payment_forms import load_invoice_currency_state
+
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.billing,
+            key="default_currency",
+            value_type=SettingValueType.string,
+            value_text="USD",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    state = load_invoice_currency_state(db_session, invoice_id=None, currency=None)
+    assert state["currency_value"] == "USD"
