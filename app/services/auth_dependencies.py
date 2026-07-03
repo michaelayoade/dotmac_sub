@@ -1,5 +1,5 @@
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import Depends, Header, HTTPException, Request
@@ -66,6 +66,19 @@ def _as_utc(value: datetime | None) -> datetime | None:
 
 def _is_jwt(token: str) -> bool:
     return token.count(".") == 2
+
+
+# "Last used" is observability, not an audit trail: refresh at most once per
+# window so hot keys don't pay a DB write (and commit) on every request.
+_API_KEY_LAST_USED_REFRESH = timedelta(minutes=5)
+
+
+def _touch_api_key_last_used(db: Session, api_key: ApiKey, now: datetime) -> None:
+    last_used = _as_utc(api_key.last_used_at)
+    if last_used is not None and now - last_used < _API_KEY_LAST_USED_REFRESH:
+        return
+    api_key.last_used_at = now
+    db.commit()
 
 
 def _has_audit_scope(payload: dict) -> bool:
@@ -153,8 +166,7 @@ def require_audit_auth(
             .first()
         )
         if api_key and _has_audit_scope({"scopes": list(api_key.scopes or [])}):
-            api_key.last_used_at = now
-            db.commit()
+            _touch_api_key_last_used(db, api_key, now)
             if request is not None:
                 request.state.actor_id = str(api_key.id)
                 request.state.actor_type = "api_key"
@@ -182,8 +194,7 @@ def _api_key_principal(
     )
     if not api_key:
         return None
-    api_key.last_used_at = now
-    db.commit()
+    _touch_api_key_last_used(db, api_key, now)
     actor_id = str(api_key.id)
     owner = str(api_key.subscriber_id) if api_key.subscriber_id else actor_id
     auth = {
