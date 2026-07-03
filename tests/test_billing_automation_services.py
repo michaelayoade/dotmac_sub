@@ -110,11 +110,18 @@ class TestPeriodEnd:
         assert result.month == 6
         assert result.day == 15
 
+    def test_quarterly_cycle(self):
+        """Test quarterly billing cycle."""
+        start = datetime(2024, 6, 15, 12, 0, 0)
+        result = billing_automation._period_end(start, BillingCycle.quarterly)
+        assert result.year == 2024
+        assert result.month == 9
+        assert result.day == 15
+
     def test_none_cycle_defaults_to_monthly(self):
         """Test that None cycle defaults to monthly."""
         start = datetime(2024, 6, 15, 12, 0, 0)
-        # None/unrecognized should default to monthly in code logic
-        # But _period_end only handles monthly/annual, so just test monthly
+        # None/unrecognized should default to monthly in code logic.
         result = billing_automation._period_end(start, BillingCycle.monthly)
         assert result.month == 7
         assert result.day == 15

@@ -24,6 +24,10 @@ from app.services.customer_notification_policy import (
     resolve_subscriber_id_for_recipient,
 )
 from app.services.events.types import Event, EventType
+from app.services.notification_template_conditions import (
+    NotificationTemplateConditionError,
+    conditions_match,
+)
 
 logger = logging.getLogger(__name__)
 _LOGGED_MISSING_TEMPLATE_CODES: set[str] = set()
@@ -634,6 +638,36 @@ class NotificationHandler:
                     event.event_type.value,
                     channel.value,
                     recipient,
+                )
+                continue
+            try:
+                if not conditions_match(
+                    db,
+                    subscriber_id=subscriber_id,
+                    conditions=template.conditions,
+                ):
+                    logger.info(
+                        "Suppressed notification for event %s on %s to %s by template conditions",
+                        event.event_type.value,
+                        channel.value,
+                        recipient,
+                    )
+                    continue
+            except NotificationTemplateConditionError as exc:
+                logger.error(
+                    "Suppressed notification for event %s on %s: invalid template conditions on %s: %s",
+                    event.event_type.value,
+                    channel.value,
+                    template.id,
+                    exc,
+                )
+                continue
+            except Exception:
+                logger.exception(
+                    "Suppressed notification for event %s on %s: template condition evaluation failed for %s",
+                    event.event_type.value,
+                    channel.value,
+                    template.id,
                 )
                 continue
             if has_recent_notification(

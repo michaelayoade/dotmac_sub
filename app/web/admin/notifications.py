@@ -163,6 +163,7 @@ def notification_template_create(
     channel: str = Form(...),
     subject: str | None = Form(None),
     body: str = Form(...),
+    conditions_json: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
     """Create a notification template."""
@@ -174,6 +175,7 @@ def notification_template_create(
             channel=channel,
             subject=subject,
             body=body,
+            conditions_json=conditions_json,
         )
         return RedirectResponse(
             url=f"/admin/notifications/templates/{template.id}", status_code=303
@@ -246,6 +248,7 @@ def notification_template_update(
     channel: str = Form(...),
     subject: str | None = Form(None),
     body: str = Form(...),
+    conditions_json: str | None = Form(None),
     is_active: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
@@ -260,6 +263,7 @@ def notification_template_update(
             subject=subject,
             body=body,
             is_active=is_active is not None,
+            conditions_json=conditions_json,
         )
         return RedirectResponse(
             url=f"/admin/notifications/templates/{template_id}", status_code=303
