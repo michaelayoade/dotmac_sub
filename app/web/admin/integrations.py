@@ -146,8 +146,13 @@ def sync_detail(request: Request, job_id: str, db: Session = Depends(get_db)):
     "/syncs/{job_id}/run",
     dependencies=[Depends(require_permission("system:settings:write"))],
 )
-def sync_run(job_id: str):
-    """Queue a manual sync run."""
+def sync_run(job_id: str, db: Session = Depends(get_db)):
+    """Queue a manual sync run (disabled jobs are refused)."""
+    job = integration_service.integration_jobs.get(db, job_id)
+    if not job.is_active:
+        return RedirectResponse(
+            url=f"/admin/integrations/syncs/{job_id}?error=disabled", status_code=303
+        )
     web_integration_syncs_service.trigger_sync_job(job_id)
     return RedirectResponse(
         url=f"/admin/integrations/syncs/{job_id}?queued=1", status_code=303
@@ -283,24 +288,6 @@ def integrations_installed_bulk(
             connector_ids=connector_ids,
             enabled=(action == "enable"),
         )
-    return RedirectResponse("/admin/integrations/installed?saved=1", status_code=303)
-
-
-@router.post(
-    "/installed/{connector_id}/relay",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:settings:write"))],
-)
-def integrations_installed_relay_toggle(
-    connector_id: str,
-    relay_to_portal: bool = Form(False),
-    db: Session = Depends(get_db),
-):
-    web_integrations_service.set_relay_to_portal(
-        db,
-        connector_id=connector_id,
-        relay=relay_to_portal,
-    )
     return RedirectResponse("/admin/integrations/installed?saved=1", status_code=303)
 
 
@@ -737,6 +724,7 @@ def job_create(
     interval_minutes: str | None = Form(None),
     adapter_key: str | None = Form(None),
     action: str | None = Form(None),
+    adapter_action: str | None = Form(None),
     entity_type: str | None = Form(None),
     direction: str | None = Form(None),
     trigger_mode: str | None = Form(None),
@@ -747,6 +735,21 @@ def job_create(
     is_active: bool = Form(False),
     db: Session = Depends(get_db),
 ):
+    # The form submits a single supported adapter:action combo; free-form
+    # adapter/action values used to no-op or fail only at run time.
+    if adapter_action is not None:
+        adapter_key, _, action = adapter_action.partition(":")
+        adapter_key = adapter_key or None
+        action = action or None
+    supported = {("crm", "pull_tickets"), (None, None)}
+    if (adapter_key, action) not in supported:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"No sync adapter registered for {adapter_key}:{action} — "
+                "supported: crm:pull_tickets (or blank for record-keeping only)"
+            ),
+        )
     try:
         job = web_integrations_service.create_job(
             db,
@@ -830,8 +833,13 @@ def job_detail(request: Request, job_id: str, db: Session = Depends(get_db)):
     "/jobs/{job_id}/run",
     dependencies=[Depends(require_permission("system:settings:write"))],
 )
-def job_run(job_id: str):
-    """Queue a manual integration job run."""
+def job_run(job_id: str, db: Session = Depends(get_db)):
+    """Queue a manual integration job run (disabled jobs are refused)."""
+    job = integration_service.integration_jobs.get(db, job_id)
+    if not job.is_active:
+        return RedirectResponse(
+            url=f"/admin/integrations/jobs/{job_id}?error=disabled", status_code=303
+        )
     web_integration_syncs_service.trigger_sync_job(job_id)
     return RedirectResponse(
         url=f"/admin/integrations/jobs/{job_id}?queued=1", status_code=303

@@ -270,7 +270,15 @@ class IntegrationJobs(ListResponseMixin):
         if not job:
             raise HTTPException(status_code=404, detail="Integration job not found")
         if not job.is_active:
-            logger.info("EMAIL_POLL_EXIT reason=job_disabled job_id=%s", job_id)
+            # A disabled job must not run — previously this only logged (with a
+            # copy-pasted EMAIL_POLL message) and fell through to execute.
+            logger.info(
+                "integration_job_disabled job_id=%s trigger=%s", job_id, trigger
+            )
+            raise HTTPException(
+                status_code=409,
+                detail="Integration job is disabled — enable it before running",
+            )
         run = IntegrationRun(
             job_id=job.id,
             status=IntegrationRunStatus.running,
