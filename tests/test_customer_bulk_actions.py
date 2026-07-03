@@ -54,7 +54,7 @@ def test_customer_send_email_action_opens_template_modal_for_email_channel():
     assert "@click.prevent.stop=\"openSendMessageModal('email')\"" in detail_template
     assert "detailUrl" in detail_template
     assert "closeSendMessageModal" in detail_template
-    assert "@change=\"handleTemplateSelection()\"" in detail_template
+    assert '@change="handleTemplateSelection()"' in detail_template
     assert "this.sendMessageForm.templateId = '';" in detail_template
     assert "preview_only: true" in detail_template
     assert "Send ${selectedChannelMeta().label} template" in detail_template
@@ -364,9 +364,9 @@ def test_whatsapp_registry_templates_sync_into_notification_templates(db_session
     assert provider_rows[("service_restoration", "en_US")].channel == (
         NotificationChannel.whatsapp
     )
-    assert provider_rows[("closed", "en_US")].code != provider_rows[
-        ("closed", "en")
-    ].code
+    assert (
+        provider_rows[("closed", "en_US")].code != provider_rows[("closed", "en")].code
+    )
 
 
 def test_queue_bulk_whatsapp_respects_template_conditions(db_session):

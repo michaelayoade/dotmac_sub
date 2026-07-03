@@ -309,9 +309,7 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                             (provider_template or {}).get("name")
                             or notification.template.code
                         ),
-                        language=str(
-                            (provider_template or {}).get("language") or ""
-                        )
+                        language=str((provider_template or {}).get("language") or "")
                         or None,
                         variables=(provider_template or {}).get("variables") or {},
                         dry_run=False,

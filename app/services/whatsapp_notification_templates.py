@@ -112,16 +112,22 @@ def sync_whatsapp_registry_templates(db: Session) -> list[NotificationTemplate]:
             changed = True
         else:
             marker = parse_provider_template_body(template.body)
-            if not marker or (
-                marker["name"],
-                marker["language"],
-            ) != signature:
+            if (
+                not marker
+                or (
+                    marker["name"],
+                    marker["language"],
+                )
+                != signature
+            ):
                 template.body = build_provider_template_body(
                     name=item["name"], language=item["language"]
                 )
                 changed = True
             if not template.name.strip():
-                template.name = _display_name(item["name"], item["language"], name_counts)
+                template.name = _display_name(
+                    item["name"], item["language"], name_counts
+                )
                 changed = True
         by_signature[signature] = template
 

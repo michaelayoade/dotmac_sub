@@ -309,9 +309,7 @@ def send_template_test(
         result = whatsapp_service.send_template_message(
             db=db,
             recipient=recipient,
-            template_name=str(
-                (provider_template or {}).get("name") or template.code
-            ),
+            template_name=str((provider_template or {}).get("name") or template.code),
             language=str((provider_template or {}).get("language") or "") or None,
             dry_run=False,
         )
@@ -420,34 +418,24 @@ def bulk_notification_setup_context(db: Session) -> dict[str, object]:
             NotificationChannel.whatsapp,
         )
     ]
-    templates_state = [
-        {
-            "id": str(template.id),
-            "name": template.name,
-            "code": template.code,
-            "language": (
-                provider_template_from_template(template).get("language", "")
-                if provider_template_from_template(template)
-                else ""
-            ),
-            "label": (
-                f"{template.name} ({provider_template_from_template(template).get('language')})"
-                if provider_template_from_template(template)
-                and provider_template_from_template(template).get("language")
-                else template.name
-            ),
-            "channel": template.channel.value,
-            "subject": template.subject or "",
-            "is_active": bool(template.is_active),
-            "is_registry_template": bool(provider_template_from_template(template)),
-            "provider_template_name": (
-                provider_template_from_template(template).get("name")
-                if provider_template_from_template(template)
-                else ""
-            ),
-        }
-        for template in template_list
-    ]
+    templates_state = []
+    for template in template_list:
+        provider_template = provider_template_from_template(template)
+        language = str((provider_template or {}).get("language") or "")
+        templates_state.append(
+            {
+                "id": str(template.id),
+                "name": template.name,
+                "code": template.code,
+                "language": language,
+                "label": f"{template.name} ({language})" if language else template.name,
+                "channel": template.channel.value,
+                "subject": template.subject or "",
+                "is_active": bool(template.is_active),
+                "is_registry_template": bool(provider_template),
+                "provider_template_name": (provider_template or {}).get("name") or "",
+            }
+        )
     return {
         "bulk_notification_channels": channels_state,
         "bulk_notification_templates": templates_state,
