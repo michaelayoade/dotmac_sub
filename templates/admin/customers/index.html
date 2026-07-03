@@ -1262,6 +1262,10 @@ function customersPage() {
         async applyBulkUpdate() {
             if (!this.hasBulkUpdateChanges()) return;
 
+            const scopeCount = this.selectedIds.length > 0 ? this.selectedIds.length : this.filteredTotal;
+            const scopeLabel = this.selectedIds.length > 0 ? 'selected customer(s)' : 'customer(s) in the current filtered result';
+            if (!confirm(`Apply these changes to ${scopeCount} ${scopeLabel}?`)) return;
+
             this.bulkLoading = true;
             try {
                 const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || document.cookie.match(/csrf_token=([^;]+)/)?.[1] || '';
@@ -1306,6 +1310,10 @@ function customersPage() {
                 return;
             }
             this.rememberWhatsappMapping();
+
+            const msgScopeCount = this.selectedIds.length > 0 ? this.selectedIds.length : this.filteredTotal;
+            const msgScopeLabel = this.selectedIds.length > 0 ? 'selected customer(s)' : 'customer(s) in the current filtered result';
+            if (!confirm(`Queue "${template.name || 'this message'}" for ${msgScopeCount} ${msgScopeLabel}?`)) return;
 
             this.bulkLoading = true;
             try {

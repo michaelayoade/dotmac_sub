@@ -961,6 +961,18 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.catalog,
+        key="new_offer_visible_by_default",
+        env_var="CATALOG_NEW_OFFER_VISIBLE_BY_DEFAULT",
+        value_type=SettingValueType.boolean,
+        default=False,
+        label=(
+            "Pre-tick customer-portal visibility and service availability on "
+            "the new-offer form (off = a new offer must be published "
+            "deliberately, not by forgetting to untick a box)"
+        ),
+    ),
+    SettingSpec(
+        domain=SettingDomain.catalog,
         key="default_billing_mode",
         env_var="CATALOG_DEFAULT_BILLING_MODE",
         value_type=SettingValueType.string,

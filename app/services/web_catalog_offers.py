@@ -149,8 +149,19 @@ def get_offer_availability(
     }
 
 
-def default_offer_form() -> dict[str, object]:
-    """Return default values for offer create form."""
+def default_offer_form(db: Session | None = None) -> dict[str, object]:
+    """Return default values for offer create form.
+
+    Visibility flags default OFF unless the ``new_offer_visible_by_default``
+    catalog setting opts in: a fresh offer silently landing on the customer
+    portal is a real incident pattern (~40 e2e offers went customer-visible).
+    """
+    visible_default = False
+    if db is not None:
+        raw = settings_spec.resolve_value(
+            db, SettingDomain.catalog, "new_offer_visible_by_default"
+        )
+        visible_default = str(raw).lower() in {"true", "1", "on", "yes"}
     return {
         "name": "",
         "code": "",
@@ -176,8 +187,8 @@ def default_offer_form() -> dict[str, object]:
         "guaranteed_speed": GuaranteedSpeedType.none.value,
         "aggregation": "",
         "priority": "",
-        "available_for_services": True,
-        "show_on_customer_portal": True,
+        "available_for_services": visible_default,
+        "show_on_customer_portal": visible_default,
         "olt_profile_auto_sync_enabled": False,
         "plan_category": PlanCategory.internet.value,
         "hide_on_admin_portal": False,
