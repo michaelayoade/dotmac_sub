@@ -3892,17 +3892,23 @@ def bulk_change_plan(
     target_offer_id: str,
     request: object,
     actor_id: str | None,
+    include_suspended: bool = False,
 ) -> dict[str, Any]:
     """Bulk-change plan/offer for subscriptions, logging audit events.
 
-    Only changes active subscriptions. Returns ``{changed, skipped_ids,
-    failed_ids}`` so callers can surface partial success.
+    Only changes active subscriptions by default; when ``include_suspended`` is
+    true, suspended subscriptions are eligible too. Returns ``{changed,
+    skipped_ids, failed_ids}`` so callers can surface partial success.
     """
     from app.models.catalog import CatalogOffer
 
     target_offer = db.get(CatalogOffer, target_offer_id)
     if not target_offer:
         raise ValueError("Target offer not found")
+
+    allowed_from = {SubscriptionStatus.active}
+    if include_suspended:
+        allowed_from.add(SubscriptionStatus.suspended)
 
     changed = 0
     skipped_ids: list[str] = []
@@ -3913,7 +3919,7 @@ def bulk_change_plan(
             continue
         try:
             sub = catalog_service.subscriptions.get(db, sub_id)
-            if not sub or sub.status != SubscriptionStatus.active:
+            if not sub or sub.status not in allowed_from:
                 skipped_ids.append(sub_id)
                 continue
             payload = SubscriptionUpdate(offer_id=UUID(target_offer_id))

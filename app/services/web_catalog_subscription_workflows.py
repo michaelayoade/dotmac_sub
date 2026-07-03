@@ -392,6 +392,7 @@ def bulk_change_plan_response(
     target_offer_id: str,
     request: object,
     actor_id: str | None,
+    include_suspended: bool = False,
 ) -> dict[str, object]:
     """Bulk change subscription plans and return API response payload."""
     result = core.bulk_change_plan(
@@ -400,6 +401,7 @@ def bulk_change_plan_response(
         target_offer_id,
         request=request,
         actor_id=actor_id,
+        include_suspended=include_suspended,
     )
     return _bulk_result_payload("Changed plan for", result)
 
