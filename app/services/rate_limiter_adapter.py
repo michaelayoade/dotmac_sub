@@ -7,6 +7,7 @@ from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from threading import Lock
+from typing import cast
 
 from app.services.adapters import adapter_registry
 
@@ -111,7 +112,9 @@ class RedisRateLimiterAdapter:
         bucket = int(now.timestamp() // window)
         redis_key = f"ratelimit:{rule.key}:{bucket}"
         try:
-            count = int(client.incr(redis_key))
+            # redis-py stubs type incr() as Awaitable[Any] | Any on the sync
+            # client; cast mirrors app/services/auth.py's rate-limit path.
+            count = int(cast(int, client.incr(redis_key)))
             if count == 1:
                 client.expire(redis_key, window)
         except redis.RedisError:
