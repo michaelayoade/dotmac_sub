@@ -1308,7 +1308,7 @@
         </div>
 
         <div x-show="billingSubTab === 'overview'" x-cloak class="grid gap-4 md:grid-cols-3">
-            <div class="rounded-2xl border border-cyan-200/70 bg-cyan-50 p-4 shadow-sm dark:border-cyan-900/50 dark:bg-slate-800">
+            <div class="rounded-2xl border border-cyan-200/70 bg-cyan-50 p-4 shadow-sm dark:border-cyan-900/50 dark:bg-cyan-950/20">
                 <p class="text-xs font-semibold uppercase tracking-wider text-cyan-700 dark:text-cyan-300">Pending Proofs</p>
                 <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">{{ billing_counts.pending_payment_proofs | default(0) }}</p>
                 <button type="button" @click="billingSubTab = 'proofs'" class="mt-2 text-xs font-semibold text-cyan-700 hover:text-cyan-800 dark:text-cyan-300">Review proofs</button>
@@ -1318,7 +1318,7 @@
                 <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(billing_counts.open_credit_amount | default(0)) }}</p>
                 <button type="button" @click="billingSubTab = 'credits'" class="mt-2 text-xs font-semibold text-emerald-700 hover:text-emerald-800 dark:text-emerald-300">{{ billing_counts.open_credit_notes | default(0) }} available credit note{{ 's' if (billing_counts.open_credit_notes | default(0)) != 1 else '' }}</button>
             </div>
-            <div class="rounded-2xl border border-indigo-200/70 bg-indigo-50 p-4 shadow-sm dark:border-indigo-900/50 dark:bg-slate-800">
+            <div class="rounded-2xl border border-indigo-200/70 bg-indigo-50 p-4 shadow-sm dark:border-indigo-900/50 dark:bg-indigo-950/20">
                 <p class="text-xs font-semibold uppercase tracking-wider text-indigo-700 dark:text-indigo-300">Service Extensions</p>
                 <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">{{ billing_counts.service_extensions | default(0) }}</p>
                 <button type="button" @click="billingSubTab = 'extensions'" class="mt-2 text-xs font-semibold text-indigo-700 hover:text-indigo-800 dark:text-indigo-300">View extension history</button>
@@ -2709,7 +2709,9 @@ function customerDetail(config = {}) {
                         customer_ids: [{ id: this.customerId, type: this.customerType }],
                         filters: {},
                         channel: this.sendMessageForm.channel,
-                        template_id: template.id
+                        template_id: template.id,
+                        template_variables: this.sendMessageForm.templateVariables || {},
+                        confirmed: true
                     })
                 });
 
@@ -2720,7 +2722,12 @@ function customerDetail(config = {}) {
                         ? ' Delivery has been started.'
                         : (result.queued_count ? ' Delivery is queued, but the dispatcher could not be started automatically.' : '');
                     this.closeSendMessageModal();
-                    alert(`Queued ${result.queued_count || 0} notification(s).${deliveryMessage}${result.suppressed_count ? ` ${result.suppressed_count} were suppressed by customer preferences.` : ''}${result.skipped?.length ? ` ${result.skipped.length} customer(s) were skipped due to missing contact details.` : ''}`);
+                    const suppressed = result.suppressed || [];
+                    const openTicketExcluded = suppressed.filter((item) => item.reason_code === 'open_ticket');
+                    const otherSuppressed = Math.max((result.suppressed_count || 0) - openTicketExcluded.length, 0);
+                    const openTicketNames = openTicketExcluded.slice(0, 10).map((item) => item.name).join(', ');
+                    const openTicketMore = openTicketExcluded.length > 10 ? `, and ${openTicketExcluded.length - 10} more` : '';
+                    alert(`Queued ${result.queued_count || 0} notification(s).${deliveryMessage}${openTicketExcluded.length ? ` ${openTicketExcluded.length} excluded because they have open tickets: ${openTicketNames}${openTicketMore}.` : ''}${otherSuppressed ? ` ${otherSuppressed} suppressed by preferences, dedupe, or other template conditions.` : ''}${result.skipped?.length ? ` ${result.skipped.length} customer(s) were skipped due to missing contact details.` : ''}`);
                 } else {
                     const error = await response.json().catch(() => ({}));
                     alert(error.detail || 'Failed to queue the message. Please try again.');
