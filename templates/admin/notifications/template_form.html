@@ -129,6 +129,20 @@
                             Use single braces like <code class="bg-slate-100 dark:bg-slate-700 px-1 rounded">{subscriber_name}</code> for dynamic content (not double braces). Only the variables listed on the right are filled in real messages. Supports HTML for email templates.
                         </p>
                     </div>
+
+                    <div class="mt-4">
+                        <label for="conditions_json" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Automated Send Conditions</label>
+                        <textarea
+                            id="conditions_json"
+                            name="conditions_json"
+                            rows="8"
+                            class="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs font-mono placeholder-slate-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white dark:placeholder-slate-500"
+                            placeholder='{"all":[{"field":"customer_has_open_ticket","operator":"=","value":true}]}'
+                        >{{ conditions_json or '' }}</textarea>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                            Optional JSON gate for automated event sends. Leave empty to send normally.
+                        </p>
+                    </div>
                 </div>
 
                 <div class="flex items-center justify-end gap-3">
@@ -220,6 +234,21 @@
                         <div class="flex items-center justify-between gap-2">
                             <code class="rounded bg-slate-100 px-2 py-1 text-xs dark:bg-slate-700">{{ '{' ~ name ~ '}' }}</code>
                             <span class="text-xs text-slate-500 dark:text-slate-400">{{ desc }}</span>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+
+            <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <h3 class="text-sm font-semibold text-slate-900 dark:text-white mb-4">Condition Fields</h3>
+                <div class="space-y-2 text-sm">
+                    <p class="text-slate-600 dark:text-slate-400">Use <code class="rounded bg-slate-100 px-1 dark:bg-slate-700">all</code> for required conditions and <code class="rounded bg-slate-100 px-1 dark:bg-slate-700">any</code> for alternatives.</p>
+                    <div class="space-y-1">
+                        {% for name, sample, desc in (condition_fields or []) %}
+                        <div class="space-y-0.5">
+                            <code class="rounded bg-slate-100 px-2 py-1 text-xs dark:bg-slate-700">{{ name }}</code>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">{{ desc }} Example: {{ sample }}</p>
                         </div>
                         {% endfor %}
                     </div>
