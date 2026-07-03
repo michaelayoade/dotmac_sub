@@ -1338,7 +1338,23 @@ function customersPage() {
                     return;
                 }
                 const preview = await previewResponse.json();
-                const previewMessage = `Matched ${preview.matched_count || 0} customer(s). Queue ${preview.queued_count || 0} message(s), suppress ${preview.suppressed_count || 0}, skip ${(preview.skipped || []).length}. Continue?`;
+                const previewSuppressed = preview.suppressed || [];
+                const previewOpenTicketExcluded = previewSuppressed.filter((item) => item.reason_code === 'open_ticket');
+                const previewOtherSuppressed = Math.max((preview.suppressed_count || 0) - previewOpenTicketExcluded.length, 0);
+                const previewMessageParts = [
+                    `Matched ${preview.matched_count || 0} customer(s).`,
+                    `Queue ${preview.queued_count || 0} message(s).`
+                ];
+                if (previewOpenTicketExcluded.length) {
+                    previewMessageParts.push(`Exclude ${previewOpenTicketExcluded.length} customer(s) with open tickets.`);
+                }
+                if (previewOtherSuppressed) {
+                    previewMessageParts.push(`Suppress ${previewOtherSuppressed} other customer(s).`);
+                }
+                if ((preview.skipped || []).length) {
+                    previewMessageParts.push(`Skip ${(preview.skipped || []).length} customer(s) with missing contact details.`);
+                }
+                const previewMessage = `${previewMessageParts.join(' ')} Continue?`;
                 if (!confirm(previewMessage)) return;
 
                 const response = await fetch('/admin/customers/bulk/send-message', {
@@ -1368,8 +1384,12 @@ function customersPage() {
                     const created = result.created_count || 0;
                     const queued = result.queued_count || 0;
                     const skipped = result.skipped?.length || 0;
-                    const suppressed = result.suppressed_count || 0;
-                    alert(`Matched ${matched} customer(s). Created ${created} notification(s); queued ${queued}.${deliveryMessage}${skipped ? ` ${skipped} skipped due to missing contact details.` : ''}${suppressed ? ` ${suppressed} suppressed by customer preferences.` : ''}`);
+                    const suppressed = result.suppressed || [];
+                    const openTicketExcluded = suppressed.filter((item) => item.reason_code === 'open_ticket');
+                    const otherSuppressed = Math.max((result.suppressed_count || 0) - openTicketExcluded.length, 0);
+                    const openTicketNames = openTicketExcluded.slice(0, 10).map((item) => item.name).join(', ');
+                    const openTicketMore = openTicketExcluded.length > 10 ? `, and ${openTicketExcluded.length - 10} more` : '';
+                    alert(`Matched ${matched} customer(s). Created ${created} notification(s); queued ${queued}.${deliveryMessage}${skipped ? ` ${skipped} skipped due to missing contact details.` : ''}${openTicketExcluded.length ? ` ${openTicketExcluded.length} excluded because they have open tickets: ${openTicketNames}${openTicketMore}.` : ''}${otherSuppressed ? ` ${otherSuppressed} suppressed by preferences, dedupe, or other template conditions.` : ''}`);
                 } else {
                     const error = await response.json().catch(() => ({}));
                     alert(error.detail || 'Failed to queue the message. Please try again.');

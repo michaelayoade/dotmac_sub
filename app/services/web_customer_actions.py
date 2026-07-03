@@ -65,6 +65,7 @@ from app.services.integrations.connectors import whatsapp as whatsapp_connector
 from app.services.notification_template_conditions import (
     NotificationTemplateConditionError,
     conditions_match,
+    normalize_conditions,
 )
 from app.services.notification_template_renderer import render_template_text
 from app.services.whatsapp_notification_templates import (
@@ -807,6 +808,7 @@ def queue_bulk_message_from_payload(
         )
     notifications: list[Notification] = []
     skipped: list[dict[str, str]] = []
+    suppressed: list[dict[str, str]] = []
     queued_count = 0
     suppressed_count = 0
     category = resolve_notification_category("service_bulk_message")
@@ -877,6 +879,13 @@ def queue_bulk_message_from_payload(
         ):
             status = NotificationStatus.canceled
             last_error = "Suppressed by customer notification preferences"
+            suppressed.append(
+                _bulk_message_suppression_item(
+                    subscriber,
+                    reason_code="preferences",
+                    reason="Suppressed by customer notification preferences",
+                )
+            )
             suppressed_count += 1
         elif has_recent_notification(
             db,
@@ -888,6 +897,13 @@ def queue_bulk_message_from_payload(
         ):
             status = NotificationStatus.canceled
             last_error = "Suppressed by notification dedupe window"
+            suppressed.append(
+                _bulk_message_suppression_item(
+                    subscriber,
+                    reason_code="dedupe",
+                    reason="Suppressed by notification dedupe window",
+                )
+            )
             suppressed_count += 1
         else:
             try:
@@ -903,7 +919,21 @@ def queue_bulk_message_from_payload(
                 ) from exc
             if not condition_matched:
                 status = NotificationStatus.canceled
-                last_error = "Suppressed by template conditions"
+                if _template_has_open_ticket_exclusion(template.conditions):
+                    reason_code = "open_ticket"
+                    last_error = "Suppressed by open ticket template condition"
+                    reason = "Customer has an open ticket"
+                else:
+                    reason_code = "template_conditions"
+                    last_error = "Suppressed by template conditions"
+                    reason = "Suppressed by template conditions"
+                suppressed.append(
+                    _bulk_message_suppression_item(
+                        subscriber,
+                        reason_code=reason_code,
+                        reason=reason,
+                    )
+                )
                 suppressed_count += 1
             else:
                 queued_count += 1
@@ -938,11 +968,59 @@ def queue_bulk_message_from_payload(
         "created_count": len(notifications),
         "queued_count": queued_count,
         "suppressed_count": suppressed_count,
+        "suppressed": suppressed,
         "skipped": skipped,
         "notification_ids": [
             str(notification.id) for notification in notifications if notification.id
         ],
     }
+
+
+def _bulk_message_suppression_item(
+    subscriber: Subscriber, *, reason_code: str, reason: str
+) -> dict[str, str]:
+    return {
+        "id": str(subscriber.id),
+        "name": _subscriber_display_name(subscriber),
+        "reason_code": reason_code,
+        "reason": reason,
+    }
+
+
+def _subscriber_display_name(subscriber: Subscriber) -> str:
+    return (
+        subscriber.company_name
+        or subscriber.display_name
+        or subscriber.full_name
+        or subscriber.email
+        or subscriber.phone
+        or str(subscriber.id)
+    )
+
+
+def _template_has_open_ticket_exclusion(conditions: Any) -> bool:
+    try:
+        normalized = normalize_conditions(conditions)
+    except NotificationTemplateConditionError:
+        return False
+    for group_name in ("all", "any"):
+        for condition in normalized.get(group_name, []):
+            field = condition.get("field")
+            operator = condition.get("operator")
+            value = condition.get("value")
+            if (
+                field == "customer_has_open_ticket"
+                and operator == "="
+                and value is False
+            ):
+                return True
+            if field == "open_ticket_count" and operator in {"=", "<="}:
+                try:
+                    if Decimal(str(value)) <= 0:
+                        return True
+                except (InvalidOperation, TypeError, ValueError):
+                    continue
+    return False
 
 
 def _business_identity_from_contacts(

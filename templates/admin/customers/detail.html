@@ -2709,7 +2709,9 @@ function customerDetail(config = {}) {
                         customer_ids: [{ id: this.customerId, type: this.customerType }],
                         filters: {},
                         channel: this.sendMessageForm.channel,
-                        template_id: template.id
+                        template_id: template.id,
+                        template_variables: this.sendMessageForm.templateVariables || {},
+                        confirmed: true
                     })
                 });
 
@@ -2720,7 +2722,12 @@ function customerDetail(config = {}) {
                         ? ' Delivery has been started.'
                         : (result.queued_count ? ' Delivery is queued, but the dispatcher could not be started automatically.' : '');
                     this.closeSendMessageModal();
-                    alert(`Queued ${result.queued_count || 0} notification(s).${deliveryMessage}${result.suppressed_count ? ` ${result.suppressed_count} were suppressed by customer preferences.` : ''}${result.skipped?.length ? ` ${result.skipped.length} customer(s) were skipped due to missing contact details.` : ''}`);
+                    const suppressed = result.suppressed || [];
+                    const openTicketExcluded = suppressed.filter((item) => item.reason_code === 'open_ticket');
+                    const otherSuppressed = Math.max((result.suppressed_count || 0) - openTicketExcluded.length, 0);
+                    const openTicketNames = openTicketExcluded.slice(0, 10).map((item) => item.name).join(', ');
+                    const openTicketMore = openTicketExcluded.length > 10 ? `, and ${openTicketExcluded.length - 10} more` : '';
+                    alert(`Queued ${result.queued_count || 0} notification(s).${deliveryMessage}${openTicketExcluded.length ? ` ${openTicketExcluded.length} excluded because they have open tickets: ${openTicketNames}${openTicketMore}.` : ''}${otherSuppressed ? ` ${otherSuppressed} suppressed by preferences, dedupe, or other template conditions.` : ''}${result.skipped?.length ? ` ${result.skipped.length} customer(s) were skipped due to missing contact details.` : ''}`);
                 } else {
                     const error = await response.json().catch(() => ({}));
                     alert(error.detail || 'Failed to queue the message. Please try again.');

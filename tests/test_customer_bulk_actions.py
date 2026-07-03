@@ -54,6 +54,10 @@ def test_customer_send_email_action_opens_template_modal_for_email_channel():
     assert "@click.prevent.stop=\"openSendMessageModal('email')\"" in detail_template
     assert "detailUrl" in detail_template
     assert "closeSendMessageModal" in detail_template
+    assert "template_variables: this.sendMessageForm.templateVariables || {}" in (
+        detail_template
+    )
+    assert "confirmed: true" in detail_template
     assert "mailto:" not in detail_template
 
 
@@ -85,7 +89,10 @@ def test_customer_bulk_actions_sync_selection_from_checked_rows_before_submit():
     )
     assert "Matched ${matched} customer(s)." in page_template
     assert "skipped due to missing contact details" in page_template
-    assert "suppressed by customer preferences" in page_template
+    assert "excluded because they have open tickets" in page_template
+    assert "suppressed by preferences, dedupe, or other template conditions" in (
+        page_template
+    )
 
 
 def test_bulk_update_customers_from_filtered_scope_updates_matching_customers(
@@ -406,7 +413,15 @@ def test_queue_bulk_whatsapp_respects_template_conditions(db_session):
     assert result["created_count"] == 1
     assert result["queued_count"] == 0
     assert result["suppressed_count"] == 1
+    assert result["suppressed"] == [
+        {
+            "id": str(customer.id),
+            "name": "Wale Ticketed",
+            "reason_code": "open_ticket",
+            "reason": "Customer has an open ticket",
+        }
+    ]
     notification = db_session.get(Notification, result["notification_ids"][0])
     assert notification is not None
     assert notification.status.value == "canceled"
-    assert notification.last_error == "Suppressed by template conditions"
+    assert notification.last_error == "Suppressed by open ticket template condition"
