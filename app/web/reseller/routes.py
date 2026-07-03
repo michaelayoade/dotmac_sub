@@ -82,15 +82,20 @@ def reseller_vas_topup_intent(
     db: Session = Depends(get_db),
 ):
     return web_reseller_routes_service.reseller_vas_topup_intent(
-        request, db, payload.get("amount")
+        request, db, payload.get("amount"), payload.get("provider")
     )
 
 
 @router.get("/vas/topup/verify", response_class=HTMLResponse)
 def reseller_vas_topup_verify(
-    request: Request, reference: str, db: Session = Depends(get_db)
+    request: Request,
+    reference: str,
+    provider: str | None = None,
+    db: Session = Depends(get_db),
 ):
-    return web_reseller_routes_service.reseller_vas_topup_verify(request, db, reference)
+    return web_reseller_routes_service.reseller_vas_topup_verify(
+        request, db, reference, provider
+    )
 
 
 @router.post("/vas/sell")
