@@ -8,11 +8,19 @@ from typing import cast
 from uuid import uuid4
 
 from app.models.billing import InvoiceStatus
+from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber
 from app.services import billing as billing_service
+from app.services import settings_spec
 from app.services import subscriber as subscriber_service
 
 logger = logging.getLogger(__name__)
+
+
+def _default_currency(db) -> str:
+    value = settings_spec.resolve_value(db, SettingDomain.billing, "default_currency")
+    code = str(value or "NGN").strip().upper()
+    return code or "NGN"
 
 
 def new_manual_payment_idempotency_token() -> str:
@@ -149,6 +157,7 @@ def build_new_form_state(
         "balance_display": balance_display,
         "collection_accounts": collection_accounts,
         "invoices": invoices,
+        "default_currency": _default_currency(db),
     }
 
 
@@ -202,7 +211,7 @@ def load_invoice_currency_state(
 ) -> dict[str, object]:
     """Build state for invoice currency HTMX partial."""
     invoice_obj = resolve_invoice(db, invoice_id)
-    currency_value = currency or "NGN"
+    currency_value = currency or _default_currency(db)
     currency_locked = False
     if invoice_obj and invoice_obj.currency:
         currency_value = invoice_obj.currency
