@@ -22,8 +22,8 @@ from scripts.one_off.reconcile_phantom_opening_debits import (
     REVERSAL_MEMO,
     _apply,
     _classify,
-    _reversal_amounts,
     _load_candidates,
+    _reversal_amounts,
 )
 
 
@@ -172,17 +172,23 @@ def test_classify_pure_unit_behavior(db_session):
         False,
     )
     # Negative deposit -> legit arrears.
-    assert _classify(sub, Decimal("-1.00"), Decimal("10.00"), Decimal("0.00"), scope) == (
+    assert _classify(
+        sub, Decimal("-1.00"), Decimal("10.00"), Decimal("0.00"), scope
+    ) == (
         "legit_negative_deposit",
         False,
     )
     # Inactive prior reversal -> hard non-eligible review, before deposit rules.
-    assert _classify(sub, Decimal("0.00"), Decimal("10.00"), Decimal("5.00"), scope) == (
+    assert _classify(
+        sub, Decimal("0.00"), Decimal("10.00"), Decimal("5.00"), scope
+    ) == (
         "previously_reversed_inactive_review",
         False,
     )
     # In-scope, non-negative deposit -> eligible.
-    assert _classify(sub, Decimal("0.00"), Decimal("10.00"), Decimal("0.00"), scope) == (
+    assert _classify(
+        sub, Decimal("0.00"), Decimal("10.00"), Decimal("0.00"), scope
+    ) == (
         "eligible_phantom_debit",
         True,
     )
