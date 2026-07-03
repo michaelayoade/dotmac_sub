@@ -641,9 +641,7 @@ def save_reminders(db: Session, data: Mapping[str, Any]) -> None:
     # saves. None of the REMINDER_KEYS currently has a runtime reader, so none
     # is registered as a spec (registering them would create orphans); they all
     # take the raw-string fall-through until a consumer exists.
-    _save_settings(
-        db, SettingDomain.collections, data, REMINDER_KEYS, use_specs=True
-    )
+    _save_settings(db, SettingDomain.collections, data, REMINDER_KEYS, use_specs=True)
 
 
 # ---------------------------------------------------------------------------

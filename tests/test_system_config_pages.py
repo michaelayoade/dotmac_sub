@@ -291,9 +291,7 @@ def test_direct_bank_transfer_save_coerces_boolean_and_preserves_json(db_session
 
     rows = _billing_rows(db_session)
     assert rows["direct_bank_transfer_enabled"].value_text == "true"
-    assert (
-        rows["direct_bank_transfer_enabled"].value_type == SettingValueType.boolean
-    )
+    assert rows["direct_bank_transfer_enabled"].value_type == SettingValueType.boolean
     assert rows["direct_bank_transfer_bank_name"].value_text == "GTBank"
     # The accounts blob is a JSON *string* held in value_text (not value_json)
     # so the customer-portal readers keep working.
