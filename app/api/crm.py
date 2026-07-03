@@ -355,6 +355,224 @@ def billing_risk_source(
     return _envelope(rows, {**meta, "total": total})
 
 
+@router.post(
+    "/payments",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_crm_bearer)],
+    tags=["payments"],
+)
+def record_crm_payment(
+    payload: dict[str, Any] = Body(default_factory=dict),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Record a payment a customer made in the CRM (installation / subscription)
+    into the ledger so it settles the invoice and shows in the customer portal.
+
+    Body: ``{subscriber_id, amount, external_ref, paid_at?, memo?,
+    invoice_external_ref?, currency?}``. Idempotent on ``external_ref``.
+    """
+    errors: dict[str, list[str]] = {}
+    subscriber_id = str(payload.get("subscriber_id") or "").strip()
+    if not subscriber_id:
+        errors.setdefault("subscriber_id", []).append("Required.")
+    external_ref = str(payload.get("external_ref") or "").strip()
+    if not external_ref:
+        errors.setdefault("external_ref", []).append("Required.")
+    amount_raw = payload.get("amount")
+    try:
+        amount = Decimal(str(amount_raw))
+    except (InvalidOperation, TypeError, ValueError):
+        errors.setdefault("amount", []).append("Must be a number.")
+        amount = Decimal("0")
+    else:
+        if amount <= 0:
+            errors.setdefault("amount", []).append("Must be greater than 0.")
+    if errors:
+        _error(status.HTTP_400_BAD_REQUEST, "Invalid payment payload.", errors)
+
+    paid_at_raw = payload.get("paid_at")
+    paid_at = None
+    if paid_at_raw:
+        try:
+            paid_at = datetime.fromisoformat(str(paid_at_raw).replace("Z", "+00:00"))
+        except ValueError:
+            _error(
+                status.HTTP_400_BAD_REQUEST,
+                "Invalid payment payload.",
+                {"paid_at": ["Must be ISO 8601."]},
+            )
+
+    invoice_external_ref = payload.get("invoice_external_ref")
+    invoice_external_ref = (
+        str(invoice_external_ref).strip()
+        if invoice_external_ref not in (None, "")
+        else None
+    )
+
+    try:
+        payment = crm_api.record_external_payment(
+            db,
+            subscriber_id=subscriber_id,
+            amount=amount,
+            external_ref=external_ref,
+            paid_at=paid_at,
+            memo=payload.get("memo"),
+            invoice_external_ref=invoice_external_ref,
+            currency=str(payload.get("currency") or "NGN"),
+        )
+    except LookupError:
+        _error(status.HTTP_404_NOT_FOUND, "Subscriber not found.")
+    except ValueError as exc:
+        _error(status.HTTP_400_BAD_REQUEST, str(exc))
+
+    return _envelope(
+        {
+            "id": str(payment.id),
+            "amount": str(payment.amount),
+            "status": payment.status.value,
+            "account_id": str(payment.account_id) if payment.account_id else None,
+            "external_id": payment.external_id,
+        }
+    )
+
+
+@router.post(
+    "/subscriptions",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_crm_bearer)],
+    tags=["subscriptions"],
+)
+def create_crm_subscription(
+    payload: dict[str, Any] = Body(default_factory=dict),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Create a subscription for a subscriber from a CRM sale (+ its first
+    invoice). Body: ``{subscriber_id, offer_ref|offer_id|offer_code,
+    external_ref, unit_price?, start_at?}``. Idempotent on ``external_ref``."""
+    errors: dict[str, list[str]] = {}
+    subscriber_id = str(payload.get("subscriber_id") or "").strip()
+    if not subscriber_id:
+        errors.setdefault("subscriber_id", []).append("Required.")
+    offer_ref = str(
+        payload.get("offer_ref")
+        or payload.get("offer_id")
+        or payload.get("offer_code")
+        or ""
+    ).strip()
+    if not offer_ref:
+        errors.setdefault("offer_ref", []).append("Required (offer id or code).")
+    external_ref = str(payload.get("external_ref") or "").strip()
+    if not external_ref:
+        errors.setdefault("external_ref", []).append("Required.")
+    if errors:
+        _error(status.HTTP_400_BAD_REQUEST, "Invalid subscription payload.", errors)
+
+    start_at = None
+    start_raw = payload.get("start_at")
+    if start_raw:
+        try:
+            start_at = datetime.fromisoformat(str(start_raw).replace("Z", "+00:00"))
+        except ValueError:
+            _error(
+                status.HTTP_400_BAD_REQUEST,
+                "Invalid subscription payload.",
+                {"start_at": ["Must be ISO 8601."]},
+            )
+
+    try:
+        result = crm_api.create_subscription(
+            db,
+            subscriber_id=subscriber_id,
+            offer_ref=offer_ref,
+            external_ref=external_ref,
+            unit_price=payload.get("unit_price"),
+            start_at=start_at,
+        )
+    except LookupError as exc:
+        _error(status.HTTP_404_NOT_FOUND, str(exc).capitalize())
+
+    subscription = result["subscription"]
+    invoice = result["invoice"]
+    return _envelope(
+        {
+            "subscription_id": str(subscription.id) if subscription else None,
+            "invoice_id": str(invoice.id) if invoice else None,
+            "status": subscription.status.value if subscription else None,
+            "created": result["created"],
+        }
+    )
+
+
+@router.get("/offers", dependencies=[Depends(require_crm_bearer)])
+def catalog_offers(
+    q: str | None = None,
+    active_only: bool = True,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """The plan catalog (offers + recurring price) for the CRM to pick from when
+    quoting a subscription — sub owns the plans; the CRM reads them."""
+    return _envelope(crm_api.list_catalog_offers(db, q=q, active_only=active_only))
+
+
+@router.get("/infrastructure/assets", dependencies=[Depends(require_crm_bearer)])
+def infrastructure_assets(
+    q: str | None = None,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Pickable infrastructure items — OLTs (Huawei/Ubiquiti), their PON ports,
+    and basestations — for raising an infrastructure/outage ticket."""
+    return _envelope(crm_api.list_infrastructure_assets(db, q=q))
+
+
+@router.get("/outages/impact", dependencies=[Depends(require_crm_bearer)])
+def outage_impact(
+    node_id: str | None = None,
+    basestation_id: str | None = None,
+    olt_id: str | None = None,
+    pon_port_id: str | None = None,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Subscribers affected by a failed infrastructure asset.
+
+    Pass one of: ``node_id`` (a monitored NetworkDevice — switch/router, with
+    LLDP downstream expansion), ``basestation_id`` (a PopSite), ``olt_id`` (all
+    ONTs on an OLT), or ``pon_port_id`` (only the ONTs on that PON port). OLT and
+    PON-port resolution are vendor-agnostic (Huawei + Ubiquiti). The ``coverage``
+    block flags where the e2e chain is incomplete so the caller can fall back to
+    manual selection.
+    """
+    from app.models.network_monitoring import NetworkDevice, PopSite
+
+    if not any([node_id, basestation_id, olt_id, pon_port_id]):
+        raise HTTPException(
+            status_code=400,
+            detail="One of node_id, basestation_id, olt_id or pon_port_id is required",
+        )
+
+    node = None
+    if node_id:
+        node = db.get(NetworkDevice, crm_api.coerce_subscriber_id(node_id))
+        if node is None:
+            raise HTTPException(status_code=404, detail="Network device not found")
+    basestation = None
+    if basestation_id:
+        basestation = db.get(PopSite, crm_api.coerce_subscriber_id(basestation_id))
+        if basestation is None:
+            raise HTTPException(status_code=404, detail="Basestation not found")
+
+    return _envelope(
+        crm_api.outage_impact(
+            db,
+            node=node,
+            basestation=basestation,
+            olt_id=crm_api.coerce_subscriber_id(olt_id) if olt_id else None,
+            pon_port_id=crm_api.coerce_subscriber_id(pon_port_id)
+            if pon_port_id
+            else None,
+        )
+    )
+
+
 @router.get("/service-extensions", dependencies=[Depends(require_crm_bearer)])
 def service_extensions(
     request: Request, db: Session = Depends(get_db)

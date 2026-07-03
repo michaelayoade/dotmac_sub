@@ -84,6 +84,9 @@ from app.schemas.portal import (
     QuoteRequestCreate,
     ReferAFriendRequest,
     ReferAFriendResponse,
+    TechnicianLocation,
+    TechnicianRatingRequest,
+    TechnicianRatingResponse,
 )
 from app.schemas.service_status import ServiceStatusResponse
 from app.schemas.subscriber import (
@@ -129,6 +132,7 @@ from app.services import autopay as autopay_service
 from app.services import billing as billing_service
 from app.services import catalog as catalog_service
 from app.services import chat_session as chat_session_service
+from app.services import crm_portal as crm_portal_service
 from app.services import customer_location_requests as location_service
 from app.services import customer_portal_contacts as contacts_service
 from app.services import customer_portal_flow_addons as customer_addons
@@ -789,15 +793,22 @@ def my_account_deletion_request(
 def my_chat_session(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
+    ticket_id: str | None = None,
+    project_id: str | None = None,
 ):
     """Open (or resume) a live-chat session with support.
 
     The sub asserts the authenticated subscriber's identity to the CRM and
     returns an opaque visitor token plus the URLs the client uses to talk to the
     CRM chat widget directly (WebSocket for real-time, REST for send/history).
+
+    Pass ``ticket_id`` or ``project_id`` to start the chat about that record —
+    the reference rides in the session so the agent has context.
     """
     subscriber_id = _subscriber_id(principal)
-    return chat_session_service.broker_customer_session(db, subscriber_id)
+    return chat_session_service.broker_customer_session(
+        db, subscriber_id, ticket_id=ticket_id, project_id=project_id
+    )
 
 
 @router.post("/portal/session", response_model=PortalSessionResponse)
@@ -846,6 +857,61 @@ def my_work_orders(
     status — served from the local mirror (refreshed from the CRM lazily)."""
     subscriber_id = _subscriber_id(principal)
     return work_orders_mirror.read_for_subscriber(db, subscriber_id)
+
+
+@router.get(
+    "/work-orders/{work_order_id}/technician-location",
+    response_model=TechnicianLocation,
+)
+def my_work_order_technician_location(
+    work_order_id: str,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Live technician position for an in-progress work order (poll for the
+    'where's my technician' map). Proxies the CRM portal; returns
+    available=False when the map should be hidden."""
+    subscriber_id = _subscriber_id(principal)
+    crm_id = crm_portal_service.resolve_crm_subscriber_id(db, subscriber_id)
+    if not crm_id:
+        return TechnicianLocation(available=False, reason="not_linked")
+    from app.services.crm_client import CRMClientError, get_crm_client
+
+    try:
+        data = get_crm_client(db).get_portal_technician_location(crm_id, work_order_id)
+    except CRMClientError:
+        # CRM unreachable / circuit open — degrade to "hidden" so the poller
+        # doesn't 500-spam; the client just keeps the map hidden.
+        return TechnicianLocation(available=False, reason="unavailable")
+    return TechnicianLocation.model_validate(data)
+
+
+@router.post(
+    "/work-orders/{work_order_id}/rate-technician",
+    response_model=TechnicianRatingResponse,
+)
+def my_rate_technician(
+    work_order_id: str,
+    payload: TechnicianRatingRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Rate the technician after a completed work order (1-5 + optional comment)."""
+    subscriber_id = _subscriber_id(principal)
+    crm_id = crm_portal_service.resolve_crm_subscriber_id(db, subscriber_id)
+    if not crm_id:
+        raise HTTPException(status_code=404, detail="Account not linked to CRM")
+    from app.services.crm_client import CRMClientError, get_crm_client
+
+    try:
+        data = get_crm_client(db).submit_portal_technician_rating(
+            crm_id, work_order_id, rating=payload.rating, comment=payload.comment
+        )
+    except CRMClientError as exc:
+        raise HTTPException(
+            status_code=503, detail="Rating service is temporarily unavailable."
+        ) from exc
+    return TechnicianRatingResponse.model_validate(data)
 
 
 @router.get("/quotes", response_model=MyQuotesResponse)

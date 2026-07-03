@@ -1,4 +1,4 @@
-.PHONY: help test lint type-check format security check lint-file type-check-file check-file migrate dev docker-up docker-down docker-logs worker beat coverage clean prod-build prod-pin prod-deploy prod-up prod-down prod-logs prod-restart prod-migrate prod-check bump-version
+.PHONY: help test lint type-check format security check lint-file type-check-file check-file migrate dev docker-up docker-down docker-logs worker beat coverage clean prod-build prod-pin prod-deploy prod-up prod-down prod-logs prod-restart prod-migrate prod-check bump-version prod-ghcr-pin prod-ghcr-deploy
 
 # Production runs IMMUTABLE images: the base docker-compose.yml has no source
 # bind-mounts and pulls code only from the baked image (built by `prod-build`).
@@ -136,7 +136,7 @@ prod-pin: ## Point .env APP_IMAGE at the freshly-built HEAD image (compose's sou
 	@sha=$$(git rev-parse --short HEAD); \
 	img="dotmac_sub:$$sha"; \
 	if grep -q '^APP_IMAGE=' .env 2>/dev/null; then \
-		sed -i.bak "s#^APP_IMAGE=.*#APP_IMAGE=$$img#" .env; \
+		sed -i.bak "s#^APP_IMAGE=.*#APP_IMAGE=$$img#" .env && rm -f .env.bak; \
 	else \
 		printf 'APP_IMAGE=%s\n' "$$img" >> .env; \
 	fi; \
@@ -156,6 +156,29 @@ prod-restart: ## Recreate prod app + worker services from the current image (APP
 
 prod-migrate: ## Apply DB migrations in the prod stack (alembic baked into the image)
 	$(PROD_COMPOSE) run --rm app alembic upgrade head
+
+# ─── GHCR (pull a CI-built image instead of building on the host) ──────────
+# CI (.github/workflows/ghcr.yml) pushes ghcr.io/<owner>/dotmac_sub on every
+# main push. Prod pulls it — no local build. The package is private, so the host
+# must `docker login ghcr.io` (PAT with read:packages) once. Pin a specific
+# build with GHCR_TAG=sha-<shortsha>; defaults to the latest main build.
+GHCR_IMAGE ?= ghcr.io/michaelayoade/dotmac_sub
+GHCR_TAG ?= latest
+
+prod-ghcr-pin: ## Point .env APP_IMAGE at the GHCR image (GHCR_IMAGE:GHCR_TAG)
+	@img="$(GHCR_IMAGE):$(GHCR_TAG)"; \
+	if grep -q '^APP_IMAGE=' .env 2>/dev/null; then \
+		sed -i.bak "s#^APP_IMAGE=.*#APP_IMAGE=$$img#" .env && rm -f .env.bak; \
+	else \
+		printf 'APP_IMAGE=%s\n' "$$img" >> .env; \
+	fi; \
+	echo "Pinned APP_IMAGE=$$img in .env (compose now runs the CI-built image)"
+
+prod-ghcr-deploy: ## Deploy from the CI-built GHCR image (pull + migrate + restart; no host build)
+	$(MAKE) prod-ghcr-pin
+	$(PROD_COMPOSE) pull app
+	$(MAKE) prod-migrate
+	$(MAKE) prod-restart
 
 prod-check: ## Run deployment reconciliation checks in the production stack
 	$(PROD_COMPOSE) run --rm app python scripts/setup/deploy_reconcile.py

@@ -1357,6 +1357,74 @@ class TestNotificationHandler:
         assert emit_calls == [EventType.subscription_suspension_warning]
         assert (invoice.metadata_ or {}).get("suspension_warning_sent_at")
 
+    def test_handle_invoice_overdue_shield_suppresses_warning(
+        self,
+        db_session,
+        subscriber,
+        monkeypatch,
+    ):
+        from app.models.domain_settings import DomainSetting, SettingDomain
+        from app.models.subscription_engine import SettingValueType
+
+        subscriber.status = AccountStatus.active
+        invoice = Invoice(
+            account_id=subscriber.id,
+            invoice_number="INV-GRACE-2",
+            status=InvoiceStatus.overdue,
+            total=100,
+            balance_due=100,
+            due_at=datetime.now(UTC) - timedelta(hours=6),
+            metadata_={},
+        )
+        db_session.add(invoice)
+        db_session.add_all(
+            [
+                DomainSetting(
+                    domain=SettingDomain.billing,
+                    key="auto_suspend_on_overdue",
+                    value_type=SettingValueType.boolean,
+                    value_text="true",
+                    value_json=True,
+                    is_active=True,
+                ),
+                DomainSetting(
+                    domain=SettingDomain.billing,
+                    key="suspension_grace_hours",
+                    value_type=SettingValueType.integer,
+                    value_text="48",
+                    is_active=True,
+                ),
+            ]
+        )
+        db_session.commit()
+
+        # An in-force service extension (or arrangement/proof) shields the
+        # account: no scary suspension warning while the shield holds.
+        monkeypatch.setattr(
+            "app.services.service_extensions.extension_shield_reason",
+            lambda _db, _account_id: "service extension test in force",
+        )
+
+        handler = EnforcementHandler()
+        event = Event(
+            event_type=EventType.invoice_overdue,
+            payload={"invoice_id": str(invoice.id)},
+            invoice_id=invoice.id,
+            account_id=subscriber.id,
+        )
+
+        emit_calls: list[EventType] = []
+        monkeypatch.setattr(
+            "app.services.events.handlers.enforcement.emit_event",
+            lambda *args, **kwargs: emit_calls.append(args[1]),
+        )
+
+        handler.handle(db_session, event)
+        db_session.refresh(invoice)
+
+        assert emit_calls == []
+        assert not (invoice.metadata_ or {}).get("suspension_warning_sent_at")
+
 
 # ---------------------------------------------------------------------------
 # Payment-received restore guard tests
@@ -1617,7 +1685,7 @@ class TestInvoiceOverdueSuspensionShields:
     @patch(
         "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
     )
-    def test_defaulted_arrangement_does_not_shield(
+    def test_defaulted_arrangement_does_not_directly_suspend(
         self,
         mock_reject_ip,
         mock_cleanup,
@@ -1636,7 +1704,102 @@ class TestInvoiceOverdueSuspensionShields:
         )
         db_session.refresh(subscription)
 
-        assert subscription.status == SubscriptionStatus.suspended
+        assert subscription.status == SubscriptionStatus.active
+        mock_reject_ip.assert_not_called()
+        mock_cleanup.assert_not_called()
+
+    @patch("app.tasks.enforcement.cleanup_subscription_block_sessions.delay")
+    @patch(
+        "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
+    )
+    def test_covering_prepaid_credit_shields_from_suspension(
+        self,
+        mock_reject_ip,
+        mock_cleanup,
+        db_session,
+        subscriber,
+        subscription,
+    ):
+        """A prepaid account whose wallet/ledger credit covers the overdue debt
+        must NOT be suspended by the overdue event path — the same balance gate
+        the dunning reconciler applies. Regression for the ungated 2nd writer
+        that cut off credited customers (e.g. 100008817, ₦702k credit)."""
+        from decimal import Decimal
+
+        from app.models.billing import (
+            LedgerEntry,
+            LedgerEntryType,
+            LedgerSource,
+        )
+
+        mock_reject_ip.return_value = {"ok": False}
+        invoice = self._setup_overdue_account(db_session, subscriber, subscription)
+        # Unallocated credit of 15,000 covers the 10,000 overdue invoice.
+        db_session.add(
+            LedgerEntry(
+                account_id=subscriber.id,
+                invoice_id=None,
+                entry_type=LedgerEntryType.credit,
+                source=LedgerSource.payment,
+                amount=Decimal("15000"),
+                currency="NGN",
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+        EnforcementHandler().handle(
+            db_session, self._overdue_event(subscriber, invoice)
+        )
+        db_session.refresh(subscription)
+
+        assert subscription.status == SubscriptionStatus.active
+        mock_cleanup.assert_not_called()
+
+    @patch("app.tasks.enforcement.cleanup_subscription_block_sessions.delay")
+    @patch(
+        "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
+    )
+    def test_insufficient_prepaid_credit_does_not_directly_suspend(
+        self,
+        mock_reject_ip,
+        mock_cleanup,
+        db_session,
+        subscriber,
+        subscription,
+    ):
+        """The overdue event writer never cuts service; dunning owns that."""
+        from decimal import Decimal
+
+        from app.models.billing import (
+            LedgerEntry,
+            LedgerEntryType,
+            LedgerSource,
+        )
+
+        mock_reject_ip.return_value = {"ok": False}
+        invoice = self._setup_overdue_account(db_session, subscriber, subscription)
+        db_session.add(
+            LedgerEntry(
+                account_id=subscriber.id,
+                invoice_id=None,
+                entry_type=LedgerEntryType.credit,
+                source=LedgerSource.payment,
+                amount=Decimal("3000"),
+                currency="NGN",
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+        EnforcementHandler().handle(
+            db_session, self._overdue_event(subscriber, invoice)
+        )
+        db_session.refresh(subscription)
+
+        assert subscription.status == SubscriptionStatus.active
+        mock_reject_ip.assert_not_called()
+        mock_cleanup.assert_not_called()
 
     @patch("app.tasks.enforcement.cleanup_subscription_block_sessions.delay")
     @patch(
@@ -1668,7 +1831,7 @@ class TestInvoiceOverdueSuspensionShields:
     @patch(
         "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
     )
-    def test_rejected_proof_does_not_shield(
+    def test_rejected_proof_does_not_directly_suspend(
         self,
         mock_reject_ip,
         mock_cleanup,
@@ -1687,13 +1850,15 @@ class TestInvoiceOverdueSuspensionShields:
         )
         db_session.refresh(subscription)
 
-        assert subscription.status == SubscriptionStatus.suspended
+        assert subscription.status == SubscriptionStatus.active
+        mock_reject_ip.assert_not_called()
+        mock_cleanup.assert_not_called()
 
     @patch("app.tasks.enforcement.cleanup_subscription_block_sessions.delay")
     @patch(
         "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
     )
-    def test_no_shield_suspends_past_grace(
+    def test_no_shield_does_not_directly_suspend_past_grace(
         self,
         mock_reject_ip,
         mock_cleanup,
@@ -1709,7 +1874,9 @@ class TestInvoiceOverdueSuspensionShields:
         )
         db_session.refresh(subscription)
 
-        assert subscription.status == SubscriptionStatus.suspended
+        assert subscription.status == SubscriptionStatus.active
+        mock_reject_ip.assert_not_called()
+        mock_cleanup.assert_not_called()
 
     @patch("app.tasks.enforcement.cleanup_subscription_block_sessions.delay")
     @patch(

@@ -13,6 +13,7 @@ import '../models/payment_proof.dart';
 import '../models/session.dart';
 import '../models/page.dart';
 import '../models/subscription.dart';
+import '../models/technician_location.dart';
 import '../models/ticket.dart';
 import '../models/usage.dart';
 import '../repositories/billing_repository.dart';
@@ -94,8 +95,9 @@ final resellerDashboardProvider = FutureProvider.autoDispose<ResellerDashboard>(
 );
 
 /// Sales/Quotes across the reseller's customers (B3).
-final resellerQuotesProvider =
-    FutureProvider.autoDispose<List<ResellerQuote>>((ref) async {
+final resellerQuotesProvider = FutureProvider.autoDispose<List<ResellerQuote>>((
+  ref,
+) async {
   cacheFor(ref);
   return ref.watch(resellerRepositoryProvider).quotes();
 });
@@ -519,6 +521,22 @@ final workOrdersProvider = FutureProvider.autoDispose<WorkOrdersSummary>((
 ) async {
   cacheFor(ref);
   return ref.watch(workOrderRepositoryProvider).summary();
+});
+
+/// Polls the assigned technician's live position for an in-progress work order
+/// (~20s). The CRM gates visibility to the Start work → End work window and
+/// returns available=false otherwise, so the map self-hides.
+final technicianLocationProvider = StreamProvider.autoDispose
+    .family<TechnicianLocation, String>((ref, workOrderId) async* {
+  final repo = ref.watch(workOrderRepositoryProvider);
+  while (true) {
+    try {
+      yield await repo.technicianLocation(workOrderId);
+    } catch (_) {
+      yield const TechnicianLocation(available: false, reason: 'error');
+    }
+    await Future<void>.delayed(const Duration(seconds: 20));
+  }
 });
 
 final serviceLocationProvider = FutureProvider.autoDispose<ServiceLocation>((

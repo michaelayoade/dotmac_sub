@@ -170,6 +170,38 @@ def has_overdue_balance(db: Session, account_id: str) -> bool:
     return row is not None
 
 
+def _effective_billing_mode_for_account(
+    db: Session, account: Subscriber
+) -> BillingMode | None:
+    """Resolve billing mode from collectible services, falling back to account."""
+    modes = {
+        row[0]
+        for row in (
+            db.query(Subscription.billing_mode)
+            .filter(Subscription.subscriber_id == account.id)
+            .filter(Subscription.status.in_(COLLECTIBLE_SERVICE_STATUSES))
+            .distinct()
+            .all()
+        )
+        if row[0] is not None
+    }
+    if BillingMode.prepaid in modes:
+        effective = BillingMode.prepaid
+    elif BillingMode.postpaid in modes:
+        effective = BillingMode.postpaid
+    else:
+        effective = account.billing_mode
+    if modes and account.billing_mode != effective:
+        logger.info(
+            "Resolved billing mode for account %s from collectible subscriptions: "
+            "account=%s effective=%s",
+            account.id,
+            account.billing_mode.value if account.billing_mode else None,
+            effective.value if effective else None,
+        )
+    return effective
+
+
 def _general_default_policy_set_id(db: Session, account: Subscriber):
     """The general (fallback) dunning policy for an account's billing mode.
 
@@ -177,9 +209,10 @@ def _general_default_policy_set_id(db: Session, account: Subscriber):
     ``default_postpaid_policy_set_id`` (seeded to the immediate-suspend prepaid
     policy and the 30-day postpaid policy respectively).
     """
+    billing_mode = _effective_billing_mode_for_account(db, account)
     key = (
         "default_prepaid_policy_set_id"
-        if account.billing_mode == BillingMode.prepaid
+        if billing_mode == BillingMode.prepaid
         else "default_postpaid_policy_set_id"
     )
     # Read the setting row directly: these are seeded data settings, not declared
@@ -287,9 +320,10 @@ def _resolve_overdue_days(
     if account and account.grace_period_days is not None:
         grace_period = int(account.grace_period_days)
     elif account and db is not None:
+        billing_mode = _effective_billing_mode_for_account(db, account)
         setting_key = (
             "prepaid_default_grace_period_days"
-            if account.billing_mode == BillingMode.prepaid
+            if billing_mode == BillingMode.prepaid
             else "postpaid_default_grace_period_days"
         )
         value = settings_spec.resolve_value(db, SettingDomain.billing, setting_key)
@@ -672,37 +706,31 @@ def _create_throttle_notification(
 
 
 def _create_suspension_warning_notification(
-    db: Session, account_id: str, days_overdue: int, note: str | None = None
+    db: Session,
+    account_id: str,
+    days_overdue: int,
+    note: str | None = None,
+    invoice_id: str | None = None,
 ) -> None:
-    """Create email notification warning of pending suspension."""
-    from app.models.notification import (
-        Notification,
-        NotificationChannel,
-        NotificationStatus,
+    """Emit a suspension warning event so notification policy owns delivery."""
+    invoice = db.get(Invoice, coerce_uuid(invoice_id)) if invoice_id else None
+    emit_event(
+        db,
+        EventType.subscription_suspension_warning,
+        {
+            "invoice_id": str(invoice.id) if invoice else (invoice_id or ""),
+            "invoice_number": invoice.invoice_number if invoice else "",
+            "amount": str(invoice.balance_due or invoice.total or 0)
+            if invoice
+            else "0.00",
+            "days_overdue": str(days_overdue),
+            "grace_hours": "0",
+            "reason": "dunning",
+            "note": note or "",
+        },
+        account_id=coerce_uuid(account_id),
     )
-
-    email = _get_account_email(db, account_id)
-    if not email:
-        logger.warning(
-            f"Cannot create suspension warning notification for account {account_id}: no email found"
-        )
-        return
-
-    body = (
-        note
-        or f"Your account is {days_overdue} days past due. Please make a payment to avoid service suspension."
-    )
-    notification = Notification(
-        channel=NotificationChannel.email,
-        event_type="suspension_warning",
-        category="billing",
-        recipient=email,
-        subject="Suspension Warning - Payment Overdue",
-        body=body,
-        status=NotificationStatus.queued,
-    )
-    db.add(notification)
-    logger.info(f"Created suspension warning notification for account {account_id}")
+    logger.info("Emitted suspension warning event for account %s", account_id)
 
 
 def _create_suspension_notification(db: Session, account_id: str) -> None:
@@ -786,7 +814,49 @@ def _dunning_shield_reason(db: Session, account_id) -> str | None:
     )
     if proof_id:
         return f"payment proof {proof_id} pending review"
-    return None
+    from app.services.service_extensions import extension_shield_reason
+
+    return extension_shield_reason(db, account_id)
+
+
+def _bulk_dunning_shield_reasons(
+    db: Session, account_ids: list[UUID] | set[UUID]
+) -> dict[UUID, str]:
+    """Return account shield reasons for a dunning cohort in bulk."""
+    if not account_ids:
+        return {}
+    ids = {coerce_uuid(str(account_id)) for account_id in account_ids}
+    from app.models.payment_arrangement import (
+        ArrangementStatus,
+        PaymentArrangement,
+    )
+    from app.models.payment_proof import PaymentProof, PaymentProofStatus
+
+    reasons: dict[UUID, str] = {}
+    arrangement_rows = (
+        db.query(PaymentArrangement.subscriber_id, PaymentArrangement.id)
+        .filter(PaymentArrangement.subscriber_id.in_(ids))
+        .filter(PaymentArrangement.status == ArrangementStatus.active)
+        .filter(PaymentArrangement.is_active.is_(True))
+        .all()
+    )
+    for account_id, arrangement_id in arrangement_rows:
+        reasons.setdefault(account_id, f"active payment arrangement {arrangement_id}")
+
+    proof_rows = (
+        db.query(PaymentProof.account_id, PaymentProof.id)
+        .filter(PaymentProof.account_id.in_(ids))
+        .filter(PaymentProof.status == PaymentProofStatus.submitted)
+        .all()
+    )
+    for account_id, proof_id in proof_rows:
+        reasons.setdefault(account_id, f"payment proof {proof_id} pending review")
+
+    from app.services.service_extensions import bulk_extension_shield_reasons
+
+    for account_id, reason in bulk_extension_shield_reasons(db, ids).items():
+        reasons.setdefault(account_id, reason)
+    return reasons
 
 
 # Dunning actions that enforce against the account (and so must re-check the
@@ -864,6 +934,8 @@ def _minimum_enforcement_age_skip_reason(
     db: Session, account: Subscriber, overdue_days: int
 ) -> str | None:
     """Block service-affecting action until the notice runway has elapsed."""
+    if _effective_billing_mode_for_account(db, account) == BillingMode.prepaid:
+        return None
     value = settings_spec.resolve_value(
         db,
         SettingDomain.collections,
@@ -894,6 +966,7 @@ def _execute_dunning_action(
     day_offset: int,
     note: str | None,
     overdue_days: int | None = None,
+    invoice_id: str | None = None,
 ) -> str:
     """Execute a dunning action and return the outcome.
 
@@ -978,7 +1051,9 @@ def _execute_dunning_action(
             )
 
     if action == DunningAction.notify:
-        _create_suspension_warning_notification(db, account_id, day_offset, note)
+        _create_suspension_warning_notification(
+            db, account_id, day_offset, note, invoice_id=invoice_id
+        )
         return "notification_sent"
 
     elif action == DunningAction.suspend:
@@ -1362,13 +1437,27 @@ class DunningWorkflow(ListResponseMixin):
             .filter(Invoice.due_at.is_not(None))
             .filter(Invoice.due_at <= run_at)
             .filter(Invoice.is_active.is_(True))
+            # Only collectible invoices drive dunning. draft/void/written_off
+            # rows must never create a case even if they retain a positive
+            # balance_due (a stale value elsewhere would otherwise dun a debt
+            # that isn't owed).
+            .filter(
+                Invoice.status.in_(
+                    [
+                        InvoiceStatus.issued,
+                        InvoiceStatus.partially_paid,
+                        InvoiceStatus.overdue,
+                    ]
+                )
+            )
             .all()
         )
         overdue_accounts: dict[UUID, list[Invoice]] = {}
         for invoice in invoices:
             if (invoice.metadata_ or {}).get("reconciliation_hold"):
                 continue
-            overdue_accounts.setdefault(invoice.account_id, []).append(invoice)
+            account_id = coerce_uuid(str(invoice.account_id))
+            overdue_accounts.setdefault(account_id, []).append(invoice)
             if not payload.dry_run and invoice.status in {
                 InvoiceStatus.issued,
                 InvoiceStatus.partially_paid,
@@ -1397,7 +1486,7 @@ class DunningWorkflow(ListResponseMixin):
                 Subscription.offer_id.in_(monthly_offer_ids),
             )
         postpaid_account_ids = {
-            row[0]
+            coerce_uuid(str(row[0]))
             for row in (
                 db.query(Subscription.subscriber_id)
                 .filter(enforce_mode_filter)
@@ -1411,19 +1500,49 @@ class DunningWorkflow(ListResponseMixin):
                 .all()
             )
         }
+        account_ids = list(overdue_accounts.keys())
+        accounts = {
+            coerce_uuid(str(account.id)): account
+            for account in (
+                db.query(Subscriber).filter(Subscriber.id.in_(account_ids)).all()
+                if account_ids
+                else []
+            )
+        }
+        shield_reasons = _bulk_dunning_shield_reasons(db, set(account_ids))
+        open_cases_by_account: dict[UUID, DunningCase] = {}
+        if account_ids:
+            open_cases = (
+                db.query(DunningCase)
+                .filter(DunningCase.account_id.in_(account_ids))
+                .filter(
+                    DunningCase.status.in_(
+                        [DunningCaseStatus.open, DunningCaseStatus.paused]
+                    )
+                )
+                .order_by(
+                    DunningCase.account_id.asc(),
+                    DunningCase.started_at.desc(),
+                )
+                .all()
+            )
+            for open_case in open_cases:
+                open_cases_by_account.setdefault(
+                    coerce_uuid(str(open_case.account_id)), open_case
+                )
+        steps_by_policy: dict[str, list[PolicyDunningStep]] = {}
         cases_created = 0
         actions_created = 0
         skipped = 0
         for account_id, account_invoices in overdue_accounts.items():
-            # Fetch account to get grace_period
-            account = db.get(Subscriber, account_id)
+            account = accounts.get(account_id)
             if not account:
                 skipped += 1
                 continue
             if account_id not in postpaid_account_ids:
                 skipped += 1
                 continue
-            if _dunning_shield_reason(db, account_id):
+            if shield_reasons.get(account_id):
                 skipped += 1
                 continue
 
@@ -1431,7 +1550,11 @@ class DunningWorkflow(ListResponseMixin):
             if not policy_set_id:
                 skipped += 1
                 continue
-            steps = _resolve_dunning_steps(db, str(policy_set_id))
+            policy_cache_key = str(policy_set_id)
+            steps = steps_by_policy.get(policy_cache_key)
+            if steps is None:
+                steps = _resolve_dunning_steps(db, policy_cache_key)
+                steps_by_policy[policy_cache_key] = steps
             if not steps:
                 skipped += 1
                 continue
@@ -1447,17 +1570,7 @@ class DunningWorkflow(ListResponseMixin):
                 skipped += 1
                 continue
 
-            case = (
-                db.query(DunningCase)
-                .filter(DunningCase.account_id == account_id)
-                .filter(
-                    DunningCase.status.in_(
-                        [DunningCaseStatus.open, DunningCaseStatus.paused]
-                    )
-                )
-                .order_by(DunningCase.started_at.desc())
-                .first()
-            )
+            case = open_cases_by_account.get(account_id)
             if not case:
                 case = DunningCase(
                     account_id=account_id,
@@ -1515,6 +1628,7 @@ class DunningWorkflow(ListResponseMixin):
                         step.day_offset,
                         step.note,
                         overdue_days=max_days,
+                        invoice_id=str(oldest_invoice.id),
                     )
                     _create_action_log(
                         db,
@@ -1671,7 +1785,6 @@ class BillingEnforcementReconciler:
                 "credit_applied": "0.00",
             }
 
-        from app.services.billing._common import get_account_credit_balance
         from app.services.billing.reconcile_unposted import (
             settle_open_invoices_from_credit,
         )
@@ -1714,8 +1827,6 @@ class BillingEnforcementReconciler:
         total_applied = Decimal("0.00")
         for account_id in account_ids:
             try:
-                if get_account_credit_balance(db, account_id) <= 0:
-                    continue
                 result = settle_open_invoices_from_credit(db, account_id)
                 if result.changed:
                     total_applied += result.applied

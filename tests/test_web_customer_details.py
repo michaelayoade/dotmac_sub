@@ -441,6 +441,13 @@ def test_person_detail_stats_normalizes_usage_period(monkeypatch, db_session):
     }
 
 
+def test_admin_customer_stats_templates_register_portal_datetime_filter():
+    portal_datetime = customer_routes.templates.env.filters.get("portal_datetime")
+
+    assert portal_datetime is not None
+    assert portal_datetime(None, "%b %d, %Y", "N/A") == "N/A"
+
+
 def test_customer_detail_snapshot_includes_pending_location_request(
     db_session, subscriber
 ):

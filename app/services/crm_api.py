@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from sqlalchemy import func, or_, select
@@ -26,7 +26,7 @@ from app.models.catalog import (
 from app.models.collections import DunningCase
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.lifecycle import LifecycleEventType, SubscriptionLifecycleEvent
-from app.models.network_monitoring import PopSite
+from app.models.network_monitoring import NetworkDevice, PopSite
 from app.models.service_extension import ServiceExtension, ServiceExtensionEntry
 from app.models.subscriber import Address, Subscriber, SubscriberStatus
 from app.models.system_user import SystemUser
@@ -1385,3 +1385,409 @@ def create_installation_invoice(
     db.commit()
     db.refresh(invoice)
     return invoice
+
+
+def outage_impact(
+    session: Session,
+    *,
+    node: NetworkDevice | None = None,
+    basestation: PopSite | None = None,
+    olt_id: str | uuid.UUID | None = None,
+    pon_port_id: str | uuid.UUID | None = None,
+) -> dict:
+    """Subscribers affected by a failed asset, with a coverage report.
+
+    Handles four asset granularities, deduped into one subscriber set:
+      - ``node``/``basestation`` — the LLDP topology (``affected_customers``),
+        which expands a switch/router/cabinet failure downstream.
+      - ``olt_id`` — every active ONT on the OLT (all PON ports).
+      - ``pon_port_id`` — only the ONTs on that PON port (a subset of the OLT).
+
+    OLT and PON-port resolution read straight off ``OntAssignment`` and so are
+    vendor-agnostic (Huawei and Ubiquiti alike). The coverage block is
+    deliberate: impact is only as complete as the e2e topology, and the
+    resolvers under-report rather than over-report when links are missing — so
+    we surface where the chain dead-ends (an asset that yields zero subscribers)
+    to let the caller trust the list or fall back to manual selection.
+    """
+    from app.models.network import OntAssignment, OntUnit
+    from app.services.topology.affected import (
+        affected_customers,
+        subscriptions_for_node,
+    )
+
+    subscribers: dict = {}
+    gaps: list[dict] = []
+    resolved_node_count = 0
+
+    def _add(s) -> None:
+        if s is None:
+            return
+        subscribers[s.id] = {
+            "id": str(s.id),
+            "subscriber_number": s.subscriber_number or s.account_number,
+            "name": subscriber_name(s),
+            "email": s.email,
+            "phone": s.phone,
+        }
+
+    def _add_by_subscriber_ids(rows) -> None:
+        for (sub_id,) in rows:
+            if sub_id is not None:
+                _add(session.get(Subscriber, sub_id))
+
+    if node is not None or basestation is not None:
+        result = affected_customers(session, node=node, basestation=basestation)
+        for sub in result["subscriptions"]:
+            _add(getattr(sub, "subscriber", None))
+        node_ids = result.get("node_ids") or set()
+        resolved_node_count = len(node_ids)
+        for nid in node_ids:
+            n = session.get(NetworkDevice, nid)
+            if (
+                n is not None
+                and n.matched_device_type in ("olt", "nas")
+                and not subscriptions_for_node(session, n)
+            ):
+                gaps.append(
+                    {
+                        "node_id": str(nid),
+                        "name": n.name,
+                        "matched_type": n.matched_device_type,
+                    }
+                )
+
+    if olt_id is not None:
+        before = len(subscribers)
+        ont_ids = [
+            r[0]
+            for r in session.query(OntUnit.id)
+            .filter(OntUnit.olt_device_id == olt_id)
+            .all()
+        ]
+        if ont_ids:
+            _add_by_subscriber_ids(
+                session.query(OntAssignment.subscriber_id)
+                .filter(
+                    OntAssignment.ont_unit_id.in_(ont_ids),
+                    OntAssignment.active.is_(True),
+                    OntAssignment.subscriber_id.isnot(None),
+                )
+                .all()
+            )
+        if len(subscribers) == before:
+            gaps.append(
+                {
+                    "olt_id": str(olt_id),
+                    "reason": "no active ONT assignments on this OLT",
+                }
+            )
+
+    if pon_port_id is not None:
+        before = len(subscribers)
+        _add_by_subscriber_ids(
+            session.query(OntAssignment.subscriber_id)
+            .filter(
+                OntAssignment.pon_port_id == pon_port_id,
+                OntAssignment.active.is_(True),
+                OntAssignment.subscriber_id.isnot(None),
+            )
+            .all()
+        )
+        if len(subscribers) == before:
+            gaps.append(
+                {
+                    "pon_port_id": str(pon_port_id),
+                    "reason": "no active ONT assignments on this PON port",
+                }
+            )
+
+    return {
+        "subscribers": list(subscribers.values()),
+        "count": len(subscribers),
+        "coverage": {
+            "resolved_node_count": resolved_node_count,
+            "nodes_without_subscribers": gaps,
+            "has_topology_gaps": bool(gaps),
+        },
+    }
+
+
+def list_infrastructure_assets(
+    session: Session, *, q: str | None = None, limit: int = 1000
+) -> list[dict]:
+    """Pickable infrastructure items for raising an outage/infrastructure ticket:
+    OLTs (Huawei/Ubiquiti), their PON ports, and basestations. Each item's id +
+    type map onto the outage-impact resolver."""
+    from app.models.network import OLTDevice, PonPort
+
+    like = f"%{q.strip()}%" if q and q.strip() else None
+    assets: list[dict] = []
+
+    olt_query = session.query(OLTDevice)
+    if like is not None:
+        olt_query = olt_query.filter(OLTDevice.name.ilike(like))
+    olts = olt_query.order_by(OLTDevice.name).limit(limit).all()
+    olt_by_id = {o.id: o for o in olts}
+    for olt in olts:
+        vendor = (olt.vendor or "").strip()
+        assets.append(
+            {
+                "id": str(olt.id),
+                "type": "olt",
+                "label": f"{olt.name} ({vendor})" if vendor else olt.name,
+                "vendor": vendor or None,
+            }
+        )
+
+    # Only list PON ports for OLTs we can attribute (search mode = all matching
+    # OLTs; otherwise the OLTs we already returned) — avoids dumping thousands.
+    ports: list = []
+    if olt_by_id:
+        ports = (
+            session.query(PonPort)
+            .filter(PonPort.olt_id.in_(list(olt_by_id.keys())))
+            .order_by(PonPort.name)
+            .limit(limit)
+            .all()
+        )
+    for port in ports:
+        parent: OLTDevice | None = olt_by_id.get(port.olt_id) or session.get(
+            OLTDevice, port.olt_id
+        )
+        olt_name = parent.name if parent else "OLT"
+        vendor = ((parent.vendor if parent else None) or "").strip()
+        assets.append(
+            {
+                "id": str(port.id),
+                "type": "pon_port",
+                "label": f"{olt_name} - {port.name}",
+                "olt_id": str(port.olt_id),
+                "vendor": vendor or None,
+            }
+        )
+
+    bs_query = session.query(PopSite).filter(PopSite.zabbix_group_id.isnot(None))
+    if like is not None:
+        bs_query = bs_query.filter(PopSite.name.ilike(like))
+    for pop in bs_query.order_by(PopSite.name).limit(limit).all():
+        assets.append({"id": str(pop.id), "type": "basestation", "label": pop.name})
+
+    return assets
+
+
+def record_external_payment(
+    session: Session,
+    *,
+    subscriber_id: str,
+    amount: Any,
+    external_ref: str,
+    paid_at: datetime | None = None,
+    memo: str | None = None,
+    invoice_external_ref: str | None = None,
+    currency: str = "NGN",
+) -> Any:
+    """Record a payment the customer made in the CRM (installation / subscription)
+    into this app's ledger, so it settles the matching invoice and shows in the
+    customer portal. Idempotent on ``external_ref`` — a repeat push returns the
+    already-recorded payment. When ``invoice_external_ref`` matches a CRM-created
+    invoice it's allocated there; otherwise it auto-allocates to oldest unpaid.
+    """
+    from decimal import Decimal, InvalidOperation
+
+    from app.models.billing import Invoice, Payment, PaymentStatus
+    from app.schemas.billing import PaymentAllocationApply, PaymentCreate
+    from app.services import billing as billing_service
+
+    sub_uuid = coerce_subscriber_id(str(subscriber_id))
+    subscriber = session.get(Subscriber, sub_uuid) if sub_uuid else None
+    if subscriber is None:
+        raise LookupError("subscriber not found")
+
+    try:
+        amt = Decimal(str(amount))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ValueError("amount must be a number") from exc
+    if amt <= 0:
+        raise ValueError("amount must be greater than 0")
+
+    ext_id = f"crm:{external_ref}"
+    existing = session.query(Payment).filter(Payment.external_id == ext_id).first()
+    if existing is not None:
+        return existing
+
+    allocations: list[PaymentAllocationApply] | None = None
+    if invoice_external_ref:
+        for inv in (
+            session.query(Invoice)
+            .filter(Invoice.account_id == subscriber.id, Invoice.is_active.is_(True))
+            .order_by(Invoice.created_at.desc())
+            .all()
+        ):
+            if (inv.metadata_ or {}).get("crm_external_ref") == str(
+                invoice_external_ref
+            ):
+                due = inv.balance_due if inv.balance_due is not None else amt
+                if due and due > 0:
+                    allocations = [
+                        PaymentAllocationApply(invoice_id=inv.id, amount=min(amt, due))
+                    ]
+                break
+
+    payload = PaymentCreate(
+        account_id=subscriber.id,
+        amount=amt,
+        currency=(currency or "NGN").upper(),
+        status=PaymentStatus.succeeded,
+        paid_at=paid_at,
+        external_id=ext_id,
+        memo=memo or "CRM sales payment",
+        allocations=allocations,
+    )
+    return billing_service.payments.create(
+        session, payload, auto_allocate=(allocations is None)
+    )
+
+
+def list_catalog_offers(
+    session: Session,
+    *,
+    q: str | None = None,
+    active_only: bool = True,
+    limit: int = 500,
+) -> list[dict]:
+    """The subscriber-facing plan catalog (offers + their recurring price) for the
+    CRM to read, so a sales quote can pick a real offer instead of the CRM
+    maintaining a parallel plan list. sub is the source of truth for plans."""
+    from app.models.catalog import CatalogOffer, OfferPrice, PriceType
+
+    query = session.query(CatalogOffer)
+    if active_only:
+        query = query.filter(CatalogOffer.is_active.is_(True))
+    if q and q.strip():
+        query = query.filter(CatalogOffer.name.ilike(f"%{q.strip()}%"))
+    offers = query.order_by(CatalogOffer.name).limit(limit).all()
+    if not offers:
+        return []
+
+    prices: dict = {}
+    for price in (
+        session.query(OfferPrice)
+        .filter(
+            OfferPrice.offer_id.in_([o.id for o in offers]),
+            OfferPrice.price_type == PriceType.recurring,
+            OfferPrice.is_active.is_(True),
+        )
+        .all()
+    ):
+        prices.setdefault(price.offer_id, price)  # first active recurring price wins
+
+    out: list[dict] = []
+    for offer in offers:
+        offer_price = prices.get(offer.id)
+        out.append(
+            {
+                "id": str(offer.id),
+                "code": offer.code,
+                "name": offer.name,
+                "recurring_price": str(offer_price.amount)
+                if offer_price is not None
+                else None,
+                "currency": offer_price.currency if offer_price is not None else "NGN",
+                "billing_cycle": offer.billing_cycle.value
+                if offer.billing_cycle
+                else None,
+                "speed_download_mbps": offer.speed_download_mbps,
+                "speed_upload_mbps": offer.speed_upload_mbps,
+            }
+        )
+    return out
+
+
+def _resolve_offer(session: Session, offer_ref: str):
+    from app.models.catalog import CatalogOffer
+
+    oid = coerce_subscriber_id(str(offer_ref))
+    if oid is not None:
+        offer = session.get(CatalogOffer, oid)
+        if offer is not None:
+            return offer
+    return (
+        session.query(CatalogOffer)
+        .filter(CatalogOffer.code == str(offer_ref), CatalogOffer.is_active.is_(True))
+        .order_by(CatalogOffer.created_at.desc())
+        .first()
+    )
+
+
+def create_subscription(
+    session: Session,
+    *,
+    subscriber_id: str,
+    offer_ref: str,
+    external_ref: str,
+    unit_price: Any = None,
+    start_at: datetime | None = None,
+) -> dict:
+    """Create a subscription for a subscriber from a CRM sale and generate its
+    first (subscription-tagged) invoice, so the plan + its charge show in the
+    customer portal. ``offer_ref`` is a sub CatalogOffer id or code — the CRM
+    picks a real offer, so no fuzzy matching. Idempotent on ``external_ref``
+    (recorded on the first invoice's metadata).
+    """
+    from app.models.catalog import SubscriptionStatus
+    from app.schemas.catalog import SubscriptionCreate
+    from app.services.billing.invoices import Invoices
+    from app.services.catalog.subscriptions import Subscriptions
+
+    subscriber = session.get(Subscriber, coerce_subscriber_id(str(subscriber_id)))
+    if subscriber is None:
+        raise LookupError("subscriber not found")
+    offer = _resolve_offer(session, offer_ref)
+    if offer is None:
+        raise LookupError("offer not found")
+
+    # Idempotent: an invoice already tagged with this crm_external_ref means the
+    # subscription was synced before — return it rather than duplicating.
+    for inv in (
+        session.query(Invoice)
+        .filter(Invoice.account_id == subscriber.id, Invoice.is_active.is_(True))
+        .order_by(Invoice.created_at.desc())
+        .all()
+    ):
+        meta = inv.metadata_ or {}
+        if meta.get("crm_external_ref") == str(external_ref) and meta.get(
+            "crm_subscription_id"
+        ):
+            existing = session.get(
+                Subscription, coerce_subscriber_id(str(meta["crm_subscription_id"]))
+            )
+            return {"subscription": existing, "invoice": inv, "created": False}
+
+    price_override = None
+    if unit_price is not None:
+        try:
+            price_override = Decimal(str(unit_price))
+        except (InvalidOperation, TypeError, ValueError):
+            price_override = None
+
+    subscription = Subscriptions.create(
+        session,
+        SubscriptionCreate(
+            subscriber_id=subscriber.id,
+            offer_id=offer.id,
+            status=SubscriptionStatus.pending,
+            start_at=start_at or datetime.now(UTC),
+            unit_price=price_override,
+        ),
+    )
+    invoice = Invoices.create_for_subscription(
+        session, str(subscriber.id), str(subscription.id), allow_prepaid=True
+    )
+    meta = dict(invoice.metadata_ or {})
+    meta["source"] = "dotmac_crm"
+    meta["crm_external_ref"] = str(external_ref)
+    meta["crm_subscription_id"] = str(subscription.id)
+    invoice.metadata_ = meta
+    session.commit()
+    return {"subscription": subscription, "invoice": invoice, "created": True}
