@@ -1,0 +1,142 @@
+# Audit closure checklist — all modules
+
+Master tracker to close out the 14-domain UX-polish/operator-control audit
+program plus the admin-authz security review. Compiled 2026-07-03 from every
+audit doc's remediation-status section (all 14 domains are past their
+required-tier remediation; this is the remaining tail).
+
+**How to use**: tick items with the PR number (`- [x] … (#123)`). When a tier-5
+item is consciously dropped, mark it `[won't-do]` with a word of rationale
+instead of leaving it unchecked forever. Source of detail: each domain's
+`*_UX_POLISH_AUDIT.md` appendix.
+
+---
+
+## Tier 0 — verify-and-tick (already believed fixed; confirm, then close)
+
+- [ ] SECURITY #2: connector `auth_config` encrypted at rest — APP_INTEGRATIONS
+  status says shipped via #534; verify ciphertext in DB + update
+  SECURITY_REVIEW_ADMIN_AUTHZ.md status column
+- [ ] SECURITY #12: connector `headers`/`metadata_` masked on render — says
+  shipped via #540; verify + update the security doc
+- [ ] SECURITY #13: API-key scopes model — says shipped via #539/#541; verify +
+  update the security doc
+
+## Tier 1 — remaining correctness / security-adjacent work
+
+- [ ] SECURITY (systemic): extend the build-failing route-permission arch test
+  from `/api/v1`-only to **all `/admin` web routers**, with a quarantine list
+  burned down over time
+- [ ] SECURITY: move API-key hashing from unsalted sha256 to HMAC-with-key
+- [ ] BILLING: currency cleanup remainder — forms, adapters, **Flutterwave init
+  (blocks non-NGN today)**, integrity SQL, `crm_billing_push` (`os.getenv`)
+- [ ] APP-INTEGRATIONS P-C: fix fake observability — connector health is
+  unconditionally green, API-key `last_used_at` never stamped, activity-log
+  latency always "-", Connector column shows raw UUID instead of name
+- [ ] AUTH (security-review pointer): portal login throttle is per-worker
+  in-memory (`limit=10/900s`) — move to a distributed limiter + settings
+- [ ] AUTH (security-review pointer): reset-token passed in redirect URL
+  (`web_auth.py:196`) — move out of the URL
+
+## Tier 2 — structural / settings-system unification
+
+- [ ] SYSTEM-CONFIG C-1: migrate the remaining **billing/collections bespoke
+  string-save forms** to typed `settings_spec` (the two-settings-systems split)
+- [ ] SYSTEM-CONFIG: bespoke-save validation/feedback consistency for the
+  remaining untyped forms (monitoring/preferences/portal/radius already typed)
+- [ ] BILLING: bulk/scheduled money-job **result history** surface (autopay,
+  reconcilers, runners: last-run/result in-app) + raw-exception copy cleanup
+- [ ] BILLING: remaining policy thresholds → settings (outside the resolved
+  autopay/arrangements/extensions/sweep/gateway-timeout/AR-bucket/dedupe set)
+- [ ] RESELLER C-2: per-reseller "restrict catalog to assigned offers" flag +
+  global default (catalog is default-open today)
+- [ ] CROSS-CUTTING: shared currency + timezone display helpers, then sweep the
+  known hardcodes: catalog customer-detail `₦` + calculator totals, reseller
+  VAS `min_topup=100`/`₦`/`NGN`, dunning/arrangement tz+currency, reseller
+  UTC-label-only branch
+- [ ] CROSS-CUTTING: "no dead controls" lint — every form field maps to a
+  consumer, every settings key has a reader (recurring incident class; CI grep)
+
+## Tier 3 — product decisions needed (blocked on a human call)
+
+- [ ] CATALOG C-4: change-plan effective timing — offer **next-cycle** option
+  alongside instant-with-proration? (currently hardcoded instant)
+- [ ] RESELLER C-1: partner economics — commission rate/markup, credit limit,
+  payout terms fields + defaults (data-model decision)
+- [ ] RESELLER: dual-provider VAS float top-up (Flutterwave path exists,
+  unused) — enable or drop?
+- [ ] CUSTOMER-PORTAL: direct appointment reschedule/cancel workflow (replaces
+  prefilled-ticket flow) — accept customer-side scheduling changes?
+- [ ] CATALOG: bulk ops include suspended subscriptions via a configurable
+  included-statuses set? (bulk-tariff/bulk-change-plan are active-only today)
+
+## Tier 4 — deferred P2 tails (real work, low urgency)
+
+### Networking (largest bucket — one settings-focused PR could take most of it)
+- [ ] WireGuard tunables (4): `wireguard_default_keepalive` (25), per-server
+  `router_api_ssl_verify` (currently off even with SSL on), log retention
+  (90d), handshake-online window (180s)
+- [ ] Threshold/TTL settings (~5): CoA neg-TTL 15m / burst 10 / open-session
+  2h; VPN-tunnel-stale 3m; backup-stale 24h; ACS validate timeout 5s;
+  availability window 365d + uptime badge cutoffs vs `infra_sla_target_percent`
+- [ ] Deployment identifiers: captive `block_chain`/`oss_ports`, ONT
+  `tag_transform` per-OLT, HTTP-mgmt-port validation, genieacs task-wait
+  knobs, CPE LAN-port range by vendor
+- [ ] Async/feedback polish batch (~8 small): push-detail poll, sessions
+  "as of" label, import-PPPoE confirm, TR-069 task result poll + auto-refresh,
+  map loading/empty/tile-error states, IP-ops busy state, VPN copy/regen
+  toasts, fiber approve/reject disable+toast
+
+### Catalog & services
+- [ ] FUP rule **impact preview** (how many subscribers would a new rule
+  throttle/block right now)
+- [ ] Calculator VAT/proration accuracy (VAT on subtotal only; one-time fees
+  VAT-free; "First Bill" ignores proration)
+- [ ] GiB-computed-but-labeled-GB (a "100 GB" rule is ~107 GB)
+- [ ] Tunable thresholds: serviceable radius 1.5km, service-request SLA/aging,
+  password-reset throttle 3/hr, PPPoE-reveal 30/hr, 60d staleness
+- [ ] Appendix tail (~10 small: usage price type in UI, orphan bulk routes,
+  page-size caps, service-intent pppoe hardcode, etc. — see doc appendix)
+
+### Billing
+- [ ] AR-aging period selector breadth (month/quarter) + tz edge polish
+- [ ] Appendix tail (~15 small: truncation footers on capped lists, reconciler
+  last-run surfacing, `billing_enabled_expected` registration, partial-pay
+  invoice field, statement-period selector + paperless, TTL settings, stale
+  Pay-button label, manual-payment min/max — see doc appendix)
+
+### Reports & dashboards
+- [ ] Truncation footers / count banners on every capped table & export
+  (row caps 200/100/20; CSV cap 5000)
+- [ ] Default window/row-cap as settings (days=30, export ranges, network
+  `hours` without UI) — possibly a reports settings group
+
+### App integrations
+- [ ] P-D: revoke/create flash results + system-user-owned API keys
+- [ ] P2 tail: key rotate flow, max-keys/max-TTL/rate-limit per key,
+  probe-timeout + catalog-version settings, schedule-restart hint, copy
+  feedback, friendly error masking
+
+## Tier 5 — optional / recommended-only (close or consciously drop)
+
+- [ ] CRM (3): warn on 0 CRM-linked subscribers in billing push; conflicting
+  IDs in ambiguous-identity logs; configurable require-name fuzzy toggle
+- [ ] NOTIFICATIONS (2): client-side template lint before submit; queue
+  batch-size + reclaim-category controls
+- [ ] SUPPORT (4): searchable ticket picker for link/merge; scheduled
+  SLA-breach materialization; richer team-management views; broader tz sweep
+- [ ] VAS/WALLET (4): the four unchecked "Recommended" items in its doc
+
+---
+
+## Suggested closure order
+
+1. **Tier 0** (an hour: verify three security items, update the security doc)
+2. **Tier 1** (each item is a small-to-medium PR; the arch-test extension pays
+   for itself immediately)
+3. **Tier 2** — do the two cross-cutting helpers first (currency/tz, dead-
+   controls lint); they shrink several Tier 4 tails to mechanical sweeps
+4. **Tier 3** — needs product answers; batch the five decisions in one sitting
+5. **Tier 4** — one PR per domain bucket (networking-settings PR is the big one)
+6. **Tier 5** — tick or `[won't-do]` each; empty this list to declare the
+   audit program closed
