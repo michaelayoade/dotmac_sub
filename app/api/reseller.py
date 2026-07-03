@@ -339,11 +339,16 @@ def my_reseller_billing(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ) -> dict:
-    """Consolidated billing statement for the caller's reseller account."""
+    """Consolidated billing statement + account-activity ledger for the caller's
+    reseller account (mobile parity with the reseller web billing page)."""
     from app.services import reseller_portal_billing
 
     reseller_id = _reseller_id(db, principal)
-    return reseller_portal_billing.get_billing_account_summary(db, reseller_id)
+    summary = reseller_portal_billing.get_billing_account_summary(db, reseller_id)
+    summary["account_activity"] = reseller_portal_billing.account_activity(
+        db, reseller_id, summary
+    )
+    return summary
 
 
 @router.post("/billing/pay/intent")

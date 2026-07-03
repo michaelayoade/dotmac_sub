@@ -436,6 +436,73 @@ def record_crm_payment(
     )
 
 
+@router.post(
+    "/subscriptions",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_crm_bearer)],
+    tags=["subscriptions"],
+)
+def create_crm_subscription(
+    payload: dict[str, Any] = Body(default_factory=dict),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Create a subscription for a subscriber from a CRM sale (+ its first
+    invoice). Body: ``{subscriber_id, offer_ref|offer_id|offer_code,
+    external_ref, unit_price?, start_at?}``. Idempotent on ``external_ref``."""
+    errors: dict[str, list[str]] = {}
+    subscriber_id = str(payload.get("subscriber_id") or "").strip()
+    if not subscriber_id:
+        errors.setdefault("subscriber_id", []).append("Required.")
+    offer_ref = str(
+        payload.get("offer_ref")
+        or payload.get("offer_id")
+        or payload.get("offer_code")
+        or ""
+    ).strip()
+    if not offer_ref:
+        errors.setdefault("offer_ref", []).append("Required (offer id or code).")
+    external_ref = str(payload.get("external_ref") or "").strip()
+    if not external_ref:
+        errors.setdefault("external_ref", []).append("Required.")
+    if errors:
+        _error(status.HTTP_400_BAD_REQUEST, "Invalid subscription payload.", errors)
+
+    start_at = None
+    start_raw = payload.get("start_at")
+    if start_raw:
+        try:
+            start_at = datetime.fromisoformat(str(start_raw).replace("Z", "+00:00"))
+        except ValueError:
+            _error(
+                status.HTTP_400_BAD_REQUEST,
+                "Invalid subscription payload.",
+                {"start_at": ["Must be ISO 8601."]},
+            )
+
+    try:
+        result = crm_api.create_subscription(
+            db,
+            subscriber_id=subscriber_id,
+            offer_ref=offer_ref,
+            external_ref=external_ref,
+            unit_price=payload.get("unit_price"),
+            start_at=start_at,
+        )
+    except LookupError as exc:
+        _error(status.HTTP_404_NOT_FOUND, str(exc).capitalize())
+
+    subscription = result["subscription"]
+    invoice = result["invoice"]
+    return _envelope(
+        {
+            "subscription_id": str(subscription.id) if subscription else None,
+            "invoice_id": str(invoice.id) if invoice else None,
+            "status": subscription.status.value if subscription else None,
+            "created": result["created"],
+        }
+    )
+
+
 @router.get("/offers", dependencies=[Depends(require_crm_bearer)])
 def catalog_offers(
     q: str | None = None,
