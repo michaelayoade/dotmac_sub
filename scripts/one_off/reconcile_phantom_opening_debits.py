@@ -3,11 +3,18 @@
 The cutover opening-balance seed imported some non-negative deposit accounts as
 active debit ledger rows. A non-negative imported deposit means the customer did
 not owe opening debt, so the debit corrupts account net-ledger displays. This
-tool is dry-run by default and creates compensating credit entries only for
-rows that are safely classified as phantom.
+tool is retired for normal operation. It is dry-run by default and creates
+compensating credit entries only for rows that are safely classified as
+phantom.
 
 The original debit rows are left active for audit; the compensating credit nets
 the statement to zero and is idempotent by original ledger-entry id.
+
+Rows that already have an inactive phantom-reversal credit are never eligible.
+That case means a later cleanup soft-deleted the debit/reversal audit pair; a
+subsequent repair may have deliberately restored the original debit. Treating
+the inactive credit as reusable evidence would re-reverse legitimate cutover
+construction rows.
 
 Examples
 --------
@@ -77,6 +84,7 @@ class Candidate:
     subscriber: Subscriber
     account_id: str
     existing_reversal: Decimal
+    inactive_reversal: Decimal
     remaining: Decimal
     classification: str
     eligible: bool
@@ -105,12 +113,12 @@ def _correction_reversal_id(memo: str | None) -> str | None:
     return match.group(1) if match else None
 
 
-def _existing_reversal_amounts(
+def _reversal_amounts(
     db: Session,
     entry_ids: list[UUID],
-) -> dict[str, Decimal]:
+) -> tuple[dict[str, Decimal], dict[str, Decimal]]:
     if not entry_ids:
-        return {}
+        return {}, {}
     reversal_memos = [
         memo
         for entry_id in entry_ids
@@ -124,7 +132,6 @@ def _existing_reversal_amounts(
             select(LedgerEntry)
             .where(LedgerEntry.memo.in_(reversal_memos))
             .where(LedgerEntry.entry_type == LedgerEntryType.credit)
-            .where(LedgerEntry.is_active.is_(True))
         ).all()
     )
     correction_by_reversal_id: dict[str, Decimal] = {}
@@ -148,7 +155,8 @@ def _existing_reversal_amounts(
                     + to_decimal(correction.amount)
                 )
 
-    by_original_id: dict[str, Decimal] = {}
+    active_by_original_id: dict[str, Decimal] = {}
+    inactive_by_original_id: dict[str, Decimal] = {}
     for reversal in reversals:
         original_id = _reversal_original_id(reversal.memo)
         if not original_id:
@@ -157,20 +165,26 @@ def _existing_reversal_amounts(
             to_decimal(reversal.amount)
             - correction_by_reversal_id.get(str(reversal.id), Decimal("0.00"))
         )
-        by_original_id[original_id] = round_money(
-            by_original_id.get(original_id, Decimal("0.00")) + net
+        target = (
+            active_by_original_id if reversal.is_active else inactive_by_original_id
         )
-    return by_original_id
+        target[original_id] = round_money(
+            target.get(original_id, Decimal("0.00")) + net
+        )
+    return active_by_original_id, inactive_by_original_id
 
 
 def _classify(
     subscriber: Subscriber,
     deposit: Decimal | None,
     remaining: Decimal,
+    inactive_reversal: Decimal,
     scope_statuses: set[SubscriberStatus],
 ) -> tuple[str, bool]:
     if remaining <= 0:
         return "already_compensated", False
+    if inactive_reversal > 0:
+        return "previously_reversed_inactive_review", False
     if deposit is None:
         return "deposit_null_review", False
     if deposit < 0:
@@ -193,13 +207,14 @@ def _load_candidates(db: Session, scope: str) -> list[Candidate]:
         .order_by(Subscriber.status.asc(), Subscriber.id.asc(), LedgerEntry.id.asc())
         .all()
     )
-    reversal_by_entry_id = _existing_reversal_amounts(
+    reversal_by_entry_id, inactive_reversal_by_entry_id = _reversal_amounts(
         db,
         [entry.id for entry, _subscriber in rows],
     )
     candidates: list[Candidate] = []
     for entry, subscriber in rows:
         existing = reversal_by_entry_id.get(str(entry.id), Decimal("0.00"))
+        inactive = inactive_reversal_by_entry_id.get(str(entry.id), Decimal("0.00"))
         amount = round_money(to_decimal(entry.amount))
         remaining = round_money(max(amount - existing, Decimal("0.00")))
         deposit = _deposit_value(subscriber)
@@ -207,6 +222,7 @@ def _load_candidates(db: Session, scope: str) -> list[Candidate]:
             subscriber,
             deposit,
             remaining,
+            inactive,
             scope_statuses,
         )
         candidates.append(
@@ -215,6 +231,7 @@ def _load_candidates(db: Session, scope: str) -> list[Candidate]:
                 subscriber=subscriber,
                 account_id=str(entry.account_id),
                 existing_reversal=existing,
+                inactive_reversal=inactive,
                 remaining=remaining,
                 classification=classification,
                 eligible=eligible,
@@ -246,6 +263,7 @@ def _candidate_row(candidate: Candidate) -> dict[str, str]:
         "deposit": "" if deposit is None else str(deposit),
         "debit_amount": str(round_money(to_decimal(entry.amount))),
         "existing_reversal": str(candidate.existing_reversal),
+        "inactive_reversal": str(candidate.inactive_reversal),
         "remaining_to_reverse": str(candidate.remaining),
         "currency": entry.currency or "NGN",
         "source": entry.source.value if entry.source else "",
@@ -272,6 +290,7 @@ def _write_csv(path: Path, candidates: list[Candidate]) -> None:
             "deposit",
             "debit_amount",
             "existing_reversal",
+            "inactive_reversal",
             "remaining_to_reverse",
             "currency",
             "source",

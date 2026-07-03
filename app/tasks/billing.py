@@ -231,6 +231,43 @@ def check_billing_switch_task() -> dict:
         session.close()
 
 
+@celery_app.task(name="app.tasks.billing.audit_cutover_balance_invariant")
+def audit_cutover_balance_invariant_task() -> dict:
+    """Read-only guard for cutover-seeded account balance drift."""
+    from app.services.cutover_balance_audit import audit_cutover_balance_invariant
+
+    session = SessionLocal()
+    try:
+        result = audit_cutover_balance_invariant(session)
+        if result.get("ok"):
+            logger.info(
+                "cutover_balance_invariant_ok: population=%s",
+                result.get("population"),
+            )
+        else:
+            logger.error(
+                "cutover_balance_invariant_drift: population=%s drift=%s "
+                "overcredited=%s/%s understated=%s/%s inactive_seed_drift=%s "
+                "post_adjustment_drift=%s post_adjustments=%s/%s "
+                "excluded_adjustments=%s/%s",
+                result.get("population"),
+                result.get("drift_count"),
+                result.get("overcredited_count"),
+                result.get("overcredited_total"),
+                result.get("understated_count"),
+                result.get("understated_total"),
+                result.get("inactive_seed_drift_count"),
+                result.get("post_adjustment_drift_count"),
+                result.get("post_adjustment_entry_count"),
+                result.get("post_adjustment_net"),
+                result.get("excluded_adjustment_entry_count"),
+                result.get("excluded_adjustment_net"),
+            )
+        return result
+    finally:
+        session.close()
+
+
 @celery_app.task(name="app.tasks.billing.run_billing_notifications")
 @idempotent_task(
     key_func=lambda: (
