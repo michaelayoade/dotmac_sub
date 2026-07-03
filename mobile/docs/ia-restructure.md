@@ -57,11 +57,19 @@ Account (`/profile`), pushed above the shell.
 | Feature | Domain | Today | Target |
 |---|---|---|---|
 | Get a quote · upgrade · add location | Sales | Profile row | **Service** ("Grow your service") + Home prompt |
-| Technician visit · live map | Projects | Profile → 404 | **Home** card while `in_progress`; history under **Help → Visits** |
+| Technician visit · live map | Projects | Profile → 404 | Slim **Home banner** → full map on its own screen (`/track/:id`); also in **Help → Visits**. The map is *not* embedded on Home. |
 | Installation progress | Projects | Profile row | **Onboarding Home**, retires on activation |
 | Tickets · live chat | Support | Support tab | **Help** tab (renamed) |
 | Refer & Earn | Sales | Profile row | **Account** (fine — low frequency) |
 | Map-pin, Payment, Contacts, Sessions, Settings, Change password | — | Profile (mixed) | **Account** (settings only) |
+
+### Copy decision — the account-activity tab
+The Billing account-activity view is a **live running record with a balance** —
+that's a *ledger*, not a *statement* (a statement is a periodic snapshot). Label
+it for the audience: **"Activity"** on the customer app/web (consumer-standard,
+matches banking/fintech apps), **"Ledger"** on the reseller app/web (business
+audience; precise). The data model is `LedgerEntry` either way. ("Statement"
+stays reserved for a future downloadable periodic document.)
 
 ## 4. Implementation map (key files)
 
@@ -95,12 +103,18 @@ new homes exist.
   sub-screen still reachable; route paths (`/support`, `/usage`, `/billing`,
   `/dashboard`) unchanged so notification deep links keep working.
 
-### PR 2 — Home: active-visit card + lifecycle state  *(highest value)*
-- Active-visit card on Home, shown only when a work order is `in_progress`
-  (reuse the technician-live-location gate). CTAs: Track on map + Message.
-- Onboarding stepper state, auto-selected from install/work-order stage.
-- **Accept:** active visit → card with live location; none → no card, no error;
-  onboarding customer → stepper; activated → active state.
+### PR 2 — Home: active-visit banner  ✅ *(this PR)*
+- A **slim visit banner** on Home (deliberately *not* an embedded map) shown
+  only when a work order is `in_progress`: "Technician on the way · $tech ·
+  $eta ›". It routes to the full tracking screen (`/track/:id`, the existing
+  `TechnicianTrackScreen`). The heavy live map stays on its own screen so the
+  dashboard stays calm — the map is also reached from **Help → Visits** (PR 3).
+- **Accept:** in-progress visit → banner appears and opens the live map; no
+  active visit → no banner, no error.
+
+### PR 2b — Home onboarding stepper  *(follow-up)*
+- Onboarding Home state: install stepper from `projectsProvider` /
+  `ProjectStage`, auto-selected pre-activation; retires on activation.
 
 ### PR 3 — Service "Grow your service" + Help "Visits"
 - **Service** tab: Upgrade plan + Add-a-location/Get-a-quote entries (Sales).
