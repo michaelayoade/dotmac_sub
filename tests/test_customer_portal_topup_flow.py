@@ -818,6 +818,59 @@ def test_create_invoice_payment_intent_initializes_flutterwave(
         "?reference=pay-ref-flw&provider=flutterwave"
     )
     assert captured["metadata"]["invoice_id"] == str(invoice.id)
+    # The invoice's own currency is plumbed through to the gateway init.
+    assert captured["currency"] == "NGN"
+
+
+def test_flutterwave_initialize_uses_default_currency_setting(monkeypatch, db_session):
+    # C-4 currency cleanup: Flutterwave init must honor a non-NGN
+    # billing.default_currency setting when no explicit currency is given.
+    from app.models.domain_settings import DomainSetting, SettingDomain
+    from app.models.subscription_engine import SettingValueType
+    from app.services import flutterwave
+
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.billing,
+            key="default_currency",
+            value_type=SettingValueType.string,
+            value_text="GHS",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(flutterwave, "_get_secret_key", lambda _db=None: "sk_test")
+    captured_payloads = []
+
+    def fake_post(url, *, json, headers, timeout):
+        captured_payloads.append(json)
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"status": "success", "data": {"link": "https://flw.test"}},
+        )
+
+    monkeypatch.setattr("app.services.flutterwave.httpx.post", fake_post)
+
+    flutterwave.initialize_transaction(
+        db_session,
+        email="customer@example.com",
+        amount=Decimal("100.00"),
+        reference="ref-1",
+        redirect_url="https://selfcare.test/verify",
+    )
+    assert captured_payloads[-1]["currency"] == "GHS"
+
+    # An explicit (e.g. invoice) currency still wins over the setting.
+    flutterwave.initialize_transaction(
+        db_session,
+        email="customer@example.com",
+        amount=Decimal("100.00"),
+        reference="ref-2",
+        redirect_url="https://selfcare.test/verify",
+        currency="usd",
+    )
+    assert captured_payloads[-1]["currency"] == "USD"
 
 
 def test_create_invoice_payment_intent_rejects_saved_card_non_paystack(

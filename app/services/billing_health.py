@@ -282,11 +282,18 @@ def runner_heartbeats(
     return out
 
 
+def _default_currency(db: Session) -> str:
+    """Billing default currency setting (NGN when unset)."""
+    value = settings_spec.resolve_value(db, SettingDomain.billing, "default_currency")
+    code = str(value or "NGN").strip().upper()
+    return code or "NGN"
+
+
 def covered_but_locked(db: Session) -> int:
     """§6.6 drift: accounts still under a billing lock (overdue/prepaid) whose
     local ledger available balance is >= 0 — i.e. covered yet suspended
-    (wrongful-suspension drift). Mirrors get_available_balance for NGN:
-    unallocated credit - unallocated debit - open invoice balance.
+    (wrongful-suspension drift). Mirrors get_available_balance for the default
+    currency: unallocated credit - unallocated debit - open invoice balance.
     """
     sql = text(
         """
@@ -300,19 +307,19 @@ def covered_but_locked(db: Session) -> int:
             COALESCE((SELECT sum(le.amount) FROM ledger_entries le
                 WHERE le.account_id = acct AND le.invoice_id IS NULL
                   AND le.entry_type = 'credit' AND le.is_active
-                  AND le.currency = 'NGN'), 0)
+                  AND le.currency = :currency), 0)
           - COALESCE((SELECT sum(le.amount) FROM ledger_entries le
                 WHERE le.account_id = acct AND le.invoice_id IS NULL
                   AND le.entry_type = 'debit' AND le.is_active
-                  AND le.currency = 'NGN'), 0)
+                  AND le.currency = :currency), 0)
           - COALESCE((SELECT sum(i.balance_due) FROM invoices i
                 WHERE i.account_id = acct AND i.balance_due > 0
                   AND i.status IN ('issued', 'partially_paid', 'overdue')
-                  AND i.currency = 'NGN'), 0)
+                  AND i.currency = :currency), 0)
         ) >= 0
         """
     )
-    return int(db.execute(sql).scalar() or 0)
+    return int(db.execute(sql, {"currency": _default_currency(db)}).scalar() or 0)
 
 
 def _prepaid_monthly_enabled(db: Session) -> bool:

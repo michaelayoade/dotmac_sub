@@ -50,6 +50,16 @@ def _get_secret_hash(db: Session | None = None) -> str:
     return os.getenv("FLUTTERWAVE_SECRET_HASH", "")
 
 
+def _default_currency(db: Session | None = None) -> str:
+    """Resolve the billing default currency setting (NGN when unset)."""
+    if db:
+        value = resolve_value(db, SettingDomain.billing, "default_currency")
+        code = str(value or "").strip().upper()
+        if code:
+            return code
+    return "NGN"
+
+
 def _get_timeout_seconds(db: Session | None = None) -> int:
     if db:
         value = resolve_value(
@@ -85,16 +95,19 @@ def initialize_transaction(
     reference: str,
     redirect_url: str,
     metadata: dict[str, Any] | None = None,
+    currency: str | None = None,
 ) -> dict[str, Any]:
     """Initialize a Flutterwave payment.
 
     Args:
         db: Database session for settings resolution.
         email: Customer email address.
-        amount: Amount in naira (major currency unit).
+        amount: Amount in the major currency unit (e.g. naira).
         reference: Unique transaction reference.
         redirect_url: URL Flutterwave redirects to after payment.
         metadata: Optional metadata dict attached to the transaction.
+        currency: ISO currency code; defaults to the billing
+            ``default_currency`` setting (NGN when unset).
 
     Returns:
         Dict with ``link`` (hosted payment URL) and other data.
@@ -112,7 +125,8 @@ def initialize_transaction(
     payload: dict[str, Any] = {
         "tx_ref": reference,
         "amount": float(Decimal(str(amount))),
-        "currency": "NGN",
+        "currency": (str(currency).strip().upper() if currency else None)
+        or _default_currency(db),
         "redirect_url": redirect_url,
         "customer": {"email": email},
     }
