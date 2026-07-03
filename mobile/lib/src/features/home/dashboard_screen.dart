@@ -8,6 +8,7 @@ import '../auth/biometric_enrollment_prompt.dart';
 import '../../models/service_status.dart';
 import '../../models/subscription.dart';
 import '../../models/usage.dart';
+import '../../models/work_order.dart';
 import '../../providers/auth_controller.dart';
 import '../../providers/data_providers.dart';
 import '../../providers/read_notifications.dart';
@@ -19,6 +20,18 @@ import '../../widgets/status_chip.dart';
 
 /// Home dashboard: an at-a-glance summary (account status, balance, data,
 /// services) plus quick-action shortcuts into the rest of the app.
+/// Short, human ETA for the Home visit banner. Prefers the live estimate, then
+/// falls back to a plain "on the way" (the tracking screen has the detail).
+String _visitEta(WorkOrderItem w) {
+  final eta = w.estimatedArrivalAt;
+  if (eta != null) {
+    final mins = eta.difference(DateTime.now()).inMinutes;
+    if (mins > 1) return 'arriving in ~$mins min';
+    if (mins >= -15) return 'arriving now';
+  }
+  return 'on the way';
+}
+
 class DashboardScreen extends ConsumerWidget {
   const DashboardScreen({super.key});
 
@@ -272,6 +285,50 @@ class DashboardScreen extends ConsumerWidget {
                 ),
               ),
             ],
+            // Live technician visit — a slim banner shown only while a work
+            // order is in progress. The full map lives on its own screen
+            // (/track/:id) so it doesn't crowd the dashboard.
+            Consumer(builder: (context, ref, _) {
+              final orders =
+                  ref.watch(workOrdersProvider).asData?.value.workOrders ??
+                      const <WorkOrderItem>[];
+              WorkOrderItem? active;
+              for (final w in orders) {
+                if (w.status == 'in_progress') {
+                  active = w;
+                  break;
+                }
+              }
+              if (active == null) return const SizedBox.shrink();
+              final v = active;
+              final scheme = Theme.of(context).colorScheme;
+              final who = v.technicianName ?? 'Your technician';
+              return Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Card(
+                  shape: RoundedRectangleBorder(
+                    side: BorderSide(
+                      color: scheme.primary.withValues(alpha: 0.45),
+                    ),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: ListTile(
+                    leading: CircleAvatar(
+                      backgroundColor: scheme.primaryContainer,
+                      foregroundColor: scheme.onPrimaryContainer,
+                      child: const Icon(Icons.engineering_outlined),
+                    ),
+                    title: const Text(
+                      'Technician on the way',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    subtitle: Text('$who · ${_visitEta(v)}'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => context.push('/track/${v.id}'),
+                  ),
+                ),
+              );
+            }),
             Consumer(builder: (context, ref, _) {
               final wallet = ref.watch(walletProvider).asData?.value;
               if (wallet == null) return const SizedBox.shrink();
