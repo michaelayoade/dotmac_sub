@@ -18,6 +18,12 @@
         </div>
     </div>
 
+    {% if revoked %}
+    <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
+        API key revoked. It can no longer be used to authenticate.
+    </div>
+    {% endif %}
+
     {% if new_key %}
     <div class="rounded-xl border border-green-200 bg-green-50 p-6 dark:border-green-800 dark:bg-green-900/30">
         <div class="flex items-start gap-4">
@@ -25,8 +31,8 @@
                 <svg class="h-5 w-5 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
             </div>
             <div class="flex-1">
-                <h3 class="text-lg font-semibold text-green-800 dark:text-green-300">API Key Created</h3>
-                <p class="mt-1 text-sm text-green-700 dark:text-green-400">Copy your API key now. You won't be able to see it again!</p>
+                <h3 class="text-lg font-semibold text-green-800 dark:text-green-300">{% if rotated %}API Key Rotated{% else %}API Key Created{% endif %}</h3>
+                <p class="mt-1 text-sm text-green-700 dark:text-green-400">{% if rotated %}The old secret has stopped working. Copy the new key now — you won't be able to see it again!{% else %}Copy your API key now. You won't be able to see it again!{% endif %}</p>
                 <div class="mt-4 flex items-center gap-2">
                     <code class="flex-1 rounded-lg bg-white px-4 py-2 font-mono text-sm text-slate-900 dark:bg-slate-800 dark:text-white">{{ new_key }}</code>
                     <button onclick="navigator.clipboard.writeText('{{ new_key }}')" class="inline-flex items-center gap-2 rounded-lg border border-green-300 bg-white px-3 py-2 text-sm font-medium text-green-700 hover:bg-green-50 dark:border-green-700 dark:bg-slate-800 dark:text-green-400">
@@ -54,7 +60,12 @@
                             <svg class="h-5 w-5 {% if key.is_active and not key.revoked_at %}text-indigo-600 dark:text-indigo-400{% else %}text-slate-400{% endif %}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
                         </div>
                         <div>
-                            <p class="text-sm font-medium text-slate-900 dark:text-white">{{ key.label or 'Unnamed Key' }}</p>
+                            <p class="text-sm font-medium text-slate-900 dark:text-white">
+                                {{ key.label or 'Unnamed Key' }}
+                                {% if not key.subscriber_id %}
+                                <span class="ml-1 inline-flex items-center rounded bg-indigo-50 px-1.5 py-0.5 text-[11px] font-medium text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">System</span>
+                                {% endif %}
+                            </p>
                             <div class="flex flex-wrap items-center gap-1 mt-1">
                                 {% if key.scopes %}
                                     {% for scope in key.scopes %}
@@ -92,6 +103,10 @@
                         {{ status_badge("Active", "active", size="sm") }}
                         {% endif %}
                         {% if key.is_active and not key.revoked_at %}
+                        <form method="POST" action="/admin/system/api-keys/{{ key.id }}/rotate" onsubmit="return confirm('Rotate this API key? A new secret is generated and the current secret stops working immediately.')">
+                            {% include "components/forms/csrf_input.html" %}
+                            <button type="submit" class="text-sm text-indigo-600 hover:text-indigo-700">Rotate</button>
+                        </form>
                         <form method="POST" action="/admin/system/api-keys/{{ key.id }}/revoke" onsubmit="return confirm('Are you sure you want to revoke this API key? This action cannot be undone.')">
                             {% include "components/forms/csrf_input.html" %}
                             <button type="submit" class="text-sm text-red-600 hover:text-red-700">Revoke</button>
