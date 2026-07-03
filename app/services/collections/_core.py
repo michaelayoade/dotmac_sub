@@ -368,6 +368,29 @@ def _refresh_account_status(db: Session, account_id) -> None:
         )
 
 
+def _account_has_dedicated_bundle(db: Session, account_id) -> bool:
+    """True if any of the account's subscriptions is in a dedicated bundle.
+
+    Dedicated internet (``plan_family='dedicated'``) is contract/SLA-managed and
+    must never be auto-suspended. Because a bundle shares one subscriber-level
+    RADIUS identity, a single dedicated member makes the whole account hands-off.
+    """
+    from app.models.catalog import SubscriptionBundle
+
+    return (
+        db.scalar(
+            select(SubscriptionBundle.id)
+            .join(Subscription, Subscription.bundle_id == SubscriptionBundle.id)
+            .where(
+                Subscription.subscriber_id == coerce_uuid(account_id),
+                SubscriptionBundle.is_dedicated.is_(True),
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
 def _suspend_account(
     db: Session,
     account_id: str,
@@ -393,6 +416,14 @@ def _suspend_account(
 
     if account.status == SubscriberStatus.canceled:
         logger.info("Account %s is canceled, skipping suspension", account_id)
+        return False
+
+    if _account_has_dedicated_bundle(db, account.id):
+        logger.info(
+            "dedicated_bundle_skip: account %s has a dedicated-internet bundle; "
+            "hands-off for auto-enforcement",
+            account_id,
+        )
         return False
 
     query = (

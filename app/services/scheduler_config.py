@@ -864,6 +864,15 @@ def build_beat_schedule() -> dict:
             enabled=dunning_enabled,
             interval_seconds=dunning_interval_seconds,
         )
+        # Bundle-state reconcile: heal any divergent bundle member (base active
+        # while a component sub is suspended, or vice versa) back to its anchor.
+        _sync_scheduled_task(
+            session,
+            name="bundle_reconcile",
+            task_name="app.tasks.collections.run_bundle_reconcile",
+            enabled=dunning_enabled,
+            interval_seconds=900,
+        )
         # Billing master-switch config guard — ALWAYS on (independent of
         # billing_enabled) so an unexpected flip is caught, not silently armed.
         _sync_scheduled_task(
