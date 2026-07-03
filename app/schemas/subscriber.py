@@ -68,6 +68,7 @@ class ResellerBase(BaseModel):
     contact_phone: str | None = Field(default=None, max_length=40)
     policy_set_id: UUID | None = None
     is_active: bool = True
+    restrict_to_assigned_offers: bool | None = None
     notes: str | None = None
 
 
@@ -82,6 +83,7 @@ class ResellerUpdate(BaseModel):
     contact_phone: str | None = Field(default=None, max_length=40)
     policy_set_id: UUID | None = None
     is_active: bool | None = None
+    restrict_to_assigned_offers: bool | None = None
     notes: str | None = None
 
 

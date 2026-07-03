@@ -56,6 +56,16 @@
             Active reseller
         </label>
 
+        <div>
+            <label class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+                <input type="checkbox" name="restrict_to_assigned_offers" class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700" {% if reseller and reseller.restrict_to_assigned_offers %}checked{% endif %} />
+                Restrict to assigned offers only
+            </label>
+            <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                When on, this reseller's customers see only offers explicitly assigned to the reseller. When off, they follow the global default (open = all unrestricted offers are visible).
+            </p>
+        </div>
+
         {% if not reseller %}
         <div class="border-t border-slate-200 pt-6 dark:border-slate-700">
             <label class="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
