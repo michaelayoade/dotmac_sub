@@ -54,6 +54,12 @@ def test_customer_send_email_action_opens_template_modal_for_email_channel():
     assert "@click.prevent.stop=\"openSendMessageModal('email')\"" in detail_template
     assert "detailUrl" in detail_template
     assert "closeSendMessageModal" in detail_template
+    assert "@change=\"handleTemplateSelection()\"" in detail_template
+    assert "whatsappTemplateVariables" in detail_template
+    assert "template.provider_template_name || template.code || template.name" in (
+        detail_template
+    )
+    assert "!hasRequiredWhatsAppMappings()" in detail_template
     assert "template_variables: this.sendMessageForm.templateVariables || {}" in (
         detail_template
     )
