@@ -67,9 +67,7 @@ from app.services.common import round_money
 
 DEAD_PAYMENT_STATUSES = (PaymentStatus.failed, PaymentStatus.canceled)
 OPENING_MEMO = "Prepaid opening balance @ cutover"
-CORRECTION_MEMO = (
-    "Correction: reverse erroneous duplicate-payment reversal [id={id}]"
-)
+CORRECTION_MEMO = "Correction: reverse erroneous duplicate-payment reversal [id={id}]"
 TOLERANCE = Decimal("0.01")
 DEFAULT_OUTPUT = "scratchpad/void_mirror_double_reversals.csv"
 
@@ -117,7 +115,10 @@ def _lone_refund_debits(session: Session) -> list[tuple[LedgerEntry, Payment]]:
 
 def _mirror_sum_excl_deleted(session: Session, splynx_customer_id: int) -> Decimal:
     signed = case(
-        (SplynxBillingTransaction.entry_type == "credit", SplynxBillingTransaction.amount),
+        (
+            SplynxBillingTransaction.entry_type == "credit",
+            SplynxBillingTransaction.amount,
+        ),
         else_=-SplynxBillingTransaction.amount,
     )
     total = session.execute(
@@ -133,26 +134,34 @@ def _mirror_row_deleted(
     session: Session, splynx_customer_id: int, splynx_payment_id: int
 ) -> bool | None:
     """True/False for the payment's mirror row deleted flag, None if absent."""
-    deleted = session.execute(
-        select(SplynxBillingTransaction.deleted).where(
-            SplynxBillingTransaction.splynx_customer_id == splynx_customer_id,
-            SplynxBillingTransaction.splynx_payment_id == splynx_payment_id,
+    deleted = (
+        session.execute(
+            select(SplynxBillingTransaction.deleted).where(
+                SplynxBillingTransaction.splynx_customer_id == splynx_customer_id,
+                SplynxBillingTransaction.splynx_payment_id == splynx_payment_id,
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     if not deleted:
         return None
     return all(deleted)
 
 
 def _active_seed_total(session: Session, account_id: uuid.UUID) -> Decimal | None:
-    rows = session.execute(
-        select(LedgerEntry.amount).where(
-            LedgerEntry.account_id == account_id,
-            LedgerEntry.is_active.is_(True),
-            LedgerEntry.entry_type == LedgerEntryType.credit,
-            LedgerEntry.memo == OPENING_MEMO,
+    rows = (
+        session.execute(
+            select(LedgerEntry.amount).where(
+                LedgerEntry.account_id == account_id,
+                LedgerEntry.is_active.is_(True),
+                LedgerEntry.entry_type == LedgerEntryType.credit,
+                LedgerEntry.memo == OPENING_MEMO,
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     if not rows:
         return None
     return round_money(sum(rows, Decimal("0")))
@@ -214,7 +223,9 @@ def _classify(session: Session, entry: LedgerEntry, payment: Payment) -> Finding
     if seed_total is not None and _eq(seed_total, deposit):
         return finding(AUTO_FIXABLE, suggested=amount)
     seed_excess = (
-        max(seed_total - deposit, Decimal("0")) if seed_total is not None else Decimal("0")
+        max(seed_total - deposit, Decimal("0"))
+        if seed_total is not None
+        else Decimal("0")
     )
     return finding(
         "overshoot_review" if seed_total is not None else "review_no_seed",
@@ -256,7 +267,9 @@ def _write_csv(path: Path, findings: list[Finding]) -> None:
                     f.deposit if f.deposit is not None else "",
                     f.mirror_excl_deleted if f.mirror_excl_deleted is not None else "",
                     f.seed_total if f.seed_total is not None else "",
-                    f.suggested_min_credit if f.suggested_min_credit is not None else "",
+                    f.suggested_min_credit
+                    if f.suggested_min_credit is not None
+                    else "",
                     f.entry.created_at,
                     f.entry.memo,
                 ]
@@ -344,7 +357,9 @@ def main() -> int:
         by_class: dict[str, list[Finding]] = {}
         for f in findings:
             by_class.setdefault(f.classification, []).append(f)
-        print(f"{'APPLY' if args.apply else 'DRY-RUN'}: {len(findings)} lone refund debits")
+        print(
+            f"{'APPLY' if args.apply else 'DRY-RUN'}: {len(findings)} lone refund debits"
+        )
         for classification in sorted(by_class):
             rows = by_class[classification]
             total = sum((f.entry.amount for f in rows), Decimal("0"))
