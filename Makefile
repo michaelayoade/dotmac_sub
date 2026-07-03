@@ -1,4 +1,4 @@
-.PHONY: help test lint type-check format security check lint-file type-check-file check-file migrate dev docker-up docker-down docker-logs worker beat coverage clean prod-build prod-pin prod-deploy prod-up prod-down prod-logs prod-restart prod-migrate prod-check bump-version prod-ghcr-pin prod-ghcr-deploy
+.PHONY: help test lint type-check format security check lint-file type-check-file check-file migrate dev docker-up docker-down docker-logs worker beat coverage clean prod-build prod-pin prod-deploy prod-up prod-down prod-logs prod-restart prod-migrate prod-check bump-version prod-ghcr-pin prod-ghcr-deploy deploy
 
 # Production runs IMMUTABLE images: the base docker-compose.yml has no source
 # bind-mounts and pulls code only from the baked image (built by `prod-build`).
@@ -112,7 +112,7 @@ docker-shell: ## Open shell in app container
 	docker exec -it dotmac_sub_app bash
 
 docker-migrate: ## Run migrations inside Docker
-	docker exec dotmac_sub_app alembic upgrade head
+	docker exec dotmac_sub_app alembic upgrade heads
 
 prod-build: ## Build + tag the immutable prod image from a CLEAN checkout of HEAD (working-tree edits are NOT baked)
 	@set -eu; \
@@ -155,13 +155,22 @@ prod-restart: ## Recreate prod app + worker services from the current image (APP
 	$(PROD_COMPOSE) up -d app celery-worker celery-worker-bandwidth celery-worker-billing celery-worker-tr069 celery-beat bandwidth-poller syslog-listener
 
 prod-migrate: ## Apply DB migrations in the prod stack (alembic baked into the image)
-	$(PROD_COMPOSE) run --rm app alembic upgrade head
+	$(PROD_COMPOSE) run --rm app alembic upgrade heads
 
-# ─── GHCR (pull a CI-built image instead of building on the host) ──────────
-# CI (.github/workflows/ghcr.yml) pushes ghcr.io/<owner>/dotmac_sub on every
-# main push. Prod pulls it — no local build. The package is private, so the host
-# must `docker login ghcr.io` (PAT with read:packages) once. Pin a specific
-# build with GHCR_TAG=sha-<shortsha>; defaults to the latest main build.
+# ─── GHCR deploy (RECOMMENDED) ─────────────────────────────────────────────
+# Pull the exact CI-built, CI-tested image instead of building on the host —
+# decoupled from the box's git tree (which drifts). `make prod-deploy` above is
+# a host-build fallback for air-gapped / registry-down situations only.
+#
+# `make deploy TAG=sha-<shortsha>` runs the hardened scripts/deploy.sh:
+#   verify image on GHCR -> DB backup -> pin APP_IMAGE -> pull ->
+#   alembic upgrade heads -> recreate app+workers -> health gate -> auto-rollback.
+# CI (.github/workflows/ghcr.yml) pushes ghcr.io/<owner>/dotmac_sub per main push;
+# the host must `docker login ghcr.io` (PAT with read:packages) once.
+deploy: ## Hardened GHCR deploy. Usage: make deploy TAG=sha-abc1234
+	@test -n "$(TAG)" || { echo "usage: make deploy TAG=sha-<shortsha> (see: scripts/deploy.sh --status)"; exit 1; }
+	bash scripts/deploy.sh "$(TAG)"
+
 GHCR_IMAGE ?= ghcr.io/michaelayoade/dotmac_sub
 GHCR_TAG ?= latest
 
