@@ -272,11 +272,22 @@ Format: `[POLISH|CONTROL] (severity) file:line — problem → recommendation [r
   settings_spec (usage domain, default off); FUP warn-ratio fallback 0.8
   centralized as `usage.DEFAULT_FUP_WARN_RATIO`.
 
+### Resolved (P1 follow-up, 2026-07-03)
+
+- **P-B change-plan proration preview** — the admin change-plan modal fetches
+  a live quote (`GET /admin/catalog/subscriptions/{id}/change-plan-quote`,
+  reusing the portal quote builder) and shows credit-for-unused-time, prorated
+  new-plan charge, and net before the confirm.
+- **Security note verified** — all 20 write routes in
+  `app/web/admin/catalog_settings.py` carry route-level
+  `require_permission("catalog:write")`; reads are covered by the
+  mount-registry RBAC layer.
+
 ### Still open
 
-- **P1 remainder**: change-plan proration preview quote; FUP rule impact
-  preview; currency/tz display sweep (customer detail, calculator);
-  change-plan instant│next-cycle timing (product decision).
+- **P1 remainder**: FUP rule impact preview; currency/tz display sweep
+  (customer detail, calculator); change-plan instant│next-cycle timing
+  (product decision).
 - **P2**: tunable thresholds (serviceable radius, SLA aging, reset throttle,
   PPPoE reveal limit, 60d staleness); GiB labeling; usage-priced offers in UI;
   calculator VAT/proration accuracy.
