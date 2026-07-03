@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from datetime import UTC, datetime, time
 from typing import TYPE_CHECKING
 
@@ -229,6 +230,50 @@ def _guard_submonthly_period(db: Session, consumption_period: str) -> None:
         )
 
 
+def _parse_threshold_amount(raw: str) -> float:
+    """Parse a FUP threshold, rejecting anything non-positive.
+
+    A typo must never coerce to 0.0: a zero threshold is instantly exceeded and
+    throttles/blocks every customer on the offer.
+    """
+    try:
+        value = float(raw)
+    except ValueError:
+        value = math.nan
+    if not math.isfinite(value) or value <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Threshold must be a positive number (got {raw!r}). A zero "
+                "threshold would throttle or block every customer on the offer."
+            ),
+        )
+    return value
+
+
+def _parse_speed_reduction(raw: str) -> float:
+    try:
+        value = float(raw)
+    except ValueError:
+        value = math.nan
+    if not math.isfinite(value) or not 0 < value < 100:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Speed reduction must be a percentage between 1 and 99 (got {raw!r}).",
+        )
+    return value
+
+
+def _parse_sort_order(raw: str) -> int:
+    try:
+        return int(raw)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Sort order must be a whole number (got {raw!r}).",
+        ) from None
+
+
 def handle_add_rule(db: Session, offer_id: str, form: FormData) -> None:
     """Add a new FUP rule from form data.
 
@@ -248,28 +293,18 @@ def handle_add_rule(db: Session, offer_id: str, form: FormData) -> None:
     action = str(form.get("action", "reduce_speed"))
     speed_reduction_raw = str(form.get("speed_reduction_percent", ""))
 
-    try:
-        threshold_amount = float(threshold_amount_raw)
-    except ValueError:
-        threshold_amount = 0.0
+    threshold_amount = _parse_threshold_amount(threshold_amount_raw)
 
     speed_reduction_percent: float | None = None
     if action == "reduce_speed" and speed_reduction_raw:
-        try:
-            speed_reduction_percent = float(speed_reduction_raw)
-        except ValueError:
-            speed_reduction_percent = None
+        speed_reduction_percent = _parse_speed_reduction(speed_reduction_raw)
 
     # Parse new chaining/time fields
     time_start = _parse_time(str(form.get("time_start", "")))
     time_end = _parse_time(str(form.get("time_end", "")))
     enabled_by_raw = str(form.get("enabled_by_rule_id", "")).strip()
     enabled_by_rule_id = enabled_by_raw if enabled_by_raw else None
-    sort_order_raw = str(form.get("sort_order", "0"))
-    try:
-        sort_order = int(sort_order_raw)
-    except ValueError:
-        sort_order = 0
+    sort_order = _parse_sort_order(str(form.get("sort_order", "0")) or "0")
     days_of_week_raw = form.getlist("days_of_week")
     days_of_week = [int(d) for d in days_of_week_raw if str(d).isdigit()] or None
     is_active = str(form.get("is_active", "")).lower() in {"on", "true", "1"}
@@ -319,10 +354,7 @@ def handle_update_rule(db: Session, rule_id: str, form: FormData) -> None:
 
     threshold_amount_raw = str(form.get("threshold_amount", ""))
     if threshold_amount_raw:
-        try:
-            kwargs["threshold_amount"] = float(threshold_amount_raw)
-        except ValueError:
-            pass
+        kwargs["threshold_amount"] = _parse_threshold_amount(threshold_amount_raw)
 
     threshold_unit = str(form.get("threshold_unit", ""))
     if threshold_unit:
@@ -334,10 +366,7 @@ def handle_update_rule(db: Session, rule_id: str, form: FormData) -> None:
 
     speed_reduction_raw = str(form.get("speed_reduction_percent", ""))
     if action == "reduce_speed" and speed_reduction_raw:
-        try:
-            kwargs["speed_reduction_percent"] = float(speed_reduction_raw)
-        except ValueError:
-            pass
+        kwargs["speed_reduction_percent"] = _parse_speed_reduction(speed_reduction_raw)
     elif action and action != "reduce_speed":
         kwargs["speed_reduction_percent"] = None
 

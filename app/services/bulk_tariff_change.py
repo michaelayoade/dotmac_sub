@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import date
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
@@ -34,17 +33,18 @@ class BulkTariffChange:
         *,
         source_offer_id: str,
         target_offer_id: str,
-        start_date: date,
-        ignore_balance: bool = False,
     ) -> dict:
         """Preview what will happen if we change all subscribers from source to target plan.
+
+        The change is applied immediately on execute — there is deliberately no
+        start-date or balance option (previous form fields collected both and
+        ignored them, implying behavior that never existed).
 
         Returns dict with:
         - source_offer: CatalogOffer
         - target_offer: CatalogOffer
         - affected_subscriptions: list of Subscription objects
         - total_count: int
-        - start_date: date
         """
         source = db.get(CatalogOffer, coerce_uuid(source_offer_id))
         if not source:
@@ -64,8 +64,6 @@ class BulkTariffChange:
             "target_offer": target,
             "affected_subscriptions": subscriptions,
             "total_count": len(subscriptions),
-            "start_date": start_date,
-            "ignore_balance": ignore_balance,
         }
 
     @staticmethod
@@ -74,12 +72,11 @@ class BulkTariffChange:
         *,
         source_offer_id: str,
         target_offer_id: str,
-        start_date: date,
-        ignore_balance: bool = False,
     ) -> dict:
-        """Execute the bulk tariff change.
+        """Execute the bulk tariff change (immediately).
 
-        Returns dict with: changed, skipped, errors counts.
+        Returns dict with: changed, skipped, errors counts plus failed_ids so a
+        partial failure is triageable from the UI, not just "check the logs".
         """
         source_uuid = coerce_uuid(source_offer_id)
         target_uuid = coerce_uuid(target_offer_id)
@@ -98,6 +95,7 @@ class BulkTariffChange:
         skipped = 0
         errors = 0
         changed_ids: list[str] = []
+        failed_ids: list[str] = []
 
         for sub in subscriptions:
             savepoint = db.begin_nested()
@@ -120,6 +118,7 @@ class BulkTariffChange:
                 savepoint.rollback()
                 logger.error("Error changing subscription %s: %s", sub.id, e)
                 errors += 1
+                failed_ids.append(str(sub.id))
 
         if changed > 0:
             db.commit()
@@ -148,7 +147,12 @@ class BulkTariffChange:
             target_offer_id,
         )
 
-        return {"changed": changed, "skipped": skipped, "errors": errors}
+        return {
+            "changed": changed,
+            "skipped": skipped,
+            "errors": errors,
+            "failed_ids": failed_ids,
+        }
 
     @staticmethod
     def count_by_offer(db: Session) -> dict[str, int]:

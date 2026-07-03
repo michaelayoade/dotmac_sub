@@ -171,6 +171,11 @@
                 },
                 async runChangePlan() {
                     if (!this.targetOfferId) return;
+                    const select = document.getElementById('change-plan-target');
+                    const planLabel = select ? select.options[select.selectedIndex].text.trim() : 'the selected plan';
+                    if (!confirm(`Change this subscription to "${planLabel}" now? This applies immediately and generates a proration invoice or credit.`)) {
+                        return;
+                    }
                     this.busy = true;
                     try {
                         const body = new URLSearchParams({

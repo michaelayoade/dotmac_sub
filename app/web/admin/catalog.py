@@ -116,7 +116,7 @@ def catalog_offers(
 def catalog_offers_create(
     request: Request, db: Session = Depends(get_db)
 ) -> HTMLResponse:
-    offer = web_catalog_offers_service.default_offer_form()
+    offer = web_catalog_offers_service.default_offer_form(db)
     context = _base_context(request, db, active_page="catalog")
     context.update(web_catalog_offers_service.offer_form_context(db, offer))
     return templates.TemplateResponse("admin/catalog/offer_form.html", context)
