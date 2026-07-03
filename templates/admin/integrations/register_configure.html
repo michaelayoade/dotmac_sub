@@ -7,6 +7,7 @@
     <div>
         <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Configure {{ registration.display_title if registration else connector.name }}</h1>
         <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Define custom fields, webhook endpoint, authentication method, and data mapping rules.</p>
+        <p class="mt-1 text-xs text-amber-700 dark:text-amber-400">Metadata only: these values are stored with the registration for reference — the connector runtime does not read them yet. Runtime credentials live on the connector itself.</p>
     </div>
 
     {% if error %}
@@ -25,7 +26,7 @@
                 <input name="webhook_endpoint" value="{{ config.webhook_endpoint }}" placeholder="https://example.com/webhook" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
             </label>
             <label class="block">
-                <span class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Authentication Method</span>
+                <span class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Authentication Method <span class="font-normal text-slate-400">(reference only)</span></span>
                 <input name="auth_method" value="{{ config.auth_method }}" placeholder="bearer/basic/hmac/oauth2" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
             </label>
             <label class="block md:col-span-2">

@@ -515,7 +515,6 @@ def build_installed_integrations_data(db: Session) -> dict[str, object]:
                     registration.get("integration_type")
                     or connector.connector_type.value
                 ),
-                "relay_to_portal": bool(registration.get("relay_to_portal", False)),
                 "health": health,
                 "health_stats": health_stats,
             }
@@ -584,23 +583,6 @@ def bulk_set_integrations_enabled(
         updated += 1
     db.commit()
     return updated
-
-
-def set_relay_to_portal(db: Session, connector_id: str, *, relay: bool):
-    connector = connector_service.connector_configs.get(db, connector_id)
-    metadata = dict(connector.metadata_ or {})
-    registration = (
-        metadata.get("registration")
-        if isinstance(metadata.get("registration"), dict)
-        else {}
-    )
-    registration["relay_to_portal"] = bool(relay)
-    metadata["registration"] = registration
-    connector.metadata_ = metadata
-    db.add(connector)
-    db.commit()
-    db.refresh(connector)
-    return connector
 
 
 def uninstall_integration(db: Session, connector_id: str):
