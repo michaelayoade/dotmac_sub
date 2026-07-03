@@ -7,6 +7,7 @@ import '../../core/semantic_colors.dart';
 import '../../models/invoice.dart';
 import '../../models/ledger.dart';
 import '../../providers/data_providers.dart';
+import '../../widgets/account_avatar_button.dart';
 import '../../widgets/async_value_view.dart';
 import '../../widgets/offline_banner.dart';
 import '../../widgets/skeleton.dart';
@@ -30,6 +31,7 @@ class InvoicesScreen extends ConsumerWidget {
             icon: const Icon(Icons.account_balance_outlined),
             onPressed: () => context.go('/billing/transfer-proofs'),
           ),
+          const AccountAvatarButton(),
         ],
         bottom: const TabBar(tabs: [
           Tab(text: 'Invoices'),

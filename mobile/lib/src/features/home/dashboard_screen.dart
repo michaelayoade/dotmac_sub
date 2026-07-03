@@ -11,6 +11,7 @@ import '../../models/usage.dart';
 import '../../providers/auth_controller.dart';
 import '../../providers/data_providers.dart';
 import '../../providers/read_notifications.dart';
+import '../../widgets/account_avatar_button.dart';
 import '../../widgets/async_value_view.dart';
 import '../../widgets/offline_banner.dart';
 import '../../widgets/skeleton.dart';
@@ -214,6 +215,7 @@ class DashboardScreen extends ConsumerWidget {
               child: const Icon(Icons.notifications_outlined),
             ),
           ),
+          const AccountAvatarButton(),
         ],
       ),
       body: RefreshIndicator(
