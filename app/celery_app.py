@@ -404,6 +404,16 @@ def _log_task_postrun(task_id=None, task=None, state=None, retval=None, **_kwarg
             record_success(task.name)
         except Exception:
             logger.debug("heartbeat record failed", exc_info=True)
+        # Also record the last-run RESULT (returned counts) for money jobs, so an
+        # operator can see "dunning last ran 09:00, 42 processed, 0 failed".
+        try:
+            from app.services.job_heartbeat import MONEY_JOB_TASKS, record_result
+
+            if task.name in MONEY_JOB_TASKS:
+                detail = retval if isinstance(retval, dict) else None
+                record_result(task.name, status="ok", detail=detail)
+        except Exception:
+            logger.debug("job result record failed", exc_info=True)
 
 
 @task_failure.connect
@@ -419,6 +429,16 @@ def _log_task_failure(task_id=None, exception=None, sender=None, einfo=None, **_
         ),
         exc_info=einfo.exc_info if einfo is not None else None,
     )
+    # Record the failure as the last-run result for money jobs (never raise).
+    if task is not None and getattr(task, "name", None):
+        try:
+            from app.services.job_heartbeat import MONEY_JOB_TASKS, record_result
+
+            if task.name in MONEY_JOB_TASKS:
+                msg = str(exception) if exception is not None else "unknown error"
+                record_result(task.name, status="error", detail={"error": msg[:500]})
+        except Exception:
+            logger.debug("job result (failure) record failed", exc_info=True)
 
 
 @task_retry.connect
