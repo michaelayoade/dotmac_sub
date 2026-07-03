@@ -76,8 +76,7 @@ def test_consolidated_record_payment_uses_default_currency_when_omitted(
         _fake_record_bulk_payment,
     )
     monkeypatch.setattr(
-        billing_consolidated.settings_spec,
-        "resolve_value",
+        "app.services.settings_spec.resolve_value",
         lambda *_args, **_kwargs: "USD",
     )
 

@@ -61,8 +61,11 @@ def currency_code(db: Session) -> str:
 
 
 def currency_symbol(db: Session) -> str:
-    symbols = {"NGN": "₦", "USD": "$", "EUR": "€", "GBP": "£"}
-    return symbols.get(currency_code(db), currency_code(db))
+    # Delegates to the canonical map; NGN/USD/EUR/GBP are identical there and
+    # both fall back to the raw code, so VAS output is unchanged.
+    from app.services import display_format
+
+    return display_format.currency_symbol(currency_code(db))
 
 
 def topup_limits(db: Session) -> dict[str, int]:
