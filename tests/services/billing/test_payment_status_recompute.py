@@ -129,8 +129,7 @@ def _make_prepaid_renewal_invoice(
         invoice_id=invoice.id,
         subscription_id=subscription.id,
         description=(
-            f"{subscription.offer.name} ({period_start.date()} - "
-            f"{period_end.date()})"
+            f"{subscription.offer.name} ({period_start.date()} - {period_end.date()})"
         ),
         quantity=Decimal("1.000"),
         unit_price=Decimal(total),
@@ -311,15 +310,9 @@ def test_lapsed_prepaid_invoice_payment_reanchors_period_to_payment_date(db_sess
     db_session.refresh(subscription)
     line = db_session.query(InvoiceLine).filter_by(invoice_id=invoice.id).one()
     assert invoice.status == InvoiceStatus.paid
-    assert invoice.billing_period_start == _utc_naive(
-        datetime(2026, 8, 5, tzinfo=UTC)
-    )
-    assert invoice.billing_period_end == _utc_naive(
-        datetime(2026, 9, 5, tzinfo=UTC)
-    )
-    assert subscription.next_billing_at == _utc_naive(
-        datetime(2026, 9, 5, tzinfo=UTC)
-    )
+    assert invoice.billing_period_start == _utc_naive(datetime(2026, 8, 5, tzinfo=UTC))
+    assert invoice.billing_period_end == _utc_naive(datetime(2026, 9, 5, tzinfo=UTC))
+    assert subscription.next_billing_at == _utc_naive(datetime(2026, 9, 5, tzinfo=UTC))
     assert subscription.status == SubscriptionStatus.active
     assert line.description.endswith("(2026-08-05 - 2026-09-05)")
     assert line.metadata_["billing_period_start"] == "2026-08-05T00:00:00+00:00"
@@ -367,15 +360,9 @@ def test_lapsed_prepaid_payment_preserves_existing_extension_delta(db_session):
 
     db_session.refresh(invoice)
     db_session.refresh(subscription)
-    assert invoice.billing_period_start == _utc_naive(
-        datetime(2026, 8, 5, tzinfo=UTC)
-    )
-    assert invoice.billing_period_end == _utc_naive(
-        datetime(2026, 9, 5, tzinfo=UTC)
-    )
-    assert subscription.next_billing_at == _utc_naive(
-        datetime(2026, 9, 10, tzinfo=UTC)
-    )
+    assert invoice.billing_period_start == _utc_naive(datetime(2026, 8, 5, tzinfo=UTC))
+    assert invoice.billing_period_end == _utc_naive(datetime(2026, 9, 5, tzinfo=UTC))
+    assert subscription.next_billing_at == _utc_naive(datetime(2026, 9, 10, tzinfo=UTC))
 
 
 def test_current_prepaid_invoice_payment_keeps_existing_period_anchor(db_session):
