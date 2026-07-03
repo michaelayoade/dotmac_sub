@@ -219,6 +219,7 @@ def payment_new(
             "idempotency_token": web_billing_payment_forms_service.new_manual_payment_idempotency_token(),
             "balance_value": state["balance_value"],
             "balance_display": state["balance_display"],
+            "default_currency": state["default_currency"],
         },
     )
 
@@ -664,6 +665,9 @@ def payment_import_page(
             "history_handler": history_handler,
             "history_status": history_status,
             "history_date_range": history_date_range,
+            "default_currency": web_billing_payments_service.resolve_default_currency(
+                db
+            ),
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
         },
