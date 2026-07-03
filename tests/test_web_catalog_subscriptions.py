@@ -2503,3 +2503,52 @@ def test_ensure_ipv4_blocks_allocatable_rejects_duplicate_manual_ipv4_selection(
             [str(first_block.id), str(second_block.id)],
             ["10.81.0.5", "10.81.0.5"],
         )
+
+
+def test_bulk_update_status_reports_partial_success(
+    db_session, subscriber, catalog_offer
+):
+    from app.schemas.catalog import SubscriptionCreate
+    from app.services import catalog as catalog_service
+    from app.services.web_catalog_subscriptions import bulk_update_status
+
+    active = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=subscriber.id,
+            offer_id=catalog_offer.id,
+            status=SubscriptionStatus.active,
+        ),
+    )
+    from app.models.subscriber import Subscriber
+
+    other = Subscriber(
+        first_name="Bulk",
+        last_name="Partial",
+        email=f"bulk-{uuid4().hex[:8]}@t.example",
+    )
+    db_session.add(other)
+    db_session.commit()
+    pending = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=other.id,
+            offer_id=catalog_offer.id,
+            status=SubscriptionStatus.pending,
+        ),
+    )
+    bogus = str(uuid4())
+
+    result = bulk_update_status(
+        db_session,
+        f"{active.id},{pending.id},{bogus}",
+        target_status=SubscriptionStatus.suspended,
+        allowed_from=[SubscriptionStatus.active],
+        request=None,
+        actor_id=None,
+    )
+
+    assert result["changed"] == 1
+    assert str(pending.id) in result["skipped_ids"]
+    db_session.refresh(active)
+    assert active.status == SubscriptionStatus.suspended

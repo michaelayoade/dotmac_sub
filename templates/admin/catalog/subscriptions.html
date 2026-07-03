@@ -196,10 +196,11 @@
                 Cancel
             </button>
             <button @click="bulkChangePlan()"
-                    :disabled="!targetOfferId"
-                    :class="targetOfferId ? 'bg-violet-600 hover:bg-violet-700' : 'bg-slate-300 cursor-not-allowed'"
+                    :disabled="!targetOfferId || bulkBusy"
+                    :class="(targetOfferId && !bulkBusy) ? 'bg-violet-600 hover:bg-violet-700' : 'bg-slate-300 cursor-not-allowed'"
                     class="rounded-lg px-4 py-2 text-sm font-medium text-white">
-                Apply Change
+                <span x-show="!bulkBusy">Apply Change</span>
+                <span x-show="bulkBusy">Applying…</span>
             </button>
         </div>
     </div>
@@ -235,8 +236,12 @@ function subscriptionBulkActions() {
             this.selectedIds = [];
         },
 
+        bulkBusy: false,
+
         async bulkAction(action) {
             if (this.selectedIds.length === 0) return;
+            if (this.bulkBusy) return;  // double-submit guard
+            this.bulkBusy = true;
 
             const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content ||
                              document.querySelector('[name="_csrf_token"]')?.value || '';
@@ -253,18 +258,31 @@ function subscriptionBulkActions() {
 
                 if (response.ok) {
                     const result = await response.json();
-                    window.dispatchEvent(new CustomEvent('show-toast', {
-                        detail: { message: result.message || `Successfully updated subscriptions`, type: 'success' }
-                    }));
+                    const skipped = result.skipped_ids || [];
+                    const failed = result.failed_ids || [];
+                    if (failed.length > 0 || skipped.length > 0) {
+                        // Blocking summary so a partial result can't be missed.
+                        let detail = result.message || 'Bulk action partially completed.';
+                        if (skipped.length) detail += `\nSkipped (not eligible): ${skipped.join(', ')}`;
+                        if (failed.length) detail += `\nFailed: ${failed.join(', ')}`;
+                        alert(detail);
+                    } else {
+                        // Persist the toast across the reload that used to destroy it.
+                        sessionStorage.setItem('bulk_result_toast', result.message || 'Subscriptions updated');
+                    }
                     window.location.reload();
                 } else {
-                    const error = await response.json();
+                    const error = await response.json().catch(() => ({}));
                     window.dispatchEvent(new CustomEvent('show-toast', {
-                        detail: { message: error.message || `Failed to ${action} subscriptions`, type: 'error' }
+                        detail: { message: error.message || error.detail || `Failed to ${action} subscriptions`, type: 'error' }
                     }));
+                    this.bulkBusy = false;
                 }
             } catch (error) {
-                console.error('Bulk action error:', error);
+                window.dispatchEvent(new CustomEvent('show-toast', {
+                    detail: { message: `Bulk ${action} failed: ${error.message || 'network error'}`, type: 'error' }
+                }));
+                this.bulkBusy = false;
             }
         },
 
@@ -288,6 +306,9 @@ function subscriptionBulkActions() {
 
         async bulkChangePlan() {
             if (!this.targetOfferId || this.selectedIds.length === 0) return;
+            if (this.bulkBusy) return;  // double-submit guard: rapid clicks duplicated proration artifacts
+            if (!confirm(`Change the plan for ${this.selectedIds.length} selected subscription(s) now? This applies immediately.`)) return;
+            this.bulkBusy = true;
 
             const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content ||
                              document.querySelector('[name="_csrf_token"]')?.value || '';
@@ -306,18 +327,40 @@ function subscriptionBulkActions() {
                     const result = await response.json();
                     this.showChangePlanModal = false;
                     this.targetOfferId = '';
-                    window.dispatchEvent(new CustomEvent('show-toast', {
-                        detail: { message: result.message || 'Plan changed successfully', type: 'success' }
-                    }));
+                    const skipped = result.skipped_ids || [];
+                    const failed = result.failed_ids || [];
+                    if (failed.length > 0 || skipped.length > 0) {
+                        let detail = result.message || 'Plan change partially completed.';
+                        if (skipped.length) detail += `\nSkipped (not active): ${skipped.join(', ')}`;
+                        if (failed.length) detail += `\nFailed: ${failed.join(', ')}`;
+                        alert(detail);
+                    } else {
+                        sessionStorage.setItem('bulk_result_toast', result.message || 'Plan changed');
+                    }
                     window.location.reload();
                 } else {
-                    const error = await response.json();
+                    const error = await response.json().catch(() => ({}));
                     window.dispatchEvent(new CustomEvent('show-toast', {
-                        detail: { message: error.message || 'Failed to change plan', type: 'error' }
+                        detail: { message: error.message || error.detail || 'Failed to change plan', type: 'error' }
                     }));
+                    this.bulkBusy = false;
                 }
             } catch (error) {
-                console.error('Bulk change plan error:', error);
+                window.dispatchEvent(new CustomEvent('show-toast', {
+                    detail: { message: `Plan change failed: ${error.message || 'network error'}`, type: 'error' }
+                }));
+                this.bulkBusy = false;
+            }
+        },
+
+        init() {
+            // Replay the success toast that a post-action reload used to destroy.
+            const msg = sessionStorage.getItem('bulk_result_toast');
+            if (msg) {
+                sessionStorage.removeItem('bulk_result_toast');
+                window.dispatchEvent(new CustomEvent('show-toast', {
+                    detail: { message: msg, type: 'success' }
+                }));
             }
         }
     };

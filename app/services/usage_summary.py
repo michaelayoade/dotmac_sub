@@ -187,13 +187,13 @@ def _fup_warn_ratio(db: Session) -> float:
     task warns at), default 0.8."""
     from app.models.domain_settings import SettingDomain
     from app.services import settings_spec
-    from app.services.usage import _parse_warning_thresholds
+    from app.services.usage import DEFAULT_FUP_WARN_RATIO, _parse_warning_thresholds
 
     raw = settings_spec.resolve_value(
         db, SettingDomain.usage, "usage_warning_thresholds"
     )
     parsed = _parse_warning_thresholds(str(raw) if raw is not None else None)
-    return float(parsed[0]) if parsed else 0.8
+    return float(parsed[0]) if parsed else DEFAULT_FUP_WARN_RATIO
 
 
 def _nearest_enforcement_rule(db: Session, offer_id):

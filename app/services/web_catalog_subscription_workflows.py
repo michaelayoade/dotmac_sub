@@ -305,6 +305,25 @@ def admin_resume_vacation_hold_redirect(
     return f"/admin/catalog/subscriptions/{subscription_id}?{query}"
 
 
+def _bulk_result_payload(verb: str, result: dict) -> dict[str, object]:
+    """Standard partial-success payload: message + changed/skipped/failed detail."""
+    changed = result.get("changed", 0)
+    skipped = result.get("skipped_ids", [])
+    failed = result.get("failed_ids", [])
+    parts = [f"{verb} {changed} subscription{'s' if changed != 1 else ''}"]
+    if skipped:
+        parts.append(f"{len(skipped)} skipped (not eligible)")
+    if failed:
+        parts.append(f"{len(failed)} FAILED")
+    return {
+        "message": "; ".join(parts),
+        "count": changed,
+        "changed": changed,
+        "skipped_ids": skipped,
+        "failed_ids": failed,
+    }
+
+
 def bulk_activate_response(
     db: Session,
     *,
@@ -313,7 +332,7 @@ def bulk_activate_response(
     actor_id: str | None,
 ) -> dict[str, object]:
     """Activate eligible subscriptions and return API response payload."""
-    count = core.bulk_update_status(
+    result = core.bulk_update_status(
         db,
         subscription_ids,
         target_status=SubscriptionStatus.active,
@@ -321,7 +340,7 @@ def bulk_activate_response(
         request=request,
         actor_id=actor_id,
     )
-    return {"message": f"Activated {count} subscriptions", "count": count}
+    return _bulk_result_payload("Activated", result)
 
 
 def bulk_suspend_response(
@@ -332,7 +351,7 @@ def bulk_suspend_response(
     actor_id: str | None,
 ) -> dict[str, object]:
     """Suspend eligible subscriptions and return API response payload."""
-    count = core.bulk_update_status(
+    result = core.bulk_update_status(
         db,
         subscription_ids,
         target_status=SubscriptionStatus.suspended,
@@ -340,7 +359,7 @@ def bulk_suspend_response(
         request=request,
         actor_id=actor_id,
     )
-    return {"message": f"Suspended {count} subscriptions", "count": count}
+    return _bulk_result_payload("Suspended", result)
 
 
 def bulk_cancel_response(
@@ -351,7 +370,7 @@ def bulk_cancel_response(
     actor_id: str | None,
 ) -> dict[str, object]:
     """Cancel eligible subscriptions and return API response payload."""
-    count = core.bulk_update_status(
+    result = core.bulk_update_status(
         db,
         subscription_ids,
         target_status=SubscriptionStatus.canceled,
@@ -363,7 +382,7 @@ def bulk_cancel_response(
         request=request,
         actor_id=actor_id,
     )
-    return {"message": f"Canceled {count} subscriptions", "count": count}
+    return _bulk_result_payload("Canceled", result)
 
 
 def bulk_change_plan_response(
@@ -375,11 +394,11 @@ def bulk_change_plan_response(
     actor_id: str | None,
 ) -> dict[str, object]:
     """Bulk change subscription plans and return API response payload."""
-    count = core.bulk_change_plan(
+    result = core.bulk_change_plan(
         db,
         subscription_ids,
         target_offer_id,
         request=request,
         actor_id=actor_id,
     )
-    return {"message": f"Changed plan for {count} subscriptions", "count": count}
+    return _bulk_result_payload("Changed plan for", result)

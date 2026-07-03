@@ -14,6 +14,25 @@ from app.services.common import coerce_uuid
 logger = logging.getLogger(__name__)
 
 
+def _recurring_price(db: Session, offer_id: str):
+    """Active recurring price for an offer, or the newest active price."""
+    from app.services import catalog as catalog_service
+
+    prices = catalog_service.offer_prices.list(
+        db=db,
+        offer_id=offer_id,
+        is_active=True,
+        order_by="created_at",
+        order_dir="desc",
+        limit=50,
+        offset=0,
+    )
+    recurring = next(
+        (item for item in prices if item.price_type.value == "recurring"), None
+    )
+    return recurring or (prices[0] if prices else None)
+
+
 class BulkTariffChange:
     """Service for bulk tariff plan changes."""
 
@@ -59,11 +78,20 @@ class BulkTariffChange:
         )
         subscriptions = list(db.scalars(stmt).all())
 
+        source_price = _recurring_price(db, source_offer_id)
+        target_price = _recurring_price(db, target_offer_id)
+        price_delta = None
+        if source_price is not None and target_price is not None:
+            price_delta = target_price.amount - source_price.amount
+
         return {
             "source_offer": source,
             "target_offer": target,
             "affected_subscriptions": subscriptions,
             "total_count": len(subscriptions),
+            "source_price": source_price,
+            "target_price": target_price,
+            "price_delta": price_delta,
         }
 
     @staticmethod

@@ -2485,6 +2485,17 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.usage,
+        key="fup_submonthly_rules_enabled",
+        env_var="USAGE_FUP_SUBMONTHLY_RULES_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=False,
+        label=(
+            "Allow daily/weekly FUP rules (sub-monthly usage is samples-derived, "
+            "not billing-grade — enable only after validating the metrics source)"
+        ),
+    ),
+    SettingSpec(
+        domain=SettingDomain.usage,
         key="fup_action",
         env_var="USAGE_FUP_ACTION",
         value_type=SettingValueType.string,
