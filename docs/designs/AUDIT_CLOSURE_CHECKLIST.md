@@ -28,7 +28,11 @@ instead of leaving it unchecked forever. Source of detail: each domain's
 - [ ] SECURITY (systemic): extend the build-failing route-permission arch test
   from `/api/v1`-only to **all `/admin` web routers**, with a quarantine list
   burned down over time
-- [ ] SECURITY: move API-key hashing from unsalted sha256 to HMAC-with-key
+- [x] SECURITY: API-key hashing → HMAC-SHA256 keyed with a derived subkey of
+  the credential-encryption key. Dual-read + rehash-on-use: legacy sha256 rows
+  keep authenticating and upgrade to HMAC on next call — NO key rotation, NO
+  external (ERP/CRM) changes, zero downtime. Legacy sha256 verify path can be
+  retired once all active keys have re-authenticated (2 prod keys).
 - [ ] BILLING: currency cleanup remainder — forms, adapters, **Flutterwave init
   (blocks non-NGN today)**, integrity SQL, `crm_billing_push` (`os.getenv`)
 - [ ] APP-INTEGRATIONS P-C: fix fake observability — connector health is
@@ -41,8 +45,14 @@ instead of leaving it unchecked forever. Source of detail: each domain's
 
 ## Tier 2 — structural / settings-system unification
 
-- [ ] SYSTEM-CONFIG C-1: migrate the remaining **billing/collections bespoke
+- [x] SYSTEM-CONFIG C-1: migrate the remaining **billing/collections bespoke
   string-save forms** to typed `settings_spec` (the two-settings-systems split)
+  — all five saves (`save_billing_config`, `save_direct_bank_transfer_config`,
+  `save_reminders`, `save_billing_notifications`, `save_plan_change`) now pass
+  `use_specs=True`; registered keys get spec type coercion/validation, and the
+  seven `direct_bank_transfer_*` keys gained specs (they have portal readers).
+  Reader-less keys (payment_period, invoice/proforma toggles, the reminder/
+  blocking-wave waves) are intentionally left un-spec'd to avoid orphans.
 - [ ] SYSTEM-CONFIG: bespoke-save validation/feedback consistency for the
   remaining untyped forms (monitoring/preferences/portal/radius already typed)
 - [ ] BILLING: bulk/scheduled money-job **result history** surface (autopay,
@@ -55,8 +65,18 @@ instead of leaving it unchecked forever. Source of detail: each domain's
   known hardcodes: catalog customer-detail `₦` + calculator totals, reseller
   VAS `min_topup=100`/`₦`/`NGN`, dunning/arrangement tz+currency, reseller
   UTC-label-only branch
-- [ ] CROSS-CUTTING: "no dead controls" lint — every form field maps to a
-  consumer, every settings key has a reader (recurring incident class; CI grep)
+- [x] CROSS-CUTTING: "no dead controls" lint — settings-key half done via
+  `tests/architecture/test_no_orphan_settings.py`: every registered
+  `SETTINGS_SPECS` key must have a reader or the build fails. Surfaced **35
+  pre-existing dead keys** (burn-down `_KNOWN_ORPHAN_SETTINGS`) — see Tier 4.
+  The "every form field maps to a consumer" half is deliberately deferred (too
+  noisy for CI without a large allowlist).
+- [ ] TIER-4 follow-up: burn down the 35 orphan settings the lint captured
+  (wire a consumer or drop from SETTINGS_SPECS). Clusters: collections
+  `prepaid_deactivation_*` / `prepaid_warning_*` / `prepaid_skip_*` (dead
+  prepaid-dunning settings page), `meta_*` comms, `hotspot_*`, subscriber
+  `account_number_*`, several network/monitoring poll intervals, vendor
+  quote/bid thresholds, `vendor_*session*` auth.
 
 ## Tier 3 — product decisions needed (blocked on a human call)
 

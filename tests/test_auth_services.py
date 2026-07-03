@@ -1,4 +1,3 @@
-import hashlib
 import uuid
 from http.cookies import SimpleCookie
 from pathlib import Path
@@ -148,6 +147,35 @@ def test_admin_login_page_uses_configured_remember_duration(db_session):
     )
 
     assert "Remember me for 10 days" in response.body.decode()
+
+
+def _make_get_request_with_cookie(path: str, cookie: str) -> Request:
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": path,
+        "headers": [
+            (b"user-agent", b"pytest"),
+            (b"cookie", cookie.encode("utf-8")),
+        ],
+        "client": ("127.0.0.1", 12345),
+        "query_string": b"",
+    }
+    return Request(scope)
+
+
+def test_reset_password_page_reads_token_from_cookie(db_session):
+    # Forced-reset flow delivers the token via an HttpOnly cookie, not the URL.
+    response = web_auth_service.reset_password_page(
+        _make_get_request_with_cookie(
+            "/auth/reset-password",
+            f"{web_auth_service.PASSWORD_RESET_COOKIE}=cookie-token-xyz",
+        ),
+        db_session,
+        None,
+    )
+    body = response.body.decode()
+    assert "cookie-token-xyz" in body
 
 
 def test_reset_password_page_uses_configured_min_length(db_session):
@@ -417,7 +445,9 @@ def test_api_key_generate_with_redis(monkeypatch, db_session):
     result = auth_service.api_keys.generate_with_rate_limit(db_session, payload, None)
     raw_key = result["key"]
     api_key = result["api_key"]
-    assert hashlib.sha256(raw_key.encode("utf-8")).hexdigest() == api_key.key_hash
+    # Scheme-agnostic: matches whatever hash_api_key produces (HMAC when a
+    # server secret is configured, legacy sha256 otherwise).
+    assert auth_service.hash_api_key(raw_key) == api_key.key_hash
 
 
 def test_api_key_rate_limit_requires_redis(monkeypatch, db_session):
@@ -454,7 +484,7 @@ def test_api_key_update_and_revoke(db_session, person):
         str(created.id),
         ApiKeyUpdate(key_hash="new-key"),
     )
-    assert updated.key_hash == hashlib.sha256(b"new-key").hexdigest()
+    assert updated.key_hash == auth_service.hash_api_key("new-key")
 
     auth_service.api_keys.revoke(db_session, str(created.id))
     db_session.refresh(created)

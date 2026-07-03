@@ -409,11 +409,21 @@ def _normalized_billing_config(data: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def save_billing_config(db: Session, data: Mapping[str, Any]) -> None:
+    # ``_normalized_billing_config`` still performs the canonicalisation (lower-
+    # casing enum choices, formatting decimals, validating CSV day-lists) and
+    # ``use_specs`` layers spec-based type coercion/validation on top for the
+    # keys that have a registered spec. Keys without a spec (payment_period,
+    # billing_day, use_creation_date, send_billing_notifications, the
+    # invoice/receipt/credit-note number formats, and the proforma_* / zero_
+    # total_invoices / invoice_caching toggles) are intentionally NOT spec'd:
+    # nothing in the app reads them, so registering specs would create orphans.
+    # They keep their prior raw-string behaviour via the fall-through path.
     _save_settings(
         db,
         SettingDomain.billing,
         _normalized_billing_config(data),
         BILLING_KEYS,
+        use_specs=True,
     )
 
 
@@ -445,7 +455,13 @@ def save_direct_bank_transfer_config(db: Session, data: Mapping[str, Any]) -> No
         "direct_bank_transfer_account_number": primary.get("account_number", ""),
         "direct_bank_transfer_sort_code": primary.get("sort_code", ""),
     }
-    _save_settings(db, SettingDomain.billing, payload, DIRECT_BANK_TRANSFER_KEYS)
+    _save_settings(
+        db,
+        SettingDomain.billing,
+        payload,
+        DIRECT_BANK_TRANSFER_KEYS,
+        use_specs=True,
+    )
 
 
 def _parse_direct_transfer_accounts(
@@ -621,7 +637,11 @@ def get_reminders_context(db: Session) -> dict:
 
 
 def save_reminders(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.collections, data, REMINDER_KEYS)
+    # Routed through the spec path for consistency with the other settings
+    # saves. None of the REMINDER_KEYS currently has a runtime reader, so none
+    # is registered as a spec (registering them would create orphans); they all
+    # take the raw-string fall-through until a consumer exists.
+    _save_settings(db, SettingDomain.collections, data, REMINDER_KEYS, use_specs=True)
 
 
 # ---------------------------------------------------------------------------
@@ -656,7 +676,14 @@ def get_billing_notifications_context(db: Session) -> dict:
 
 
 def save_billing_notifications(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.collections, data, BILLING_NOTIF_KEYS)
+    # ``billing_notif_send_hour`` has a spec (integer 0-23, read by the
+    # enforcement-window gate) and now gets spec type coercion/validation. The
+    # blocking-wave / pre-block-wave keys have no runtime reader, so they are
+    # deliberately left un-spec'd (avoiding orphans) and keep the raw-string
+    # fall-through.
+    _save_settings(
+        db, SettingDomain.collections, data, BILLING_NOTIF_KEYS, use_specs=True
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -720,7 +747,14 @@ def save_plan_change(db: Session, data: Mapping[str, Any]) -> None:
     normalized["invoice_timing"] = invoice_timing
     normalized["prepaid_rollover"] = prepaid_rollover
     normalized["discount_transfer"] = discount_transfer
-    _save_settings(db, SettingDomain.billing, normalized, PLAN_CHANGE_KEYS)
+    # Every PLAN_CHANGE_KEYS entry is spec-registered. The lowercase
+    # canonicalisation above is preserved so the coerced enum values match the
+    # specs' ``allowed`` sets (refund_policy / invoice_timing) and the boolean
+    # coercion (prepaid_rollover / discount_transfer); use_specs then applies
+    # the spec typing/validation.
+    _save_settings(
+        db, SettingDomain.billing, normalized, PLAN_CHANGE_KEYS, use_specs=True
+    )
 
 
 # ---------------------------------------------------------------------------

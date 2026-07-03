@@ -11,7 +11,6 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.models.billing import InvoiceStatus, PaymentStatus
-from app.models.domain_settings import SettingDomain
 from app.schemas.billing import (
     InvoiceCreate,
     InvoiceLineCreate,
@@ -19,7 +18,7 @@ from app.schemas.billing import (
     PaymentCreate,
     PaymentProviderEventIngest,
 )
-from app.services import settings_spec
+from app.services import display_format
 from app.services.adapters import adapter_registry
 
 
@@ -73,12 +72,7 @@ class BillingAdapter:
 
     def _default_currency(self, db: Session | None) -> str:
         if db is not None:
-            value = settings_spec.resolve_value(
-                db, SettingDomain.billing, "default_currency"
-            )
-            code = str(value or "NGN").strip().upper()
-            if code:
-                return code
+            return display_format.default_currency(db)
         return "NGN"
 
     def _currency(self, db: Session | None, currency: str | None) -> str:
