@@ -388,3 +388,36 @@ def test_plan_change_save_rejects_invalid_enum(db_session):
         )
 
     assert "refund_policy" not in _billing_rows(db_session)
+
+
+def test_modules_save_flips_payment_provider_is_active(db_session, monkeypatch):
+    from app.models.billing import PaymentProvider, PaymentProviderType
+
+    provider = PaymentProvider(
+        name="Flutterwave",
+        provider_type=PaymentProviderType.flutterwave,
+        is_active=True,
+    )
+    db_session.add(provider)
+    db_session.commit()
+    db_session.refresh(provider)
+
+    monkeypatch.setattr(
+        admin_system,
+        "parse_form_data_sync",
+        lambda request: {f"provider__{provider.id}": "false"},
+    )
+
+    response = admin_system.modules_manager_save(SimpleNamespace(), db_session)
+
+    assert response.status_code == 303
+    db_session.refresh(provider)
+    assert provider.is_active is False
+
+
+def test_modules_template_renders_provider_toggle_section():
+    template = Path("templates/admin/system/modules.html").read_text()
+
+    assert "Payment Providers" in template
+    assert "provider__{{ provider.id }}" in template
+    assert "{% if payment_providers %}" in template
