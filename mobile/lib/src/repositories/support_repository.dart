@@ -35,6 +35,23 @@ class SupportRepository {
     return Ticket.fromJson(data as Map<String, dynamic>);
   }
 
+  /// POST /me/support/tickets/{id}/rate — CSAT on the support experience for a
+  /// resolved/closed ticket (1-5 + optional comment). Returns the updated ticket.
+  Future<Ticket> rateTicket(
+    String id, {
+    required int rating,
+    String? comment,
+  }) async {
+    final data = await guard(() => dio.post(
+          '/me/support/tickets/$id/rate',
+          data: {
+            'rating': rating,
+            if (comment != null && comment.isNotEmpty) 'comment': comment,
+          },
+        ));
+    return Ticket.fromJson(data as Map<String, dynamic>);
+  }
+
   /// POST /me/support/tickets — scoped to the caller; no subscriber id sent.
   ///
   /// When [attachmentPaths] is non-empty the request is sent as

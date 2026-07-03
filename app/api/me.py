@@ -105,6 +105,7 @@ from app.schemas.support import (
     TicketCommentRead,
     TicketCreate,
     TicketRead,
+    TicketSatisfactionRequest,
 )
 from app.schemas.usage import (
     DailyUsageHistoryResponse,
@@ -1354,6 +1355,21 @@ def my_add_ticket_comment(
     if getattr(comment, "id", None):
         enqueue_crm_comment_push(comment.id, source="me_ticket_comment")
     return comment
+
+
+@router.post("/support/tickets/{ticket_id}/rate", response_model=TicketRead)
+def my_rate_ticket(
+    ticket_id: str,
+    payload: TicketSatisfactionRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Rate the support experience on the caller's own resolved/closed ticket
+    (CSAT, 1-5 + optional comment). Re-rating overwrites the previous score."""
+    ticket = _owned_ticket(db, _subscriber_id(principal), ticket_id)
+    return support_service.tickets.set_satisfaction(
+        db, ticket, rating=payload.rating, comment=payload.comment
+    )
 
 
 # --- Geocoding (self-care helpers) ----------------------------------------------

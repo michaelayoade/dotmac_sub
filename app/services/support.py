@@ -1012,6 +1012,34 @@ class Tickets:
         return ticket
 
     @staticmethod
+    def set_satisfaction(
+        db: Session, ticket: Ticket, *, rating: int, comment: str | None = None
+    ) -> Ticket:
+        """Record a customer CSAT rating (1-5 + optional comment) on a resolved
+        or closed ticket, stored under ``metadata.csat``. Re-rating overwrites.
+        Rejects tickets that aren't resolved/closed so support is rated on the
+        outcome, not mid-flight."""
+        if ticket.status not in (
+            TicketStatus.resolved.value,
+            TicketStatus.closed.value,
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="You can rate support once the ticket is resolved.",
+            )
+        meta = dict(ticket.metadata_ or {})
+        meta["csat"] = {
+            "rating": int(rating),
+            "comment": (comment or "").strip() or None,
+            "at": datetime.now(UTC).isoformat(),
+        }
+        ticket.metadata_ = meta
+        db.add(ticket)
+        db.commit()
+        db.refresh(ticket)
+        return ticket
+
+    @staticmethod
     def add_attachments(
         db: Session, ticket_id: str, attachments: list[dict] | None
     ) -> Ticket:
