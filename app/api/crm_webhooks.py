@@ -223,19 +223,12 @@ async def receive_crm_chat_event(
     # have registered a device).
     reseller_id = str(body.get("reseller_id") or "").strip()
     if reseller_id:
-        from app.models.subscriber import ResellerUser
-        from app.services.common import coerce_uuid
+        from app.services import reseller_portal
 
-        rows = (
-            db.query(ResellerUser.subscriber_id)
-            .filter(ResellerUser.reseller_id == coerce_uuid(reseller_id))
-            .filter(ResellerUser.is_active.is_(True))
-            .filter(ResellerUser.subscriber_id.isnot(None))
-            .all()
-        )
-        for (sid,) in rows:
-            _wake(str(sid))
-        return {"status": "ok" if rows else "ignored", "event": event_type}
+        sub_ids = reseller_portal.portal_user_subscriber_ids(db, reseller_id)
+        for sid in sub_ids:
+            _wake(sid)
+        return {"status": "ok" if sub_ids else "ignored", "event": event_type}
 
     return {"status": "ignored", "reason": "no_target"}
 
