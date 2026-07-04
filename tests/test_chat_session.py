@@ -34,14 +34,14 @@ def _chat_settings(*, enabled=True, config_id="cfg-1", base="https://crm.example
             "crm_chat_config_id",
             "crm_base_url",
             "crm_chat_ws_url",
-            "crm_chat_webhook_secret",
+            "crm_webhook_secret",
         )
     }
     object.__setattr__(settings, "chat_live_enabled", enabled)
     object.__setattr__(settings, "crm_chat_config_id", config_id)
     object.__setattr__(settings, "crm_base_url", base)
     object.__setattr__(settings, "crm_chat_ws_url", "")
-    object.__setattr__(settings, "crm_chat_webhook_secret", CHAT_SECRET)
+    object.__setattr__(settings, "crm_webhook_secret", CHAT_SECRET)
     try:
         yield
     finally:
