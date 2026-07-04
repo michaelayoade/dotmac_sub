@@ -171,7 +171,7 @@ def test_duplicate_accepted_variance_rejected(tmp_path):
     )
 
     try:
-        audit._load_registered_variances(registry)
+        audit._load_registered_variances(object(), variance_registry_path=registry)
     except ValueError as exc:
         assert account_id in str(exc)
     else:
