@@ -174,11 +174,11 @@ async def receive_crm_chat_event(
     token — so message bodies here are advisory only.
     """
     raw_body = await request.body()
-    _verify_signature(
-        raw_body,
-        request.headers.get(SIGNATURE_HEADER),
-        secret=settings.crm_chat_webhook_secret,
-    )
+    # Verify with the shared CRM webhook secret — the same secret the selfcare
+    # client signs chat pushes with (dotmac_crm selfcare.notify_chat_message),
+    # like every other CRM webhook here. Avoids a separate, unconfigured chat
+    # secret that silently fails the signature check.
+    _verify_signature(raw_body, request.headers.get(SIGNATURE_HEADER))
 
     event_type = str(request.headers.get(EVENT_HEADER) or "").strip()
     if event_type and event_type not in CHAT_EVENTS:
