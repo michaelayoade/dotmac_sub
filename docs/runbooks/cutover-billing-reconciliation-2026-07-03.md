@@ -21,8 +21,9 @@ Payments are counted from `2026-06-16 00:00:00 UTC` by `payments.created_at`.
 Invoices and ordinary manual adjustments are counted from
 `2026-06-16 09:08:00 UTC`, after the opening-balance seed handoff. Remediation
 memos (`Reversal of phantom%`, `Reversal of prepaid opening%`, `Correction:%`,
-`Partial cutover opening balance construction adjustment%`) are excluded from
-the adjustment target and reported separately.
+`Partial cutover opening balance construction adjustment%`,
+`Data repair 2026-06-29:%`, `Validated account credit consumed%`) are excluded
+from the adjustment target and reported separately.
 
 Some prepaid renewals write a local ledger debit with `source='invoice'` and
 `invoice_id = NULL` instead of an `invoices` table row. Those rows are real
@@ -74,20 +75,21 @@ ledger-charge-aware opening construction restores: 9 accounts / NGN 1,096,437.00
 post-merge exact opening/seed restores: 14 rows / NGN 862,611.97
 post-merge missing payment credits: 4 accounts / NGN 75,251.00
 partial opening-construction debit adjustments: 11 accounts / NGN 1,504,277.03
+adjustment-aware exact opening construction restore: 1 account / NGN 306,250.00
 ```
 
-After the partial construction-adjustment pass, before registering accepted variances,
-the scheduled audit reports:
+After the mirror-evidence pass and adjustment-aware exact restore, before
+registering accepted variances, the scheduled audit reports:
 
 ```text
 population: 15055 cutover-seeded accounts
-raw_drift_count: 32
-unregistered drift_count: 32
-overcredited: 11 accounts / NGN 1,434,886.04
+raw_drift_count: 30
+unregistered drift_count: 30
+overcredited: 9 accounts / NGN 689,184.50
 understated: 21 accounts / NGN 1,383,930.82
 post-cutover adjustments: 29 entries / NGN -1,702,726.86
-target adjustments: 16 entries / NGN -140,949.83
-excluded remediation adjustments: 13 entries / NGN -1,561,777.03
+target adjustments: 13 entries / NGN 298,501.71
+excluded remediation adjustments: 16 entries / NGN -2,001,228.57
 ```
 
 Historical baseline log:
@@ -96,6 +98,7 @@ Historical baseline log:
 2026-07-04 post ledger-charge refinement: 60 drift rows
 2026-07-04 post seed/payment tail fixes: 43 drift rows
 2026-07-04 post partial construction adjustments: 32 drift rows
+2026-07-04 post mirror-evidence adjustment exclusions: 30 drift rows
 ```
 
 The scheduled guard is `app.tasks.billing.audit_cutover_balance_invariant`,

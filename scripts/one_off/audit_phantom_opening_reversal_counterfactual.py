@@ -737,6 +737,80 @@ def _restore_eligible(
     return 0
 
 
+def _restore_exact_with_adjustments(
+    session: Session,
+    pairs: list[Pair],
+    reviews: list[Review],
+    apply: bool,
+    print_limit: int,
+) -> int:
+    eligible_account_ids = {
+        review.account_id
+        for review in reviews
+        if review.status == "review_exact_with_post_adjustments"
+        and review.cause_bucket == "exact_pair_but_post_cutover_adjustments_present"
+        and review.invalid_pairs == 0
+        and review.inactive_original_amount > 0
+        and _eq(review.restore_needed, review.inactive_original_amount)
+    }
+    entries = [
+        pair.original
+        for pair in pairs
+        if pair.valid
+        and pair.original is not None
+        and pair.original.account_id in eligible_account_ids
+        and not pair.original.is_active
+        and not pair.reversal.is_active
+    ]
+    total = _money(sum((entry.amount for entry in entries), Decimal("0")))
+    print(
+        f"{'APPLY' if apply else 'DRY-RUN'}: restore {len(entries)} "
+        f"adjustment-aware exact construction debit rows totaling {total}"
+    )
+    printed = 0
+    suppressed = 0
+    for review in reviews:
+        if review.account_id not in eligible_account_ids:
+            continue
+        expected_after = _money(
+            review.current_available - review.inactive_original_amount
+        )
+        if printed < print_limit:
+            print(
+                f"  {review.subscriber_name}: {review.current_available} -> "
+                f"{expected_after} (target {review.target_available}; "
+                f"post_adjustment_net {review.post_adjustment_net})"
+            )
+            printed += 1
+        else:
+            suppressed += 1
+    if suppressed:
+        print(f"  ... {suppressed} additional eligible accounts omitted from output")
+    if not apply:
+        return 0
+
+    for entry in entries:
+        entry.is_active = True
+    session.flush()
+
+    failures = []
+    actual_by_account = _current_available_map(session, list(eligible_account_ids))
+    for review in reviews:
+        if review.account_id not in eligible_account_ids:
+            continue
+        actual = actual_by_account.get(review.account_id, Decimal("0"))
+        if not _eq(actual, review.target_available):
+            failures.append((review.subscriber_name, actual, review.target_available))
+    if failures:
+        session.rollback()
+        for name, actual, target in failures:
+            print(f"VERIFY FAILED: {name}: available {actual}, expected {target}")
+        return 1
+    session.commit()
+    print(f"restored {len(entries)} adjustment-aware construction debit rows")
+    return 0
+
+
 def _partial_adjust_eligible(
     session: Session,
     reviews: list[Review],
@@ -878,6 +952,14 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--restore-exact-with-adjustments",
+        action="store_true",
+        help=(
+            "reactivate exact-match inactive construction debits even when "
+            "ordinary post-cutover adjustments are present in the invariant target"
+        ),
+    )
+    parser.add_argument(
         "--include-events",
         action="store_true",
         help="include per-account dunning/status/event counts; slower",
@@ -908,6 +990,10 @@ def main() -> int:
         if args.partial_adjust_eligible:
             return _partial_adjust_eligible(
                 session, reviews, args.apply, max(args.print_limit, 0)
+            )
+        if args.restore_exact_with_adjustments:
+            return _restore_exact_with_adjustments(
+                session, pairs, reviews, args.apply, max(args.print_limit, 0)
             )
         if args.apply:
             print(

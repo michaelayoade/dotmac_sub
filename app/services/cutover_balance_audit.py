@@ -175,6 +175,8 @@ def _rows(db: Session):
                   AND le.memo NOT LIKE 'Reversal of prepaid opening%'
                   AND le.memo NOT LIKE 'Correction:%'
                   AND le.memo NOT LIKE :partial_construction_memo_prefix
+                  AND le.memo NOT LIKE 'Data repair 2026-06-29:%'
+                  AND le.memo NOT LIKE 'Validated account credit consumed%'
                   AND le.created_at >= :activity_at
                 GROUP BY le.account_id
             )
