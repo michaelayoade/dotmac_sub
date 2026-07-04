@@ -113,6 +113,9 @@ Historical baseline log:
 
 The scheduled guard is `app.tasks.billing.audit_cutover_balance_invariant`,
 registered as `cutover_balance_invariant_audit` every 86,400 seconds.
+On-call note after the prepaid phantom AR draft flip: expect roughly 490
+unregistered drift rows until draft-flip settlement remediation completes; a
+falling count is remediation progress, while a rising count is a new problem.
 
 ## Funded Inactive Exposure
 
