@@ -18,6 +18,7 @@ import logging
 import os
 
 import paramiko
+from paramiko.ssh_exception import AuthenticationException
 
 from app.config import settings
 
@@ -138,7 +139,7 @@ def export_config_via_ssh(
                 **base_kwargs,
                 **({"pkey": pkey} if pkey is not None else {"password": password}),
             )
-        except paramiko.AuthenticationException:
+        except AuthenticationException:
             # Key rejected — fall back to the password if one is configured.
             if pkey is None or not password:
                 raise
