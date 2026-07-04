@@ -80,3 +80,28 @@ def run_bundle_reconcile() -> dict[str, int]:
 def run_dunning() -> dict[str, int | str]:
     """Backward-compatible task alias for the unified billing enforcer."""
     return run_billing_enforcement()
+
+
+@celery_app.task(name="app.tasks.collections.prepaid_balance_sweep")
+def prepaid_balance_sweep() -> dict[str, int | str]:
+    """Balance/expiry-based prepaid enforcement (arm timers, warn, suspend).
+
+    Gated OFF by default behind the ``collections.prepaid_balance_enforcement``
+    control; the service returns ``{"skipped": "disabled"}`` when the control is
+    off, so the beat entry firing is harmless until an operator opts in.
+    """
+    from app.services.collections.prepaid_balance_sweep import (
+        run_prepaid_balance_sweep,
+    )
+
+    logger.info("Starting prepaid balance sweep")
+    session = SessionLocal()
+    try:
+        result = run_prepaid_balance_sweep(session)
+        logger.info("prepaid_balance_sweep completed: %s", result)
+        return result
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()

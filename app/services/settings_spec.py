@@ -904,6 +904,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.collections,
+        key="prepaid_balance_enforcement_enabled",
+        env_var="PREPAID_BALANCE_ENFORCEMENT_ENABLED",
+        value_type=SettingValueType.boolean,
+        # SAFETY: default OFF. Arms the balance/expiry prepaid suspension sweep.
+        default=False,
+    ),
+    SettingSpec(
+        domain=SettingDomain.collections,
         key="prepaid_skip_weekends",
         env_var="PREPAID_SKIP_WEEKENDS",
         value_type=SettingValueType.boolean,

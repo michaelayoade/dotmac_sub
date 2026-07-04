@@ -873,6 +873,25 @@ def build_beat_schedule() -> dict:
             enabled=dunning_enabled,
             interval_seconds=900,
         )
+        # Balance/expiry-based prepaid enforcement sweep. DEFAULT OFF (its own
+        # control key, routed through the single control-plane resolver): it
+        # arms low-balance/deactivation timers and SUSPENDS depleted prepaid
+        # accounts, so it stays a deliberate opt-in. The sweep also no-ops
+        # internally when the control is off. Daily cadence.
+        prepaid_balance_enforcement_enabled = _effective_bool(
+            session,
+            SettingDomain.collections,
+            "prepaid_balance_enforcement_enabled",
+            "PREPAID_BALANCE_ENFORCEMENT_ENABLED",
+            False,
+        )
+        _sync_scheduled_task(
+            session,
+            name="prepaid_balance_sweep",
+            task_name="app.tasks.collections.prepaid_balance_sweep",
+            enabled=prepaid_balance_enforcement_enabled,
+            interval_seconds=86400,
+        )
         # Billing master-switch config guard — ALWAYS on (independent of
         # billing_enabled) so an unexpected flip is caught, not silently armed.
         _sync_scheduled_task(
