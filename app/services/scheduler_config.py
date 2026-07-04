@@ -398,17 +398,29 @@ def _interval_to_beat_schedule(task_id, interval_seconds: int):
     """Beat schedule object for an interval task.
 
     Celery beat measures `timedelta` intervals from its own (non-persisted)
-    start time, so a daily task only fires after 24h of uninterrupted beat
-    uptime — under frequent deploys it never comes due (this starved billing,
-    dunning, expiration and FUP runs for weeks). Day-long intervals are
-    therefore anchored to a stable wall-clock slot instead: 00:00-05:59,
-    spread deterministically by task id so the daily runners don't stampede.
-    Sub-daily intervals keep their timedelta — a restart delays them by at
-    most one interval, which is acceptable.
+    start time, so a task only comes due after a full interval of
+    uninterrupted beat uptime — under frequent deploys long intervals never
+    fire. This starved billing, dunning, expiration and FUP runs for weeks,
+    and later starved the hourly topology_lldp_poll/topology_reconcile
+    (network_topology_links stayed empty for 17+ days because beat rarely
+    survived a full hour between deploys). Intervals that map onto a
+    wall-clock cadence are therefore anchored to stable crontab slots,
+    spread deterministically by task id so runners don't stampede:
+
+    - day-long: a fixed minute/hour in the 00:00-05:59 window;
+    - whole-hour multiples (1h..23h): a fixed minute, every Nth hour.
+
+    Sub-hourly intervals keep their timedelta (a restart delays them by at
+    most one interval, which at that cadence is fine), as do intervals that
+    don't divide into whole hours (crontab cannot express e.g. a 90-minute
+    cadence without drift).
     """
+    anchor = task_id.int if hasattr(task_id, "int") else abs(hash(task_id))
     if 86400 <= interval_seconds < 2 * 86400:
-        anchor = task_id.int if hasattr(task_id, "int") else abs(hash(task_id))
         return crontab(minute=anchor % 60, hour=(anchor // 60) % 6)
+    if 3600 <= interval_seconds < 86400 and interval_seconds % 3600 == 0:
+        step_hours = interval_seconds // 3600
+        return crontab(minute=anchor % 60, hour=f"*/{step_hours}")
     if interval_seconds >= 2 * 86400:
         logger.warning(
             "scheduled_task_multiday_interval_restart_relative",

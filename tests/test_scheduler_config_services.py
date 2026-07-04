@@ -928,11 +928,47 @@ class TestBuildBeatSchedule:
 
 
 class TestIntervalToBeatSchedule:
-    """Day-long intervals become wall-clock crontabs (restart-proof)."""
+    """Hour-multiple and day-long intervals become wall-clock crontabs
+    (restart-proof); everything else stays timedelta."""
 
-    def test_sub_daily_interval_stays_timedelta(self):
-        result = scheduler_config._interval_to_beat_schedule("task-1", 3600)
-        assert result == timedelta(seconds=3600)
+    def test_sub_hourly_interval_stays_timedelta(self):
+        result = scheduler_config._interval_to_beat_schedule("task-1", 300)
+        assert result == timedelta(seconds=300)
+
+    def test_hourly_interval_becomes_crontab(self):
+        # Hourly tasks starved for 17+ days when beat restarted more often
+        # than hourly (topology_lldp_poll / topology_reconcile never fired).
+        import uuid
+
+        from celery.schedules import crontab
+
+        result = scheduler_config._interval_to_beat_schedule(uuid.uuid4(), 3600)
+        assert isinstance(result, crontab)
+        # Fires every hour at one deterministic minute.
+        assert result.hour == set(range(24))
+        assert len(result.minute) == 1
+
+    def test_multi_hour_interval_becomes_stepped_crontab(self):
+        import uuid
+
+        from celery.schedules import crontab
+
+        result = scheduler_config._interval_to_beat_schedule(uuid.uuid4(), 4 * 3600)
+        assert isinstance(result, crontab)
+        assert result.hour == {0, 4, 8, 12, 16, 20}
+
+    def test_hourly_crontab_is_deterministic_per_task(self):
+        import uuid
+
+        task_id = uuid.uuid4()
+        first = scheduler_config._interval_to_beat_schedule(task_id, 3600)
+        second = scheduler_config._interval_to_beat_schedule(task_id, 3600)
+        assert first.minute == second.minute
+
+    def test_non_hour_multiple_stays_timedelta(self):
+        # crontab cannot express a 90-minute cadence without drift.
+        result = scheduler_config._interval_to_beat_schedule("task-1", 5400)
+        assert result == timedelta(seconds=5400)
 
     def test_daily_interval_becomes_crontab(self):
         import uuid
