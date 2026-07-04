@@ -4,6 +4,8 @@ from app.models.catalog import (
     AccessType,
     BillingMode,
     CatalogOffer,
+    NasDevice,
+    NasDeviceStatus,
     OfferStatus,
     PriceBasis,
     ServiceType,
@@ -11,6 +13,7 @@ from app.models.catalog import (
     SubscriptionStatus,
 )
 from app.models.network import IPAssignment, IPv4Address, IPVersion
+from app.models.network_monitoring import PopSite
 from app.models.subscriber import Subscriber, UserType
 from app.services.web_customer_lists import build_customers_index_context
 
@@ -42,12 +45,32 @@ def _make_customer(db_session, email: str) -> Subscriber:
     return customer
 
 
+def _make_pop_site(db_session, name: str) -> PopSite:
+    pop_site = PopSite(name=f"{name} {uuid.uuid4().hex[:8]}", is_active=True)
+    db_session.add(pop_site)
+    db_session.flush()
+    return pop_site
+
+
+def _make_nas(db_session, name: str, pop_site: PopSite | None = None) -> NasDevice:
+    nas = NasDevice(
+        name=f"{name} {uuid.uuid4().hex[:8]}",
+        status=NasDeviceStatus.active,
+        is_active=True,
+        pop_site_id=pop_site.id if pop_site else None,
+    )
+    db_session.add(nas)
+    db_session.flush()
+    return nas
+
+
 def _make_subscription(
     db_session,
     customer: Subscriber,
     *,
     status: SubscriptionStatus,
     ipv4_address: str | None = None,
+    nas_device: NasDevice | None = None,
 ) -> Subscription:
     subscription = Subscription(
         subscriber_id=customer.id,
@@ -55,6 +78,7 @@ def _make_subscription(
         status=status,
         billing_mode=BillingMode.postpaid,
         ipv4_address=ipv4_address,
+        provisioning_nas_device_id=nas_device.id if nas_device else None,
     )
     db_session.add(subscription)
     db_session.flush()
@@ -217,3 +241,74 @@ def test_customer_list_does_not_display_placeholder_ipv4(db_session):
     row = next(item for item in context["customers"] if item["email"] == customer.email)
     assert row["ipv4"] is None
     assert row["ipv4_label"] is None
+
+
+def test_customer_location_filter_uses_customer_pop_site_not_nas_pop_site(db_session):
+    karu_bts = _make_pop_site(db_session, "Karu BTS")
+    afr_pop = _make_pop_site(db_session, "AFR")
+    afr_nas = _make_nas(db_session, "AFR Access", afr_pop)
+
+    karu_customer = _make_customer(db_session, "karu-location@example.com")
+    karu_customer.pop_site_id = karu_bts.id
+    _make_subscription(
+        db_session,
+        karu_customer,
+        status=SubscriptionStatus.active,
+        nas_device=afr_nas,
+    )
+
+    afr_customer = _make_customer(db_session, "afr-location@example.com")
+    afr_customer.pop_site_id = afr_pop.id
+    _make_subscription(
+        db_session,
+        afr_customer,
+        status=SubscriptionStatus.active,
+        nas_device=afr_nas,
+    )
+    db_session.commit()
+
+    context = build_customers_index_context(
+        db_session,
+        search=None,
+        status=None,
+        customer_type=None,
+        nas_id=None,
+        pop_site_id=str(karu_bts.id),
+        page=1,
+        per_page=25,
+    )
+
+    emails = {item["email"] for item in context["customers"]}
+    assert karu_customer.email in emails
+    assert afr_customer.email not in emails
+
+
+def test_customer_nas_filter_still_uses_subscription_nas(db_session):
+    karu_bts = _make_pop_site(db_session, "Karu BTS")
+    afr_pop = _make_pop_site(db_session, "AFR")
+    afr_nas = _make_nas(db_session, "AFR Access", afr_pop)
+
+    karu_customer = _make_customer(db_session, "karu-nas@example.com")
+    karu_customer.pop_site_id = karu_bts.id
+    _make_subscription(
+        db_session,
+        karu_customer,
+        status=SubscriptionStatus.active,
+        nas_device=afr_nas,
+    )
+    db_session.commit()
+
+    context = build_customers_index_context(
+        db_session,
+        search=None,
+        status=None,
+        customer_type=None,
+        nas_id=str(afr_nas.id),
+        pop_site_id=None,
+        page=1,
+        per_page=25,
+    )
+
+    emails = {item["email"] for item in context["customers"]}
+    assert karu_customer.email in emails
+    assert any(str(nas.id) == str(afr_nas.id) for nas in context["nas_options"])
