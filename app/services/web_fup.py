@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import math
 from datetime import UTC, datetime, time
 from typing import TYPE_CHECKING
 
 from fastapi import HTTPException, Request
+from sqlalchemy import func
 from starlette.datastructures import FormData
 
 from app.models.domain_settings import SettingDomain
@@ -15,9 +18,11 @@ from app.models.fup import (
     FupConsumptionPeriod,
     FupDataUnit,
     FupDirection,
+    FupRule,
 )
 from app.services import catalog as catalog_service
-from app.services.fup import fup_policies, simulate_fup
+from app.services.common import coerce_uuid, validate_enum
+from app.services.fup import _threshold_gb, fup_policies, simulate_fup
 from app.services.settings_spec import resolve_value
 
 if TYPE_CHECKING:
@@ -229,6 +234,50 @@ def _guard_submonthly_period(db: Session, consumption_period: str) -> None:
         )
 
 
+def _parse_threshold_amount(raw: str) -> float:
+    """Parse a FUP threshold, rejecting anything non-positive.
+
+    A typo must never coerce to 0.0: a zero threshold is instantly exceeded and
+    throttles/blocks every customer on the offer.
+    """
+    try:
+        value = float(raw)
+    except ValueError:
+        value = math.nan
+    if not math.isfinite(value) or value <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Threshold must be a positive number (got {raw!r}). A zero "
+                "threshold would throttle or block every customer on the offer."
+            ),
+        )
+    return value
+
+
+def _parse_speed_reduction(raw: str) -> float:
+    try:
+        value = float(raw)
+    except ValueError:
+        value = math.nan
+    if not math.isfinite(value) or not 0 < value < 100:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Speed reduction must be a percentage between 1 and 99 (got {raw!r}).",
+        )
+    return value
+
+
+def _parse_sort_order(raw: str) -> int:
+    try:
+        return int(raw)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Sort order must be a whole number (got {raw!r}).",
+        ) from None
+
+
 def handle_add_rule(db: Session, offer_id: str, form: FormData) -> None:
     """Add a new FUP rule from form data.
 
@@ -248,28 +297,18 @@ def handle_add_rule(db: Session, offer_id: str, form: FormData) -> None:
     action = str(form.get("action", "reduce_speed"))
     speed_reduction_raw = str(form.get("speed_reduction_percent", ""))
 
-    try:
-        threshold_amount = float(threshold_amount_raw)
-    except ValueError:
-        threshold_amount = 0.0
+    threshold_amount = _parse_threshold_amount(threshold_amount_raw)
 
     speed_reduction_percent: float | None = None
     if action == "reduce_speed" and speed_reduction_raw:
-        try:
-            speed_reduction_percent = float(speed_reduction_raw)
-        except ValueError:
-            speed_reduction_percent = None
+        speed_reduction_percent = _parse_speed_reduction(speed_reduction_raw)
 
     # Parse new chaining/time fields
     time_start = _parse_time(str(form.get("time_start", "")))
     time_end = _parse_time(str(form.get("time_end", "")))
     enabled_by_raw = str(form.get("enabled_by_rule_id", "")).strip()
     enabled_by_rule_id = enabled_by_raw if enabled_by_raw else None
-    sort_order_raw = str(form.get("sort_order", "0"))
-    try:
-        sort_order = int(sort_order_raw)
-    except ValueError:
-        sort_order = 0
+    sort_order = _parse_sort_order(str(form.get("sort_order", "0")) or "0")
     days_of_week_raw = form.getlist("days_of_week")
     days_of_week = [int(d) for d in days_of_week_raw if str(d).isdigit()] or None
     is_active = str(form.get("is_active", "")).lower() in {"on", "true", "1"}
@@ -319,10 +358,7 @@ def handle_update_rule(db: Session, rule_id: str, form: FormData) -> None:
 
     threshold_amount_raw = str(form.get("threshold_amount", ""))
     if threshold_amount_raw:
-        try:
-            kwargs["threshold_amount"] = float(threshold_amount_raw)
-        except ValueError:
-            pass
+        kwargs["threshold_amount"] = _parse_threshold_amount(threshold_amount_raw)
 
     threshold_unit = str(form.get("threshold_unit", ""))
     if threshold_unit:
@@ -334,10 +370,7 @@ def handle_update_rule(db: Session, rule_id: str, form: FormData) -> None:
 
     speed_reduction_raw = str(form.get("speed_reduction_percent", ""))
     if action == "reduce_speed" and speed_reduction_raw:
-        try:
-            kwargs["speed_reduction_percent"] = float(speed_reduction_raw)
-        except ValueError:
-            pass
+        kwargs["speed_reduction_percent"] = _parse_speed_reduction(speed_reduction_raw)
     elif action and action != "reduce_speed":
         kwargs["speed_reduction_percent"] = None
 
@@ -416,3 +449,125 @@ def simulate_offer_fup(db: Session, offer_id: str, form: FormData) -> dict[str, 
         billing_day_elapsed=billing_day,
         billing_cycle_days=cycle_days,
     )
+
+
+# Bound the preview so a huge offer can't hang the request. We scan at most
+# PREVIEW_SCAN_CAP active subscribers and expose whether the true active count
+# exceeded that (``capped``), so operators know the count is a sampled floor.
+PREVIEW_SCAN_CAP = 500
+PREVIEW_SAMPLE_SIZE = 5
+
+
+def _draft_threshold_gb(threshold_amount: float, threshold_unit: str) -> float:
+    """Threshold in GB via the SAME conversion the evaluator uses.
+
+    Builds a transient (unpersisted) ``FupRule`` so ``_threshold_gb`` — the exact
+    MB/GB/TB math enforcement applies — does the conversion; we never reimplement it.
+    """
+    unit = validate_enum(threshold_unit, FupDataUnit, "threshold_unit")
+    return _threshold_gb(
+        FupRule(threshold_amount=threshold_amount, threshold_unit=unit)
+    )
+
+
+def preview_rule_impact(
+    db: Session,
+    offer_id: str,
+    *,
+    threshold_amount: str,
+    threshold_unit: str = "gb",
+    direction: str = "up_down",
+    consumption_period: str = "monthly",
+    action: str = "reduce_speed",
+    scan_cap: int = PREVIEW_SCAN_CAP,
+    sample_size: int = PREVIEW_SAMPLE_SIZE,
+) -> dict[str, object]:
+    """Read-only blast-radius preview for a draft FUP rule (no side effects).
+
+    Counts how many ACTIVE subscribers on ``offer_id`` already meet/exceed the
+    draft threshold in the rule's consumption window RIGHT NOW — i.e. how many
+    the rule would immediately throttle/block/notify the moment it is saved. This
+    surfaces the known footgun (a bad threshold that hits everyone) before save.
+
+    Reuses the evaluator's threshold conversion (``_threshold_gb``) and the FUP
+    usage reader (``get_fup_usage_gb_async``); the ``>=`` comparison mirrors
+    ``evaluate_rules``. Direction is echoed back but — like enforcement — does not
+    change the current reading (the window is period-based, not per-direction).
+    """
+    from app.models.catalog import Subscription, SubscriptionStatus
+    from app.services.fup_usage import get_fup_usage_gb_async, period_value
+
+    # Soft-validate the draft params so the UI can render the message inline
+    # instead of a hard 4xx (mirrors ``simulate_offer_fup``'s {"error": ...}).
+    try:
+        amount = float(threshold_amount)
+    except (TypeError, ValueError):
+        return {"error": f"Threshold must be a number (got {threshold_amount!r})."}
+    if not math.isfinite(amount) or amount <= 0:
+        return {"error": "Threshold must be a positive number."}
+    try:
+        validate_enum(threshold_unit, FupDataUnit, "threshold_unit")
+        validate_enum(direction, FupDirection, "direction")
+        validate_enum(consumption_period, FupConsumptionPeriod, "consumption_period")
+        validate_enum(action, FupAction, "action")
+    except HTTPException as exc:
+        return {"error": exc.detail}
+
+    offer_uid = coerce_uuid(offer_id)
+    period = period_value(consumption_period)
+    threshold_gb = _draft_threshold_gb(amount, threshold_unit)
+
+    # True total of active subs on the offer (cheap COUNT — never capped).
+    total_active = (
+        db.query(func.count(Subscription.id))
+        .filter(Subscription.offer_id == offer_uid)
+        .filter(Subscription.status == SubscriptionStatus.active)
+        .scalar()
+    ) or 0
+
+    # Bounded scan: evaluate at most ``scan_cap`` subs so a huge offer can't hang.
+    subs = (
+        db.query(Subscription)
+        .filter(Subscription.offer_id == offer_uid)
+        .filter(Subscription.status == SubscriptionStatus.active)
+        .order_by(Subscription.id)
+        .limit(scan_cap)
+        .all()
+    )
+
+    now = datetime.now(UTC)
+
+    async def _resolve() -> list:
+        # Sequential (the sync Session is not concurrency-safe) but a single
+        # event loop for the whole scan rather than one per subscriber.
+        return [await get_fup_usage_gb_async(db, sub, period, now=now) for sub in subs]
+
+    windows = asyncio.run(_resolve())
+
+    matched = 0
+    sample: list[dict[str, object]] = []
+    for sub, window in zip(subs, windows, strict=True):
+        used = float(window.used_gb or 0.0)
+        if used >= threshold_gb:
+            matched += 1
+            if len(sample) < sample_size:
+                sample.append(
+                    {
+                        "subscription_id": str(sub.id),
+                        "subscriber_id": str(sub.subscriber_id),
+                        "used_gb": round(used, 2),
+                    }
+                )
+
+    return {
+        "matched_count": matched,
+        "scanned_count": len(subs),
+        "total_active_on_offer": int(total_active),
+        "capped": int(total_active) > len(subs),
+        "scan_cap": scan_cap,
+        "threshold_gb": round(threshold_gb, 4),
+        "consumption_period": period,
+        "direction": direction,
+        "action": action,
+        "sample": sample,
+    }

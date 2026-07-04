@@ -3,7 +3,7 @@
 Source audit: `docs/designs/BILLING_UX_POLISH_AUDIT.md`
 Branch: `audit/billing-remediation`
 Dependency order: 6
-Status: Review-ready after 2026-06-30 finish-up; deploy pending branch clean/merge.
+Status: MERGED — Merged as PR #523 (100 files, includes /admin/billing/health) and deployed. Source audit doc carries the Remediation status section (41 resolved, 2 partial, 3 still open).
 
 ## PR Readiness Checklist
 
@@ -11,8 +11,8 @@ Status: Review-ready after 2026-06-30 finish-up; deploy pending branch clean/mer
 - [x] Update the source audit document with `Resolved`, `Partially resolved`, `Still open`, and `Deferred` sections.
 - [x] Record automated tests/manual verification that could run in this environment.
 - [x] Rebase or merge latest `main` before marking ready for review.
-- [ ] Run full `pytest`/`ruff` in an environment with project dependencies installed.
-- [ ] Merge/deploy after branch review.
+- [x] Run full `pytest`/`ruff` in an environment with project dependencies installed.
+- [x] Merge/deploy after branch review.
 
 ## 2026-06-30 Finish-Up
 

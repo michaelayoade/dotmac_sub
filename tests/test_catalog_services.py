@@ -386,3 +386,32 @@ def test_plan_family_values_settings_driven(db_session):
         "home_flex",
         "business_fiber",
     ]
+
+
+def test_new_offer_visibility_defaults_off(db_session):
+    # A fresh offer must not silently land on the customer portal (the "~40
+    # e2e offers went customer-visible" incident) — default OFF.
+    form = web_catalog_offers_service.default_offer_form(db_session)
+    assert form["show_on_customer_portal"] is False
+    assert form["available_for_services"] is False
+
+
+def test_new_offer_visibility_opt_in_setting(db_session):
+    from app.models.domain_settings import DomainSetting, SettingDomain
+    from app.models.subscription_engine import SettingValueType
+
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.catalog,
+            key="new_offer_visible_by_default",
+            value_type=SettingValueType.boolean,
+            value_text="true",
+            value_json=True,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    form = web_catalog_offers_service.default_offer_form(db_session)
+    assert form["show_on_customer_portal"] is True
+    assert form["available_for_services"] is True

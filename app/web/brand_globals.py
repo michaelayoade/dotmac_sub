@@ -33,13 +33,40 @@ def _current_year() -> int:
     return datetime.now(UTC).year
 
 
+def _money_filter(amount: object, currency: str | None = None) -> str:
+    """Jinja ``money`` filter: ``{{ amount | money }}`` / ``{{ amount | money(cur) }}``.
+
+    Side-effect-free — it never touches the DB; without an explicit currency it
+    renders with the default NGN symbol.
+    """
+    from app.services.display_format import format_money
+
+    return format_money(amount, currency=currency)
+
+
+def _app_datetime_filter(value: object) -> str:
+    """Admin/reseller sibling of the customer ``portal_datetime`` filter.
+
+    Formats an aware / naive-UTC datetime in the fixed display timezone
+    (Africa/Lagos / WAT) with a tz label, reusing the customer portal impl so
+    both surfaces stay identical.
+    """
+    from app.web.customer.branding import _format_portal_datetime
+
+    return _format_portal_datetime(value)
+
+
 def _attach_globals(templates: Jinja2Templates) -> None:
     from app.config import settings
+    from app.services.display_format import currency_symbol
 
     templates.env.globals.setdefault("brand", get_brand())
     templates.env.globals.setdefault("current_year", _current_year)
     templates.env.globals.setdefault("app_version", get_app_version)
     templates.env.globals.setdefault("chat_live_enabled", settings.chat_live_enabled)
+    templates.env.globals.setdefault("currency_symbol", currency_symbol)
+    templates.env.filters.setdefault("money", _money_filter)
+    templates.env.filters.setdefault("app_datetime", _app_datetime_filter)
 
 
 def _backfill_loaded_template_instances() -> None:

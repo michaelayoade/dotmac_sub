@@ -1,0 +1,138 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, stats_card %}
+
+{% block title %}NCC Subscriber Data - Reports{% endblock %}
+
+{% block content %}
+{{ ambient_background("amber", "orange") }}
+
+<div class="relative space-y-8">
+  {% call page_header(
+      title="NCC Subscriber Data (Quarterly)",
+      subtitle="Active subscriptions by type, connection, speed, State & geopolitical region",
+      icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>',
+      color="amber",
+      color2="orange"
+  ) %}{% endcall %}
+
+  {# ── Picker form ─────────────────────────────────────────── #}
+  <form method="GET" action="/admin/reports/ncc-subscribers"
+        class="rounded-2xl border border-slate-200/70 bg-white p-6 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+    <div class="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+      <div>
+        <label for="as_of" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Reporting period end</label>
+        <input type="date" id="as_of" name="as_of" value="{{ form.as_of }}"
+               class="block w-full rounded-xl border border-slate-300 bg-slate-50/50 px-3 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+        <p class="mt-1 text-xs text-slate-400">"As at" date, e.g. the last day of the quarter. Blank = today.</p>
+      </div>
+      <div>
+        <label for="reseller_id" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Reseller / partner (optional)</label>
+        <input type="text" id="reseller_id" name="reseller_id" value="{{ form.reseller_id }}" placeholder="Reseller UUID"
+               class="block w-full rounded-xl border border-slate-300 bg-slate-50/50 px-3 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+      </div>
+      <div class="sm:col-span-2">
+        <span class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Count as active</span>
+        <div class="flex flex-wrap gap-2">
+          {% for opt in status_options %}
+          <label class="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs dark:border-slate-600 dark:bg-slate-700/50">
+            <input type="checkbox" name="statuses" value="{{ opt }}" {% if opt in selected_statuses %}checked{% endif %}
+                   class="h-3.5 w-3.5 rounded border-slate-300 text-amber-600 focus:ring-amber-500">
+            <span class="text-slate-700 dark:text-slate-300">{{ opt }}</span>
+          </label>
+          {% endfor %}
+        </div>
+        <p class="mt-1 text-xs text-slate-400">Default: <span class="font-medium">active</span> only. Widen per NCC guidance.</p>
+      </div>
+    </div>
+
+    <div class="mt-5 border-t border-slate-100 pt-5 dark:border-slate-700/50">
+      <span class="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-400">Network capacity — manual inputs (not subscriber data)</span>
+      <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {% set caps = [
+          ("access_capacity_gbps", "Access Capacity (Gbps)"),
+          ("unutilized_capacity_mbps", "Un-utilised Capacity (Mbps)"),
+          ("points_of_presence", "Points of Presence"),
+          ("data_usage_tb", "Data Usage (TB)")
+        ] %}
+        {% for name, label in caps %}
+        <div>
+          <label for="{{ name }}" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">{{ label }}</label>
+          <input type="text" id="{{ name }}" name="{{ name }}" value="{{ form[name] }}"
+                 class="block w-full rounded-xl border border-slate-300 bg-slate-50/50 px-3 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="mt-6 flex flex-wrap items-center gap-3">
+      <button type="submit"
+              class="inline-flex items-center gap-2 rounded-xl bg-amber-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-amber-700">
+        Run report
+      </button>
+      <button type="submit" formaction="/admin/reports/ncc-subscribers/export"
+              class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+        Export CSV
+      </button>
+      <span class="text-xs text-slate-400">As at {{ report.parameters.as_of[:10] }} · statuses: {{ report.parameters.active_statuses | join(", ") }}</span>
+    </div>
+  </form>
+
+  {# ── Headline ────────────────────────────────────────────── #}
+  <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+    {{ stats_card("Total Active Subscriptions", "{:,}".format(report.total_active_subscriptions), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-1.13a4 4 0 10-4-4 4 4 0 004 4z"/></svg>', color="amber", color2="orange") }}
+    {{ stats_card("Wired", "{:,}".format(report.by_connection.get("wired", 0)), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>', color="cyan", color2="blue") }}
+    {{ stats_card("Wireless", "{:,}".format(report.by_connection.get("wireless", 0)), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M5.05 12.485a9 9 0 0113.9 0M12 20h.01"/></svg>', color="violet", color2="purple") }}
+    {{ stats_card("Corporate / Individual", (report.by_customer_type.get("corporate", 0)) ~ " / " ~ (report.by_customer_type.get("individual", 0)), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>', color="emerald", color2="teal") }}
+  </div>
+
+  {# ── Breakdown tables ────────────────────────────────────── #}
+  <div class="grid gap-6 lg:grid-cols-2">
+    {% macro kv_table(title, rows) %}
+    <div class="overflow-hidden rounded-2xl border border-slate-200/70 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+      <div class="border-b border-slate-100 px-5 py-3 dark:border-slate-700/50">
+        <h3 class="font-display text-sm font-semibold text-slate-900 dark:text-white">{{ title }}</h3>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="min-w-full text-sm">
+          <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+            {% for label, value in rows %}
+            <tr>
+              <td class="px-5 py-2.5 text-slate-600 dark:text-slate-300">{{ label }}</td>
+              <td class="px-5 py-2.5 text-right font-medium text-slate-900 tabular-nums dark:text-white">{{ value if value is not none else "—" }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endmacro %}
+
+    {{ kv_table("Subscription matrix (6a / 6b)", [
+        ("Corporate — Wired", report.subscription_matrix.corporate.wired),
+        ("Corporate — Wireless", report.subscription_matrix.corporate.wireless),
+        ("Individual — Wired", report.subscription_matrix.individual.wired),
+        ("Individual — Wireless", report.subscription_matrix.individual.wireless),
+    ]) }}
+
+    {{ kv_table("Billing & speed", [
+        ("Prepaid", report.by_billing_mode.get("prepaid", 0)),
+        ("Postpaid", report.by_billing_mode.get("postpaid", 0)),
+        ("256kbps – <2Mbps", report.by_speed_band["256kbps-<2Mbps"]),
+        ("2Mbps – <10Mbps", report.by_speed_band["2Mbps-<10Mbps"]),
+        ("10Mbps & above", report.by_speed_band["10Mbps+"]),
+    ]) }}
+
+    {{ kv_table("Network capacity (manual)", [
+        ("Access Capacity (Gbps)", report.network_capacity.access_capacity_gbps),
+        ("Un-utilised Capacity (Mbps)", report.network_capacity.unutilized_capacity_mbps),
+        ("Points of Presence", report.network_capacity.points_of_presence),
+        ("Data Usage (TB)", report.network_capacity.data_usage_tb),
+    ]) }}
+
+    {{ kv_table("Active subscriptions per region", report.by_region.items() | list) }}
+  </div>
+
+  {{ kv_table("Active subscriptions per State", report.by_state.items() | list) }}
+</div>
+{% endblock %}

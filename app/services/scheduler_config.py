@@ -7,6 +7,7 @@ from celery.schedules import crontab
 
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.scheduler import ScheduledTask, ScheduleType
+from app.services import control_registry
 from app.services import integration as integration_service
 from app.services.db_session_adapter import db_session_adapter
 from app.services.settings_spec import resolve_value
@@ -873,6 +874,21 @@ def build_beat_schedule() -> dict:
             enabled=dunning_enabled,
             interval_seconds=900,
         )
+        # Balance/expiry-based prepaid enforcement sweep. DEFAULT OFF (its own
+        # control key, routed through the single control-plane resolver): it
+        # arms low-balance/deactivation timers and SUSPENDS depleted prepaid
+        # accounts, so it stays a deliberate opt-in. The sweep also no-ops
+        # internally when the control is off. Daily cadence.
+        prepaid_balance_enforcement_enabled = control_registry.is_enabled(
+            session, "collections.prepaid_balance_enforcement"
+        )
+        _sync_scheduled_task(
+            session,
+            name="prepaid_balance_sweep",
+            task_name="app.tasks.collections.prepaid_balance_sweep",
+            enabled=prepaid_balance_enforcement_enabled,
+            interval_seconds=86400,
+        )
         # Billing master-switch config guard — ALWAYS on (independent of
         # billing_enabled) so an unexpected flip is caught, not silently armed.
         _sync_scheduled_task(
@@ -881,6 +897,48 @@ def build_beat_schedule() -> dict:
             task_name="app.tasks.billing.check_billing_switch",
             enabled=True,
             interval_seconds=3600,
+        )
+        cutover_audit_enabled = _effective_bool(
+            session,
+            SettingDomain.billing,
+            "cutover_balance_audit_enabled",
+            "BILLING_CUTOVER_BALANCE_AUDIT_ENABLED",
+            True,
+        )
+        cutover_audit_interval_seconds = _effective_int(
+            session,
+            SettingDomain.billing,
+            "cutover_balance_audit_interval_seconds",
+            "BILLING_CUTOVER_BALANCE_AUDIT_INTERVAL_SECONDS",
+            86400,
+        )
+        _sync_scheduled_task(
+            session,
+            name="cutover_balance_invariant_audit",
+            task_name="app.tasks.billing.audit_cutover_balance_invariant",
+            enabled=cutover_audit_enabled,
+            interval_seconds=max(cutover_audit_interval_seconds, 3600),
+        )
+        funded_inactive_audit_enabled = _effective_bool(
+            session,
+            SettingDomain.billing,
+            "funded_inactive_exposure_audit_enabled",
+            "BILLING_FUNDED_INACTIVE_EXPOSURE_AUDIT_ENABLED",
+            True,
+        )
+        funded_inactive_audit_interval_seconds = _effective_int(
+            session,
+            SettingDomain.billing,
+            "funded_inactive_exposure_audit_interval_seconds",
+            "BILLING_FUNDED_INACTIVE_EXPOSURE_AUDIT_INTERVAL_SECONDS",
+            2592000,
+        )
+        _sync_scheduled_task(
+            session,
+            name="funded_inactive_exposure_audit",
+            task_name="app.tasks.billing.audit_funded_inactive_exposure",
+            enabled=funded_inactive_audit_enabled,
+            interval_seconds=max(funded_inactive_audit_interval_seconds, 86400),
         )
         # Autopay charging (idempotent; due-date gating lives in the service)
         autopay_enabled = _effective_bool(
@@ -1056,6 +1114,34 @@ def build_beat_schedule() -> dict:
             task_name="app.tasks.catalog.expire_subscriptions",
             enabled=subscription_expiration_enabled,
             interval_seconds=subscription_expiration_interval_seconds,
+        )
+        # Apply admin-scheduled next-cycle plan changes once their effective
+        # (next-billing) date arrives. Hourly so a change lands promptly after
+        # the boundary; the applier is idempotent (only picks up approved,
+        # unapplied rows whose effective_date has passed).
+        scheduled_plan_change_enabled = _effective_bool(
+            session,
+            SettingDomain.catalog,
+            "scheduled_plan_change_enabled",
+            "SCHEDULED_PLAN_CHANGE_ENABLED",
+            True,
+        )
+        scheduled_plan_change_interval_seconds = _effective_int(
+            session,
+            SettingDomain.catalog,
+            "scheduled_plan_change_interval_seconds",
+            "SCHEDULED_PLAN_CHANGE_INTERVAL_SECONDS",
+            3600,  # Hourly
+        )
+        scheduled_plan_change_interval_seconds = max(
+            scheduled_plan_change_interval_seconds, 300
+        )
+        _sync_scheduled_task(
+            session,
+            name="scheduled_plan_change_applier",
+            task_name="app.tasks.catalog.apply_due_subscription_changes",
+            enabled=scheduled_plan_change_enabled,
+            interval_seconds=scheduled_plan_change_interval_seconds,
         )
         # Infrastructure availability snapshot - daily rollup powering the
         # performance/SLA trend charts (see INFRASTRUCTURE_SLA_PERFORMANCE.md).

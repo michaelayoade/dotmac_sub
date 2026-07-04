@@ -835,6 +835,106 @@ def test_restricted_offer_hidden_without_subscriber_context(db_session):
     assert "Unlimited Open3" in names
 
 
+def test_restrict_mode_reseller_sees_only_assigned_offers(db_session, subscriber):
+    # C-2: a reseller flagged restrict_to_assigned_offers sees ONLY offers
+    # assigned to it — unrestricted offers are hidden too.
+    reseller = _reseller(db_session, "Restricted Partner")
+    reseller.restrict_to_assigned_offers = True
+    subscriber.reseller_id = reseller.id
+    db_session.commit()
+
+    assigned = _make_offer(
+        db_session,
+        name="Assigned Only",
+        amount=Decimal("100"),
+        plan_family="unlimited",
+    )
+    _make_offer(
+        db_session,
+        name="Open Unrestricted",
+        amount=Decimal("90"),
+        plan_family="unlimited",
+    )
+    _restrict_to(db_session, assigned, reseller)
+
+    offers = get_available_portal_offers(db_session, subscriber_id=subscriber.id)
+
+    names = {o.name for o in offers}
+    assert names == {"Assigned Only"}
+
+
+def test_non_restrict_reseller_still_sees_unrestricted_offers(db_session, subscriber):
+    # Flag explicitly False (open) behaves exactly like today.
+    reseller = _reseller(db_session, "Open Partner")
+    reseller.restrict_to_assigned_offers = False
+    subscriber.reseller_id = reseller.id
+    db_session.commit()
+
+    assigned = _make_offer(
+        db_session,
+        name="Assigned Open Partner",
+        amount=Decimal("100"),
+        plan_family="unlimited",
+    )
+    _make_offer(
+        db_session,
+        name="Unrestricted Open Partner",
+        amount=Decimal("90"),
+        plan_family="unlimited",
+    )
+    _restrict_to(db_session, assigned, reseller)
+
+    offers = get_available_portal_offers(db_session, subscriber_id=subscriber.id)
+
+    names = {o.name for o in offers}
+    assert "Assigned Open Partner" in names
+    assert "Unrestricted Open Partner" in names
+
+
+def test_global_default_flip_flows_through_when_flag_null(
+    db_session, subscriber, monkeypatch
+):
+    # Per-reseller flag NULL (inherit): flipping the global default to
+    # "not open" puts the reseller into restrict mode.
+    import app.services.customer_portal_context as cpc
+
+    reseller = _reseller(db_session, "Inherit Partner")
+    assert reseller.restrict_to_assigned_offers is None
+    subscriber.reseller_id = reseller.id
+    db_session.commit()
+
+    assigned = _make_offer(
+        db_session,
+        name="Assigned Inherit",
+        amount=Decimal("100"),
+        plan_family="unlimited",
+    )
+    _make_offer(
+        db_session,
+        name="Unrestricted Inherit",
+        amount=Decimal("90"),
+        plan_family="unlimited",
+    )
+    _restrict_to(db_session, assigned, reseller)
+
+    # Global default open (today's behavior) → unrestricted offer visible.
+    monkeypatch.setattr(cpc, "_reseller_default_catalog_open", lambda db: True)
+    open_names = {
+        o.name
+        for o in get_available_portal_offers(db_session, subscriber_id=subscriber.id)
+    }
+    assert "Unrestricted Inherit" in open_names
+    assert "Assigned Inherit" in open_names
+
+    # Flip global default to restrict → only assigned offer visible.
+    monkeypatch.setattr(cpc, "_reseller_default_catalog_open", lambda db: False)
+    restricted_names = {
+        o.name
+        for o in get_available_portal_offers(db_session, subscriber_id=subscriber.id)
+    }
+    assert restricted_names == {"Assigned Inherit"}
+
+
 def test_archived_status_offer_hidden_even_when_is_active_drifted(
     db_session, subscriber
 ):
@@ -1194,3 +1294,60 @@ def test_change_plan_page_flags_arrears(db_session, subscriber):
     page = get_change_plan_page(db_session, cust, str(subscription.id))
     assert page["in_arrears"] is True
     assert page["arrears_amount"] == 5000.0
+
+
+def test_admin_change_plan_quote_response(db_session, subscriber):
+    from app.services.web_catalog_subscription_workflows import (
+        change_plan_quote_response,
+    )
+
+    now = datetime.now(UTC)
+    source = _make_offer(
+        db_session, name="Quote Src", amount=Decimal("20000.00"), plan_family="u"
+    )
+    target = _make_offer(
+        db_session, name="Quote Tgt", amount=Decimal("35000.00"), plan_family="u"
+    )
+    sub = _make_subscription(
+        db_session,
+        subscriber,
+        source,
+        start_at=now - timedelta(days=10),
+        next_billing_at=now + timedelta(days=20),
+    )
+
+    payload = change_plan_quote_response(
+        db_session, subscription_id=str(sub.id), target_offer_id=str(target.id)
+    )
+
+    quote = payload["quote"]
+    assert payload["target_offer_name"] == "Quote Tgt"
+    assert quote["days_in_cycle"] > 0
+    assert quote["days_remaining"] > 0
+    assert quote["charge_amount"] > 0
+    # Upgrading mid-cycle must cost something net.
+    assert quote["net_amount"] > 0
+
+
+def test_admin_change_plan_quote_unknown_offer_404(db_session, subscriber):
+    from app.services.web_catalog_subscription_workflows import (
+        change_plan_quote_response,
+    )
+
+    now = datetime.now(UTC)
+    source = _make_offer(
+        db_session, name="Quote Only", amount=Decimal("20000.00"), plan_family="u"
+    )
+    sub = _make_subscription(
+        db_session,
+        subscriber,
+        source,
+        start_at=now - timedelta(days=1),
+        next_billing_at=now + timedelta(days=29),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        change_plan_quote_response(
+            db_session, subscription_id=str(sub.id), target_offer_id=str(uuid4())
+        )
+    assert exc.value.status_code == 404

@@ -280,6 +280,14 @@ def apply_webhook(db: Session, event_type: str, body: dict) -> dict:
         )
         return {"status": "ignored", "reason": "unmapped_subscriber"}
 
+    # Prior status (before this event) so we push exactly once on the
+    # transition into in_progress — the "tech started / on the way" moment.
+    prev_status = db.scalar(
+        select(WorkOrderMirror.status).where(
+            WorkOrderMirror.crm_work_order_id == crm_work_order_id
+        )
+    )
+
     completed_at = None
     if event_type == "work_order.completed":
         completed_at = _to_dt(body.get("completed_at")) or datetime.now(UTC)
@@ -305,26 +313,50 @@ def apply_webhook(db: Session, event_type: str, body: dict) -> dict:
         sync.synced_at = datetime(1970, 1, 1, tzinfo=UTC)
     db.commit()
 
-    if event_type in ("work_order.dispatched", "work_order.completed"):
+    # Phase 0 — automated lifecycle notifications. The key moment is the tech
+    # tapping Start Work (→ in_progress): the live map goes active, so wake the
+    # customer and deep-link straight to tracking. Dispatched/completed keep a
+    # lighter notice. Each transition fires once (guarded by prev_status).
+    new_status = (body.get("status") or body.get("to_status") or "").strip().lower()
+    started = (
+        new_status == "in_progress" and (prev_status or "").lower() != "in_progress"
+    )
+
+    ping: tuple[str, str, str] | None = None
+    if started:
+        ping = (
+            "Your technician is on the way",
+            "Tap to track your technician live.",
+            f"/track/{crm_work_order_id}",
+        )
+    elif event_type == "work_order.dispatched":
+        ping = (
+            "Visit scheduled",
+            "A technician is assigned to your field-service visit.",
+            "/profile/technician-visits",
+        )
+    elif event_type == "work_order.completed":
+        ping = (
+            "Visit completed",
+            "Your field-service work order is complete.",
+            "/profile/technician-visits",
+        )
+
+    if ping is not None:
         try:
             from app.services import push as push_service
 
-            if event_type == "work_order.dispatched":
-                title, msg = (
-                    "Technician on the way",
-                    "Your field-service visit is scheduled.",
-                )
-            else:
-                title, msg = (
-                    "Visit completed",
-                    "Your field-service work order is complete.",
-                )
+            title, msg, route = ping
             push_service.send_push(
                 db,
                 str(subscriber.id),
                 title=title,
                 body=msg,
-                data={"type": "work_order", "work_order_id": crm_work_order_id},
+                data={
+                    "type": "work_order",
+                    "work_order_id": crm_work_order_id,
+                    "route": route,
+                },
             )
         except Exception as exc:  # noqa: BLE001 - notification is advisory
             logger.warning(

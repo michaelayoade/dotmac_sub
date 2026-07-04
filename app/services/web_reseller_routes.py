@@ -812,13 +812,14 @@ def reseller_vas_page(request: Request, db: Session):
                 db, str(reseller.id), limit=15
             ),
             "min_topup": 100,
+            "payment_options": vas_wallet.topup_payment_options(db),
             "form_error": request.query_params.get("error"),
             "funded": request.query_params.get("funded"),
         },
     )
 
 
-def reseller_vas_topup_intent(request: Request, db: Session, amount):
+def reseller_vas_topup_intent(request: Request, db: Session, amount, provider=None):
     from decimal import Decimal, InvalidOperation
 
     from fastapi.responses import JSONResponse
@@ -834,7 +835,10 @@ def reseller_vas_topup_intent(request: Request, db: Session, amount):
         return JSONResponse({"detail": "Invalid amount"}, status_code=400)
     try:
         result = vas_wallet.initiate_reseller_topup(
-            db, str(context["reseller"].id), value
+            db,
+            str(context["reseller"].id),
+            value,
+            provider=(str(provider or "").strip() or None),
         )
     except HTTPException as exc:
         return JSONResponse({"detail": str(exc.detail)}, status_code=exc.status_code)
@@ -848,7 +852,9 @@ def reseller_vas_topup_intent(request: Request, db: Session, amount):
     )
 
 
-def reseller_vas_topup_verify(request: Request, db: Session, reference: str):
+def reseller_vas_topup_verify(
+    request: Request, db: Session, reference: str, provider: str | None = None
+):
     from app.services import vas_wallet
 
     context = _require_reseller_context(request, db)
@@ -856,7 +862,10 @@ def reseller_vas_topup_verify(request: Request, db: Session, reference: str):
         return RedirectResponse(url=RESELLER_LOGIN_URL, status_code=303)
     try:
         result = vas_wallet.verify_reseller_topup(
-            db, str(context["reseller"].id), reference
+            db,
+            str(context["reseller"].id),
+            reference,
+            provider=(str(provider or "").strip() or None),
         )
     except (HTTPException, ValueError) as exc:
         detail = getattr(exc, "detail", None) or str(exc)

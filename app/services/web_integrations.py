@@ -5,14 +5,22 @@ from __future__ import annotations
 import json
 import logging
 import secrets
+from datetime import UTC, datetime, timedelta
 from typing import cast
 from urllib.parse import urlparse
 from uuid import UUID
 
 import httpx
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
-from app.models.webhook import WebhookDelivery, WebhookEndpoint
+from app.models.integration import (
+    IntegrationJob,
+    IntegrationRun,
+    IntegrationRunStatus,
+    IntegrationTarget,
+)
+from app.models.webhook import WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint
 from app.schemas.billing import PaymentProviderCreate
 from app.schemas.connector import ConnectorConfigCreate, ConnectorConfigUpdate
 from app.schemas.integration import IntegrationJobCreate, IntegrationTargetCreate
@@ -456,40 +464,101 @@ def _connector_registration_meta(connector) -> dict[str, object]:
     return {}
 
 
-def _connector_health(db: Session, connector_id: str) -> tuple[str, dict[str, int]]:
-    endpoints = (
-        db.query(WebhookEndpoint)
-        .filter(
-            WebhookEndpoint.connector_config_id
-            == parse_uuid(connector_id, "connector_id")
+def _latest_run_by_connector(
+    db: Session, connector_ids: list[UUID]
+) -> dict[str, tuple[str, datetime | None]]:
+    """Most recent completed IntegrationRun per connector, one grouped query."""
+    if not connector_ids:
+        return {}
+    rank = (
+        func.row_number()
+        .over(
+            partition_by=IntegrationTarget.connector_config_id,
+            order_by=IntegrationRun.started_at.desc(),
         )
+        .label("rank")
+    )
+    ranked = (
+        db.query(
+            IntegrationTarget.connector_config_id.label("connector_id"),
+            IntegrationRun.status.label("status"),
+            IntegrationRun.started_at.label("started_at"),
+            rank,
+        )
+        .join(IntegrationJob, IntegrationJob.target_id == IntegrationTarget.id)
+        .join(IntegrationRun, IntegrationRun.job_id == IntegrationJob.id)
+        .filter(IntegrationTarget.connector_config_id.in_(connector_ids))
+        .filter(IntegrationRun.status != IntegrationRunStatus.running)
+        .subquery()
+    )
+    rows = (
+        db.query(ranked.c.connector_id, ranked.c.status, ranked.c.started_at)
+        .filter(ranked.c.rank == 1)
         .all()
     )
-    endpoint_ids = [endpoint.id for endpoint in endpoints]
-    if not endpoint_ids:
-        return "green", {"calls": 0, "failed": 0}
+    return {
+        str(row.connector_id): (
+            getattr(row.status, "value", str(row.status)),
+            row.started_at,
+        )
+        for row in rows
+    }
 
-    deliveries = (
-        db.query(WebhookDelivery)
-        .filter(WebhookDelivery.endpoint_id.in_(endpoint_ids))
-        .order_by(WebhookDelivery.created_at.desc())
-        .limit(100)
+
+def _webhook_stats_by_connector(
+    db: Session, connector_ids: list[UUID]
+) -> dict[str, tuple[int, int]]:
+    """(total, failed) webhook deliveries per connector over the last 7 days."""
+    if not connector_ids:
+        return {}
+    since = datetime.now(UTC) - timedelta(days=7)
+    rows = (
+        db.query(
+            WebhookEndpoint.connector_config_id.label("connector_id"),
+            func.count(WebhookDelivery.id).label("total"),
+            func.sum(
+                case(
+                    (WebhookDelivery.status == WebhookDeliveryStatus.failed, 1),
+                    else_=0,
+                )
+            ).label("failed"),
+        )
+        .join(WebhookDelivery, WebhookDelivery.endpoint_id == WebhookEndpoint.id)
+        .filter(WebhookEndpoint.connector_config_id.in_(connector_ids))
+        .filter(WebhookDelivery.created_at >= since)
+        .group_by(WebhookEndpoint.connector_config_id)
         .all()
     )
-    total = len(deliveries)
-    failed = sum(
-        1
-        for item in deliveries
-        if getattr(item.status, "value", str(item.status)) == "failed"
-    )
-    if total == 0:
-        return "green", {"calls": 0, "failed": 0}
-    failure_ratio = failed / total
-    if failure_ratio >= 0.35:
-        return "red", {"calls": total, "failed": failed}
-    if failure_ratio >= 0.10:
-        return "amber", {"calls": total, "failed": failed}
-    return "green", {"calls": total, "failed": failed}
+    return {
+        str(row.connector_id): (int(row.total or 0), int(row.failed or 0))
+        for row in rows
+    }
+
+
+def _connector_health(
+    last_run: tuple[str, datetime | None] | None,
+    webhook_stats: tuple[int, int] | None,
+) -> tuple[str, dict[str, object]]:
+    """Health from real signals only: healthy / degraded / unknown.
+
+    Signals are the most recent completed IntegrationRun and recent webhook
+    delivery failures; a connector with neither is "unknown", never green.
+    """
+    calls, failed = webhook_stats or (0, 0)
+    stats: dict[str, object] = {
+        "calls": calls,
+        "failed": failed,
+        "last_run_status": last_run[0] if last_run else None,
+        "last_run_at": last_run[1] if last_run else None,
+    }
+    degraded = bool(last_run and last_run[0] == "failed")
+    if calls and (failed / calls) >= 0.10:
+        degraded = True
+    if degraded:
+        return "degraded", stats
+    if last_run or calls:
+        return "healthy", stats
+    return "unknown", stats
 
 
 def build_installed_integrations_data(db: Session) -> dict[str, object]:
@@ -502,10 +571,17 @@ def build_installed_integrations_data(db: Session) -> dict[str, object]:
         limit=1000,
         offset=0,
     )
+    connector_ids = [connector.id for connector in connectors]
+    connector_names = {str(connector.id): connector.name for connector in connectors}
+    last_runs = _latest_run_by_connector(db, connector_ids)
+    webhook_stats = _webhook_stats_by_connector(db, connector_ids)
     rows: list[dict[str, object]] = []
     for connector in connectors:
         registration = _connector_registration_meta(connector)
-        health, health_stats = _connector_health(db, str(connector.id))
+        health, health_stats = _connector_health(
+            last_runs.get(str(connector.id)),
+            webhook_stats.get(str(connector.id)),
+        )
         rows.append(
             {
                 "connector": connector,
@@ -515,13 +591,11 @@ def build_installed_integrations_data(db: Session) -> dict[str, object]:
                     registration.get("integration_type")
                     or connector.connector_type.value
                 ),
-                "relay_to_portal": bool(registration.get("relay_to_portal", False)),
                 "health": health,
                 "health_stats": health_stats,
             }
         )
 
-    connector_ids = [row["connector"].id for row in rows]
     endpoint_map = {
         str(endpoint.id): str(endpoint.connector_config_id)
         for endpoint in db.query(WebhookEndpoint)
@@ -547,6 +621,7 @@ def build_installed_integrations_data(db: Session) -> dict[str, object]:
         activities.append(
             {
                 "connector_id": connector_id,
+                "connector_name": connector_names.get(connector_id, connector_id),
                 "timestamp": delivery.created_at,
                 "event_type": getattr(
                     delivery.event_type, "value", str(delivery.event_type)
@@ -561,6 +636,41 @@ def build_installed_integrations_data(db: Session) -> dict[str, object]:
                 "status": getattr(delivery.status, "value", str(delivery.status)),
             }
         )
+    if connector_ids:
+        run_rows = (
+            db.query(
+                IntegrationRun,
+                IntegrationJob.name.label("job_name"),
+                IntegrationTarget.connector_config_id.label("connector_id"),
+            )
+            .join(IntegrationJob, IntegrationRun.job_id == IntegrationJob.id)
+            .join(IntegrationTarget, IntegrationJob.target_id == IntegrationTarget.id)
+            .filter(IntegrationTarget.connector_config_id.in_(connector_ids))
+            .order_by(IntegrationRun.started_at.desc())
+            .limit(50)
+            .all()
+        )
+        for run, job_name, run_connector_id in run_rows:
+            duration_ms = None
+            if run.finished_at is not None and run.started_at is not None:
+                duration_ms = int(
+                    (run.finished_at - run.started_at).total_seconds() * 1000
+                )
+            run_connector_key = str(run_connector_id)
+            activities.append(
+                {
+                    "connector_id": run_connector_key,
+                    "connector_name": connector_names.get(
+                        run_connector_key, run_connector_key
+                    ),
+                    "timestamp": run.started_at,
+                    "event_type": f"job: {job_name}",
+                    "status_code": None,
+                    "response_time_ms": duration_ms,
+                    "status": getattr(run.status, "value", str(run.status)),
+                }
+            )
+    activities.sort(key=lambda item: item["timestamp"], reverse=True)
     activities = activities[:50]
     return {
         "integrations": rows,
@@ -568,7 +678,7 @@ def build_installed_integrations_data(db: Session) -> dict[str, object]:
         "stats": {
             "total": len(rows),
             "enabled": sum(1 for row in rows if row["connector"].is_active),
-            "healthy": sum(1 for row in rows if row["health"] == "green"),
+            "healthy": sum(1 for row in rows if row["health"] == "healthy"),
         },
     }
 
@@ -584,23 +694,6 @@ def bulk_set_integrations_enabled(
         updated += 1
     db.commit()
     return updated
-
-
-def set_relay_to_portal(db: Session, connector_id: str, *, relay: bool):
-    connector = connector_service.connector_configs.get(db, connector_id)
-    metadata = dict(connector.metadata_ or {})
-    registration = (
-        metadata.get("registration")
-        if isinstance(metadata.get("registration"), dict)
-        else {}
-    )
-    registration["relay_to_portal"] = bool(relay)
-    metadata["registration"] = registration
-    connector.metadata_ = metadata
-    db.add(connector)
-    db.commit()
-    db.refresh(connector)
-    return connector
 
 
 def uninstall_integration(db: Session, connector_id: str):

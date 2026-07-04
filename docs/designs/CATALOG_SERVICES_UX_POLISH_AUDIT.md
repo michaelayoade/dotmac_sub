@@ -233,3 +233,63 @@ Format: `[POLISH|CONTROL] (severity) file:line — problem → recommendation [r
 - [POLISH] (Low) `service_requests/index.html:125-131` — empty state always "No service requests found" even when filtered → vary copy + "clear filter" when status set [recommend]
 - [POLISH] (Low) `service_requests/index.html:65` — `onchange="this.form.submit()"` auto-submit, no fallback button (keyboard/SR/no-JS) → add Apply button [defer]
 - [CONTROL] (Low) `service_intent_adapter.py:299,320` / `service_intent_ui_adapter.py:118` — hardcoded `connection_type="pppoe"`, service_type "internet", planned name "Internet" → promote to offer/profile config if non-PPPoE deployments appear [defer]
+
+## Remediation status
+
+### Resolved (P0 pass, 2026-07-03)
+
+- **C-1 FUP silent coercion** — `threshold_amount` / `speed_reduction_percent` /
+  `sort_order` now validate and 400 on bad input (positive/finite threshold,
+  1–99 speed %, integer sort order) in both add and update paths
+  (`app/services/web_fup.py`); regression tests in `tests/test_fup_ui_gaps.py`.
+- **P-A bulk-tariff dead controls** — `start_date` and `ignore_balance` removed
+  from the form, preview, hidden inputs, and service signatures; preview/confirm
+  copy now says the change applies immediately. `execute()` returns `failed_ids`
+  and the result page links each failed subscription (partial P-C).
+- **P-A dead FUP settings page** — already removed by the system-config
+  remediation (section 8.25 tombstone in `web_system_config.py`).
+- **C-3 new-offer visibility** — new-offer form defaults
+  `show_on_customer_portal` / `available_for_services` to **off**; opt-in via
+  new registered catalog setting `new_offer_visible_by_default` (default false).
+- **P-D confirms** — change-plan modal confirms with plan name + proration
+  warning; impersonate "Open Portal" confirms (read-write session, audited);
+  service-request status select no longer preselects terminal "Completed"
+  (placeholder + "(final)" markers) and submit confirms, strongest for terminal;
+  customers filtered-bulk update **and** bulk message queue confirm with the
+  actual scope count ("apply to N customers?").
+
+### Resolved (P1 pass, 2026-07-03)
+
+- **P-C partial success** — subscription bulk activate/suspend/cancel/change-plan
+  return `{changed, skipped_ids, failed_ids}`; the UI surfaces skipped/failed
+  IDs in a blocking summary instead of a bare success count.
+- **P-E double-submit** — bulk change-plan and bulk actions guard on a busy
+  flag (button disabled + "Applying…"); the success toast now survives the
+  page reload (sessionStorage replay) instead of being destroyed by it.
+- **P-B (partial)** — bulk-tariff preview shows source→target recurring price
+  and the per-cycle delta (real currency code, not hardcoded ₦).
+- **C-2 (partial)** — `fup_submonthly_rules_enabled` registered in
+  settings_spec (usage domain, default off); FUP warn-ratio fallback 0.8
+  centralized as `usage.DEFAULT_FUP_WARN_RATIO`.
+
+### Resolved (P1 follow-up, 2026-07-03)
+
+- **P-B change-plan proration preview** — the admin change-plan modal fetches
+  a live quote (`GET /admin/catalog/subscriptions/{id}/change-plan-quote`,
+  reusing the portal quote builder) and shows credit-for-unused-time, prorated
+  new-plan charge, and net before the confirm.
+- **Security note verified** — all 20 write routes in
+  `app/web/admin/catalog_settings.py` carry route-level
+  `require_permission("catalog:write")`; reads are covered by the
+  mount-registry RBAC layer.
+
+### Still open
+
+- **P1 remainder**: FUP rule impact preview; currency/tz display sweep
+  (customer detail, calculator); change-plan instant│next-cycle timing
+  (product decision).
+- **P2**: tunable thresholds (serviceable radius, SLA aging, reset throttle,
+  PPPoE reveal limit, 60d staleness); GiB labeling; usage-priced offers in UI;
+  calculator VAT/proration accuracy.
+- **Security note**: verify `catalog_settings.py` write routes against the
+  mount-registry RBAC layer (unchanged by this pass).

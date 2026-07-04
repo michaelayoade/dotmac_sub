@@ -105,6 +105,18 @@ def seed_auth_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text=os.getenv("API_KEY_RATE_MAX", "5"),
     )
+    auth_settings.ensure_by_key(
+        db,
+        key="api_key_max_ttl_days",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("API_KEY_MAX_TTL_DAYS", "0"),
+    )
+    auth_settings.ensure_by_key(
+        db,
+        key="api_key_max_per_owner",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("API_KEY_MAX_PER_OWNER", "0"),
+    )
     jwt_secret = os.getenv("JWT_SECRET")
     if jwt_secret and is_openbao_ref(jwt_secret):
         auth_settings.ensure_by_key(
@@ -1062,6 +1074,17 @@ def seed_collections_settings(db: Session) -> None:
         key="suspension_notification_dedupe_hours",
         value_type=SettingValueType.integer,
         value_text=os.getenv("COLLECTIONS_SUSPENSION_NOTIFICATION_DEDUPE_HOURS", "24"),
+    )
+    prepaid_balance_enforcement_raw = os.getenv(
+        "PREPAID_BALANCE_ENFORCEMENT_ENABLED", "false"
+    )
+    collections_settings.ensure_by_key(
+        db,
+        key="prepaid_balance_enforcement_enabled",
+        value_type=SettingValueType.boolean,
+        value_text=prepaid_balance_enforcement_raw,
+        value_json=prepaid_balance_enforcement_raw.lower()
+        in {"1", "true", "yes", "on"},
     )
     collections_settings.ensure_by_key(
         db,

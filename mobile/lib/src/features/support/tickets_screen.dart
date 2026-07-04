@@ -4,10 +4,12 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/formatters.dart';
 import '../../providers/data_providers.dart';
+import '../../widgets/account_avatar_button.dart';
 import '../../widgets/async_value_view.dart';
 import '../../widgets/skeleton.dart';
 import '../../widgets/status_chip.dart';
 import '../../providers/chat_controller.dart';
+import '../profile/work_orders_screen.dart';
 import 'chat_screen.dart';
 
 /// Support tab: a Tickets | Live chat segment that switches in-place. Selecting
@@ -20,8 +22,11 @@ class TicketsScreen extends ConsumerStatefulWidget {
   ConsumerState<TicketsScreen> createState() => _TicketsScreenState();
 }
 
+/// Which sub-view the Help tab is showing.
+enum _HelpView { tickets, chat, visits }
+
 class _TicketsScreenState extends ConsumerState<TicketsScreen> {
-  bool _chat = false;
+  _HelpView _view = _HelpView.tickets;
 
   @override
   Widget build(BuildContext context) {
@@ -34,8 +39,11 @@ class _TicketsScreenState extends ConsumerState<TicketsScreen> {
     );
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Support')),
-      floatingActionButton: _chat
+      appBar: AppBar(
+        title: const Text('Help'),
+        actions: const [AccountAvatarButton()],
+      ),
+      floatingActionButton: _view != _HelpView.tickets
           ? null
           : FloatingActionButton.extended(
               onPressed: () => context.go('/support/new'),
@@ -46,30 +54,40 @@ class _TicketsScreenState extends ConsumerState<TicketsScreen> {
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-            child: SegmentedButton<bool>(
+            child: SegmentedButton<_HelpView>(
+              showSelectedIcon: false,
               segments: [
                 const ButtonSegment(
-                  value: false,
+                  value: _HelpView.tickets,
                   icon: Icon(Icons.confirmation_number_outlined),
                   label: Text('Tickets'),
                 ),
                 ButtonSegment(
-                  value: true,
+                  value: _HelpView.chat,
                   icon: const Icon(Icons.forum_outlined),
                   label: unread > 0
                       ? Badge(
                           label: Text('$unread'),
-                          child: const Text('Live chat'),
+                          child: const Text('Chat'),
                         )
-                      : const Text('Live chat'),
+                      : const Text('Chat'),
+                ),
+                const ButtonSegment(
+                  value: _HelpView.visits,
+                  icon: Icon(Icons.engineering_outlined),
+                  label: Text('Visits'),
                 ),
               ],
-              selected: {_chat},
-              onSelectionChanged: (s) => setState(() => _chat = s.first),
+              selected: {_view},
+              onSelectionChanged: (s) => setState(() => _view = s.first),
             ),
           ),
           Expanded(
-            child: _chat ? const ChatView() : _ticketList(tickets),
+            child: switch (_view) {
+              _HelpView.tickets => _ticketList(tickets),
+              _HelpView.chat => const ChatView(),
+              _HelpView.visits => const WorkOrdersView(),
+            },
           ),
         ],
       ),

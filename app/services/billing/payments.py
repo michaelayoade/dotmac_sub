@@ -17,6 +17,7 @@ from app.models.billing import (
     CreditNoteLine,
     CreditNoteStatus,
     Invoice,
+    InvoiceLine,
     InvoiceStatus,
     LedgerCategory,
     LedgerEntry,
@@ -675,6 +676,209 @@ def apply_prepaid_service_credit(
     return True
 
 
+def _latest_successful_invoice_payment(db: Session, invoice: Invoice) -> Payment | None:
+    return (
+        db.query(Payment)
+        .join(PaymentAllocation, PaymentAllocation.payment_id == Payment.id)
+        .filter(PaymentAllocation.invoice_id == invoice.id)
+        .filter(PaymentAllocation.is_active.is_(True))
+        .filter(Payment.status == PaymentStatus.succeeded)
+        .filter(Payment.is_active.is_(True))
+        .order_by(
+            func.coalesce(
+                Payment.paid_at,
+                PaymentAllocation.created_at,
+                Payment.created_at,
+            ).desc(),
+            Payment.created_at.desc(),
+            Payment.id.desc(),
+        )
+        .first()
+    )
+
+
+def _invoice_subscription_lines(
+    db: Session, invoice: Invoice
+) -> tuple[Subscription, list[InvoiceLine]] | None:
+    lines = (
+        db.query(InvoiceLine)
+        .filter(InvoiceLine.invoice_id == invoice.id)
+        .filter(InvoiceLine.subscription_id.is_not(None))
+        .filter(InvoiceLine.is_active.is_(True))
+        .all()
+    )
+    subscription_ids = {line.subscription_id for line in lines}
+    if len(subscription_ids) != 1:
+        return None
+    subscription = db.get(Subscription, next(iter(subscription_ids)))
+    if subscription is None or subscription.billing_mode != BillingMode.prepaid:
+        return None
+    return subscription, lines
+
+
+def _base_subscription_invoice_lines(lines: list[InvoiceLine]) -> list[InvoiceLine]:
+    base_lines = [
+        line
+        for line in lines
+        if (line.metadata_ or {}).get("kind") == "base_subscription"
+    ]
+    if base_lines:
+        return base_lines
+    billable_lines = [line for line in lines if round_money(line.amount) > 0]
+    if len(billable_lines) == 1:
+        return billable_lines
+    if len(lines) == 1:
+        return lines
+    return []
+
+
+def _prepaid_invoice_needs_payment_date_anchor(
+    subscription: Subscription,
+    invoice: Invoice,
+    paid_at_day: datetime,
+) -> bool:
+    period_start = invoice.billing_period_start
+    if period_start is None:
+        return False
+    period_start = (
+        period_start if period_start.tzinfo else period_start.replace(tzinfo=UTC)
+    )
+    if paid_at_day <= period_start:
+        return False
+
+    lapsed_statuses = {
+        SubscriptionStatus.blocked,
+        SubscriptionStatus.suspended,
+        SubscriptionStatus.expired,
+    }
+    if subscription.status in lapsed_statuses:
+        return True
+
+    next_billing = subscription.next_billing_at
+    if next_billing is not None:
+        next_billing = (
+            next_billing if next_billing.tzinfo else next_billing.replace(tzinfo=UTC)
+        )
+        if next_billing <= paid_at_day:
+            return True
+
+    period_end = invoice.billing_period_end
+    if period_end is not None:
+        period_end = period_end if period_end.tzinfo else period_end.replace(tzinfo=UTC)
+        if period_end <= paid_at_day:
+            return True
+
+    return False
+
+
+def _prepaid_extension_delta_after_invoice(
+    invoice: Invoice, subscription: Subscription
+) -> timedelta:
+    period_end = invoice.billing_period_end
+    next_billing = subscription.next_billing_at
+    if period_end is None or next_billing is None:
+        return timedelta(0)
+    period_end = period_end if period_end.tzinfo else period_end.replace(tzinfo=UTC)
+    next_billing = (
+        next_billing if next_billing.tzinfo else next_billing.replace(tzinfo=UTC)
+    )
+    if next_billing <= period_end:
+        return timedelta(0)
+    return next_billing - period_end
+
+
+def _reanchor_paid_prepaid_invoice_if_lapsed(db: Session, invoice: Invoice) -> bool:
+    """Start lapsed prepaid renewals from the settlement date.
+
+    Prepaid customers should not lose paid entitlement to a historical unpaid
+    period after they have already been suspended or otherwise lapsed. When a
+    payment fully settles that renewal invoice, move the covered period to the
+    payment date and advance the subscription from there.
+    """
+    if invoice.status != InvoiceStatus.paid:
+        return False
+    if invoice.billing_period_start is None or invoice.billing_period_end is None:
+        return False
+
+    payment = _latest_successful_invoice_payment(db, invoice)
+    if payment is None:
+        return False
+    effective_at = payment.paid_at or payment.created_at or datetime.now(UTC)
+    paid_at_utc = (
+        effective_at if effective_at.tzinfo else effective_at.replace(tzinfo=UTC)
+    )
+    paid_at_day = paid_at_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    resolved = _invoice_subscription_lines(db, invoice)
+    if resolved is None:
+        return False
+    subscription, lines = resolved
+    if not _prepaid_invoice_needs_payment_date_anchor(
+        subscription, invoice, paid_at_day
+    ):
+        return False
+
+    base_lines = _base_subscription_invoice_lines(lines)
+    if not base_lines:
+        return False
+
+    from app.services.billing_automation import _period_end
+
+    cycle = (
+        subscription.offer.billing_cycle
+        if subscription.offer and subscription.offer.billing_cycle
+        else BillingCycle.monthly
+    )
+    extension_delta = _prepaid_extension_delta_after_invoice(invoice, subscription)
+    old_period_start = invoice.billing_period_start
+    old_period_end = invoice.billing_period_end
+    new_period_start = paid_at_day
+    new_period_end = _period_end(new_period_start, cycle)
+    if old_period_start == new_period_start and old_period_end == new_period_end:
+        return False
+
+    invoice.billing_period_start = new_period_start
+    invoice.billing_period_end = new_period_end
+    offer_name = subscription.offer.name if subscription.offer else "Subscription"
+    for line in base_lines:
+        metadata = dict(line.metadata_ or {})
+        metadata["kind"] = metadata.get("kind") or "base_subscription"
+        metadata["billing_period_start"] = new_period_start.isoformat()
+        metadata["billing_period_end"] = new_period_end.isoformat()
+        line.metadata_ = metadata
+        line.description = (
+            f"{offer_name} ({new_period_start.date()} - {new_period_end.date()})"
+        )
+
+    target_next_billing = new_period_end + extension_delta
+    current_next = subscription.next_billing_at
+    if current_next is None:
+        subscription.next_billing_at = target_next_billing
+    else:
+        current_next = (
+            current_next if current_next.tzinfo else current_next.replace(tzinfo=UTC)
+        )
+        if current_next < target_next_billing:
+            subscription.next_billing_at = target_next_billing
+
+    logger.info(
+        "prepaid_invoice_reanchored_to_payment_date",
+        extra={
+            "event": "prepaid_invoice_reanchored_to_payment_date",
+            "invoice_id": str(invoice.id),
+            "subscription_id": str(subscription.id),
+            "payment_id": str(payment.id),
+            "old_period_start": old_period_start.isoformat(),
+            "old_period_end": old_period_end.isoformat(),
+            "new_period_start": new_period_start.isoformat(),
+            "new_period_end": new_period_end.isoformat(),
+            "extension_delta_seconds": extension_delta.total_seconds(),
+            "new_next_billing_at": target_next_billing.isoformat(),
+        },
+    )
+    return True
+
+
 def _finalize_invoice_payment_effects(db: Session, invoice: Invoice) -> None:
     """Recompute invoice totals, restore eligible service, then derive account status."""
     _recalculate_invoice_totals(db, invoice)
@@ -683,6 +887,8 @@ def _finalize_invoice_payment_effects(db: Session, invoice: Invoice) -> None:
     db.flush()
 
     if invoice.status == InvoiceStatus.paid:
+        _reanchor_paid_prepaid_invoice_if_lapsed(db, invoice)
+
         from app.services import collections as collections_service
 
         if not collections_service.has_overdue_balance(db, str(invoice.account_id)):

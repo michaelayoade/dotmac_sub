@@ -34,7 +34,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Profile'),
+        title: const Text('Account'),
         actions: [
           if (me != null)
             IconButton(
@@ -121,27 +121,9 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                     onTap: () => context.push('/profile/contacts'),
                   ),
                 ),
-                const SizedBox(height: 12),
-                Card(
-                  child: ListTile(
-                    leading: const Icon(Icons.timeline_outlined),
-                    title: const Text('Installation progress'),
-                    subtitle:
-                        const Text('Track your install, survey to activation'),
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: () => context.push('/profile/installation-progress'),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Card(
-                  child: ListTile(
-                    leading: const Icon(Icons.engineering_outlined),
-                    title: const Text('Technician visits'),
-                    subtitle: const Text('Field-service schedule & status'),
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: () => context.push('/profile/technician-visits'),
-                  ),
-                ),
+                // Installation progress → now a modest Home banner (onboarding
+                // is a one-time activity). Technician visits → now Help → Visits.
+                // Account is settings only; both remain reachable via /profile/*.
                 const SizedBox(height: 12),
                 Card(
                   child: ListTile(

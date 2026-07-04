@@ -26,6 +26,29 @@ def expire_subscriptions() -> dict:
         return result
 
 
+@celery_app.task(name="app.tasks.catalog.apply_due_subscription_changes")
+def apply_due_subscription_changes() -> dict:
+    """Apply admin-scheduled next-cycle plan changes whose date has arrived.
+
+    Swaps the offer for every ``approved`` (scheduled) SubscriptionChangeRequest
+    with ``effective_date <= today``. Gated by ``billing_enabled`` because
+    applying a plan change touches the recurring price and billing mode.
+    """
+    logger.info("Starting apply_due_subscription_changes")
+    from app.services.subscription_changes import subscription_change_requests
+
+    with db_session_adapter.session() as session:
+        if not billing_enabled(session):
+            logger.info(
+                "apply_due_subscription_changes skipped: local billing disabled "
+                "(billing_enabled)"
+            )
+            return {"skipped": "billing_disabled"}
+        result = subscription_change_requests.apply_due_changes(session)
+        logger.info("Completed apply_due_subscription_changes: %s", result)
+        return result
+
+
 @celery_app.task(name="app.tasks.catalog.send_expiry_reminders")
 def send_expiry_reminders(days_before: int | None = None) -> dict:
     """Send renewal reminders for subscriptions expiring within N days.

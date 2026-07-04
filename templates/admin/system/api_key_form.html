@@ -51,6 +51,17 @@
                     </div>
 
                     <div class="sm:col-span-2">
+                        <label class="flex items-start gap-2">
+                            <input type="checkbox" name="system_owned" id="system_owned" value="1"
+                                class="mt-0.5 h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                            <span>
+                                <span class="block text-sm font-medium text-slate-700 dark:text-slate-300">System-owned key</span>
+                                <span class="block text-xs text-slate-500 dark:text-slate-400">Not tied to any subscriber — for service/integration use. Leave unchecked to own the key yourself.</span>
+                            </span>
+                        </label>
+                    </div>
+
+                    <div class="sm:col-span-2">
                         <label for="scopes" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Scopes</label>
                         <input type="text" name="scopes" id="scopes"
                             placeholder="audit:read"

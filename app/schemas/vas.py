@@ -35,10 +35,12 @@ class VasWalletOverviewResponse(BaseModel):
     max_topup: int
     auth_threshold: int
     entries: list[VasWalletEntryRead] = []
+    payment_options: list[dict[str, str]] = []
 
 
 class VasTopupInitiateRequest(BaseModel):
     amount: Decimal = Field(gt=0)
+    provider: str | None = None
 
 
 class VasTopupInitiateResponse(BaseModel):

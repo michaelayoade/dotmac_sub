@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from collections.abc import Callable
 from typing import Any
 
@@ -202,6 +203,58 @@ def load_feature_states(
     return states
 
 
+def list_payment_providers(db: Session) -> list[dict[str, Any]]:
+    """Return payment-provider rows (id/name/provider_type/is_active).
+
+    Backs the module-manager on/off toggles. Defensive: returns ``[]`` if the
+    table can't be read (e.g. before the billing tables exist).
+    """
+    from app.models.billing import PaymentProvider
+
+    try:
+        rows = db.query(PaymentProvider).order_by(PaymentProvider.name).all()
+    except Exception:
+        logger.warning("Failed to load payment providers", exc_info=True)
+        return []
+    providers: list[dict[str, Any]] = []
+    for row in rows:
+        provider_type = getattr(row.provider_type, "value", str(row.provider_type))
+        providers.append(
+            {
+                "id": str(row.id),
+                "name": row.name,
+                "provider_type": provider_type,
+                "is_active": bool(row.is_active),
+            }
+        )
+    return providers
+
+
+def update_provider_flags(db: Session, *, payload: dict[str, bool]) -> None:
+    """Set ``is_active`` per payment-provider id.
+
+    Defensive: unknown or malformed ids are skipped; only commits if a row
+    actually changed. Flipping a provider off here removes it from billing and
+    VAS checkout (both honour ``PaymentProvider.is_active``).
+    """
+    if not payload:
+        return
+    from app.models.billing import PaymentProvider
+
+    changed = False
+    for provider_id, enabled in payload.items():
+        try:
+            provider = db.get(PaymentProvider, uuid.UUID(str(provider_id)))
+        except (ValueError, TypeError):
+            provider = None
+        if provider is None:
+            continue
+        provider.is_active = bool(enabled)
+        changed = True
+    if changed:
+        db.commit()
+
+
 def module_manager_page_state(db: Session) -> dict[str, Any]:
     modules = load_module_states(db)
     features = load_feature_states(db)
@@ -226,7 +279,12 @@ def module_manager_page_state(db: Session) -> dict[str, Any]:
                 "features": feature_entries,
             }
         )
-    return {"module_cards": cards, "module_states": modules, "feature_states": features}
+    return {
+        "module_cards": cards,
+        "module_states": modules,
+        "feature_states": features,
+        "payment_providers": list_payment_providers(db),
+    }
 
 
 def _upsert_boolean_setting(db: Session, key: str, enabled: bool) -> None:

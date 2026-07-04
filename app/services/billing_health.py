@@ -46,7 +46,7 @@ from app.services.billing_statuses import (
     BILLABLE_SUBSCRIBER_STATUS_VALUES,
     BILLABLE_SUBSCRIBER_STATUSES,
 )
-from app.services.job_heartbeat import get_last_success
+from app.services.job_heartbeat import get_last_result, get_last_success
 
 # Alert thresholds. Conservative defaults; tune via ops experience.
 SCAN_MIN_RATIO = 0.5  # alert if a run scanned < 50% of active subs
@@ -74,6 +74,55 @@ class RunnerHeartbeat:
     last_success: datetime | None
     age_seconds: float | None
     stale: bool
+    # Last-run result blob {status, at, detail} from job_heartbeat.get_last_result,
+    # or None when unknown (never recorded / Redis down). Optional so older
+    # positional call sites and tests stay valid.
+    last_result: dict | None = None
+
+    @property
+    def last_result_status(self) -> str | None:
+        """ "ok" / "error" / None (unknown)."""
+        if not isinstance(self.last_result, dict):
+            return None
+        status = self.last_result.get("status")
+        return status if isinstance(status, str) else None
+
+    @property
+    def last_result_at(self) -> datetime | None:
+        """Timestamp of the last recorded result, or None. Never raises."""
+        if not isinstance(self.last_result, dict):
+            return None
+        raw = self.last_result.get("at")
+        if not isinstance(raw, str):
+            return None
+        try:
+            parsed = datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+        return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed
+
+    @property
+    def last_result_detail(self) -> dict | None:
+        """Returned counts (success) or {"error": msg} (failure), or None."""
+        if not isinstance(self.last_result, dict):
+            return None
+        detail = self.last_result.get("detail")
+        return detail if isinstance(detail, dict) else None
+
+    @property
+    def last_result_summary(self) -> str:
+        """Compact one-line rendering of the last-run result for display."""
+        status = self.last_result_status
+        if status is None:
+            return "No result yet"
+        detail = self.last_result_detail or {}
+        if status == "error":
+            msg = detail.get("error")
+            return f"errored: {msg}" if msg else "errored"
+        if not detail:
+            return "ok"
+        counts = ", ".join(f"{k}={v}" for k, v in detail.items())
+        return f"ok — {counts}" if counts else "ok"
 
 
 @dataclass(frozen=True)
@@ -265,8 +314,13 @@ def runner_heartbeats(
         ).first()
         enabled = bool(row[0]) if row else False
         interval = int(row[1]) if row and row[1] else None
+        last_result = get_last_result(task_name)
         if not enabled:
-            out.append(RunnerHeartbeat(task_name, False, interval, None, None, False))
+            out.append(
+                RunnerHeartbeat(
+                    task_name, False, interval, None, None, False, last_result
+                )
+            )
             continue
         last = get_last_success(task_name)
         if last is not None and last.tzinfo is None:
@@ -278,15 +332,24 @@ def runner_heartbeats(
             )
         else:
             stale = last is None
-        out.append(RunnerHeartbeat(task_name, True, interval, last, age, stale))
+        out.append(
+            RunnerHeartbeat(task_name, True, interval, last, age, stale, last_result)
+        )
     return out
+
+
+def _default_currency(db: Session) -> str:
+    """Billing default currency setting (NGN when unset)."""
+    value = settings_spec.resolve_value(db, SettingDomain.billing, "default_currency")
+    code = str(value or "NGN").strip().upper()
+    return code or "NGN"
 
 
 def covered_but_locked(db: Session) -> int:
     """§6.6 drift: accounts still under a billing lock (overdue/prepaid) whose
     local ledger available balance is >= 0 — i.e. covered yet suspended
-    (wrongful-suspension drift). Mirrors get_available_balance for NGN:
-    unallocated credit - unallocated debit - open invoice balance.
+    (wrongful-suspension drift). Mirrors get_available_balance for the default
+    currency: unallocated credit - unallocated debit - open invoice balance.
     """
     sql = text(
         """
@@ -300,19 +363,19 @@ def covered_but_locked(db: Session) -> int:
             COALESCE((SELECT sum(le.amount) FROM ledger_entries le
                 WHERE le.account_id = acct AND le.invoice_id IS NULL
                   AND le.entry_type = 'credit' AND le.is_active
-                  AND le.currency = 'NGN'), 0)
+                  AND le.currency = :currency), 0)
           - COALESCE((SELECT sum(le.amount) FROM ledger_entries le
                 WHERE le.account_id = acct AND le.invoice_id IS NULL
                   AND le.entry_type = 'debit' AND le.is_active
-                  AND le.currency = 'NGN'), 0)
+                  AND le.currency = :currency), 0)
           - COALESCE((SELECT sum(i.balance_due) FROM invoices i
                 WHERE i.account_id = acct AND i.balance_due > 0
                   AND i.status IN ('issued', 'partially_paid', 'overdue')
-                  AND i.currency = 'NGN'), 0)
+                  AND i.currency = :currency), 0)
         ) >= 0
         """
     )
-    return int(db.execute(sql).scalar() or 0)
+    return int(db.execute(sql, {"currency": _default_currency(db)}).scalar() or 0)
 
 
 def _prepaid_monthly_enabled(db: Session) -> bool:

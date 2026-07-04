@@ -33,7 +33,7 @@ from __future__ import annotations
 import logging
 from contextlib import nullcontext
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import func
@@ -42,6 +42,7 @@ from sqlalchemy.orm import Session
 from app.models.billing import (
     CreditNoteApplication,
     Invoice,
+    InvoiceLine,
     InvoiceStatus,
     LedgerEntry,
     LedgerEntryType,
@@ -50,6 +51,7 @@ from app.models.billing import (
     PaymentAllocation,
     PaymentStatus,
 )
+from app.models.catalog import BillingMode, Subscription
 from app.services.billing._common import (
     _recalculate_invoice_totals as recalculate_invoice_totals,
 )
@@ -309,6 +311,146 @@ def settle_open_invoices_from_credit(db: Session, account_id: str) -> SettleResu
         account_id,
         len(result.invoices_settled),
     )
+    return result
+
+
+def settle_single_invoice_from_credit(
+    db: Session, invoice: Invoice, *, only_if_full: bool = False
+) -> Decimal:
+    """Apply an account's payment-backed credit to ONE invoice. Returns applied.
+
+    Targeted, migrated-data-safe counterpart to
+    :func:`settle_open_invoices_from_credit`: it only ever touches ``invoice``,
+    so it cannot destroy credit on unrelated historical invoices (the reason the
+    account-wide settle is disabled by default). Same accounting — a
+    ``PaymentAllocation`` per applied naira plus one offsetting unallocated
+    debit ledger entry, so ``get_account_credit_balance`` drops by exactly the
+    amount and money is never double-counted. Does NOT commit.
+
+    ``only_if_full=True`` makes it all-or-nothing: if the payment-backed credit
+    cannot fully cover the invoice remaining, nothing is applied (returns 0).
+    Used by the prepaid draft-until-funded path so a renewal is either fully
+    funded from the deposit or left entirely as a draft.
+    """
+    account_id = str(invoice.account_id)
+    currency = invoice.currency or "NGN"
+
+    # Serialize the read-modify-write of the credit pool for this account.
+    lock_account(db, account_id)
+
+    invoice_remaining = _project_invoice_remaining(db, invoice)
+    if invoice_remaining <= 0:
+        return Decimal("0.00")
+
+    credit = get_account_credit_balance(db, account_id, currency=currency)
+    payments = [
+        (payment, room)
+        for payment, room in _allocatable_payments(db, account_id)
+        if (payment.currency or "NGN") == currency
+    ]
+    payment_backed = round_money(
+        sum((room for _payment, room in payments), Decimal("0.00"))
+    )
+    # Spend only credit that real succeeded payments can back (mirrors the
+    # account-wide settle's unbacked-credit guard).
+    spendable = min(max(credit, Decimal("0.00")), payment_backed)
+    if spendable <= 0:
+        return Decimal("0.00")
+    if only_if_full and spendable < invoice_remaining:
+        return Decimal("0.00")
+
+    remaining = min(spendable, invoice_remaining)
+    applied_total = Decimal("0.00")
+    for payment, room in payments:
+        if remaining <= 0:
+            break
+        amount = min(remaining, room)
+        if amount <= 0:
+            continue
+        _allocation, applied = _apply_payment_allocation(
+            db, payment, invoice, amount, memo=CREDIT_SETTLEMENT_MEMO
+        )
+        applied_total = round_money(applied_total + applied)
+        remaining = round_money(remaining - applied)
+    if applied_total <= 0:
+        return Decimal("0.00")
+
+    db.flush()
+    recalculate_invoice_totals(db, invoice)
+    # Reduce the unallocated-credit pool by exactly what we applied.
+    db.add(
+        LedgerEntry(
+            account_id=coerce_uuid(account_id),
+            invoice_id=None,
+            payment_id=None,
+            entry_type=LedgerEntryType.debit,
+            source=LedgerSource.payment,
+            amount=applied_total,
+            currency=currency,
+            memo=CREDIT_SETTLEMENT_MEMO,
+        )
+    )
+    return applied_total
+
+
+def _prepaid_draft_invoices(db: Session, account_id: str) -> list[Invoice]:
+    """Draft prepaid renewal invoices for one account, oldest first."""
+    return (
+        db.query(Invoice)
+        .join(InvoiceLine, InvoiceLine.invoice_id == Invoice.id)
+        .join(Subscription, Subscription.id == InvoiceLine.subscription_id)
+        .filter(Invoice.account_id == coerce_uuid(account_id))
+        .filter(Invoice.is_active.is_(True))
+        .filter(Invoice.status == InvoiceStatus.draft)
+        .filter(Invoice.balance_due > 0)
+        .filter(InvoiceLine.is_active.is_(True))
+        .filter(Subscription.billing_mode == BillingMode.prepaid)
+        .distinct()
+        .order_by(
+            Invoice.billing_period_start.asc().nulls_last(),
+            Invoice.created_at.asc(),
+            Invoice.id.asc(),
+        )
+        .all()
+    )
+
+
+def settle_prepaid_draft_invoices_from_credit(
+    db: Session, account_id: str, *, run_at: datetime | None = None
+) -> SettleResult:
+    """Issue and settle fully funded prepaid draft renewals for one account.
+
+    Draft-until-funded renewals deliberately do not become AR when the wallet is
+    short. A later top-up must therefore revisit those drafts; otherwise the
+    billing runner has already advanced ``next_billing_at`` and the period is
+    never recognized. This settles oldest-first and remains all-or-nothing per
+    invoice: insufficient credit leaves the draft untouched.
+    """
+    result = SettleResult(account_id=str(account_id))
+    now = run_at or datetime.now(UTC)
+
+    for invoice in _prepaid_draft_invoices(db, str(account_id)):
+        invoice.status = InvoiceStatus.issued
+        invoice.issued_at = now
+        invoice.due_at = now
+        db.flush()
+
+        applied = settle_single_invoice_from_credit(db, invoice, only_if_full=True)
+        db.flush()
+        recalculate_invoice_totals(db, invoice)
+        if invoice.status == InvoiceStatus.paid:
+            result.applied = round_money(result.applied + applied)
+            result.invoices_touched.append(str(invoice.id))
+            result.invoices_settled.append(str(invoice.id))
+            continue
+
+        # Underfunded or raced by another consumer: restore the non-AR state.
+        invoice.status = InvoiceStatus.draft
+        invoice.issued_at = None
+        invoice.due_at = None
+        db.flush()
+        break
+
     return result
 
 

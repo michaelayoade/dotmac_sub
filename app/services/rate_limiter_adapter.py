@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from threading import Lock
+from typing import cast
 
 from app.services.adapters import adapter_registry
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -76,7 +80,74 @@ class InMemoryRateLimiterAdapter:
             )
 
 
-rate_limiter_adapter = InMemoryRateLimiterAdapter()
+class RedisRateLimiterAdapter:
+    """Fixed-window limiter shared across workers via Redis.
+
+    Same ``check`` contract as the in-memory limiter. When Redis is
+    unreachable it falls back to a per-worker in-memory limiter — throttling
+    still applies (just per-worker, not globally), rather than failing open and
+    letting brute-force through, or failing closed and locking everyone out.
+    """
+
+    name = "rate_limiter.redis"
+
+    def __init__(self, fallback: InMemoryRateLimiterAdapter) -> None:
+        self._fallback = fallback
+
+    def check(
+        self, rule: RateLimitRule, *, now: datetime | None = None
+    ) -> RateLimitDecision:
+        import redis
+
+        from app.services.redis_client import get_redis
+
+        client = get_redis()
+        if client is None:
+            return self._fallback.check(rule, now=now)
+
+        now = now or datetime.now(UTC)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=UTC)
+        window = max(rule.window_seconds, 1)
+        bucket = int(now.timestamp() // window)
+        redis_key = f"ratelimit:{rule.key}:{bucket}"
+        try:
+            # redis-py stubs type incr() as Awaitable[Any] | Any on the sync
+            # client; cast mirrors app/services/auth.py's rate-limit path.
+            count = int(cast(int, client.incr(redis_key)))
+            if count == 1:
+                client.expire(redis_key, window)
+        except redis.RedisError:
+            logger.warning(
+                "Rate limiter Redis error for %s; using per-worker fallback",
+                rule.key,
+                exc_info=True,
+            )
+            return self._fallback.check(rule, now=now)
+
+        reset_at = datetime.fromtimestamp((bucket + 1) * window, tz=UTC)
+        if count > rule.limit:
+            retry_after = max(1, int((reset_at - now).total_seconds()))
+            return RateLimitDecision(
+                allowed=False,
+                key=rule.key,
+                limit=rule.limit,
+                remaining=0,
+                reset_at=reset_at,
+                retry_after_seconds=retry_after,
+            )
+        return RateLimitDecision(
+            allowed=True,
+            key=rule.key,
+            limit=rule.limit,
+            remaining=max(rule.limit - count, 0),
+            reset_at=reset_at,
+        )
+
+
+_in_memory_rate_limiter = InMemoryRateLimiterAdapter()
+# Shared across workers when Redis is up; per-worker in-memory otherwise.
+rate_limiter_adapter = RedisRateLimiterAdapter(_in_memory_rate_limiter)
 adapter_registry.register(rate_limiter_adapter)
 
 

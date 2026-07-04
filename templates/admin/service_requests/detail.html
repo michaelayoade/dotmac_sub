@@ -86,8 +86,11 @@
                     <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">Move to</label>
                     <select name="status" required
                             class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {# No preselected status: the first option used to be the
+                           terminal "Completed", one accidental click away. #}
+                        <option value="" disabled selected>Select next status…</option>
                         {% for s in allowed_next %}
-                        <option value="{{ s }}">{{ s | replace('_', ' ') | title }}</option>
+                        <option value="{{ s }}">{{ s | replace('_', ' ') | title }}{% if s in ('completed', 'rejected') %} (final){% endif %}</option>
                         {% endfor %}
                     </select>
                 </div>
@@ -98,6 +101,7 @@
                               class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ req.admin_notes or '' }}</textarea>
                 </div>
                 <button type="submit"
+                        onclick="var s=this.form.status.value; if(!s) return true; var msg = (s==='completed'||s==='rejected') ? 'Mark this request ' + s.toUpperCase() + '? This is FINAL (it cannot be reopened) and the reseller will be notified.' : 'Move this request to ' + s.replace('_',' ') + ' and notify the reseller?'; return confirm(msg);"
                         class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 transition-colors">
                     Update &amp; Notify Reseller
                 </button>

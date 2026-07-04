@@ -115,6 +115,16 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "bandwidth", SWEEP, PER_ITEM, HEALTH
     ),
     "app.tasks.bandwidth.trim_redis_stream": _c("bandwidth", SWEEP, IDEMP, LOG),
+    "app.tasks.billing.audit_cutover_balance_invariant": _c(
+        "billing", SWEEP, IDEMP, HEALTH, "Read-only drift audit; safe to re-run."
+    ),
+    "app.tasks.billing.audit_funded_inactive_exposure": _c(
+        "billing",
+        SWEEP,
+        IDEMP,
+        HEALTH,
+        "Read-only funded inactive liability report; safe to re-run.",
+    ),
     "app.tasks.billing.check_billing_switch": _c("billing", SWEEP, IDEMP, HEALTH),
     "app.tasks.billing.mark_invoices_overdue": _c("billing", SWEEP, IDEMP, HEALTH),
     "app.tasks.billing.run_billing_notifications": _c(
@@ -125,6 +135,20 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     ),
     "app.tasks.catalog.expire_subscriptions": _c("catalog", SWEEP, GUARDED, HEALTH),
     "app.tasks.catalog.send_expiry_reminders": _c("catalog", SWEEP, GUARDED, STATUS),
+    "app.tasks.catalog.apply_due_subscription_changes": _c(
+        "catalog",
+        SWEEP,
+        GUARDED,
+        HEALTH,
+        "Applying a scheduled plan change must be idempotent (apply() status guard).",
+    ),
+    "app.tasks.collections.prepaid_balance_sweep": _c(
+        "collections",
+        SWEEP,
+        GUARDED,
+        HEALTH,
+        "Daily balance sweep; per-account commit, idempotent arm/warn/suspend.",
+    ),
     "app.tasks.collections.run_billing_enforcement": _c(
         "collections", STATE, GUARDED, HEALTH
     ),

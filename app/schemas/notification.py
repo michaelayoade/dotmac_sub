@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -19,6 +20,7 @@ class NotificationTemplateBase(BaseModel):
     channel: NotificationChannel
     subject: str | None = Field(default=None, max_length=200)
     body: str = Field(min_length=1)
+    conditions: dict[str, Any] = Field(default_factory=dict)
     is_active: bool = True
 
 
@@ -32,6 +34,7 @@ class NotificationTemplateUpdate(BaseModel):
     channel: NotificationChannel | None = None
     subject: str | None = Field(default=None, max_length=200)
     body: str | None = Field(default=None, min_length=1)
+    conditions: dict[str, Any] | None = None
     is_active: bool | None = None
 
 

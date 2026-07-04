@@ -176,6 +176,24 @@ _FEATURE_CONTROLS: tuple[Control, ...] = (
         description="Hourly billing-notification send-window runner.",
     ),
     Control(
+        # Balance/expiry-based prepaid enforcement sweep. DEFAULT OFF —
+        # fail-closed so arming this customer-suspending sweep is a deliberate
+        # opt-in (Item 2 of the prepaid/invoice/deposit alignment).
+        key="collections.prepaid_balance_enforcement",
+        layer=Layer.feature,
+        owner_module="billing",
+        default=False,
+        on_missing=False,
+        legacy=(
+            LegacyAlias(
+                _C,
+                "prepaid_balance_enforcement_enabled",
+                "PREPAID_BALANCE_ENFORCEMENT_ENABLED",
+            ),
+        ),
+        description="Prepaid balance/expiry suspension sweep.",
+    ),
+    Control(
         key="catalog.subscription_expiration",
         layer=Layer.feature,
         owner_module="catalog",

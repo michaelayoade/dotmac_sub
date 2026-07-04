@@ -61,8 +61,11 @@ def currency_code(db: Session) -> str:
 
 
 def currency_symbol(db: Session) -> str:
-    symbols = {"NGN": "₦", "USD": "$", "EUR": "€", "GBP": "£"}
-    return symbols.get(currency_code(db), currency_code(db))
+    # Delegates to the canonical map; NGN/USD/EUR/GBP are identical there and
+    # both fall back to the raw code, so VAS output is unchanged.
+    from app.services import display_format
+
+    return display_format.currency_symbol(currency_code(db))
 
 
 def topup_limits(db: Session) -> dict[str, int]:
@@ -257,7 +260,9 @@ def _topup_credited_today(db: Session, wallet_id) -> Decimal:
     return Decimal(str(total))
 
 
-def initiate_topup(db: Session, subscriber_id: str, amount: Decimal) -> dict:
+def initiate_topup(
+    db: Session, subscriber_id: str, amount: Decimal, *, provider: str | None = None
+) -> dict:
     """Start a wallet top-up: limit checks + gateway checkout context.
 
     No Payment row is created — wallet top-ups are liabilities, not revenue;
@@ -265,16 +270,20 @@ def initiate_topup(db: Session, subscriber_id: str, amount: Decimal) -> dict:
     """
     require_enabled(db)
     wallet = get_or_create_wallet(db, subscriber_id)
-    return _initiate_topup_for_wallet(db, wallet, amount)
+    return _initiate_topup_for_wallet(db, wallet, amount, provider=provider)
 
 
-def initiate_reseller_topup(db: Session, reseller_id: str, amount: Decimal) -> dict:
+def initiate_reseller_topup(
+    db: Session, reseller_id: str, amount: Decimal, *, provider: str | None = None
+) -> dict:
     require_enabled(db)
     wallet = get_or_create_reseller_wallet(db, reseller_id)
-    return _initiate_topup_for_wallet(db, wallet, amount)
+    return _initiate_topup_for_wallet(db, wallet, amount, provider=provider)
 
 
-def _initiate_topup_for_wallet(db: Session, wallet: VasWallet, amount: Decimal) -> dict:
+def _initiate_topup_for_wallet(
+    db: Session, wallet: VasWallet, amount: Decimal, *, provider: str | None = None
+) -> dict:
     amount = Decimal(str(amount))
     limits = topup_limits(db)
     min_amount = Decimal(limits["min_topup"])
@@ -292,7 +301,9 @@ def _initiate_topup_for_wallet(db: Session, wallet: VasWallet, amount: Decimal) 
         raise HTTPException(
             status_code=400, detail="Daily wallet funding limit reached"
         )
-    context = payment_gateway_adapter.build_context(db, provider_type=_provider(db))
+    context = payment_gateway_adapter.build_context(
+        db, provider_type=provider or _provider(db)
+    )
     # Bind the reference to THIS wallet — verify refuses unknown references,
     # so a leaked/stolen reference can never credit a different wallet.
     db.add(
@@ -313,6 +324,21 @@ def _provider(db: Session) -> str:
         db, SettingDomain.billing, "default_payment_provider"
     )
     return str(value) if value else "paystack"
+
+
+def topup_payment_options(db: Session) -> list[dict[str, str]]:
+    """Online-gateway options for VAS float top-up checkout.
+
+    Reuses the consolidated-billing active-provider selection so VAS honours the
+    same rule: Paystack is the baseline, Flutterwave appears only when an active
+    Flutterwave ``PaymentProvider`` row exists, and the configured default is
+    surfaced first. Bank transfer is billing-only and is not offered here.
+    """
+    from app.services.customer_portal_flow_payments import (
+        online_gateway_payment_options,
+    )
+
+    return online_gateway_payment_options(db, _provider(db))
 
 
 def verify_topup(
@@ -596,6 +622,7 @@ def wallet_overview(db: Session, subscriber_id: str, *, limit: int = 20) -> dict
         "daily_limit": limits["daily_limit"],
         "auth_threshold": limits["auth_threshold"],
         "entries": entries,
+        "payment_options": topup_payment_options(db),
     }
 
 

@@ -92,9 +92,9 @@ class Settings:
     # ChatWidgetConfig id in the CRM that customer + reseller sessions attach to
     # (general support pool; same config for both surfaces).
     crm_chat_config_id: str = os.getenv("CRM_CHAT_CONFIG_ID", "")
-    # Distinct from crm_webhook_secret: protects the inbound chat message_new
-    # webhook that drives mobile push.
-    crm_chat_webhook_secret: str = os.getenv("CRM_CHAT_WEBHOOK_SECRET", "")
+    # The inbound chat push webhook shares crm_webhook_secret with the other CRM
+    # webhooks (the CRM signs it with the same selfcare secret), so no separate
+    # chat secret is needed.
     # Visitor WebSocket URL handed to clients. Derived from crm_base_url
     # (https→wss) + /ws/widget when left blank.
     crm_chat_ws_url: str = os.getenv("CRM_CHAT_WS_URL", "")

@@ -62,9 +62,31 @@ def subscription_detail_page_context(
         "subscription": subscription,
         "activities": build_audit_activities(db, "subscription", str(subscription_id)),
         "offer_options": core.active_offer_options(db),
+        "scheduled_plan_change": _scheduled_plan_change_context(db, subscription_id),
     }
     context.update(core.subscription_detail_context(db, subscription))
     return context
+
+
+def _scheduled_plan_change_context(
+    db: Session,
+    subscription_id: str,
+) -> dict[str, object] | None:
+    """Summarize the outstanding scheduled (next-cycle) plan change, if any."""
+    from app.models.catalog import CatalogOffer
+    from app.services.subscription_changes import subscription_change_requests
+
+    scheduled = subscription_change_requests.get_scheduled_for_subscription(
+        db, subscription_id
+    )
+    if scheduled is None:
+        return None
+    target_offer = db.get(CatalogOffer, scheduled.requested_offer_id)
+    return {
+        "id": str(scheduled.id),
+        "offer_name": target_offer.name if target_offer else "New plan",
+        "effective_date": scheduled.effective_date,
+    }
 
 
 def customer_detail_url_for_subscriber_id(db: Session, subscriber_id: str) -> str:
@@ -305,6 +327,25 @@ def admin_resume_vacation_hold_redirect(
     return f"/admin/catalog/subscriptions/{subscription_id}?{query}"
 
 
+def _bulk_result_payload(verb: str, result: dict) -> dict[str, object]:
+    """Standard partial-success payload: message + changed/skipped/failed detail."""
+    changed = result.get("changed", 0)
+    skipped = result.get("skipped_ids", [])
+    failed = result.get("failed_ids", [])
+    parts = [f"{verb} {changed} subscription{'s' if changed != 1 else ''}"]
+    if skipped:
+        parts.append(f"{len(skipped)} skipped (not eligible)")
+    if failed:
+        parts.append(f"{len(failed)} FAILED")
+    return {
+        "message": "; ".join(parts),
+        "count": changed,
+        "changed": changed,
+        "skipped_ids": skipped,
+        "failed_ids": failed,
+    }
+
+
 def bulk_activate_response(
     db: Session,
     *,
@@ -313,7 +354,7 @@ def bulk_activate_response(
     actor_id: str | None,
 ) -> dict[str, object]:
     """Activate eligible subscriptions and return API response payload."""
-    count = core.bulk_update_status(
+    result = core.bulk_update_status(
         db,
         subscription_ids,
         target_status=SubscriptionStatus.active,
@@ -321,7 +362,7 @@ def bulk_activate_response(
         request=request,
         actor_id=actor_id,
     )
-    return {"message": f"Activated {count} subscriptions", "count": count}
+    return _bulk_result_payload("Activated", result)
 
 
 def bulk_suspend_response(
@@ -332,7 +373,7 @@ def bulk_suspend_response(
     actor_id: str | None,
 ) -> dict[str, object]:
     """Suspend eligible subscriptions and return API response payload."""
-    count = core.bulk_update_status(
+    result = core.bulk_update_status(
         db,
         subscription_ids,
         target_status=SubscriptionStatus.suspended,
@@ -340,7 +381,7 @@ def bulk_suspend_response(
         request=request,
         actor_id=actor_id,
     )
-    return {"message": f"Suspended {count} subscriptions", "count": count}
+    return _bulk_result_payload("Suspended", result)
 
 
 def bulk_cancel_response(
@@ -351,7 +392,7 @@ def bulk_cancel_response(
     actor_id: str | None,
 ) -> dict[str, object]:
     """Cancel eligible subscriptions and return API response payload."""
-    count = core.bulk_update_status(
+    result = core.bulk_update_status(
         db,
         subscription_ids,
         target_status=SubscriptionStatus.canceled,
@@ -363,7 +404,7 @@ def bulk_cancel_response(
         request=request,
         actor_id=actor_id,
     )
-    return {"message": f"Canceled {count} subscriptions", "count": count}
+    return _bulk_result_payload("Canceled", result)
 
 
 def bulk_change_plan_response(
@@ -373,13 +414,90 @@ def bulk_change_plan_response(
     target_offer_id: str,
     request: object,
     actor_id: str | None,
+    effective_timing: str = "instant",
+    include_suspended: bool = False,
 ) -> dict[str, object]:
-    """Bulk change subscription plans and return API response payload."""
-    count = core.bulk_change_plan(
+    """Bulk change subscription plans and return API response payload.
+
+    ``effective_timing`` is ``instant`` (swap now, prorate) or ``next_cycle``
+    (schedule the swap for each subscription's next billing date).
+    ``include_suspended`` also changes suspended subscriptions, not just active.
+    """
+    result = core.bulk_change_plan(
         db,
         subscription_ids,
         target_offer_id,
         request=request,
         actor_id=actor_id,
+        effective_timing=effective_timing,
+        include_suspended=include_suspended,
     )
-    return {"message": f"Changed plan for {count} subscriptions", "count": count}
+    verb = (
+        "Scheduled next-cycle plan change for"
+        if effective_timing == "next_cycle"
+        else "Changed plan for"
+    )
+    return _bulk_result_payload(verb, result)
+
+
+def cancel_scheduled_plan_change_redirect(
+    db: Session,
+    *,
+    subscription_id: str,
+    request_id: str,
+    actor_id: str | None,
+) -> str:
+    """Cancel a scheduled next-cycle plan change; return a redirect URL."""
+    from app.services.audit_adapter import record_audit_event
+    from app.services.subscription_changes import subscription_change_requests
+
+    base = f"/admin/catalog/subscriptions/{subscription_id}"
+    try:
+        subscription_change_requests.cancel_scheduled(
+            db,
+            request_id=request_id,
+            notes="Canceled via admin subscription detail",
+        )
+    except Exception as exc:
+        detail = getattr(exc, "detail", None) or str(exc)
+        return f"{base}?error={quote_plus(str(detail))}"
+    record_audit_event(
+        db,
+        action="cancel_scheduled_plan_change",
+        entity_type="subscription",
+        entity_id=subscription_id,
+        actor_id=actor_id,
+        metadata={"change_request_id": request_id},
+    )
+    return f"{base}?notice={quote_plus('Scheduled plan change canceled.')}"
+
+
+def change_plan_quote_response(
+    db: Session,
+    *,
+    subscription_id: str,
+    target_offer_id: str,
+) -> dict[str, object]:
+    """Proration quote for an admin change-plan preview.
+
+    Reuses the customer-portal quote builder so the admin modal shows the same
+    credit/charge/net numbers the change will actually produce.
+    """
+    from fastapi import HTTPException
+
+    from app.models.catalog import CatalogOffer
+    from app.services.common import coerce_uuid
+    from app.services.customer_portal_flow_changes import (
+        _build_plan_change_quote,
+        _serialize_plan_change_quote,
+    )
+
+    subscription = catalog_service.subscriptions.get(db, subscription_id)
+    target = db.get(CatalogOffer, coerce_uuid(target_offer_id))
+    if not target:
+        raise HTTPException(status_code=404, detail="Target offer not found")
+    quote = _build_plan_change_quote(db, subscription, target)
+    return {
+        "quote": _serialize_plan_change_quote(quote),
+        "target_offer_name": target.name,
+    }

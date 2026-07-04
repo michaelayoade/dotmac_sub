@@ -18,9 +18,14 @@ from app.schemas.notification import (
 )
 from app.services import email as email_service
 from app.services import notification as notification_service
+from app.services import notification_template_conditions as condition_service
 from app.services import notification_template_renderer as template_renderer
 from app.services import sms as sms_service
 from app.services.integrations.connectors import whatsapp as whatsapp_connector
+from app.services.whatsapp_notification_templates import (
+    provider_template_from_template,
+    sync_whatsapp_registry_templates,
+)
 
 
 def channels() -> list[str]:
@@ -44,6 +49,7 @@ def templates_list_context(
     page: int,
     per_page: int,
 ) -> dict[str, object]:
+    sync_whatsapp_registry_templates(db)
     offset = (page - 1) * per_page
     effective_channel = channel if channel else None
     effective_status = str(status or "").strip().lower()
@@ -92,6 +98,7 @@ def template_form_context(
     template_id: UUID | None = None,
     error: str | None = None,
 ) -> dict[str, object] | None:
+    sync_whatsapp_registry_templates(db)
     template = None
     if template_id is not None:
         template = notification_service.templates.get(
@@ -111,9 +118,11 @@ def template_form_context(
         else "New Notification Template",
         "submit_label": "Update Template" if is_edit else "Create Template",
         "template_variables": template_renderer.TEMPLATE_VARIABLES,
+        "condition_fields": condition_service.CONDITION_FIELD_HELP,
     }
     if template is not None:
         context["template"] = template
+        context["conditions_json"] = _conditions_to_json(template.conditions)
     if error:
         context["error"] = error
     return context
@@ -131,15 +140,18 @@ def create_template(
     channel: str,
     subject: str | None,
     body: str,
+    conditions_json: str | None = None,
 ):
     normalized_code = _normalize_template_code(code)
     template_renderer.validate_template_text(subject, body, code=normalized_code)
+    conditions = _parse_conditions_json(conditions_json)
     payload = NotificationTemplateCreate(
         name=name.strip(),
         code=normalized_code,
         channel=NotificationChannel(channel),
         subject=subject.strip() if subject else None,
         body=body.strip(),
+        conditions=conditions,
     )
     return notification_service.templates.create(db=db, payload=payload)
 
@@ -154,20 +166,44 @@ def update_template(
     subject: str | None,
     body: str,
     is_active: bool,
+    conditions_json: str | None = None,
 ):
     normalized_code = _normalize_template_code(code)
     template_renderer.validate_template_text(subject, body, code=normalized_code)
+    conditions = _parse_conditions_json(conditions_json)
     payload = NotificationTemplateUpdate(
         name=name.strip(),
         code=normalized_code,
         channel=NotificationChannel(channel),
         subject=subject.strip() if subject else None,
         body=body.strip(),
+        conditions=conditions,
         is_active=is_active,
     )
     return notification_service.templates.update(
         db=db, template_id=str(template_id), payload=payload
     )
+
+
+def _parse_conditions_json(raw: str | None) -> dict:
+    text = (raw or "").strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Conditions must be valid JSON: {exc.msg}") from exc
+    return condition_service.validate_conditions(parsed)
+
+
+def _conditions_to_json(conditions: object) -> str:
+    try:
+        normalized = condition_service.validate_conditions(conditions)
+    except condition_service.NotificationTemplateConditionError:
+        return json.dumps(conditions or {}, indent=2, sort_keys=True)
+    if not normalized:
+        return ""
+    return json.dumps(normalized, indent=2, sort_keys=True)
 
 
 def delete_template(db: Session, *, template_id: UUID) -> None:
@@ -269,10 +305,12 @@ def send_template_test(
         )
         return f"Test email sent to {test_recipient}"
     if template.channel == NotificationChannel.whatsapp:
+        provider_template = provider_template_from_template(template)
         result = whatsapp_service.send_template_message(
             db=db,
             recipient=recipient,
-            template_name=template.code,
+            template_name=str((provider_template or {}).get("name") or template.code),
+            language=str((provider_template or {}).get("language") or "") or None,
             dry_run=False,
         )
         if not result.get("ok"):
@@ -333,6 +371,7 @@ def _whatsapp_channel_ready(db: Session) -> tuple[bool, str]:
 
 
 def bulk_notification_setup_context(db: Session) -> dict[str, object]:
+    sync_whatsapp_registry_templates(db)
     template_list = notification_service.templates.list(
         db=db,
         channel=None,
@@ -343,28 +382,6 @@ def bulk_notification_setup_context(db: Session) -> dict[str, object]:
         limit=500,
         offset=0,
     )
-    whatsapp_config = whatsapp_connector.load_whatsapp_config(db)
-    whatsapp_registry_templates = [
-        {
-            "id": (
-                f"whatsapp:{str(item.get('name') or '').strip()}:"
-                f"{str(item.get('language') or '').strip() or 'en'}"
-            ),
-            "name": str(item.get("name") or "").strip(),
-            "code": str(item.get("name") or "").strip(),
-            "language": str(item.get("language") or "").strip() or "en",
-            "label": (
-                f"{str(item.get('name') or '').strip()} "
-                f"({str(item.get('language') or '').strip() or 'en'})"
-            ),
-            "channel": NotificationChannel.whatsapp.value,
-            "subject": "",
-            "is_active": True,
-            "is_registry_template": True,
-        }
-        for item in whatsapp_config.get("templates", [])
-        if str(item.get("name") or "").strip()
-    ]
     channel_checks = {
         NotificationChannel.email.value: _email_channel_ready(db),
         NotificationChannel.sms.value: _sms_channel_ready(db),
@@ -386,9 +403,7 @@ def bulk_notification_setup_context(db: Session) -> dict[str, object]:
             "message": channel_checks.get(channel.value, (False, "Unsupported"))[1],
             "template_count": sum(
                 1 for template in template_list if template.channel == channel
-            )
-            if channel != NotificationChannel.whatsapp
-            else len(whatsapp_registry_templates),
+            ),
             "settings_url": (
                 "/admin/system/email"
                 if channel == NotificationChannel.email
@@ -403,22 +418,24 @@ def bulk_notification_setup_context(db: Session) -> dict[str, object]:
             NotificationChannel.whatsapp,
         )
     ]
-    templates_state = [
-        {
-            "id": str(template.id),
-            "name": template.name,
-            "code": template.code,
-            "language": "",
-            "label": template.name,
-            "channel": template.channel.value,
-            "subject": template.subject or "",
-            "is_active": bool(template.is_active),
-            "is_registry_template": False,
-        }
-        for template in template_list
-        if template.channel != NotificationChannel.whatsapp
-    ]
-    templates_state.extend(whatsapp_registry_templates)
+    templates_state = []
+    for template in template_list:
+        provider_template = provider_template_from_template(template)
+        language = str((provider_template or {}).get("language") or "")
+        templates_state.append(
+            {
+                "id": str(template.id),
+                "name": template.name,
+                "code": template.code,
+                "language": language,
+                "label": f"{template.name} ({language})" if language else template.name,
+                "channel": template.channel.value,
+                "subject": template.subject or "",
+                "is_active": bool(template.is_active),
+                "is_registry_template": bool(provider_template),
+                "provider_template_name": (provider_template or {}).get("name") or "",
+            }
+        )
     return {
         "bulk_notification_channels": channels_state,
         "bulk_notification_templates": templates_state,

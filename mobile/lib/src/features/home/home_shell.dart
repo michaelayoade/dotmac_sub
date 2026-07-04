@@ -14,20 +14,22 @@ class HomeShell extends ConsumerWidget {
 
   final StatefulNavigationShell navigationShell;
 
+  // Four recurring-job tabs. Account is NOT a tab — it's reached from the
+  // avatar in each screen's app bar (see AccountAvatarButton), the standard
+  // place for identity/settings. Order matches the branch order in the router.
   static const _tabs = [
     (icon: Icons.home_outlined, sel: Icons.home, label: 'Home'),
+    (icon: Icons.wifi_outlined, sel: Icons.wifi, label: 'Service'),
     (
       icon: Icons.receipt_long_outlined,
       sel: Icons.receipt_long,
       label: 'Billing'
     ),
-    (icon: Icons.wifi_outlined, sel: Icons.wifi, label: 'Service'),
     (
       icon: Icons.support_agent_outlined,
       sel: Icons.support_agent,
-      label: 'Support'
+      label: 'Help'
     ),
-    (icon: Icons.person_outline, sel: Icons.person, label: 'Profile'),
   ];
 
   @override

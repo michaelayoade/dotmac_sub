@@ -9,7 +9,6 @@ from uuid import UUID
 from sqlalchemy import func, not_, or_
 
 from app.models.billing import Invoice, InvoiceStatus
-from app.models.domain_settings import SettingDomain
 from app.models.subscriber import (
     Subscriber,
     SubscriberCategory,
@@ -18,7 +17,7 @@ from app.models.subscriber import (
 )
 from app.schemas.subscriber import SubscriberAccountCreate, SubscriberUpdate
 from app.services import billing as billing_service
-from app.services import settings_spec
+from app.services import display_format
 from app.services import subscriber as subscriber_service
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services.audit_helpers import build_changes_metadata, log_audit_event
@@ -33,9 +32,7 @@ _OPEN_BALANCE_INVOICE_STATUSES = (
 
 
 def _default_currency(db) -> str:
-    value = settings_spec.resolve_value(db, SettingDomain.billing, "default_currency")
-    code = str(value or "NGN").strip().upper()
-    return code or "NGN"
+    return display_format.default_currency(db)
 
 
 def _format_money(amount: object, currency: str) -> str:

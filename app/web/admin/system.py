@@ -357,8 +357,16 @@ def modules_manager_save(request: Request, db: Session = Depends(get_db)):
                 str(form.get(f"feature__{feature_name}") or "").lower() == "true"
             )
 
+    provider_payload: dict[str, bool] = {}
+    for provider in module_manager_service.list_payment_providers(db):
+        provider_id = provider["id"]
+        provider_payload[provider_id] = (
+            str(form.get(f"provider__{provider_id}") or "").lower() == "true"
+        )
+
     module_manager_service.update_module_flags(db, payload=module_payload)
     module_manager_service.update_feature_flags(db, payload=feature_payload)
+    module_manager_service.update_provider_flags(db, payload=provider_payload)
     return RedirectResponse("/admin/system/modules?saved=1", status_code=303)
 
 
@@ -2673,7 +2681,7 @@ def permission_delete(
 
 
 @router.get("/api-keys", response_class=HTMLResponse)
-def api_keys_list(request: Request, db: Session = Depends(get_db)):
+def api_keys_list(request: Request, revoked: str = "", db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
 
     current_user = get_current_user(request)
@@ -2681,7 +2689,8 @@ def api_keys_list(request: Request, db: Session = Depends(get_db)):
     api_keys = web_system_api_keys_service.list_api_keys_for_subscriber(db, person_id)
 
     # ``new_key`` is intentionally never read from the query string — the raw
-    # secret is shown once on the create POST response, not via a URL param.
+    # secret is shown once on the create/rotate POST response, not via a URL
+    # param. A revoke has no secret, so it uses a redirect query flag banner.
     context = {
         "request": request,
         "active_page": "api-keys",
@@ -2690,6 +2699,7 @@ def api_keys_list(request: Request, db: Session = Depends(get_db)):
         "sidebar_stats": get_sidebar_stats(db),
         "api_keys": api_keys,
         "new_key": None,
+        "revoked": bool(revoked),
         "now": datetime.now(UTC),
     }
     return templates.TemplateResponse("admin/system/api_keys.html", context)
@@ -2721,19 +2731,27 @@ def api_key_create(
     label: str = Form(...),
     expires_in: str = Form(None),
     scopes: str = Form(None),
+    system_owned: str = Form(None),
     db: Session = Depends(get_db),
 ):
     from app.web.admin import get_current_user, get_sidebar_stats
 
     current_user = get_current_user(request)
+    if not current_user:
+        return RedirectResponse(url="/admin/system/api-keys", status_code=303)
 
-    if not current_user or not current_user.get("person_id"):
+    person_id = current_user.get("person_id")
+    # A "system-owned" key has no subscriber owner (service/integration key).
+    # Otherwise the key is owned by the calling admin's subscriber principal, so
+    # that still requires a person_id.
+    owner_id = None if system_owned else person_id
+    if not system_owned and not person_id:
         return RedirectResponse(url="/admin/system/api-keys", status_code=303)
 
     try:
         raw_key = web_system_api_key_forms_service.create_api_key(
             db,
-            subscriber_id=current_user["person_id"],
+            subscriber_id=owner_id,
             label=label,
             expires_in=expires_in,
             scopes=web_system_api_key_forms_service.parse_scopes(scopes),
@@ -2743,7 +2761,7 @@ def api_key_create(
         # redirect URL (which leaks into access logs / history / Referer and
         # re-shows on reload).
         api_keys = web_system_api_keys_service.list_api_keys_for_subscriber(
-            db, current_user["person_id"]
+            db, person_id
         )
         return templates.TemplateResponse(
             "admin/system/api_keys.html",
@@ -2786,7 +2804,44 @@ def api_key_revoke(request: Request, key_id: str, db: Session = Depends(get_db))
     web_system_api_key_mutations_service.revoke_api_key(
         db, key_id=key_id, subscriber_id=person_id
     )
-    return RedirectResponse(url="/admin/system/api-keys", status_code=303)
+    # No secret to surface on a revoke, so use PRG + a query flag the list page
+    # renders as a "revoked" banner (create/rotate keep the secret out of URLs).
+    return RedirectResponse(url="/admin/system/api-keys?revoked=1", status_code=303)
+
+
+@router.post(
+    "/api-keys/{key_id}/rotate",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def api_key_rotate(request: Request, key_id: str, db: Session = Depends(get_db)):
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    current_user = get_current_user(request)
+    person_id = current_user.get("person_id") if current_user else None
+    raw_key = web_system_api_key_mutations_service.rotate_api_key(
+        db, key_id=key_id, subscriber_id=person_id
+    )
+    api_keys = web_system_api_keys_service.list_api_keys_for_subscriber(db, person_id)
+    if not raw_key:
+        # Missing / out-of-scope / already-revoked key: no secret to show.
+        return RedirectResponse(url="/admin/system/api-keys", status_code=303)
+    # Show the rotated secret exactly once in the POST response body — same
+    # one-time-reveal pattern as create, never via a redirect URL.
+    return templates.TemplateResponse(
+        "admin/system/api_keys.html",
+        {
+            "request": request,
+            "active_page": "api-keys",
+            "active_menu": "system",
+            "current_user": current_user,
+            "sidebar_stats": get_sidebar_stats(db),
+            "api_keys": api_keys,
+            "new_key": raw_key,
+            "rotated": True,
+            "now": datetime.now(UTC),
+        },
+    )
 
 
 @router.get(

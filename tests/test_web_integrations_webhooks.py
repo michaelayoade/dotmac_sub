@@ -240,7 +240,8 @@ def test_installed_integrations_template_confirms_bulk_relay_and_toggle_actions(
 
     assert "Enable the selected integrations?" in template
     assert "Disable the selected integrations?" in template
-    assert "Relay this integration to the portal?" in template
-    assert "Stop relaying this integration to the portal?" in template
+    # The relay-to-portal toggle was removed (dead control: persisted a flag
+    # nothing consumed), so no relay confirms remain.
+    assert "relay" not in template.lower()
     assert "Disable this integration?" in template
     assert "Enable this integration?" in template

@@ -207,6 +207,24 @@ SETTINGS_SPECS: list[SettingSpec] = [
         min_value=1,
     ),
     SettingSpec(
+        domain=SettingDomain.auth,
+        key="api_key_max_ttl_days",
+        env_var="API_KEY_MAX_TTL_DAYS",
+        value_type=SettingValueType.integer,
+        default=0,
+        min_value=0,
+        label="API Key Max Lifetime (days)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.auth,
+        key="api_key_max_per_owner",
+        env_var="API_KEY_MAX_PER_OWNER",
+        value_type=SettingValueType.integer,
+        default=0,
+        min_value=0,
+        label="API Keys Max Per Owner",
+    ),
+    SettingSpec(
         domain=SettingDomain.imports,
         key="max_file_bytes",
         env_var="IMPORT_MAX_FILE_BYTES",
@@ -886,6 +904,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.collections,
+        key="prepaid_balance_enforcement_enabled",
+        env_var="PREPAID_BALANCE_ENFORCEMENT_ENABLED",
+        value_type=SettingValueType.boolean,
+        # SAFETY: default OFF. Arms the balance/expiry prepaid suspension sweep.
+        default=False,
+    ),
+    SettingSpec(
+        domain=SettingDomain.collections,
         key="prepaid_skip_weekends",
         env_var="PREPAID_SKIP_WEEKENDS",
         value_type=SettingValueType.boolean,
@@ -958,6 +984,30 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.string,
         default="unlimited,dedicated,home_flex",
         label="Plan Families (comma-separated; changes stay within a family)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.catalog,
+        key="new_offer_visible_by_default",
+        env_var="CATALOG_NEW_OFFER_VISIBLE_BY_DEFAULT",
+        value_type=SettingValueType.boolean,
+        default=False,
+        label=(
+            "Pre-tick customer-portal visibility and service availability on "
+            "the new-offer form (off = a new offer must be published "
+            "deliberately, not by forgetting to untick a box)"
+        ),
+    ),
+    SettingSpec(
+        domain=SettingDomain.catalog,
+        key="reseller_default_catalog_open",
+        env_var="RESELLER_DEFAULT_CATALOG_OPEN",
+        value_type=SettingValueType.boolean,
+        default=True,
+        label=(
+            "Resellers see all unrestricted offers by default (on = today's "
+            "open catalog; off = a reseller sees only offers explicitly "
+            "assigned to it, unless the reseller's own override says otherwise)"
+        ),
     ),
     SettingSpec(
         domain=SettingDomain.catalog,
@@ -1769,6 +1819,18 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=False,
         label="Enable Monthly Prepaid Invoicing",
     ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="prepaid_draft_until_funded",
+        env_var="PREPAID_DRAFT_UNTIL_FUNDED",
+        value_type=SettingValueType.boolean,
+        default=False,
+        label=(
+            "Prepaid advance invoices stay DRAFT (not AR) until funded from the "
+            "deposit; when the wallet covers the total they are issued + settled "
+            "from credit in one step. Off = legacy issue-on-create."
+        ),
+    ),
     # Overdue detection (independent of billing cycle)
     SettingSpec(
         domain=SettingDomain.billing,
@@ -2149,6 +2211,68 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default="0.00",
         label="Postpaid Default Minimum Balance",
     ),
+    # --- Direct bank transfer (customer-visible payment instructions) ---
+    # Consumed by app.services.customer_portal_flow_payments.direct_bank_transfer_*
+    # (plus the reseller/me variants), which read value_text directly. The
+    # ``_accounts`` value holds a JSON *string* in value_text (not value_json),
+    # so it is typed ``string`` deliberately — a ``json`` type would move it to
+    # value_json and the readers would see an empty transfer config.
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="direct_bank_transfer_enabled",
+        env_var="BILLING_DIRECT_BANK_TRANSFER_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=False,
+        label="Direct Bank Transfer Enabled",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="direct_bank_transfer_bank_name",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="",
+        label="Direct Bank Transfer Bank Name",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="direct_bank_transfer_account_name",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="",
+        label="Direct Bank Transfer Account Name",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="direct_bank_transfer_account_number",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="",
+        label="Direct Bank Transfer Account Number",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="direct_bank_transfer_sort_code",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="",
+        label="Direct Bank Transfer Sort Code",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="direct_bank_transfer_instructions",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="",
+        label="Direct Bank Transfer Instructions",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="direct_bank_transfer_accounts",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="",
+        label="Direct Bank Transfer Accounts (JSON)",
+    ),
     SettingSpec(
         domain=SettingDomain.billing,
         key="invoice_number_enabled",
@@ -2470,6 +2594,17 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.string,
         default=None,
         label="FUP Throttle RADIUS Profile ID",
+    ),
+    SettingSpec(
+        domain=SettingDomain.usage,
+        key="fup_submonthly_rules_enabled",
+        env_var="USAGE_FUP_SUBMONTHLY_RULES_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=False,
+        label=(
+            "Allow daily/weekly FUP rules (sub-monthly usage is samples-derived, "
+            "not billing-grade — enable only after validating the metrics source)"
+        ),
     ),
     SettingSpec(
         domain=SettingDomain.usage,

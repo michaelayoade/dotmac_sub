@@ -116,7 +116,7 @@ def catalog_offers(
 def catalog_offers_create(
     request: Request, db: Session = Depends(get_db)
 ) -> HTMLResponse:
-    offer = web_catalog_offers_service.default_offer_form()
+    offer = web_catalog_offers_service.default_offer_form(db)
     context = _base_context(request, db, active_page="catalog")
     context.update(web_catalog_offers_service.offer_form_context(db, offer))
     return templates.TemplateResponse("admin/catalog/offer_form.html", context)
@@ -357,6 +357,35 @@ def offer_fup_simulate(offer_id: str, request: Request, db: Session = Depends(ge
     """Simulate FUP rules for a given usage scenario. Returns JSON for HTMX."""
     form = parse_form_data_sync(request)
     result = web_fup_service.simulate_offer_fup(db, offer_id, form)
+    return JSONResponse(result, status_code=400 if result.get("error") else 200)
+
+
+@router.get(
+    "/offers/{offer_id}/fup/rule-impact-preview",
+    dependencies=[Depends(require_permission("catalog:read"))],
+)
+def offer_fup_rule_impact_preview(
+    offer_id: str,
+    threshold_amount: str,
+    threshold_unit: str = "gb",
+    direction: str = "up_down",
+    consumption_period: str = "monthly",
+    action: str = "reduce_speed",
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Blast-radius preview: how many active subs a draft FUP rule would hit now.
+
+    Read-only, no side effects — mirrors the change-plan-quote preview pattern.
+    """
+    result = web_fup_service.preview_rule_impact(
+        db,
+        offer_id,
+        threshold_amount=threshold_amount,
+        threshold_unit=threshold_unit,
+        direction=direction,
+        consumption_period=consumption_period,
+        action=action,
+    )
     return JSONResponse(result, status_code=400 if result.get("error") else 200)
 
 
@@ -773,6 +802,25 @@ def subscription_bulk_cancel(
     )
 
 
+@router.get(
+    "/subscriptions/{subscription_id}/change-plan-quote",
+    dependencies=[Depends(require_permission("catalog:read"))],
+)
+def subscription_change_plan_quote(
+    subscription_id: str,
+    target_offer_id: str,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Proration preview for the change-plan modal (no side effects)."""
+    return JSONResponse(
+        web_catalog_subscription_workflows_service.change_plan_quote_response(
+            db,
+            subscription_id=subscription_id,
+            target_offer_id=target_offer_id,
+        )
+    )
+
+
 @router.post(
     "/subscriptions/bulk/change-plan",
     dependencies=[Depends(require_permission("catalog:write"))],
@@ -781,9 +829,15 @@ def subscription_bulk_change_plan(
     request: Request,
     subscription_ids: str = Form(...),
     target_offer_id: str = Form(...),
+    effective_timing: str = Form("instant"),
+    include_suspended: bool = Form(False),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
-    """Bulk change plan/offer for subscriptions."""
+    """Bulk change plan/offer for subscriptions.
+
+    ``effective_timing`` is ``instant`` (default, swap now with proration) or
+    ``next_cycle`` (schedule the swap for each sub's next billing date).
+    """
     return JSONResponse(
         web_catalog_subscription_workflows_service.bulk_change_plan_response(
             db,
@@ -791,7 +845,31 @@ def subscription_bulk_change_plan(
             target_offer_id=target_offer_id,
             request=request,
             actor_id=_get_actor_id(request),
+            effective_timing=effective_timing,
+            include_suspended=include_suspended,
         )
+    )
+
+
+@router.post(
+    "/subscriptions/{subscription_id}/scheduled-change/{request_id}/cancel",
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
+def subscription_cancel_scheduled_change(
+    request: Request,
+    subscription_id: str,
+    request_id: str,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """Cancel a scheduled next-cycle plan change before it takes effect."""
+    return RedirectResponse(
+        web_catalog_subscription_workflows_service.cancel_scheduled_plan_change_redirect(
+            db,
+            subscription_id=subscription_id,
+            request_id=request_id,
+            actor_id=_get_actor_id(request),
+        ),
+        status_code=303,
     )
 
 

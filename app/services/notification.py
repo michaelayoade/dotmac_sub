@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException
@@ -49,9 +50,30 @@ from app.services.customer_notification_policy import (
     resolve_notification_category,
     resolve_subscriber_id_for_recipient,
 )
+from app.services.email_template import html_to_text
+from app.services.notification_template_conditions import validate_conditions
 from app.services.response import ListResponseMixin, list_response
 
 logger = logging.getLogger(__name__)
+
+# Unrendered double-brace template tokens (e.g. "{{amount}}") that leaked into a
+# stored/sent notification body — they must never reach the in-app feed.
+_LEAKED_TOKEN_RE = re.compile(r"\{\{\s*[a-zA-Z0-9_.]+\s*\}\}")
+
+
+def _clean_feed_body(body: str | None) -> str | None:
+    """Sanitise a notification body for the in-app feed: convert email HTML to
+    readable text (so an email notification doesn't dump raw ``<!DOCTYPE html>``)
+    and drop any unrendered ``{{token}}`` placeholders that leaked into the
+    content. Returns None when nothing readable remains — the app then shows
+    just the title."""
+    if not body:
+        return body
+    text = html_to_text(body)
+    text = _LEAKED_TOKEN_RE.sub("", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return text or None
 
 
 def _severity_rank(severity: AlertSeverity) -> int:
@@ -121,7 +143,9 @@ def _setting_str(
 class Templates(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: NotificationTemplateCreate):
-        template = NotificationTemplate(**payload.model_dump())
+        data = payload.model_dump()
+        data["conditions"] = validate_conditions(data.get("conditions"))
+        template = NotificationTemplate(**data)
         db.add(template)
         db.commit()
         db.refresh(template)
@@ -220,6 +244,8 @@ class Templates(ListResponseMixin):
         if not template:
             raise HTTPException(status_code=404, detail="Template not found")
         for key, value in payload.model_dump(exclude_unset=True).items():
+            if key == "conditions":
+                value = validate_conditions(value)
             setattr(template, key, value)
         db.commit()
         db.refresh(template)
@@ -381,6 +407,12 @@ class Notifications(ListResponseMixin):
     @classmethod
     def list_response_for_subscriber(cls, db, subscriber_id, limit, offset):
         items = cls.list_for_subscriber(db, subscriber_id, limit, offset)
+        # Sanitise bodies for the in-app feed (strip email HTML, drop leaked
+        # {{tokens}}). Detach each row first so these display-only edits are
+        # never flushed back to the database.
+        for n in items:
+            db.expunge(n)
+            n.body = _clean_feed_body(n.body)
         return list_response(items, limit, offset)
 
     @staticmethod

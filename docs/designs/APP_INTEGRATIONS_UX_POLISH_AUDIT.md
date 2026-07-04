@@ -4,7 +4,7 @@
 **Method:** 2-agent parallel read-only review of the integration **connector
 lifecycle** (marketplace → register → configure → install → targets/jobs/providers
 + registry) and the **API-keys / developer-access** surface.
-**Status:** audit only. Completes the integrations coverage begun in
+**Status:** P0 + core P1 remediated (see "Remediation status" at the end). Completes the integrations coverage begun in
 `INTEGRATIONS_WEBHOOKS_UX_POLISH_AUDIT.md` (which covered hooks/webhook-endpoints/
 connector-config; CRM sync is in `CRM_IDENTITY_UX_POLISH_AUDIT.md`).
 
@@ -141,3 +141,37 @@ sha256 mismatch is the load-bearing bug, not plaintext.)
 - [CONTROL] (Low) `api_key_form.html:45-50` — expiry choices hardcoded (never/30/90/180/365), default "Never"; no org max-TTL → `api_key_max_ttl_days` setting, limit "Never" [defer]
 - [POLISH] (Low) `system.py:2546` — create error renders `str(e)` → generic message + log [defer]
 - Verified: key storage is hashed (not plaintext); read schema masks `key_hash`; list never renders the hash.
+
+
+## Remediation status
+
+### Resolved — security P0s (via the dedicated security PRs, 2026-06-29)
+
+- Admin API keys DOA (bcrypt-on-create vs sha256-on-verify) + route guards on
+  connector/API-key mutations incl. payment-provider create (#533)
+- Connector `auth_config` encrypted at rest (#534)
+- API-key scopes model + enforcement (#539); secret-looking header/metadata
+  values masked on edit forms (#540); API keys as first-class principals on
+  `require_permission` (#541)
+
+### Resolved — UX/control pass (2026-07-03)
+
+- **Disabled job ran anyway**: `integration_jobs.run` only logged (with a
+  copy-pasted EMAIL_POLL message) and executed regardless; it now refuses with
+  409, and both manual-run routes (jobs + syncs) check `is_active` first and
+  show a "disabled — enable it before running" banner instead of "queued".
+- **Relay Portal toggle removed** (persisted `relay_to_portal`, no consumer):
+  column, route, and service writer deleted; template test updated.
+- **Generic job form honesty**: free-text adapter/action inputs (which no-op'd
+  or failed only at run time) replaced with a select of the actually-supported
+  combos (`crm:pull_tickets`, or none/record-keeping); the create route
+  validates and 400s anything else.
+- **Register-configure relabeled "metadata only"** — the saved
+  registration_config/auth_method has no runtime consumer; the form now says
+  so instead of implying live configuration.
+
+### Still open
+
+- P-C fake observability (health / last_used_at / latency / UUID→name),
+  P-D revoke/create result feedback + system-user-owned keys, and the P2 tail
+  (rotate, max-keys/TTL, probe-timeout settings, copy feedback).

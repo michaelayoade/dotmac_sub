@@ -75,13 +75,11 @@ def _provider_uuid(db: Session, provider_type: str) -> uuid.UUID | None:
     return provider.id if provider else None
 
 
-def _topup_payment_options(
+def online_gateway_payment_options(
     db: Session,
     default_provider: str,
-    *,
-    direct_transfer_enabled: bool | None = None,
 ) -> list[dict[str, str]]:
-    """Return online provider options for customer payments.
+    """Return active online-gateway options (``{provider_type, label}``).
 
     Paystack is always offered as the baseline gateway (it works even with no
     ``PaymentProvider`` row). Flutterwave only appears when an active
@@ -89,8 +87,10 @@ def _topup_payment_options(
     listing it without keys would hand the customer a checkout that can't
     complete. The configured default provider is surfaced first.
 
-    Pass ``direct_transfer_enabled`` when the caller has already resolved it to
-    avoid re-running the bank-transfer settings query.
+    Shared by consolidated billing (:func:`_topup_payment_options`) and VAS
+    float top-up (``vas_wallet.topup_payment_options``) so both honour the same
+    active-provider rule — and the module-manager on/off toggle that flips
+    ``PaymentProvider.is_active``.
     """
     active: list[str] = []
     try:
@@ -117,7 +117,7 @@ def _topup_payment_options(
         active.remove(default_provider)
         active.insert(0, default_provider)
 
-    options = [
+    return [
         {
             "provider_type": provider_type,
             "label": _ONLINE_PROVIDER_LABELS[provider_type],
@@ -125,6 +125,23 @@ def _topup_payment_options(
         for provider_type in active
         if provider_type in _ONLINE_PROVIDER_LABELS
     ]
+
+
+def _topup_payment_options(
+    db: Session,
+    default_provider: str,
+    *,
+    direct_transfer_enabled: bool | None = None,
+) -> list[dict[str, str]]:
+    """Return online provider options for customer payments.
+
+    Online gateways come from :func:`online_gateway_payment_options`; direct
+    bank transfer is appended when configured.
+
+    Pass ``direct_transfer_enabled`` when the caller has already resolved it to
+    avoid re-running the bank-transfer settings query.
+    """
+    options = online_gateway_payment_options(db, default_provider)
     if direct_transfer_enabled is None:
         direct_transfer_enabled = direct_bank_transfer_enabled(db)
     if direct_transfer_enabled:
@@ -392,8 +409,21 @@ def _finalize_topup_intent(
 
 def _retry_topup_restore(db: Session, account_id: uuid.UUID) -> None:
     try:
+        from app.services.billing.reconcile_unposted import (
+            settle_prepaid_draft_invoices_from_credit,
+        )
+
+        settled = settle_prepaid_draft_invoices_from_credit(db, str(account_id))
+        if settled.changed:
+            logger.info(
+                "Settled %d prepaid draft invoice(s) after top-up for account %s",
+                len(settled.invoices_settled),
+                account_id,
+            )
+            db.commit()
         restore_account_services(db, str(account_id))
     except Exception as exc:
+        db.rollback()
         logger.warning(
             "Best-effort service restore retry failed for account %s: %s",
             account_id,
@@ -649,6 +679,7 @@ def _init_flutterwave_checkout(
     redirect_url: str | None,
     metadata: dict,
     default_callback_path: str,
+    currency: str | None = None,
 ) -> str:
     """Start a Flutterwave hosted checkout and return its link.
 
@@ -677,6 +708,7 @@ def _init_flutterwave_checkout(
                 f"{callback_url}{separator}reference={reference}&provider=flutterwave"
             ),
             metadata=metadata,
+            currency=currency,
         )
     except ValueError:
         raise
@@ -898,6 +930,7 @@ def create_invoice_payment_intent(
             redirect_url=redirect_url,
             metadata=checkout_metadata,
             default_callback_path="/portal/billing/pay/verify",
+            currency=getattr(invoice, "currency", None),
         )
     return result
 
@@ -1765,6 +1798,18 @@ def verify_and_record_topup(
 
     # Attempt to restore suspended prepaid subscriptions
     try:
+        from app.services.billing.reconcile_unposted import (
+            settle_prepaid_draft_invoices_from_credit,
+        )
+
+        settled = settle_prepaid_draft_invoices_from_credit(db, str(intent.account_id))
+        if settled.changed:
+            logger.info(
+                "Settled %d prepaid draft invoice(s) after top-up for account %s",
+                len(settled.invoices_settled),
+                intent.account_id,
+            )
+            db.commit()
         restored = restore_account_services(db, str(intent.account_id))
         if restored:
             logger.info(
@@ -1773,6 +1818,7 @@ def verify_and_record_topup(
                 intent.account_id,
             )
     except Exception as exc:
+        db.rollback()
         logger.warning(
             "Failed to auto-restore after top-up for account %s: %s",
             intent.account_id,
