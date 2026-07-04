@@ -634,8 +634,10 @@ def sync(session: Session, client, now: datetime | None = None) -> dict:
     session.flush()
 
     result = dict(stats)
+    log_extra = {"event": "uisp_topology_sync_complete"}
+    log_extra.update({f"uisp_{key}": value for key, value in result.items()})
     logger.info(
         "uisp_topology_sync_complete",
-        extra={"event": "uisp_topology_sync_complete", **result},
+        extra=log_extra,
     )
     return result
