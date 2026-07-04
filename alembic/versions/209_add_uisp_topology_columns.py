@@ -6,8 +6,8 @@ CPE -> AP edge (``parent_network_device_id``) plus sync bookkeeping columns
 on cpe_devices, and the ``wireless_radio`` device type for wireless
 customer radios imported from UISP.
 
-Revision ID: 208_add_uisp_topology_columns
-Revises: 207_add_cutover_balance_variances
+Revision ID: 209_add_uisp_topology_columns
+Revises: 208_map_karu_customers_to_bts
 Create Date: 2026-07-04
 """
 
@@ -19,8 +19,8 @@ from sqlalchemy.dialects.postgresql import UUID
 
 from alembic import op
 
-revision = "208_add_uisp_topology_columns"
-down_revision = "207_add_cutover_balance_variances"
+revision = "209_add_uisp_topology_columns"
+down_revision = "208_map_karu_customers_to_bts"
 branch_labels = None
 depends_on = None
 
