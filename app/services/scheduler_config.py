@@ -903,6 +903,27 @@ def build_beat_schedule() -> dict:
             enabled=cutover_audit_enabled,
             interval_seconds=max(cutover_audit_interval_seconds, 3600),
         )
+        funded_inactive_audit_enabled = _effective_bool(
+            session,
+            SettingDomain.billing,
+            "funded_inactive_exposure_audit_enabled",
+            "BILLING_FUNDED_INACTIVE_EXPOSURE_AUDIT_ENABLED",
+            True,
+        )
+        funded_inactive_audit_interval_seconds = _effective_int(
+            session,
+            SettingDomain.billing,
+            "funded_inactive_exposure_audit_interval_seconds",
+            "BILLING_FUNDED_INACTIVE_EXPOSURE_AUDIT_INTERVAL_SECONDS",
+            2592000,
+        )
+        _sync_scheduled_task(
+            session,
+            name="funded_inactive_exposure_audit",
+            task_name="app.tasks.billing.audit_funded_inactive_exposure",
+            enabled=funded_inactive_audit_enabled,
+            interval_seconds=max(funded_inactive_audit_interval_seconds, 86400),
+        )
         # Autopay charging (idempotent; due-date gating lives in the service)
         autopay_enabled = _effective_bool(
             session,

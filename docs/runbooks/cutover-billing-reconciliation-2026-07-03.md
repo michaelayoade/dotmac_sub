@@ -106,3 +106,29 @@ Historical baseline log:
 
 The scheduled guard is `app.tasks.billing.audit_cutover_balance_invariant`,
 registered as `cutover_balance_invariant_audit` every 86,400 seconds.
+
+## Funded Inactive Exposure
+
+Positive balances on inactive accounts are a standing liability report, not a
+cutover drift variance. The scheduled read-only task
+`app.tasks.billing.audit_funded_inactive_exposure` reports inactive accounts
+(`blocked`, `disabled`, `suspended`) whose portal available balance is positive,
+using the same customer-facing balance formula:
+
+```text
+available = active null-invoice ledger credits
+          - active null-invoice ledger debits
+          - active open invoice balances
+```
+
+Policy:
+
+```text
+blocked   -> retention/win-back queue; customer may return with value intact
+disabled  -> refund/disposition review
+suspended -> account review; do not leave positive value buried under suspension
+```
+
+The task is registered as `funded_inactive_exposure_audit` every 2,592,000
+seconds by default. It logs disabled/suspended funded exposure at ERROR level
+and includes the largest accounts as samples for ops review.

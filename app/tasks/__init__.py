@@ -20,6 +20,7 @@ from app.tasks.bandwidth import (
 )
 from app.tasks.billing import (
     audit_cutover_balance_invariant_task,
+    audit_funded_inactive_exposure_task,
     check_billing_switch_task,
     run_invoice_cycle,
 )
@@ -203,6 +204,7 @@ __all__ = [
     "apply_due_subscription_changes",
     "run_dunning",
     "audit_cutover_balance_invariant_task",
+    "audit_funded_inactive_exposure_task",
     "check_billing_switch_task",
     "push_crm_subscriber_change",
     "redrive_crm_dead_letters",

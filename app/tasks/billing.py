@@ -274,6 +274,38 @@ def audit_cutover_balance_invariant_task() -> dict:
         session.close()
 
 
+@celery_app.task(name="app.tasks.billing.audit_funded_inactive_exposure")
+def audit_funded_inactive_exposure_task() -> dict:
+    """Read-only report for inactive accounts carrying positive balances."""
+    from app.services.funded_inactive_exposure import funded_inactive_exposure
+
+    session = SessionLocal()
+    try:
+        result = funded_inactive_exposure(session)
+        log_fn = (
+            logger.error
+            if result.get("disabled_count") or result.get("suspended_count")
+            else logger.info
+        )
+        log_fn(
+            "funded_inactive_exposure: ok=%s inactive_positive=%s/%s "
+            "disabled=%s/%s suspended=%s/%s blocked=%s/%s material=%s",
+            result.get("ok"),
+            result.get("inactive_positive_count"),
+            result.get("inactive_positive_total"),
+            result.get("disabled_count"),
+            result.get("disabled_total"),
+            result.get("suspended_count"),
+            result.get("suspended_total"),
+            result.get("blocked_count"),
+            result.get("blocked_total"),
+            result.get("material_count"),
+        )
+        return result
+    finally:
+        session.close()
+
+
 @celery_app.task(name="app.tasks.billing.run_billing_notifications")
 @idempotent_task(
     key_func=lambda: (
