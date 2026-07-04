@@ -524,6 +524,37 @@ def infrastructure_assets(
     return _envelope(crm_api.list_infrastructure_assets(db, q=q))
 
 
+@router.get("/ncc/subscribers", dependencies=[Depends(require_crm_bearer)])
+def ncc_subscriber_report(
+    as_of: str | None = None,
+    statuses: str | None = None,
+    reseller_id: str | None = None,
+    access_capacity_gbps: str | None = None,
+    unutilized_capacity_mbps: str | None = None,
+    points_of_presence: str | None = None,
+    data_usage_tb: str | None = None,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """The NCC quarterly Subscriber & Capacity aggregate, for the CRM's
+    regulatory-pack aggregator. Same parameters as the admin report (period-end
+    ``as_of``, comma-separated ``statuses``, optional ``reseller_id``, and the
+    manual capacity figures)."""
+    from app.services import ncc_subscriber_report as ncc
+
+    params = ncc.parse_report_params(
+        as_of=as_of,
+        statuses=statuses,
+        reseller_id=reseller_id,
+        capacity={
+            "access_capacity_gbps": access_capacity_gbps,
+            "unutilized_capacity_mbps": unutilized_capacity_mbps,
+            "points_of_presence": points_of_presence,
+            "data_usage_tb": data_usage_tb,
+        },
+    )
+    return _envelope(ncc.build_ncc_subscriber_report(db, params))
+
+
 @router.get("/outages/impact", dependencies=[Depends(require_crm_bearer)])
 def outage_impact(
     node_id: str | None = None,
