@@ -358,6 +358,63 @@ def test_chat_webhook_unknown_event_ignored(db_session):
     send.assert_not_called()
 
 
+def test_chat_webhook_reseller_wakes_portal_users(db_session):
+    # A reseller chat carries reseller_id (no subscriber_id); the receiver wakes
+    # every active reseller-portal user backed by a subscriber_id.
+    reseller = Reseller(name="Acme Reseller")
+    db_session.add(reseller)
+    db_session.flush()
+
+    def _sub(email):
+        s = Subscriber(first_name="R", last_name="U", display_name="R U", email=email)
+        db_session.add(s)
+        db_session.flush()
+        return s
+
+    sub_a, sub_b, sub_c = (
+        _sub("ra@example.com"),
+        _sub("rb@example.com"),
+        _sub("rc@example.com"),
+    )
+    s1, s2 = sub_a.id, sub_b.id
+    db_session.add_all(
+        [
+            ResellerUser(reseller_id=reseller.id, subscriber_id=s1, is_active=True),
+            ResellerUser(reseller_id=reseller.id, subscriber_id=s2, is_active=True),
+            # Excluded: inactive, and a subscriber-less (Layer-3) login.
+            ResellerUser(
+                reseller_id=reseller.id, subscriber_id=sub_c.id, is_active=False
+            ),
+            ResellerUser(reseller_id=reseller.id, subscriber_id=None, is_active=True),
+        ]
+    )
+    db_session.commit()
+
+    body = {
+        "reseller_id": str(reseller.id),
+        "conversation_id": "conv-r",
+        "preview": "Reseller reply",
+    }
+    raw = json.dumps(body).encode()
+    with _chat_settings(), patch("app.services.push.send_push") as send:
+        resp = _post_chat(db_session, body, sig=_sign(raw))
+    assert resp["status"] == "ok"
+    woken = {call.args[1] for call in send.call_args_list}
+    assert woken == {str(s1), str(s2)}
+
+
+def test_chat_webhook_reseller_no_devices_ignored(db_session):
+    reseller = Reseller(name="Empty Reseller")
+    db_session.add(reseller)
+    db_session.commit()
+    body = {"reseller_id": str(reseller.id), "conversation_id": "c", "preview": "x"}
+    raw = json.dumps(body).encode()
+    with _chat_settings(), patch("app.services.push.send_push") as send:
+        resp = _post_chat(db_session, body, sig=_sign(raw))
+    assert resp["status"] == "ignored"
+    send.assert_not_called()
+
+
 def test_chat_webhook_without_subscriber_is_acked_no_push(db_session):
     body = {"conversation_id": "conv-only"}  # reseller-originated / unmapped
     raw = json.dumps(body).encode()
