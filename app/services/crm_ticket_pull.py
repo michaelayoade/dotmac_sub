@@ -19,7 +19,7 @@ from app.services.crm_client import CRMClient, CRMClientError, get_crm_client
 from app.services.support import _coerce_uuid
 
 logger = logging.getLogger(__name__)
-_CUSTOMER_ID_PAIR_RE = re.compile(r"\((\d{6,12})\s*-\s*([\d\s\u200b]+)\)")
+_CUSTOMER_ID_PAIR_RE = re.compile(r"\(\s*(\d{6,12})\s*-\s*([\d\s\u200b]+)\s*\)")
 CrmTicketRecordCallback = Callable[
     [dict[str, Any], str, int, str | None, UUID | None], None
 ]
@@ -425,10 +425,22 @@ def sync_ticket(
     if crm_ticket.get("lead_id") and not crm_ticket.get("subscriber_id"):
         return "skipped_lead", 0, None
 
+    existing = _find_existing_ticket(db, crm_ticket)
+    previous_status = existing.status if existing else None
+    if existing:
+        incoming_updated = str(crm_ticket.get("updated_at") or "")
+        stored_updated = str((existing.metadata_ or {}).get("crm_updated_at") or "")
+        incoming_dt = _parse_datetime(incoming_updated)
+        stored_dt = _parse_datetime(stored_updated)
+        if incoming_dt and stored_dt and incoming_dt < stored_dt:
+            return "unchanged", 0, existing
+
     crm_subscriber_id = str(crm_ticket.get("subscriber_id") or "").strip() or None
     subscriber_id: UUID | None = None
     resolved_via_legacy_chain = False
-    if crm_subscriber_id and local_by_crm_id is not None:
+    if existing and existing.subscriber_id:
+        subscriber_id = existing.subscriber_id
+    if not subscriber_id and crm_subscriber_id and local_by_crm_id is not None:
         subscriber_id = local_by_crm_id.get(crm_subscriber_id)
     if not subscriber_id and crm_subscriber_id:
         subscriber_id = (
@@ -452,8 +464,6 @@ def sync_ticket(
             db, subscriber_id, crm_subscriber_id, local_by_crm_id
         )
 
-    existing = _find_existing_ticket(db, crm_ticket)
-    previous_status = existing.status if existing else None
     if existing:
         # Unchanged in the CRM since we last synced it → skip the rewrite.
         # CRM comment creation does not bump the ticket's updated_at, so the

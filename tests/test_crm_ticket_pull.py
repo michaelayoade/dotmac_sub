@@ -215,6 +215,37 @@ def test_pull_crm_ticket_maps_single_customer_id_pair_from_title(
     assert ticket.subscriber_id == subscriber.id
 
 
+def test_pull_crm_ticket_maps_spaced_customer_id_pair_from_title(
+    db_session, subscriber
+):
+    subscriber.splynx_customer_id = 10019
+    db_session.commit()
+    crm_ticket_id = str(uuid4())
+    client = FakeCrmClient(
+        tickets=[
+            {
+                "id": crm_ticket_id,
+                "subscriber_id": str(uuid4()),
+                "number": "21915",
+                "title": "Ben Onwionoko ( 100010019 - 10019 ) - Customer Link Disconnection",
+                "status": "open",
+                "priority": "normal",
+                "channel": "phone",
+                "is_active": True,
+            }
+        ],
+        subscribers={},
+        comments={},
+    )
+
+    result = pull_tickets(db_session, client=client)
+    db_session.commit()
+
+    assert result.created == 1
+    ticket = db_session.query(Ticket).filter(Ticket.number == "21915").one()
+    assert ticket.subscriber_id == subscriber.id
+
+
 def test_pull_crm_ticket_skips_ambiguous_customer_id_pairs(db_session, subscriber):
     subscriber.splynx_customer_id = 8270
     other_subscriber = Subscriber(
@@ -372,6 +403,46 @@ def test_pull_crm_ticket_maps_via_alias_crm_id(db_session, subscriber):
     assert result.created == 1
     ticket = db_session.query(Ticket).filter(Ticket.number == "30004").one()
     assert ticket.subscriber_id == subscriber.id
+
+
+def test_pull_crm_ticket_does_not_overwrite_newer_local_crm_state(
+    db_session, subscriber
+):
+    subscriber.splynx_customer_id = 24296
+    db_session.commit()
+    crm_ticket_id = str(uuid4())
+    ticket = Ticket(
+        subscriber_id=subscriber.id,
+        customer_account_id=subscriber.id,
+        number="30005",
+        title="Webhook title",
+        metadata_={
+            "sync_source": "crm",
+            "crm_ticket_id": crm_ticket_id,
+            "crm_updated_at": "2026-07-04T12:00:00Z",
+        },
+    )
+    db_session.add(ticket)
+    db_session.commit()
+    client = FakeCrmClient(
+        tickets=[
+            _crm_ticket(
+                crm_ticket_id,
+                "30005",
+                "2026-07-04T11:00:00Z",
+                title="Older poll title",
+            )
+        ],
+        subscribers={},
+        comments={crm_ticket_id: []},
+    )
+
+    result = pull_tickets(db_session, client=client)
+    db_session.commit()
+    db_session.refresh(ticket)
+
+    assert result.unchanged == 1
+    assert ticket.title == "Webhook title"
 
 
 from datetime import UTC, datetime

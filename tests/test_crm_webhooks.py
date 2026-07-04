@@ -8,7 +8,7 @@ import hmac
 import json
 import threading
 from contextlib import contextmanager
-from unittest.mock import patch
+from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
 
@@ -16,7 +16,9 @@ from app.api.crm_webhooks import receive_crm_customer, receive_crm_event, router
 from app.config import settings
 from app.db import get_db
 from app.models.audit import AuditEvent
+from app.models.crm_webhook_delivery import CrmWebhookDelivery
 from app.models.subscriber import Subscriber
+from app.models.support import Ticket, TicketComment
 
 SECRET = "test-webhook-secret"
 
@@ -79,13 +81,21 @@ def _run(coro):
     return box["result"]
 
 
-def _post(body: dict, event: str, signature: str | None):
+def _post(
+    db_session,
+    body: dict,
+    event: str,
+    signature: str | None,
+    *,
+    delivery_id: str | None = None,
+):
     raw = json.dumps(body).encode()
     headers = {"X-Webhook-Event": event, "Content-Type": "application/json"}
+    headers["X-Webhook-Delivery-Id"] = delivery_id or str(uuid4())
     if signature is not None:
         headers["X-Webhook-Signature-256"] = signature
     try:
-        payload = _run(receive_crm_event(_FakeRequest(raw, headers)))
+        payload = _run(receive_crm_event(_FakeRequest(raw, headers), db_session))
     except HTTPException as exc:
         return _RouteResponse(exc.status_code, {"detail": exc.detail})
     return _RouteResponse(200, payload)
@@ -124,69 +134,308 @@ def _http_app(db_session) -> FastAPI:
     return app
 
 
-def test_valid_ticket_created_enqueues_sync():
-    body = {"ticket_id": "abc-123"}
+def _ticket_event_body(
+    crm_ticket_id: str,
+    *,
+    event_type: str = "ticket.created",
+    subscriber_id: str,
+    number: str = "T-100",
+    status: str = "open",
+    updated_at: str = "2026-07-04T10:00:00Z",
+) -> dict:
+    return {
+        "event_id": str(uuid4()),
+        "event_type": event_type,
+        "occurred_at": updated_at,
+        "context": {"subscriber_id": subscriber_id, "ticket_id": crm_ticket_id},
+        "payload": {
+            "id": crm_ticket_id,
+            "number": number,
+            "title": "Router offline",
+            "description": "Customer cannot browse",
+            "status": status,
+            "priority": "normal",
+            "channel": "web",
+            "updated_at": updated_at,
+            "created_at": "2026-07-04T09:00:00Z",
+        },
+    }
+
+
+def test_valid_ticket_created_creates_local_ticket(db_session, subscriber):
+    crm_ticket_id = str(uuid4())
+    crm_subscriber_id = uuid4()
+    subscriber.crm_subscriber_id = crm_subscriber_id
+    db_session.commit()
+    body = _ticket_event_body(
+        crm_ticket_id,
+        subscriber_id=str(crm_subscriber_id),
+        number="WH-1",
+    )
     raw = json.dumps(body).encode()
-    with (
-        _with_secret(SECRET),
-        patch("app.services.queue_adapter.enqueue_task") as enqueue,
-    ):
-        resp = _post(body, "ticket.created", _sign(raw))
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "queued"
-    enqueue.assert_called_once()
-    assert enqueue.call_args.kwargs["args"] == ["abc-123"]
-
-
-def test_bad_signature_rejected():
-    body = {"ticket_id": "abc-123"}
-    with (
-        _with_secret(SECRET),
-        patch("app.services.queue_adapter.enqueue_task") as enqueue,
-    ):
-        resp = _post(body, "ticket.created", "sha256=deadbeef")
-    assert resp.status_code == 401
-    enqueue.assert_not_called()
-
-
-def test_missing_signature_rejected():
     with _with_secret(SECRET):
-        resp = _post({"ticket_id": "x"}, "ticket.created", None)
+        resp = _post(db_session, body, "ticket.created", _sign(raw))
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "processed"
+    assert resp.json()["result"] == "created"
+    ticket = db_session.query(Ticket).filter(Ticket.number == "WH-1").one()
+    assert ticket.subscriber_id == subscriber.id
+    assert ticket.metadata_["crm_ticket_id"] == crm_ticket_id
+
+
+def test_bad_signature_rejected(db_session):
+    body = {"event_type": "ticket.created", "payload": {"id": "abc-123"}}
+    with _with_secret(SECRET):
+        resp = _post(db_session, body, "ticket.created", "sha256=deadbeef")
     assert resp.status_code == 401
 
 
-def test_unconfigured_secret_fails_closed():
+def test_missing_signature_rejected(db_session):
+    with _with_secret(SECRET):
+        resp = _post(db_session, {"ticket_id": "x"}, "ticket.created", None)
+    assert resp.status_code == 401
+
+
+def test_unconfigured_secret_fails_closed(db_session):
     body = {"ticket_id": "x"}
     raw = json.dumps(body).encode()
     with _with_secret(""):
-        resp = _post(body, "ticket.created", _sign(raw))
+        resp = _post(db_session, body, "ticket.created", _sign(raw))
     assert resp.status_code == 503
 
 
-def test_unknown_event_acknowledged_without_enqueue():
+def test_unknown_event_acknowledged_without_processing(db_session):
     body = {"ticket_id": "x"}
     raw = json.dumps(body).encode()
-    with (
-        _with_secret(SECRET),
-        patch("app.services.queue_adapter.enqueue_task") as enqueue,
-    ):
-        resp = _post(body, "invoice.paid", _sign(raw))
+    with _with_secret(SECRET):
+        resp = _post(db_session, body, "invoice.paid", _sign(raw))
     assert resp.status_code == 200
     assert resp.json()["status"] == "ignored"
-    enqueue.assert_not_called()
+    assert db_session.query(CrmWebhookDelivery).count() == 0
 
 
-def test_missing_ticket_id_ignored():
-    body = {"title": "no id"}
+def test_missing_ticket_id_ignored(db_session):
+    body = {"event_type": "ticket.created", "payload": {"title": "no id"}}
     raw = json.dumps(body).encode()
-    with (
-        _with_secret(SECRET),
-        patch("app.services.queue_adapter.enqueue_task") as enqueue,
-    ):
-        resp = _post(body, "ticket.created", _sign(raw))
+    with _with_secret(SECRET):
+        resp = _post(db_session, body, "ticket.created", _sign(raw))
     assert resp.status_code == 200
-    assert resp.json()["status"] == "ignored"
-    enqueue.assert_not_called()
+    assert resp.json()["status"] == "processed"
+    assert resp.json()["result"] == "ignored_missing_ticket_id"
+
+
+def test_duplicate_delivery_id_ignored(db_session, subscriber):
+    crm_ticket_id = str(uuid4())
+    crm_subscriber_id = uuid4()
+    subscriber.crm_subscriber_id = crm_subscriber_id
+    db_session.commit()
+    body = _ticket_event_body(
+        crm_ticket_id,
+        subscriber_id=str(crm_subscriber_id),
+        number="WH-DUPE",
+    )
+    raw = json.dumps(body).encode()
+    delivery_id = str(uuid4())
+
+    with _with_secret(SECRET):
+        first = _post(
+            db_session,
+            body,
+            "ticket.created",
+            _sign(raw),
+            delivery_id=delivery_id,
+        )
+        second = _post(
+            db_session,
+            body,
+            "ticket.created",
+            _sign(raw),
+            delivery_id=delivery_id,
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["status"] == "duplicate"
+    assert db_session.query(Ticket).filter(Ticket.number == "WH-DUPE").count() == 1
+    assert db_session.query(CrmWebhookDelivery).count() == 1
+
+
+def test_ticket_updated_updates_local_ticket(db_session, subscriber):
+    crm_ticket_id = str(uuid4())
+    crm_subscriber_id = uuid4()
+    subscriber.crm_subscriber_id = crm_subscriber_id
+    ticket = Ticket(
+        subscriber_id=subscriber.id,
+        customer_account_id=subscriber.id,
+        number="WH-UPD",
+        title="Old title",
+        metadata_={
+            "sync_source": "crm",
+            "crm_ticket_id": crm_ticket_id,
+            "crm_updated_at": "2026-07-04T09:00:00Z",
+        },
+    )
+    db_session.add(ticket)
+    db_session.commit()
+    body = _ticket_event_body(
+        crm_ticket_id,
+        event_type="ticket.updated",
+        subscriber_id=str(crm_subscriber_id),
+        number="WH-UPD",
+        updated_at="2026-07-04T10:30:00Z",
+    )
+    body["payload"]["title"] = "New title"
+    raw = json.dumps(body).encode()
+
+    with _with_secret(SECRET):
+        resp = _post(db_session, body, "ticket.updated", _sign(raw))
+
+    assert resp.status_code == 200
+    assert resp.json()["result"] == "updated"
+    db_session.refresh(ticket)
+    assert ticket.title == "New title"
+    assert ticket.metadata_["crm_updated_at"] == "2026-07-04T10:30:00Z"
+
+
+def test_payload_subscriber_id_can_be_selfcare_external_id(db_session, subscriber):
+    crm_ticket_id = str(uuid4())
+    crm_subscriber_id = str(uuid4())
+    body = _ticket_event_body(
+        crm_ticket_id,
+        subscriber_id=crm_subscriber_id,
+        number="WH-SELFCARE",
+    )
+    body["payload"]["subscriber_id"] = str(subscriber.id)
+    raw = json.dumps(body).encode()
+
+    with _with_secret(SECRET):
+        resp = _post(db_session, body, "ticket.created", _sign(raw))
+
+    assert resp.status_code == 200
+    assert resp.json()["result"] == "created"
+    ticket = db_session.query(Ticket).filter(Ticket.number == "WH-SELFCARE").one()
+    assert ticket.subscriber_id == subscriber.id
+
+
+def test_ticket_resolved_sets_resolved_status(db_session, subscriber):
+    crm_ticket_id = str(uuid4())
+    crm_subscriber_id = uuid4()
+    subscriber.crm_subscriber_id = crm_subscriber_id
+    db_session.commit()
+    body = _ticket_event_body(
+        crm_ticket_id,
+        event_type="ticket.resolved",
+        subscriber_id=str(crm_subscriber_id),
+        number="WH-RES",
+        status="resolved",
+    )
+    raw = json.dumps(body).encode()
+
+    with _with_secret(SECRET):
+        resp = _post(db_session, body, "ticket.resolved", _sign(raw))
+
+    assert resp.status_code == 200
+    ticket = db_session.query(Ticket).filter(Ticket.number == "WH-RES").one()
+    assert ticket.status == "resolved"
+
+
+def test_ticket_escalated_sets_high_priority_when_missing(db_session, subscriber):
+    crm_ticket_id = str(uuid4())
+    crm_subscriber_id = uuid4()
+    subscriber.crm_subscriber_id = crm_subscriber_id
+    db_session.commit()
+    body = _ticket_event_body(
+        crm_ticket_id,
+        event_type="ticket.escalated",
+        subscriber_id=str(crm_subscriber_id),
+        number="WH-ESC",
+    )
+    body["payload"].pop("priority")
+    raw = json.dumps(body).encode()
+
+    with _with_secret(SECRET):
+        resp = _post(db_session, body, "ticket.escalated", _sign(raw))
+
+    assert resp.status_code == 200
+    ticket = db_session.query(Ticket).filter(Ticket.number == "WH-ESC").one()
+    assert ticket.priority == "high"
+
+
+def test_ticket_comment_created_adds_comment(db_session, subscriber):
+    crm_ticket_id = str(uuid4())
+    crm_comment_id = str(uuid4())
+    ticket = Ticket(
+        subscriber_id=subscriber.id,
+        customer_account_id=subscriber.id,
+        number="WH-COM",
+        title="Needs help",
+        metadata_={
+            "sync_source": "crm",
+            "crm_ticket_id": crm_ticket_id,
+            "crm_updated_at": "2026-07-04T09:00:00Z",
+        },
+    )
+    db_session.add(ticket)
+    db_session.commit()
+    body = {
+        "event_id": str(uuid4()),
+        "event_type": "ticket.comment_created",
+        "occurred_at": "2026-07-04T11:00:00Z",
+        "context": {"ticket_id": crm_ticket_id},
+        "payload": {
+            "id": crm_comment_id,
+            "ticket_id": crm_ticket_id,
+            "body": "Agent replied",
+            "is_internal": False,
+            "created_at": "2026-07-04T11:00:00Z",
+        },
+    }
+    raw = json.dumps(body).encode()
+
+    with _with_secret(SECRET):
+        resp = _post(db_session, body, "ticket.comment_created", _sign(raw))
+
+    assert resp.status_code == 200
+    assert resp.json()["result"] == "comment_created"
+    comment = db_session.query(TicketComment).filter_by(ticket_id=ticket.id).one()
+    assert comment.body == "Agent replied"
+    assert comment.metadata_["crm_comment_id"] == crm_comment_id
+
+
+def test_older_webhook_does_not_overwrite_newer_poll_state(db_session, subscriber):
+    crm_ticket_id = str(uuid4())
+    crm_subscriber_id = uuid4()
+    subscriber.crm_subscriber_id = crm_subscriber_id
+    ticket = Ticket(
+        subscriber_id=subscriber.id,
+        customer_account_id=subscriber.id,
+        number="WH-STALE",
+        title="Current title",
+        metadata_={
+            "sync_source": "crm",
+            "crm_ticket_id": crm_ticket_id,
+            "crm_updated_at": "2026-07-04T12:00:00Z",
+        },
+    )
+    db_session.add(ticket)
+    db_session.commit()
+    body = _ticket_event_body(
+        crm_ticket_id,
+        event_type="ticket.updated",
+        subscriber_id=str(crm_subscriber_id),
+        number="WH-STALE",
+        updated_at="2026-07-04T11:00:00Z",
+    )
+    body["payload"]["title"] = "Stale title"
+    raw = json.dumps(body).encode()
+
+    with _with_secret(SECRET):
+        resp = _post(db_session, body, "ticket.updated", _sign(raw))
+
+    assert resp.status_code == 200
+    assert resp.json()["result"] == "stale_ignored"
+    db_session.refresh(ticket)
+    assert ticket.title == "Current title"
 
 
 def test_customer_accepted_creates_subscriber_and_returns_readable_id(db_session):
