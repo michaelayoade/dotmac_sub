@@ -52,6 +52,9 @@ OPENING_MEMO = "Prepaid opening balance @ cutover"
 PHANTOM_REVERSAL_PREFIX = (
     "Reversal of phantom prepaid opening balance cutover debit [id="
 )
+PARTIAL_CONSTRUCTION_MEMO_PREFIX = (
+    "Partial cutover opening balance construction adjustment"
+)
 TOLERANCE = Decimal("0.01")
 CUTOVER_AT = datetime(2026, 6, 16, tzinfo=UTC)
 DEFAULT_OUTPUT = "scratchpad/phantom_opening_reversal_counterfactual.csv"
@@ -637,6 +640,34 @@ def _write_csv(path: Path, reviews: list[Review]) -> None:
             )
 
 
+def _partial_adjustment_memo(review: Review) -> str:
+    original_ids = ",".join(
+        sorted(value.strip() for value in review.original_ids.split(","))
+    )
+    return (
+        f"{PARTIAL_CONSTRUCTION_MEMO_PREFIX} "
+        f"[original_ids={original_ids}] [target={review.target_available}]"
+    )
+
+
+def _existing_partial_adjustment(
+    session: Session, account_id: uuid.UUID, amount: Decimal, memo: str
+) -> LedgerEntry | None:
+    return session.execute(
+        select(LedgerEntry).where(
+            LedgerEntry.account_id == account_id,
+            LedgerEntry.entry_type == LedgerEntryType.debit,
+            LedgerEntry.source == LedgerSource.adjustment,
+            LedgerEntry.amount == amount,
+            LedgerEntry.memo == memo,
+            LedgerEntry.invoice_id.is_(None),
+            LedgerEntry.payment_id.is_(None),
+            LedgerEntry.currency == "NGN",
+            LedgerEntry.is_active.is_(True),
+        )
+    ).scalar_one_or_none()
+
+
 def _restore_eligible(
     session: Session,
     pairs: list[Pair],
@@ -706,6 +737,97 @@ def _restore_eligible(
     return 0
 
 
+def _partial_adjust_eligible(
+    session: Session,
+    reviews: list[Review],
+    apply: bool,
+    print_limit: int,
+) -> int:
+    eligible_reviews = [
+        review
+        for review in reviews
+        if review.cause_bucket == "partial_restore_only_full_pair_would_overcorrect"
+        and review.status == "manual_review"
+        and review.restore_needed > 0
+        and review.inactive_original_amount > review.restore_needed
+        and review.invalid_pairs == 0
+        and _eq(review.active_original_amount, Decimal("0"))
+        and _eq(review.active_reversal_amount, Decimal("0"))
+    ]
+    total = _money(
+        sum((review.restore_needed for review in eligible_reviews), Decimal("0"))
+    )
+    print(
+        f"{'APPLY' if apply else 'DRY-RUN'}: create "
+        f"{len(eligible_reviews)} partial construction debit adjustments "
+        f"totaling {total}"
+    )
+    printed = 0
+    suppressed = 0
+    existing = 0
+    to_create: list[tuple[Review, LedgerEntry]] = []
+    for review in eligible_reviews:
+        memo = _partial_adjustment_memo(review)
+        expected_after = _money(review.current_available - review.restore_needed)
+        duplicate = _existing_partial_adjustment(
+            session, review.account_id, review.restore_needed, memo
+        )
+        if duplicate is not None:
+            existing += 1
+        else:
+            to_create.append(
+                (
+                    review,
+                    LedgerEntry(
+                        account_id=review.account_id,
+                        invoice_id=None,
+                        payment_id=None,
+                        entry_type=LedgerEntryType.debit,
+                        source=LedgerSource.adjustment,
+                        amount=review.restore_needed,
+                        currency="NGN",
+                        memo=memo,
+                    ),
+                )
+            )
+        if printed < print_limit:
+            suffix = " (already posted)" if duplicate is not None else ""
+            print(
+                f"  {review.subscriber_name}: {review.current_available} -> "
+                f"{expected_after} (target {review.target_available}; "
+                f"debit {review.restore_needed}){suffix}"
+            )
+            printed += 1
+        else:
+            suppressed += 1
+    if suppressed:
+        print(f"  ... {suppressed} additional eligible accounts omitted from output")
+    if existing:
+        print(f"skipping {existing} already-posted partial adjustments")
+    if not apply:
+        return 0
+
+    for _, entry in to_create:
+        session.add(entry)
+    session.flush()
+
+    failures = []
+    account_ids = [review.account_id for review in eligible_reviews]
+    actual_by_account = _current_available_map(session, account_ids)
+    for review in eligible_reviews:
+        actual = actual_by_account.get(review.account_id, Decimal("0"))
+        if not _eq(actual, review.target_available):
+            failures.append((review.subscriber_name, actual, review.target_available))
+    if failures:
+        session.rollback()
+        for name, actual, target in failures:
+            print(f"VERIFY FAILED: {name}: available {actual}, expected {target}")
+        return 1
+    session.commit()
+    print(f"created {len(to_create)} partial construction debit adjustments")
+    return 0
+
+
 def _print_summary(reviews: list[Review]) -> None:
     counts: dict[str, int] = {}
     restore_totals: dict[str, Decimal] = {}
@@ -748,6 +870,14 @@ def main() -> int:
         help="reactivate exact-match inactive construction debits",
     )
     parser.add_argument(
+        "--partial-adjust-eligible",
+        action="store_true",
+        help=(
+            "create gap-sized debit adjustments for partial restores where "
+            "reactivating the full inactive pair would overcorrect"
+        ),
+    )
+    parser.add_argument(
         "--include-events",
         action="store_true",
         help="include per-account dunning/status/event counts; slower",
@@ -775,8 +905,15 @@ def main() -> int:
             return _restore_eligible(
                 session, pairs, reviews, args.apply, max(args.print_limit, 0)
             )
+        if args.partial_adjust_eligible:
+            return _partial_adjust_eligible(
+                session, reviews, args.apply, max(args.print_limit, 0)
+            )
         if args.apply:
-            print("No apply action requested. Use --restore-eligible --apply.")
+            print(
+                "No apply action requested. Use --restore-eligible --apply "
+                "or --partial-adjust-eligible --apply."
+            )
         return 0
     finally:
         session.close()

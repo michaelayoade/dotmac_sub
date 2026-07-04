@@ -14,6 +14,9 @@ from sqlalchemy.orm import Session
 from app.services.common import round_money
 
 OPENING_MEMO = "Prepaid opening balance @ cutover"
+PARTIAL_CONSTRUCTION_MEMO_PREFIX = (
+    "Partial cutover opening balance construction adjustment"
+)
 CUTOVER_ACTIVITY_AT = datetime(2026, 6, 16, 9, 8, tzinfo=UTC)
 PAYMENT_ACTIVITY_AT = datetime(2026, 6, 16, tzinfo=UTC)
 TOLERANCE = Decimal("0.01")
@@ -171,6 +174,7 @@ def _rows(db: Session):
                   AND le.memo NOT LIKE 'Reversal of phantom%'
                   AND le.memo NOT LIKE 'Reversal of prepaid opening%'
                   AND le.memo NOT LIKE 'Correction:%'
+                  AND le.memo NOT LIKE :partial_construction_memo_prefix
                   AND le.created_at >= :activity_at
                 GROUP BY le.account_id
             )
@@ -211,6 +215,9 @@ def _rows(db: Session):
         ),
         {
             "opening_memo": OPENING_MEMO,
+            "partial_construction_memo_prefix": (
+                f"{PARTIAL_CONSTRUCTION_MEMO_PREFIX}%"
+            ),
             "activity_at": CUTOVER_ACTIVITY_AT,
             "payment_at": PAYMENT_ACTIVITY_AT,
         },
