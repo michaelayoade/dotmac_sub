@@ -246,11 +246,14 @@ def audit_cutover_balance_invariant_task() -> dict:
             )
         else:
             logger.error(
-                "cutover_balance_invariant_drift: population=%s drift=%s "
+                "cutover_balance_invariant_drift: population=%s raw_drift=%s "
+                "unregistered_drift=%s "
                 "overcredited=%s/%s understated=%s/%s inactive_seed_drift=%s "
                 "post_adjustment_drift=%s post_adjustments=%s/%s "
-                "excluded_adjustments=%s/%s",
+                "excluded_adjustments=%s/%s registered_variance=%s/%s "
+                "stale_registered_variance=%s",
                 result.get("population"),
+                result.get("raw_drift_count"),
                 result.get("drift_count"),
                 result.get("overcredited_count"),
                 result.get("overcredited_total"),
@@ -262,6 +265,9 @@ def audit_cutover_balance_invariant_task() -> dict:
                 result.get("post_adjustment_net"),
                 result.get("excluded_adjustment_entry_count"),
                 result.get("excluded_adjustment_net"),
+                result.get("registered_variance_count"),
+                result.get("registered_variance_total"),
+                result.get("stale_registered_variance_count"),
             )
         return result
     finally:

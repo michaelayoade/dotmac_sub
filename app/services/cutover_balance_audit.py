@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import text
@@ -15,6 +17,9 @@ OPENING_MEMO = "Prepaid opening balance @ cutover"
 CUTOVER_ACTIVITY_AT = datetime(2026, 6, 16, 9, 8, tzinfo=UTC)
 PAYMENT_ACTIVITY_AT = datetime(2026, 6, 16, tzinfo=UTC)
 TOLERANCE = Decimal("0.01")
+VARIANCE_REGISTRY_PATH = Path(__file__).with_name(
+    "cutover_balance_variance_registry.json"
+)
 
 
 def _money(value: object) -> Decimal:
@@ -25,6 +30,40 @@ def _direction(drift: Decimal) -> str:
     if abs(drift) <= TOLERANCE:
         return "balanced"
     return "overcredited" if drift > 0 else "understated"
+
+
+def _load_registered_variances(path: Path | None = None) -> dict[str, Decimal]:
+    registry_path = path or VARIANCE_REGISTRY_PATH
+    if not registry_path.exists():
+        return {}
+    data = json.loads(registry_path.read_text())
+    entries = data.get("entries", [])
+    if not isinstance(entries, list):
+        raise ValueError("cutover variance registry entries must be a list")
+
+    variances: dict[str, Decimal] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError("cutover variance registry entries must be objects")
+        if entry.get("status") != "accepted":
+            continue
+        account_id = str(entry.get("account_id") or "")
+        expected_drift = entry.get("expected_drift")
+        reason = str(entry.get("reason") or "")
+        recorded_at = str(entry.get("recorded_at") or "")
+        if not account_id or expected_drift is None or not reason or not recorded_at:
+            raise ValueError(
+                "accepted cutover variance requires account_id, expected_drift, "
+                "reason, and recorded_at"
+            )
+        if account_id in variances:
+            raise ValueError(f"duplicate accepted cutover variance for {account_id}")
+        variances[account_id] = _money(expected_drift)
+    return variances
+
+
+def _unregistered_drift(raw_drift: Decimal, registered_drift: Decimal) -> Decimal:
+    return _money(raw_drift - registered_drift)
 
 
 def _rows(db: Session):
@@ -179,10 +218,15 @@ def _rows(db: Session):
 
 
 def audit_cutover_balance_invariant(
-    db: Session, *, sample_limit: int = 25
+    db: Session, *, sample_limit: int = 25, variance_registry_path: Path | None = None
 ) -> dict[str, Any]:
+    registered_variances = _load_registered_variances(variance_registry_path)
+    seen_registered_accounts: set[str] = set()
     population = 0
     drift_rows: list[dict[str, Any]] = []
+    raw_drift_count = 0
+    registered_variance_count = 0
+    registered_variance_total = Decimal("0")
     overcredited_total = Decimal("0")
     understated_total = Decimal("0")
     post_adjustment_entry_count = 0
@@ -207,7 +251,17 @@ def audit_cutover_balance_invariant(
 
         current = _money(row["current_available"])
         target = _money(row["target_available"])
-        drift = _money(current - target)
+        raw_drift = _money(current - target)
+        account_id = str(row["account_id"])
+        registered_drift = registered_variances.get(account_id, Decimal("0"))
+        if account_id in registered_variances:
+            seen_registered_accounts.add(account_id)
+        drift = _unregistered_drift(raw_drift, registered_drift)
+        if abs(raw_drift) > TOLERANCE:
+            raw_drift_count += 1
+        if abs(registered_drift) > TOLERANCE:
+            registered_variance_count += 1
+            registered_variance_total += abs(registered_drift)
         if abs(drift) <= TOLERANCE:
             continue
         if drift > 0:
@@ -220,11 +274,13 @@ def audit_cutover_balance_invariant(
             post_adjustment_drift_count += 1
         drift_rows.append(
             {
-                "account_id": str(row["account_id"]),
+                "account_id": account_id,
                 "subscriber_name": str(row["subscriber_name"] or ""),
                 "subscriber_status": str(row["subscriber_status"] or ""),
                 "current_available": str(current),
                 "target_available": str(target),
+                "raw_drift": str(raw_drift),
+                "registered_variance": str(registered_drift),
                 "drift": str(drift),
                 "direction": _direction(drift),
             }
@@ -233,14 +289,22 @@ def audit_cutover_balance_invariant(
     drift_rows.sort(key=lambda item: abs(Decimal(item["drift"])), reverse=True)
     overcredited = [row for row in drift_rows if Decimal(row["drift"]) > 0]
     understated = [row for row in drift_rows if Decimal(row["drift"]) < 0]
+    stale_registered_variances = sorted(
+        set(registered_variances) - seen_registered_accounts
+    )
     return {
-        "ok": not drift_rows,
+        "ok": not drift_rows and not stale_registered_variances,
         "population": population,
+        "raw_drift_count": raw_drift_count,
         "drift_count": len(drift_rows),
         "overcredited_count": len(overcredited),
         "overcredited_total": str(round_money(overcredited_total)),
         "understated_count": len(understated),
         "understated_total": str(round_money(understated_total)),
+        "registered_variance_count": registered_variance_count,
+        "registered_variance_total": str(round_money(registered_variance_total)),
+        "stale_registered_variance_count": len(stale_registered_variances),
+        "stale_registered_variance_accounts": stale_registered_variances[:sample_limit],
         "inactive_seed_drift_count": inactive_seed_drift_count,
         "post_adjustment_drift_count": post_adjustment_drift_count,
         "post_adjustment_entry_count": post_adjustment_entry_count,
