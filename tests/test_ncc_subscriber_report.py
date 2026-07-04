@@ -180,3 +180,37 @@ def test_point_in_time_and_status_params(db_session):
     )
     assert widened["total_active_subscriptions"] == 2  # + the suspended one
     assert set(widened["parameters"]["active_statuses"]) == {"active", "suspended"}
+
+
+def test_parse_report_params():
+    p = ncc.parse_report_params(
+        as_of="2026-03-31",
+        statuses="active,suspended,bogus",
+        reseller_id="not-a-uuid",
+        capacity={
+            "points_of_presence": "28",
+            "data_usage_tb": "",
+            "access_capacity_gbps": None,
+        },
+    )
+    assert p.as_of is not None and p.as_of.year == 2026 and p.as_of.hour == 23
+    assert p.active_statuses == (
+        SubscriptionStatus.active,
+        SubscriptionStatus.suspended,
+    )
+    assert p.reseller_id is None
+    assert p.capacity == {"points_of_presence": "28"}  # blanks/None dropped
+
+    # empty statuses -> default active; blank as_of -> None (now)
+    d = ncc.parse_report_params(as_of="", statuses="")
+    assert d.active_statuses == (SubscriptionStatus.active,)
+    assert d.as_of is None
+
+
+def test_build_csv_layout(db_session):
+    report = ncc.build_ncc_subscriber_report(db_session)  # empty report
+    csv_text = ncc.build_ncc_subscriber_csv(report)
+    assert "Total Active Internet Subscriptions,0" in csv_text
+    assert "Corporate — Wired,0" in csv_text
+    assert "Data Usage (TB) [manual]," in csv_text
+    assert "Active Subscriptions per State" in csv_text

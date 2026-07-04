@@ -1,11 +1,13 @@
 """Admin reporting web routes."""
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models.catalog import SubscriptionStatus
+from app.services import ncc_subscriber_report as ncc_report_service
 from app.services import web_reports as web_reports_service
 from app.services import web_reports_extended as web_reports_ext_service
 from app.services.audit_helpers import recent_activity_for_paths
@@ -121,6 +123,19 @@ REPORT_HUB_SECTIONS: list[dict] = [
                 "name": "Bandwidth & Usage",
                 "url": "/admin/reports/bandwidth",
                 "description": "Network usage analytics and top consumers",
+            },
+        ],
+    },
+    {
+        "id": "regulatory",
+        "name": "Regulatory",
+        "description": "Returns for the NCC and other regulators.",
+        "color": "amber",
+        "links": [
+            {
+                "name": "NCC Subscriber Data (Quarterly)",
+                "url": "/admin/reports/ncc-subscribers",
+                "description": "Active subscriptions by type, connection, speed, State & region",
             },
         ],
     },
@@ -625,5 +640,112 @@ def reports_bandwidth_export(
         media_type="text/csv",
         headers={
             "Content-Disposition": "attachment; filename=bandwidth-usage-report.csv"
+        },
+    )
+
+
+# ── NCC quarterly Subscriber & Capacity return ──────────────────────────────
+def _ncc_params(
+    as_of: str | None,
+    statuses: list[str],
+    reseller_id: str | None,
+    access_capacity_gbps: str | None,
+    unutilized_capacity_mbps: str | None,
+    points_of_presence: str | None,
+    data_usage_tb: str | None,
+):
+    return ncc_report_service.parse_report_params(
+        as_of=as_of,
+        statuses=",".join(statuses),
+        reseller_id=reseller_id,
+        capacity={
+            "access_capacity_gbps": access_capacity_gbps,
+            "unutilized_capacity_mbps": unutilized_capacity_mbps,
+            "points_of_presence": points_of_presence,
+            "data_usage_tb": data_usage_tb,
+        },
+    )
+
+
+@router.get(
+    "/ncc-subscribers",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:read"))],
+)
+def reports_ncc_subscribers(
+    request: Request,
+    as_of: str | None = None,
+    statuses: list[str] = Query(default=[]),
+    reseller_id: str | None = None,
+    access_capacity_gbps: str | None = None,
+    unutilized_capacity_mbps: str | None = None,
+    points_of_presence: str | None = None,
+    data_usage_tb: str | None = None,
+    db: Session = Depends(get_db),
+):
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    params = _ncc_params(
+        as_of,
+        statuses,
+        reseller_id,
+        access_capacity_gbps,
+        unutilized_capacity_mbps,
+        points_of_presence,
+        data_usage_tb,
+    )
+    report = ncc_report_service.build_ncc_subscriber_report(db, params)
+    context = {
+        "request": request,
+        "active_page": "reports-ncc-subscribers",
+        "active_menu": "reports",
+        "current_user": get_current_user(request),
+        "sidebar_stats": get_sidebar_stats(db),
+        "report": report,
+        "status_options": [s.value for s in SubscriptionStatus],
+        "selected_statuses": report["parameters"]["active_statuses"],
+        "form": {
+            "as_of": as_of or "",
+            "reseller_id": reseller_id or "",
+            "access_capacity_gbps": access_capacity_gbps or "",
+            "unutilized_capacity_mbps": unutilized_capacity_mbps or "",
+            "points_of_presence": points_of_presence or "",
+            "data_usage_tb": data_usage_tb or "",
+        },
+    }
+    return templates.TemplateResponse("admin/reports/ncc_subscribers.html", context)
+
+
+@router.get(
+    "/ncc-subscribers/export",
+    dependencies=[Depends(require_permission("customer:read"))],
+)
+def reports_ncc_subscribers_export(
+    as_of: str | None = None,
+    statuses: list[str] = Query(default=[]),
+    reseller_id: str | None = None,
+    access_capacity_gbps: str | None = None,
+    unutilized_capacity_mbps: str | None = None,
+    points_of_presence: str | None = None,
+    data_usage_tb: str | None = None,
+    db: Session = Depends(get_db),
+):
+    params = _ncc_params(
+        as_of,
+        statuses,
+        reseller_id,
+        access_capacity_gbps,
+        unutilized_capacity_mbps,
+        points_of_presence,
+        data_usage_tb,
+    )
+    report = ncc_report_service.build_ncc_subscriber_report(db, params)
+    content = ncc_report_service.build_ncc_subscriber_csv(report)
+    stamp = report["parameters"]["as_of"][:10]
+    return Response(
+        content,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f"attachment; filename=ncc-subscribers-{stamp}.csv"
         },
     )
