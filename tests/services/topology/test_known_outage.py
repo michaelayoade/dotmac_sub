@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from jinja2 import Environment, FileSystemLoader
 
+from app.models.network import FdhCabinet, OntUnit, Splitter
 from app.models.network_monitoring import NetworkDevice, OutageIncident, PopSite
 from app.services.topology.customer_path import CustomerPath
 from app.services.topology.outage import open_incident_for_path
@@ -18,10 +19,11 @@ def _node(db, name):
     return n
 
 
-def _open(db, *, root_node_id=None, basestation_id=None):
+def _open(db, *, root_node_id=None, basestation_id=None, fdh_cabinet_id=None):
     inc = OutageIncident(
         root_node_id=root_node_id,
         basestation_id=basestation_id,
+        fdh_cabinet_id=fdh_cabinet_id,
         status="open",
         affected_count=7,
         note="fiber cut",
@@ -53,6 +55,19 @@ def test_matches_on_basestation(db_session):
     assert (
         open_incident_for_path(db_session, CustomerPath(basestation=pop)).id == inc.id
     )
+
+
+def test_matches_on_fdh_from_ont_splitter(db_session):
+    fdh = FdhCabinet(name="FDH Alpha", code="FDH-A")
+    splitter = Splitter(name="Splitter Alpha", fdh=fdh)
+    db_session.add_all([fdh, splitter])
+    db_session.flush()
+    ont = OntUnit(serial_number="SN-FDH", splitter_id=splitter.id)
+    db_session.add(ont)
+    db_session.flush()
+    inc = _open(db_session, fdh_cabinet_id=fdh.id)
+
+    assert open_incident_for_path(db_session, CustomerPath(ont=ont)).id == inc.id
 
 
 def test_resolved_incident_not_matched(db_session):

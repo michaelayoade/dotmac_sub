@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.models.catalog import NasDevice, Subscription, SubscriptionStatus
+from app.models.network import FdhCabinet, Splitter, SplitterPort, SplitterPortAssignment
 from app.models.network_monitoring import NetworkDevice, PopSite
 from app.models.subscriber import Subscriber
 from app.services.topology.outage import (
@@ -50,6 +51,48 @@ def test_declare_snapshots_affected_count(db_session, catalog_offer):
     assert inc.status == "open"
     assert inc.affected_count == 3
     assert inc.basestation_id == pop.id
+    assert inc.declared_by == "noc@x"
+
+
+def test_declare_fdh_outage_snapshots_affected_count(db_session, catalog_offer):
+    fdh = FdhCabinet(name="FDH Alpha", code="FDH-A")
+    splitter = Splitter(name="Splitter Alpha", fdh=fdh)
+    db_session.add_all([fdh, splitter])
+    db_session.flush()
+    ports = [
+        SplitterPort(splitter_id=splitter.id, port_number=1),
+        SplitterPort(splitter_id=splitter.id, port_number=2),
+    ]
+    db_session.add_all(ports)
+    db_session.flush()
+    for index, port in enumerate(ports):
+        subscriber = Subscriber(
+            first_name="F",
+            last_name="DH",
+            email=f"fdh-{index}@ex.com",
+        )
+        db_session.add(subscriber)
+        db_session.flush()
+        db_session.add(
+            Subscription(
+                subscriber_id=subscriber.id,
+                offer_id=catalog_offer.id,
+                status=SubscriptionStatus.active,
+            )
+        )
+        db_session.add(
+            SplitterPortAssignment(
+                splitter_port_id=port.id,
+                subscriber_id=subscriber.id,
+                active=True,
+            )
+        )
+    db_session.flush()
+
+    inc = declare_outage(db_session, fdh=fdh, declared_by="noc@x")
+    assert inc.status == "open"
+    assert inc.affected_count == 2
+    assert inc.fdh_cabinet_id == fdh.id
     assert inc.declared_by == "noc@x"
 
 

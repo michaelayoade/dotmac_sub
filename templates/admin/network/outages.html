@@ -7,17 +7,26 @@
     <div>
         <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Outage Console</h1>
         <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
-            Declare an outage against a basestation (manual — no auto-detection). The affected subscriber count is snapshotted at declare time.
+            Declare an outage against a basestation or FDH cabinet (manual — no auto-detection). The affected subscriber count is snapshotted at declare time.
         </p>
     </div>
 
     <form method="post" action="/admin/network/outages/declare" class="flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
         <div>
             <label class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Basestation</label>
-            <select name="basestation_id" required class="mt-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200">
+            <select name="basestation_id" class="mt-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200">
                 <option value="">— select —</option>
                 {% for bs in basestations %}
                 <option value="{{ bs.id }}">{{ bs.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div>
+            <label class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">FDH Cabinet</label>
+            <select name="fdh_id" class="mt-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200">
+                <option value="">— select —</option>
+                {% for fdh in fdh_cabinets %}
+                <option value="{{ fdh.id }}">{{ fdh.code or fdh.name }}{% if fdh.code and fdh.name %} — {{ fdh.name }}{% endif %}</option>
                 {% endfor %}
             </select>
         </div>

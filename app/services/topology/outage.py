@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.orm import Session
 
+from app.models.network import FdhCabinet, OntUnit, Splitter, SplitterPort
 from app.models.network_monitoring import NetworkDevice, OutageIncident, PopSite
 from app.services.topology.affected import (
     _dist_to_core,
@@ -55,17 +56,19 @@ def declare_outage(
     *,
     node: NetworkDevice | None = None,
     basestation: PopSite | None = None,
+    fdh: FdhCabinet | None = None,
     declared_by: str | None = None,
     note: str | None = None,
     severity: str | None = None,
 ) -> OutageIncident:
-    """Open an incident against a node/basestation, snapshotting affected_count."""
-    if node is None and basestation is None:
-        raise ValueError("declare_outage requires a node or a basestation")
-    impact = affected_customers(session, node=node, basestation=basestation)
+    """Open an incident against a target, snapshotting affected_count."""
+    if node is None and basestation is None and fdh is None:
+        raise ValueError("declare_outage requires a node, basestation, or FDH")
+    impact = affected_customers(session, node=node, basestation=basestation, fdh=fdh)
     incident = OutageIncident(
         root_node_id=node.id if node is not None else None,
         basestation_id=basestation.id if basestation is not None else None,
+        fdh_cabinet_id=fdh.id if fdh is not None else None,
         declared_by=declared_by,
         note=note,
         severity=severity,
@@ -75,6 +78,22 @@ def declare_outage(
     session.add(incident)
     session.flush()
     return incident
+
+
+def _fdh_id_for_ont(session: Session, ont: OntUnit | None):
+    if ont is None:
+        return None
+    if ont.splitter_id is not None:
+        splitter = session.get(Splitter, ont.splitter_id)
+        if splitter is not None and splitter.fdh_id is not None:
+            return splitter.fdh_id
+    if ont.splitter_port_id is not None:
+        port = session.get(SplitterPort, ont.splitter_port_id)
+        if port is not None:
+            splitter = session.get(Splitter, port.splitter_id)
+            if splitter is not None and splitter.fdh_id is not None:
+                return splitter.fdh_id
+    return None
 
 
 def resolve_outage(session: Session, incident_id) -> OutageIncident | None:
@@ -102,6 +121,7 @@ def open_incident_for_path(session: Session, path) -> OutageIncident | None:
         customer_node_ids.add(hop.id)
     basestation = getattr(path, "basestation", None)
     basestation_id = basestation.id if basestation is not None else None
+    fdh_id = _fdh_id_for_ont(session, getattr(path, "ont", None))
 
     incidents = (
         session.query(OutageIncident)
@@ -113,6 +133,8 @@ def open_incident_for_path(session: Session, path) -> OutageIncident | None:
     # customer's own (hop-capped) path.
     for incident in incidents:
         if basestation_id is not None and incident.basestation_id == basestation_id:
+            return incident
+        if fdh_id is not None and incident.fdh_cabinet_id == fdh_id:
             return incident
         if (
             incident.root_node_id is not None

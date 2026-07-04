@@ -7,7 +7,7 @@
     <div>
         <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Outage Impact</h1>
         <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
-            Pick a basestation to preview the active subscriptions affected if it fails. Read-only — no incident is created.
+            Pick a basestation or FDH cabinet to preview the active subscriptions affected if it fails. Read-only — no incident is created.
         </p>
     </div>
 
@@ -18,6 +18,15 @@
                 <option value="">— select —</option>
                 {% for bs in basestations %}
                 <option value="{{ bs.id }}" {% if selected_basestation_id == bs.id|string %}selected{% endif %}>{{ bs.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div>
+            <label class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">FDH Cabinet</label>
+            <select name="fdh_id" class="mt-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200">
+                <option value="">— select —</option>
+                {% for fdh in fdh_cabinets %}
+                <option value="{{ fdh.id }}" {% if selected_fdh_id == fdh.id|string %}selected{% endif %}>{{ fdh.code or fdh.name }}{% if fdh.code and fdh.name %} — {{ fdh.name }}{% endif %}</option>
                 {% endfor %}
             </select>
         </div>

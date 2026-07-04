@@ -5,7 +5,15 @@ from __future__ import annotations
 import uuid
 
 from app.models.catalog import NasDevice, Subscription, SubscriptionStatus
-from app.models.network import OLTDevice, OntAssignment, OntUnit
+from app.models.network import (
+    FdhCabinet,
+    OLTDevice,
+    OntAssignment,
+    OntUnit,
+    Splitter,
+    SplitterPort,
+    SplitterPortAssignment,
+)
 from app.models.network_monitoring import (
     DeviceRole,
     NetworkDevice,
@@ -113,6 +121,73 @@ def test_basestation_aggregates_its_nodes(db_session, catalog_offer):
 
     out = affected_customers(db_session, basestation=pop)
     assert out["count"] == 2
+
+
+def test_fdh_affected_via_splitter_port_assignments(db_session, catalog_offer):
+    fdh = FdhCabinet(name="FDH Alpha", code="FDH-A")
+    other_fdh = FdhCabinet(name="FDH Beta", code="FDH-B")
+    db_session.add_all([fdh, other_fdh])
+    db_session.flush()
+    splitter = Splitter(name="SPL-A", fdh_id=fdh.id)
+    other_splitter = Splitter(name="SPL-B", fdh_id=other_fdh.id)
+    db_session.add_all([splitter, other_splitter])
+    db_session.flush()
+    ports = [
+        SplitterPort(splitter_id=splitter.id, port_number=1),
+        SplitterPort(splitter_id=splitter.id, port_number=2),
+        SplitterPort(splitter_id=other_splitter.id, port_number=1),
+    ]
+    db_session.add_all(ports)
+    db_session.flush()
+
+    sub_a = _sub(db_session, catalog_offer.id)
+    sub_b = _sub(db_session, catalog_offer.id)
+    unrelated = _sub(db_session, catalog_offer.id)  # unrelated, excluded
+    db_session.add_all(
+        [
+            SplitterPortAssignment(
+                splitter_port_id=ports[0].id,
+                subscriber_id=sub_a.subscriber_id,
+                active=True,
+            ),
+            SplitterPortAssignment(
+                splitter_port_id=ports[1].id,
+                subscriber_id=sub_b.subscriber_id,
+                active=True,
+            ),
+            SplitterPortAssignment(
+                splitter_port_id=ports[2].id,
+                subscriber_id=unrelated.subscriber_id,
+                active=True,
+            ),
+        ]
+    )
+    db_session.flush()
+
+    out = affected_customers(db_session, fdh=fdh)
+    assert out["count"] == 2
+    assert {sub.id for sub in out["subscriptions"]} == {sub_a.id, sub_b.id}
+
+
+def test_fdh_affected_via_direct_ont_splitter_reference(
+    db_session, subscriber, catalog_offer
+):
+    fdh = FdhCabinet(name="FDH Alpha", code="FDH-A")
+    splitter = Splitter(name="SPL-A", fdh=fdh)
+    db_session.add_all([fdh, splitter])
+    db_session.flush()
+    ont = OntUnit(serial_number="SN-FDH", splitter_id=splitter.id)
+    db_session.add(ont)
+    db_session.flush()
+    db_session.add(
+        OntAssignment(ont_unit_id=ont.id, subscriber_id=subscriber.id, active=True)
+    )
+    sub = _sub(db_session, catalog_offer.id, subscriber_id=subscriber.id)
+    db_session.flush()
+
+    out = affected_customers(db_session, fdh=fdh)
+    assert out["count"] == 1
+    assert out["subscriptions"][0].id == sub.id
 
 
 def test_upstream_node_captures_downstream(db_session, catalog_offer):

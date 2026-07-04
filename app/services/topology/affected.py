@@ -16,7 +16,14 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription, SubscriptionStatus
-from app.models.network import OntAssignment, OntUnit
+from app.models.network import (
+    FdhCabinet,
+    OntAssignment,
+    OntUnit,
+    Splitter,
+    SplitterPort,
+    SplitterPortAssignment,
+)
 from app.models.network_monitoring import (
     DeviceRole,
     NetworkDevice,
@@ -32,6 +39,16 @@ def list_basestations(session: Session) -> list[PopSite]:
         session.query(PopSite)
         .filter(PopSite.zabbix_group_id.isnot(None))
         .order_by(PopSite.name)
+        .all()
+    )
+
+
+def list_fdh_cabinets(session: Session) -> list[FdhCabinet]:
+    """Active FDH cabinets for outage-impact pickers."""
+    return (
+        session.query(FdhCabinet)
+        .filter(FdhCabinet.is_active.is_(True))
+        .order_by(FdhCabinet.name)
         .all()
     )
 
@@ -152,10 +169,93 @@ def subscriptions_for_node(session: Session, node: NetworkDevice) -> list[Subscr
     return []
 
 
+def subscriptions_for_fdh(session: Session, fdh: FdhCabinet) -> list[Subscription]:
+    """Active subscriptions downstream of an FDH cabinet.
+
+    Uses explicit splitter-port assignments when available, plus direct ONT
+    splitter references for imported/legacy plant data.
+    """
+    splitter_ids = [
+        row[0]
+        for row in session.query(Splitter.id)
+        .filter(Splitter.fdh_id == fdh.id, Splitter.is_active.is_(True))
+        .all()
+    ]
+    if not splitter_ids:
+        return []
+
+    splitter_port_ids = [
+        row[0]
+        for row in session.query(SplitterPort.id)
+        .filter(
+            SplitterPort.splitter_id.in_(splitter_ids),
+            SplitterPort.is_active.is_(True),
+        )
+        .all()
+    ]
+
+    subscriber_ids: set = set()
+    service_address_ids: set = set()
+    if splitter_port_ids:
+        for subscriber_id, service_address_id in (
+            session.query(
+                SplitterPortAssignment.subscriber_id,
+                SplitterPortAssignment.service_address_id,
+            )
+            .filter(
+                SplitterPortAssignment.splitter_port_id.in_(splitter_port_ids),
+                SplitterPortAssignment.active.is_(True),
+            )
+            .all()
+        ):
+            if subscriber_id is not None:
+                subscriber_ids.add(subscriber_id)
+            if service_address_id is not None:
+                service_address_ids.add(service_address_id)
+
+        ont_rows = (
+            session.query(OntAssignment.subscriber_id)
+            .join(OntUnit, OntUnit.id == OntAssignment.ont_unit_id)
+            .filter(
+                OntAssignment.active.is_(True),
+                OntAssignment.subscriber_id.isnot(None),
+                OntUnit.splitter_port_id.in_(splitter_port_ids),
+            )
+            .all()
+        )
+        subscriber_ids.update(row[0] for row in ont_rows if row[0] is not None)
+
+    ont_rows = (
+        session.query(OntAssignment.subscriber_id)
+        .join(OntUnit, OntUnit.id == OntAssignment.ont_unit_id)
+        .filter(
+            OntAssignment.active.is_(True),
+            OntAssignment.subscriber_id.isnot(None),
+            OntUnit.splitter_id.in_(splitter_ids),
+        )
+        .all()
+    )
+    subscriber_ids.update(row[0] for row in ont_rows if row[0] is not None)
+
+    if not subscriber_ids and not service_address_ids:
+        return []
+
+    query = session.query(Subscription).filter(
+        Subscription.status == SubscriptionStatus.active
+    )
+    filters = []
+    if subscriber_ids:
+        filters.append(Subscription.subscriber_id.in_(subscriber_ids))
+    if service_address_ids:
+        filters.append(Subscription.service_address_id.in_(service_address_ids))
+    return query.filter(or_(*filters)).all()
+
+
 def affected_customers(
     session: Session,
     node: NetworkDevice | None = None,
     basestation: PopSite | None = None,
+    fdh: FdhCabinet | None = None,
 ) -> dict:
     """Subscriptions affected by a failing node and/or basestation.
 
@@ -177,6 +277,9 @@ def affected_customers(
         node_ids |= downstream_nodes(session, node)
 
     subs: dict = {}
+    if fdh is not None:
+        for s in subscriptions_for_fdh(session, fdh):
+            subs[s.id] = s
     for nid in node_ids:
         n = session.get(NetworkDevice, nid)
         if n is None:
