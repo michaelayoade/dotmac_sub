@@ -7,6 +7,7 @@ from celery.schedules import crontab
 
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.scheduler import ScheduledTask, ScheduleType
+from app.services import control_registry
 from app.services import integration as integration_service
 from app.services.db_session_adapter import db_session_adapter
 from app.services.settings_spec import resolve_value
@@ -878,12 +879,8 @@ def build_beat_schedule() -> dict:
         # arms low-balance/deactivation timers and SUSPENDS depleted prepaid
         # accounts, so it stays a deliberate opt-in. The sweep also no-ops
         # internally when the control is off. Daily cadence.
-        prepaid_balance_enforcement_enabled = _effective_bool(
-            session,
-            SettingDomain.collections,
-            "prepaid_balance_enforcement_enabled",
-            "PREPAID_BALANCE_ENFORCEMENT_ENABLED",
-            False,
+        prepaid_balance_enforcement_enabled = control_registry.is_enabled(
+            session, "collections.prepaid_balance_enforcement"
         )
         _sync_scheduled_task(
             session,

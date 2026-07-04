@@ -32,6 +32,7 @@ from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services import control_registry, enforcement_window, settings_spec
 from app.services.collections._core import (
     _clear_prepaid_dunning_flags,
+    _effective_billing_mode_for_account,
     _get_account_email,
     _suspend_account,
     get_available_balance,
@@ -136,7 +137,12 @@ def _candidate_account_ids(db: Session) -> set:
         for row in (
             db.query(Subscriber.id)
             .join(Subscription, Subscription.subscriber_id == Subscriber.id)
-            .filter(Subscriber.billing_mode == BillingMode.prepaid)
+            .filter(
+                or_(
+                    Subscriber.billing_mode == BillingMode.prepaid,
+                    Subscription.billing_mode == BillingMode.prepaid,
+                )
+            )
             .filter(Subscription.status.in_(_RELEVANT_STATUSES))
             .distinct()
             .all()
@@ -361,6 +367,15 @@ def _reconcile_low(
 def _process_account(
     db: Session, account: Subscriber, now: datetime, cfg: _SweepConfig
 ) -> str:
+    if _effective_billing_mode_for_account(db, account) != BillingMode.prepaid:
+        if (
+            account.prepaid_low_balance_at is not None
+            or account.prepaid_deactivation_at is not None
+        ):
+            _clear_prepaid_dunning_flags(db, str(account.id))
+            return "restored"
+        return "ok"
+
     balance = get_available_balance(db, str(account.id))
     threshold = _prepaid_threshold(db, account)
     if balance >= threshold:
