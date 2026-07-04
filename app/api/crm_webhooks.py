@@ -198,26 +198,39 @@ async def receive_crm_chat_event(
     inner = payload.get("payload")
     body = inner if isinstance(inner, dict) else payload
 
-    subscriber_id = str(body.get("subscriber_id") or "").strip()
-    if not subscriber_id:
-        # Reseller-originated or unmapped chats have no device to wake; ack so
-        # the CRM doesn't retry.
-        return {"status": "ignored", "reason": "no_subscriber"}
-
     from app.services import push as push_service
 
     preview = str(body.get("preview") or "").strip() or "You have a new message."
-    push_service.send_push(
-        db,
-        subscriber_id,
-        title="New message from support",
-        body=preview,
-        data={
-            "type": "chat_message",
-            "conversation_id": str(body.get("conversation_id") or ""),
-        },
-    )
-    return {"status": "ok", "event": event_type}
+    conversation_id = str(body.get("conversation_id") or "")
+
+    def _wake(sid: str) -> None:
+        push_service.send_push(
+            db,
+            sid,
+            title="New message from support",
+            body=preview,
+            data={"type": "chat_message", "conversation_id": conversation_id},
+        )
+
+    subscriber_id = str(body.get("subscriber_id") or "").strip()
+    if subscriber_id:
+        _wake(subscriber_id)
+        return {"status": "ok", "event": event_type}
+
+    # Reseller-originated chat: the reseller org isn't a subscriber, but each
+    # active reseller-portal user is backed by a subscriber_id under which its
+    # device tokens register — wake all of them (best-effort; no-op when none
+    # have registered a device).
+    reseller_id = str(body.get("reseller_id") or "").strip()
+    if reseller_id:
+        from app.services import reseller_portal
+
+        sub_ids = reseller_portal.portal_user_subscriber_ids(db, reseller_id)
+        for sid in sub_ids:
+            _wake(sid)
+        return {"status": "ok" if sub_ids else "ignored", "event": event_type}
+
+    return {"status": "ignored", "reason": "no_target"}
 
 
 @router.post("/referrals")

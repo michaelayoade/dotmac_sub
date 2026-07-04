@@ -178,6 +178,26 @@ def _customer_account_join_filter():
     )
 
 
+def portal_user_subscriber_ids(db: Session, reseller_id: str) -> list[str]:
+    """Subscriber ids of the reseller's active portal users (push targets).
+
+    Each reseller-portal login is backed by a subscriber_id under which the
+    mobile app registers device tokens; subscriber-less (Layer-3) logins are
+    excluded. Returns [] on schemas without the reseller_users table."""
+    try:
+        rows = (
+            db.query(ResellerUser.subscriber_id)
+            .filter(ResellerUser.reseller_id == coerce_uuid(reseller_id))
+            .filter(ResellerUser.is_active.is_(True))
+            .filter(ResellerUser.subscriber_id.isnot(None))
+            .all()
+        )
+        return [str(sid) for (sid,) in rows]
+    except ProgrammingError:
+        db.rollback()
+        return []
+
+
 def _get_reseller_user(db: Session, subscriber_id: str) -> ResellerUser | None:
     # Preferred path for schemas with dedicated reseller user link table.
     try:
