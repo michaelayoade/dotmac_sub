@@ -20,7 +20,7 @@
 
     {% call page_header(
         title="Network Devices",
-        subtitle="Manage OLT, ONT, and CPE devices across the network",
+        subtitle="Manage core, OLT, ONT, and CPE devices across the network",
         icon=icon_server(),
         color="cyan",
         color2="blue",
@@ -34,6 +34,7 @@
         <div class="flex flex-wrap gap-2 rounded-2xl border border-slate-200/60 bg-white p-2 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
             {% set device_types = [
                 {'value': 'all', 'label': 'All Devices', 'count': stats.total, 'color': 'slate', 'icon': '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/></svg>'},
+                {'value': 'core', 'label': 'Core', 'count': stats.core, 'color': 'slate', 'icon': '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/></svg>'},
                 {'value': 'olt', 'label': 'OLT', 'count': stats.olt, 'color': 'violet', 'icon': '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>'},
                 {'value': 'ont', 'label': 'ONT', 'count': stats.ont, 'color': 'blue', 'icon': '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>'},
                 {'value': 'cpe', 'label': 'CPE', 'count': stats.cpe, 'color': 'emerald', 'icon': '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"/></svg>'}
@@ -42,6 +43,7 @@
             <button x-on:click="activeType = '{{ dt.value }}'"
                     hx-get="/admin/network/devices?type={{ dt.value }}"
                     hx-target="#devices-content"
+                    hx-select="#devices-content"
                     :class="activeType === '{{ dt.value }}' ? 'bg-gradient-to-r from-{{ dt.color }}-500 to-{{ dt.color }}-600 text-white shadow-lg shadow-{{ dt.color }}-500/25' : 'text-slate-600 hover:bg-{{ dt.color }}-50 dark:text-slate-300 dark:hover:bg-{{ dt.color }}-900/20'"
                     class="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition-all">
                 {{ dt.icon|safe }}
@@ -65,6 +67,7 @@
     {# Search & Filters #}
     {% call filter_bar() %}
     <form id="devices-filter-form" method="GET" action="/admin/network/devices" class="flex flex-col gap-4 lg:flex-row lg:items-end">
+        <input type="hidden" name="type" value="{{ type or 'all' }}">
         <div class="flex-1">
             <label class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Search Devices</label>
             {{ search_input("search", search or '', "Search by serial, MAC, name, or IP...", "cyan", {"hx-get": "/admin/network/devices/filter", "hx-trigger": "input changed delay:300ms", "hx-target": "#devices-table-body", "hx-include": "#devices-filter-form"}) }}
