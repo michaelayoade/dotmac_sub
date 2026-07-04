@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import json
 import threading
+import uuid
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
@@ -354,6 +355,51 @@ def test_chat_webhook_unknown_event_ignored(db_session):
         resp = _post_chat(
             db_session, body, event="conversation.snoozed", sig=_sign(raw)
         )
+    assert resp["status"] == "ignored"
+    send.assert_not_called()
+
+
+def test_chat_webhook_reseller_wakes_portal_users(db_session):
+    # A reseller chat carries reseller_id (no subscriber_id); the receiver wakes
+    # every active reseller-portal user backed by a subscriber_id.
+    reseller = Reseller(name="Acme Reseller")
+    db_session.add(reseller)
+    db_session.flush()
+    s1, s2 = uuid.uuid4(), uuid.uuid4()
+    db_session.add_all(
+        [
+            ResellerUser(reseller_id=reseller.id, subscriber_id=s1, is_active=True),
+            ResellerUser(reseller_id=reseller.id, subscriber_id=s2, is_active=True),
+            # Excluded: inactive, and a subscriber-less (Layer-3) login.
+            ResellerUser(
+                reseller_id=reseller.id, subscriber_id=uuid.uuid4(), is_active=False
+            ),
+            ResellerUser(reseller_id=reseller.id, subscriber_id=None, is_active=True),
+        ]
+    )
+    db_session.commit()
+
+    body = {
+        "reseller_id": str(reseller.id),
+        "conversation_id": "conv-r",
+        "preview": "Reseller reply",
+    }
+    raw = json.dumps(body).encode()
+    with _chat_settings(), patch("app.services.push.send_push") as send:
+        resp = _post_chat(db_session, body, sig=_sign(raw))
+    assert resp["status"] == "ok"
+    woken = {call.args[1] for call in send.call_args_list}
+    assert woken == {str(s1), str(s2)}
+
+
+def test_chat_webhook_reseller_no_devices_ignored(db_session):
+    reseller = Reseller(name="Empty Reseller")
+    db_session.add(reseller)
+    db_session.commit()
+    body = {"reseller_id": str(reseller.id), "conversation_id": "c", "preview": "x"}
+    raw = json.dumps(body).encode()
+    with _chat_settings(), patch("app.services.push.send_push") as send:
+        resp = _post_chat(db_session, body, sig=_sign(raw))
     assert resp["status"] == "ignored"
     send.assert_not_called()
 
