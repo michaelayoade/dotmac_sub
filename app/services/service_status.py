@@ -113,7 +113,20 @@ def build_service_status(db: Session, subscriber_id: str) -> ServiceStatusRespon
         # Caller authenticated but no subscriber row — empty, not an error.
         return ServiceStatusResponse(as_of=now, billing_mode=BillingMode.prepaid.value)
 
-    account_mode = account.billing_mode or BillingMode.prepaid
+    # Resolve billing mode through the SAME authority as dunning/enforcement
+    # (collectible-subscription-derived, prepaid-wins) so the customer-facing
+    # view can never disagree with how the account is actually enforced — e.g.
+    # a mixed/drifted account showing a prepaid wallet while dunning treats it
+    # as postpaid. Deferred import avoids the service_status <-> collections
+    # import cycle. Falls back to the account flag when there are no collectible
+    # subscriptions to derive from.
+    from app.services.collections._core import _effective_billing_mode_for_account
+
+    account_mode = (
+        _effective_billing_mode_for_account(db, account)
+        or account.billing_mode
+        or BillingMode.prepaid
+    )
     resp = ServiceStatusResponse(as_of=now, billing_mode=account_mode.value)
 
     is_prepaid = account_mode == BillingMode.prepaid
