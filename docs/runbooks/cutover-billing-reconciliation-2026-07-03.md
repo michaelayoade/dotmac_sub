@@ -76,17 +76,19 @@ post-merge exact opening/seed restores: 14 rows / NGN 862,611.97
 post-merge missing payment credits: 4 accounts / NGN 75,251.00
 partial opening-construction debit adjustments: 11 accounts / NGN 1,504,277.03
 adjustment-aware exact opening construction restore: 1 account / NGN 306,250.00
+mirror-backed seed construction credits: 2 accounts / NGN 980,916.67
 ```
 
-After the mirror-evidence pass and adjustment-aware exact restore, before
-registering accepted variances, the scheduled audit reports:
+After the mirror-evidence pass, adjustment-aware exact restore, and
+mirror-backed seed credits, before registering accepted variances, the scheduled
+audit reports:
 
 ```text
 population: 15055 cutover-seeded accounts
-raw_drift_count: 30
-unregistered drift_count: 30
+raw_drift_count: 28
+unregistered drift_count: 28
 overcredited: 9 accounts / NGN 689,184.50
-understated: 21 accounts / NGN 1,383,930.82
+understated: 19 accounts / NGN 403,014.15
 post-cutover adjustments: 29 entries / NGN -1,702,726.86
 target adjustments: 13 entries / NGN 298,501.71
 excluded remediation adjustments: 16 entries / NGN -2,001,228.57
@@ -99,6 +101,7 @@ Historical baseline log:
 2026-07-04 post seed/payment tail fixes: 43 drift rows
 2026-07-04 post partial construction adjustments: 32 drift rows
 2026-07-04 post mirror-evidence adjustment exclusions: 30 drift rows
+2026-07-04 post mirror-backed seed credits: 28 drift rows
 ```
 
 The scheduled guard is `app.tasks.billing.audit_cutover_balance_invariant`,
