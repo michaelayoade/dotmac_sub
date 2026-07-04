@@ -38,6 +38,7 @@ class DeviceType(enum.Enum):
     modem = "modem"
     server = "server"
     cpe = "cpe"
+    wireless_radio = "wireless_radio"
     other = "other"
 
 
@@ -326,6 +327,16 @@ class WanServiceProvisioningStatus(enum.Enum):
 
 class CPEDevice(Base):
     __tablename__ = "cpe_devices"
+    __table_args__ = (
+        # Stable UISP device id — the uisp_sync upsert key. Partial-unique so
+        # rows not sourced from UISP stay NULL.
+        Index(
+            "uq_cpe_devices_uisp_device_id",
+            "uisp_device_id",
+            unique=True,
+            postgresql_where=text("uisp_device_id IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -352,6 +363,19 @@ class CPEDevice(Base):
     notes: Mapped[str | None] = mapped_column(Text)
     tr069_data_model: Mapped[str | None] = mapped_column(String(40))
 
+    # --- UISP topology sync (relationship layer) ---
+    # Stable UISP device id; NULL for rows not sourced from UISP.
+    uisp_device_id: Mapped[str | None] = mapped_column(String(64))
+    # CPE -> AP edge: the network_devices row (basestation AP) this radio is
+    # associated to, per UISP. Lets customer_path walk radio -> AP -> pop_site.
+    parent_network_device_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_devices.id", ondelete="SET NULL")
+    )
+    uisp_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Last UISP overview.status: active/disconnected/unauthorized (or
+    # 'vanished' when the device disappeared from UISP).
+    last_uisp_status: Mapped[str | None] = mapped_column(String(20))
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -363,6 +387,7 @@ class CPEDevice(Base):
 
     subscriber = relationship("Subscriber", back_populates="cpe_devices")
     service_address = relationship("Address")
+    parent_network_device = relationship("NetworkDevice")
     ports = relationship(
         "Port",
         back_populates="device",
@@ -917,6 +942,13 @@ class OLTDevice(Base):
             "capabilities_source IN ('auto', 'manual')",
             name="ck_olt_devices_capabilities_source",
         ),
+        # Stable UISP device id — the uisp_sync upsert key (UF-OLTs).
+        Index(
+            "uq_olt_devices_uisp_device_id",
+            "uisp_device_id",
+            unique=True,
+            postgresql_where=text("uisp_device_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -984,6 +1016,9 @@ class OLTDevice(Base):
     zabbix_last_sync_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )
+
+    # UISP topology sync: stable UISP device id (UF-OLTs); NULL otherwise.
+    uisp_device_id: Mapped[str | None] = mapped_column(String(64))
 
     # Autofind sync deduplication (prevents redundant SSH queries during concurrent auths)
     autofind_last_sync_at: Mapped[datetime | None] = mapped_column(
@@ -1785,6 +1820,13 @@ class OntUnit(Base):
                 "olt_device_id IS NOT NULL AND external_id IS NOT NULL"
             ),
         ),
+        # Stable UISP device id — the uisp_sync upsert key (UFiber ONUs).
+        Index(
+            "uq_ont_units_uisp_device_id",
+            "uisp_device_id",
+            unique=True,
+            postgresql_where=text("uisp_device_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -1938,6 +1980,9 @@ class OntUnit(Base):
     # Sync tracking — which external source last modified this ONT, and when
     last_sync_source: Mapped[str | None] = mapped_column(String(40))
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # UISP topology sync: stable UISP device id (UFiber ONUs); NULL otherwise.
+    uisp_device_id: Mapped[str | None] = mapped_column(String(64))
 
     # Reconciler bookkeeping (see app/services/network/reconcile/). These columns
     # are set exclusively by reconcile_ont; UI write paths must never mutate them

@@ -222,6 +222,14 @@ class NetworkDevice(Base):
             unique=True,
             postgresql_where=text("zabbix_hostid IS NOT NULL"),
         ),
+        # Stable UISP device id (wireless APs / infra) stamped by the UISP
+        # topology sync; partial-unique so non-UISP rows stay NULL.
+        Index(
+            "uq_network_devices_uisp_device_id",
+            "uisp_device_id",
+            unique=True,
+            postgresql_where=text("uisp_device_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -270,6 +278,9 @@ class NetworkDevice(Base):
     # --- Topology reconcile (Zabbix linkage) ---
     # Stable Zabbix host id; the reconcile key. NULL until merged to a Zabbix host.
     zabbix_hostid: Mapped[str | None] = mapped_column(String(20))
+    # Stable UISP device id, stamped by the UISP topology sync when this node
+    # is matched to a UISP AP/infra device. NULL until matched.
+    uisp_device_id: Mapped[str | None] = mapped_column(String(64))
     # Provenance of this row: 'zabbix_reconcile', 'splynx', manual, etc.
     source: Mapped[str | None] = mapped_column(String(40))
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
