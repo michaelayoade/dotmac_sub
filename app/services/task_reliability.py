@@ -118,6 +118,13 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.billing.audit_cutover_balance_invariant": _c(
         "billing", SWEEP, IDEMP, HEALTH, "Read-only drift audit; safe to re-run."
     ),
+    "app.tasks.billing.audit_funded_inactive_exposure": _c(
+        "billing",
+        SWEEP,
+        IDEMP,
+        HEALTH,
+        "Read-only funded inactive liability report; safe to re-run.",
+    ),
     "app.tasks.billing.check_billing_switch": _c("billing", SWEEP, IDEMP, HEALTH),
     "app.tasks.billing.mark_invoices_overdue": _c("billing", SWEEP, IDEMP, HEALTH),
     "app.tasks.billing.run_billing_notifications": _c(

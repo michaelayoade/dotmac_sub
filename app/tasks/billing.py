@@ -246,11 +246,14 @@ def audit_cutover_balance_invariant_task() -> dict:
             )
         else:
             logger.error(
-                "cutover_balance_invariant_drift: population=%s drift=%s "
+                "cutover_balance_invariant_drift: population=%s raw_drift=%s "
+                "unregistered_drift=%s "
                 "overcredited=%s/%s understated=%s/%s inactive_seed_drift=%s "
                 "post_adjustment_drift=%s post_adjustments=%s/%s "
-                "excluded_adjustments=%s/%s",
+                "excluded_adjustments=%s/%s registered_variance=%s/%s "
+                "stale_registered_variance=%s",
                 result.get("population"),
+                result.get("raw_drift_count"),
                 result.get("drift_count"),
                 result.get("overcredited_count"),
                 result.get("overcredited_total"),
@@ -262,7 +265,47 @@ def audit_cutover_balance_invariant_task() -> dict:
                 result.get("post_adjustment_net"),
                 result.get("excluded_adjustment_entry_count"),
                 result.get("excluded_adjustment_net"),
+                result.get("registered_variance_count"),
+                result.get("registered_variance_total"),
+                result.get("stale_registered_variance_count"),
             )
+        return result
+    finally:
+        session.close()
+
+
+@celery_app.task(name="app.tasks.billing.audit_funded_inactive_exposure")
+def audit_funded_inactive_exposure_task() -> dict:
+    """Read-only report for inactive accounts carrying positive balances."""
+    from app.services.funded_inactive_exposure import funded_inactive_exposure
+
+    session = SessionLocal()
+    try:
+        result = funded_inactive_exposure(session)
+        log_fn = logger.error if result.get("refund_review_count") else logger.info
+        log_fn(
+            "funded_inactive_exposure: ok=%s inactive_positive=%s/%s "
+            "refund_review=%s/%s disabled=%s/%s canceled=%s/%s "
+            "suspended=%s/%s blocked=%s/%s soft_deleted=%s/%s "
+            "sibling_candidates=%s material=%s",
+            result.get("ok"),
+            result.get("inactive_positive_count"),
+            result.get("inactive_positive_total"),
+            result.get("refund_review_count"),
+            result.get("refund_review_total"),
+            result.get("disabled_count"),
+            result.get("disabled_total"),
+            result.get("canceled_count"),
+            result.get("canceled_total"),
+            result.get("suspended_count"),
+            result.get("suspended_total"),
+            result.get("blocked_count"),
+            result.get("blocked_total"),
+            result.get("soft_deleted_count"),
+            result.get("soft_deleted_total"),
+            result.get("sibling_candidate_count"),
+            result.get("material_count"),
+        )
         return result
     finally:
         session.close()
