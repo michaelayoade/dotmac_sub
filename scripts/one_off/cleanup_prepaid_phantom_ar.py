@@ -49,12 +49,12 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
 from app.models.billing import Invoice, InvoiceStatus
-from app.models.catalog import BillingMode
+from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
 from app.models.subscriber import Subscriber
 from app.services.billing._common import get_account_credit_balance
 from app.services.billing.reconcile_unposted import (
@@ -69,6 +69,12 @@ _AR_STATUSES = (
     InvoiceStatus.issued,
     InvoiceStatus.overdue,
     InvoiceStatus.partially_paid,
+)
+_RELEVANT_SUBSCRIPTION_STATUSES = (
+    SubscriptionStatus.active,
+    SubscriptionStatus.pending,
+    SubscriptionStatus.suspended,
+    SubscriptionStatus.blocked,
 )
 
 
@@ -101,7 +107,13 @@ def _prepaid_ar_invoices_by_account(
                 Invoice.is_active.is_(True),
                 Invoice.status.in_(_AR_STATUSES),
                 Invoice.balance_due > Decimal("0.00"),
-                Subscriber.billing_mode == BillingMode.prepaid,
+                (
+                    (Subscriber.billing_mode == BillingMode.prepaid)
+                    | exists()
+                    .where(Subscription.subscriber_id == Invoice.account_id)
+                    .where(Subscription.billing_mode == BillingMode.prepaid)
+                    .where(Subscription.status.in_(_RELEVANT_SUBSCRIPTION_STATUSES))
+                ),
             )
             .order_by(Invoice.account_id, Invoice.issued_at.asc().nulls_last())
         )

@@ -33,7 +33,7 @@ from __future__ import annotations
 import logging
 from contextlib import nullcontext
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import func
@@ -42,6 +42,7 @@ from sqlalchemy.orm import Session
 from app.models.billing import (
     CreditNoteApplication,
     Invoice,
+    InvoiceLine,
     InvoiceStatus,
     LedgerEntry,
     LedgerEntryType,
@@ -50,6 +51,7 @@ from app.models.billing import (
     PaymentAllocation,
     PaymentStatus,
 )
+from app.models.catalog import BillingMode, Subscription
 from app.services.billing._common import (
     _recalculate_invoice_totals as recalculate_invoice_totals,
 )
@@ -389,6 +391,67 @@ def settle_single_invoice_from_credit(
         )
     )
     return applied_total
+
+
+def _prepaid_draft_invoices(db: Session, account_id: str) -> list[Invoice]:
+    """Draft prepaid renewal invoices for one account, oldest first."""
+    return (
+        db.query(Invoice)
+        .join(InvoiceLine, InvoiceLine.invoice_id == Invoice.id)
+        .join(Subscription, Subscription.id == InvoiceLine.subscription_id)
+        .filter(Invoice.account_id == coerce_uuid(account_id))
+        .filter(Invoice.is_active.is_(True))
+        .filter(Invoice.status == InvoiceStatus.draft)
+        .filter(Invoice.balance_due > 0)
+        .filter(InvoiceLine.is_active.is_(True))
+        .filter(Subscription.billing_mode == BillingMode.prepaid)
+        .distinct()
+        .order_by(
+            Invoice.billing_period_start.asc().nulls_last(),
+            Invoice.created_at.asc(),
+            Invoice.id.asc(),
+        )
+        .all()
+    )
+
+
+def settle_prepaid_draft_invoices_from_credit(
+    db: Session, account_id: str, *, run_at: datetime | None = None
+) -> SettleResult:
+    """Issue and settle fully funded prepaid draft renewals for one account.
+
+    Draft-until-funded renewals deliberately do not become AR when the wallet is
+    short. A later top-up must therefore revisit those drafts; otherwise the
+    billing runner has already advanced ``next_billing_at`` and the period is
+    never recognized. This settles oldest-first and remains all-or-nothing per
+    invoice: insufficient credit leaves the draft untouched.
+    """
+    result = SettleResult(account_id=str(account_id))
+    now = run_at or datetime.now(UTC)
+
+    for invoice in _prepaid_draft_invoices(db, str(account_id)):
+        invoice.status = InvoiceStatus.issued
+        invoice.issued_at = now
+        invoice.due_at = now
+        db.flush()
+
+        applied = settle_single_invoice_from_credit(db, invoice, only_if_full=True)
+        db.flush()
+        recalculate_invoice_totals(db, invoice)
+        if invoice.status == InvoiceStatus.paid:
+            result.applied = round_money(result.applied + applied)
+            result.invoices_touched.append(str(invoice.id))
+            result.invoices_settled.append(str(invoice.id))
+            continue
+
+        # Underfunded or raced by another consumer: restore the non-AR state.
+        invoice.status = InvoiceStatus.draft
+        invoice.issued_at = None
+        invoice.due_at = None
+        db.flush()
+        break
+
+    return result
 
 
 def project_settlement(db: Session, account_id: str) -> SettleResult:

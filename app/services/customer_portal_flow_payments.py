@@ -409,8 +409,21 @@ def _finalize_topup_intent(
 
 def _retry_topup_restore(db: Session, account_id: uuid.UUID) -> None:
     try:
+        from app.services.billing.reconcile_unposted import (
+            settle_prepaid_draft_invoices_from_credit,
+        )
+
+        settled = settle_prepaid_draft_invoices_from_credit(db, str(account_id))
+        if settled.changed:
+            logger.info(
+                "Settled %d prepaid draft invoice(s) after top-up for account %s",
+                len(settled.invoices_settled),
+                account_id,
+            )
+            db.commit()
         restore_account_services(db, str(account_id))
     except Exception as exc:
+        db.rollback()
         logger.warning(
             "Best-effort service restore retry failed for account %s: %s",
             account_id,
@@ -1785,6 +1798,18 @@ def verify_and_record_topup(
 
     # Attempt to restore suspended prepaid subscriptions
     try:
+        from app.services.billing.reconcile_unposted import (
+            settle_prepaid_draft_invoices_from_credit,
+        )
+
+        settled = settle_prepaid_draft_invoices_from_credit(db, str(intent.account_id))
+        if settled.changed:
+            logger.info(
+                "Settled %d prepaid draft invoice(s) after top-up for account %s",
+                len(settled.invoices_settled),
+                intent.account_id,
+            )
+            db.commit()
         restored = restore_account_services(db, str(intent.account_id))
         if restored:
             logger.info(
@@ -1793,6 +1818,7 @@ def verify_and_record_topup(
                 intent.account_id,
             )
     except Exception as exc:
+        db.rollback()
         logger.warning(
             "Failed to auto-restore after top-up for account %s: %s",
             intent.account_id,
