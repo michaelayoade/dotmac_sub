@@ -480,3 +480,23 @@ def test_status_writeback_disables_suspended_subscriber(db_session, crm_auth):
     db_session.refresh(subscription)
     assert subscriber.status == SubscriberStatus.disabled
     assert subscription.status == SubscriptionStatus.disabled
+
+
+def test_ncc_subscriber_report_endpoint_returns_aggregate(db_session, crm_auth):
+    subscriber = _subscriber(db_session)
+    offer = _offer(db_session)
+    _subscription(db_session, subscriber, offer)
+    db_session.commit()
+
+    body = crm_routes.ncc_subscriber_report(
+        as_of="2026-06-30",
+        points_of_presence="28",
+        db=db_session,
+    )
+
+    report = body["data"]
+    assert report["total_active_subscriptions"] == 1
+    assert report["parameters"]["active_statuses"] == ["active"]
+    assert report["network_capacity"]["points_of_presence"] == "28"
+    # picker params flow through untouched
+    assert report["parameters"]["as_of"].startswith("2026-06-30")
