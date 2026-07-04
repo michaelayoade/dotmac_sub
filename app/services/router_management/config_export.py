@@ -18,6 +18,7 @@ import logging
 import os
 
 import paramiko
+from paramiko.ssh_exception import AuthenticationException
 
 from app.config import settings
 
@@ -73,12 +74,27 @@ def _load_private_key(key_path: str, passphrase: str | None = None):
     )
 
 
+def _resolve_ssh_password() -> str:
+    """Resolve the optional snapshot-user password (may be an OpenBao/secret ref)."""
+    raw = getattr(settings, "router_config_ssh_password", "") or ""
+    if not raw:
+        return ""
+    try:
+        from app.services.secrets import resolve_secret
+
+        return resolve_secret(raw) or ""
+    except Exception:
+        logger.warning("router SSH password: secret ref did not resolve", exc_info=True)
+        return ""
+
+
 def export_config_via_ssh(
     router,
     *,
     username: str | None = None,
     port: int | None = None,
     key_path: str | None = None,
+    password: str | None = None,
     command: str = "/export",
     timeout: int = 30,
 ) -> str:
@@ -90,25 +106,44 @@ def export_config_via_ssh(
     """
     username = username or settings.router_config_ssh_username
     port = port or settings.router_config_ssh_port
-    key_path = key_path or settings.router_config_ssh_key_path
-    if not key_path:
-        raise RouterConfigExportError("ROUTER_CONFIG_SSH_KEY_PATH is not configured")
+    key_path = key_path if key_path is not None else settings.router_config_ssh_key_path
+    password = password if password is not None else _resolve_ssh_password()
 
-    pkey = _load_private_key(key_path)
+    # Key-preferred auth: use the SSH key when configured, and fall back to a
+    # password (a least-privilege ssh,read snapshot user) either when no key is
+    # set or when the router rejects the key — e.g. a not-yet-keyed new router,
+    # which can then snapshot immediately via a one-line `/user add password=...`
+    # instead of a public-key file import.
+    pkey = _load_private_key(key_path) if key_path else None
+    if pkey is None and not password:
+        raise RouterConfigExportError(
+            "no SSH auth configured: set ROUTER_CONFIG_SSH_KEY_PATH or "
+            "ROUTER_CONFIG_SSH_PASSWORD"
+        )
+
+    base_kwargs = dict(
+        hostname=router.management_ip,
+        port=port,
+        username=username,
+        timeout=timeout,
+        banner_timeout=timeout,
+        auth_timeout=timeout,
+        look_for_keys=False,
+        allow_agent=False,
+    )
     client = paramiko.SSHClient()
     _install_host_key_policy(client)
     try:
-        client.connect(  # type: ignore[call-arg]
-            hostname=router.management_ip,
-            port=port,
-            username=username,
-            pkey=pkey,
-            timeout=timeout,
-            banner_timeout=timeout,
-            auth_timeout=timeout,
-            look_for_keys=False,
-            allow_agent=False,
-        )
+        try:
+            client.connect(  # type: ignore[call-arg]
+                **base_kwargs,
+                **({"pkey": pkey} if pkey is not None else {"password": password}),
+            )
+        except AuthenticationException:
+            # Key rejected — fall back to the password if one is configured.
+            if pkey is None or not password:
+                raise
+            client.connect(**base_kwargs, password=password)  # type: ignore[call-arg]
         # Fixed, non-interpolated command (no user input) — not a shell.
         _stdin, stdout, stderr = client.exec_command(command, timeout=timeout)  # nosec B601
         out = stdout.read().decode("utf-8", "replace")
