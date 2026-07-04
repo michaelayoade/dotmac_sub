@@ -105,6 +105,15 @@ phantom-ledger cleanups). Separate one-off script, run after Item 1 lands.
    old ones remain overdue leaves a mixed state, and enabling without Item 2 removes
    prepaid enforcement entirely.
 4. Items 3 & 4 are independent hardening; ship anytime.
+5. **Post-flip smoke test (top-up → draft settlement).** The #751 follow-ups
+   (`settle_prepaid_draft_invoices_from_credit`, wired into portal top-up verify /
+   webhook settlement / pending top-up reconciliation) are part of the go-live
+   baseline, not optional. Immediately after the flip, exercise the path
+   end-to-end: take or create ONE underfunded prepaid **draft** renewal, top up
+   enough to cover it, then verify (a) it transitions to `paid`, (b) wallet credit
+   is consumed **exactly once** (no double-draw), and (c) if the account was
+   prepaid-suspended, service restore runs. This is the one behaviour the offline
+   tests can't fully prove against real payment/webhook plumbing.
 
 **LANDMINE:** do NOT flip `prepaid_monthly_invoicing_enabled` off/on or enable
 `settle_credit_on_invoice_enabled` (account-wide settle) as a shortcut — the latter is
