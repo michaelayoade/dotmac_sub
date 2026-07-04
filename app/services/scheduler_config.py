@@ -1525,6 +1525,23 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(lldp_poll_minutes * 60, 300),
         )
+        # UISP topology sync: import the wireless/UFiber customer-device
+        # relationship layer (radios -> APs, ONUs -> UF-OLTs) into sub's
+        # tables. Association churn is faster than the device graph, so the
+        # default matches the UISP->Zabbix importer's 15-minute cadence.
+        topology_uisp_minutes = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "topology_uisp_sync_interval_minutes",
+            15,
+        )
+        _sync_scheduled_task(
+            session,
+            name="topology_uisp_sync",
+            task_name="app.tasks.topology_uisp.run_uisp_topology_sync",
+            enabled=True,
+            interval_seconds=max(topology_uisp_minutes * 60, 300),
+        )
         dashboard_cache_seconds = _resolve_int(
             session,
             SettingDomain.network_monitoring,
