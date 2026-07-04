@@ -1,7 +1,8 @@
 # Prepaid invoicing → deposit-is-truth alignment
 
-**Status:** design + item 1 in progress (2026-07-03). Option A chosen (align prepaid
-to deposit-is-truth), per product direction.
+**Status:** Option A chosen (align prepaid to deposit-is-truth), per product
+direction. Item 1 done (#734, flag OFF), Item 2 done (#738, control OFF), Items 3 & 4
+done (this PR). Item 5 (data cleanup) + the coordinated flag flip remain.
 
 ## Problem
 
@@ -67,13 +68,13 @@ skip weekends/holidays, blocking time) as its config → resolves the earlier
 wire-vs-delete question to **WIRE**. Emits the prepaid-native low-balance warning that
 `service_status.py:121-137` already renders but never receives.
 
-### Item 3 — admin/API prepaid plan-change should draw down, not invoice
+### Item 3 — admin/API prepaid plan-change should draw down, not invoice ✅ DONE (this PR)
 `catalog/subscriptions.py:1004-1075 _generate_proration_invoice` mints an issued
 invoice for prepaid upgrades on the generic CRUD/admin path; only the portal path
 (`customer_portal_flow_changes.py:709-720`) honors drawdown. Route admin/API prepaid
 changes through the same `_create_prepaid_plan_change_debit` drawdown.
 
-### Item 4 — one billing-mode authority in the read path
+### Item 4 — one billing-mode authority in the read path ✅ DONE (this PR)
 Dunning/enforcement use `_effective_billing_mode_for_account` (Subscription-derived,
 prepaid-wins, `_core.py:173-202`); customer `build_service_status` uses
 `Subscriber.billing_mode` (`service_status.py:116`). Reconcile so a drifted/mixed
