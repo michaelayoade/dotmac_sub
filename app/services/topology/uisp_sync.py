@@ -24,10 +24,9 @@ from __future__ import annotations
 import logging
 import re
 from collections import Counter
-from contextlib import nullcontext
 from datetime import UTC, datetime
 
-from sqlalchemy import or_, text
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription, SubscriptionStatus
@@ -42,8 +41,9 @@ logger = logging.getLogger(__name__)
 SOURCE = "uisp_sync"
 # The UISP "Archive" site: decommissioned gear parked there is never imported.
 ARCHIVE_SITE_ID = "d857d634-db38-45ff-81a1-4594410ded45"
-# Arbitrary constant key for the Postgres advisory lock (single-flight guard).
-_ADVISORY_LOCK_KEY = 0x75_69_53  # "uiS"
+# Arbitrary constant key for the Postgres advisory lock (single-flight guard,
+# acquired via db_session_adapter.advisory_lock in the Celery task wrapper).
+ADVISORY_LOCK_KEY = 0x75_69_53  # "uiS"
 
 # Device types that are customer radios even when the role field is absent.
 _STATION_TYPES = {"airCube", "blackBox"}
@@ -159,29 +159,6 @@ def _unique_ips(devices: list[dict]) -> set[str]:
     """IPs that appear on exactly one UISP device (and are not shared defaults)."""
     counts = Counter(ip for d in devices if (ip := _mgmt_ip(d)))
     return {ip for ip, n in counts.items() if n == 1 and ip not in _SHARED_DEFAULT_IPS}
-
-
-def _single_flight(session: Session):
-    """Postgres advisory lock so scheduled + on-demand runs don't overlap."""
-    bind = session.get_bind()
-    if bind.dialect.name != "postgresql":
-        return nullcontext()
-    locked = session.execute(
-        text("SELECT pg_try_advisory_lock(:k)"), {"k": _ADVISORY_LOCK_KEY}
-    ).scalar()
-    if not locked:
-        raise RuntimeError("uisp topology sync already running")
-
-    class _Lock:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            session.execute(
-                text("SELECT pg_advisory_unlock(:k)"), {"k": _ADVISORY_LOCK_KEY}
-            )
-
-    return _Lock()
 
 
 def _active_subscriber_macs(session: Session) -> dict[str, set]:
@@ -417,6 +394,13 @@ def _upsert_olt(
     if ip and ip in unique_ips:
         changed |= _fill(olt, "mgmt_ip", ip)
     if olt.uisp_device_id != uisp_id:
+        # Release the id from any other row first (a fallback ip/name match
+        # can land on a row while another still holds this uisp id) so the
+        # partial-unique index can't reject the flush.
+        release = session.query(OLTDevice).filter(OLTDevice.uisp_device_id == uisp_id)
+        if olt.id is not None:
+            release = release.filter(OLTDevice.id != olt.id)
+        release.update({OLTDevice.uisp_device_id: None}, synchronize_session=False)
         olt.uisp_device_id = uisp_id
         changed = True
 
@@ -482,6 +466,13 @@ def _upsert_onu(
     changed |= _fill(ont, "vendor", "ubiquiti")
     changed |= _fill(ont, "mac_address", ident.get("mac"))
     if ont.uisp_device_id != uisp_id:
+        # Release the id from any other row first (the (olt, serial) fallback
+        # can land on a row while another still holds this uisp id) so the
+        # partial-unique index can't reject the flush.
+        release = session.query(OntUnit).filter(OntUnit.uisp_device_id == uisp_id)
+        if ont.id is not None:
+            release = release.filter(OntUnit.id != ont.id)
+        release.update({OntUnit.uisp_device_id: None}, synchronize_session=False)
         ont.uisp_device_id = uisp_id
         changed = True
     ont.last_sync_source = "uisp"
@@ -501,65 +492,70 @@ def sync(session: Session, client, now: datetime | None = None) -> dict:
     """Run one UISP topology sync pass; returns the counter summary.
 
     Read-only against UISP. Idempotent: every row is keyed by its stable
-    ``uisp_device_id``; re-runs only bump sync timestamps. One bad device is
-    caught, logged and counted as ``failed`` — it never aborts the run (known
-    unique-key collisions are pre-empted in code so a failure can't poison
-    the session).
+    ``uisp_device_id``; re-runs only bump sync timestamps. Each device is
+    upserted inside its own SAVEPOINT (``Session.begin_nested``, the
+    zabbix_host_sync idiom): a flush failure rolls back to the savepoint,
+    is counted as ``failed`` and never aborts the run or poisons the
+    session. Single-flight locking lives in the Celery task wrapper
+    (``db_session_adapter.advisory_lock``), not here.
     """
     now = now or _now()
     stats = _blank_stats()
-    with _single_flight(session):
-        sites = client.list_sites()
-        devices = client.list_devices()
-        excluded_sites = excluded_site_ids(sites)
+    sites = client.list_sites()
+    devices = client.list_devices()
+    excluded_sites = excluded_site_ids(sites)
 
-        kept: list[dict] = []
-        for device in devices:
-            if not _device_id(device):
-                continue
-            site_id = _device_site_id(device)
-            if site_id and site_id in excluded_sites:
-                stats["excluded_archive"] += 1
-                continue
-            kept.append(device)
+    kept: list[dict] = []
+    for device in devices:
+        if not _device_id(device):
+            continue
+        site_id = _device_site_id(device)
+        if site_id and site_id in excluded_sites:
+            stats["excluded_archive"] += 1
+            continue
+        kept.append(device)
 
-        unique_ips = _unique_ips(kept)
-        aps = [d for d in kept if _is_ap(d)]
-        olts = [d for d in kept if _is_olt(d)]
-        onus = [d for d in kept if _is_onu(d)]
-        stations = [
-            d for d in kept if _is_station(d) and not _is_olt(d) and not _is_onu(d)
-        ]
+    unique_ips = _unique_ips(kept)
+    aps = [d for d in kept if _is_ap(d)]
+    olts = [d for d in kept if _is_olt(d)]
+    onus = [d for d in kept if _is_onu(d)]
+    stations = [d for d in kept if _is_station(d) and not _is_olt(d) and not _is_onu(d)]
 
-        # --- APs -> network_devices (match-only; stamps uisp_device_id) ---
-        ap_nodes = match_ap_nodes(session, aps, unique_ips, stats)
-        session.flush()
+    # --- APs -> network_devices (match-only; stamps uisp_device_id) ---
+    ap_nodes = match_ap_nodes(session, aps, unique_ips, stats)
+    session.flush()
 
-        # --- Wireless customer radios -> cpe_devices ---
-        # PtP backhaul masters report role=station but are infrastructure: a
-        # station whose name matches an existing network_devices row must not
-        # create a duplicate CPE (match-don't-create).
-        infra_names, _infra_ips = build_device_index(session)
-        need_ap_fallback = any(
-            _station_parent_ap_id(s) is None
-            and _norm_label(_device_name(s)) not in infra_names
-            for s in stations
+    # --- Wireless customer radios -> cpe_devices ---
+    # PtP backhaul masters report role=station but are infrastructure: a
+    # station whose name matches an existing network_devices row must not
+    # create a duplicate CPE (match-don't-create).
+    infra_names, _infra_ips = build_device_index(session)
+    need_ap_fallback = any(
+        _station_parent_ap_id(s) is None
+        and _norm_label(_device_name(s)) not in infra_names
+        for s in stations
+    )
+    ap_by_station_id: dict[str, str] = {}
+    ap_by_station_mac: dict[str, str] = {}
+    if need_ap_fallback:
+        ap_by_station_id, ap_by_station_mac = _ap_side_station_index(
+            client, aps, ap_nodes
         )
-        ap_by_station_id: dict[str, str] = {}
-        ap_by_station_mac: dict[str, str] = {}
-        if need_ap_fallback:
-            ap_by_station_id, ap_by_station_mac = _ap_side_station_index(
-                client, aps, ap_nodes
-            )
 
-        created_cpes: list[CPEDevice] = []
-        seen_cpe_uisp_ids: set[str] = set()
-        for station in stations:
-            uisp_id = _device_id(station)
-            if _norm_label(_device_name(station)) in infra_names:
-                stats["skipped"] += 1
-                continue
-            try:
+    created_cpes: list[CPEDevice] = []
+    # Seen = what UISP *reports*, taken from the raw inventory BEFORE the
+    # upsert loop: a device whose upsert fails transiently is still present
+    # in UISP and must not be soft-pruned to 'vanished'.
+    seen_cpe_uisp_ids: set[str] = {_device_id(s) for s in stations}
+    for station in stations:
+        uisp_id = _device_id(station)
+        if _norm_label(_device_name(station)) in infra_names:
+            stats["skipped"] += 1
+            continue
+        try:
+            # SAVEPOINT per item (the zabbix_host_sync idiom): a flush failure
+            # rolls back only this device, not the surrounding transaction.
+            with session.begin_nested():
                 cpe, created = _upsert_station(session, station, now, stats)
                 parent_ap_id = (
                     _station_parent_ap_id(station)
@@ -573,68 +569,69 @@ def sync(session: Session, client, now: datetime | None = None) -> dict:
                     cpe.parent_network_device_id = node.id
                     stats["edges_set"] += 1
                 session.flush()
-            except Exception:
-                stats["failed"] += 1
-                logger.exception("uisp_sync_station_failed uisp_id=%s", uisp_id)
-                continue
-            seen_cpe_uisp_ids.add(uisp_id)
-            if created:
-                created_cpes.append(cpe)
+        except Exception:
+            stats["failed"] += 1
+            logger.exception("uisp_sync_station_failed uisp_id=%s", uisp_id)
+            continue
+        if created:
+            created_cpes.append(cpe)
 
-        # --- Subscriber matching: NEWLY CREATED radios only, exact MAC ---
-        if created_cpes:
-            mac_index = _active_subscriber_macs(session)
-            for cpe in created_cpes:
-                normalized = _norm_mac(cpe.mac_address)
-                subscribers = mac_index.get(normalized or "", set())
-                if len(subscribers) == 1:
-                    cpe.subscriber_id = next(iter(subscribers))
-                    stats["matched"] += 1
-                elif len(subscribers) > 1:
-                    stats["ambiguous"] += 1
-            session.flush()
-
-        # --- UF-OLTs -> olt_devices ---
-        olt_ids_by_uisp: dict[str, object] = {}
-        for device in olts:
-            try:
-                olt = _upsert_olt(session, device, unique_ips, stats)
-            except Exception:
-                stats["failed"] += 1
-                logger.exception("uisp_sync_olt_failed uisp_id=%s", _device_id(device))
-                continue
-            if olt is not None:
-                olt_ids_by_uisp[_device_id(device)] = olt.id
-
-        # --- UFiber ONUs -> ont_units ---
-        seen_onu_keys: set[tuple] = set()
-        for device in onus:
-            try:
-                _upsert_onu(session, device, olt_ids_by_uisp, seen_onu_keys, now, stats)
-            except Exception:
-                stats["failed"] += 1
-                logger.exception("uisp_sync_onu_failed uisp_id=%s", _device_id(device))
-
-        # --- Soft-prune: radios that vanished from UISP ---
-        # Only the columns this sync owns are touched; operator-managed fields
-        # (status, subscriber link) are never flipped by a prune.
-        stale = (
-            session.query(CPEDevice)
-            .filter(
-                CPEDevice.uisp_device_id.isnot(None),
-                or_(
-                    CPEDevice.last_uisp_status.is_(None),
-                    CPEDevice.last_uisp_status != "vanished",
-                ),
-            )
-            .all()
-        )
-        for cpe in stale:
-            if cpe.uisp_device_id not in seen_cpe_uisp_ids:
-                cpe.last_uisp_status = "vanished"
-                cpe.uisp_synced_at = now
-                stats["pruned"] += 1
+    # --- Subscriber matching: NEWLY CREATED radios only, exact MAC ---
+    if created_cpes:
+        mac_index = _active_subscriber_macs(session)
+        for cpe in created_cpes:
+            normalized = _norm_mac(cpe.mac_address)
+            subscribers = mac_index.get(normalized or "", set())
+            if len(subscribers) == 1:
+                cpe.subscriber_id = next(iter(subscribers))
+                stats["matched"] += 1
+            elif len(subscribers) > 1:
+                stats["ambiguous"] += 1
         session.flush()
+
+    # --- UF-OLTs -> olt_devices ---
+    olt_ids_by_uisp: dict[str, object] = {}
+    for device in olts:
+        try:
+            with session.begin_nested():
+                olt = _upsert_olt(session, device, unique_ips, stats)
+        except Exception:
+            stats["failed"] += 1
+            logger.exception("uisp_sync_olt_failed uisp_id=%s", _device_id(device))
+            continue
+        if olt is not None:
+            olt_ids_by_uisp[_device_id(device)] = olt.id
+
+    # --- UFiber ONUs -> ont_units ---
+    seen_onu_keys: set[tuple] = set()
+    for device in onus:
+        try:
+            with session.begin_nested():
+                _upsert_onu(session, device, olt_ids_by_uisp, seen_onu_keys, now, stats)
+        except Exception:
+            stats["failed"] += 1
+            logger.exception("uisp_sync_onu_failed uisp_id=%s", _device_id(device))
+
+    # --- Soft-prune: radios that vanished from UISP ---
+    # Only the columns this sync owns are touched; operator-managed fields
+    # (status, subscriber link) are never flipped by a prune.
+    stale = (
+        session.query(CPEDevice)
+        .filter(
+            CPEDevice.uisp_device_id.isnot(None),
+            or_(
+                CPEDevice.last_uisp_status.is_(None),
+                CPEDevice.last_uisp_status != "vanished",
+            ),
+        )
+        .all()
+    )
+    for cpe in stale:
+        if cpe.uisp_device_id not in seen_cpe_uisp_ids:
+            cpe.last_uisp_status = "vanished"
+            cpe.uisp_synced_at = now
+            stats["pruned"] += 1
+    session.flush()
 
     result = dict(stats)
     logger.info(

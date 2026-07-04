@@ -252,6 +252,21 @@ def engine():
             poolclass=StaticPool,
         )
 
+        # pysqlite emits BEGIN lazily and runs SAVEPOINT/RELEASE in autocommit
+        # mode, so releasing the outermost savepoint COMMITS the connection —
+        # breaking Session.begin_nested() (used for per-item isolation, e.g.
+        # zabbix_host_sync / uisp_sync) under the db_session fixture's
+        # connection-level transaction. Standard SQLAlchemy recipe: take over
+        # transaction control so BEGIN is emitted eagerly and savepoints nest
+        # inside a real transaction.
+        @event.listens_for(engine, "connect")
+        def _sqlite_disable_implicit_begin(dbapi_connection, _connection_record):
+            dbapi_connection.isolation_level = None
+
+        @event.listens_for(engine, "begin")
+        def _sqlite_emit_begin(conn):
+            conn.exec_driver_sql("BEGIN")
+
         @event.listens_for(engine, "connect")
         def _load_spatialite(dbapi_connection, _connection_record):
             dbapi_connection.enable_load_extension(True)

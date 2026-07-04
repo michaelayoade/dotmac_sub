@@ -257,6 +257,80 @@ def test_ptp_master_matching_network_device_is_not_created(db_session):
     assert result["created"] == 0
 
 
+def test_flush_failure_is_isolated_and_prior_work_survives(db_session):
+    # A mid-run flush failure (unbindable value -> DBAPI error, standing in
+    # for a Postgres IntegrityError that would abort the transaction) must be
+    # rolled back to its own savepoint: the run completes, earlier and later
+    # devices' work survives, and only the bad device is counted as failed.
+    node = _ap_node(db_session)
+    station_a = _device(
+        "aaaaaaaa-0000-0000-0000-00000000000a",
+        "CUST-BEFORE",
+        mac="24:A4:3C:AA:BB:10",
+        ap_device_id=AP_ID,
+    )
+    station_bad = _device(
+        "bbbbbbbb-0000-0000-0000-00000000000b",
+        "CUST-BROKEN",
+        mac={"unbindable": True},  # fails at session.flush()
+        ap_device_id=AP_ID,
+    )
+    station_c = _device(
+        "cccccccc-0000-0000-0000-00000000000c",
+        "CUST-AFTER",
+        mac="24:A4:3C:AA:BB:11",
+        ap_device_id=AP_ID,
+    )
+    ap = _device(
+        AP_ID,
+        "AP-GARKI-SECTOR1",
+        role="ap",
+        ip="172.16.40.2/24",
+        site_id="site-bts-1",
+    )
+    client = FakeUispClient(devices=[ap, station_a, station_bad, station_c])
+
+    result = sync(db_session, client)
+
+    assert result["failed"] == 1
+    assert result["created"] == 2
+    macs = {
+        cpe.mac_address
+        for cpe in db_session.query(CPEDevice).all()
+        if cpe.uisp_device_id
+    }
+    assert macs == {"24:A4:3C:AA:BB:10", "24:A4:3C:AA:BB:11"}
+    # The session survived the failure: edges were still written afterwards.
+    after = (
+        db_session.query(CPEDevice)
+        .filter(CPEDevice.uisp_device_id == "cccccccc-0000-0000-0000-00000000000c")
+        .one()
+    )
+    assert after.parent_network_device_id == node.id
+
+
+def test_failed_upsert_does_not_mark_device_vanished(db_session):
+    # The seen-set is built from the raw UISP inventory, not from successful
+    # upserts: a device whose upsert fails transiently is still reported by
+    # UISP and must not be soft-pruned to 'vanished'.
+    existing = CPEDevice(
+        uisp_device_id=STATION_ID,
+        mac_address=None,
+        last_uisp_status="active",
+    )
+    db_session.add(existing)
+    db_session.flush()
+    devices = [_device(STATION_ID, "CUST-JOHN-DOE", mac={"unbindable": True})]
+    client = FakeUispClient(devices=devices)
+
+    result = sync(db_session, client)
+
+    assert result["failed"] == 1
+    assert result["pruned"] == 0
+    db_session.refresh(existing)
+    assert existing.last_uisp_status == "active"
+
+
 def test_vanished_radio_is_soft_pruned(db_session):
     _ap_node(db_session)
     client = FakeUispClient(devices=_wireless_payload())
