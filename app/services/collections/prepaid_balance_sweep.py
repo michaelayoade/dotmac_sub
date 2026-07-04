@@ -330,8 +330,12 @@ def _reconcile_low(
     if _deactivation_deferred(db, now, cfg):
         return "deferred"
 
-    account.prepaid_deactivation_at = now
-    db.flush()
+    # Arm the deactivation timer ONLY on a successful suspend. _suspend_account
+    # fails-closed (returns False) for shielded / dedicated-bundle / canceled
+    # accounts; if we armed the timer first, _reconcile_low would short-circuit
+    # on the next run and never retry — leaving an armed-but-active account
+    # showing a bogus deactivation date. Leaving the timer None makes the next
+    # sweep re-attempt the suspension once the block clears.
     suspended = _suspend_account(
         db,
         str(account.id),
@@ -339,6 +343,8 @@ def _reconcile_low(
         source=_SOURCE,
     )
     if suspended:
+        account.prepaid_deactivation_at = now
+        db.flush()
         _send_notice(
             db,
             account,

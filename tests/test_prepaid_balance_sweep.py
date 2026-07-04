@@ -368,3 +368,37 @@ def test_postpaid_accounts_untouched(
     assert result["accounts_scanned"] == 0
     db_session.refresh(subscription)
     assert subscription.status == SubscriptionStatus.active
+
+
+def test_suspend_blocked_leaves_timer_unarmed_and_retries(
+    db_session, subscriber_account, subscription, monkeypatch
+):
+    """If the suspend is blocked (shield / dedicated bundle → _suspend_account
+    returns False), prepaid_deactivation_at must NOT be armed, so the next sweep
+    re-attempts rather than short-circuiting on a set-but-not-suspended timer."""
+    import app.services.collections.prepaid_balance_sweep as sweep
+
+    _enable_control(db_session)
+    _make_prepaid(db_session, subscriber_account, subscription, credit=Decimal("0"))
+    subscriber_account.prepaid_low_balance_at = _MONDAY_NOON - timedelta(days=2)
+    db_session.commit()
+
+    calls = {"n": 0}
+
+    def _blocked(*args, **kwargs):
+        calls["n"] += 1
+        return False
+
+    monkeypatch.setattr(sweep, "_suspend_account", _blocked)
+
+    result = run_prepaid_balance_sweep(db_session, now=_MONDAY_NOON)
+    assert result["suspended"] == 0
+    db_session.refresh(subscriber_account)
+    db_session.refresh(subscription)
+    assert subscriber_account.prepaid_deactivation_at is None
+    assert subscription.status != SubscriptionStatus.suspended
+    assert calls["n"] == 1
+
+    # Next run re-attempts the suspension (timer still unarmed).
+    run_prepaid_balance_sweep(db_session, now=_MONDAY_NOON + timedelta(hours=1))
+    assert calls["n"] == 2
