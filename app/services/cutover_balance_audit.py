@@ -150,6 +150,23 @@ def _rows(db: Session):
                   AND i.created_at >= :activity_at
                 GROUP BY i.account_id
             ),
+            external_post_invoice_allocations AS (
+                SELECT i.account_id, COALESCE(SUM(pa.amount), 0) AS amount
+                FROM invoices i
+                JOIN seeded seeded ON seeded.account_id = i.account_id
+                JOIN payment_allocations pa
+                  ON pa.invoice_id = i.id
+                 AND pa.is_active IS TRUE
+                JOIN payments p ON p.id = pa.payment_id
+                WHERE i.is_active
+                  AND i.status IN ('issued', 'partially_paid', 'overdue', 'paid')
+                  AND COALESCE(i.is_proforma, false) IS false
+                  AND i.created_at >= :activity_at
+                  AND p.is_active IS TRUE
+                  AND p.status = 'succeeded'
+                  AND p.account_id IS DISTINCT FROM i.account_id
+                GROUP BY i.account_id
+            ),
             ledger_charges AS (
                 SELECT le.account_id, COALESCE(SUM(le.amount), 0) AS amount
                 FROM ledger_entries le
@@ -219,9 +236,11 @@ def _rows(db: Session):
                    COALESCE(s.deposit, 0) AS deposit,
                    COALESCE(ln.net, 0) - COALESCE(oa.due, 0) AS current_available,
                    COALESCE(s.deposit, 0) + COALESCE(pp.amount, 0)
-                     + COALESCE(ta.net, 0) - COALESCE(pi.amount, 0)
+                     + COALESCE(epia.amount, 0) + COALESCE(ta.net, 0)
+                     - COALESCE(pi.amount, 0)
                      - COALESCE(lc.amount, 0) AS target_available,
-                   COALESCE(pp.amount, 0) AS post_cutover_payments,
+                   COALESCE(pp.amount, 0) + COALESCE(epia.amount, 0)
+                     AS post_cutover_payments,
                    COALESCE(pi.amount, 0) + COALESCE(lc.amount, 0)
                      AS post_cutover_invoices,
                    COALESCE(ss.active_seed_net, 0) AS active_seed_net,
@@ -241,6 +260,8 @@ def _rows(db: Session):
             LEFT JOIN open_ar oa ON oa.account_id = s.id
             LEFT JOIN post_payments pp ON pp.account_id = s.id
             LEFT JOIN post_invoices pi ON pi.account_id = s.id
+            LEFT JOIN external_post_invoice_allocations epia
+              ON epia.account_id = s.id
             LEFT JOIN ledger_charges lc ON lc.account_id = s.id
             LEFT JOIN seed_sums ss ON ss.account_id = s.id
             LEFT JOIN all_post_adjustments apa ON apa.account_id = s.id
