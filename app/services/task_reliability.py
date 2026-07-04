@@ -135,6 +135,13 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         HEALTH,
         "Applying a scheduled plan change must be idempotent (apply() status guard).",
     ),
+    "app.tasks.collections.prepaid_balance_sweep": _c(
+        "collections",
+        SWEEP,
+        GUARDED,
+        HEALTH,
+        "Daily balance sweep; per-account commit, idempotent arm/warn/suspend.",
+    ),
     "app.tasks.collections.run_billing_enforcement": _c(
         "collections", STATE, GUARDED, HEALTH
     ),

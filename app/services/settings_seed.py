@@ -1075,6 +1075,17 @@ def seed_collections_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text=os.getenv("COLLECTIONS_SUSPENSION_NOTIFICATION_DEDUPE_HOURS", "24"),
     )
+    prepaid_balance_enforcement_raw = os.getenv(
+        "PREPAID_BALANCE_ENFORCEMENT_ENABLED", "false"
+    )
+    collections_settings.ensure_by_key(
+        db,
+        key="prepaid_balance_enforcement_enabled",
+        value_type=SettingValueType.boolean,
+        value_text=prepaid_balance_enforcement_raw,
+        value_json=prepaid_balance_enforcement_raw.lower()
+        in {"1", "true", "yes", "on"},
+    )
     collections_settings.ensure_by_key(
         db,
         key="prepaid_blocking_time",
