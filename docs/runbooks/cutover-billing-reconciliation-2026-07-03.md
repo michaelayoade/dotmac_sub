@@ -61,6 +61,11 @@ source-of-truth difference has been verified, for example a deliberate write-off
 or collections-side reconciliation that intentionally differs from Splynx mirror
 truth. Stale accepted entries are reported separately and keep the audit non-OK.
 
+Correction rule: customer-favorable credits may be applied by tooling when the
+invariant proves the amount and the post-apply balance is verified against the
+target. Customer debits require a reviewed account-specific evidence trail; do
+not post debits from arithmetic alone.
+
 ## Applied State
 
 The June 24 phantom-opening reversal repair restored exact construction rows
@@ -77,18 +82,19 @@ post-merge missing payment credits: 4 accounts / NGN 75,251.00
 partial opening-construction debit adjustments: 11 accounts / NGN 1,504,277.03
 adjustment-aware exact opening construction restore: 1 account / NGN 306,250.00
 mirror-backed seed construction credits: 2 accounts / NGN 980,916.67
+invariant-proven understated seed credits: 19 accounts / NGN 403,014.15
 ```
 
-After the mirror-evidence pass, adjustment-aware exact restore, and
-mirror-backed seed credits, before registering accepted variances, the scheduled
-audit reports:
+After the mirror-evidence pass, adjustment-aware exact restore, mirror-backed
+seed credits, and invariant-proven understated seed credits, before registering
+accepted variances, the scheduled audit reports:
 
 ```text
 population: 15055 cutover-seeded accounts
-raw_drift_count: 28
-unregistered drift_count: 28
+raw_drift_count: 9
+unregistered drift_count: 9
 overcredited: 9 accounts / NGN 689,184.50
-understated: 19 accounts / NGN 403,014.15
+understated: 0 accounts / NGN 0.00
 post-cutover adjustments: 29 entries / NGN -1,702,726.86
 target adjustments: 13 entries / NGN 298,501.71
 excluded remediation adjustments: 16 entries / NGN -2,001,228.57
@@ -102,6 +108,7 @@ Historical baseline log:
 2026-07-04 post partial construction adjustments: 32 drift rows
 2026-07-04 post mirror-evidence adjustment exclusions: 30 drift rows
 2026-07-04 post mirror-backed seed credits: 28 drift rows
+2026-07-04 post invariant-proven understated seed credits: 9 drift rows
 ```
 
 The scheduled guard is `app.tasks.billing.audit_cutover_balance_invariant`,
