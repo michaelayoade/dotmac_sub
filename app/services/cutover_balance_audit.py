@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import text
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session
 
 from app.services.common import round_money
@@ -20,9 +21,6 @@ PARTIAL_CONSTRUCTION_MEMO_PREFIX = (
 CUTOVER_ACTIVITY_AT = datetime(2026, 6, 16, 9, 8, tzinfo=UTC)
 PAYMENT_ACTIVITY_AT = datetime(2026, 6, 16, tzinfo=UTC)
 TOLERANCE = Decimal("0.01")
-VARIANCE_REGISTRY_PATH = Path(__file__).with_name(
-    "cutover_balance_variance_registry.json"
-)
 
 
 def _money(value: object) -> Decimal:
@@ -35,8 +33,8 @@ def _direction(drift: Decimal) -> str:
     return "overcredited" if drift > 0 else "understated"
 
 
-def _load_registered_variances(path: Path | None = None) -> dict[str, Decimal]:
-    registry_path = path or VARIANCE_REGISTRY_PATH
+def _load_registered_variances_from_file(path: Path) -> dict[str, Decimal]:
+    registry_path = path
     if not registry_path.exists():
         return {}
     data = json.loads(registry_path.read_text())
@@ -63,6 +61,40 @@ def _load_registered_variances(path: Path | None = None) -> dict[str, Decimal]:
             raise ValueError(f"duplicate accepted cutover variance for {account_id}")
         variances[account_id] = _money(expected_drift)
     return variances
+
+
+def _load_registered_variances_from_db(db: Session) -> dict[str, Decimal]:
+    try:
+        rows = db.execute(
+            text(
+                """
+                SELECT account_id::text, expected_drift
+                FROM cutover_balance_variances
+                WHERE is_active IS TRUE
+                  AND status = 'accepted'
+                """
+            )
+        ).mappings()
+    except ProgrammingError as exc:
+        if "cutover_balance_variances" not in str(exc):
+            raise
+        db.rollback()
+        return {}
+    variances: dict[str, Decimal] = {}
+    for row in rows:
+        account_id = str(row["account_id"])
+        if account_id in variances:
+            raise ValueError(f"duplicate accepted cutover variance for {account_id}")
+        variances[account_id] = _money(row["expected_drift"])
+    return variances
+
+
+def _load_registered_variances(
+    db: Session, variance_registry_path: Path | None = None
+) -> dict[str, Decimal]:
+    if variance_registry_path is not None:
+        return _load_registered_variances_from_file(variance_registry_path)
+    return _load_registered_variances_from_db(db)
 
 
 def _unregistered_drift(raw_drift: Decimal, registered_drift: Decimal) -> Decimal:
@@ -229,8 +261,9 @@ def _rows(db: Session):
 def audit_cutover_balance_invariant(
     db: Session, *, sample_limit: int = 25, variance_registry_path: Path | None = None
 ) -> dict[str, Any]:
-    registered_variances = _load_registered_variances(variance_registry_path)
+    registered_variances = _load_registered_variances(db, variance_registry_path)
     seen_registered_accounts: set[str] = set()
+    changed_registered_accounts: set[str] = set()
     population = 0
     drift_rows: list[dict[str, Any]] = []
     raw_drift_count = 0
@@ -266,6 +299,8 @@ def audit_cutover_balance_invariant(
         if account_id in registered_variances:
             seen_registered_accounts.add(account_id)
         drift = _unregistered_drift(raw_drift, registered_drift)
+        if abs(registered_drift) > TOLERANCE and abs(drift) > TOLERANCE:
+            changed_registered_accounts.add(account_id)
         if abs(raw_drift) > TOLERANCE:
             raw_drift_count += 1
         if abs(registered_drift) > TOLERANCE:
@@ -299,7 +334,8 @@ def audit_cutover_balance_invariant(
     overcredited = [row for row in drift_rows if Decimal(row["drift"]) > 0]
     understated = [row for row in drift_rows if Decimal(row["drift"]) < 0]
     stale_registered_variances = sorted(
-        set(registered_variances) - seen_registered_accounts
+        (set(registered_variances) - seen_registered_accounts)
+        | changed_registered_accounts
     )
     return {
         "ok": not drift_rows and not stale_registered_variances,
