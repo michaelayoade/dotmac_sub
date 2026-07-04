@@ -38,6 +38,7 @@ from app.models.network_monitoring import (
     DeviceMetric,
     DeviceRole,
     DeviceStatus,
+    DeviceType,
     DnsThreatAction,
     DnsThreatEvent,
     DnsThreatSeverity,
@@ -2301,6 +2302,80 @@ def test_consolidated_page_data_includes_active_nas_inventory_devices(db_session
         device for device in payload["core_devices"] if device.name == "Fiber POP NAS"
     )
     assert included.detail_url.endswith(f"/admin/network/nas/devices/{included.id}")
+
+
+def test_devices_list_page_data_includes_core_network_devices(db_session):
+    core = NetworkDevice(
+        name="Distribution Switch 1",
+        hostname="dist-sw1.local",
+        mgmt_ip="192.0.2.240",
+        vendor="Ubiquiti",
+        model="EdgeSwitch",
+        serial_number="SW-001",
+        device_type=DeviceType.switch,
+        role=DeviceRole.distribution,
+        status=DeviceStatus.online,
+        is_active=True,
+    )
+    olt_monitor = NetworkDevice(
+        name="Lab Huawei OLT",
+        hostname="lab-olt.local",
+        mgmt_ip="192.0.2.241",
+        vendor="Huawei",
+        model="MA5608T",
+        device_type=DeviceType.switch,
+        role=DeviceRole.access,
+        status=DeviceStatus.online,
+        is_active=True,
+    )
+    olt = OLTDevice(
+        name="Lab Huawei OLT",
+        hostname="lab-olt.local",
+        mgmt_ip="192.0.2.241",
+        vendor="Huawei",
+        model="MA5608T",
+        is_active=True,
+    )
+    db_session.add_all([core, olt_monitor, olt])
+    db_session.commit()
+
+    payload = core_devices_inventory_service.devices_list_page_data(db_session)
+
+    names_by_type = {(device["name"], device["type"]) for device in payload["devices"]}
+    assert ("Distribution Switch 1", "core") in names_by_type
+    assert ("Lab Huawei OLT", "olt") in names_by_type
+    assert ("Lab Huawei OLT", "core") not in names_by_type
+    assert payload["stats"]["core"] == 1
+
+
+def test_devices_list_page_data_filters_core_network_devices(db_session):
+    db_session.add_all(
+        [
+            NetworkDevice(
+                name="Core Router 1",
+                mgmt_ip="192.0.2.242",
+                device_type=DeviceType.router,
+                role=DeviceRole.core,
+                status=DeviceStatus.online,
+                is_active=True,
+            ),
+            OLTDevice(
+                name="Access OLT",
+                mgmt_ip="192.0.2.243",
+                vendor="Huawei",
+                model="MA5800",
+                is_active=True,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    payload = core_devices_inventory_service.devices_list_page_data(
+        db_session, device_type="core"
+    )
+
+    assert [device["name"] for device in payload["devices"]] == ["Core Router 1"]
+    assert payload["type"] == "core"
 
 
 def test_network_devices_zabbix_probe_statuses_use_icmp_and_snmp_only(monkeypatch):

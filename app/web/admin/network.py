@@ -1,6 +1,6 @@
 """Admin network management base web routes."""
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -48,14 +48,16 @@ def network_hub(request: Request, db: Session = Depends(get_db)) -> HTMLResponse
 def devices_list(
     request: Request,
     device_type: str | None = None,
+    type_filter: str | None = Query(default=None, alias="type"),
     search: str | None = None,
     status: str | None = None,
     vendor: str | None = None,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     """List all network devices."""
+    selected_type = type_filter or device_type
     page_data = web_network_core_devices_service.devices_list_page_data(
-        db, device_type=device_type, search=search, status=status, vendor=vendor
+        db, device_type=selected_type, search=search, status=status, vendor=vendor
     )
     context = _base_context(request, db, active_page="devices")
     context.update(page_data)
@@ -84,13 +86,20 @@ def devices_search(
 )
 def devices_filter(
     request: Request,
+    device_type: str | None = None,
+    type_filter: str | None = Query(default=None, alias="type"),
     search: str | None = None,
     status: str | None = None,
     vendor: str | None = None,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
+    selected_type = type_filter or device_type
     devices = web_network_core_devices_service.devices_filter_data(
-        db, search=search, status=status, vendor=vendor
+        db,
+        device_type=selected_type,
+        search=search,
+        status=status,
+        vendor=vendor,
     )
     return templates.TemplateResponse(
         "admin/network/devices/_table_rows.html",

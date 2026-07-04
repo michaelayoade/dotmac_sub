@@ -551,6 +551,16 @@ def get_cpe_ports(db: Session, cpe_id: object) -> list[Port]:
 def collect_devices(db: Session) -> list[dict]:
     """Collect all device types into a unified list of dicts."""
     devices: list[dict] = []
+    seen_keys: set[tuple[str, str]] = set()
+
+    def _add_seen(kind: str, value: object | None) -> None:
+        text = str(value or "").strip().lower()
+        if text:
+            seen_keys.add((kind, text))
+
+    def _seen(kind: str, value: object | None) -> bool:
+        text = str(value or "").strip().lower()
+        return bool(text and (kind, text) in seen_keys)
 
     olts = network_service.olt_devices.list(
         db=db, is_active=True, order_by="name", order_dir="asc", limit=500, offset=0
@@ -570,6 +580,53 @@ def collect_devices(db: Session) -> list[dict]:
                 "subscriber": None,
             }
         )
+        _add_seen("id", olt.id)
+        _add_seen("mgmt_ip", getattr(olt, "mgmt_ip", None))
+        _add_seen("hostname", getattr(olt, "hostname", None))
+        _add_seen("name", getattr(olt, "name", None))
+
+    core_devices = list(
+        db.scalars(
+            select(NetworkDevice)
+            .where(NetworkDevice.is_active.is_(True))
+            .order_by(NetworkDevice.name.asc())
+        ).all()
+    )
+    for device in core_devices:
+        if _network_device_is_olt_candidate(device):
+            continue
+        if (
+            _seen("mgmt_ip", getattr(device, "mgmt_ip", None))
+            or _seen("hostname", getattr(device, "hostname", None))
+            or _seen("name", getattr(device, "name", None))
+        ):
+            continue
+        status_value = getattr(getattr(device, "status", None), "value", None)
+        status = (
+            "online"
+            if status_value == "online"
+            else "warning"
+            if status_value in {"degraded", "maintenance"}
+            else "offline"
+        )
+        devices.append(
+            {
+                "id": str(device.id),
+                "name": device.name,
+                "type": "core",
+                "serial_number": device.serial_number,
+                "ip_address": device.mgmt_ip,
+                "vendor": device.vendor,
+                "model": device.model,
+                "status": status,
+                "last_seen": device.last_ping_at or device.last_snmp_at,
+                "subscriber": None,
+            }
+        )
+        _add_seen("id", device.id)
+        _add_seen("mgmt_ip", device.mgmt_ip)
+        _add_seen("hostname", device.hostname)
+        _add_seen("name", device.name)
 
     onts = network_service.ont_units.list(
         db=db,
@@ -678,6 +735,7 @@ def compute_device_stats(devices: list[dict]) -> dict[str, int]:
     """Compute summary stats for a filtered device list."""
     return {
         "total": len(devices),
+        "core": sum(1 for d in devices if d["type"] == "core"),
         "olt": sum(1 for d in devices if d["type"] == "olt"),
         "ont": sum(1 for d in devices if d["type"] == "ont"),
         "cpe": sum(1 for d in devices if d["type"] == "cpe"),
@@ -706,6 +764,7 @@ def devices_list_page_data(
         "devices": devices,
         "stats": stats,
         "device_type": device_type,
+        "type": device_type,
         "search": search or "",
         "status": status or "",
         "vendor": vendor or "",
@@ -724,13 +783,16 @@ def devices_search_data(db: Session, search: str) -> list[dict]:
 def devices_filter_data(
     db: Session,
     *,
+    device_type: str | None = None,
     search: str | None = None,
     status: str | None = None,
     vendor: str | None = None,
 ) -> list[dict]:
     """Return filtered devices for HTMX filter partial."""
     devices = collect_devices(db)
-    return filter_devices(devices, search=search, status=status, vendor=vendor)
+    return filter_devices(
+        devices, device_type=device_type, search=search, status=status, vendor=vendor
+    )
 
 
 def olts_list_page_data(
