@@ -282,23 +282,28 @@ def audit_funded_inactive_exposure_task() -> dict:
     session = SessionLocal()
     try:
         result = funded_inactive_exposure(session)
-        log_fn = (
-            logger.error
-            if result.get("disabled_count") or result.get("suspended_count")
-            else logger.info
-        )
+        log_fn = logger.error if result.get("refund_review_count") else logger.info
         log_fn(
             "funded_inactive_exposure: ok=%s inactive_positive=%s/%s "
-            "disabled=%s/%s suspended=%s/%s blocked=%s/%s material=%s",
+            "refund_review=%s/%s disabled=%s/%s canceled=%s/%s "
+            "suspended=%s/%s blocked=%s/%s soft_deleted=%s/%s "
+            "sibling_candidates=%s material=%s",
             result.get("ok"),
             result.get("inactive_positive_count"),
             result.get("inactive_positive_total"),
+            result.get("refund_review_count"),
+            result.get("refund_review_total"),
             result.get("disabled_count"),
             result.get("disabled_total"),
+            result.get("canceled_count"),
+            result.get("canceled_total"),
             result.get("suspended_count"),
             result.get("suspended_total"),
             result.get("blocked_count"),
             result.get("blocked_total"),
+            result.get("soft_deleted_count"),
+            result.get("soft_deleted_total"),
+            result.get("sibling_candidate_count"),
             result.get("material_count"),
         )
         return result

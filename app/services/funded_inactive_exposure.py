@@ -10,9 +10,11 @@ from sqlalchemy.orm import Session
 
 from app.services.common import round_money
 
-INACTIVE_STATUSES = ("blocked", "disabled", "suspended")
+INACTIVE_STATUSES = ("blocked", "disabled", "suspended", "canceled")
+REFUND_REVIEW_STATUSES = ("disabled", "suspended", "canceled")
 TOLERANCE = Decimal("0.01")
 MATERIAL_AMOUNT = Decimal("50000.00")
+SIBLING_SAMPLE_LIMIT = 5
 
 
 def _money(value: object) -> Decimal:
@@ -68,7 +70,10 @@ def _rows(db: Session, *, min_amount: Decimal = TOLERANCE):
                                 concat_ws(' ', s.first_name, s.last_name))
                          AS subscriber_name,
                        s.status AS subscriber_status,
+                       s.is_active AS subscriber_is_active,
                        s.splynx_customer_id,
+                       s.email,
+                       s.phone,
                        COALESCE(s.deposit, 0) AS deposit,
                        COALESCE(ln.net, 0) - COALESCE(oa.due, 0)
                          AS current_available,
@@ -82,16 +87,79 @@ def _rows(db: Session, *, min_amount: Decimal = TOLERANCE):
                 LEFT JOIN open_ar oa ON oa.account_id = s.id
                 LEFT JOIN ticket_counts tc ON tc.subscriber_id = s.id
                 LEFT JOIN status_events se ON se.subscriber_id = s.id
-                WHERE s.is_active
-                  AND s.status IN ('blocked', 'disabled', 'suspended')
+                WHERE s.status IN ('blocked', 'disabled', 'suspended', 'canceled')
+            ),
+            funded_exposure AS (
+                SELECT *
+                FROM exposure
+                WHERE current_available > :min_amount
             )
-            SELECT *
-            FROM exposure
-            WHERE current_available > :min_amount
-            ORDER BY current_available DESC, subscriber_name ASC
+            SELECT fe.account_id,
+                   fe.subscriber_name,
+                   fe.subscriber_status,
+                   fe.subscriber_is_active,
+                   fe.splynx_customer_id,
+                   fe.deposit,
+                   fe.current_available,
+                   fe.open_ar,
+                   fe.ticket_count,
+                   fe.status_event_count,
+                   fe.latest_status_event_at,
+                   COALESCE(sc.active_sibling_count, 0) AS active_sibling_count,
+                   sc.active_sibling_account_ids,
+                   sc.active_sibling_names,
+                   fe.updated_at
+            FROM funded_exposure fe
+            LEFT JOIN LATERAL (
+                WITH sibling_matches AS (
+                    SELECT sib.id,
+                           COALESCE(NULLIF(sib.display_name, ''),
+                                    NULLIF(sib.company_name, ''),
+                                    concat_ws(' ', sib.first_name, sib.last_name))
+                             AS sibling_name,
+                           sib.updated_at
+                    FROM subscribers sib
+                    WHERE sib.id <> fe.account_id
+                      AND sib.is_active
+                      AND sib.status IN ('active', 'delinquent')
+                      AND (
+                        (
+                          fe.splynx_customer_id IS NOT NULL
+                          AND sib.splynx_customer_id = fe.splynx_customer_id
+                        )
+                        OR (
+                          NULLIF(lower(trim(fe.email)), '') IS NOT NULL
+                          AND lower(trim(fe.email)) = lower(trim(sib.email))
+                        )
+                        OR (
+                          NULLIF(
+                            regexp_replace(COALESCE(fe.phone, ''), '\\D', '', 'g'), ''
+                          ) IS NOT NULL
+                          AND regexp_replace(COALESCE(fe.phone, ''), '\\D', '', 'g')
+                            = regexp_replace(COALESCE(sib.phone, ''), '\\D', '', 'g')
+                        )
+                      )
+                ),
+                sibling_sample AS (
+                    SELECT *
+                    FROM sibling_matches
+                    ORDER BY updated_at DESC
+                    LIMIT :sibling_sample_limit
+                )
+                SELECT (SELECT COUNT(*) FROM sibling_matches) AS active_sibling_count,
+                       (
+                         SELECT STRING_AGG(id::text, ',' ORDER BY updated_at DESC)
+                         FROM sibling_sample
+                       ) AS active_sibling_account_ids,
+                       (
+                         SELECT STRING_AGG(sibling_name, ' | ' ORDER BY updated_at DESC)
+                         FROM sibling_sample
+                       ) AS active_sibling_names
+            ) sc ON TRUE
+            ORDER BY fe.current_available DESC, fe.subscriber_name ASC
             """
         ),
-        {"min_amount": min_amount},
+        {"min_amount": min_amount, "sibling_sample_limit": SIBLING_SAMPLE_LIMIT},
     ).mappings()
 
 
@@ -116,6 +184,9 @@ def funded_inactive_exposure(
     }
     counts: dict[str, int] = dict.fromkeys(INACTIVE_STATUSES, 0)
     material_counts: dict[str, int] = dict.fromkeys(INACTIVE_STATUSES, 0)
+    soft_deleted_count = 0
+    soft_deleted_total = Decimal("0.00")
+    sibling_candidate_count = 0
     rows: list[dict[str, Any]] = []
 
     for row in _rows(db, min_amount=min_amount):
@@ -125,8 +196,14 @@ def funded_inactive_exposure(
         current_available = _money(row["current_available"])
         deposit = _money(row["deposit"])
         open_ar = _money(row["open_ar"])
+        subscriber_is_active = bool(row["subscriber_is_active"])
         counts[status] += 1
         totals[status] += current_available
+        if not subscriber_is_active:
+            soft_deleted_count += 1
+            soft_deleted_total += current_available
+        if int(row["active_sibling_count"] or 0) > 0:
+            sibling_candidate_count += 1
         if current_available >= material_amount:
             material_counts[status] += 1
         rows.append(
@@ -134,6 +211,7 @@ def funded_inactive_exposure(
                 "account_id": str(row["account_id"]),
                 "subscriber_name": str(row["subscriber_name"] or ""),
                 "subscriber_status": status,
+                "subscriber_is_active": subscriber_is_active,
                 "splynx_customer_id": (
                     None
                     if row["splynx_customer_id"] is None
@@ -144,6 +222,11 @@ def funded_inactive_exposure(
                 "open_ar": str(open_ar),
                 "ticket_count": int(row["ticket_count"] or 0),
                 "status_event_count": int(row["status_event_count"] or 0),
+                "active_sibling_count": int(row["active_sibling_count"] or 0),
+                "active_sibling_account_ids": str(
+                    row["active_sibling_account_ids"] or ""
+                ),
+                "active_sibling_names": str(row["active_sibling_names"] or ""),
                 "latest_status_event_at": _isoformat(row["latest_status_event_at"]),
                 "updated_at": _isoformat(row["updated_at"]),
             }
@@ -159,18 +242,28 @@ def funded_inactive_exposure(
         }
 
     inactive_positive_total = sum(totals.values(), Decimal("0.00"))
-    disabled_count = counts["disabled"]
-    suspended_count = counts["suspended"]
+    refund_review_count = sum(counts[status] for status in REFUND_REVIEW_STATUSES)
+    refund_review_total = sum(
+        (totals[status] for status in REFUND_REVIEW_STATUSES), Decimal("0.00")
+    )
     return {
-        "ok": disabled_count == 0 and suspended_count == 0,
+        "ok": refund_review_count == 0,
         "inactive_positive_count": sum(counts.values()),
         "inactive_positive_total": str(round_money(inactive_positive_total)),
-        "disabled_count": disabled_count,
+        "disabled_count": counts["disabled"],
         "disabled_total": str(round_money(totals["disabled"])),
+        "canceled_count": counts["canceled"],
+        "canceled_total": str(round_money(totals["canceled"])),
         "blocked_count": counts["blocked"],
         "blocked_total": str(round_money(totals["blocked"])),
-        "suspended_count": suspended_count,
+        "suspended_count": counts["suspended"],
         "suspended_total": str(round_money(totals["suspended"])),
+        "refund_review_count": refund_review_count,
+        "refund_review_total": str(round_money(refund_review_total)),
+        "soft_deleted_count": soft_deleted_count,
+        "soft_deleted_total": str(round_money(soft_deleted_total)),
+        "sibling_candidate_count": sibling_candidate_count,
+        "sibling_sample_limit": SIBLING_SAMPLE_LIMIT,
         "material_amount": str(material_amount),
         "material_count": sum(material_counts.values()),
         "by_status": status_summary,

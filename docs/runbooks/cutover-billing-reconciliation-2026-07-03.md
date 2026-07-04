@@ -119,8 +119,10 @@ registered as `cutover_balance_invariant_audit` every 86,400 seconds.
 Positive balances on inactive accounts are a standing liability report, not a
 cutover drift variance. The scheduled read-only task
 `app.tasks.billing.audit_funded_inactive_exposure` reports inactive accounts
-(`blocked`, `disabled`, `suspended`) whose portal available balance is positive,
-using the same customer-facing balance formula:
+(`blocked`, `disabled`, `suspended`, `canceled`) whose portal available balance
+is positive, including soft-deleted subscriber rows. Soft-deleting a subscriber
+row preserves the liability; it does not extinguish it. The report uses the
+same customer-facing balance formula:
 
 ```text
 available = active null-invoice ledger credits
@@ -134,8 +136,25 @@ Policy:
 blocked   -> retention/win-back queue; customer may return with value intact
 disabled  -> refund/disposition review
 suspended -> account review; do not leave positive value buried under suspension
+canceled  -> refund/disposition review
 ```
 
 The task is registered as `funded_inactive_exposure_audit` every 2,592,000
-seconds by default. It logs disabled/suspended funded exposure at ERROR level
-and includes the largest accounts as samples for ops review.
+seconds by default. It logs refund-review funded exposure at ERROR level and
+includes the largest accounts as samples for ops review. Samples expose
+`subscriber_is_active` plus active sibling-account candidates matched by shared
+Splynx customer id, email, or phone; these are review hints only, not automatic
+transfer targets.
+
+Current exposure after the soft-deleted-row fix:
+
+```text
+inactive positive: 430 accounts / NGN 5,187,190.36
+refund review: 28 accounts / NGN 2,681,725.29
+disabled: 10 accounts / NGN 873,992.69
+canceled: 14 accounts / NGN 1,806,997.50
+blocked: 402 accounts / NGN 2,505,465.07
+suspended: 4 accounts / NGN 735.10
+soft-deleted funded rows: 17 accounts / NGN 2,671,251.00
+sibling candidate hints: 119 accounts
+```

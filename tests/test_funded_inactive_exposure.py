@@ -12,17 +12,25 @@ def _row(
     current: str,
     deposit: str = "0.00",
     open_ar: str = "0.00",
+    is_active: bool = True,
+    active_sibling_count: int = 0,
 ) -> dict[str, object]:
     return {
         "account_id": account_id,
         "subscriber_name": f"Subscriber {account_id[-1]}",
         "subscriber_status": status,
+        "subscriber_is_active": is_active,
         "splynx_customer_id": "123",
         "current_available": current,
         "deposit": deposit,
         "open_ar": open_ar,
         "ticket_count": 1,
         "status_event_count": 2,
+        "active_sibling_count": active_sibling_count,
+        "active_sibling_account_ids": (
+            "99999999-9999-4999-8999-999999999999" if active_sibling_count else ""
+        ),
+        "active_sibling_names": "Live sibling" if active_sibling_count else "",
         "latest_status_event_at": "2026-07-04T00:00:00+00:00",
         "updated_at": "2026-07-04T01:00:00+00:00",
     }
@@ -66,6 +74,8 @@ def test_funded_inactive_exposure_groups_statuses(monkeypatch):
     assert result["disabled_total"] == "125.50"
     assert result["suspended_count"] == 1
     assert result["suspended_total"] == "60000.00"
+    assert result["refund_review_count"] == 2
+    assert result["refund_review_total"] == "60125.50"
     assert result["material_count"] == 1
     assert result["by_status"]["suspended"]["material_count"] == 1
     assert result["samples"][0]["subscriber_status"] == "suspended"
@@ -123,3 +133,53 @@ def test_sample_limit_truncates_largest_rows(monkeypatch):
         "30.00",
         "20.00",
     ]
+
+
+def test_soft_deleted_funded_accounts_are_reported(monkeypatch):
+    monkeypatch.setattr(
+        exposure,
+        "_rows",
+        lambda _db, *, min_amount: [
+            _row(
+                "11111111-1111-4111-8111-111111111111",
+                status="disabled",
+                current="381191.00",
+                is_active=False,
+                active_sibling_count=1,
+            )
+        ],
+    )
+
+    result = exposure.funded_inactive_exposure(object())
+
+    assert result["ok"] is False
+    assert result["inactive_positive_count"] == 1
+    assert result["disabled_count"] == 1
+    assert result["refund_review_count"] == 1
+    assert result["soft_deleted_count"] == 1
+    assert result["soft_deleted_total"] == "381191.00"
+    assert result["sibling_candidate_count"] == 1
+    assert result["samples"][0]["subscriber_is_active"] is False
+    assert result["samples"][0]["active_sibling_count"] == 1
+    assert result["samples"][0]["active_sibling_names"] == "Live sibling"
+
+
+def test_canceled_funded_accounts_require_refund_review(monkeypatch):
+    monkeypatch.setattr(
+        exposure,
+        "_rows",
+        lambda _db, *, min_amount: [
+            _row(
+                "11111111-1111-4111-8111-111111111111",
+                status="canceled",
+                current="50.00",
+            )
+        ],
+    )
+
+    result = exposure.funded_inactive_exposure(object())
+
+    assert result["ok"] is False
+    assert result["canceled_count"] == 1
+    assert result["refund_review_count"] == 1
+    assert result["refund_review_total"] == "50.00"
