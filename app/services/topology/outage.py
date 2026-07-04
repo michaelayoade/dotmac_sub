@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.orm import Session
 
+from app.models.network import FdhCabinet
 from app.models.network_monitoring import NetworkDevice, OutageIncident, PopSite
 from app.services.topology.affected import (
     _dist_to_core,
@@ -55,17 +56,19 @@ def declare_outage(
     *,
     node: NetworkDevice | None = None,
     basestation: PopSite | None = None,
+    fdh: FdhCabinet | None = None,
     declared_by: str | None = None,
     note: str | None = None,
     severity: str | None = None,
 ) -> OutageIncident:
-    """Open an incident against a node/basestation, snapshotting affected_count."""
-    if node is None and basestation is None:
-        raise ValueError("declare_outage requires a node or a basestation")
-    impact = affected_customers(session, node=node, basestation=basestation)
+    """Open an incident against infrastructure, snapshotting affected_count."""
+    if node is None and basestation is None and fdh is None:
+        raise ValueError("declare_outage requires a node, basestation, or FDH cabinet")
+    impact = affected_customers(session, node=node, basestation=basestation, fdh=fdh)
     incident = OutageIncident(
         root_node_id=node.id if node is not None else None,
         basestation_id=basestation.id if basestation is not None else None,
+        fdh_cabinet_id=fdh.id if fdh is not None else None,
         declared_by=declared_by,
         note=note,
         severity=severity,

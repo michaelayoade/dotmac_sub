@@ -8,9 +8,9 @@ from app.models.catalog import NasDevice, Subscription, SubscriptionStatus
 from app.models.network import (
     FdhCabinet,
     OLTDevice,
-    OnuOnlineStatus,
     OntAssignment,
     OntUnit,
+    OnuOnlineStatus,
     PonPort,
     Splitter,
     SplitterPort,
@@ -22,8 +22,7 @@ from app.models.network_monitoring import (
     NetworkTopologyLink,
     PopSite,
 )
-from app.models.subscriber import Address
-from app.models.subscriber import Subscriber
+from app.models.subscriber import Address, Subscriber
 from app.services.topology.affected import affected_customers, fdh_impact_rows
 
 

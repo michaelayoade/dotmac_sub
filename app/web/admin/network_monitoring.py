@@ -197,17 +197,13 @@ def outage_impact_page(
         fdh_impact_rows,
         list_basestations,
         list_fdh_cabinets,
+        list_network_nodes,
     )
 
     context = _base_context(request, db, active_page="monitoring")
     context["basestations"] = list_basestations(db)
     context["fdh_cabinets"] = list_fdh_cabinets(db)
-    context["network_nodes"] = (
-        db.query(NetworkDevice)
-        .filter(NetworkDevice.is_active.is_(True))
-        .order_by(NetworkDevice.name)
-        .all()
-    )
+    context["network_nodes"] = list_network_nodes(db)
     context["selected_basestation_id"] = basestation_id
     context["selected_node_id"] = node_id
     context["selected_fdh_id"] = fdh_id
@@ -276,18 +272,17 @@ def outages_console(request: Request, db: Session = Depends(get_db)):
     incidents. No auto-detection, no notification sending."""
     from app.models.network import FdhCabinet
     from app.models.network_monitoring import NetworkDevice, PopSite
-    from app.services.topology.affected import list_basestations, list_fdh_cabinets
+    from app.services.topology.affected import (
+        list_basestations,
+        list_fdh_cabinets,
+        list_network_nodes,
+    )
     from app.services.topology.outage import is_stale_open, list_open_incidents
 
     context = _base_context(request, db, active_page="monitoring")
     context["basestations"] = list_basestations(db)
     context["fdh_cabinets"] = list_fdh_cabinets(db)
-    context["network_nodes"] = (
-        db.query(NetworkDevice)
-        .filter(NetworkDevice.is_active.is_(True))
-        .order_by(NetworkDevice.name)
-        .all()
-    )
+    context["network_nodes"] = list_network_nodes(db)
     rows = []
     for inc in list_open_incidents(db):
         if inc.basestation_id is not None:

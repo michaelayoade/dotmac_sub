@@ -26,16 +26,16 @@ from app.models.network import (
     SplitterPort,
     SplitterPortAssignment,
 )
-from app.models.subscriber import Address
-from app.services.network.signal_thresholds import (
-    classify_signal,
-    normalize_optical_signal_dbm,
-)
 from app.models.network_monitoring import (
     DeviceRole,
     NetworkDevice,
     NetworkTopologyLink,
     PopSite,
+)
+from app.models.subscriber import Address
+from app.services.network.signal_thresholds import (
+    classify_signal,
+    normalize_optical_signal_dbm,
 )
 from app.services.topology.lldp_poller import SOURCE as LLDP_SOURCE
 
@@ -56,6 +56,16 @@ def list_fdh_cabinets(session: Session) -> list[FdhCabinet]:
         session.query(FdhCabinet)
         .filter(FdhCabinet.is_active.is_(True))
         .order_by(FdhCabinet.name)
+        .all()
+    )
+
+
+def list_network_nodes(session: Session) -> list[NetworkDevice]:
+    """Active network devices for outage-impact pickers."""
+    return (
+        session.query(NetworkDevice)
+        .filter(NetworkDevice.is_active.is_(True))
+        .order_by(NetworkDevice.name)
         .all()
     )
 
@@ -332,15 +342,19 @@ def fdh_impact_rows(session: Session, fdh: FdhCabinet) -> list[dict]:
         .filter(Splitter.fdh_id == fdh.id, Splitter.is_active.is_(True))
         .all()
     ]
-    splitter_port_ids = [
-        row[0]
-        for row in session.query(SplitterPort.id)
-        .filter(
-            SplitterPort.splitter_id.in_(splitter_ids),
-            SplitterPort.is_active.is_(True),
-        )
-        .all()
-    ] if splitter_ids else []
+    splitter_port_ids = (
+        [
+            row[0]
+            for row in session.query(SplitterPort.id)
+            .filter(
+                SplitterPort.splitter_id.in_(splitter_ids),
+                SplitterPort.is_active.is_(True),
+            )
+            .all()
+        ]
+        if splitter_ids
+        else []
+    )
 
     subscriber_ids = {sub.subscriber_id for sub in subscriptions if sub.subscriber_id}
     service_address_ids = {
@@ -415,12 +429,24 @@ def fdh_impact_rows(session: Session, fdh: FdhCabinet) -> list[dict]:
     rows: list[dict] = []
     for subscription in subscriptions:
         subscriber = getattr(subscription, "subscriber", None)
-        ont_assignment = ont_assignment_by_subscriber.get(
-            subscription.subscriber_id
-        ) or ont_assignment_by_address.get(subscription.service_address_id)
-        port_assignment = port_assignment_by_subscriber.get(
-            subscription.subscriber_id
-        ) or port_assignment_by_address.get(subscription.service_address_id)
+        ont_assignment = (
+            ont_assignment_by_subscriber.get(subscription.subscriber_id)
+            if subscription.subscriber_id is not None
+            else None
+        ) or (
+            ont_assignment_by_address.get(subscription.service_address_id)
+            if subscription.service_address_id is not None
+            else None
+        )
+        port_assignment = (
+            port_assignment_by_subscriber.get(subscription.subscriber_id)
+            if subscription.subscriber_id is not None
+            else None
+        ) or (
+            port_assignment_by_address.get(subscription.service_address_id)
+            if subscription.service_address_id is not None
+            else None
+        )
 
         ont = ont_by_id.get(ont_assignment.ont_unit_id) if ont_assignment else None
         splitter_port = None
