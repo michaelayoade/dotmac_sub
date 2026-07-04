@@ -308,13 +308,7 @@ def _apply_customer_filters(
             )
         )
     if pop_site_id:
-        query = query.filter(
-            Subscriber.subscriptions.any(
-                Subscription.provisioning_nas_device.has(
-                    NasDevice.pop_site_id == pop_site_id
-                )
-            )
-        )
+        query = query.filter(Subscriber.pop_site_id == pop_site_id)
     return query
 
 
