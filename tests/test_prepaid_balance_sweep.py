@@ -115,6 +115,21 @@ def test_flag_off_is_noop(db_session, subscriber_account, subscription):
     assert _notices(db_session, subscriber_account) == []
 
 
+def test_subscription_prepaid_mode_drives_candidate_selection(
+    db_session, subscriber_account, subscription
+):
+    _make_prepaid(db_session, subscriber_account, subscription, credit=Decimal("0"))
+    subscriber_account.billing_mode = BillingMode.postpaid
+    db_session.commit()
+    _enable_control(db_session)
+
+    result = run_prepaid_balance_sweep(db_session, now=_MONDAY_NOON)
+
+    db_session.refresh(subscriber_account)
+    assert result["warned"] == 1
+    assert subscriber_account.prepaid_low_balance_at is not None
+
+
 # ---------------------------------------------------------------------------
 # Low balance, first run → arm + warn, but do NOT suspend
 # ---------------------------------------------------------------------------

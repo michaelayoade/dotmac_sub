@@ -406,7 +406,20 @@ def _process_webhook(
             # this additionally covers prepaid/balance-based suspensions.
             try:
                 from app.services import collections as collections_service
+                from app.services.billing.reconcile_unposted import (
+                    settle_prepaid_draft_invoices_from_credit,
+                )
 
+                settled = settle_prepaid_draft_invoices_from_credit(
+                    db, str(account_for_restore)
+                )
+                if settled.changed:
+                    logger.info(
+                        "Settled %d prepaid draft invoice(s) after webhook top-up for %s",
+                        len(settled.invoices_settled),
+                        account_for_restore,
+                    )
+                    db.commit()
                 collections_service.restore_account_services(
                     db, str(account_for_restore)
                 )

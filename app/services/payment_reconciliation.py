@@ -238,8 +238,24 @@ def reconcile_pending_topups(
                 linked += 1
             if intent.account_id is not None:
                 try:
+                    from app.services.billing.reconcile_unposted import (
+                        settle_prepaid_draft_invoices_from_credit,
+                    )
+
+                    settled = settle_prepaid_draft_invoices_from_credit(
+                        db, str(intent.account_id), run_at=now
+                    )
+                    if settled.changed:
+                        logger.info(
+                            "Top-up reconciliation settled %d prepaid draft "
+                            "invoice(s) for account %s",
+                            len(settled.invoices_settled),
+                            intent.account_id,
+                        )
+                        db.commit()
                     restore_account_services(db, str(intent.account_id))
                 except Exception:
+                    db.rollback()
                     logger.warning(
                         "Top-up reconciliation: restore failed for account %s",
                         intent.account_id,

@@ -14,7 +14,16 @@ from app.models.billing import (
     Payment,
     PaymentStatus,
 )
-from app.models.catalog import BillingMode
+from app.models.catalog import (
+    AccessType,
+    BillingCycle,
+    BillingMode,
+    CatalogOffer,
+    PriceBasis,
+    ServiceType,
+    Subscription,
+    SubscriptionStatus,
+)
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services.billing._common import get_account_credit_balance
 from scripts.one_off.cleanup_prepaid_phantom_ar import CLEANUP_MARKER, run_cleanup
@@ -75,6 +84,29 @@ def _add_credit(db, account, amount="100.00") -> None:
     db.flush()
 
 
+def _prepaid_subscription(db, account) -> Subscription:
+    offer = CatalogOffer(
+        name="Prepaid Drift Plan",
+        service_type=ServiceType.business,
+        access_type=AccessType.fiber,
+        price_basis=PriceBasis.flat,
+        billing_cycle=BillingCycle.monthly,
+        billing_mode=BillingMode.prepaid,
+        is_active=True,
+    )
+    db.add(offer)
+    db.flush()
+    sub = Subscription(
+        subscriber_id=account.id,
+        offer_id=offer.id,
+        status=SubscriptionStatus.active,
+        billing_mode=BillingMode.prepaid,
+    )
+    db.add(sub)
+    db.flush()
+    return sub
+
+
 def test_funded_invoice_settled_from_credit(db_session):
     acct = _subscriber(db_session)
     inv = _invoice(db_session, acct, amount="100.00")
@@ -131,6 +163,19 @@ def test_postpaid_invoice_untouched(db_session):
     assert result["accounts"] == 0
     db_session.refresh(inv)
     assert inv.status == InvoiceStatus.overdue
+
+
+def test_prepaid_subscription_drift_account_is_included(db_session):
+    acct = _subscriber(db_session, mode=BillingMode.postpaid)
+    inv = _invoice(db_session, acct, amount="100.00")
+    _prepaid_subscription(db_session, acct)
+    db_session.commit()
+
+    result = run_cleanup(db_session, apply=True, unfunded_action="draft")
+
+    assert result["unfunded_retired"] == 1
+    db_session.refresh(inv)
+    assert inv.status == InvoiceStatus.draft
 
 
 def test_dry_run_writes_nothing(db_session):
