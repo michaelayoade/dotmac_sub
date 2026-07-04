@@ -261,3 +261,116 @@ def build_ncc_subscriber_report(
             "data_usage_tb": cap.get("data_usage_tb"),
         },
     }
+
+
+# ── request-parameter parsing (for the admin picker form / query string) ────
+_CAPACITY_KEYS = (
+    "access_capacity_gbps",
+    "unutilized_capacity_mbps",
+    "points_of_presence",
+    "data_usage_tb",
+)
+
+
+def parse_report_params(
+    *,
+    as_of: str | None = None,
+    statuses: str | None = None,
+    reseller_id: str | None = None,
+    capacity: dict[str, str | None] | None = None,
+) -> NccSubscriberReportParams:
+    """Build ``NccSubscriberReportParams`` from raw form/query strings.
+
+    ``as_of`` is a ``YYYY-MM-DD`` date (interpreted as end-of-day UTC — the
+    period-end). ``statuses`` is a comma-separated list of subscription-status
+    names; unknown names are ignored, and an empty result falls back to
+    ``active``. Bad values degrade to sensible defaults rather than erroring, so
+    the picker form is forgiving.
+    """
+    at = None
+    if as_of and as_of.strip():
+        try:
+            d = datetime.strptime(as_of.strip(), "%Y-%m-%d")
+            at = d.replace(hour=23, minute=59, second=59, tzinfo=UTC)
+        except ValueError:
+            at = None
+
+    picked: list[SubscriptionStatus] = []
+    for name in (statuses or "").split(","):
+        name = name.strip().lower()
+        if not name:
+            continue
+        try:
+            picked.append(SubscriptionStatus(name))
+        except ValueError:
+            continue
+    statuses_tuple = tuple(picked) or (SubscriptionStatus.active,)
+
+    rid = None
+    if reseller_id and reseller_id.strip():
+        try:
+            rid = uuid.UUID(reseller_id.strip())
+        except (ValueError, AttributeError):
+            rid = None
+
+    cap: dict[str, object] = {}
+    for key in _CAPACITY_KEYS:
+        raw = (capacity or {}).get(key)
+        if raw is not None and str(raw).strip() != "":
+            cap[key] = str(raw).strip()
+
+    return NccSubscriberReportParams(
+        as_of=at, active_statuses=statuses_tuple, reseller_id=rid, capacity=cap
+    )
+
+
+def build_ncc_subscriber_csv(report: dict) -> str:
+    """Flatten a report into the NCC "indicator, value" CSV layout."""
+    import csv
+    import io
+
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["NCC Quarterly Subscriber Data", ""])
+    w.writerow(["As at", report["parameters"]["as_of"]])
+    w.writerow(["Active statuses", ", ".join(report["parameters"]["active_statuses"])])
+    w.writerow([])
+    w.writerow(["Indicator", "Value"])
+    w.writerow(
+        ["Total Active Internet Subscriptions", report["total_active_subscriptions"]]
+    )
+
+    m = report["subscription_matrix"]
+    w.writerow(["Corporate — Wired", m["corporate"]["wired"]])
+    w.writerow(["Corporate — Wireless", m["corporate"]["wireless"]])
+    w.writerow(["Individual — Wired", m["individual"]["wired"]])
+    w.writerow(["Individual — Wireless", m["individual"]["wireless"]])
+
+    b = report["by_billing_mode"]
+    w.writerow(["Prepaid subscribers", b.get("prepaid", 0)])
+    w.writerow(["Postpaid subscribers", b.get("postpaid", 0)])
+
+    s = report["by_speed_band"]
+    w.writerow(["Speed 256kbps–<2Mbps", s["256kbps-<2Mbps"]])
+    w.writerow(["Speed 2Mbps–<10Mbps", s["2Mbps-<10Mbps"]])
+    w.writerow(["Speed 10Mbps & above", s["10Mbps+"]])
+
+    cap = report["network_capacity"]
+    w.writerow(["Access Capacity (Gbps) [manual]", cap["access_capacity_gbps"] or ""])
+    w.writerow(
+        ["Un-utilised Capacity (Mbps) [manual]", cap["unutilized_capacity_mbps"] or ""]
+    )
+    w.writerow(
+        ["Number of Points of Presence [manual]", cap["points_of_presence"] or ""]
+    )
+    w.writerow(["Data Usage (TB) [manual]", cap["data_usage_tb"] or ""])
+
+    w.writerow([])
+    w.writerow(["Active Subscriptions per State", ""])
+    for state, n in report["by_state"].items():
+        w.writerow([state, n])
+    w.writerow([])
+    w.writerow(["Active Subscriptions per Region", ""])
+    for region, n in report["by_region"].items():
+        w.writerow([region, n])
+    return buf.getvalue()
