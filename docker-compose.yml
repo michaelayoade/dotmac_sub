@@ -7,7 +7,7 @@ x-observability-extra-hosts: &observability_extra_hosts
 - observability.dotmac.io:75.119.128.247
 services:
   app:
-    image: ${APP_IMAGE:-dotmac_sub:latest}
+    image: ${APP_IMAGE:?APP_IMAGE must be set in .env to an immutable app image}
     container_name: dotmac_sub_app
     restart: unless-stopped
     mem_limit: 5g
@@ -136,7 +136,7 @@ services:
       retries: 5
 
   celery-worker:
-    image: ${APP_IMAGE:-dotmac_sub:latest}
+    image: ${APP_IMAGE:?APP_IMAGE must be set in .env to an immutable app image}
     container_name: dotmac_sub_celery_worker
     restart: unless-stopped
     mem_limit: 2g
@@ -195,7 +195,7 @@ services:
     - -Q
     - celery,nin,crm
   celery-worker-tr069:
-    image: ${APP_IMAGE:-dotmac_sub:latest}
+    image: ${APP_IMAGE:?APP_IMAGE must be set in .env to an immutable app image}
     container_name: dotmac_sub_celery_worker_tr069
     restart: unless-stopped
     mem_limit: 1g
@@ -244,7 +244,7 @@ services:
     - -Q
     - tr069,acs
   celery-worker-bandwidth:
-    image: ${APP_IMAGE:-dotmac_sub:latest}
+    image: ${APP_IMAGE:?APP_IMAGE must be set in .env to an immutable app image}
     container_name: dotmac_sub_celery_worker_bandwidth
     restart: unless-stopped
     mem_limit: 768m
@@ -294,7 +294,7 @@ services:
   # gated by `billing_enabled` and no-op until cutover; this worker simply
   # ensures the queue is consumed (previously it had no consumer → all dropped).
   celery-worker-billing:
-    image: ${APP_IMAGE:-dotmac_sub:latest}
+    image: ${APP_IMAGE:?APP_IMAGE must be set in .env to an immutable app image}
     container_name: dotmac_sub_celery_worker_billing
     restart: unless-stopped
     mem_limit: 768m
@@ -329,7 +329,7 @@ services:
     - -Q
     - billing
   celery-beat:
-    image: ${APP_IMAGE:-dotmac_sub:latest}
+    image: ${APP_IMAGE:?APP_IMAGE must be set in .env to an immutable app image}
     container_name: dotmac_sub_celery_beat
     restart: unless-stopped
     mem_limit: 512m
@@ -487,7 +487,7 @@ services:
     - /var/lib/docker/containers:/var/lib/docker/containers:ro
     command: -config.file=/etc/promtail/config.yml
   bandwidth-poller:
-    image: ${APP_IMAGE:-dotmac_sub:latest}
+    image: ${APP_IMAGE:?APP_IMAGE must be set in .env to an immutable app image}
     container_name: dotmac_sub_bandwidth_poller
     restart: unless-stopped
     mem_limit: 512m
@@ -528,7 +528,7 @@ services:
     - -m
     - app.poller
   syslog-listener:
-    image: ${APP_IMAGE:-dotmac_sub:latest}
+    image: ${APP_IMAGE:?APP_IMAGE must be set in .env to an immutable app image}
     container_name: dotmac_sub_syslog_listener
     restart: unless-stopped
     mem_limit: 256m
