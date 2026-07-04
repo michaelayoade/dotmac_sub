@@ -73,7 +73,7 @@ def test_connect_failure_raises_wrapped(monkeypatch):
     client.close.assert_called_once()  # closed even on failure
 
 
-def test_missing_key_path_raises(monkeypatch):
+def test_no_auth_configured_raises(monkeypatch):
     # settings is a frozen dataclass — swap the whole object for the test.
     monkeypatch.setattr(
         ce,
@@ -82,10 +82,50 @@ def test_missing_key_path_raises(monkeypatch):
             router_config_ssh_username="dotmac-ops",
             router_config_ssh_port=120,
             router_config_ssh_key_path="",
+            router_config_ssh_password="",
         ),
     )
-    with pytest.raises(ce.RouterConfigExportError, match="not configured"):
-        ce.export_config_via_ssh(_router(), key_path="")
+    with pytest.raises(ce.RouterConfigExportError, match="no SSH auth configured"):
+        ce.export_config_via_ssh(_router(), key_path="", password="")
+
+
+def test_export_uses_password_when_no_key(monkeypatch):
+    client = _patch_client(monkeypatch, stdout=b"/ip address\nadd address=1.1.1.1/32\n")
+    out = ce.export_config_via_ssh(
+        _router(), username="dotmac-snap", port=120, key_path="", password="s3cret"
+    )
+    assert "/ip address" in out
+    kw = client.connect.call_args.kwargs
+    assert kw["password"] == "s3cret"
+    assert "pkey" not in kw  # no key material when authenticating by password
+    assert kw["username"] == "dotmac-snap"
+
+
+def test_key_preferred_when_both_set(monkeypatch):
+    client = _patch_client(monkeypatch, stdout=b"/ip address\n")
+    ce.export_config_via_ssh(_router(), key_path="/k", password="ignored")
+    kw = client.connect.call_args.kwargs
+    assert kw.get("pkey") == "PKEY"  # key wins
+    assert "password" not in kw
+
+
+def test_password_fallback_when_key_rejected(monkeypatch):
+    client = _patch_client(monkeypatch, stdout=b"/ip address\n")
+    # First connect (key) is rejected; second connect (password) succeeds.
+    client.connect.side_effect = [ce.paramiko.AuthenticationException("bad key"), None]
+    out = ce.export_config_via_ssh(_router(), key_path="/k", password="fallback")
+    assert "/ip address" in out
+    assert client.connect.call_count == 2
+    assert client.connect.call_args_list[0].kwargs.get("pkey") == "PKEY"
+    assert client.connect.call_args_list[1].kwargs.get("password") == "fallback"
+
+
+def test_key_rejected_without_password_reraises(monkeypatch):
+    client = _patch_client(monkeypatch, stdout=b"/ip address\n")
+    client.connect.side_effect = ce.paramiko.AuthenticationException("bad key")
+    with pytest.raises(ce.RouterConfigExportError, match="failed"):
+        ce.export_config_via_ssh(_router(), key_path="/k", password="")
+    client.close.assert_called_once()
 
 
 def test_fetch_config_export_uses_ssh_when_enabled(monkeypatch):

@@ -136,6 +136,13 @@ class Settings:
     router_config_ssh_key_path: str = os.getenv(
         "ROUTER_CONFIG_SSH_KEY_PATH", "/etc/dotmac/dotmac-ops.key"
     )
+    # Optional password auth for a least-privilege (ssh,read) snapshot user, as
+    # an alternative/fallback to the key. Simplifies per-router onboarding (one
+    # `/user add password=...` line — no public-key file import). Key is
+    # preferred: the password is only used when no key is configured, or when a
+    # router rejects the key (e.g. a not-yet-keyed new router). May be a plain
+    # value or an OpenBao/secret ref (bao://…) resolved at use.
+    router_config_ssh_password: str = os.getenv("ROUTER_CONFIG_SSH_PASSWORD", "")
     # Host-key pinning (TOFU): known_hosts persists first-seen router keys so a
     # CHANGED key is rejected (MITM guard). Strict mode also rejects unknown
     # hosts (requires a pre-populated known_hosts file).
