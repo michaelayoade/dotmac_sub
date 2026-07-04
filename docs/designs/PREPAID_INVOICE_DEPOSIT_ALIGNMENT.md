@@ -80,7 +80,15 @@ prepaid-wins, `_core.py:173-202`); customer `build_service_status` uses
 `Subscriber.billing_mode` (`service_status.py:116`). Reconcile so a drifted/mixed
 account can't show a prepaid wallet while dunning treats it as postpaid.
 
-### Item 5 — clean up the 938 phantom prepaid overdue invoices
+### Item 5 — clean up the 938 phantom prepaid overdue invoices ✅ DONE (this PR — script)
+Script: `scripts/one_off/cleanup_prepaid_phantom_ar.py` (dry-run by default; `--apply`;
+`--unfunded-action draft|void`). Per prepaid account, oldest-first: funded invoices
+(payment-backed credit ≥ balance) are settled from the deposit via the Item-1
+`settle_single_invoice_from_credit`; unfunded ones are drafted (default) or voided —
+removing them from AR/overdue/dunning/balance. `partially_paid` never drafted/voided
+(only settled if now funded, else reported). Idempotent (stamps `metadata_`). Run the
+dry-run in the prod container, review the CSV, then `--apply`. Prod estimate at build
+time: ~1,101 prepaid AR invoices → ~241 funded (₦6.7M) / ~860 unfunded (₦25.9M).
 Behind a `reconciliation_hold` (the existing dunning-stop flag), reclassify the
 already-issued prepaid overdue/issued invoices: draft-or-void the unfunded ones,
 settle the funded ones from deposit. Balance-neutral, audited (mirrors the prior
