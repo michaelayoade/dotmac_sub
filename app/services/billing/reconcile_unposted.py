@@ -312,6 +312,85 @@ def settle_open_invoices_from_credit(db: Session, account_id: str) -> SettleResu
     return result
 
 
+def settle_single_invoice_from_credit(
+    db: Session, invoice: Invoice, *, only_if_full: bool = False
+) -> Decimal:
+    """Apply an account's payment-backed credit to ONE invoice. Returns applied.
+
+    Targeted, migrated-data-safe counterpart to
+    :func:`settle_open_invoices_from_credit`: it only ever touches ``invoice``,
+    so it cannot destroy credit on unrelated historical invoices (the reason the
+    account-wide settle is disabled by default). Same accounting — a
+    ``PaymentAllocation`` per applied naira plus one offsetting unallocated
+    debit ledger entry, so ``get_account_credit_balance`` drops by exactly the
+    amount and money is never double-counted. Does NOT commit.
+
+    ``only_if_full=True`` makes it all-or-nothing: if the payment-backed credit
+    cannot fully cover the invoice remaining, nothing is applied (returns 0).
+    Used by the prepaid draft-until-funded path so a renewal is either fully
+    funded from the deposit or left entirely as a draft.
+    """
+    account_id = str(invoice.account_id)
+    currency = invoice.currency or "NGN"
+
+    # Serialize the read-modify-write of the credit pool for this account.
+    lock_account(db, account_id)
+
+    invoice_remaining = _project_invoice_remaining(db, invoice)
+    if invoice_remaining <= 0:
+        return Decimal("0.00")
+
+    credit = get_account_credit_balance(db, account_id, currency=currency)
+    payments = [
+        (payment, room)
+        for payment, room in _allocatable_payments(db, account_id)
+        if (payment.currency or "NGN") == currency
+    ]
+    payment_backed = round_money(
+        sum((room for _payment, room in payments), Decimal("0.00"))
+    )
+    # Spend only credit that real succeeded payments can back (mirrors the
+    # account-wide settle's unbacked-credit guard).
+    spendable = min(max(credit, Decimal("0.00")), payment_backed)
+    if spendable <= 0:
+        return Decimal("0.00")
+    if only_if_full and spendable < invoice_remaining:
+        return Decimal("0.00")
+
+    remaining = min(spendable, invoice_remaining)
+    applied_total = Decimal("0.00")
+    for payment, room in payments:
+        if remaining <= 0:
+            break
+        amount = min(remaining, room)
+        if amount <= 0:
+            continue
+        _allocation, applied = _apply_payment_allocation(
+            db, payment, invoice, amount, memo=CREDIT_SETTLEMENT_MEMO
+        )
+        applied_total = round_money(applied_total + applied)
+        remaining = round_money(remaining - applied)
+    if applied_total <= 0:
+        return Decimal("0.00")
+
+    db.flush()
+    recalculate_invoice_totals(db, invoice)
+    # Reduce the unallocated-credit pool by exactly what we applied.
+    db.add(
+        LedgerEntry(
+            account_id=coerce_uuid(account_id),
+            invoice_id=None,
+            payment_id=None,
+            entry_type=LedgerEntryType.debit,
+            source=LedgerSource.payment,
+            amount=applied_total,
+            currency=currency,
+            memo=CREDIT_SETTLEMENT_MEMO,
+        )
+    )
+    return applied_total
+
+
 def project_settlement(db: Session, account_id: str) -> SettleResult:
     """Read-only projection of :func:`settle_open_invoices_from_credit`.
 

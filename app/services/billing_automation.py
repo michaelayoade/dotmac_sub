@@ -1095,6 +1095,13 @@ def run_invoice_cycle(
     include_prepaid_monthly = _setting_truthy(
         db, "prepaid_monthly_invoicing_enabled", default=False
     )
+    # Deposit-is-truth: when enabled, a prepaid advance invoice is created DRAFT
+    # (not AR, never overdue, never dunned) and only issued+settled from the
+    # wallet when the deposit covers it — see docs/designs/
+    # PREPAID_INVOICE_DEPOSIT_ALIGNMENT.md. Default OFF = legacy issue-on-create.
+    prepaid_draft_until_funded = _setting_truthy(
+        db, "prepaid_draft_until_funded", default=False
+    )
     mode_filter = Subscription.billing_mode != BillingMode.prepaid
     if include_prepaid_monthly:
         monthly_offer_ids = select(CatalogOffer.id).where(
@@ -1326,15 +1333,24 @@ def run_invoice_cycle(
             # (a short grace lives in dunning) so non-payment enforces promptly.
             if subscription.billing_mode == BillingMode.prepaid:
                 due_days = 0
+            # Deposit-is-truth: a prepaid advance invoice starts DRAFT with no due
+            # date — it only becomes issued/paid once the wallet funds it in the
+            # finalize pass below. Draft is excluded from AR / overdue-marking /
+            # dunning / available-balance by contract, so an unfunded renewal
+            # never becomes a phantom receivable.
+            prepaid_draft = (
+                prepaid_draft_until_funded
+                and subscription.billing_mode == BillingMode.prepaid
+            )
             invoice = Invoice(
                 account_id=subscription.subscriber_id,
                 invoice_number=next_invoice_number(db),
-                status=InvoiceStatus.issued,
+                status=(InvoiceStatus.draft if prepaid_draft else InvoiceStatus.issued),
                 currency=currency or "NGN",
                 billing_period_start=period_start,
                 billing_period_end=period_end,
-                issued_at=run_at,
-                due_at=run_at + timedelta(days=due_days),
+                issued_at=None if prepaid_draft else run_at,
+                due_at=None if prepaid_draft else run_at + timedelta(days=due_days),
             )
             db.add(invoice)
             db.flush()
@@ -1440,6 +1456,46 @@ def run_invoice_cycle(
         # Recalc writes balance_due/status onto the invoice objects; flush so the
         # credit settlement below sees the open balance via its query.
         db.flush()
+
+        # Prepaid draft-until-funded: each freshly-created prepaid DRAFT is either
+        # fully funded from the wallet now (→ issued + paid, one drawdown) or left
+        # as a draft (no AR, no overdue, no dunning). All-or-nothing via
+        # settle_single_invoice_from_credit(only_if_full=True), which is targeted
+        # to the one invoice (safe against migrated historical rows, unlike the
+        # account-wide settle below). See PREPAID_INVOICE_DEPOSIT_ALIGNMENT.md.
+        if prepaid_draft_until_funded and newly_created_invoices:
+            from app.services.billing.reconcile_unposted import (
+                settle_single_invoice_from_credit,
+            )
+
+            for invoice in newly_created_invoices:
+                if invoice.status != InvoiceStatus.draft:
+                    continue
+                if (invoice.total or Decimal("0.00")) <= Decimal("0.00"):
+                    continue  # nothing to fund; leave draft
+                # Optimistically issue so a fully-funded settle lands a proper
+                # issued→paid invoice; revert to draft if the wallet can't cover.
+                invoice.status = InvoiceStatus.issued
+                invoice.issued_at = run_at
+                invoice.due_at = run_at
+                db.flush()
+                settle_single_invoice_from_credit(db, invoice, only_if_full=True)
+                db.flush()
+                _recalculate_invoice_totals(db, invoice)
+                if invoice.status != InvoiceStatus.paid:
+                    # Underfunded — no allocation was made (all-or-nothing); return
+                    # it to a pure draft so it never becomes a phantom receivable.
+                    invoice.status = InvoiceStatus.draft
+                    invoice.issued_at = None
+                    invoice.due_at = None
+                    summary["prepaid_invoices_left_draft"] = (
+                        summary.get("prepaid_invoices_left_draft", 0) + 1
+                    )
+                else:
+                    summary["prepaid_invoices_funded"] = (
+                        summary.get("prepaid_invoices_funded", 0) + 1
+                    )
+            db.flush()
 
         # Inline credit settlement is DISABLED by default. It was found to be
         # unsafe on the migrated dataset: per-invoice balance_due/allocations are

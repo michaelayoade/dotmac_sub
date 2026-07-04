@@ -1811,6 +1811,18 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=False,
         label="Enable Monthly Prepaid Invoicing",
     ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="prepaid_draft_until_funded",
+        env_var="PREPAID_DRAFT_UNTIL_FUNDED",
+        value_type=SettingValueType.boolean,
+        default=False,
+        label=(
+            "Prepaid advance invoices stay DRAFT (not AR) until funded from the "
+            "deposit; when the wallet covers the total they are issued + settled "
+            "from credit in one step. Off = legacy issue-on-create."
+        ),
+    ),
     # Overdue detection (independent of billing cycle)
     SettingSpec(
         domain=SettingDomain.billing,
