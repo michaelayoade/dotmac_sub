@@ -17,7 +17,17 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.catalog import NasDevice, Subscription
-from app.models.network import OLTDevice, OntAssignment, OntUnit
+from app.models.network import (
+    FdhCabinet,
+    OLTDevice,
+    OntAssignment,
+    OntUnit,
+    PonPort,
+    PonPortSplitterLink,
+    Splitter,
+    SplitterPort,
+    SplitterPortAssignment,
+)
 from app.models.network_monitoring import (
     DeviceRole,
     NetworkDevice,
@@ -38,6 +48,11 @@ GAP_NO_BASESTATION = "no_basestation"  # node not mapped to a basestation
 @dataclass
 class CustomerPath:
     ont: OntUnit | None = None
+    ont_assignment: OntAssignment | None = None
+    splitter_port: SplitterPort | None = None
+    splitter: Splitter | None = None
+    fdh: FdhCabinet | None = None
+    pon_port: PonPort | None = None
     access_device: Any | None = None  # OLTDevice | NasDevice
     access_device_kind: str | None = None  # 'olt' | 'nas'
     node: NetworkDevice | None = None
@@ -135,6 +150,81 @@ def _active_ont_assignment(
     return base.first()
 
 
+def _splitter_port_assignment_for_subscription(
+    session: Session, subscription: Subscription
+) -> SplitterPortAssignment | None:
+    base = session.query(SplitterPortAssignment).filter(
+        SplitterPortAssignment.active.is_(True)
+    )
+    if subscription.service_address_id is not None:
+        by_addr = (
+            base.filter(
+                SplitterPortAssignment.service_address_id
+                == subscription.service_address_id
+            )
+            .order_by(SplitterPortAssignment.id)
+            .first()
+        )
+        if by_addr is not None:
+            return by_addr
+    return (
+        base.filter(SplitterPortAssignment.subscriber_id == subscription.subscriber_id)
+        .order_by(SplitterPortAssignment.id)
+        .first()
+    )
+
+
+def _populate_fiber_plant(
+    session: Session,
+    path: CustomerPath,
+    subscription: Subscription,
+    assignment: OntAssignment,
+) -> None:
+    """Populate physical fiber plant fields from local database mappings only."""
+    ont = path.ont
+    path.ont_assignment = assignment
+
+    if assignment.pon_port_id is not None:
+        path.pon_port = session.get(PonPort, assignment.pon_port_id)
+    if path.pon_port is None and ont is not None and ont.pon_port_id is not None:
+        path.pon_port = session.get(PonPort, ont.pon_port_id)
+
+    if ont is not None and ont.splitter_port_id is not None:
+        path.splitter_port = session.get(SplitterPort, ont.splitter_port_id)
+    if path.splitter_port is None:
+        port_assignment = _splitter_port_assignment_for_subscription(
+            session, subscription
+        )
+        if port_assignment is not None:
+            path.splitter_port = session.get(
+                SplitterPort, port_assignment.splitter_port_id
+            )
+
+    if path.splitter_port is not None:
+        path.splitter = session.get(Splitter, path.splitter_port.splitter_id)
+        if path.pon_port is None:
+            pon_link = (
+                session.query(PonPortSplitterLink)
+                .filter(
+                    PonPortSplitterLink.splitter_port_id == path.splitter_port.id,
+                    PonPortSplitterLink.active.is_(True),
+                )
+                .first()
+            )
+            if pon_link is not None:
+                path.pon_port = session.get(PonPort, pon_link.pon_port_id)
+
+    if path.splitter is None and ont is not None and ont.splitter_id is not None:
+        path.splitter = session.get(Splitter, ont.splitter_id)
+
+    if path.splitter is not None and path.splitter.fdh_id is not None:
+        path.fdh = session.get(FdhCabinet, path.splitter.fdh_id)
+
+    if path.pon_port is not None:
+        path.access_device = session.get(OLTDevice, path.pon_port.olt_id)
+        path.access_device_kind = "olt" if path.access_device is not None else None
+
+
 def _node_for_device(
     session: Session, device_type: str, device_id
 ) -> NetworkDevice | None:
@@ -175,6 +265,7 @@ def resolve_customer_path(session: Session, subscription: Subscription) -> Custo
     if assignment is not None:
         ont = session.get(OntUnit, assignment.ont_unit_id)
         path.ont = ont
+        _populate_fiber_plant(session, path, subscription, assignment)
         if ont is not None and ont.olt_device_id is not None:
             path.access_device = session.get(OLTDevice, ont.olt_device_id)
             path.access_device_kind = "olt"

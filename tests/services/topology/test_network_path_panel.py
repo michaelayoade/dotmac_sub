@@ -47,6 +47,38 @@ def test_renders_full_fiber_chain():
     assert "Status: Up" in html
 
 
+def test_renders_physical_fiber_plant_chain():
+    path = CustomerPath(
+        ont=SimpleNamespace(serial_number="SN-FULL"),
+        splitter_port=SimpleNamespace(port_number=12),
+        splitter=SimpleNamespace(name="SPL-A"),
+        fdh=SimpleNamespace(code="FDH-A12", name="Alpha 12"),
+        pon_port=SimpleNamespace(name="0/1/2"),
+        access_device=SimpleNamespace(name="OLT-1"),
+        access_device_kind="olt",
+    )
+    html = _render(path)
+    assert "Fiber Plant" in html
+    assert "ONT SN-FULL" in html
+    assert "Splitter Port 12" in html
+    assert "Splitter SPL-A" in html
+    assert "FDH FDH-A12" in html
+    assert "PON 0/1/2" in html
+    assert "OLT OLT-1" in html
+
+
+def test_renders_partial_fiber_plant_as_not_mapped():
+    path = CustomerPath(
+        ont=SimpleNamespace(serial_number="SN-PARTIAL"),
+        access_device=SimpleNamespace(name="OLT-Partial"),
+        access_device_kind="olt",
+    )
+    html = _render(path)
+    assert "Fiber Plant" in html
+    assert "SN-PARTIAL" in html
+    assert "not mapped" in html
+
+
 def test_renders_upstream_chain():
     path = CustomerPath(
         access_device=SimpleNamespace(name="SPDC Access"),

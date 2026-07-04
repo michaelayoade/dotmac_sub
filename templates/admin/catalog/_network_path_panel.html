@@ -1,4 +1,4 @@
-{# Read-only Network Path panel (Phase 1): ONT -> access device -> basestation.
+{# Read-only Network Path panel: physical fiber path + logical upstream path.
    Expects `network_path` (app.services.topology.customer_path.CustomerPath). #}
 <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
     {% set _ls = network_path.node.live_status if network_path.node else None %}
@@ -11,7 +11,36 @@
         Known outage{% if known_outage.note %} &mdash; {{ known_outage.note }}{% endif %} ({{ known_outage.affected_count }} subscriptions affected). This customer is within a declared outage.
     </div>
     {% endif %}
+    {% if network_path.ont %}
+    <div class="mt-4 space-y-2">
+        <div class="flex flex-wrap items-center gap-2 text-sm">
+            <span class="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Fiber Plant</span>
+            <span class="inline-flex items-center rounded-lg bg-slate-100 px-3 py-1.5 font-mono text-slate-700 dark:bg-slate-700 dark:text-slate-200" title="ONT serial">ONT {{ network_path.ont.serial_number }}</span>
+            <span class="text-slate-300 dark:text-slate-600">&rarr;</span>
+            <span class="inline-flex items-center rounded-lg bg-slate-100 px-3 py-1.5 text-slate-700 dark:bg-slate-700 dark:text-slate-200" title="Splitter output port">
+                Splitter Port {{ network_path.splitter_port.port_number if network_path.splitter_port else 'not mapped' }}
+            </span>
+            <span class="text-slate-300 dark:text-slate-600">&rarr;</span>
+            <span class="inline-flex items-center rounded-lg bg-slate-100 px-3 py-1.5 text-slate-700 dark:bg-slate-700 dark:text-slate-200" title="Splitter">
+                Splitter {{ network_path.splitter.name if network_path.splitter else 'not mapped' }}
+            </span>
+            <span class="text-slate-300 dark:text-slate-600">&rarr;</span>
+            <span class="inline-flex items-center rounded-lg bg-slate-100 px-3 py-1.5 text-slate-700 dark:bg-slate-700 dark:text-slate-200" title="FDH / cabinet">
+                FDH {% if network_path.fdh %}{{ network_path.fdh.code or network_path.fdh.name }}{% else %}not mapped{% endif %}
+            </span>
+            <span class="text-slate-300 dark:text-slate-600">&rarr;</span>
+            <span class="inline-flex items-center rounded-lg bg-slate-100 px-3 py-1.5 text-slate-700 dark:bg-slate-700 dark:text-slate-200" title="PON port">
+                PON {{ network_path.pon_port.name if network_path.pon_port else 'not mapped' }}
+            </span>
+            <span class="text-slate-300 dark:text-slate-600">&rarr;</span>
+            <span class="inline-flex items-center rounded-lg bg-slate-100 px-3 py-1.5 text-slate-700 dark:bg-slate-700 dark:text-slate-200" title="OLT">
+                OLT {% if network_path.access_device_kind == 'olt' and network_path.access_device %}{{ network_path.access_device.name }}{% else %}not mapped{% endif %}
+            </span>
+        </div>
+    </div>
+    {% endif %}
     <div class="mt-4 flex flex-wrap items-center gap-2 text-sm">
+        <span class="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Logical Path</span>
         {% if network_path.ont %}
         <span class="inline-flex items-center rounded-lg bg-slate-100 px-3 py-1.5 font-mono text-slate-700 dark:bg-slate-700 dark:text-slate-200" title="ONT serial">ONT {{ network_path.ont.serial_number }}</span>
         <span class="text-slate-300 dark:text-slate-600">&rarr;</span>
