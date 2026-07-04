@@ -275,10 +275,10 @@
     </table>
   </div>
 
-  <!-- Account Activity (ledger) -->
+  <!-- Ledger (consolidated account activity) -->
   <div class="overflow-hidden rounded-2xl border border-slate-200/60 bg-white/80 shadow-premium dark:border-slate-700/60 dark:bg-slate-800/80">
     <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
-      <h3 class="text-base font-semibold text-slate-900 dark:text-white">Account Activity</h3>
+      <h3 class="text-base font-semibold text-slate-900 dark:text-white">Ledger</h3>
       <p class="text-sm text-slate-500 dark:text-slate-400">Payments and credits on your consolidated billing account</p>
     </div>
     {% if billing_activity %}
@@ -309,7 +309,7 @@
       {% endfor %}
     </ul>
     {% else %}
-    <div class="px-6 py-10 text-center text-sm text-slate-500 dark:text-slate-400">No account activity yet.</div>
+    <div class="px-6 py-10 text-center text-sm text-slate-500 dark:text-slate-400">No ledger entries yet.</div>
     {% endif %}
   </div>
 </div>
