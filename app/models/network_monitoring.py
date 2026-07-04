@@ -838,6 +838,7 @@ class OutageIncident(Base):
         Index("ix_outage_incidents_status", "status"),
         Index("ix_outage_incidents_root_node", "root_node_id"),
         Index("ix_outage_incidents_basestation", "basestation_id"),
+        Index("ix_outage_incidents_fdh_cabinet", "fdh_cabinet_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -848,6 +849,9 @@ class OutageIncident(Base):
     )
     basestation_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("pop_sites.id")
+    )
+    fdh_cabinet_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("fdh_cabinets.id")
     )
     declared_by: Mapped[str | None] = mapped_column(String(120))
     status: Mapped[str] = mapped_column(String(20), default="open")  # open / resolved

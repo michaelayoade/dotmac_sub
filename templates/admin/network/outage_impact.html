@@ -21,6 +21,24 @@
                 {% endfor %}
             </select>
         </div>
+        <div>
+            <label class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Network Node</label>
+            <select name="node_id" class="mt-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200">
+                <option value="">— select —</option>
+                {% for node in network_nodes %}
+                <option value="{{ node.id }}" {% if selected_node_id == node.id|string %}selected{% endif %}>{{ node.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div>
+            <label class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">FDH Cabinet</label>
+            <select name="fdh_id" class="mt-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200">
+                <option value="">— select —</option>
+                {% for fdh in fdh_cabinets %}
+                <option value="{{ fdh.id }}" {% if selected_fdh_id == fdh.id|string %}selected{% endif %}>{{ fdh.code or fdh.name }}{% if fdh.code and fdh.name %} — {{ fdh.name }}{% endif %}</option>
+                {% endfor %}
+            </select>
+        </div>
         <button type="submit" class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500">Preview impact</button>
     </form>
 
@@ -31,6 +49,60 @@
             <span class="text-2xl font-bold text-slate-900 dark:text-white">{{ impact_count }}</span>
         </div>
         <p class="mt-1 text-xs text-slate-400">active subscriptions affected</p>
+        {% if impact_detail_mode == "fdh" %}
+        <div class="mt-4 overflow-x-auto">
+        <table class="min-w-full text-sm">
+            <thead><tr class="text-left text-xs uppercase text-slate-400">
+                <th class="py-2 pr-4">Customer</th>
+                <th class="pr-4">Phone</th>
+                <th class="pr-4">Service address</th>
+                <th class="pr-4">ONT</th>
+                <th class="pr-4">OLT / PON</th>
+                <th class="pr-4">Splitter</th>
+                <th class="pr-4">Signal</th>
+                <th class="pr-4">Last seen</th>
+            </tr></thead>
+            <tbody>
+            {% for row in impact_rows %}
+                <tr class="border-t border-slate-100 align-top dark:border-slate-700">
+                    <td class="py-2 pr-4">
+                        <a class="font-medium text-indigo-600 hover:underline dark:text-indigo-400" href="/admin/catalog/subscriptions/{{ row.subscription_id }}">{{ row.subscriber_name or row.subscriber_number or row.subscription_id | string | truncate(8, True, '') }}</a>
+                        <div class="text-xs text-slate-500">{{ row.email or '-' }}</div>
+                    </td>
+                    <td class="pr-4 text-slate-700 dark:text-slate-200">{{ row.phone or '-' }}</td>
+                    <td class="max-w-xs pr-4 text-slate-700 dark:text-slate-200">{{ row.service_address or '-' }}</td>
+                    <td class="pr-4">
+                        {% if row.ont_id %}
+                        <a class="font-mono text-indigo-600 hover:underline dark:text-indigo-400" href="/admin/network/onts/{{ row.ont_id }}">{{ row.ont_serial or row.ont_id | string | truncate(8, True, '') }}</a>
+                        {% else %}
+                        <span class="text-slate-400">-</span>
+                        {% endif %}
+                    </td>
+                    <td class="pr-4 text-slate-700 dark:text-slate-200">
+                        <div>{{ row.olt_name or '-' }}</div>
+                        <div class="text-xs text-slate-500">{{ row.pon_port_name or '-' }}</div>
+                    </td>
+                    <td class="pr-4 text-slate-700 dark:text-slate-200">
+                        <div>{{ row.splitter_name or '-' }}</div>
+                        <div class="text-xs text-slate-500">Port {{ row.splitter_port_number if row.splitter_port_number is not none else '-' }}</div>
+                    </td>
+                    <td class="pr-4">
+                        <span class="font-medium {% if row.signal_quality == 'critical' %}text-rose-600 dark:text-rose-400{% elif row.signal_quality == 'warning' %}text-amber-600 dark:text-amber-400{% elif row.signal_quality == 'good' %}text-emerald-600 dark:text-emerald-400{% else %}text-slate-500{% endif %}">{{ row.signal_status or row.signal_quality or '-' }}</span>
+                        {% if row.onu_rx_dbm is not none %}
+                        <div class="font-mono text-xs text-slate-500">{{ "%.1f"|format(row.onu_rx_dbm) }} dBm</div>
+                        {% endif %}
+                    </td>
+                    <td class="pr-4 text-slate-500">
+                        {{ row.last_seen_at.strftime('%Y-%m-%d %H:%M') if row.last_seen_at else '-' }}
+                    </td>
+                </tr>
+            {% else %}
+                <tr><td colspan="8" class="py-4 text-slate-400">No affected subscriptions found.</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        {% else %}
         <table class="mt-4 w-full text-sm">
             <thead><tr class="text-left text-xs uppercase text-slate-400">
                 <th class="py-2">Subscription</th><th>Subscriber</th><th>Email</th>
@@ -38,8 +110,8 @@
             <tbody>
             {% for row in impact_rows %}
                 <tr class="border-t border-slate-100 dark:border-slate-700">
-                    <td class="py-2"><a class="font-mono text-indigo-600 hover:underline dark:text-indigo-400" href="/admin/catalog/subscriptions/{{ row.id }}">{{ row.id | string | truncate(8, True, '') }}</a></td>
-                    <td class="text-slate-700 dark:text-slate-200">{{ row.subscriber }}</td>
+                    <td class="py-2"><a class="font-mono text-indigo-600 hover:underline dark:text-indigo-400" href="/admin/catalog/subscriptions/{{ row.subscription_id }}">{{ row.subscription_id | string | truncate(8, True, '') }}</a></td>
+                    <td class="text-slate-700 dark:text-slate-200">{{ row.subscriber_name }}</td>
                     <td class="text-slate-500">{{ row.email }}</td>
                 </tr>
             {% else %}
@@ -47,6 +119,7 @@
             {% endfor %}
             </tbody>
         </table>
+        {% endif %}
     </div>
     {% endif %}
 </div>

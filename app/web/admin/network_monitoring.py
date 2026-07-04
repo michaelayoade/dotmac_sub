@@ -183,20 +183,33 @@ def outage_impact_page(
     request: Request,
     basestation_id: str | None = None,
     node_id: str | None = None,
+    fdh_id: str | None = None,
     db: Session = Depends(get_db),
 ):
-    """Read-only outage impact preview: pick a basestation/node -> affected
+    """Read-only outage impact preview: pick infrastructure -> affected
     active subscriptions. No incident is created (that's the outage console)."""
     import uuid as _uuid
 
+    from app.models.network import FdhCabinet
     from app.models.network_monitoring import NetworkDevice, PopSite
-    from app.services.topology.affected import affected_customers, list_basestations
+    from app.services.topology.affected import (
+        affected_customers,
+        fdh_impact_rows,
+        list_basestations,
+        list_fdh_cabinets,
+        list_network_nodes,
+    )
 
     context = _base_context(request, db, active_page="monitoring")
     context["basestations"] = list_basestations(db)
+    context["fdh_cabinets"] = list_fdh_cabinets(db)
+    context["network_nodes"] = list_network_nodes(db)
     context["selected_basestation_id"] = basestation_id
+    context["selected_node_id"] = node_id
+    context["selected_fdh_id"] = fdh_id
     target = None
     result = None
+    detailed_rows = None
     try:
         if basestation_id:
             pop = db.get(PopSite, _uuid.UUID(basestation_id))
@@ -208,23 +221,35 @@ def outage_impact_page(
             if node is not None:
                 target = f"Node: {node.name}"
                 result = affected_customers(db, node=node)
+        elif fdh_id:
+            fdh = db.get(FdhCabinet, _uuid.UUID(fdh_id))
+            if fdh is not None:
+                label = fdh.code or fdh.name
+                target = f"FDH Cabinet: {label}"
+                result = affected_customers(db, fdh=fdh)
+                detailed_rows = fdh_impact_rows(db, fdh)
     except (ValueError, TypeError):
         target = None
     context["target"] = target
     if result is not None:
         context["impact_count"] = result["count"]
-        context["impact_rows"] = [
-            {
-                "id": s.id,
-                "subscriber": (
-                    f"{s.subscriber.first_name} {s.subscriber.last_name}"
-                    if s.subscriber
-                    else "—"
-                ),
-                "email": s.subscriber.email if s.subscriber else "",
-            }
-            for s in result["subscriptions"]
-        ]
+        if detailed_rows is not None:
+            context["impact_rows"] = detailed_rows
+            context["impact_detail_mode"] = "fdh"
+        else:
+            context["impact_rows"] = [
+                {
+                    "subscription_id": s.id,
+                    "subscriber_name": (
+                        f"{s.subscriber.first_name} {s.subscriber.last_name}"
+                        if s.subscriber
+                        else "—"
+                    ),
+                    "email": s.subscriber.email if s.subscriber else "",
+                }
+                for s in result["subscriptions"]
+            ]
+            context["impact_detail_mode"] = "basic"
     return templates.TemplateResponse("admin/network/outage_impact.html", context)
 
 
@@ -243,19 +268,29 @@ def _actor(request: Request) -> str | None:
     dependencies=[Depends(require_permission("monitoring:read"))],
 )
 def outages_console(request: Request, db: Session = Depends(get_db)):
-    """Manual outage console: declare against a basestation, list/resolve open
+    """Manual outage console: declare against infrastructure, list/resolve open
     incidents. No auto-detection, no notification sending."""
+    from app.models.network import FdhCabinet
     from app.models.network_monitoring import NetworkDevice, PopSite
-    from app.services.topology.affected import list_basestations
+    from app.services.topology.affected import (
+        list_basestations,
+        list_fdh_cabinets,
+        list_network_nodes,
+    )
     from app.services.topology.outage import is_stale_open, list_open_incidents
 
     context = _base_context(request, db, active_page="monitoring")
     context["basestations"] = list_basestations(db)
+    context["fdh_cabinets"] = list_fdh_cabinets(db)
+    context["network_nodes"] = list_network_nodes(db)
     rows = []
     for inc in list_open_incidents(db):
         if inc.basestation_id is not None:
             pop = db.get(PopSite, inc.basestation_id)
             target = f"BTS: {pop.name}" if pop else "BTS"
+        elif getattr(inc, "fdh_cabinet_id", None) is not None:
+            fdh = db.get(FdhCabinet, inc.fdh_cabinet_id)
+            target = f"FDH: {fdh.code or fdh.name}" if fdh else "FDH"
         elif inc.root_node_id is not None:
             node = db.get(NetworkDevice, inc.root_node_id)
             target = f"Node: {node.name}" if node else "Node"
@@ -272,21 +307,43 @@ def outages_console(request: Request, db: Session = Depends(get_db)):
 )
 def outages_declare(
     request: Request,
-    basestation_id: str = Form(...),
+    basestation_id: str | None = Form(default=None),
+    node_id: str | None = Form(default=None),
+    fdh_id: str | None = Form(default=None),
     note: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
     import uuid as _uuid
 
-    from app.models.network_monitoring import PopSite
+    from app.models.network import FdhCabinet
+    from app.models.network_monitoring import NetworkDevice, PopSite
     from app.services.topology.outage import declare_outage
 
+    declared = False
     try:
-        pop = db.get(PopSite, _uuid.UUID(basestation_id))
+        pop = db.get(PopSite, _uuid.UUID(basestation_id)) if basestation_id else None
     except (ValueError, TypeError):
         pop = None
     if pop is not None:
         declare_outage(db, basestation=pop, declared_by=_actor(request), note=note)
+        declared = True
+    if not declared:
+        try:
+            node = db.get(NetworkDevice, _uuid.UUID(node_id)) if node_id else None
+        except (ValueError, TypeError):
+            node = None
+        if node is not None:
+            declare_outage(db, node=node, declared_by=_actor(request), note=note)
+            declared = True
+    if not declared:
+        try:
+            fdh = db.get(FdhCabinet, _uuid.UUID(fdh_id)) if fdh_id else None
+        except (ValueError, TypeError):
+            fdh = None
+        if fdh is not None:
+            declare_outage(db, fdh=fdh, declared_by=_actor(request), note=note)
+            declared = True
+    if declared:
         db.commit()
     return RedirectResponse("/admin/network/outages", status_code=303)
 
