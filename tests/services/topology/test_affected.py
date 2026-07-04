@@ -5,15 +5,26 @@ from __future__ import annotations
 import uuid
 
 from app.models.catalog import NasDevice, Subscription, SubscriptionStatus
-from app.models.network import OLTDevice, OntAssignment, OntUnit
+from app.models.network import (
+    FdhCabinet,
+    OLTDevice,
+    OnuOnlineStatus,
+    OntAssignment,
+    OntUnit,
+    PonPort,
+    Splitter,
+    SplitterPort,
+    SplitterPortAssignment,
+)
 from app.models.network_monitoring import (
     DeviceRole,
     NetworkDevice,
     NetworkTopologyLink,
     PopSite,
 )
+from app.models.subscriber import Address
 from app.models.subscriber import Subscriber
-from app.services.topology.affected import affected_customers
+from app.services.topology.affected import affected_customers, fdh_impact_rows
 
 
 def _node(db, name, mtype=None, mid=None, pop_site_id=None, role=DeviceRole.edge):
@@ -113,6 +124,140 @@ def test_basestation_aggregates_its_nodes(db_session, catalog_offer):
 
     out = affected_customers(db_session, basestation=pop)
     assert out["count"] == 2
+
+
+def test_fdh_affected_via_splitter_port_assignments(db_session, catalog_offer):
+    fdh = FdhCabinet(name="FDH Alpha", code="FDH-A")
+    other_fdh = FdhCabinet(name="FDH Beta", code="FDH-B")
+    db_session.add_all([fdh, other_fdh])
+    db_session.flush()
+    splitter = Splitter(name="SPL-A", fdh_id=fdh.id)
+    other_splitter = Splitter(name="SPL-B", fdh_id=other_fdh.id)
+    db_session.add_all([splitter, other_splitter])
+    db_session.flush()
+    ports = [
+        SplitterPort(splitter_id=splitter.id, port_number=1),
+        SplitterPort(splitter_id=splitter.id, port_number=2),
+        SplitterPort(splitter_id=other_splitter.id, port_number=1),
+    ]
+    db_session.add_all(ports)
+    db_session.flush()
+
+    sub_a = _sub(db_session, catalog_offer.id)
+    sub_b = _sub(db_session, catalog_offer.id)
+    unrelated = _sub(db_session, catalog_offer.id)  # unrelated, excluded
+    db_session.add_all(
+        [
+            SplitterPortAssignment(
+                splitter_port_id=ports[0].id,
+                subscriber_id=sub_a.subscriber_id,
+                active=True,
+            ),
+            SplitterPortAssignment(
+                splitter_port_id=ports[1].id,
+                subscriber_id=sub_b.subscriber_id,
+                active=True,
+            ),
+            SplitterPortAssignment(
+                splitter_port_id=ports[2].id,
+                subscriber_id=unrelated.subscriber_id,
+                active=True,
+            ),
+        ]
+    )
+    db_session.flush()
+
+    out = affected_customers(db_session, fdh=fdh)
+    assert out["count"] == 2
+    assert {sub.id for sub in out["subscriptions"]} == {sub_a.id, sub_b.id}
+
+
+def test_fdh_affected_via_direct_ont_splitter_reference(
+    db_session, subscriber, catalog_offer
+):
+    fdh = FdhCabinet(name="FDH Alpha", code="FDH-A")
+    splitter = Splitter(name="SPL-A", fdh=fdh)
+    db_session.add_all([fdh, splitter])
+    db_session.flush()
+    ont = OntUnit(serial_number="SN-FDH", splitter_id=splitter.id)
+    db_session.add(ont)
+    db_session.flush()
+    db_session.add(
+        OntAssignment(ont_unit_id=ont.id, subscriber_id=subscriber.id, active=True)
+    )
+    sub = _sub(db_session, catalog_offer.id, subscriber_id=subscriber.id)
+    db_session.flush()
+
+    out = affected_customers(db_session, fdh=fdh)
+    assert out["count"] == 1
+    assert out["subscriptions"][0].id == sub.id
+
+
+def test_fdh_impact_rows_include_customer_and_plant_details(
+    db_session, subscriber, catalog_offer
+):
+    fdh = FdhCabinet(name="FDH Alpha", code="FDH-A")
+    splitter = Splitter(name="SPL-A", fdh=fdh)
+    olt = OLTDevice(name="OLT Alpha", hostname="olt-alpha", mgmt_ip="10.0.0.8")
+    db_session.add_all([fdh, splitter, olt])
+    db_session.flush()
+    port = SplitterPort(splitter_id=splitter.id, port_number=7)
+    pon = PonPort(olt_id=olt.id, name="0/1/2")
+    db_session.add_all([port, pon])
+    db_session.flush()
+    address = Address(
+        subscriber_id=subscriber.id,
+        address_line1="12 Fiber Close",
+        city="Abuja",
+        region="FCT",
+    )
+    ont = OntUnit(
+        serial_number="SN-FDH-DETAIL",
+        olt_device_id=olt.id,
+        pon_port_id=pon.id,
+        splitter_port_id=port.id,
+        olt_status=OnuOnlineStatus.online,
+        onu_rx_signal_dbm=-24.2,
+        olt_rx_signal_dbm=-23.8,
+    )
+    db_session.add_all([address, ont])
+    db_session.flush()
+    sub = _sub(db_session, catalog_offer.id, subscriber_id=subscriber.id)
+    sub.service_address_id = address.id
+    subscriber.phone = "08030000000"
+    db_session.add_all(
+        [
+            OntAssignment(
+                ont_unit_id=ont.id,
+                pon_port_id=pon.id,
+                subscriber_id=subscriber.id,
+                service_address_id=address.id,
+                active=True,
+            ),
+            SplitterPortAssignment(
+                splitter_port_id=port.id,
+                subscriber_id=subscriber.id,
+                service_address_id=address.id,
+                active=True,
+            ),
+        ]
+    )
+    db_session.flush()
+
+    rows = fdh_impact_rows(db_session, fdh)
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["subscription_id"] == sub.id
+    assert row["phone"] == "08030000000"
+    assert row["service_address"] == "12 Fiber Close, Abuja, FCT"
+    assert row["ont_serial"] == "SN-FDH-DETAIL"
+    assert row["olt_name"] == "OLT Alpha"
+    assert row["pon_port_name"] == "0/1/2"
+    assert row["splitter_name"] == "SPL-A"
+    assert row["splitter_port_number"] == 7
+    assert row["signal_status"] == "online"
+    assert row["signal_quality"] == "good"
 
 
 def test_upstream_node_captures_downstream(db_session, catalog_offer):

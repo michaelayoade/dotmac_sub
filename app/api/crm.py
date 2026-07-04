@@ -561,23 +561,29 @@ def outage_impact(
     basestation_id: str | None = None,
     olt_id: str | None = None,
     pon_port_id: str | None = None,
+    fdh_id: str | None = None,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Subscribers affected by a failed infrastructure asset.
 
     Pass one of: ``node_id`` (a monitored NetworkDevice — switch/router, with
     LLDP downstream expansion), ``basestation_id`` (a PopSite), ``olt_id`` (all
-    ONTs on an OLT), or ``pon_port_id`` (only the ONTs on that PON port). OLT and
-    PON-port resolution are vendor-agnostic (Huawei + Ubiquiti). The ``coverage``
-    block flags where the e2e chain is incomplete so the caller can fall back to
-    manual selection.
+    ONTs on an OLT), ``pon_port_id`` (only the ONTs on that PON port), or
+    ``fdh_id`` (active subscriptions behind an FDH cabinet). OLT and PON-port
+    resolution are vendor-agnostic (Huawei + Ubiquiti). The ``coverage`` block
+    flags where the e2e chain is incomplete so the caller can fall back to manual
+    selection.
     """
+    from app.models.network import FdhCabinet
     from app.models.network_monitoring import NetworkDevice, PopSite
 
-    if not any([node_id, basestation_id, olt_id, pon_port_id]):
+    if not any([node_id, basestation_id, olt_id, pon_port_id, fdh_id]):
         raise HTTPException(
             status_code=400,
-            detail="One of node_id, basestation_id, olt_id or pon_port_id is required",
+            detail=(
+                "One of node_id, basestation_id, olt_id, pon_port_id "
+                "or fdh_id is required"
+            ),
         )
 
     node = None
@@ -590,6 +596,10 @@ def outage_impact(
         basestation = db.get(PopSite, crm_api.coerce_subscriber_id(basestation_id))
         if basestation is None:
             raise HTTPException(status_code=404, detail="Basestation not found")
+    if fdh_id:
+        fdh = db.get(FdhCabinet, crm_api.coerce_subscriber_id(fdh_id))
+        if fdh is None:
+            raise HTTPException(status_code=404, detail="FDH cabinet not found")
 
     return _envelope(
         crm_api.outage_impact(
@@ -600,6 +610,7 @@ def outage_impact(
             pon_port_id=crm_api.coerce_subscriber_id(pon_port_id)
             if pon_port_id
             else None,
+            fdh_id=crm_api.coerce_subscriber_id(fdh_id) if fdh_id else None,
         )
     )
 

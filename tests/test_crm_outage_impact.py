@@ -37,6 +37,12 @@ def test_impact_node_not_found(db_session):
     assert exc.value.status_code == 404
 
 
+def test_impact_fdh_not_found(db_session):
+    with pytest.raises(HTTPException) as exc:
+        crm_routes.outage_impact(fdh_id=str(uuid.uuid4()), db=db_session)
+    assert exc.value.status_code == 404
+
+
 def test_impact_flags_topology_gap_when_olt_has_no_subscribers(db_session):
     """A matched OLT node that resolves no subscribers is surfaced as a gap —
     the e2e ONT/assignment chain isn't established, so impact is incomplete."""
@@ -111,6 +117,76 @@ def test_impact_pon_port_gap_when_no_assignments(db_session):
     report = crm_api.outage_impact(db_session, pon_port_id=port.id)
     assert report["count"] == 0
     assert report["coverage"]["has_topology_gaps"] is True
+
+
+def test_impact_by_fdh_returns_customer_and_detail_rows(db_session, catalog_offer):
+    from app.models.catalog import Subscription, SubscriptionStatus
+    from app.models.network import (
+        FdhCabinet,
+        OLTDevice,
+        OntAssignment,
+        OntUnit,
+        PonPort,
+        Splitter,
+        SplitterPort,
+        SplitterPortAssignment,
+    )
+    from app.models.subscriber import Subscriber
+
+    fdh = FdhCabinet(name="FDH CRM", code="FDH-CRM")
+    splitter = Splitter(name="SPL-CRM", fdh=fdh)
+    olt = OLTDevice(name="OLT CRM")
+    db_session.add_all([fdh, splitter, olt])
+    db_session.flush()
+    splitter_port = SplitterPort(splitter_id=splitter.id, port_number=3)
+    pon = PonPort(olt_id=olt.id, name="0/1/3")
+    subscriber = Subscriber(
+        first_name="Ada",
+        last_name="FDH",
+        email=f"fdh-{uuid.uuid4().hex[:8]}@x.io",
+        phone="08030000001",
+        subscriber_number="SUB-FDH",
+    )
+    db_session.add_all([splitter_port, pon, subscriber])
+    db_session.flush()
+    ont = OntUnit(
+        serial_number="SN-CRM-FDH",
+        olt_device_id=olt.id,
+        pon_port_id=pon.id,
+        splitter_port_id=splitter_port.id,
+    )
+    db_session.add(ont)
+    db_session.flush()
+    db_session.add_all(
+        [
+            Subscription(
+                subscriber_id=subscriber.id,
+                offer_id=catalog_offer.id,
+                status=SubscriptionStatus.active,
+            ),
+            OntAssignment(
+                ont_unit_id=ont.id,
+                pon_port_id=pon.id,
+                subscriber_id=subscriber.id,
+                active=True,
+            ),
+            SplitterPortAssignment(
+                splitter_port_id=splitter_port.id,
+                subscriber_id=subscriber.id,
+                active=True,
+            ),
+        ]
+    )
+    db_session.flush()
+
+    report = crm_api.outage_impact(db_session, fdh_id=fdh.id)
+    route_resp = crm_routes.outage_impact(fdh_id=str(fdh.id), db=db_session)
+
+    assert report["count"] == 1
+    assert report["subscribers"][0]["phone"] == "08030000001"
+    assert report["impact_rows"][0]["ont_serial"] == "SN-CRM-FDH"
+    assert report["impact_rows"][0]["olt_name"] == "OLT CRM"
+    assert route_resp["data"]["count"] == 1
 
 
 def test_list_infrastructure_assets_includes_olt_and_pon_port(db_session):

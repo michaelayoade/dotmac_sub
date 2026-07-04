@@ -1394,14 +1394,16 @@ def outage_impact(
     basestation: PopSite | None = None,
     olt_id: str | uuid.UUID | None = None,
     pon_port_id: str | uuid.UUID | None = None,
+    fdh_id: str | uuid.UUID | None = None,
 ) -> dict:
     """Subscribers affected by a failed asset, with a coverage report.
 
-    Handles four asset granularities, deduped into one subscriber set:
+    Handles five asset granularities, deduped into one subscriber set:
       - ``node``/``basestation`` — the LLDP topology (``affected_customers``),
         which expands a switch/router/cabinet failure downstream.
       - ``olt_id`` — every active ONT on the OLT (all PON ports).
       - ``pon_port_id`` — only the ONTs on that PON port (a subset of the OLT).
+      - ``fdh_id`` — active subscriptions behind an FDH cabinet.
 
     OLT and PON-port resolution read straight off ``OntAssignment`` and so are
     vendor-agnostic (Huawei and Ubiquiti alike). The coverage block is
@@ -1410,14 +1412,16 @@ def outage_impact(
     we surface where the chain dead-ends (an asset that yields zero subscribers)
     to let the caller trust the list or fall back to manual selection.
     """
-    from app.models.network import OntAssignment, OntUnit
+    from app.models.network import FdhCabinet, OntAssignment, OntUnit
     from app.services.topology.affected import (
         affected_customers,
+        fdh_impact_rows,
         subscriptions_for_node,
     )
 
     subscribers: dict = {}
     gaps: list[dict] = []
+    detailed_rows: list[dict] = []
     resolved_node_count = 0
 
     def _add(s) -> None:
@@ -1502,7 +1506,31 @@ def outage_impact(
                 }
             )
 
-    return {
+    if fdh_id is not None:
+        before = len(subscribers)
+        fdh = session.get(FdhCabinet, fdh_id)
+        if fdh is not None:
+            detailed_rows = fdh_impact_rows(session, fdh)
+            for row in detailed_rows:
+                subscriber_id = row.get("subscriber_id")
+                if subscriber_id is None:
+                    continue
+                subscribers[subscriber_id] = {
+                    "id": str(subscriber_id),
+                    "subscriber_number": row.get("subscriber_number"),
+                    "name": row.get("subscriber_name"),
+                    "email": row.get("email"),
+                    "phone": row.get("phone"),
+                }
+        if len(subscribers) == before:
+            gaps.append(
+                {
+                    "fdh_id": str(fdh_id),
+                    "reason": "no active subscriptions mapped to this FDH",
+                }
+            )
+
+    payload = {
         "subscribers": list(subscribers.values()),
         "count": len(subscribers),
         "coverage": {
@@ -1511,6 +1539,9 @@ def outage_impact(
             "has_topology_gaps": bool(gaps),
         },
     }
+    if detailed_rows:
+        payload["impact_rows"] = detailed_rows
+    return payload
 
 
 def list_infrastructure_assets(
