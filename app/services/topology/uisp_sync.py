@@ -25,6 +25,7 @@ import logging
 import re
 from collections import Counter
 from datetime import UTC, datetime
+from uuid import UUID
 
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -417,7 +418,7 @@ def _upsert_olt(
 def _upsert_onu(
     session: Session,
     device: dict,
-    olt_ids_by_uisp: dict[str, object],
+    olt_ids_by_uisp: dict[str, UUID],
     seen_onu_keys: set[tuple],
     now: datetime,
     stats: Counter,
@@ -590,7 +591,7 @@ def sync(session: Session, client, now: datetime | None = None) -> dict:
         session.flush()
 
     # --- UF-OLTs -> olt_devices ---
-    olt_ids_by_uisp: dict[str, object] = {}
+    olt_ids_by_uisp: dict[str, UUID] = {}
     for device in olts:
         try:
             with session.begin_nested():

@@ -41,6 +41,7 @@ import ssl
 import sys
 import urllib.request
 from collections import Counter
+from urllib.parse import urlparse
 
 ARCHIVE_SITE_ID = "d857d634-db38-45ff-81a1-4594410ded45"
 MANAGED_TAG = ("managed", "uisp-importer")
@@ -75,11 +76,16 @@ def _read_token(env_name):
 
 
 def _http_json(url, headers=None, payload=None, timeout=60):
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError(f"unsupported URL scheme for API request: {parsed.scheme}")
     data = json.dumps(payload).encode() if payload is not None else None
-    req = urllib.request.Request(url, data=data, headers=headers or {})
+    req = urllib.request.Request(url, data=data, headers=headers or {})  # noqa: S310
     if data is not None:
         req.add_header("Content-Type", "application/json")
-    with urllib.request.urlopen(req, timeout=timeout, context=_ssl_ctx) as resp:
+    with urllib.request.urlopen(  # noqa: S310  # nosec B310
+        req, timeout=timeout, context=_ssl_ctx
+    ) as resp:
         return json.loads(resp.read().decode())
 
 

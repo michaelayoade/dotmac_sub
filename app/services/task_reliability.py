@@ -290,6 +290,13 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "network", SWEEP, IDEMP, HEALTH
     ),
     "app.tasks.topology_sync.warm_topology_status": _c("network", SWEEP, IDEMP, HEALTH),
+    "app.tasks.topology_uisp.run_uisp_topology_sync": _c(
+        "network",
+        SWEEP,
+        IDEMP,
+        HEALTH,
+        "Scheduled UISP relationship sync; advisory lock prevents overlap.",
+    ),
     "app.tasks.tr069.apply_acs_config": _c("tr069", STATE, STATEFUL, STATUS),
     "app.tasks.tr069.apply_saved_ont_service_config": _c(
         "tr069", STATE, STATEFUL, STATUS
