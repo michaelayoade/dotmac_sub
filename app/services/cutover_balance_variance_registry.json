@@ -1,4 +1,16 @@
 {
   "version": 1,
-  "entries": []
+  "entries": [
+    {
+      "account_id": "4df28f82-b868-4710-ba8c-209b4ebbeb82",
+      "subscriber_name": "Megamore (Gwarimpa) Pizza Hut Office Downstairs",
+      "status": "accepted",
+      "expected_drift": "0.00",
+      "reason": "Manual prepaid go-live review: blocked prepaid account has a migrated partially paid invoice fully offset by unbacked opening credit. Net audit drift is zero, but both sides remain a frozen finance exception pending disposition.",
+      "recorded_at": "2026-07-04",
+      "invoice_id": "3d652132-2a42-49ba-b597-dc8b25837daa",
+      "invoice_number": "202322000034",
+      "invoice_balance_due": "40000.00"
+    }
+  ]
 }
