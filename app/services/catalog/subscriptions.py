@@ -986,10 +986,6 @@ def _generate_proration_invoice(
     from app.models.billing import (
         CreditNote,
         CreditNoteStatus,
-        Invoice,
-        InvoiceLine,
-        InvoiceStatus,
-        TaxApplication,
     )
     from app.services import numbering
 
@@ -1002,46 +998,27 @@ def _generate_proration_invoice(
     days = proration["days_remaining"]
 
     if net > 0:
-        # Customer owes more — generate invoice
-        invoice_number = numbering.generate_number(
+        # Prepaid is deposit-is-truth (this function only runs for prepaid —
+        # postpaid returned above): a mid-cycle upgrade draws the price
+        # difference down from the wallet as a ledger debit, NEVER an issued
+        # invoice/AR. This mirrors the customer-portal instant-change path
+        # (_create_prepaid_plan_change_debit + skip_proration_artifacts) so an
+        # admin/API-driven change behaves identically instead of minting a
+        # phantom receivable. Affordability is not gated here — an admin change
+        # may push the wallet negative; balance enforcement then applies.
+        _create_prepaid_plan_change_debit(
             db,
-            SettingDomain.billing,
-            "invoice_number",
-            "invoice_number_enabled",
-            "invoice_number_prefix",
-            "invoice_number_padding",
-            "invoice_number_start",
+            subscription,
+            net,
+            old_offer_name=old_offer_name,
+            new_offer_name=new_offer_name,
         )
-        invoice = Invoice(
-            account_id=subscriber_id,
-            invoice_number=invoice_number,
-            currency="NGN",
-            subtotal=net,
-            tax_total=Decimal("0"),
-            total=net,
-            balance_due=net,
-            status=InvoiceStatus.issued,
-            memo=f"Plan change proration: {old_offer_name} → {new_offer_name} ({days} days remaining)",
-        )
-        db.add(invoice)
-        db.flush()
-        line = InvoiceLine(
-            invoice_id=invoice.id,
-            subscription_id=subscription.id,
-            description=f"Proration: upgrade to {new_offer_name} ({days} days)",
-            quantity=Decimal("1"),
-            unit_price=net,
-            amount=net,
-            tax_application=TaxApplication.exclusive,
-            is_active=True,
-        )
-        db.add(line)
         logger.info(
-            "Generated proration invoice %s for ₦%s (upgrade %s → %s)",
-            invoice_number,
+            "Recorded prepaid plan-change drawdown ₦%s (upgrade %s → %s, %s days)",
             net,
             old_offer_name,
             new_offer_name,
+            days,
         )
     else:
         # Customer gets credit — generate credit note

@@ -25,7 +25,7 @@ from app.tasks.billing import (
     run_invoice_cycle,
 )
 from app.tasks.catalog import apply_due_subscription_changes, expire_subscriptions
-from app.tasks.collections import run_dunning
+from app.tasks.collections import prepaid_balance_sweep, run_dunning
 from app.tasks.crm_billing_push import push_crm_billing_snapshots
 from app.tasks.crm_sync import push_subscriber_change as push_crm_subscriber_change
 from app.tasks.crm_sync import redrive_crm_dead_letters
@@ -203,6 +203,7 @@ __all__ = [
     "expire_subscriptions",
     "apply_due_subscription_changes",
     "run_dunning",
+    "prepaid_balance_sweep",
     "audit_cutover_balance_invariant_task",
     "audit_funded_inactive_exposure_task",
     "check_billing_switch_task",

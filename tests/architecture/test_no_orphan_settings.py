@@ -59,14 +59,8 @@ _KNOWN_ORPHAN_SETTINGS: set[str] = {
     "olt_polling_interval_minutes",
     "ont_offline_poll_threshold",
     "pon_outage_min_offline_onus",
-    "prepaid_blocking_time",
-    "prepaid_deactivation_body",
-    "prepaid_deactivation_days",
-    "prepaid_deactivation_subject",
-    "prepaid_skip_holidays",
-    "prepaid_skip_weekends",
-    "prepaid_warning_body",
-    "prepaid_warning_subject",
+    # prepaid_* enforcement settings wired 2026-07-04 by the prepaid balance
+    # sweep (app/services/collections/prepaid_balance_sweep.py).
     "vendor_bid_minimum_days",
     "vendor_quote_approval_threshold",
     "vendor_quote_validity_days",

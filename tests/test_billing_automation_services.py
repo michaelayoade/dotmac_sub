@@ -3021,3 +3021,36 @@ class TestPrepaidDraftUntilFunded:
         assert get_account_credit_balance(
             db_session, str(subscriber_account.id), currency="NGN"
         ) == Decimal("40.00")
+
+    def test_later_topup_settles_existing_prepaid_draft(
+        self, db_session, subscription, subscriber_account
+    ):
+        from app.models.billing import InvoiceStatus
+        from app.services.billing._common import get_account_credit_balance
+        from app.services.billing.reconcile_unposted import (
+            settle_prepaid_draft_invoices_from_credit,
+        )
+
+        run_at = self._setup_prepaid_monthly(
+            db_session, subscription, subscriber_account, draft_flag=True
+        )
+        billing_automation.run_invoice_cycle(db_session, run_at=run_at)
+        inv = self._invoice(db_session, subscriber_account)
+        assert inv.status == InvoiceStatus.draft
+        db_session.refresh(subscription)
+        assert subscription.next_billing_at is not None
+        assert subscription.next_billing_at > run_at
+
+        self._add_credit(db_session, subscriber_account, "100.00", run_at)
+        result = settle_prepaid_draft_invoices_from_credit(
+            db_session, str(subscriber_account.id), run_at=run_at + timedelta(hours=2)
+        )
+        db_session.commit()
+
+        db_session.refresh(inv)
+        assert result.applied == Decimal("100.00")
+        assert inv.status == InvoiceStatus.paid
+        assert inv.balance_due == Decimal("0.00")
+        assert get_account_credit_balance(
+            db_session, str(subscriber_account.id), currency="NGN"
+        ) == Decimal("0.00")

@@ -1,7 +1,8 @@
 # Prepaid invoicing → deposit-is-truth alignment
 
-**Status:** design + item 1 in progress (2026-07-03). Option A chosen (align prepaid
-to deposit-is-truth), per product direction.
+**Status:** Option A chosen (align prepaid to deposit-is-truth), per product
+direction. Item 1 done (#734, flag OFF), Item 2 done (#738, control OFF), Items 3 & 4
+done (this PR). Item 5 (data cleanup) + the coordinated flag flip remain.
 
 ## Problem
 
@@ -67,19 +68,27 @@ skip weekends/holidays, blocking time) as its config → resolves the earlier
 wire-vs-delete question to **WIRE**. Emits the prepaid-native low-balance warning that
 `service_status.py:121-137` already renders but never receives.
 
-### Item 3 — admin/API prepaid plan-change should draw down, not invoice
+### Item 3 — admin/API prepaid plan-change should draw down, not invoice ✅ DONE (this PR)
 `catalog/subscriptions.py:1004-1075 _generate_proration_invoice` mints an issued
 invoice for prepaid upgrades on the generic CRUD/admin path; only the portal path
 (`customer_portal_flow_changes.py:709-720`) honors drawdown. Route admin/API prepaid
 changes through the same `_create_prepaid_plan_change_debit` drawdown.
 
-### Item 4 — one billing-mode authority in the read path
+### Item 4 — one billing-mode authority in the read path ✅ DONE (this PR)
 Dunning/enforcement use `_effective_billing_mode_for_account` (Subscription-derived,
 prepaid-wins, `_core.py:173-202`); customer `build_service_status` uses
 `Subscriber.billing_mode` (`service_status.py:116`). Reconcile so a drifted/mixed
 account can't show a prepaid wallet while dunning treats it as postpaid.
 
-### Item 5 — clean up the 938 phantom prepaid overdue invoices
+### Item 5 — clean up the 938 phantom prepaid overdue invoices ✅ DONE (this PR — script)
+Script: `scripts/one_off/cleanup_prepaid_phantom_ar.py` (dry-run by default; `--apply`;
+`--unfunded-action draft|void`). Per prepaid account, oldest-first: funded invoices
+(payment-backed credit ≥ balance) are settled from the deposit via the Item-1
+`settle_single_invoice_from_credit`; unfunded ones are drafted (default) or voided —
+removing them from AR/overdue/dunning/balance. `partially_paid` never drafted/voided
+(only settled if now funded, else reported). Idempotent (stamps `metadata_`). Run the
+dry-run in the prod container, review the CSV, then `--apply`. Prod estimate at build
+time: ~1,101 prepaid AR invoices → ~241 funded (₦6.7M) / ~860 unfunded (₦25.9M).
 Behind a `reconciliation_hold` (the existing dunning-stop flag), reclassify the
 already-issued prepaid overdue/issued invoices: draft-or-void the unfunded ones,
 settle the funded ones from deposit. Balance-neutral, audited (mirrors the prior
@@ -96,6 +105,15 @@ phantom-ledger cleanups). Separate one-off script, run after Item 1 lands.
    old ones remain overdue leaves a mixed state, and enabling without Item 2 removes
    prepaid enforcement entirely.
 4. Items 3 & 4 are independent hardening; ship anytime.
+5. **Post-flip smoke test (top-up → draft settlement).** The #751 follow-ups
+   (`settle_prepaid_draft_invoices_from_credit`, wired into portal top-up verify /
+   webhook settlement / pending top-up reconciliation) are part of the go-live
+   baseline, not optional. Immediately after the flip, exercise the path
+   end-to-end: take or create ONE underfunded prepaid **draft** renewal, top up
+   enough to cover it, then verify (a) it transitions to `paid`, (b) wallet credit
+   is consumed **exactly once** (no double-draw), and (c) if the account was
+   prepaid-suspended, service restore runs. This is the one behaviour the offline
+   tests can't fully prove against real payment/webhook plumbing.
 
 **LANDMINE:** do NOT flip `prepaid_monthly_invoicing_enabled` off/on or enable
 `settle_credit_on_invoice_enabled` (account-wide settle) as a shortcut — the latter is

@@ -139,6 +139,59 @@ def test_webhook_completed_sets_completed_at(db_session):
     assert row.completed_at is not None
 
 
+def test_webhook_started_pushes_track_deeplink(db_session):
+    # The dispatched → in_progress transition ("tech started") pushes an
+    # on-the-way notice deep-linked to the live map.
+    sub = _subscriber(db_session)
+    work_orders_mirror.apply_webhook(
+        db_session,
+        "work_order.created",
+        {"subscriber_id": str(sub.id), "work_order_id": "wo9", "status": "dispatched"},
+    )
+    with patch("app.services.push.send_push") as push:
+        out = work_orders_mirror.apply_webhook(
+            db_session,
+            "work_order.updated",
+            {
+                "subscriber_id": str(sub.id),
+                "work_order_id": "wo9",
+                "to_status": "in_progress",
+            },
+        )
+    assert out["status"] == "ok"
+    push.assert_called_once()
+    kwargs = push.call_args.kwargs
+    assert kwargs["title"] == "Your technician is on the way"
+    assert kwargs["data"]["route"] == "/track/wo9"
+
+
+def test_webhook_no_repush_while_in_progress(db_session):
+    sub = _subscriber(db_session)
+    with patch("app.services.push.send_push") as push:
+        work_orders_mirror.apply_webhook(
+            db_session,
+            "work_order.updated",
+            {
+                "subscriber_id": str(sub.id),
+                "work_order_id": "wo9",
+                "to_status": "in_progress",
+            },
+        )
+        assert push.call_count == 1
+        # A second update while already in_progress must not re-push.
+        work_orders_mirror.apply_webhook(
+            db_session,
+            "work_order.updated",
+            {
+                "subscriber_id": str(sub.id),
+                "work_order_id": "wo9",
+                "to_status": "in_progress",
+                "technician_name": "Ade",
+            },
+        )
+        assert push.call_count == 1
+
+
 def test_webhook_unmapped_ignored(db_session):
     out = work_orders_mirror.apply_webhook(
         db_session,
