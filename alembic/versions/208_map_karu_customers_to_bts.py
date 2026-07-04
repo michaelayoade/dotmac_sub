@@ -1,7 +1,7 @@
 """Map confirmed Karu customers to Karu BTS.
 
-Revision ID: 205_map_karu_customers_to_bts
-Revises: 204_add_reseller_restrict_to_assigned_offers
+Revision ID: 208_map_karu_customers_to_bts
+Revises: 207_add_cutover_balance_variances
 Create Date: 2026-07-04
 """
 
@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision = "205_map_karu_customers_to_bts"
-down_revision = "204_add_reseller_restrict_to_assigned_offers"
+revision = "208_map_karu_customers_to_bts"
+down_revision = "207_add_cutover_balance_variances"
 branch_labels = None
 depends_on = None
 
