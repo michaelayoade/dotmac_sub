@@ -487,6 +487,9 @@ def test_reparent_second_run_is_stable_no_further_moves(
     sync(db_session, FakeUispClient(devices=_two_ap_payload(AP2_ID)))
 
     with caplog.at_level(logging.INFO, logger="app.services.topology.uisp_sync"):
+        # Drop the (legitimate) reparent breadcrumb from the run above; only the
+        # stable third run should be asserted on here.
+        caplog.clear()
         third = sync(db_session, FakeUispClient(devices=_two_ap_payload(AP2_ID)))
 
     assert third["edges_set"] == 0
