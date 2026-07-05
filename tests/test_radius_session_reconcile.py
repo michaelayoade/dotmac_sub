@@ -141,6 +141,41 @@ class TestActiveSessionReconcile:
         assert row.framed_ip_address == "100.64.0.1"
         assert row.calling_station_id == "AA:BB:CC:DD:EE:FF"
 
+    def test_inet_mask_stripped_so_nas_resolves(
+        self, db_session, tmp_path, catalog_offer
+    ):
+        # radacct nasipaddress/framedipaddress are inet columns whose text form
+        # carries a /32 (e.g. "10.0.0.1/32"), but nas_devices/subscriptions
+        # store bare IPs. Without stripping the mask, NAS resolution missed on
+        # every session (nas_device_id NULL). This reproduces that prod bug.
+        db_path = tmp_path / "radacct.db"
+        subscriber, sub = _seed_subscriber_with_login(
+            db_session,
+            login="100017271",
+            offer=catalog_offer,
+            status=SubscriptionStatus.active,
+        )
+        nas = _seed_nas(db_session, name="bng-1", nas_ip="10.0.0.1")
+        _seed_radacct_sqlite(
+            db_path,
+            rows=[
+                _open_row(
+                    username="100017271",
+                    sid="sess-1",
+                    framed="172.16.0.5/32",
+                    nasip="10.0.0.1/32",
+                )
+            ],
+        )
+
+        result = _run(db_session, db_path)
+
+        assert result["unresolved_nas"] == 0
+        row = db_session.query(RadiusActiveSession).one()
+        assert row.nas_device_id == nas.id
+        assert row.nas_ip_address == "10.0.0.1"  # stored without the /32
+        assert row.framed_ip_address == "172.16.0.5"  # stored without the /32
+
     def test_username_without_active_sub_is_unmatched_no_row(
         self, db_session, tmp_path, catalog_offer
     ):
