@@ -12,8 +12,6 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
-import pytest
-
 from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.network import CPEDevice, DeviceStatus, DeviceType
 from app.models.support import Ticket, TicketStatus
@@ -295,16 +293,6 @@ class _FakeUispClient:
         return []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "uisp_sync adoption hook (follow-up contract, see PR "
-        "feat/radio-mac-at-install): _upsert_station should adopt an existing "
-        "cpe_devices row matched by normalized MAC where uisp_device_id IS "
-        "NULL before creating a new row. Until then the sync creates a "
-        "duplicate row and the hourly review retires the manual placeholder."
-    ),
-)
 def test_uisp_sync_adopts_preregistered_row(db_session, subscriber, catalog_offer):
     from app.services.topology.uisp_sync import sync
 
