@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -271,6 +272,7 @@ def list_nodes_and_edges(
                 "id": str(dev.id),
                 "name": dev.name or str(dev.id)[:8],
                 "status": dev.status.value if dev.status else "unknown",
+                "role": dev.role.value if dev.role else "",
                 "device_type": str(dev.device_type or ""),
                 "vendor": str(dev.vendor or ""),
                 "ip": str(dev.mgmt_ip or dev.hostname or ""),
@@ -326,13 +328,39 @@ def list_nodes_and_edges(
     }
 
 
+# LLDP-discovered edges are re-seen hourly; two missed cycles ⇒ treat as
+# degraded (the poller stopped confirming the adjacency).
+_LINK_STALE_SECONDS = 2 * 60 * 60
+
+
+def _derive_link_status(link: NetworkTopologyLink, now: datetime) -> str:
+    """Coarse up / down / degraded / unknown for a link.
+
+    There is no live per-link telemetry, so this is driven by administrative
+    state plus freshness: ``disabled`` (or pruned) ⇒ down; ``maintenance`` or a
+    stale auto-discovered edge ⇒ degraded; a live enabled edge ⇒ up. Manual
+    links carry no ``last_seen_at`` and are never marked stale on that basis.
+    """
+    if not link.is_active or link.admin_status == TopologyLinkAdminStatus.disabled:
+        return "down"
+    if link.admin_status == TopologyLinkAdminStatus.maintenance:
+        return "degraded"
+    seen = link.last_seen_at
+    if seen is not None:
+        if seen.tzinfo is None:
+            seen = seen.replace(tzinfo=UTC)
+        if (now - seen).total_seconds() > _LINK_STALE_SECONDS:
+            return "degraded"
+    return "up"
+
+
 def _link_to_edge(
     db: Session,
     link: NetworkTopologyLink,
     *,
     include_utilization: bool = True,
 ) -> dict:
-    """Convert a topology link to a D3-friendly edge dict."""
+    """Convert a topology link to a graph edge dict."""
     src_iface_name = link.source_interface.name if link.source_interface else None
     tgt_iface_name = link.target_interface.name if link.target_interface else None
 
@@ -350,6 +378,7 @@ def _link_to_edge(
         "bundle_key": link.bundle_key,
         "topology_group": link.topology_group,
         "admin_status": link.admin_status.value if link.admin_status else "enabled",
+        "status": _derive_link_status(link, datetime.now(UTC)),
         "notes": link.notes or "",
     }
 

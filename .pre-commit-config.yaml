@@ -13,11 +13,11 @@ repos:
     hooks:
       - id: trailing-whitespace
         args: [--markdown-linebreak-ext=md]
-        exclude: ^static/css/main\.css$
+        exclude: ^static/(css/main\.css$|vendor/|js/vendor/)
       - id: end-of-file-fixer
         # Generated, minified Tailwind output; the build strips the trailing
         # newline on every rebuild, so don't enforce it here.
-        exclude: ^static/css/main\.css$
+        exclude: ^static/(css/main\.css$|vendor/|js/vendor/)
       - id: check-yaml
       - id: check-toml
       - id: check-added-large-files
