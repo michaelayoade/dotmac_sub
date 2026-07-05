@@ -264,12 +264,12 @@ def reconcile_active_sessions_from_radacct(
     existing: dict[str, RadiusActiveSession] = {}
     sids = list(by_sid.keys())
     for chunk in _chunked(sids):
-        for row in db.scalars(
+        for existing_row in db.scalars(
             select(RadiusActiveSession).where(
                 RadiusActiveSession.acct_session_id.in_(chunk)
             )
         ).all():
-            existing.setdefault(row.acct_session_id, row)
+            existing.setdefault(existing_row.acct_session_id, existing_row)
 
     now = datetime.now(UTC)
     for sid, s in by_sid.items():
