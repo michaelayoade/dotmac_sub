@@ -72,3 +72,73 @@ def test_topology_gaps_counts_and_match_rate(db_session, subscriber, catalog_off
     assert gaps.subscription_gap_count == 1
     assert gaps.subscription_gaps[0]["id"] == gappy_sub.id
     assert gaps.match_rate == 0.5
+
+
+# --- Wireless arm: gaps stays in sync with resolve_customer_path's radio arm ---
+
+
+def _wireless_setup(db_session, subscriber_id, uisp_status="active", pop=True):
+    from app.models.network import CPEDevice
+
+    pop_site = None
+    if pop:
+        pop_site = PopSite(name=f"BTS-{uuid.uuid4().hex[:6]}", zabbix_group_id="40")
+        db_session.add(pop_site)
+        db_session.flush()
+    ap = NetworkDevice(
+        name=f"ap-{uuid.uuid4().hex[:6]}",
+        pop_site_id=pop_site.id if pop_site else None,
+        uisp_device_id=f"uisp-{uuid.uuid4().hex[:6]}",
+    )
+    db_session.add(ap)
+    db_session.flush()
+    db_session.add(
+        CPEDevice(
+            subscriber_id=subscriber_id,
+            parent_network_device_id=ap.id,
+            last_uisp_status=uisp_status,
+        )
+    )
+    db_session.flush()
+
+
+def test_wireless_only_subscriber_is_not_a_gap(db_session, subscriber, catalog_offer):
+    # Radio -> AP -> pop_site: complete path, no gap, counted in match-rate.
+    _wireless_setup(db_session, subscriber.id)
+    db_session.add(_sub(subscriber.id, catalog_offer.id))
+    db_session.flush()
+
+    gaps = topology_gaps(db_session)
+
+    assert gaps.active_subscriptions == 1
+    assert gaps.subscription_gap_count == 0
+    assert gaps.resolved_complete == 1
+    assert gaps.match_rate == 1.0
+
+
+def test_vanished_cpe_only_subscriber_is_still_a_gap(
+    db_session, subscriber, catalog_offer
+):
+    # A vanished radio does not resolve a path (mirrors resolve_customer_path,
+    # which skips it and, with no NAS, lands on GAP_NO_ONT).
+    _wireless_setup(db_session, subscriber.id, uisp_status="vanished")
+    db_session.add(_sub(subscriber.id, catalog_offer.id))
+    db_session.flush()
+
+    gaps = topology_gaps(db_session)
+
+    assert gaps.subscription_gap_count == 1
+    assert gaps.subscription_gaps[0]["gap"] == "no_ont"
+
+
+def test_wireless_subscriber_ap_without_basestation_is_gap_no_basestation(
+    db_session, subscriber, catalog_offer
+):
+    _wireless_setup(db_session, subscriber.id, pop=False)
+    db_session.add(_sub(subscriber.id, catalog_offer.id))
+    db_session.flush()
+
+    gaps = topology_gaps(db_session)
+
+    assert gaps.subscription_gap_count == 1
+    assert gaps.subscription_gaps[0]["gap"] == "no_basestation"
