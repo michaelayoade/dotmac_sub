@@ -2359,6 +2359,57 @@ class OntAssignment(Base):
     service_address = relationship("Address")
 
 
+class ForwardingObservation(Base):
+    """A MAC-forwarding observation harvested from network hardware.
+
+    General "hop-1" position -> MAC record: one row per (MAC, position) learned
+    on a device's forwarding table. The Huawei OLT harvester
+    (``app/services/topology/olt_mac_harvest.py``) parses ``display mac-address
+    port <F/S/P>`` and emits one row per learned customer/router MAC, mapping it
+    to the exact PON port (F/S/P) and ONT-ID (the VPI column). This is an
+    ephemeral, periodically-refreshed table (rows are aged out) and the reusable
+    foundation for ONT<->subscriber drift detection today and bridge-mode
+    UF-Nano / wireless linking later. It is read-only toward assignments.
+    """
+
+    __tablename__ = "forwarding_observations"
+    __table_args__ = (
+        # Upsert identity: one row per learned MAC at a given (OLT, ONT-ID)
+        # position. Re-harvesting refreshes observed_at/vlan/pon_port in place.
+        UniqueConstraint(
+            "olt_device_id",
+            "mac",
+            "ont_id_on_olt",
+            name="uq_forwarding_observations_olt_mac_ont",
+        ),
+        Index("ix_forwarding_observations_mac", "mac"),
+        Index("ix_forwarding_observations_observed_at", "observed_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    olt_device_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("olt_devices.id", ondelete="CASCADE")
+    )
+    ont_unit_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ont_units.id", ondelete="SET NULL")
+    )
+    pon_port_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pon_ports.id", ondelete="SET NULL")
+    )
+    # The ONT-ID on the OLT for the learned MAC (the VPI column in Huawei's
+    # ``display mac-address port`` output).
+    ont_id_on_olt: Mapped[int | None] = mapped_column(Integer)
+    # Canonical MAC (uppercase colon-separated, matching subscriptions.mac_address).
+    mac: Mapped[str] = mapped_column(Text, nullable=False)
+    vlan: Mapped[int | None] = mapped_column(Integer)
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    source: Mapped[str] = mapped_column(Text, nullable=False, default="huawei_olt_mac")
+
+
 class NetworkZone(Base):
     """Geographic zone for organizing network infrastructure."""
 
