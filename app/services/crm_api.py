@@ -1681,9 +1681,21 @@ def record_external_payment(
         memo=memo or "CRM sales payment",
         allocations=allocations,
     )
-    return billing_service.payments.create(
-        session, payload, auto_allocate=(allocations is None)
-    )
+    from sqlalchemy.exc import IntegrityError
+
+    try:
+        return billing_service.payments.create(
+            session, payload, auto_allocate=(allocations is None)
+        )
+    except IntegrityError:
+        # A concurrent /crm/payments push won the race on
+        # uq_payments_active_crm_external_id. The write is idempotent — roll back
+        # our losing insert and return the already-recorded payment.
+        session.rollback()
+        existing = session.query(Payment).filter(Payment.external_id == ext_id).first()
+        if existing is not None:
+            return existing
+        raise
 
 
 def list_catalog_offers(
