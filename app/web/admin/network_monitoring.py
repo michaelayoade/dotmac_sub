@@ -194,7 +194,9 @@ def outage_impact_page(
     from app.models.network_monitoring import NetworkDevice, PopSite
     from app.services.topology.affected import (
         affected_customers,
+        fdh_impact_branches,
         fdh_impact_rows,
+        impact_breakdown,
         list_basestations,
         list_fdh_cabinets,
         list_network_nodes,
@@ -236,6 +238,7 @@ def outage_impact_page(
         if detailed_rows is not None:
             context["impact_rows"] = detailed_rows
             context["impact_detail_mode"] = "fdh"
+            context["impact_branches"] = fdh_impact_branches(detailed_rows)
         else:
             context["impact_rows"] = [
                 {
@@ -250,6 +253,7 @@ def outage_impact_page(
                 for s in result["subscriptions"]
             ]
             context["impact_detail_mode"] = "basic"
+            context["impact_branches"] = impact_breakdown(db, result)
     return templates.TemplateResponse("admin/network/outage_impact.html", context)
 
 

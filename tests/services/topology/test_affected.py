@@ -23,7 +23,12 @@ from app.models.network_monitoring import (
     PopSite,
 )
 from app.models.subscriber import Address, Subscriber
-from app.services.topology.affected import affected_customers, fdh_impact_rows
+from app.services.topology.affected import (
+    affected_customers,
+    fdh_impact_branches,
+    fdh_impact_rows,
+    impact_breakdown,
+)
 
 
 def _node(db, name, mtype=None, mid=None, pop_site_id=None, role=DeviceRole.edge):
@@ -394,3 +399,64 @@ def test_subscriptions_for_nodes_matches_per_node_results(
             s.id for s in subscriptions_for_node(db_session, node)
         }
     assert batched[empty_node.id] == []
+
+
+def test_impact_breakdown_ranks_and_scales_branches(db_session, catalog_offer):
+    pop = PopSite(name="Kubwa", zabbix_group_id="20")
+    db_session.add(pop)
+    db_session.flush()
+    nas_a = NasDevice(name="AA", management_ip="10.0.2.1")
+    nas_b = NasDevice(name="BB", management_ip="10.0.2.2")
+    nas_c = NasDevice(name="CC", management_ip="10.0.2.3")
+    db_session.add_all([nas_a, nas_b, nas_c])
+    db_session.flush()
+    node_a = _node(
+        db_session,
+        "node-a",
+        "nas",
+        nas_a.id,
+        pop_site_id=pop.id,
+        role=DeviceRole.access,
+    )
+    _node(
+        db_session,
+        "node-b",
+        "nas",
+        nas_b.id,
+        pop_site_id=pop.id,
+        role=DeviceRole.access,
+    )
+    _node(
+        db_session, "node-c", "nas", nas_c.id, pop_site_id=pop.id
+    )  # 0 subs -> dropped
+    node_a.live_status = "down"
+    db_session.flush()
+    _sub(db_session, catalog_offer.id, nas_id=nas_a.id)
+    _sub(db_session, catalog_offer.id, nas_id=nas_a.id)
+    _sub(db_session, catalog_offer.id, nas_id=nas_b.id)
+
+    result = affected_customers(db_session, basestation=pop)
+    branches = impact_breakdown(db_session, result)
+
+    # zero-count node-c dropped; sorted by count desc
+    assert [b["name"] for b in branches] == ["node-a", "node-b"]
+    assert branches[0]["count"] == 2 and branches[0]["pct"] == 100
+    assert branches[0]["live_status"] == "down"
+    assert branches[0]["role"] == "access"
+    assert branches[1]["count"] == 1 and branches[1]["pct"] == 50
+
+
+def test_fdh_impact_branches_group_and_scale():
+    rows = [
+        {"splitter_name": "SPL-1"},
+        {"splitter_name": "SPL-1"},
+        {"splitter_name": "SPL-2"},
+        {"splitter_name": None},
+    ]
+    branches = fdh_impact_branches(rows)
+    by_name = {b["name"]: b for b in branches}
+    assert by_name["SPL-1"]["count"] == 2 and by_name["SPL-1"]["pct"] == 100
+    assert by_name["SPL-2"]["count"] == 1 and by_name["SPL-2"]["pct"] == 50
+    assert by_name["—"]["count"] == 1  # None -> em dash bucket
+    assert branches[0]["name"] == "SPL-1"  # busiest first
+    assert all(b["live_status"] == "plant" for b in branches)
