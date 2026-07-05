@@ -352,3 +352,45 @@ def test_ap_node_excludes_retired_cpe(db_session, catalog_offer):
     out = affected_customers(db_session, node=ap)
     assert out["count"] == 1
     assert out["subscriptions"][0].id == live.id
+
+
+def test_subscriptions_for_nodes_matches_per_node_results(
+    db_session, subscriber, catalog_offer
+):
+    # Batched resolver must agree with the single-node path on a mixed
+    # nas/olt/ap node set (including a node with no subscribers).
+    from app.services.topology.affected import (
+        subscriptions_for_node,
+        subscriptions_for_nodes,
+    )
+
+    nas = NasDevice(name="NAS-Mix", management_ip="10.0.4.1")
+    olt = OLTDevice(name="OLT-Mix", hostname="olt-mix", mgmt_ip="10.0.4.2")
+    db_session.add_all([nas, olt])
+    db_session.flush()
+    nas_node = _node(db_session, "mix-nas", "nas", nas.id)
+    olt_node = _node(db_session, "mix-olt", "olt", olt.id)
+    ap_node = _node(db_session, "mix-ap")
+    empty_node = _node(db_session, "mix-empty")
+
+    _sub(db_session, catalog_offer.id, nas_id=nas.id)
+    ont = OntUnit(serial_number="SN-MIX", olt_device_id=olt.id)
+    db_session.add(ont)
+    db_session.flush()
+    db_session.add(
+        OntAssignment(ont_unit_id=ont.id, subscriber_id=subscriber.id, active=True)
+    )
+    _sub(db_session, catalog_offer.id, subscriber_id=subscriber.id)
+    wireless_sub = _sub(db_session, catalog_offer.id, nas_id=nas.id)  # in both arms
+    _cpe(db_session, wireless_sub.subscriber_id, ap_node.id)
+    db_session.flush()
+
+    nodes = [nas_node, olt_node, ap_node, empty_node]
+    batched = subscriptions_for_nodes(db_session, [n.id for n in nodes])
+
+    assert set(batched) == {n.id for n in nodes}
+    for node in nodes:
+        assert {s.id for s in batched[node.id]} == {
+            s.id for s in subscriptions_for_node(db_session, node)
+        }
+    assert batched[empty_node.id] == []

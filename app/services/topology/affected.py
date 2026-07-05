@@ -143,17 +143,86 @@ def downstream_nodes(
     return result
 
 
-def _wireless_subscriber_ids(session: Session, node: NetworkDevice) -> list:
-    """Subscriber ids of active radios parented to this node (CPE -> AP edge).
+def subscriptions_for_nodes(
+    session: Session, node_ids
+) -> dict[object, list[Subscription]]:
+    """Active subscriptions per node, as {node_id: [subscriptions]} (deduped).
 
-    "Active" mirrors customer_path._active_wireless_cpe: CPE row status is
-    active and UISP has not reported the radio vanished (disconnected still
-    counts — that radio is still the customer's access path).
+    Batched mirror of ``subscriptions_for_node``: one query per arm across
+    ALL the given nodes (instead of up to five per node), so basestation
+    sweeps and impact previews stay O(arms), not O(nodes).
+
+    Three additive arms, deduped by subscription id per node — an AP node may
+    *also* be Zabbix-matched as a NAS:
+      - nas: subscriptions provisioned on the node's matched NAS;
+      - olt: subscriptions with an active ONT assignment on the matched OLT;
+      - wireless: subscriptions whose active radio is parented to the node
+        via the UISP CPE -> AP edge. "Active" mirrors
+        customer_path._active_wireless_cpe: CPE row status is active and UISP
+        has not reported the radio vanished (disconnected still counts — that
+        radio is still the customer's access path).
     """
-    rows = (
-        session.query(CPEDevice.subscriber_id)
+    node_ids = list(node_ids)
+    if not node_ids:
+        return {}
+    result: dict[object, dict] = {nid: {} for nid in node_ids}
+
+    nodes = session.query(NetworkDevice).filter(NetworkDevice.id.in_(node_ids)).all()
+
+    # subscriber_id -> node_ids the subscriber-keyed arms (olt/wireless)
+    # resolve them under; one Subscription fetch covers both arms.
+    subscriber_nodes: dict[object, set] = {}
+
+    def _credit(subscriber_id, nid) -> None:
+        subscriber_nodes.setdefault(subscriber_id, set()).add(nid)
+
+    # --- NAS arm (keyed by provisioning_nas_device_id, not subscriber) ---
+    nas_node_ids: dict[object, list] = {}
+    for n in nodes:
+        if n.matched_device_type == "nas" and n.matched_device_id is not None:
+            nas_node_ids.setdefault(n.matched_device_id, []).append(n.id)
+    nas_subs: list[Subscription] = []
+    if nas_node_ids:
+        nas_subs = (
+            session.query(Subscription)
+            .filter(
+                Subscription.provisioning_nas_device_id.in_(nas_node_ids),
+                Subscription.status == SubscriptionStatus.active,
+            )
+            .all()
+        )
+
+    # --- OLT arm ---
+    olt_node_ids: dict[object, list] = {}
+    for n in nodes:
+        if n.matched_device_type == "olt" and n.matched_device_id is not None:
+            olt_node_ids.setdefault(n.matched_device_id, []).append(n.id)
+    if olt_node_ids:
+        ont_to_olt = {
+            r[0]: r[1]
+            for r in session.query(OntUnit.id, OntUnit.olt_device_id)
+            .filter(OntUnit.olt_device_id.in_(olt_node_ids))
+            .all()
+        }
+        if ont_to_olt:
+            for subscriber_id, ont_unit_id in (
+                session.query(OntAssignment.subscriber_id, OntAssignment.ont_unit_id)
+                .filter(
+                    OntAssignment.ont_unit_id.in_(ont_to_olt),
+                    OntAssignment.active.is_(True),
+                    OntAssignment.subscriber_id.isnot(None),
+                )
+                .all()
+            ):
+                for nid in olt_node_ids[ont_to_olt[ont_unit_id]]:
+                    _credit(subscriber_id, nid)
+
+    # --- Wireless arm (works whether or not the node is Zabbix-matched —
+    #     the UISP CPE -> AP edge alone makes it an AP) ---
+    for subscriber_id, parent_id in (
+        session.query(CPEDevice.subscriber_id, CPEDevice.parent_network_device_id)
         .filter(
-            CPEDevice.parent_network_device_id == node.id,
+            CPEDevice.parent_network_device_id.in_(node_ids),
             CPEDevice.subscriber_id.isnot(None),
             CPEDevice.status == DeviceStatus.active,
             or_(
@@ -163,73 +232,34 @@ def _wireless_subscriber_ids(session: Session, node: NetworkDevice) -> list:
         )
         .distinct()
         .all()
-    )
-    return [r[0] for r in rows]
+    ):
+        _credit(subscriber_id, parent_id)
+
+    if subscriber_nodes:
+        for sub in (
+            session.query(Subscription)
+            .filter(
+                Subscription.subscriber_id.in_(subscriber_nodes),
+                Subscription.status == SubscriptionStatus.active,
+            )
+            .all()
+        ):
+            for nid in subscriber_nodes[sub.subscriber_id]:
+                result[nid][sub.id] = sub
+    for sub in nas_subs:
+        for nid in nas_node_ids[sub.provisioning_nas_device_id]:
+            result[nid][sub.id] = sub
+
+    return {nid: list(by_id.values()) for nid, by_id in result.items()}
 
 
 def subscriptions_for_node(session: Session, node: NetworkDevice) -> list[Subscription]:
     """Active subscriptions whose access path terminates at this node.
 
-    Unions the Zabbix-matched arm (nas/olt) with the wireless arm (radios
-    whose UISP CPE -> AP edge points at this node): an AP node may *also* be
-    matched as a NAS, so the arms are additive, deduped by subscription id.
+    Thin single-node wrapper over ``subscriptions_for_nodes`` (the batched
+    resolver); the arms and their union/dedupe semantics live there.
     """
-    subs: dict = {}
-    if node.matched_device_id is not None and node.matched_device_type == "nas":
-        for sub in (
-            session.query(Subscription)
-            .filter(
-                Subscription.provisioning_nas_device_id == node.matched_device_id,
-                Subscription.status == SubscriptionStatus.active,
-            )
-            .all()
-        ):
-            subs[sub.id] = sub
-    if node.matched_device_id is not None and node.matched_device_type == "olt":
-        ont_ids = [
-            r[0]
-            for r in session.query(OntUnit.id)
-            .filter(OntUnit.olt_device_id == node.matched_device_id)
-            .all()
-        ]
-        subscriber_ids = (
-            [
-                r[0]
-                for r in session.query(OntAssignment.subscriber_id)
-                .filter(
-                    OntAssignment.ont_unit_id.in_(ont_ids),
-                    OntAssignment.active.is_(True),
-                    OntAssignment.subscriber_id.isnot(None),
-                )
-                .all()
-            ]
-            if ont_ids
-            else []
-        )
-        if subscriber_ids:
-            for sub in (
-                session.query(Subscription)
-                .filter(
-                    Subscription.subscriber_id.in_(subscriber_ids),
-                    Subscription.status == SubscriptionStatus.active,
-                )
-                .all()
-            ):
-                subs[sub.id] = sub
-    # Wireless: active radios parented to this node (works whether or not the
-    # node is Zabbix-matched — the UISP edge alone makes it an AP).
-    wireless_subscriber_ids = _wireless_subscriber_ids(session, node)
-    if wireless_subscriber_ids:
-        for sub in (
-            session.query(Subscription)
-            .filter(
-                Subscription.subscriber_id.in_(wireless_subscriber_ids),
-                Subscription.status == SubscriptionStatus.active,
-            )
-            .all()
-        ):
-            subs[sub.id] = sub
-    return list(subs.values())
+    return subscriptions_for_nodes(session, [node.id]).get(node.id, [])
 
 
 def subscriptions_for_fdh(session: Session, fdh: FdhCabinet) -> list[Subscription]:
@@ -584,7 +614,9 @@ def affected_customers(
 ) -> dict:
     """Subscriptions affected by a failing node and/or basestation.
 
-    Returns {subscriptions, node_ids, count} (deduped). For a basestation, all
+    Returns {subscriptions, node_ids, subscriptions_by_node, count} (deduped;
+    subscriptions_by_node lets callers do per-node coverage checks without
+    re-resolving). For a basestation, all
     its active nodes; for a node, it + its downstream access nodes.
     """
     node_ids: set = set()
@@ -605,14 +637,13 @@ def affected_customers(
     if fdh is not None:
         for s in subscriptions_for_fdh(session, fdh):
             subs[s.id] = s
-    for nid in node_ids:
-        n = session.get(NetworkDevice, nid)
-        if n is None:
-            continue
-        for s in subscriptions_for_node(session, n):
+    subscriptions_by_node = subscriptions_for_nodes(session, node_ids)
+    for node_subs in subscriptions_by_node.values():
+        for s in node_subs:
             subs[s.id] = s
     return {
         "subscriptions": list(subs.values()),
         "node_ids": node_ids,
+        "subscriptions_by_node": subscriptions_by_node,
         "count": len(subs),
     }
