@@ -161,18 +161,25 @@ class MikroTikConnection:
     async def connect(self) -> bool:
         """Establish connection to the device."""
         self._last_attempt = datetime.now(UTC)
+        # RouterOS API is synchronous, run in executor. wait_for guarantees
+        # the async loop is never blocked by a hung device even if the
+        # executor thread lingers.
+        loop = asyncio.get_event_loop()
+        # Constructing RouterOsApiPool opens the TCP socket AND performs the
+        # API login, so the session already exists on the router the instant
+        # this returns. Keep the pool in a local so any failure after this
+        # point can release it — otherwise the next connect() overwrites
+        # self._pool, dropping the only reference and orphaning the session
+        # on the router (it lingers for days). See fix/mikrotik-poller-session-leak.
+        pool: RouterOsApiPool | None = None
         try:
-            # RouterOS API is synchronous, run in executor. wait_for guarantees
-            # the async loop is never blocked by a hung device even if the
-            # executor thread lingers.
-            loop = asyncio.get_event_loop()
             # TLS-readiness: tag a NAS with mikrotik_api_port:8729 to poll over
             # RouterOS API-SSL (encrypted transport) instead of plaintext 8728.
             # No-op until a device is on 8729, so the fleet is unchanged today.
             # ssl_verify stays off for now (encrypted but unverified) — cert
             # verification is a later step once the routers have trusted certs.
             use_ssl = self.port == 8729
-            self._pool = await asyncio.wait_for(
+            pool = await asyncio.wait_for(
                 loop.run_in_executor(
                     None,
                     lambda: RouterOsApiPool(
@@ -188,8 +195,11 @@ class MikroTikConnection:
                 ),
                 timeout=DEVICE_IO_TIMEOUT_SEC + 3,
             )
-            pool = self._pool
+            self._pool = pool
             if pool is None:
+                await self._release_pool(loop, pool)
+                self._pool = None
+                self._connection = None
                 return False
             self._connection = await asyncio.wait_for(
                 loop.run_in_executor(None, lambda: pool.get_api()),
@@ -202,7 +212,27 @@ class MikroTikConnection:
         except Exception as e:
             self._consecutive_failures += 1
             logger.error(f"Failed to connect to {self.host}: {_sanitize_exc(e)}")
+            # The pool was already constructed (and thus logged in) before the
+            # failure, so disconnect it here to avoid orphaning the session.
+            await self._release_pool(loop, pool)
+            self._pool = None
+            self._connection = None
             return False
+
+    async def _release_pool(self, loop, pool) -> None:
+        """Best-effort disconnect of a pool during a failed connect().
+
+        Mirrors disconnect()'s safe pattern so a disconnect error never masks
+        the original connect failure.
+        """
+        if pool is None:
+            return
+        try:
+            await loop.run_in_executor(None, pool.disconnect)
+        except Exception as e:
+            logger.warning(
+                f"Error releasing orphaned pool for {self.host}: {_sanitize_exc(e)}"
+            )
 
     async def disconnect(self):
         """Close the connection."""
