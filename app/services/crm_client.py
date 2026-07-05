@@ -145,10 +145,14 @@ class CRMClient:
         password: str,
         timeout: float = 15.0,
         settings_db: Session | None = None,
+        service_token: str | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.username = username
         self.password = password
+        # Static service ApiKey. When present, requests authenticate with
+        # X-API-Key and the staff session->JWT login is never used.
+        self.service_token = (service_token or "").strip()
         self.timeout = timeout
         self.settings_db = settings_db
         self._token: str | None = None
@@ -217,6 +221,21 @@ class CRMClient:
             )
         )
 
+    def _auth_headers(self) -> dict[str, str]:
+        """Auth headers for a service-to-service CRM request.
+
+        Prefers a static service ApiKey (auth-unification phase 2b): when
+        configured, no staff-credential login happens at all — one header, no
+        token round-trip. Falls back to the staff session->JWT login only while
+        ``service_token`` is unset, so the cut-over is a pure config flip and
+        never a breakage window regardless of deploy order.
+        """
+        if not self.base_url:
+            raise CRMClientError("CRM is not configured")
+        if self.service_token:
+            return {"X-API-Key": self.service_token}
+        return {"Authorization": f"Bearer {self._ensure_token()}"}
+
     def _ensure_token(self) -> str:
         """Get a valid JWT token, refreshing if within 60s of expiry."""
         if self._token and time.time() < self._token_expires_at - 60:
@@ -272,7 +291,7 @@ class CRMClient:
         if _REACHABILITY_CIRCUIT.is_open():
             raise CRMClientError("CRM temporarily unavailable (circuit open)")
 
-        token = self._ensure_token()
+        auth_headers = self._auth_headers()
         url = f"{self.base_url}{path}"
         try:
             attempt = 0
@@ -284,7 +303,7 @@ class CRMClient:
                         params=params,
                         json=json_data,
                         headers={
-                            "Authorization": f"Bearer {token}",
+                            **auth_headers,
                             **(headers or {}),
                         },
                     )
@@ -936,6 +955,7 @@ def get_crm_client(db: Session | None = None) -> CRMClient:
             base_url=settings.crm_base_url,
             username=settings.crm_username,
             password=settings.crm_password,
+            service_token=settings.crm_service_token,
             settings_db=db,
         )
     global _crm_client
@@ -944,5 +964,6 @@ def get_crm_client(db: Session | None = None) -> CRMClient:
             base_url=settings.crm_base_url,
             username=settings.crm_username,
             password=settings.crm_password,
+            service_token=settings.crm_service_token,
         )
     return _crm_client
