@@ -27,14 +27,19 @@ class FakeUispClient:
         stations_by_ap=None,
         onus_by_olt=None,
         onu_list_errors=None,
+        data_links=None,
     ):
         self.devices = devices or []
         self.sites = sites or []
         self.stations_by_ap = stations_by_ap or {}
         self.onus_by_olt = onus_by_olt or {}
         self.onu_list_errors = set(onu_list_errors or ())
+        self.data_links = data_links or []
         self.station_list_calls: list[str] = []
         self.onu_list_calls: list[str] = []
+
+    def list_data_links(self):
+        return self.data_links
 
     def list_devices(self):
         return self.devices
@@ -871,3 +876,173 @@ def test_per_olt_port_fetch_failure_is_isolated(db_session):
     assert result["ports_created"] == 1
     assert result["onu_ports_set"] == 1
     assert sorted(client.onu_list_calls) == sorted([OLT_ID, olt_b_id])
+
+
+# ---------------------------------------------------------------------------
+# Gap #4 — UFiber ONU live status + signal -> ont_units
+# ---------------------------------------------------------------------------
+
+
+def _onu_device(status="active", signal=None):
+    onu = _device(
+        ONU_ID,
+        "ONU-CUST-42",
+        role="station",
+        device_type="onu",
+        mac="24:A4:3C:44:55:66",
+        ip=None,
+        parent_id=OLT_ID,
+        model="UF-LOCO",
+        status=status,
+    )
+    if signal is not None:
+        onu["overview"]["signal"] = signal
+    return onu
+
+
+def _ufiber_payload_with(onu):
+    olt = _device(
+        OLT_ID,
+        "GPON-GARKI-1",
+        role="gpon",
+        device_type="olt",
+        ip="172.16.60.2/24",
+        mac="24:A4:3C:11:22:33",
+        model="UF-OLT",
+        site_id="site-bts-1",
+    )
+    return [olt, onu]
+
+
+def test_onu_status_and_signal_mapped_from_payload(db_session):
+    from app.models.network import OnuOnlineStatus
+
+    client = FakeUispClient(
+        devices=_ufiber_payload_with(_onu_device(status="active", signal=-21.5))
+    )
+    sync(db_session, client)
+    ont = db_session.query(OntUnit).filter(OntUnit.uisp_device_id == ONU_ID).one()
+    assert ont.olt_status == OnuOnlineStatus.online
+    assert ont.olt_status_seen_at is not None
+    assert ont.onu_rx_signal_dbm == -21.5
+
+
+def test_onu_offline_status_mapped(db_session):
+    from app.models.network import OnuOnlineStatus
+
+    client = FakeUispClient(
+        devices=_ufiber_payload_with(_onu_device(status="disconnected", signal=None))
+    )
+    sync(db_session, client)
+    ont = db_session.query(OntUnit).filter(OntUnit.uisp_device_id == ONU_ID).one()
+    assert ont.olt_status == OnuOnlineStatus.offline
+    assert ont.onu_rx_signal_dbm is None
+
+
+def test_onu_without_status_leaves_telemetry_untouched(db_session):
+    # No status string in the payload -> the UISP-owned fields are never set,
+    # so a missing field can't blank a value we don't have.
+    client = FakeUispClient(
+        devices=_ufiber_payload_with(_onu_device(status="", signal=None))
+    )
+    sync(db_session, client)
+    ont = db_session.query(OntUnit).filter(OntUnit.uisp_device_id == ONU_ID).one()
+    assert ont.onu_rx_signal_dbm is None
+    assert ont.olt_status_seen_at is None
+
+
+# ---------------------------------------------------------------------------
+# Gap #3 — UISP data-links -> NetworkTopologyLink (backhaul topology)
+# ---------------------------------------------------------------------------
+
+
+def _data_link(from_uisp_id, to_uisp_id, *, state="active", link_type="wireless"):
+    return {
+        "from": {"device": {"identification": {"id": from_uisp_id}}},
+        "to": {"device": {"identification": {"id": to_uisp_id}}},
+        "state": state,
+        "type": link_type,
+    }
+
+
+def _stamped_node(db_session, name, uisp_id, mgmt_ip):
+    node = NetworkDevice(
+        name=name,
+        hostname=name,
+        mgmt_ip=mgmt_ip,
+        role=DeviceRole.access,
+        is_active=True,
+        uisp_device_id=uisp_id,
+    )
+    db_session.add(node)
+    db_session.flush()
+    return node
+
+
+def test_data_link_between_matched_nodes_creates_topology_link(db_session):
+    from app.models.network_monitoring import NetworkTopologyLink, TopologyLinkMedium
+
+    a = _stamped_node(db_session, "AP-A", "uisp-a", "172.16.40.10")
+    b = _stamped_node(db_session, "AP-B", "uisp-b", "172.16.40.11")
+    client = FakeUispClient(devices=[], data_links=[_data_link("uisp-a", "uisp-b")])
+
+    result = sync(db_session, client)
+
+    links = (
+        db_session.query(NetworkTopologyLink)
+        .filter(NetworkTopologyLink.source == "uisp_data_link")
+        .all()
+    )
+    assert len(links) == 1
+    assert {links[0].source_device_id, links[0].target_device_id} == {a.id, b.id}
+    assert links[0].is_active is True
+    assert links[0].medium == TopologyLinkMedium.wireless
+    assert result["links_created"] == 1
+    # Idempotent: a second run updates, never duplicates.
+    again = sync(
+        db_session,
+        FakeUispClient(devices=[], data_links=[_data_link("uisp-a", "uisp-b")]),
+    )
+    assert again["links_created"] == 0
+    assert again["links_updated"] == 1
+
+
+def test_data_link_to_unmatched_endpoint_is_skipped(db_session):
+    from app.models.network_monitoring import NetworkTopologyLink
+
+    _stamped_node(db_session, "AP-A", "uisp-a", "172.16.40.10")
+    client = FakeUispClient(
+        devices=[], data_links=[_data_link("uisp-a", "uisp-unknown")]
+    )
+
+    result = sync(db_session, client)
+
+    count = (
+        db_session.query(NetworkTopologyLink)
+        .filter(NetworkTopologyLink.source == "uisp_data_link")
+        .count()
+    )
+    assert count == 0
+    assert result["links_created"] == 0
+    assert result["links_skipped"] == 1
+
+
+def test_vanished_data_link_is_soft_pruned(db_session):
+    from app.models.network_monitoring import NetworkTopologyLink
+
+    _stamped_node(db_session, "AP-A", "uisp-a", "172.16.40.10")
+    _stamped_node(db_session, "AP-B", "uisp-b", "172.16.40.11")
+    sync(
+        db_session,
+        FakeUispClient(devices=[], data_links=[_data_link("uisp-a", "uisp-b")]),
+    )
+
+    result = sync(db_session, FakeUispClient(devices=[], data_links=[]))
+
+    link = (
+        db_session.query(NetworkTopologyLink)
+        .filter(NetworkTopologyLink.source == "uisp_data_link")
+        .one()
+    )
+    assert link.is_active is False
+    assert result["links_pruned"] == 1
