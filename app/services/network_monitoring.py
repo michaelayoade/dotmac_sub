@@ -1350,7 +1350,7 @@ def get_onu_status_summary(db: Session, *, refresh: bool = False) -> dict[str, i
     """
     from sqlalchemy import func as sa_func
 
-    from app.models.network import OLTDevice, OntUnit
+    from app.models.network import OLTDevice, OntUnit, OnuOnlineStatus
     from app.services.zabbix_ont_status import (
         get_olt_ont_snapshot_from_zabbix,
         get_olt_ont_summary_from_zabbix,
@@ -1363,6 +1363,32 @@ def get_onu_status_summary(db: Session, *, refresh: bool = False) -> dict[str, i
     online = 0
     offline = 0
     low_signal = 0
+
+    # UISP-managed plant (UFiber): the topology sync imports these OLTs as
+    # INACTIVE placeholder rows (no config pack, no Zabbix host), so the
+    # per-OLT Zabbix walk below never sees their ONTs. They are not
+    # unmonitored Huawei gear and must not be dumped into the offline bucket:
+    # count them from their own last OBSERVED state instead — online/offline
+    # only when a status was actually seen (olt_status_seen_at set), otherwise
+    # a distinct ``uisp_managed`` bucket that is excluded from offline.
+    uisp_ont_rows = (
+        db.query(OntUnit.olt_status, OntUnit.olt_status_seen_at)
+        .join(OLTDevice, OntUnit.olt_device_id == OLTDevice.id)
+        .filter(
+            OntUnit.is_active.is_(True),
+            OLTDevice.uisp_device_id.isnot(None),
+            OLTDevice.is_active.is_(False),
+        )
+        .all()
+    )
+    uisp_managed = 0
+    for uisp_status, uisp_seen_at in uisp_ont_rows:
+        if uisp_status == OnuOnlineStatus.online:
+            online += 1
+        elif uisp_status == OnuOnlineStatus.offline and uisp_seen_at is not None:
+            offline += 1
+        else:
+            uisp_managed += 1
 
     olts = (
         db.query(OLTDevice)
@@ -1409,7 +1435,11 @@ def get_onu_status_summary(db: Session, *, refresh: bool = False) -> dict[str, i
             if item.olt_rx_dbm is not None and item.olt_rx_dbm < -25
         )
 
-    unmonitored_total = max(inventory_total - len(monitored_ont_ids), 0)
+    # UISP-managed ONTs were already bucketed above — keep them out of the
+    # unmonitored -> offline rollup.
+    unmonitored_total = max(
+        inventory_total - len(monitored_ont_ids) - len(uisp_ont_rows), 0
+    )
     offline += unmonitored_total
 
     return {
@@ -1417,6 +1447,7 @@ def get_onu_status_summary(db: Session, *, refresh: bool = False) -> dict[str, i
         "online": online,
         "offline": offline,
         "low_signal": low_signal,
+        "uisp_managed": uisp_managed,
     }
 
 
