@@ -402,7 +402,7 @@ def _note_edge_move(
     ``edges_moved`` count — ``edges_set`` alone covers it.
     """
     old_id = cpe.parent_network_device_id
-    if old_id is None:
+    if old_id is None or old_id == new_node.id:
         return
     old_node = session.get(NetworkDevice, old_id)
     old_name = old_node.name if old_node is not None else None
