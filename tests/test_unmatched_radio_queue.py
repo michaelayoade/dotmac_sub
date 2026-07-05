@@ -1,10 +1,9 @@
 """Unmatched-radio ops queue: dedupe, auto-close, placeholder retirement.
 
-Also carries the test-shaped specification of the uisp_sync ADOPTION hook
-(follow-up contract): the sync's station upsert should adopt a pre-created
-manual cpe_devices row (matched by normalized MAC, uisp_device_id IS NULL)
-instead of creating a duplicate. That test is xfail(strict=True) until the
-hook lands in app/services/topology/uisp_sync.py.
+Also asserts the uisp_sync ADOPTION contract: the sync's station upsert adopts
+a pre-created manual cpe_devices row (matched by normalized MAC, uisp_device_id
+IS NULL) in place instead of creating a duplicate. The hook lives in
+app/services/topology/uisp_sync.py (``_adoption_candidates``).
 """
 
 from __future__ import annotations
