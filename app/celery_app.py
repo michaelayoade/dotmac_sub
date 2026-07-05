@@ -88,6 +88,7 @@ celery_app.conf.task_routes = {
     "app.tasks.topology_sync.warm_topology_status": {"queue": "ingestion"},
     "app.tasks.monitoring_coverage.refresh_monitoring_coverage": {"queue": "ingestion"},
     "app.tasks.topology_lldp.run_lldp_topology_poll": {"queue": "ingestion"},
+    "app.tasks.topology_outage.run_outage_scan": {"queue": "ingestion"},
     "app.tasks.topology_uisp.run_uisp_topology_sync": {"queue": "ingestion"},
     "app.tasks.usage.import_radius_accounting": {"queue": "ingestion"},
     "app.tasks.usage.reap_stale_radius_sessions": {"queue": "ingestion"},

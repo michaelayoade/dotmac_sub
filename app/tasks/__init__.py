@@ -114,6 +114,7 @@ from app.tasks.router_sync import (
     sync_all_system_info,
 )
 from app.tasks.topology_lldp import run_lldp_topology_poll
+from app.tasks.topology_outage import run_outage_scan
 from app.tasks.topology_sync import run_topology_reconcile, warm_topology_status
 from app.tasks.topology_uisp import run_uisp_topology_sync
 from app.tasks.tr069 import (
@@ -258,6 +259,7 @@ __all__ = [
     "run_topology_reconcile",
     "warm_topology_status",
     "run_lldp_topology_poll",
+    "run_outage_scan",
     "run_uisp_topology_sync",
     "tr069_sync_all_acs_devices",
     "tr069_execute_pending_jobs",
