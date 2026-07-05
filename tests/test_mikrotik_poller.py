@@ -88,6 +88,140 @@ def test_mikrotik_connection_does_not_pass_unsupported_socket_timeout(monkeypatc
     assert "socket_timeout" not in captured_kwargs
 
 
+def test_connect_disconnects_pool_when_get_api_fails(monkeypatch):
+    """Regression: a failure after the pool logs in must release the session.
+
+    Constructing RouterOsApiPool opens the socket and logs in, so a session
+    exists on the router. If get_api() then fails, connect() must disconnect the
+    pool (exactly once) instead of orphaning the session — the production
+    symptom was stale snap-api sessions accumulating on garki-core.
+    """
+    disconnect_calls = []
+
+    class _Pool:
+        def __init__(self, host, **kwargs):
+            # Construction "succeeds": the API session now exists on the router.
+            pass
+
+        def get_api(self):
+            raise RuntimeError("router busy: get_api timed out")
+
+        def disconnect(self):
+            disconnect_calls.append(True)
+
+    monkeypatch.setattr(mikrotik_poller, "RouterOsApiPool", _Pool)
+
+    conn = MikroTikConnection(
+        device_id=uuid4(),
+        host="192.0.2.10",
+        username="admin",
+        password="secret",
+    )
+
+    assert _run_async(conn.connect()) is False
+    # The established session was released, not leaked.
+    assert disconnect_calls == [True]
+    assert conn._pool is None
+    assert conn._connection is None
+
+
+def test_connect_success_does_not_disconnect(monkeypatch):
+    """The success path returns True and must NOT disconnect the pool."""
+    disconnect_calls = []
+
+    class _Pool:
+        def __init__(self, host, **kwargs):
+            pass
+
+        def get_api(self):
+            return object()
+
+        def disconnect(self):
+            disconnect_calls.append(True)
+
+    monkeypatch.setattr(mikrotik_poller, "RouterOsApiPool", _Pool)
+
+    conn = MikroTikConnection(
+        device_id=uuid4(),
+        host="192.0.2.10",
+        username="admin",
+        password="secret",
+    )
+
+    assert _run_async(conn.connect()) is True
+    assert disconnect_calls == []
+    assert conn._connection is not None
+    assert conn._pool is not None
+
+
+def test_connect_handles_none_pool(monkeypatch):
+    """A None pool from construction is handled without crashing."""
+    monkeypatch.setattr(
+        mikrotik_poller, "RouterOsApiPool", lambda *args, **kwargs: None
+    )
+
+    conn = MikroTikConnection(
+        device_id=uuid4(),
+        host="192.0.2.10",
+        username="admin",
+        password="secret",
+    )
+
+    assert _run_async(conn.connect()) is False
+    assert conn._pool is None
+    assert conn._connection is None
+
+
+def test_connect_drains_pool_when_construction_times_out(monkeypatch):
+    """Door #2: pool construction outruns the connect() timeout.
+
+    When wait_for times out, the constructor thread keeps running and logs in,
+    creating a session with no reference to release it. connect() must schedule
+    a background drain that disconnects that late-born session so it is not
+    orphaned on the router.
+    """
+    disconnect_calls = []
+
+    class _Pool:
+        def __init__(self, host, **kwargs):
+            # Construction "succeeds" after the timeout -> session established.
+            pass
+
+        def get_api(self):
+            return object()
+
+        def disconnect(self):
+            disconnect_calls.append(True)
+
+    monkeypatch.setattr(mikrotik_poller, "RouterOsApiPool", _Pool)
+
+    async def _timeout_wait_for(awaitable, timeout):
+        # Simulate the construction wait_for timing out while the underlying
+        # (shielded) executor future keeps running to completion.
+        raise TimeoutError
+
+    monkeypatch.setattr(mikrotik_poller.asyncio, "wait_for", _timeout_wait_for)
+
+    async def _scenario():
+        conn = MikroTikConnection(
+            device_id=uuid4(),
+            host="192.0.2.10",
+            username="admin",
+            password="secret",
+        )
+        result = await conn.connect()
+        # Let the background drain finish releasing the late-born session.
+        if conn._drain_tasks:
+            await asyncio.gather(*list(conn._drain_tasks))
+        return result, conn
+
+    result, conn = _run_async(_scenario())
+    assert result is False
+    assert disconnect_calls == [True]
+    assert conn._pool is None
+    assert conn._connection is None
+
+
 def test_sanitize_exc_names_blank_exceptions_and_redacts_password():
     assert _sanitize_exc(TimeoutError()) == "TimeoutError"
     assert (
