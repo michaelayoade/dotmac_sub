@@ -40,10 +40,21 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription, SubscriptionStatus
-from app.models.network import CPEDevice, DeviceType, OLTDevice, OntUnit, PonPort
-from app.models.network_monitoring import NetworkDevice
+from app.models.network import (
+    CPEDevice,
+    DeviceType,
+    OLTDevice,
+    OntUnit,
+    OnuOnlineStatus,
+    PonPort,
+)
+from app.models.network_monitoring import (
+    NetworkDevice,
+    NetworkTopologyLink,
+    TopologyLinkMedium,
+)
+from app.services.topology.lldp_poller import _canonical, build_device_index
 from app.services.topology.lldp_poller import _norm as _norm_label
-from app.services.topology.lldp_poller import build_device_index
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +118,67 @@ def _device_status(device: dict) -> str | None:
         return None
     status = str(overview.get("status") or "").strip()
     return status[:20] or None
+
+
+_DATA_LINK_SOURCE = "uisp_data_link"
+
+
+def _onu_status(device: dict) -> OnuOnlineStatus | None:
+    """Map a UISP device status string to OnuOnlineStatus; None when absent."""
+    raw = (_device_status(device) or "").lower()
+    if not raw:
+        return None
+    # Offline first: "disconnected" contains "connected", so an online check
+    # must not win on a down radio.
+    if any(token in raw for token in ("offline", "disconnect", "down", "inactive")):
+        return OnuOnlineStatus.offline
+    if any(token in raw for token in ("online", "active", "connected", "running")):
+        return OnuOnlineStatus.online
+    return None
+
+
+def _onu_signal(device: dict) -> float | None:
+    """Best-effort ONU receive signal (dBm) from the UISP overview; None if absent."""
+    overview = device.get("overview")
+    if not isinstance(overview, dict):
+        return None
+    for key in ("signal", "receivePower", "rxPower", "rxSignal"):
+        val = overview.get(key)
+        if isinstance(val, (int, float)) and not isinstance(val, bool):
+            return float(val)
+    return None
+
+
+def _link_endpoint_uisp_id(side: object) -> str | None:
+    """UISP device id of one end of a data-link, tolerating shape variance."""
+    if not isinstance(side, dict):
+        return None
+    device = side.get("device")
+    if not isinstance(device, dict):
+        return None
+    ident = device.get("identification")
+    if not isinstance(ident, dict):
+        return None
+    return str(ident.get("id") or "").strip() or None
+
+
+def _link_is_disabled(link: dict) -> bool:
+    """True only when UISP explicitly marks the link disabled/inactive."""
+    if link.get("enabled") is False:
+        return True
+    state = str(link.get("state") or link.get("status") or "").strip().lower()
+    return state in {"inactive", "disabled", "deleted"}
+
+
+def _link_medium(link: dict) -> TopologyLinkMedium:
+    kind = str(link.get("type") or link.get("medium") or "").strip().lower()
+    if "fiber" in kind or "fibre" in kind or "pon" in kind:
+        return TopologyLinkMedium.fiber
+    if "ethernet" in kind:
+        return TopologyLinkMedium.ethernet
+    if any(token in kind for token in ("wireless", "air", "ptp", "ptmp", "rf")):
+        return TopologyLinkMedium.wireless
+    return TopologyLinkMedium.unknown
 
 
 def _device_site_id(device: dict) -> str | None:
@@ -294,6 +366,11 @@ def _blank_stats() -> Counter:
             "onu_ports_set": 0,
             "onu_ports_unchanged": 0,
             "port_fetch_failures": 0,
+            "links_created": 0,
+            "links_updated": 0,
+            "links_pruned": 0,
+            "links_skipped": 0,
+            "link_fetch_failures": 0,
         }
     )
 
@@ -547,6 +624,19 @@ def _upsert_onu(
     ont.last_sync_source = "uisp"
     ont.last_sync_at = now
 
+    # Live telemetry UISP owns for UF-OLT ONUs (Huawei ONTs get theirs from
+    # SNMP — different rows). Updated each sync when present; left untouched
+    # when absent so a missing field never blanks a known value.
+    status = _onu_status(device)
+    if status is not None and ont.olt_status != status:
+        ont.olt_status = status
+        ont.olt_status_seen_at = now
+        changed = True
+    signal = _onu_signal(device)
+    if signal is not None and ont.onu_rx_signal_dbm != signal:
+        ont.onu_rx_signal_dbm = signal
+        changed = True
+
     session.flush()
     if created:
         stats["created"] += 1
@@ -685,6 +775,95 @@ def _apply_onu_pon_port(
         stats["onu_ports_set"] += 1
     else:
         stats["onu_ports_unchanged"] += 1
+
+
+def _import_data_links(session: Session, client, now: datetime, stats: Counter) -> None:
+    """Import active UISP data-links into ``NetworkTopologyLink`` (backhaul).
+
+    Owns ``source='uisp_data_link'`` rows only (upsert + soft-prune), mirroring
+    the LLDP poller. A link is kept only when BOTH endpoints resolve to a
+    ``network_devices`` row by stamped ``uisp_device_id`` — client stations
+    (``cpe_devices``) never carry a network-device uisp id, so customer links
+    are excluded structurally. Endpoint/shape variance is tolerated per link
+    (a malformed link is skipped, never fatal); UISP unreachable is counted and
+    leaves existing links untouched.
+    """
+    node_by_uisp: dict[str, UUID] = {
+        uid: nid
+        for uid, nid in session.query(
+            NetworkDevice.uisp_device_id, NetworkDevice.id
+        ).filter(NetworkDevice.uisp_device_id.isnot(None))
+    }
+    try:
+        links = client.list_data_links()
+    except Exception as exc:  # UISP unreachable must not abort the sync
+        stats["link_fetch_failures"] += 1
+        logger.warning("uisp_data_links_fetch_failed: %s", exc)
+        return
+
+    edges: dict[tuple[UUID, UUID], TopologyLinkMedium] = {}
+    for link in links:
+        if not isinstance(link, dict):
+            continue
+        if _link_is_disabled(link):
+            stats["links_skipped"] += 1
+            continue
+        a = _link_endpoint_uisp_id(link.get("from"))
+        b = _link_endpoint_uisp_id(link.get("to"))
+        na = node_by_uisp.get(a) if a else None
+        nb = node_by_uisp.get(b) if b else None
+        if na is None or nb is None or na == nb:
+            stats["links_skipped"] += 1
+            continue
+        key = _canonical(na, nb)
+        if key not in edges:
+            edges[key] = _link_medium(link)
+
+    for key, medium in edges.items():
+        existing = (
+            session.query(NetworkTopologyLink)
+            .filter(
+                NetworkTopologyLink.source == _DATA_LINK_SOURCE,
+                NetworkTopologyLink.source_device_id == key[0],
+                NetworkTopologyLink.target_device_id == key[1],
+                NetworkTopologyLink.source_interface_id.is_(None),
+                NetworkTopologyLink.target_interface_id.is_(None),
+            )
+            .first()
+        )
+        if existing is None:
+            session.add(
+                NetworkTopologyLink(
+                    source_device_id=key[0],
+                    target_device_id=key[1],
+                    source=_DATA_LINK_SOURCE,
+                    medium=medium,
+                    is_active=True,
+                    discovered_at=now,
+                    last_seen_at=now,
+                )
+            )
+            stats["links_created"] += 1
+        else:
+            existing.medium = medium
+            existing.is_active = True
+            existing.last_seen_at = now
+            stats["links_updated"] += 1
+    session.flush()
+
+    for link_row in (
+        session.query(NetworkTopologyLink)
+        .filter(
+            NetworkTopologyLink.source == _DATA_LINK_SOURCE,
+            NetworkTopologyLink.is_active.is_(True),
+        )
+        .all()
+    ):
+        pair = _canonical(link_row.source_device_id, link_row.target_device_id)
+        if pair not in edges:
+            link_row.is_active = False
+            stats["links_pruned"] += 1
+    session.flush()
 
 
 def sync(session: Session, client, now: datetime | None = None) -> dict:
@@ -842,6 +1021,9 @@ def sync(session: Session, client, now: datetime | None = None) -> dict:
             cpe.uisp_synced_at = now
             stats["pruned"] += 1
     session.flush()
+
+    # --- Backhaul topology: UISP data-links -> NetworkTopologyLink ---
+    _import_data_links(session, client, now, stats)
 
     result = dict(stats)
     log_extra = {"event": "uisp_topology_sync_complete"}

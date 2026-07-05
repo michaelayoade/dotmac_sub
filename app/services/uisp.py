@@ -216,6 +216,10 @@ class UispClient:
         """
         return self._get_list("/devices/onus", params={"parentId": olt_id})
 
+    def list_data_links(self) -> list[dict[str, Any]]:
+        """All UISP data-links — device<->device backhaul topology edges."""
+        return self._get_list("/data-links")
+
 
 def check_uisp_availability(timeout: float = 3.0) -> dict[str, Any]:
     """Check whether the configured UISP API accepts authenticated requests."""
