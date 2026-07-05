@@ -1542,6 +1542,23 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(topology_uisp_minutes * 60, 300),
         )
+        # Topology coverage + pipeline-health metrics export to
+        # VictoriaMetrics (per-medium E2E match-rate, feeder-task staleness).
+        # Default 15 minutes — matches the fastest feeder (topology_uisp_sync),
+        # so every feeder run is reflected without redundant recomputation.
+        topology_metrics_seconds = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "topology_metrics_interval_seconds",
+            900,
+        )
+        _sync_scheduled_task(
+            session,
+            name="topology_metrics_export",
+            task_name="app.tasks.topology_metrics.export_topology_metrics",
+            enabled=True,
+            interval_seconds=max(topology_metrics_seconds, 300),
+        )
         dashboard_cache_seconds = _resolve_int(
             session,
             SettingDomain.network_monitoring,
