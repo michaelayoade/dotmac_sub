@@ -83,6 +83,7 @@ from app.tasks.olt_health_retry import (
     retry_single_olt,
     trigger_immediate_retry,
 )
+from app.tasks.olt_mac_harvest import run_olt_mac_harvest
 from app.tasks.ont_bulk import execute_bulk_action as execute_ont_bulk_action
 from app.tasks.ont_provisioning import (
     authorize_ont as authorize_ont_task,
@@ -239,6 +240,7 @@ __all__ = [
     "aggregate_bandwidth_to_metrics",
     "trim_bandwidth_stream",
     "backup_all_olts",
+    "run_olt_mac_harvest",
     "retry_failed_olt_connections",
     "retry_single_olt",
     "trigger_immediate_retry",

@@ -2658,6 +2658,16 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.network,
+        key="olt_mac_harvest_age_out_hours",
+        env_var="NETWORK_OLT_MAC_HARVEST_AGE_OUT_HOURS",
+        value_type=SettingValueType.integer,
+        default=6,
+        label="OLT MAC-forwarding observation age-out (hours)",
+        min_value=1,
+        max_value=168,
+    ),
+    SettingSpec(
+        domain=SettingDomain.network,
         key="coa_negative_cache_ttl_minutes",
         env_var="NETWORK_COA_NEGATIVE_CACHE_TTL_MINUTES",
         value_type=SettingValueType.integer,
