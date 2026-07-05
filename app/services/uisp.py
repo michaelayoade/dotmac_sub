@@ -207,6 +207,15 @@ class UispClient:
         """Stations currently associated to an airMax AP (AP-side view)."""
         return self._get_list(f"/devices/airmaxes/{ap_id}/stations")
 
+    def list_olt_onus(self, olt_id: str) -> list[dict[str, Any]]:
+        """ONUs parented under one UF-OLT (OLT-side view).
+
+        Unlike the thin generic ``/devices`` list, the per-OLT payload carries
+        a top-level ``onu`` object whose ``port`` field is the OLT-side PON
+        port number — the only place UISP exposes PON-port granularity.
+        """
+        return self._get_list("/devices/onus", params={"parentId": olt_id})
+
 
 def check_uisp_availability(timeout: float = 3.0) -> dict[str, Any]:
     """Check whether the configured UISP API accepts authenticated requests."""

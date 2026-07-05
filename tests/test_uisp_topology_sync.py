@@ -9,7 +9,7 @@ from __future__ import annotations
 import uuid
 
 from app.models.catalog import Subscription, SubscriptionStatus
-from app.models.network import CPEDevice, DeviceType, OLTDevice, OntUnit
+from app.models.network import CPEDevice, DeviceType, OLTDevice, OntUnit, PonPort
 from app.models.network_monitoring import DeviceRole, NetworkDevice
 from app.models.subscriber import Subscriber
 from app.services.topology.uisp_sync import ARCHIVE_SITE_ID, sync
@@ -20,11 +20,21 @@ from app.services.topology.uisp_sync import ARCHIVE_SITE_ID, sync
 
 
 class FakeUispClient:
-    def __init__(self, devices=None, sites=None, stations_by_ap=None):
+    def __init__(
+        self,
+        devices=None,
+        sites=None,
+        stations_by_ap=None,
+        onus_by_olt=None,
+        onu_list_errors=None,
+    ):
         self.devices = devices or []
         self.sites = sites or []
         self.stations_by_ap = stations_by_ap or {}
+        self.onus_by_olt = onus_by_olt or {}
+        self.onu_list_errors = set(onu_list_errors or ())
         self.station_list_calls: list[str] = []
+        self.onu_list_calls: list[str] = []
 
     def list_devices(self):
         return self.devices
@@ -35,6 +45,12 @@ class FakeUispClient:
     def list_airmax_stations(self, ap_id):
         self.station_list_calls.append(ap_id)
         return self.stations_by_ap.get(ap_id, [])
+
+    def list_olt_onus(self, olt_id):
+        self.onu_list_calls.append(olt_id)
+        if olt_id in self.onu_list_errors:
+            raise RuntimeError("UISP API request failed")
+        return self.onus_by_olt.get(olt_id, [])
 
 
 def _site(site_id, name="Endpoint", site_type="endpoint", parent_id=None):
@@ -541,3 +557,219 @@ def test_onu_without_resolvable_parent_is_skipped(db_session):
 
     assert db_session.query(OntUnit).count() == 0
     assert result["skipped"] == 1
+
+
+# ---------------------------------------------------------------------------
+# UFiber PON-port granularity (per-OLT ONU listings, onu.port)
+# ---------------------------------------------------------------------------
+
+
+def _olt_onu_listing_entry(onu_id, port, *, parent_id=OLT_ID, mac="24:A4:3C:44:55:66"):
+    """One GET /devices/onus?parentId=<olt> entry: /devices shape + onu.port."""
+    entry = _device(
+        onu_id,
+        "ONU-CUST-42",
+        role="station",
+        device_type="onu",
+        mac=mac,
+        parent_id=parent_id,
+        model="UF-LOCO",
+    )
+    entry["onu"] = {"id": onu_id, "port": port, "profile": "profile-small"}
+    return entry
+
+
+def test_onu_port_creates_pon_port_and_sets_onu(db_session):
+    client = FakeUispClient(
+        devices=_ufiber_payload(),
+        onus_by_olt={OLT_ID: [_olt_onu_listing_entry(ONU_ID, 3)]},
+    )
+
+    result = sync(db_session, client)
+
+    olt = db_session.query(OLTDevice).filter(OLTDevice.uisp_device_id == OLT_ID).one()
+    port = db_session.query(PonPort).one()
+    assert port.olt_id == olt.id
+    assert port.port_number == 3
+    assert port.name == "pon3"
+    assert "uisp_sync" in (port.notes or "")
+    ont = db_session.query(OntUnit).filter(OntUnit.uisp_device_id == ONU_ID).one()
+    assert ont.pon_port_id == port.id
+    assert result["ports_created"] == 1
+    assert result["onu_ports_set"] == 1
+    assert result["onu_ports_unchanged"] == 0
+    assert client.onu_list_calls == [OLT_ID]
+
+
+def test_second_run_pon_ports_are_idempotent(db_session):
+    client = FakeUispClient(
+        devices=_ufiber_payload(),
+        onus_by_olt={OLT_ID: [_olt_onu_listing_entry(ONU_ID, 3)]},
+    )
+
+    first = sync(db_session, client)
+    second = sync(db_session, client)
+
+    assert first["ports_created"] == 1
+    assert second["ports_created"] == 0
+    assert second["onu_ports_set"] == 0
+    assert second["onu_ports_unchanged"] == 1
+    assert db_session.query(PonPort).count() == 1
+
+
+def test_onu_port_change_moves_pon_port_id(db_session):
+    # UISP is observed truth for the UFiber plant: a re-spliced ONU that shows
+    # up on a different OLT port is moved, not left on the stale port.
+    sync(
+        db_session,
+        FakeUispClient(
+            devices=_ufiber_payload(),
+            onus_by_olt={OLT_ID: [_olt_onu_listing_entry(ONU_ID, 3)]},
+        ),
+    )
+
+    result = sync(
+        db_session,
+        FakeUispClient(
+            devices=_ufiber_payload(),
+            onus_by_olt={OLT_ID: [_olt_onu_listing_entry(ONU_ID, 5)]},
+        ),
+    )
+
+    ont = db_session.query(OntUnit).filter(OntUnit.uisp_device_id == ONU_ID).one()
+    new_port = db_session.query(PonPort).filter(PonPort.port_number == 5).one()
+    assert ont.pon_port_id == new_port.id
+    assert result["onu_ports_set"] == 1
+    assert result["ports_created"] == 1  # pon5; pon3 stays (match-don't-create)
+    assert db_session.query(PonPort).count() == 2
+
+
+def test_existing_pon_port_is_matched_not_duplicated(db_session):
+    # An operator-created port row for the same (olt, port_number) is reused
+    # whatever its name; nothing about it is overwritten.
+    existing_olt = OLTDevice(name="GPON-GARKI-1", vendor="ubiquiti")
+    db_session.add(existing_olt)
+    db_session.flush()
+    existing_port = PonPort(
+        olt_id=existing_olt.id,
+        name="PON 3 (Garki feeder)",
+        port_number=3,
+        max_ont_capacity=64,
+        is_active=True,
+    )
+    db_session.add(existing_port)
+    db_session.flush()
+    client = FakeUispClient(
+        devices=_ufiber_payload(),
+        onus_by_olt={OLT_ID: [_olt_onu_listing_entry(ONU_ID, 3)]},
+    )
+
+    result = sync(db_session, client)
+
+    assert db_session.query(PonPort).count() == 1
+    ont = db_session.query(OntUnit).filter(OntUnit.uisp_device_id == ONU_ID).one()
+    assert ont.pon_port_id == existing_port.id
+    db_session.refresh(existing_port)
+    assert existing_port.name == "PON 3 (Garki feeder)"
+    assert existing_port.max_ont_capacity == 64
+    assert result["ports_created"] == 0
+    assert result["onu_ports_set"] == 1
+
+
+def test_huawei_ont_is_never_touched(db_session):
+    # An ONT row parented under a non-UISP (Huawei) OLT keeps its pon_port_id
+    # even when a UISP listing claims a port for the same uisp device id.
+    huawei_olt = OLTDevice(name="HW-OLT-CENTRAL", vendor="huawei")
+    db_session.add(huawei_olt)
+    db_session.flush()
+    huawei_port = PonPort(olt_id=huawei_olt.id, name="0/1/3", port_number=3)
+    db_session.add(huawei_port)
+    db_session.flush()
+    huawei_ont = OntUnit(
+        serial_number="48575443AABBCC01",
+        vendor="huawei",
+        olt_device_id=huawei_olt.id,
+        pon_port_id=huawei_port.id,
+        uisp_device_id=ONU_ID,
+    )
+    db_session.add(huawei_ont)
+    db_session.flush()
+    client = FakeUispClient(
+        devices=_ufiber_payload(),
+        onus_by_olt={OLT_ID: [_olt_onu_listing_entry(ONU_ID, 5)]},
+    )
+
+    result = sync(db_session, client)
+
+    db_session.refresh(huawei_ont)
+    assert huawei_ont.olt_device_id == huawei_olt.id
+    assert huawei_ont.pon_port_id == huawei_port.id
+    assert result["onu_ports_set"] == 0
+
+
+def test_missing_onu_port_is_tolerated(db_session):
+    entry = _olt_onu_listing_entry(ONU_ID, None)
+    entry["onu"] = {"id": ONU_ID, "profile": "profile-small"}  # no port key
+    client = FakeUispClient(
+        devices=_ufiber_payload(),
+        onus_by_olt={OLT_ID: [entry]},
+    )
+
+    result = sync(db_session, client)
+
+    ont = db_session.query(OntUnit).filter(OntUnit.uisp_device_id == ONU_ID).one()
+    assert ont.pon_port_id is None
+    assert db_session.query(PonPort).count() == 0
+    assert result["ports_created"] == 0
+    assert result["onu_ports_set"] == 0
+    assert result["onu_ports_unchanged"] == 0
+    assert result["port_fetch_failures"] == 0
+
+
+def test_per_olt_port_fetch_failure_is_isolated(db_session):
+    olt_b_id = "e2e2e2e2-1111-2222-3333-777777777778"
+    onu_b_id = "f2f2f2f2-1111-2222-3333-888888888889"
+    olt_b = _device(
+        olt_b_id,
+        "GPON-GUDU-2",
+        role="gpon",
+        device_type="olt",
+        ip="172.16.60.3/24",
+        mac="24:A4:3C:11:22:44",
+        model="UF-OLT",
+        site_id="site-bts-1",
+    )
+    onu_b = _device(
+        onu_b_id,
+        "ONU-CUST-43",
+        role="station",
+        device_type="onu",
+        mac="24:A4:3C:44:55:88",
+        parent_id=olt_b_id,
+        model="UF-LOCO",
+    )
+    client = FakeUispClient(
+        devices=[*_ufiber_payload(), olt_b, onu_b],
+        onus_by_olt={
+            olt_b_id: [
+                _olt_onu_listing_entry(
+                    onu_b_id, 7, parent_id=olt_b_id, mac="24:A4:3C:44:55:88"
+                )
+            ]
+        },
+        onu_list_errors={OLT_ID},
+    )
+
+    result = sync(db_session, client)
+
+    assert result["port_fetch_failures"] == 1
+    # The failing OLT's ONU keeps NULL; the healthy OLT's ONU still gets its port.
+    ont_a = db_session.query(OntUnit).filter(OntUnit.uisp_device_id == ONU_ID).one()
+    assert ont_a.pon_port_id is None
+    ont_b = db_session.query(OntUnit).filter(OntUnit.uisp_device_id == onu_b_id).one()
+    port_b = db_session.query(PonPort).one()
+    assert port_b.port_number == 7
+    assert ont_b.pon_port_id == port_b.id
+    assert result["ports_created"] == 1
+    assert result["onu_ports_set"] == 1
+    assert sorted(client.onu_list_calls) == sorted([OLT_ID, olt_b_id])
