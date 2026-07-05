@@ -19,6 +19,7 @@ from billiard.exceptions import SoftTimeLimitExceeded
 
 from app.celery_app import celery_app
 from app.services.db_session_adapter import db_session_adapter
+from app.services.topology.coverage_metrics import store_task_stats
 from app.services.uisp import UispClient, UispClientError, uisp_configured
 
 logger = logging.getLogger(__name__)
@@ -50,16 +51,20 @@ def run_uisp_topology_sync() -> dict[str, Any]:
             client = UispClient.from_env()
             result = sync(db, client)
             db.commit()
-            return result
         except UispClientError as exc:
             db.rollback()
             logger.warning("uisp_topology_sync_failed: %s", exc)
-            return {"error": "uisp_unavailable", "message": str(exc)}
+            result = {"error": "uisp_unavailable", "message": str(exc)}
         except SoftTimeLimitExceeded:
             db.rollback()
             logger.warning("uisp_topology_sync_timed_out")
-            return {"error": "uisp_topology_sync_timed_out"}
+            result = {"error": "uisp_topology_sync_timed_out"}
         except Exception as exc:  # noqa: BLE001 - report and roll back
             db.rollback()
             logger.exception("uisp_topology_sync_failed")
-            return {"error": str(exc)}
+            result = {"error": str(exc)}
+        # Stash the run outcome (success or error) for the topology metrics
+        # exporter; lock-skips above never reach here, so they can't clobber
+        # the last real result.
+        store_task_stats("uisp_sync", result)
+        return result

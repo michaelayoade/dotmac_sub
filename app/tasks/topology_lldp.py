@@ -14,6 +14,7 @@ from billiard.exceptions import SoftTimeLimitExceeded
 
 from app.celery_app import celery_app
 from app.services.db_session_adapter import db_session_adapter
+from app.services.topology.coverage_metrics import store_task_stats
 
 logger = logging.getLogger(__name__)
 
@@ -31,14 +32,17 @@ def run_lldp_topology_poll() -> dict[str, Any]:
     try:
         result = poll_all(db)
         db.commit()
-        return result
     except SoftTimeLimitExceeded:
         db.rollback()
         logger.warning("lldp_topology_poll_timed_out")
-        return {"error": "lldp_topology_poll_timed_out"}
+        result = {"error": "lldp_topology_poll_timed_out"}
     except Exception as exc:  # noqa: BLE001 - report and roll back
         db.rollback()
         logger.exception("lldp_topology_poll_failed")
-        return {"error": str(exc)}
+        result = {"error": str(exc)}
     finally:
         db.close()
+    # Stash the run outcome (success or error) for the topology metrics
+    # exporter's pipeline-health gauges.
+    store_task_stats("lldp_poll", result)
+    return result
