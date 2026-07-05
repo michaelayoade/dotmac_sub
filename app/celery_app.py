@@ -93,6 +93,7 @@ celery_app.conf.task_routes = {
     "app.tasks.usage.import_radius_accounting": {"queue": "ingestion"},
     "app.tasks.usage.reap_stale_radius_sessions": {"queue": "ingestion"},
     "app.tasks.radius.reap_radacct_ghosts": {"queue": "ingestion"},
+    "app.tasks.radius.reconcile_active_sessions": {"queue": "ingestion"},
     "app.tasks.usage.meter_usage_into_quota": {"queue": "ingestion"},
     # Safety-net FUP reset runs off the billing queue on purpose, so expired
     # throttle/block enforcement is still lifted when the billing queue stalls.
