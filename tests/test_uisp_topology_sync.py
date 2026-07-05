@@ -10,7 +10,14 @@ import logging
 import uuid
 
 from app.models.catalog import Subscription, SubscriptionStatus
-from app.models.network import CPEDevice, DeviceType, OLTDevice, OntUnit, PonPort
+from app.models.network import (
+    CPEDevice,
+    DeviceStatus,
+    DeviceType,
+    OLTDevice,
+    OntUnit,
+    PonPort,
+)
 from app.models.network_monitoring import DeviceRole, NetworkDevice
 from app.models.subscriber import Subscriber
 from app.services.topology.uisp_sync import ARCHIVE_SITE_ID, sync
@@ -633,6 +640,122 @@ def test_existing_row_subscriber_is_never_relinked(
     assert existing.subscriber_id == owner.id
     assert result["matched"] == 0
     assert result["created"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Adoption of install-time pre-registered rows (PR #807 follow-up contract)
+# ---------------------------------------------------------------------------
+
+
+def _preregistered_row(db_session, owner, mac=STATION_MAC, **kwargs):
+    """A cpe row as radio_registration.register_radio_mac creates it:
+    subscriber known, canonical MAC, uisp_device_id NULL."""
+    kwargs.setdefault("uisp_device_id", None)
+    row = CPEDevice(
+        subscriber_id=owner.id,
+        device_type=DeviceType.wireless_radio,
+        mac_address=mac,
+        **kwargs,
+    )
+    db_session.add(row)
+    db_session.flush()
+    return row
+
+
+def test_preregistered_row_is_adopted_not_duplicated(db_session, subscriber):
+    # No active subscription MAC at all: adoption must precede (and not need)
+    # the subscription-MAC index — the install flow already knows the owner.
+    node = _ap_node(db_session)
+    row = _preregistered_row(db_session, subscriber)
+    client = FakeUispClient(devices=_wireless_payload())
+
+    result = sync(db_session, client)
+
+    assert db_session.query(CPEDevice).count() == 1
+    db_session.refresh(row)
+    assert row.uisp_device_id == STATION_ID
+    assert row.subscriber_id == subscriber.id  # never touched
+    assert row.model == "LBE-5AC-Gen2"  # fill-if-NULL ran as usual
+    assert row.last_uisp_status == "active"
+    assert row.uisp_synced_at is not None
+    assert row.parent_network_device_id == node.id
+    assert result["adopted"] == 1
+    assert result["created"] == 0
+    assert result["matched"] == 0
+    assert result["unmatched_no_subscriber"] == 0
+    assert result["edges_set"] == 1
+
+    second = sync(db_session, client)
+    assert second["adopted"] == 0
+    assert second["unchanged"] == 1
+    assert db_session.query(CPEDevice).count() == 1
+
+
+def test_row_bound_to_another_uisp_id_is_never_adopted(db_session, subscriber):
+    # Same MAC, but the row already belongs to a different UISP device (e.g.
+    # a swapped radio whose old row kept the MAC): adoption must not steal it.
+    _ap_node(db_session)
+    row = _preregistered_row(
+        db_session, subscriber, uisp_device_id="99999999-0000-0000-0000-000000000099"
+    )
+    client = FakeUispClient(devices=_wireless_payload())
+
+    result = sync(db_session, client)
+
+    assert result["adopted"] == 0
+    assert result["created"] == 0
+    assert result["unmatched_no_subscriber"] == 1
+    db_session.refresh(row)
+    assert row.uisp_device_id == "99999999-0000-0000-0000-000000000099"
+    assert db_session.query(CPEDevice).count() == 1
+
+
+def test_multiple_preregistered_candidates_adopt_none(
+    db_session, subscriber, catalog_offer
+):
+    # Two NULL-uisp rows carry the station's MAC (shouldn't happen via the
+    # registration flow, but defense in depth): adopting either would guess,
+    # and creating a third row would compound the duplication — so the sync
+    # does neither, even though the subscription MAC index WOULD match.
+    _ap_node(db_session)
+    other = Subscriber(
+        first_name="Other",
+        last_name="Owner",
+        email=f"other-{uuid.uuid4().hex[:8]}@example.test",
+    )
+    db_session.add(other)
+    db_session.flush()
+    _preregistered_row(db_session, subscriber)
+    _preregistered_row(db_session, other)
+    _active_subscription(db_session, subscriber, catalog_offer, STATION_MAC)
+    client = FakeUispClient(devices=_wireless_payload())
+
+    result = sync(db_session, client)
+
+    assert result["adopted"] == 0
+    assert result["created"] == 0
+    assert result["ambiguous"] == 1
+    assert db_session.query(CPEDevice).count() == 2
+    assert (
+        db_session.query(CPEDevice).filter(CPEDevice.uisp_device_id.isnot(None)).count()
+        == 0
+    )
+
+
+def test_retired_placeholder_is_not_adopted(db_session, subscriber):
+    # The hourly unmatched-radio review retires superseded placeholders;
+    # a retired tombstone must never be resurrected by adoption.
+    _ap_node(db_session)
+    row = _preregistered_row(db_session, subscriber, status=DeviceStatus.retired)
+    client = FakeUispClient(devices=_wireless_payload())
+
+    result = sync(db_session, client)
+
+    assert result["adopted"] == 0
+    assert result["unmatched_no_subscriber"] == 1
+    db_session.refresh(row)
+    assert row.uisp_device_id is None
+    assert db_session.query(CPEDevice).count() == 1
 
 
 # ---------------------------------------------------------------------------

@@ -10,7 +10,11 @@ wireless/UFiber customer layer into sub's own tables:
     ``cpe_devices.subscriber_id`` is NOT NULL, so creation is MATCH-THEN-CREATE:
     a new radio only gets a row once its MAC resolves to exactly one subscriber
     over ACTIVE subscriptions (unmatched/ambiguous radios are counted and
-    retried naturally on later runs);
+    retried naturally on later runs). Rows pre-registered at install time
+    (``uisp_device_id`` NULL, subscriber known — see
+    ``app/services/radio_registration.py``) are ADOPTED by normalized MAC
+    before any matching/creation, so the install flow and this sync converge
+    on one row per radio;
   - UF-OLTs -> olt_devices and UFiber ONUs -> ont_units (parent resolved via
     the ONU's ``attributes.parentId``), both keyed by ``uisp_device_id``;
   - PON-port granularity for the UFiber plant: the generic ``/devices`` list
@@ -42,6 +46,7 @@ from sqlalchemy.orm import Session
 from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.network import (
     CPEDevice,
+    DeviceStatus,
     DeviceType,
     OLTDevice,
     OntUnit,
@@ -356,6 +361,7 @@ def _blank_stats() -> Counter:
             "edges_set": 0,
             "edges_moved": 0,
             "matched": 0,
+            "adopted": 0,
             "ambiguous": 0,
             "unmatched_no_subscriber": 0,
             "skipped": 0,
@@ -463,6 +469,33 @@ def _ap_side_station_index(
     return by_station_id, by_station_mac
 
 
+def _adoption_candidates(session: Session, mac: str | None) -> list[CPEDevice]:
+    """Pre-registered install-time cpe rows adoptable by a station's MAC.
+
+    The install-time capture flow (``radio_registration.register_radio_mac``,
+    PR #807) creates cpe rows with the subscriber known and ``uisp_device_id``
+    NULL, expecting this sync to ADOPT the row once UISP first reports the
+    radio. Safety scope: wireless radios only, never a row already bound to a
+    (different) UISP device, never a retired tombstone (the hourly
+    unmatched-radio review retires superseded placeholders). MAC comparison
+    is on the normalized bare-hex form — stored values may be canonical
+    colon-separated or free-form legacy.
+    """
+    if not mac:
+        return []
+    rows = (
+        session.query(CPEDevice)
+        .filter(
+            CPEDevice.uisp_device_id.is_(None),
+            CPEDevice.device_type == DeviceType.wireless_radio,
+            CPEDevice.status != DeviceStatus.retired,
+            CPEDevice.mac_address.isnot(None),
+        )
+        .all()
+    )
+    return [row for row in rows if _norm_mac(row.mac_address) == mac]
+
+
 def _upsert_station(
     session: Session,
     station: dict,
@@ -472,13 +505,26 @@ def _upsert_station(
 ) -> tuple[CPEDevice | None, bool]:
     """Upsert one wireless customer radio into cpe_devices by uisp_device_id.
 
-    MATCH-THEN-CREATE: ``cpe_devices.subscriber_id`` is NOT NULL in the
-    production schema, so a new row may only be created once its owner is
-    known. A new station's MAC is resolved against ACTIVE subscriptions
-    FIRST (exact match, exactly one distinct subscriber); no confirmed match
-    (none, or ambiguous) creates nothing — the radio is picked up on a later
-    run once a matching subscription exists. Existing rows keep updating as
-    before and their ``subscriber_id`` is never touched.
+    ADOPT-THEN-MATCH-THEN-CREATE: ``cpe_devices.subscriber_id`` is NOT NULL
+    in the production schema, so a new row may only be created once its owner
+    is known.
+
+    1. ADOPT (install-time contract, PR #807): the field flow pre-registers a
+       radio at turn-up as a cpe row with ``subscriber_id`` set and
+       ``uisp_device_id`` NULL. When the uisp-id lookup misses, a single such
+       row whose normalized MAC equals the station's is adopted in place —
+       ``uisp_device_id`` stamped, ``subscriber_id`` never touched, counted
+       as ``adopted`` — instead of creating a duplicate. Multiple candidates
+       for one MAC are genuinely ambiguous: nothing is adopted or created
+       (``ambiguous``), because inventing a third row would compound the
+       duplication.
+    2. MATCH-THEN-CREATE (unchanged): a new station's MAC is resolved against
+       ACTIVE subscriptions (exact match, exactly one distinct subscriber);
+       no confirmed match (none, or ambiguous) creates nothing — the radio is
+       picked up on a later run once a matching subscription exists.
+
+    Existing rows keep updating as before and their ``subscriber_id`` is
+    never touched.
     """
     uisp_id = _device_id(station)
     cpe = (
@@ -486,10 +532,28 @@ def _upsert_station(
         .filter(CPEDevice.uisp_device_id == uisp_id)
         .one_or_none()
     )
-    created = cpe is None
+    created = False
+    adopted = False
     changed = False
     if cpe is None:
         mac = _norm_mac(_ident(station).get("mac"))
+        candidates = _adoption_candidates(session, mac)
+        if len(candidates) > 1:
+            logger.warning(
+                "uisp_sync_adoption_ambiguous uisp_id=%s mac=%s candidates=%d",
+                uisp_id,
+                mac,
+                len(candidates),
+            )
+            stats["ambiguous"] += 1
+            return None, False
+        if candidates:
+            cpe = candidates[0]
+            cpe.uisp_device_id = uisp_id
+            adopted = True
+            changed = True
+            stats["adopted"] += 1
+    if cpe is None:
         subscribers = mac_index.get(mac or "", set())
         if len(subscribers) > 1:
             stats["ambiguous"] += 1
@@ -497,6 +561,7 @@ def _upsert_station(
         if len(subscribers) != 1:
             stats["unmatched_no_subscriber"] += 1
             return None, False
+        created = True
         cpe = CPEDevice(
             uisp_device_id=uisp_id,
             subscriber_id=next(iter(subscribers)),
@@ -525,6 +590,9 @@ def _upsert_station(
     session.flush()
     if created:
         stats["created"] += 1
+    elif adopted:
+        # Already counted as ``adopted``; not an update of a synced row.
+        pass
     elif changed:
         stats["updated"] += 1
     else:
