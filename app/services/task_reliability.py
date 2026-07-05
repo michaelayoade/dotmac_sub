@@ -294,6 +294,9 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "network", SWEEP, IDEMP, HEALTH
     ),
     "app.tasks.topology_sync.warm_topology_status": _c("network", SWEEP, IDEMP, HEALTH),
+    "app.tasks.topology_ufiber_link.run_ufiber_onu_link": _c(
+        "network", SWEEP, IDEMP, HEALTH
+    ),
     "app.tasks.topology_uisp.run_uisp_topology_sync": _c(
         "network",
         SWEEP,
