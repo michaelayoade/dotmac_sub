@@ -139,3 +139,36 @@ def test_endpoint_404_bad_offer(db_session):
             db=db_session,
         )
     assert exc.value.status_code == 404
+
+
+def test_first_invoice_carries_crm_external_ref_column(db_session):
+    """The first invoice sets the crm_external_ref column (migration 212 backstop),
+    not just metadata — so it's covered by uq_invoices_active_crm_external_ref."""
+    sub = _subscriber(db_session)
+    offer = _offer(db_session)
+    r = crm_api.create_subscription(
+        db_session,
+        subscriber_id=str(sub.id),
+        offer_ref=offer.code,
+        external_ref="so-col",
+    )
+    assert r["invoice"].crm_external_ref == "so-col"
+
+
+def test_distinct_second_subscription_still_rejected(db_session):
+    """enforce_single_active_subscription still blocks a genuinely-different second
+    subscription — the HTTPException catch only returns-existing when a CRM sub for
+    that external_ref exists (idempotent retry); otherwise it re-raises the 400."""
+    sub = _subscriber(db_session)
+    offer = _offer(db_session)
+    crm_api.create_subscription(
+        db_session, subscriber_id=str(sub.id), offer_ref=offer.code, external_ref="so-a"
+    )
+    with pytest.raises(HTTPException) as exc:
+        crm_api.create_subscription(
+            db_session,
+            subscriber_id=str(sub.id),
+            offer_ref=offer.code,
+            external_ref="so-b",
+        )
+    assert exc.value.status_code == 400
