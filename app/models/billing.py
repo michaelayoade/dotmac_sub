@@ -577,6 +577,23 @@ class Payment(Base):
             unique=True,
             postgresql_where=text("is_active AND splynx_payment_id IS NOT NULL"),
         ),
+        # Idempotency backstop for CRM-originated payments. These are recorded
+        # with external_id = "crm:<ref>" and NO provider_id, so they fall outside
+        # uq_payments_active_external_id (which requires provider_id NOT NULL).
+        # A concurrent /crm/payments push could otherwise double-record cash.
+        Index(
+            "uq_payments_active_crm_external_id",
+            "external_id",
+            unique=True,
+            postgresql_where=text(
+                "is_active AND external_id IS NOT NULL AND external_id LIKE 'crm:%'"
+            ),
+            # Keep the predicate partial on SQLite too (tests) so non-CRM
+            # payments sharing an external_id aren't wrongly constrained.
+            sqlite_where=text(
+                "is_active AND external_id IS NOT NULL AND external_id LIKE 'crm:%'"
+            ),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
