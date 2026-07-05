@@ -140,3 +140,63 @@ def test_renders_nas_without_ont():
 def test_renders_gap_message():
     html = _render(CustomerPath(gap="no_ont"))
     assert "provisioning incomplete" in html.lower()
+
+
+def _radio(status="active", **kw):
+    return SimpleNamespace(
+        model=kw.get("model", "LiteBeam 5AC"),
+        serial_number=kw.get("serial_number"),
+        mac_address=kw.get("mac_address", "aa:bb:cc:dd:ee:ff"),
+        last_uisp_status=status,
+    )
+
+
+def test_renders_wireless_radio_hop():
+    path = CustomerPath(
+        radio=_radio(),
+        access_device=SimpleNamespace(name="AP-Karu-S1"),
+        access_device_kind="ap",
+        node=SimpleNamespace(live_status="up", live_status_at=None),
+        basestation=SimpleNamespace(name="Karu", code="KARU"),
+    )
+    html = _render(path)
+    assert "Radio LiteBeam 5AC" in html
+    assert "aa:bb:cc:dd:ee:ff" in html  # MAC surfaced in the chip tooltip
+    assert "AP &middot; AP-Karu-S1" in html or "AP · AP-Karu-S1" in html
+    assert "Karu" in html and "KARU" in html
+    assert "incomplete" not in html.lower()
+
+
+def test_radio_status_dot_mapping():
+    def dot(status):
+        return _render(
+            CustomerPath(
+                radio=_radio(status=status),
+                access_device=SimpleNamespace(name="AP-1"),
+                access_device_kind="ap",
+                node=SimpleNamespace(live_status=None, live_status_at=None),
+            )
+        )
+
+    active = dot("active")
+    assert "bg-emerald-500" in active
+    assert "Radio status: Up" in active
+
+    disconnected = dot("disconnected")
+    assert "bg-rose-500" in disconnected
+    assert "Radio status: Down" in disconnected
+
+    for unknown_status in ("vanished", None):
+        html = dot(unknown_status)
+        assert "bg-emerald-500" not in html
+        assert "bg-rose-500" not in html
+        assert "Radio status: Unknown" in html
+
+
+def test_radio_falls_back_to_serial_then_mac():
+    path = CustomerPath(
+        radio=_radio(model=None, serial_number="SER-99"),
+        access_device=SimpleNamespace(name="AP-1"),
+        access_device_kind="ap",
+    )
+    assert "Radio SER-99" in _render(path)
