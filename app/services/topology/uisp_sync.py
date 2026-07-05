@@ -53,6 +53,7 @@ from app.models.network_monitoring import (
     NetworkTopologyLink,
     TopologyLinkMedium,
 )
+from app.services.network.ont_status import apply_olt_status_observation
 from app.services.topology.lldp_poller import _canonical, build_device_index
 from app.services.topology.lldp_poller import _norm as _norm_label
 
@@ -625,12 +626,16 @@ def _upsert_onu(
     ont.last_sync_at = now
 
     # Live telemetry UISP owns for UF-OLT ONUs (Huawei ONTs get theirs from
-    # SNMP — different rows). Updated each sync when present; left untouched
-    # when absent so a missing field never blanks a known value.
+    # SNMP — different rows). Applied only when UISP actually reports a status,
+    # so a missing field never blanks a known value. olt_status is a
+    # status-owner field: it MUST go through the sanctioned setter (it also
+    # stamps olt_status_seen_at / last_seen_at / offline_reason), never a
+    # direct assignment here. Signal is not status-owned, so it's set inline.
     status = _onu_status(device)
-    if status is not None and ont.olt_status != status:
-        ont.olt_status = status
-        ont.olt_status_seen_at = now
+    if status is not None and (
+        ont.olt_status != status or ont.olt_status_seen_at is None
+    ):
+        apply_olt_status_observation(ont, status, now=now)
         changed = True
     signal = _onu_signal(device)
     if signal is not None and ont.onu_rx_signal_dbm != signal:

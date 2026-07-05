@@ -133,4 +133,5 @@ def test_uisp_client_exposes_no_write_helpers():
         "list_sites",
         "list_airmax_stations",
         "list_olt_onus",
+        "list_data_links",
     }
