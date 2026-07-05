@@ -797,3 +797,65 @@ def create_crm_invoice(
             "account_id": str(invoice.account_id),
         }
     )
+
+
+@router.post(
+    "/subscriptions/{subscription_id}/radio-mac",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_crm_bearer)],
+    tags=["provisioning"],
+)
+def register_subscription_radio_mac(
+    subscription_id: str,
+    payload: dict[str, Any] = Body(default_factory=dict),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Register the customer's wireless-radio MAC at install time.
+
+    Called by the field/mobile app at turn-up so the radio is traceable by
+    construction instead of waiting for the UISP sync's MAC guess. Body:
+    ``{mac_address}``. Idempotent: re-posting the same MAC for the same
+    subscriber returns the existing device with ``created: false``. A MAC
+    already bound to a DIFFERENT subscriber is rejected with 409 and an
+    unmatched-radio ops review item is opened.
+    """
+    from app.services import radio_registration
+
+    mac = payload.get("mac_address") or payload.get("mac")
+    if not str(mac or "").strip():
+        _error(
+            status.HTTP_400_BAD_REQUEST,
+            "Invalid radio MAC payload.",
+            {"mac_address": ["Required."]},
+        )
+    try:
+        result = radio_registration.register_radio_mac(
+            db,
+            subscription_id=subscription_id,
+            mac=str(mac),
+            source=radio_registration.SOURCE_CRM_API,
+        )
+    except LookupError:
+        _error(status.HTTP_404_NOT_FOUND, "Subscription not found.")
+    except radio_registration.InvalidMacError as exc:
+        _error(
+            status.HTTP_400_BAD_REQUEST,
+            "Invalid radio MAC payload.",
+            {"mac_address": [str(exc)]},
+        )
+    except radio_registration.MacConflictError as exc:
+        _error(status.HTTP_409_CONFLICT, str(exc))
+
+    device = result.device
+    return _envelope(
+        {
+            "id": str(device.id),
+            "mac_address": device.mac_address,
+            "device_type": device.device_type.value,
+            "subscriber_id": str(device.subscriber_id),
+            "created": result.created,
+            "subscription_mac_stamped": result.subscription_mac_stamped,
+            "uisp_confirmed": device.uisp_device_id is not None,
+            "warnings": result.warnings,
+        }
+    )

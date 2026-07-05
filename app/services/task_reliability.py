@@ -300,6 +300,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         HEALTH,
         "Scheduled UISP relationship sync; advisory lock prevents overlap.",
     ),
+    "app.tasks.unmatched_radio.run_unmatched_radio_review": _c(
+        "network",
+        SWEEP,
+        IDEMP,
+        HEALTH,
+        "Scheduled unmatched-radio review; re-links radios whose MAC now "
+        "matches a subscriber and refreshes the residual ops queue.",
+    ),
     "app.tasks.tr069.apply_acs_config": _c("tr069", STATE, STATEFUL, STATUS),
     "app.tasks.tr069.apply_saved_ont_service_config": _c(
         "tr069", STATE, STATEFUL, STATUS

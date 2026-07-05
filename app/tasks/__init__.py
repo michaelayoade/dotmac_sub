@@ -141,6 +141,7 @@ from app.tasks.tr069 import (
 from app.tasks.tr069 import (
     sync_all_acs_devices as tr069_sync_all_acs_devices,
 )
+from app.tasks.unmatched_radio import run_unmatched_radio_review
 from app.tasks.usage import (
     import_radius_accounting,
     notify_expiring_data_bundles,
@@ -260,6 +261,7 @@ __all__ = [
     "warm_topology_status",
     "run_lldp_topology_poll",
     "run_uisp_topology_sync",
+    "run_unmatched_radio_review",
     "export_topology_metrics",
     "tr069_sync_all_acs_devices",
     "tr069_execute_pending_jobs",

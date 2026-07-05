@@ -801,6 +801,49 @@
                 {% include "admin/catalog/_network_path_panel.html" %}
             {% endif %}
 
+            <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="flex items-center justify-between gap-4">
+                    <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Customer Radio (Wireless CPE)</h3>
+                    <span class="text-xs text-slate-500 dark:text-slate-400">{{ registered_radios|length }} registered</span>
+                </div>
+                <div class="mt-4 space-y-3">
+                    {% for radio in registered_radios %}
+                    <div class="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                        <div class="flex items-center justify-between gap-3">
+                            <p class="font-mono text-sm font-medium text-slate-900 dark:text-white">{{ radio.mac_address or '—' }}</p>
+                            {% if radio.uisp_device_id %}
+                            <span class="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">Confirmed by UISP sync</span>
+                            {% elif radio.status.value == 'retired' %}
+                            <span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">Retired</span>
+                            {% else %}
+                            <span class="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">Awaiting UISP adoption</span>
+                            {% endif %}
+                        </div>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                            {{ radio.model or 'Unknown model' }}{% if radio.vendor %} · {{ radio.vendor }}{% endif %}
+                            {% if radio.installed_at %} · installed {{ radio.installed_at.strftime('%b %d, %Y') }}{% endif %}
+                        </p>
+                    </div>
+                    {% else %}
+                    <p class="text-sm text-slate-500 dark:text-slate-400">No radio registered yet. Recording the radio MAC at install links this customer to their wireless CPE without waiting for a MAC guess by the UISP sync.</p>
+                    {% endfor %}
+                </div>
+                <form method="post" action="/admin/catalog/subscriptions/{{ subscription.id }}/register-radio-mac" class="mt-4 flex flex-wrap items-end gap-3">
+                    <div class="flex-1 min-w-[220px]">
+                        <label for="radio-mac-address" class="block text-xs font-medium text-slate-600 dark:text-slate-300">Radio MAC address</label>
+                        <input id="radio-mac-address" name="mac_address" type="text" required
+                               placeholder="24:A4:3C:AA:BB:01"
+                               pattern="([0-9A-Fa-f]{2}[:\-\. ]?){5}[0-9A-Fa-f]{2}"
+                               class="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-sm text-slate-900 placeholder-slate-400 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+                    </div>
+                    <button type="submit"
+                            class="inline-flex items-center gap-2 rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                        Register radio MAC
+                    </button>
+                </form>
+            </div>
+
             <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800" x-data="{ open: false }">
                 <div class="flex items-center justify-between gap-4">
                     <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Domain Events</h3>
