@@ -3160,6 +3160,15 @@ SETTINGS_SPECS: list[SettingSpec] = [
         max_value=10,
     ),
     SettingSpec(
+        domain=SettingDomain.network_monitoring,
+        key="topology_metrics_interval_seconds",
+        label="Topology Metrics Export Interval (seconds)",
+        env_var="TOPOLOGY_METRICS_INTERVAL_SECONDS",
+        value_type=SettingValueType.integer,
+        default=900,
+        min_value=300,
+    ),
+    SettingSpec(
         domain=SettingDomain.radius,
         key="default_auth_port",
         env_var="RADIUS_DEFAULT_AUTH_PORT",

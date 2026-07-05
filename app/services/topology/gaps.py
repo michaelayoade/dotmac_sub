@@ -218,13 +218,28 @@ def _wireless_subscriber_state(
     return state
 
 
-def _subscription_gap_rows(db: Session) -> tuple[int, list[dict]]:
+# Medium labels for the per-subscription classification. "unknown" is the
+# no-access-device case (always GAP_NO_ONT): the sub has no ONT, no resolvable
+# radio, and no provisioning NAS, so we cannot tell what medium it should be.
+MEDIUM_FIBER = "fiber"
+MEDIUM_WIRELESS = "wireless"
+MEDIUM_NAS = "nas"
+MEDIUM_UNKNOWN = "unknown"
+
+
+def classify_active_subscriptions(db: Session) -> list[dict]:
     # NOTE: This is a batched (set-based) reimplementation of the per-subscription
     # gap classification in ``resolve_customer_path`` (app/services/topology/
     # customer_path.py), avoiding an N+1 across all active subscriptions. The two
     # MUST stay in sync — ``resolve_customer_path`` remains the canonical reader
     # for a single subscription's path; this function must produce the same
     # GAP_NO_ONT / GAP_NO_NODE / GAP_NO_BASESTATION verdict in aggregate.
+    #
+    # Returns one row per ACTIVE subscription:
+    #   {"id": <subscription id>, "medium": MEDIUM_*, "gap": GAP_* | None}
+    # ``gap is None`` means the E2E path resolved completely. The gaps page and
+    # the coverage-metrics exporter both consume this so the two can never
+    # disagree.
     active_subs = db.execute(
         select(
             Subscription.id,
@@ -236,7 +251,7 @@ def _subscription_gap_rows(db: Session) -> tuple[int, list[dict]]:
         .order_by(Subscription.id)
     ).all()
     if not active_subs:
-        return 0, []
+        return []
 
     subscriber_ids = {row.subscriber_id for row in active_subs}
     assignment_rows = db.execute(
@@ -287,7 +302,7 @@ def _subscription_gap_rows(db: Session) -> tuple[int, list[dict]]:
     nas_node_state = _device_node_state(db, device_type="nas", device_ids=nas_ids)
     wireless_state = _wireless_subscriber_state(db, subscriber_ids)
 
-    gap_rows: list[dict] = []
+    classified: list[dict] = []
     for row in active_subs:
         assignment_ont_ids = assignments_by_subscriber[row.subscriber_id]
         if row.service_address_id is not None:
@@ -318,13 +333,15 @@ def _subscription_gap_rows(db: Session) -> tuple[int, list[dict]]:
         # Wireless before NAS, mirroring resolve_customer_path: the radio ->
         # AP arm is finer than the coarse NAS fallback. The AP node IS the
         # topology node, so a resolvable radio grants access device + node.
-        if selected_ont_id is None and row.subscriber_id in wireless_state:
+        medium = MEDIUM_UNKNOWN
+        if selected_ont_id is not None:
+            medium = MEDIUM_FIBER
+        elif row.subscriber_id in wireless_state:
+            medium = MEDIUM_WIRELESS
             has_access_device = True
             has_node, has_complete_path = wireless_state[row.subscriber_id]
-        elif (
-            selected_ont_id is None
-            and row.provisioning_nas_device_id in existing_nas_ids
-        ):
+        elif row.provisioning_nas_device_id in existing_nas_ids:
+            medium = MEDIUM_NAS
             node_exists, complete_node = nas_node_state.get(
                 row.provisioning_nas_device_id, (False, False)
             )
@@ -338,10 +355,18 @@ def _subscription_gap_rows(db: Session) -> tuple[int, list[dict]]:
             gap = GAP_NO_NODE
         elif not has_complete_path:
             gap = GAP_NO_BASESTATION
-        if gap:
-            gap_rows.append({"id": row.id, "gap": gap})
+        classified.append({"id": row.id, "medium": medium, "gap": gap})
 
-    return len(active_subs), gap_rows
+    return classified
+
+
+def _subscription_gap_rows(db: Session) -> tuple[int, list[dict]]:
+    """(active subscription count, [{id, gap}] for unresolved subs) — the
+    shape the gaps page renders; derived from classify_active_subscriptions."""
+    classified = classify_active_subscriptions(db)
+    return len(classified), [
+        {"id": row["id"], "gap": row["gap"]} for row in classified if row["gap"]
+    ]
 
 
 def topology_gaps(
