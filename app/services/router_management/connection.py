@@ -184,9 +184,26 @@ class RouterConnectionService:
         method: str,
         path: str,
         payload: dict | None = None,
+        *,
+        connect_timeout: float | None = None,
+        read_timeout: float | None = None,
+        max_retries: int | None = None,
     ) -> RouterResponse:
+        """Issue one REST call to the router.
+
+        ``connect_timeout``/``read_timeout``/``max_retries`` override the
+        settings-resolved tunables for callers with a different latency budget
+        (e.g. the hourly LLDP discovery poll fails fast with a single attempt
+        while config snapshots keep the patient defaults). ``None`` keeps the
+        existing settings/default behavior for current callers.
+        """
         last_error: Exception | None = None
-        connect_timeout, read_timeout, max_retries, backoff_base = _rest_tunables()
+        d_connect, d_read, d_retries, backoff_base = _rest_tunables()
+        if connect_timeout is None:
+            connect_timeout = d_connect
+        if read_timeout is None:
+            read_timeout = d_read
+        max_retries = d_retries if max_retries is None else max(1, max_retries)
         timeout = httpx.Timeout(connect_timeout, read=read_timeout)
 
         for attempt in range(max_retries):

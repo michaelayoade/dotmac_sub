@@ -14,10 +14,12 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 import uuid
 from collections import Counter
 from datetime import UTC, datetime
 
+from billiard.exceptions import SoftTimeLimitExceeded
 from sqlalchemy.orm import Session
 
 from app.models.catalog import NasDevice
@@ -30,6 +32,18 @@ from app.models.network_monitoring import (
 logger = logging.getLogger(__name__)
 
 SOURCE = "lldp_neighbor"
+
+# Discovery-grade REST tunables for the router-credentials fallback. This is a
+# read-only hourly poll — "skip this hour, retry next hour" beats spending the
+# snapshot-grade retry budget (~90-120s worst case) on each dead router.
+ROUTER_CONNECT_TIMEOUT = 5.0
+ROUTER_READ_TIMEOUT = 15.0
+ROUTER_MAX_RETRIES = 1
+
+# Wall-clock safety net: the Celery task has soft_time_limit=300 — stop
+# attempting new devices before that so the run finishes cleanly (upsert +
+# prune) instead of timing out mid-fleet.
+TIME_BUDGET_SECONDS = 240.0
 
 
 def _norm(value: str | None) -> str:
@@ -168,11 +182,20 @@ def _read_ip_neighbors_via_router(router) -> list[dict]:
 
     Reuses :class:`RouterConnectionService` — the exact connection layer the
     config-snapshot feature uses (credential decryption, management_ip +
-    rest_api_port + use_ssl base URL, verify_tls, retries).
+    rest_api_port + use_ssl base URL, verify_tls) — but with discovery-grade
+    tunables: one attempt, short timeouts. A dead router costs seconds, not
+    the snapshot retry budget.
     """
     from app.services.router_management.connection import RouterConnectionService
 
-    data = RouterConnectionService.execute(router, "GET", "/ip/neighbor")
+    data = RouterConnectionService.execute(
+        router,
+        "GET",
+        "/ip/neighbor",
+        connect_timeout=ROUTER_CONNECT_TIMEOUT,
+        read_timeout=ROUTER_READ_TIMEOUT,
+        max_retries=ROUTER_MAX_RETRIES,
+    )
     return data if isinstance(data, list) else []
 
 
@@ -181,6 +204,7 @@ def poll_all(
     read_neighbors=None,
     read_router_neighbors=None,
     now: datetime | None = None,
+    time_budget_seconds: float = TIME_BUDGET_SECONDS,
 ) -> dict:
     """Poll every NAS node's neighbors, upsert lldp_neighbor edges, soft-prune.
 
@@ -189,7 +213,11 @@ def poll_all(
     row supplies REST credentials the way config snapshots do (``via_router``).
     Jump-host-only routers are skipped (``skipped_jump_host``) — the hourly
     poller does not open SSH tunnels; a NAS with neither config is counted in
-    ``skipped_no_creds`` rather than failing.
+    ``skipped_no_creds`` rather than failing. Once ``time_budget_seconds`` of
+    wall clock is spent, remaining devices are counted in
+    ``skipped_time_budget`` and the run still reconciles what it saw. A
+    ``SoftTimeLimitExceeded`` raised mid-poll propagates so the task's graceful
+    timeout handler fires instead of running into the hard kill.
 
     Idempotent: edges are keyed by canonical device pair (NULL interfaces), so a
     re-run only bumps ``last_seen_at``. A NAS that's unreachable (e.g. karsana)
@@ -198,6 +226,8 @@ def poll_all(
     read_neighbors = read_neighbors or _read_ip_neighbors
     read_router_neighbors = read_router_neighbors or _read_ip_neighbors_via_router
     now = now or datetime.now(UTC)
+    started = time.monotonic()
+    budget_logged = False
     index = build_device_index(session)
     stats: Counter = Counter(
         {
@@ -207,6 +237,7 @@ def poll_all(
             "via_router": 0,
             "skipped_no_creds": 0,
             "skipped_jump_host": 0,
+            "skipped_time_budget": 0,
             "neighbors_seen": 0,
             "created": 0,
             "updated": 0,
@@ -229,6 +260,17 @@ def poll_all(
     for node in nas_nodes:
         nas = session.get(NasDevice, node.matched_device_id)
         if nas is None:
+            continue
+        elapsed = time.monotonic() - started
+        if elapsed > time_budget_seconds:
+            if not budget_logged:
+                logger.warning(
+                    "lldp_poll_time_budget_exhausted after %.0fs; "
+                    "skipping remaining devices this run",
+                    elapsed,
+                )
+                budget_logged = True
+            stats["skipped_time_budget"] += 1
             continue
         try:
             if nas.api_url:
@@ -257,6 +299,11 @@ def poll_all(
                     continue
                 neighbors = read_router_neighbors(router)
                 via = "via_router"
+        except SoftTimeLimitExceeded:
+            # Celery's soft timeout must reach the task's graceful handler —
+            # counting it as nas_failed would keep looping until the hard
+            # time_limit SIGKILLs the worker.
+            raise
         except Exception as exc:  # one unreachable NAS must not abort the run
             stats["nas_failed"] += 1
             logger.warning("lldp_poll_nas_failed node=%s: %s", node.name, exc)
