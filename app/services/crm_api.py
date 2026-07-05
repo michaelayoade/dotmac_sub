@@ -1308,14 +1308,31 @@ def credit_referral_reward_to_wallet(
             return existing
 
     wallet = vas_wallet.get_or_create_wallet(db, str(sub_uuid))
-    return vas_wallet.credit_wallet(
-        db,
-        wallet,
-        amount=amount,
-        category=VasEntryCategory.adjustment,
-        reference=external_ref,
-        memo=(reason or "Referral reward").strip(),
-    )
+    from sqlalchemy.exc import IntegrityError
+
+    try:
+        return vas_wallet.credit_wallet(
+            db,
+            wallet,
+            amount=amount,
+            category=VasEntryCategory.adjustment,
+            reference=external_ref,
+            memo=(reason or "Referral reward").strip(),
+        )
+    except IntegrityError:
+        # A concurrent duplicate lost the race on the unique wallet-entry
+        # `reference`. The credit is idempotent — roll back our losing insert
+        # and return the entry the winner wrote (never double-credit).
+        db.rollback()
+        if external_ref:
+            existing = (
+                db.query(VasWalletEntry)
+                .filter(VasWalletEntry.reference == external_ref)
+                .first()
+            )
+            if existing is not None:
+                return existing
+        raise
 
 
 def create_installation_invoice(
