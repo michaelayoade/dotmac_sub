@@ -186,3 +186,176 @@ def test_gap_no_node_when_device_unmatched(db_session, subscriber, subscription)
     assert path.access_device.id == olt.id
     assert path.node is None
     assert path.basestation is None
+
+
+# --- Wireless arm: radio -> AP -> basestation (read-side of the UISP sync) ---
+
+
+def _cpe(db, subscriber_id, parent_id, uisp_status="active", synced_at=None, **kw):
+    from app.models.network import CPEDevice
+
+    cpe = CPEDevice(
+        subscriber_id=subscriber_id,
+        parent_network_device_id=parent_id,
+        last_uisp_status=uisp_status,
+        uisp_synced_at=synced_at,
+        **kw,
+    )
+    db.add(cpe)
+    db.flush()
+    return cpe
+
+
+def _ap_node(db, name, pop_site_id=None, **kw):
+    node = NetworkDevice(
+        name=name, pop_site_id=pop_site_id, uisp_device_id=f"uisp-{name}", **kw
+    )
+    db.add(node)
+    db.flush()
+    return node
+
+
+def test_wireless_happy_path_radio_ap_basestation(db_session, subscriber, subscription):
+    from datetime import UTC, datetime
+
+    from app.models.network_monitoring import DeviceRole, NetworkTopologyLink
+
+    pop = PopSite(name="Karu BTS", zabbix_group_id="20")
+    db_session.add(pop)
+    db_session.flush()
+    ap = _ap_node(db_session, "AP-Karu-Sector1", pop_site_id=pop.id)
+    core = NetworkDevice(name="Core-1", role=DeviceRole.core, is_active=True)
+    db_session.add(core)
+    db_session.flush()
+    db_session.add(
+        NetworkTopologyLink(
+            source_device_id=ap.id,
+            target_device_id=core.id,
+            source="lldp_neighbor",
+            is_active=True,
+        )
+    )
+    cpe = _cpe(
+        db_session,
+        subscriber.id,
+        ap.id,
+        synced_at=datetime(2026, 7, 1, tzinfo=UTC),
+        model="LiteBeam 5AC",
+    )
+
+    path = resolve_customer_path(db_session, subscription)
+
+    assert path.gap is None
+    assert path.access_device_kind == "ap"
+    assert path.radio.id == cpe.id
+    assert path.access_device.id == ap.id
+    assert path.node.id == ap.id
+    assert path.basestation.id == pop.id
+    assert [hop.id for hop in path.upstream_chain] == [core.id]
+
+
+def test_wireless_beats_nas_fallback(db_session, subscriber, subscription):
+    # A wireless subscriber whose PPPoE terminates on a NAS at the BTS: the
+    # radio arm must win (finer: it pins the customer to the actual AP).
+    nas = NasDevice(name="NAS-BTS", management_ip="10.0.0.9")
+    nas_pop = PopSite(name="NAS Site", zabbix_group_id="21")
+    ap_pop = PopSite(name="AP Site", zabbix_group_id="22")
+    db_session.add_all([nas, nas_pop, ap_pop])
+    db_session.flush()
+    db_session.add(_node("nas", nas.id, nas_pop.id, "301"))
+    ap = _ap_node(db_session, "AP-Fine", pop_site_id=ap_pop.id)
+    _cpe(db_session, subscriber.id, ap.id)
+    subscription.provisioning_nas_device_id = nas.id
+    db_session.flush()
+
+    path = resolve_customer_path(db_session, subscription)
+
+    assert path.access_device_kind == "ap"
+    assert path.node.id == ap.id
+    assert path.basestation.id == ap_pop.id
+
+
+def test_fiber_precedence_over_wireless(db_session, subscriber, subscription):
+    # An active ONT assignment implies fiber; the radio must not preempt it.
+    olt = OLTDevice(name="OLT-W", hostname="olt-w", mgmt_ip="10.0.0.3")
+    pop = PopSite(name="Fiber Site", zabbix_group_id="23")
+    db_session.add_all([olt, pop])
+    db_session.flush()
+    db_session.add(_node("olt", olt.id, pop.id, "302"))
+    ont = OntUnit(serial_number="SN-W", olt_device_id=olt.id)
+    db_session.add(ont)
+    db_session.flush()
+    db_session.add(
+        OntAssignment(ont_unit_id=ont.id, subscriber_id=subscriber.id, active=True)
+    )
+    ap = _ap_node(db_session, "AP-Ignored")
+    _cpe(db_session, subscriber.id, ap.id)
+    db_session.flush()
+
+    path = resolve_customer_path(db_session, subscription)
+
+    assert path.access_device_kind == "olt"
+    assert path.radio is None
+
+
+def test_nas_fallback_when_cpe_has_no_parent(db_session, subscriber, subscription):
+    nas = NasDevice(name="NAS-F", management_ip="10.0.0.7")
+    pop = PopSite(name="Fallback Site", zabbix_group_id="24")
+    db_session.add_all([nas, pop])
+    db_session.flush()
+    db_session.add(_node("nas", nas.id, pop.id, "303"))
+    _cpe(db_session, subscriber.id, None)  # CPE exists but no AP edge
+    subscription.provisioning_nas_device_id = nas.id
+    db_session.flush()
+
+    path = resolve_customer_path(db_session, subscription)
+
+    assert path.access_device_kind == "nas"
+    assert path.radio is None
+    assert path.basestation.id == pop.id
+
+
+def test_nas_fallback_when_cpe_vanished(db_session, subscriber, subscription):
+    nas = NasDevice(name="NAS-V", management_ip="10.0.0.8")
+    pop = PopSite(name="Vanish Site", zabbix_group_id="25")
+    db_session.add_all([nas, pop])
+    db_session.flush()
+    db_session.add(_node("nas", nas.id, pop.id, "304"))
+    ap = _ap_node(db_session, "AP-Gone")
+    _cpe(db_session, subscriber.id, ap.id, uisp_status="vanished")
+    subscription.provisioning_nas_device_id = nas.id
+    db_session.flush()
+
+    path = resolve_customer_path(db_session, subscription)
+
+    assert path.access_device_kind == "nas"
+    assert path.radio is None
+
+
+def test_multiple_radios_pick_most_recently_synced(
+    db_session, subscriber, subscription
+):
+    from datetime import UTC, datetime
+
+    pop = PopSite(name="Multi Site", zabbix_group_id="26")
+    db_session.add(pop)
+    db_session.flush()
+    ap_old = _ap_node(db_session, "AP-Old", pop_site_id=pop.id)
+    ap_new = _ap_node(db_session, "AP-New", pop_site_id=pop.id)
+    _cpe(
+        db_session,
+        subscriber.id,
+        ap_old.id,
+        synced_at=datetime(2026, 6, 1, tzinfo=UTC),
+    )
+    newer = _cpe(
+        db_session,
+        subscriber.id,
+        ap_new.id,
+        synced_at=datetime(2026, 7, 1, tzinfo=UTC),
+    )
+
+    path = resolve_customer_path(db_session, subscription)
+
+    assert path.radio.id == newer.id
+    assert path.node.id == ap_new.id

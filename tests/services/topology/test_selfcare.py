@@ -97,3 +97,36 @@ def test_missing_heartbeat_keeps_healthy(
     monkeypatch.setattr("app.services.app_cache.get_json", lambda key: None)
     out = customer_connection_status(db_session, subscription)
     assert out["status"] == "healthy"
+
+
+def test_wireless_path_resolves_basestation_and_status(
+    db_session, subscriber, subscription
+):
+    from app.models.network import CPEDevice
+    from app.models.network_monitoring import PopSite as _PopSite
+
+    pop = _PopSite(name="Karu", zabbix_group_id="30")
+    db_session.add(pop)
+    db_session.flush()
+    ap = NetworkDevice(
+        name="ap-karu-s1",
+        pop_site_id=pop.id,
+        uisp_device_id="uisp-ap-1",
+        live_status="up",
+        live_status_at=datetime(2026, 6, 17, tzinfo=UTC),
+    )
+    db_session.add(ap)
+    db_session.flush()
+    db_session.add(
+        CPEDevice(
+            subscriber_id=subscriber.id,
+            parent_network_device_id=ap.id,
+            last_uisp_status="active",
+        )
+    )
+    db_session.flush()
+
+    out = customer_connection_status(db_session, subscription)
+    assert out == {"basestation": "Karu", "status": "healthy", "known_outage": False}
+    blob = repr(out).lower()
+    assert "ap-karu-s1" not in blob and "uisp" not in blob

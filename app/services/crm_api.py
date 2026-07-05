@@ -1416,7 +1416,6 @@ def outage_impact(
     from app.services.topology.affected import (
         affected_customers,
         fdh_impact_rows,
-        subscriptions_for_node,
     )
 
     subscribers: dict = {}
@@ -1446,12 +1445,19 @@ def outage_impact(
             _add(getattr(sub, "subscriber", None))
         node_ids = result.get("node_ids") or set()
         resolved_node_count = len(node_ids)
+        # Reuse the per-node resolution affected_customers already computed
+        # instead of re-running subscriptions_for_node once per node. A node
+        # that resolves subscribers through ANY arm (nas/olt/wireless) is not
+        # a coverage gap: bad-edge detection (e.g. a stray CPE -> AP edge
+        # masking a broken nas/olt mapping) belongs to the reconciler/drift
+        # layer, not this outage report.
+        subscriptions_by_node = result.get("subscriptions_by_node") or {}
         for nid in node_ids:
             n = session.get(NetworkDevice, nid)
             if (
                 n is not None
                 and n.matched_device_type in ("olt", "nas")
-                and not subscriptions_for_node(session, n)
+                and not subscriptions_by_node.get(nid)
             ):
                 gaps.append(
                     {

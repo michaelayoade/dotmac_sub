@@ -17,11 +17,17 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass, field
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models.catalog import NasDevice, Subscription, SubscriptionStatus
-from app.models.network import OLTDevice, OntAssignment, OntUnit
+from app.models.network import (
+    CPEDevice,
+    DeviceStatus,
+    OLTDevice,
+    OntAssignment,
+    OntUnit,
+)
 from app.models.network_monitoring import NetworkDevice, PopSite
 from app.services.topology.customer_path import (
     GAP_NO_BASESTATION,
@@ -149,6 +155,69 @@ def _device_node_state(
     return state
 
 
+def _wireless_subscriber_state(
+    db: Session, subscriber_ids: set
+) -> dict[object, tuple[bool, bool]]:
+    """{subscriber_id: (has_node, has_node_with_existing_pop_site)} for the
+    wireless arm — the batched mirror of customer_path._active_wireless_cpe.
+
+    Per subscriber, the SAME radio the canonical resolver would pick (active
+    CPE with a parent AP, not UISP-vanished; most recently uisp-synced first,
+    id tie-break) decides the verdict. A subscriber whose selected radio's
+    parent node row is missing is omitted entirely, matching the resolver's
+    fall-through to the NAS arm.
+    """
+    if not subscriber_ids:
+        return {}
+    cpe_rows = db.execute(
+        select(CPEDevice.subscriber_id, CPEDevice.parent_network_device_id)
+        .where(
+            CPEDevice.subscriber_id.in_(subscriber_ids),
+            CPEDevice.parent_network_device_id.is_not(None),
+            CPEDevice.status == DeviceStatus.active,
+            or_(
+                CPEDevice.last_uisp_status.is_(None),
+                CPEDevice.last_uisp_status != "vanished",
+            ),
+        )
+        .order_by(
+            CPEDevice.uisp_synced_at.desc().nullslast(),
+            CPEDevice.id,
+        )
+    ).all()
+    # First row per subscriber = the radio _active_wireless_cpe would return.
+    selected_parent: dict[object, object] = {}
+    for row in cpe_rows:
+        selected_parent.setdefault(row.subscriber_id, row.parent_network_device_id)
+    if not selected_parent:
+        return {}
+
+    ap_pop_by_node = {
+        row.id: row.pop_site_id
+        for row in db.execute(
+            select(NetworkDevice.id, NetworkDevice.pop_site_id).where(
+                NetworkDevice.id.in_(set(selected_parent.values()))
+            )
+        )
+    }
+    pop_ids = {pid for pid in ap_pop_by_node.values() if pid is not None}
+    existing_pop_ids = set()
+    if pop_ids:
+        existing_pop_ids = set(
+            db.execute(select(PopSite.id).where(PopSite.id.in_(pop_ids))).scalars()
+        )
+
+    state: dict[object, tuple[bool, bool]] = {}
+    for subscriber_id, node_id in selected_parent.items():
+        if node_id not in ap_pop_by_node:
+            continue  # node row gone: resolver falls through to the NAS arm
+        state[subscriber_id] = (
+            True,
+            ap_pop_by_node[node_id] in existing_pop_ids,
+        )
+    return state
+
+
 def _subscription_gap_rows(db: Session) -> tuple[int, list[dict]]:
     # NOTE: This is a batched (set-based) reimplementation of the per-subscription
     # gap classification in ``resolve_customer_path`` (app/services/topology/
@@ -216,6 +285,7 @@ def _subscription_gap_rows(db: Session) -> tuple[int, list[dict]]:
         )
     olt_node_state = _device_node_state(db, device_type="olt", device_ids=olt_ids)
     nas_node_state = _device_node_state(db, device_type="nas", device_ids=nas_ids)
+    wireless_state = _wireless_subscriber_state(db, subscriber_ids)
 
     gap_rows: list[dict] = []
     for row in active_subs:
@@ -245,7 +315,13 @@ def _subscription_gap_rows(db: Session) -> tuple[int, list[dict]]:
             else:
                 has_access_device = True
 
-        if (
+        # Wireless before NAS, mirroring resolve_customer_path: the radio ->
+        # AP arm is finer than the coarse NAS fallback. The AP node IS the
+        # topology node, so a resolvable radio grants access device + node.
+        if selected_ont_id is None and row.subscriber_id in wireless_state:
+            has_access_device = True
+            has_node, has_complete_path = wireless_state[row.subscriber_id]
+        elif (
             selected_ont_id is None
             and row.provisioning_nas_device_id in existing_nas_ids
         ):
