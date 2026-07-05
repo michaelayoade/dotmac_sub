@@ -127,4 +127,10 @@ def test_uisp_client_exposes_no_write_helpers():
         for name in dir(uisp.UispClient)
         if not name.startswith("_") and callable(getattr(uisp.UispClient, name))
     }
-    assert public == {"from_env", "list_devices", "list_sites", "list_airmax_stations"}
+    assert public == {
+        "from_env",
+        "list_devices",
+        "list_sites",
+        "list_airmax_stations",
+        "list_olt_onus",
+    }
