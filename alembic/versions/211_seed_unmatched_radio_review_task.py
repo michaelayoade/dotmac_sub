@@ -39,7 +39,11 @@ def upgrade() -> None:
                 SELECT 1 FROM scheduled_tasks WHERE name = :name
             )
             """
-        ).bindparams(id=str(uuid4()), name=TASK_NAME, task_path=TASK_PATH)
+        ).bindparams(
+            sa.bindparam("id", value=uuid4(), type_=sa.Uuid()),
+            sa.bindparam("name", value=TASK_NAME),
+            sa.bindparam("task_path", value=TASK_PATH),
+        )
     )
 
 
