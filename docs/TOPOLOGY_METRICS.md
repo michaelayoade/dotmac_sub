@@ -39,10 +39,13 @@ topology_e2e_coverage_ratio
   < (max_over_time(topology_e2e_coverage_ratio[24h] offset 5m) - 0.02)
 ```
 
-Feeder failed counters (the `failed=629` case):
+Feeder failed counters (the `failed=629` case). PromQL label regexes are
+fully anchored, so the pattern must cover the real counter names:
+`failed` and `port_fetch_failures` (uisp_sync), `nas_failed` (lldp_poll),
+and the `error` presence marker emitted by failed runs:
 
 ```promql
-max by (task) (topology_task_last_result{counter=~"failed|error"}) > 0
+max by (task) (topology_task_last_result{counter=~".*fail.*|.*error.*"}) > 0
 ```
 
 Feeder staleness (also fires on never-run, thanks to the sentinel):
