@@ -147,22 +147,66 @@ def _read_ip_neighbors(nas: NasDevice) -> list[dict]:
     return data if isinstance(data, list) else []
 
 
+def _fallback_router(session: Session, nas: NasDevice):
+    """Active router-management row linked to this NAS, or None.
+
+    Most NAS rows carry no ``api_url``/REST credentials, but their ``routers``
+    row (config-snapshot feature) has ``rest_api_username``/``rest_api_password``
+    plus management_ip/port/ssl — reuse those to poll neighbors.
+    """
+    from app.models.router_management import Router
+
+    return (
+        session.query(Router)
+        .filter(Router.nas_device_id == nas.id, Router.is_active.is_(True))
+        .first()
+    )
+
+
+def _read_ip_neighbors_via_router(router) -> list[dict]:
+    """Read ``/ip/neighbor`` using router-management REST credentials.
+
+    Reuses :class:`RouterConnectionService` — the exact connection layer the
+    config-snapshot feature uses (credential decryption, management_ip +
+    rest_api_port + use_ssl base URL, verify_tls, retries).
+    """
+    from app.services.router_management.connection import RouterConnectionService
+
+    data = RouterConnectionService.execute(router, "GET", "/ip/neighbor")
+    return data if isinstance(data, list) else []
+
+
 def poll_all(
-    session: Session, read_neighbors=None, now: datetime | None = None
+    session: Session,
+    read_neighbors=None,
+    read_router_neighbors=None,
+    now: datetime | None = None,
 ) -> dict:
     """Poll every NAS node's neighbors, upsert lldp_neighbor edges, soft-prune.
+
+    Per-NAS credential resolution: a NAS with ``api_url`` is polled directly
+    (``via_nas``, the original path). Without one, the linked active ``routers``
+    row supplies REST credentials the way config snapshots do (``via_router``).
+    Jump-host-only routers are skipped (``skipped_jump_host``) — the hourly
+    poller does not open SSH tunnels; a NAS with neither config is counted in
+    ``skipped_no_creds`` rather than failing.
 
     Idempotent: edges are keyed by canonical device pair (NULL interfaces), so a
     re-run only bumps ``last_seen_at``. A NAS that's unreachable (e.g. karsana)
     is counted and skipped — it never aborts the run or prunes others' edges.
     """
     read_neighbors = read_neighbors or _read_ip_neighbors
+    read_router_neighbors = read_router_neighbors or _read_ip_neighbors_via_router
     now = now or datetime.now(UTC)
     index = build_device_index(session)
     stats: Counter = Counter(
         {
             "nas_polled": 0,
             "nas_failed": 0,
+            "via_nas": 0,
+            "via_router": 0,
+            "skipped_no_creds": 0,
+            "skipped_jump_host": 0,
             "neighbors_seen": 0,
             "created": 0,
             "updated": 0,
@@ -187,12 +231,38 @@ def poll_all(
         if nas is None:
             continue
         try:
-            neighbors = read_neighbors(nas)
+            if nas.api_url:
+                # Original path: NAS row has its own REST config.
+                neighbors = read_neighbors(nas)
+                via = "via_nas"
+            else:
+                router = _fallback_router(session, nas)
+                if router is None or not (
+                    router.rest_api_username and router.rest_api_password
+                ):
+                    stats["skipped_no_creds"] += 1
+                    logger.info(
+                        "lldp_poll_skipped_no_creds node=%s (no api_url, no router creds)",
+                        node.name,
+                    )
+                    continue
+                access = getattr(router.access_method, "value", router.access_method)
+                if access == "jump_host":
+                    stats["skipped_jump_host"] += 1
+                    logger.info(
+                        "lldp_poll_skipped_jump_host node=%s router=%s",
+                        node.name,
+                        router.name,
+                    )
+                    continue
+                neighbors = read_router_neighbors(router)
+                via = "via_router"
         except Exception as exc:  # one unreachable NAS must not abort the run
             stats["nas_failed"] += 1
             logger.warning("lldp_poll_nas_failed node=%s: %s", node.name, exc)
             continue
         stats["nas_polled"] += 1
+        stats[via] += 1
         stats["neighbors_seen"] += len(neighbors)
         accumulate_edges(edges, node, neighbors, index)
 
