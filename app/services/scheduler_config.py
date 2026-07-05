@@ -687,6 +687,29 @@ def build_beat_schedule() -> dict:
             enabled=radius_reap_enabled,
             interval_seconds=radius_reap_interval_seconds,
         )
+        # Rebuild the live radius_active_sessions view from OPEN external radacct
+        # sessions. The accounting-hook populator isn't firing in prod (the table
+        # starved to 1 row while radacct carries ~893 open sessions), so this
+        # discover-reconcile sweep is the authoritative populator. Gated by the
+        # usage flag; refreshes often (it's a live view). Default-on so the view
+        # actually gets populated.
+        radius_active_session_reconcile_interval_seconds = max(
+            _effective_int(
+                session,
+                SettingDomain.usage,
+                "radius_active_session_reconcile_interval_seconds",
+                "RADIUS_ACTIVE_SESSION_RECONCILE_INTERVAL_SECONDS",
+                120,
+            ),
+            60,
+        )
+        _sync_scheduled_task(
+            session,
+            name="radius_active_session_reconcile",
+            task_name="app.tasks.radius.reconcile_active_sessions",
+            enabled=usage_enabled,
+            interval_seconds=radius_active_session_reconcile_interval_seconds,
+        )
         # Roll imported RADIUS accounting into quota buckets (feeds FUP/overage).
         # Gated by the same usage flag. This follows the RADIUS accounting
         # cadence instead of the daily usage-rating cadence so FUP decisions

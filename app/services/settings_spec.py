@@ -700,6 +700,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
         min_value=300,
     ),
     SettingSpec(
+        domain=SettingDomain.usage,
+        key="radius_active_session_reconcile_interval_seconds",
+        env_var="RADIUS_ACTIVE_SESSION_RECONCILE_INTERVAL_SECONDS",
+        value_type=SettingValueType.integer,
+        default=120,
+        min_value=60,
+    ),
+    SettingSpec(
         domain=SettingDomain.collections,
         key="dunning_enabled",
         env_var="DUNNING_ENABLED",

@@ -209,6 +209,17 @@ class Invoice(Base):
             unique=True,
             postgresql_where=text("is_active AND splynx_invoice_id IS NOT NULL"),
         ),
+        # Idempotency key for CRM-created invoices (installation charges). A
+        # dedicated column, not metadata->>'crm_external_ref', so the partial
+        # unique index is portable to the SQLite test suite. sqlite_where keeps
+        # the predicate (else SQLite would constrain inactive/voided rows too).
+        Index(
+            "uq_invoices_active_crm_external_ref",
+            "crm_external_ref",
+            unique=True,
+            postgresql_where=text("is_active AND crm_external_ref IS NOT NULL"),
+            sqlite_where=text("is_active AND crm_external_ref IS NOT NULL"),
+        ),
         # Backs the per-account billing list (active invoices, newest first)
         # and FK joins on account_id.
         Index(
@@ -250,6 +261,9 @@ class Invoice(Base):
         UUID(as_uuid=True), ForeignKey("subscribers.id")
     )
     splynx_invoice_id: Mapped[int | None] = mapped_column(Integer)
+    # Idempotency key for CRM-created invoices (also mirrored into metadata for
+    # back-compat reads); backs uq_invoices_active_crm_external_ref.
+    crm_external_ref: Mapped[str | None] = mapped_column(String(120))
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSONB)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
