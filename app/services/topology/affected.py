@@ -647,3 +647,61 @@ def affected_customers(
         "subscriptions_by_node": subscriptions_by_node,
         "count": len(subs),
     }
+
+
+def _with_bar_pct(rows: list[dict]) -> list[dict]:
+    """Stamp a ``pct`` (0-100) on each row relative to the busiest branch, for
+    the impact tree's proportional bars. Mutates and returns ``rows``."""
+    max_count = max((r["count"] for r in rows), default=0)
+    for row in rows:
+        row["pct"] = round(100 * row["count"] / max_count) if max_count else 0
+    return rows
+
+
+def impact_breakdown(session: Session, result: dict) -> list[dict]:
+    """Per-node blast-radius rows for the outage-impact tree.
+
+    Each node in the failure domain with its affected active-subscription
+    count, live status (for the dot) and a bar percentage. Derived from an
+    ``affected_customers`` result — no re-resolution. Nodes with zero affected
+    subscriptions are dropped (the header already carries the total; the tree
+    shows *where* the impact lands). Sorted by count desc, then name.
+    """
+    by_node: dict = result.get("subscriptions_by_node", {})
+    rows: list[dict] = []
+    for nid in result.get("node_ids", set()):
+        count = len(by_node.get(nid, []))
+        if count == 0:
+            continue
+        node = session.get(NetworkDevice, nid)
+        if node is None:
+            continue
+        rows.append(
+            {
+                "id": nid,
+                "name": node.name,
+                "role": _enum_value(node.role),
+                "live_status": node.live_status or "unknown",
+                "live_status_at": node.live_status_at,
+                "count": count,
+            }
+        )
+    rows.sort(key=lambda r: (-r["count"], r["name"].lower()))
+    return _with_bar_pct(rows)
+
+
+def fdh_impact_branches(rows: list[dict]) -> list[dict]:
+    """Aggregate ``fdh_impact_rows`` (one row per customer) into per-splitter
+    blast-radius branches: cabinet -> splitter -> affected count. Passive
+    plant, so ``live_status`` is neutral. Sorted by count desc, then name.
+    """
+    counts: dict[str, int] = {}
+    for row in rows:
+        name = row.get("splitter_name") or "—"
+        counts[name] = counts.get(name, 0) + 1
+    branches: list[dict] = [
+        {"name": name, "count": count, "live_status": "plant"}
+        for name, count in counts.items()
+    ]
+    branches.sort(key=lambda b: (-b["count"], b["name"].lower()))
+    return _with_bar_pct(branches)
