@@ -56,6 +56,21 @@ _MIN_WINDOW_SECONDS = 300
 _CHUNK = 1000
 
 
+def _strip_inet_mask(value: str | None) -> str | None:
+    """Normalize a radacct ``inet`` value to a bare host IP.
+
+    ``radacct.nasipaddress`` / ``framedipaddress`` are Postgres ``inet``
+    columns whose text form carries a netmask (e.g. ``160.119.127.95/32``),
+    but ``nas_devices`` and ``subscriptions`` store bare IPs
+    (``160.119.127.95``). Without stripping the ``/mask`` the NAS lookup and
+    any downstream framed-IP match silently miss (this left nas_device_id NULL
+    on every session). IPv6 prefixes keep their mask (handled separately).
+    """
+    if value is None:
+        return None
+    return value.split("/", 1)[0].strip() or None
+
+
 def _chunked(values: list[str], size: int = _CHUNK):
     for idx in range(0, len(values), size):
         yield values[idx : idx + size]
@@ -140,9 +155,9 @@ def _read_open_sessions(
                     "username": (row.username or "").strip() or None,
                     "acct_session_id": sid,
                     "calling_station_id": row.callingstationid,
-                    "framed_ip_address": row.framedipaddress,
+                    "framed_ip_address": _strip_inet_mask(row.framedipaddress),
                     "framed_ipv6_prefix": row.framedipv6prefix,
-                    "nas_ip_address": row.nasipaddress,
+                    "nas_ip_address": _strip_inet_mask(row.nasipaddress),
                     "nas_port_id": row.nasportid,
                     "acctstarttime": row.acctstarttime,
                     "acctupdatetime": row.acctupdatetime,
