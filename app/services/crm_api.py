@@ -1364,14 +1364,7 @@ def create_installation_invoice(
         raise LookupError("subscriber_not_found")
 
     if external_ref:
-        existing = (
-            db.query(Invoice)
-            .filter(Invoice.account_id == subscriber.id)
-            .filter(Invoice.is_active.is_(True))
-            .filter(Invoice.metadata_["crm_external_ref"].astext == str(external_ref))
-            .order_by(Invoice.created_at.desc())
-            .first()
-        )
+        existing = _find_invoice_by_crm_ref(db, external_ref)
         if existing is not None:
             return existing
 
@@ -1397,11 +1390,36 @@ def create_installation_invoice(
     metadata["source"] = "dotmac_crm"
     if external_ref:
         metadata["crm_external_ref"] = str(external_ref)
+        invoice.crm_external_ref = str(external_ref)
     invoice.metadata_ = metadata
     db.add(invoice)
-    db.commit()
+    from sqlalchemy.exc import IntegrityError
+
+    try:
+        db.commit()
+    except IntegrityError:
+        # A concurrent duplicate lost the race on uq_invoices_active_crm_external_ref
+        # — the create is idempotent, so return the invoice the winner wrote.
+        db.rollback()
+        if external_ref:
+            existing = _find_invoice_by_crm_ref(db, external_ref)
+            if existing is not None:
+                return existing
+        raise
     db.refresh(invoice)
     return invoice
+
+
+def _find_invoice_by_crm_ref(db: Session, external_ref: str) -> Invoice | None:
+    """Locate the active CRM-created invoice for an external_ref (the
+    uq_invoices_active_crm_external_ref key)."""
+    return (
+        db.query(Invoice)
+        .filter(Invoice.is_active.is_(True))
+        .filter(Invoice.crm_external_ref == str(external_ref))
+        .order_by(Invoice.created_at.desc())
+        .first()
+    )
 
 
 def outage_impact(
