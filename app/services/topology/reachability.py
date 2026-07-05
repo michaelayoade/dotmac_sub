@@ -22,13 +22,9 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
-from app.models.network_monitoring import (
-    DeviceRole,
-    NetworkDevice,
-    NetworkTopologyLink,
-)
+from app.models.network_monitoring import DeviceRole, NetworkDevice
+from app.services.topology.affected import lldp_adjacency
 from app.services.topology.live_status import DOWN
-from app.services.topology.lldp_poller import SOURCE as LLDP_SOURCE
 
 CLASS_DOWN = "down"
 CLASS_UNREACHABLE_UPSTREAM = "unreachable_upstream"
@@ -42,27 +38,38 @@ class Reachability:
     root_cause_device_id: object  # the down device itself, or its topmost down ancestor
 
 
-def _adjacency(session: Session) -> dict:
-    """Undirected adjacency over active LLDP edges, from ONE links query
-    (the per-node ``_neighbor_ids`` helpers in affected/customer_path issue a
-    query per node — fine for a single customer, not for a fleet sweep)."""
-    adjacency: dict = {}
-    for source_id, target_id in (
-        session.query(
-            NetworkTopologyLink.source_device_id, NetworkTopologyLink.target_device_id
-        )
-        .filter(
-            NetworkTopologyLink.source == LLDP_SOURCE,
-            NetworkTopologyLink.is_active.is_(True),
-        )
-        .all()
-    ):
-        adjacency.setdefault(source_id, set()).add(target_id)
-        adjacency.setdefault(target_id, set()).add(source_id)
-    return adjacency
+def core_parent_map(
+    session: Session, *, adjacency: dict | None = None, core_ids: list | None = None
+) -> dict:
+    """Multi-source BFS from the cores over the LLDP graph: ``parent[n]`` is
+    n's next hop TOWARD core (None for cores themselves), so following
+    parents from any node walks its shortest path to core. Shared by the
+    classifier and the auto-detect scan (which also derives upstream chains
+    from it) so a fleet sweep runs the BFS once, in memory."""
+    if adjacency is None:
+        adjacency = lldp_adjacency(session)
+    if core_ids is None:
+        core_ids = [
+            r[0]
+            for r in session.query(NetworkDevice.id)
+            .filter(
+                NetworkDevice.role == DeviceRole.core,
+                NetworkDevice.is_active.is_(True),
+            )
+            .all()
+        ]
+    parent: dict = dict.fromkeys(core_ids)
+    queue: deque = deque(core_ids)
+    while queue:
+        nid = queue.popleft()
+        for nb in adjacency.get(nid, ()):
+            if nb not in parent:
+                parent[nb] = nid
+                queue.append(nb)
+    return parent
 
 
-def classify_down_devices(session: Session) -> dict:
+def classify_down_devices(session: Session, *, adjacency: dict | None = None) -> dict:
     """Classify every active down device as ``down`` or ``unreachable_upstream``.
 
     Returns ``{device_id: Reachability}`` — one entry per device whose cached
@@ -80,18 +87,7 @@ def classify_down_devices(session: Session) -> dict:
     if not down_ids:
         return {}
     core_ids = [r[0] for r in rows if r[1] == DeviceRole.core]
-
-    adjacency = _adjacency(session)
-    # Multi-source BFS from the cores: parent[n] is n's next hop TOWARD core,
-    # so following parents from any node walks its (shortest) path to core.
-    parent: dict = dict.fromkeys(core_ids)
-    queue: deque = deque(core_ids)
-    while queue:
-        nid = queue.popleft()
-        for nb in adjacency.get(nid, ()):
-            if nb not in parent:
-                parent[nb] = nid
-                queue.append(nb)
+    parent = core_parent_map(session, adjacency=adjacency, core_ids=core_ids)
 
     result: dict = {}
     for device_id in down_ids:

@@ -304,3 +304,43 @@ def test_auto_incident_lights_up_customer_known_outage_flag(db_session, catalog_
     incident = open_incident_for_path(db_session, CustomerPath(node=ap))
     assert incident is not None
     assert detection_source(incident) == "auto"
+
+
+def test_multi_candidate_scan_walks_graph_once(db_session, catalog_offer, monkeypatch):
+    """A cascading failure with several simultaneous candidates must reuse ONE
+    precomputed adjacency + dist-to-core across classification, impact gates,
+    open-incident checks and declares — not one full-graph BFS (of per-node
+    queries) per candidate."""
+    import app.services.topology.affected as affected_mod
+    import app.services.topology.outage as outage_mod
+    import app.services.topology.outage_autodetect as autodetect_mod
+    import app.services.topology.reachability as reachability_mod
+
+    core = _dev(db_session, "Core", role=DeviceRole.core)
+    for r in range(3):
+        router = _dev(db_session, f"R{r}", live_status="down", status_at=NOW)
+        _link(db_session, core, router)
+        for i in range(3):
+            _radio(db_session, router, catalog_offer.id, tag=f"{r}-{i}")
+
+    calls = {"dist": 0, "adjacency": 0}
+    real_dist = affected_mod._dist_to_core
+    real_adjacency = affected_mod.lldp_adjacency
+
+    def dist_spy(session, **kwargs):
+        calls["dist"] += 1
+        return real_dist(session, **kwargs)
+
+    def adjacency_spy(session):
+        calls["adjacency"] += 1
+        return real_adjacency(session)
+
+    for mod in (affected_mod, outage_mod, autodetect_mod):
+        monkeypatch.setattr(mod, "_dist_to_core", dist_spy)
+    for mod in (affected_mod, outage_mod, autodetect_mod, reachability_mod):
+        monkeypatch.setattr(mod, "lldp_adjacency", adjacency_spy)
+
+    counters, _ = evaluate_outages(db_session, now=NOW, radio_baseline=None)
+
+    assert counters["incidents_created"] == 3  # three independent root causes
+    assert calls == {"dist": 1, "adjacency": 1}

@@ -72,29 +72,36 @@ def list_network_nodes(session: Session) -> list[NetworkDevice]:
     )
 
 
-def _neighbor_ids(session: Session, node_id) -> list:
-    links = (
-        session.query(NetworkTopologyLink)
+def lldp_adjacency(session: Session) -> dict:
+    """Whole-graph undirected adjacency over active LLDP edges, from ONE query.
+
+    The graph walks below take this as an optional precomputed parameter so a
+    fleet-wide sweep (e.g. the outage auto-detect scan, which walks the graph
+    for several candidates in one run) issues one links query total instead of
+    one per visited node per walk.
+    """
+    adjacency: dict = {}
+    for source_id, target_id in (
+        session.query(
+            NetworkTopologyLink.source_device_id, NetworkTopologyLink.target_device_id
+        )
         .filter(
             NetworkTopologyLink.source == LLDP_SOURCE,
             NetworkTopologyLink.is_active.is_(True),
-            or_(
-                NetworkTopologyLink.source_device_id == node_id,
-                NetworkTopologyLink.target_device_id == node_id,
-            ),
         )
         .all()
-    )
-    return [
-        link.target_device_id
-        if link.source_device_id == node_id
-        else link.source_device_id
-        for link in links
-    ]
+    ):
+        adjacency.setdefault(source_id, set()).add(target_id)
+        adjacency.setdefault(target_id, set()).add(source_id)
+    return adjacency
 
 
-def _dist_to_core(session: Session) -> dict:
-    """BFS hop-distance to the nearest core node over the LLDP graph."""
+def _dist_to_core(session: Session, *, adjacency: dict | None = None) -> dict:
+    """BFS hop-distance to the nearest core node over the LLDP graph.
+
+    One links query (via ``lldp_adjacency``) + one cores query; pass a
+    precomputed ``adjacency`` to skip the links query too.
+    """
     cores = (
         session.query(NetworkDevice)
         .filter(
@@ -102,11 +109,13 @@ def _dist_to_core(session: Session) -> dict:
         )
         .all()
     )
+    if adjacency is None:
+        adjacency = lldp_adjacency(session)
     dist: dict = {c.id: 0 for c in cores}
     queue: deque = deque((c.id, 0) for c in cores)
     while queue:
         nid, d = queue.popleft()
-        for nb in _neighbor_ids(session, nid):
+        for nb in adjacency.get(nid, ()):
             if nb not in dist:
                 dist[nb] = d + 1
                 queue.append((nb, d + 1))
@@ -114,24 +123,31 @@ def _dist_to_core(session: Session) -> dict:
 
 
 def downstream_nodes(
-    session: Session, root: NetworkDevice, *, dist: dict | None = None
+    session: Session,
+    root: NetworkDevice,
+    *,
+    dist: dict | None = None,
+    adjacency: dict | None = None,
 ) -> set:
     """Node ids at/below ``root`` — root plus nodes reachable moving strictly
     away from core (increasing distance-to-core). Degrades to {root} when the
     graph/core is unknown, so we never over-scope an outage.
 
-    ``dist`` is the (root-independent) distance-to-core map; callers that invoke
-    this repeatedly in one request can compute it once via ``_dist_to_core`` and
-    pass it in to avoid a full-graph BFS per call.
+    ``dist`` is the (root-independent) distance-to-core map and ``adjacency``
+    the LLDP adjacency; callers that invoke this repeatedly in one request or
+    scan can compute them once (``_dist_to_core`` / ``lldp_adjacency``) and
+    pass them in to avoid a full-graph BFS + neighbor queries per call.
     """
+    if adjacency is None:
+        adjacency = lldp_adjacency(session)
     if dist is None:
-        dist = _dist_to_core(session)
+        dist = _dist_to_core(session, adjacency=adjacency)
     result = {root.id}
     queue: deque = deque([root.id])
     while queue:
         nid = queue.popleft()
         cur_d = dist.get(nid)
-        for nb in _neighbor_ids(session, nid):
+        for nb in adjacency.get(nid, ()):
             if nb in result:
                 continue
             nb_d = dist.get(nb)
@@ -611,6 +627,9 @@ def affected_customers(
     node: NetworkDevice | None = None,
     basestation: PopSite | None = None,
     fdh: FdhCabinet | None = None,
+    *,
+    dist: dict | None = None,
+    adjacency: dict | None = None,
 ) -> dict:
     """Subscriptions affected by a failing node and/or basestation.
 
@@ -618,6 +637,8 @@ def affected_customers(
     subscriptions_by_node lets callers do per-node coverage checks without
     re-resolving). For a basestation, all
     its active nodes; for a node, it + its downstream access nodes.
+    ``dist``/``adjacency`` are optional precomputed graph maps (see
+    ``downstream_nodes``) for callers resolving many scopes in one run.
     """
     node_ids: set = set()
     if basestation is not None:
@@ -631,7 +652,7 @@ def affected_customers(
             .all()
         }
     if node is not None:
-        node_ids |= downstream_nodes(session, node)
+        node_ids |= downstream_nodes(session, node, dist=dist, adjacency=adjacency)
 
     subs: dict = {}
     if fdh is not None:

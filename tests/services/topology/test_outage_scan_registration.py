@@ -36,3 +36,21 @@ def test_beat_row_registered_with_interval_floor():
     assert f'task_name="{TASK}"' in source
     assert '"outage_scan_interval_seconds"' in source
     assert "max(outage_scan_seconds, 120)" in source
+
+
+def test_overlapping_scan_is_skipped():
+    """Single-flight: when the advisory lock is held by a previous run, the
+    task skips cleanly instead of double-declaring (TOCTOU guard)."""
+    from contextlib import contextmanager
+    from unittest import mock
+
+    from app.tasks import topology_outage
+
+    @contextmanager
+    def held_lock(key, timeout_ms=None):
+        yield (None, False)
+
+    with mock.patch.object(
+        topology_outage.db_session_adapter, "advisory_lock", held_lock
+    ):
+        assert topology_outage.run_outage_scan() == {"skipped": "already_running"}

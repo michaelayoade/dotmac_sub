@@ -1971,29 +1971,48 @@ def outage_incident_detail(
             session, node=node, basestation=basestation, fdh=fdh
         )["subscriptions"]
 
+    # Slice BEFORE hydrating: a big outage can cover thousands of
+    # subscriptions, and touching .subscriber/.service_address on each would
+    # lazy-load per row. Total/truncated come from the id list; only the
+    # capped page (deterministic id order) is re-fetched, with both
+    # relationships eager-loaded in one pass.
+    affected_total = len(subscriptions)
+    page_ids = [s.id for s in sorted(subscriptions, key=lambda s: str(s.id))][:limit]
     entries = []
-    for sub in subscriptions:
-        subscriber = getattr(sub, "subscriber", None)
-        service_address = getattr(sub, "service_address", None)
-        entries.append(
-            {
-                "subscription_id": str(sub.id),
-                "status": enum_value(sub.status),
-                "subscriber_id": str(sub.subscriber_id) if sub.subscriber_id else None,
-                "subscriber_name": subscriber_name(subscriber)
-                if subscriber is not None
-                else None,
-                "service_address": address_text(
-                    subscriber, [service_address] if service_address else None
-                )
-                if subscriber is not None
-                else None,
-            }
+    if page_ids:
+        page = (
+            session.query(Subscription)
+            .options(
+                selectinload(Subscription.subscriber),
+                selectinload(Subscription.service_address),
+            )
+            .filter(Subscription.id.in_(page_ids))
+            .all()
         )
-    entries.sort(key=lambda e: (e["subscriber_name"] or "", e["subscription_id"]))
+        for sub in page:
+            subscriber = sub.subscriber
+            service_address = sub.service_address
+            entries.append(
+                {
+                    "subscription_id": str(sub.id),
+                    "status": enum_value(sub.status),
+                    "subscriber_id": str(sub.subscriber_id)
+                    if sub.subscriber_id
+                    else None,
+                    "subscriber_name": subscriber_name(subscriber)
+                    if subscriber is not None
+                    else None,
+                    "service_address": address_text(
+                        subscriber, [service_address] if service_address else None
+                    )
+                    if subscriber is not None
+                    else None,
+                }
+            )
+        entries.sort(key=lambda e: (e["subscriber_name"] or "", e["subscription_id"]))
 
     row = outage_incident_row(session, incident)
-    row["affected_total"] = len(entries)
-    row["affected_truncated"] = len(entries) > limit
-    row["affected_subscriptions"] = entries[:limit]
+    row["affected_total"] = affected_total
+    row["affected_truncated"] = affected_total > limit
+    row["affected_subscriptions"] = entries
     return row

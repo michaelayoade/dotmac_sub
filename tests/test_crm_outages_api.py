@@ -128,6 +128,9 @@ def test_detail_lists_affected_subscriptions(db_session, catalog_offer):
 
 
 def test_detail_caps_affected_list(db_session, catalog_offer):
+    """More affected subscriptions than ``limit``: the page is sliced BEFORE
+    hydration (bounded work on a big outage), totals stay honest, and the
+    sliced entries are still fully hydrated (eager-loaded page query)."""
     node = _nas_node_with_subs(db_session, catalog_offer.id, 4)
     incident = declare_outage(db_session, node=node)
 
@@ -135,6 +138,10 @@ def test_detail_caps_affected_list(db_session, catalog_offer):
     assert detail["affected_total"] == 4
     assert detail["affected_truncated"] is True
     assert len(detail["affected_subscriptions"]) == 2
+    for entry in detail["affected_subscriptions"]:
+        assert entry["subscriber_name"]
+        assert entry["service_address"]
+        assert entry["status"] == "active"
 
 
 def test_detail_unknown_incident_is_none_and_route_404s(db_session):

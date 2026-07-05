@@ -48,8 +48,11 @@ from sqlalchemy.orm import Session
 from app.models.domain_settings import SettingDomain
 from app.models.network import CPEDevice, DeviceStatus
 from app.models.network_monitoring import NetworkDevice, PopSite
-from app.services.topology.affected import affected_customers
-from app.services.topology.customer_path import resolve_upstream_chain
+from app.services.topology.affected import (
+    _dist_to_core,
+    affected_customers,
+    lldp_adjacency,
+)
 from app.services.topology.live_status import DOWN
 from app.services.topology.outage import (
     AUTO_DETECT_ACTOR,
@@ -60,6 +63,7 @@ from app.services.topology.outage import (
 from app.services.topology.reachability import (
     CLASS_UNREACHABLE_UPSTREAM,
     classify_down_devices,
+    core_parent_map,
 )
 
 logger = logging.getLogger(__name__)
@@ -70,6 +74,17 @@ MIN_AFFECTED_DEFAULT = 3
 MIN_FRACTION_PCT_DEFAULT = 40  # stored as an integer percentage
 
 RADIO_BASELINE_CACHE_KEY = "topology:outage_autodetect:radio_baseline"
+
+# Single-flight guard for the scan task (pg advisory lock via
+# db_session_adapter.advisory_lock, same pattern as uisp_sync/events). The
+# open-incident check is a plain read and declare is a plain insert, so two
+# overlapping scans could double-declare without this. A partial-unique
+# "one open incident per scope" index is deliberately NOT added as a backstop:
+# the manual console intentionally allows several open incidents on one scope
+# (operator-arbitrated; see test_list_open_excludes_resolved), so the auto
+# path's race is closed by this lock instead of a constraint that would break
+# manual semantics.
+ADVISORY_LOCK_KEY = 0x6F_75_74  # "out"
 
 # UISP radio statuses that count as "up" for transition detection. NULL covers
 # rows written before the status column existed (same reading as customer_path
@@ -124,6 +139,25 @@ class _Candidate:
     basestation: PopSite | None = None
     upstream_chain: list[NetworkDevice] = field(default_factory=list)
     reasons: list[str] = field(default_factory=list)
+    # Precomputed affected_customers result for the DECLARE scope (node-only
+    # or basestation-only), so declare_outage never re-walks the graph.
+    impact: dict | None = None
+
+
+def _chain_from_parents(session: Session, parents: dict, node_id) -> list:
+    """Upstream chain [next hop ... core] straight off the precomputed
+    core-parent map — no per-node BFS/queries (open_incident_for_path only
+    needs the hop ids for its pass-1 match)."""
+    if node_id not in parents:
+        return []
+    chain = []
+    cur = parents.get(node_id)
+    while cur is not None:
+        dev = session.get(NetworkDevice, cur)
+        if dev is not None:
+            chain.append(dev)
+        cur = parents.get(cur)
+    return chain
 
 
 def radio_snapshot(session: Session) -> dict:
@@ -239,9 +273,18 @@ def evaluate_outages(
         "errors": 0,
     }
 
+    # --- 0. whole-graph maps, computed ONCE per scan ---------------------------
+    # Every graph consumer below (classification, impact gates, blast-radius
+    # dedupe, declare snapshots, upstream chains) reuses these — a cascading
+    # failure with N candidates must not trigger N full-graph BFS sweeps of
+    # per-node queries (the exact anti-pattern reachability avoids).
+    adjacency = lldp_adjacency(session)
+    dist = _dist_to_core(session, adjacency=adjacency)
+    parents = core_parent_map(session, adjacency=adjacency)
+
     # --- 1. transition events -------------------------------------------------
     recent_down = _recent_down_devices(session, window_start)
-    classification = classify_down_devices(session)
+    classification = classify_down_devices(session, adjacency=adjacency)
 
     snapshot = radio_snapshot(session)
     radio_events_by_ap: dict[str, int] = {}
@@ -272,12 +315,16 @@ def evaluate_outages(
     # --- 3. tripped scopes -> candidates ---------------------------------------
     candidates: dict[str, _Candidate] = {}
 
-    def _node_candidate(device: NetworkDevice, reason: str) -> None:
+    def _node_candidate(
+        device: NetworkDevice, reason: str, impact: dict | None = None
+    ) -> None:
         key = f"node:{device.id}"
         if key in candidates:
             candidates[key].reasons.append(reason)
+            if candidates[key].impact is None:
+                candidates[key].impact = impact
         else:
-            candidates[key] = _Candidate(node=device, reasons=[reason])
+            candidates[key] = _Candidate(node=device, reasons=[reason], impact=impact)
 
     # 3a. AP scopes (radios), most specific. A scope trips when BOTH
     # thresholds pass; the denominator is the AP's radios that were up at the
@@ -321,13 +368,16 @@ def evaluate_outages(
     for device in root_events:
         counters["scopes_evaluated"] += 1
         try:
-            impact = affected_customers(session, node=device)
+            impact = affected_customers(
+                session, node=device, dist=dist, adjacency=adjacency
+            )
             if impact["count"] < min_affected:
                 continue
             _node_candidate(
                 device,
                 f"device {device.name} went down within {lookback_minutes}m "
                 f"({impact['count']} subscriptions affected)",
+                impact=impact,
             )
         except Exception:
             counters["errors"] += 1
@@ -349,7 +399,7 @@ def evaluate_outages(
         pop = session.get(PopSite, site_id)
         if pop is None:
             continue
-        merged = _Candidate(basestation=pop)
+        merged = _Candidate(basestation=pop)  # impact re-resolved for the site
         for key in keys:
             merged.reasons.extend(candidates.pop(key).reasons)
         merged.reasons.insert(0, f"{len(keys)} devices at {pop.name} tripped together")
@@ -359,16 +409,36 @@ def evaluate_outages(
     for key, candidate in candidates.items():
         try:
             if candidate.node is not None:
-                candidate.upstream_chain = resolve_upstream_chain(
-                    session, candidate.node
+                candidate.upstream_chain = _chain_from_parents(
+                    session, parents, candidate.node.id
                 )
                 if candidate.node.pop_site_id is not None:
                     candidate.basestation = session.get(
                         PopSite, candidate.node.pop_site_id
                     )
-            if open_incident_for_path(session, candidate) is not None:
+            if (
+                open_incident_for_path(
+                    session, candidate, dist=dist, adjacency=adjacency
+                )
+                is not None
+            ):
                 counters["skipped_open_incident"] += 1
                 continue
+            if candidate.impact is None:
+                # AP-scope / basestation candidates gate on the baseline
+                # fraction, so their declare-scope impact is resolved here —
+                # once, against the precomputed maps.
+                if candidate.node is not None:
+                    candidate.impact = affected_customers(
+                        session, node=candidate.node, dist=dist, adjacency=adjacency
+                    )
+                else:
+                    candidate.impact = affected_customers(
+                        session,
+                        basestation=candidate.basestation,
+                        dist=dist,
+                        adjacency=adjacency,
+                    )
             note = f"{AUTO_NOTE_PREFIX} " + "; ".join(candidate.reasons)
             declare_outage(
                 session,
@@ -376,6 +446,7 @@ def evaluate_outages(
                 basestation=candidate.basestation if candidate.node is None else None,
                 declared_by=AUTO_DETECT_ACTOR,
                 note=note[:2000],
+                impact=candidate.impact,
             )
             counters["incidents_created"] += 1
         except Exception:

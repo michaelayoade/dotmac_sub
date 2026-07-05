@@ -22,6 +22,7 @@ from app.services.topology.affected import (
     _dist_to_core,
     affected_customers,
     downstream_nodes,
+    lldp_adjacency,
 )
 
 logger = logging.getLogger(__name__)
@@ -136,11 +137,21 @@ def declare_outage(
     declared_by: str | None = None,
     note: str | None = None,
     severity: str | None = None,
+    impact: dict | None = None,
 ) -> OutageIncident:
-    """Open an incident against infrastructure, snapshotting affected_count."""
+    """Open an incident against infrastructure, snapshotting affected_count.
+
+    ``impact`` is an optional precomputed ``affected_customers`` result for
+    the SAME scope — the auto-detect scan already resolves it for its
+    threshold gate, so passing it in avoids a second full graph walk per
+    incident. Omitted (manual console path), it is computed here.
+    """
     if node is None and basestation is None and fdh is None:
         raise ValueError("declare_outage requires a node, basestation, or FDH cabinet")
-    impact = affected_customers(session, node=node, basestation=basestation, fdh=fdh)
+    if impact is None:
+        impact = affected_customers(
+            session, node=node, basestation=basestation, fdh=fdh
+        )
     incident = OutageIncident(
         root_node_id=node.id if node is not None else None,
         basestation_id=basestation.id if basestation is not None else None,
@@ -167,11 +178,15 @@ def resolve_outage(session: Session, incident_id) -> OutageIncident | None:
     return incident
 
 
-def open_incident_for_path(session: Session, path) -> OutageIncident | None:
+def open_incident_for_path(
+    session: Session, path, *, dist: dict | None = None, adjacency: dict | None = None
+) -> OutageIncident | None:
     """The open incident covering a customer's path, if any — matched on the
     access node, any upstream hop, the basestation, or by sitting within an
     incident's blast radius. ``path`` is a CustomerPath (duck-typed to avoid a
-    circular import)."""
+    circular import). ``dist``/``adjacency`` are optional precomputed graph
+    maps for callers that check many scopes in one run (the auto-detect scan);
+    per-request callers omit them and pay at most one BFS per call."""
     if path is None:
         return None
     customer_node_ids = set()
@@ -207,15 +222,20 @@ def open_incident_for_path(session: Session, path) -> OutageIncident | None:
     # reached during an active outage that didn't already match cheaply.
     root_incidents = [i for i in incidents if i.root_node_id is not None]
     if customer_access_id is not None and root_incidents:
-        # _dist_to_core is root-independent; compute the full-graph BFS ONCE and
-        # reuse it across incidents rather than recomputing inside each
+        # dist/adjacency are root-independent; compute the full-graph maps ONCE
+        # and reuse them across incidents rather than recomputing inside each
         # downstream_nodes call (this runs on the customer connection-status
-        # request path, possibly with many open incidents during a wide outage).
-        dist = _dist_to_core(session)
+        # request path, possibly with many open incidents during a wide outage
+        # — and once per candidate inside the auto-detect scan, which passes
+        # its own precomputed maps in).
+        if adjacency is None:
+            adjacency = lldp_adjacency(session)
+        if dist is None:
+            dist = _dist_to_core(session, adjacency=adjacency)
         for incident in root_incidents:
             root = session.get(NetworkDevice, incident.root_node_id)
             if root is not None and customer_access_id in downstream_nodes(
-                session, root, dist=dist
+                session, root, dist=dist, adjacency=adjacency
             ):
                 return incident
     return None
