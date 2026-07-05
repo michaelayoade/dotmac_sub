@@ -2,15 +2,23 @@
 
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime
+
+import pytest
+from billiard.exceptions import SoftTimeLimitExceeded
 
 from app.models.catalog import NasDevice
 from app.models.network_monitoring import NetworkDevice, NetworkTopologyLink
+from app.models.router_management import Router, RouterAccessMethod
+from app.services.topology import lldp_poller
 from app.services.topology.lldp_poller import SOURCE, poll_all
 
+NOW = datetime(2026, 6, 17, 14, 0, tzinfo=UTC)
 
-def _nas_node(db, name, mgmt_ip=None):
-    nas = NasDevice(name=name, management_ip=mgmt_ip)
+
+def _nas_node(db, name, mgmt_ip=None, api_url="https://mikrotik.example"):
+    nas = NasDevice(name=name, management_ip=mgmt_ip, api_url=api_url)
     db.add(nas)
     db.flush()
     node = NetworkDevice(
@@ -116,3 +124,202 @@ def test_unreachable_nas_isolated(db_session):
     assert r["nas_failed"] == 1
     assert r["nas_polled"] == 1  # the reachable one still processed
     assert r["created"] == 1
+
+
+# --- Router-credentials fallback (NAS rows without api_url) -------------------
+
+
+def _router_for(db, nas, name, **kwargs):
+    kwargs.setdefault("hostname", name)
+    kwargs.setdefault("management_ip", "10.20.0.1")
+    kwargs.setdefault("rest_api_username", "snap-api")
+    kwargs.setdefault("rest_api_password", "enc:secret")
+    router = Router(name=name, nas_device_id=nas.id, **kwargs)
+    db.add(router)
+    db.flush()
+    return router
+
+
+def _raise_nas_read(nas):
+    raise AssertionError("NAS REST path must not be used without api_url")
+
+
+def test_nas_with_api_url_uses_nas_path_unchanged(db_session):
+    spdc, nas_spdc = _nas_node(db_session, "SPDC Access")  # api_url set by default
+    _plain(db_session, "GBB")
+    # Even with a linked router, the NAS path wins when api_url is configured.
+    _router_for(db_session, nas_spdc, "spdc-rtr")
+
+    def router_read(router):
+        raise AssertionError("router fallback must not be used when api_url is set")
+
+    r = poll_all(
+        db_session,
+        read_neighbors=lambda nas: [{"identity": "GBB", "interface": "sfp1"}],
+        read_router_neighbors=router_read,
+        now=NOW,
+    )
+    assert r["nas_polled"] == 1
+    assert r["via_nas"] == 1
+    assert r["via_router"] == 0
+    assert r["created"] == 1
+
+
+def test_nas_without_api_url_polls_via_linked_router(db_session):
+    spdc, nas_spdc = _nas_node(db_session, "SPDC Access", api_url=None)
+    _plain(db_session, "GBB")
+    router = _router_for(db_session, nas_spdc, "spdc-rtr")
+
+    seen = []
+
+    def router_read(r):
+        seen.append(r.id)
+        return [{"identity": "GBB", "interface": "sfp1"}]
+
+    r = poll_all(
+        db_session,
+        read_neighbors=_raise_nas_read,
+        read_router_neighbors=router_read,
+        now=NOW,
+    )
+    assert seen == [router.id]
+    assert r["nas_polled"] == 1
+    assert r["via_router"] == 1
+    assert r["via_nas"] == 0
+    assert r["nas_failed"] == 0
+    assert r["created"] == 1
+
+
+def test_nas_without_api_url_inactive_router_skipped(db_session):
+    _, nas = _nas_node(db_session, "Orphan Access", api_url=None)
+    _router_for(db_session, nas, "orphan-rtr", is_active=False)
+
+    r = poll_all(
+        db_session,
+        read_neighbors=_raise_nas_read,
+        read_router_neighbors=_raise_nas_read,
+        now=NOW,
+    )
+    assert r["skipped_no_creds"] == 1
+    assert r["nas_polled"] == 0
+    assert r["nas_failed"] == 0
+
+
+def test_nas_with_no_creds_at_all_counted_not_raised(db_session):
+    _nas_node(db_session, "Bare Access", api_url=None)  # no router row at all
+
+    r = poll_all(
+        db_session,
+        read_neighbors=_raise_nas_read,
+        read_router_neighbors=_raise_nas_read,
+        now=NOW,
+    )
+    assert r["skipped_no_creds"] == 1
+    assert r["nas_failed"] == 0
+    assert r["nas_polled"] == 0
+
+
+def test_jump_host_router_skipped_with_distinct_counter(db_session):
+    _, nas = _nas_node(db_session, "Remote Access", api_url=None)
+    _router_for(
+        db_session,
+        nas,
+        "remote-rtr",
+        access_method=RouterAccessMethod.jump_host,
+    )
+
+    r = poll_all(
+        db_session,
+        read_neighbors=_raise_nas_read,
+        read_router_neighbors=_raise_nas_read,
+        now=NOW,
+    )
+    assert r["skipped_jump_host"] == 1
+    assert r["skipped_no_creds"] == 0
+    assert r["nas_failed"] == 0
+    assert r["nas_polled"] == 0
+
+
+def test_router_fallback_failure_isolated(db_session):
+    ok, nas_ok = _nas_node(db_session, "OK Access")  # NAS path, api_url set
+    bad, nas_bad = _nas_node(db_session, "Karsana Access", api_url=None)
+    _router_for(db_session, nas_bad, "karsana-rtr")
+    _plain(db_session, "GBB")
+
+    def router_read(router):
+        raise OSError("unreachable via router")
+
+    r = poll_all(
+        db_session,
+        read_neighbors=lambda nas: [{"identity": "GBB", "interface": "sfp1"}],
+        read_router_neighbors=router_read,
+        now=NOW,
+    )
+    assert r["nas_failed"] == 1  # router-path failure isolated, run continues
+    assert r["nas_polled"] == 1
+    assert r["via_nas"] == 1
+    assert r["created"] == 1
+
+
+# --- Soft time limit + wall-clock budget --------------------------------------
+
+
+def test_soft_time_limit_propagates_from_nas_read(db_session):
+    _nas_node(db_session, "SPDC Access")
+
+    def reader(nas):
+        raise SoftTimeLimitExceeded()
+
+    with pytest.raises(SoftTimeLimitExceeded):
+        poll_all(db_session, read_neighbors=reader, now=NOW)
+
+
+def test_soft_time_limit_propagates_from_router_read(db_session):
+    _, nas = _nas_node(db_session, "SPDC Access", api_url=None)
+    _router_for(db_session, nas, "spdc-rtr")
+
+    def router_read(router):
+        raise SoftTimeLimitExceeded()
+
+    with pytest.raises(SoftTimeLimitExceeded):
+        poll_all(
+            db_session,
+            read_neighbors=_raise_nas_read,
+            read_router_neighbors=router_read,
+            now=NOW,
+        )
+
+
+def test_time_budget_exhaustion_skips_remainder_without_failing(db_session):
+    _nas_node(db_session, "A Access")
+    _nas_node(db_session, "B Access")
+    _plain(db_session, "GBB")
+
+    def reader(nas):
+        time.sleep(0.05)
+        return [{"identity": "GBB", "interface": "sfp1"}]
+
+    r = poll_all(db_session, read_neighbors=reader, now=NOW, time_budget_seconds=0.02)
+    assert r["nas_polled"] == 1  # first device attempted before budget tripped
+    assert r["skipped_time_budget"] == 1  # remainder skipped, not failed
+    assert r["nas_failed"] == 0
+    assert r["created"] == 1  # run still reconciles what it saw
+
+
+def test_router_read_uses_discovery_grade_tunables(monkeypatch):
+    from app.services.router_management.connection import RouterConnectionService
+
+    captured = {}
+
+    def fake_execute(router, method, path, payload=None, **kwargs):
+        captured.update(kwargs, method=method, path=path)
+        return []
+
+    monkeypatch.setattr(RouterConnectionService, "execute", fake_execute)
+    out = lldp_poller._read_ip_neighbors_via_router(object())
+    assert out == []
+    assert captured["method"] == "GET"
+    assert captured["path"] == "/ip/neighbor"
+    assert captured["max_retries"] == 1
+    assert captured["read_timeout"] <= 15.0
+    assert captured["connect_timeout"] <= 5.0
