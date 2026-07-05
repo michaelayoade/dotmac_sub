@@ -172,6 +172,56 @@ def test_connect_handles_none_pool(monkeypatch):
     assert conn._connection is None
 
 
+def test_connect_drains_pool_when_construction_times_out(monkeypatch):
+    """Door #2: pool construction outruns the connect() timeout.
+
+    When wait_for times out, the constructor thread keeps running and logs in,
+    creating a session with no reference to release it. connect() must schedule
+    a background drain that disconnects that late-born session so it is not
+    orphaned on the router.
+    """
+    disconnect_calls = []
+
+    class _Pool:
+        def __init__(self, host, **kwargs):
+            # Construction "succeeds" after the timeout -> session established.
+            pass
+
+        def get_api(self):
+            return object()
+
+        def disconnect(self):
+            disconnect_calls.append(True)
+
+    monkeypatch.setattr(mikrotik_poller, "RouterOsApiPool", _Pool)
+
+    async def _timeout_wait_for(awaitable, timeout):
+        # Simulate the construction wait_for timing out while the underlying
+        # (shielded) executor future keeps running to completion.
+        raise TimeoutError
+
+    monkeypatch.setattr(mikrotik_poller.asyncio, "wait_for", _timeout_wait_for)
+
+    async def _scenario():
+        conn = MikroTikConnection(
+            device_id=uuid4(),
+            host="192.0.2.10",
+            username="admin",
+            password="secret",
+        )
+        result = await conn.connect()
+        # Let the background drain finish releasing the late-born session.
+        if conn._drain_tasks:
+            await asyncio.gather(*list(conn._drain_tasks))
+        return result, conn
+
+    result, conn = _run_async(_scenario())
+    assert result is False
+    assert disconnect_calls == [True]
+    assert conn._pool is None
+    assert conn._connection is None
+
+
 def test_sanitize_exc_names_blank_exceptions_and_redacts_password():
     assert _sanitize_exc(TimeoutError()) == "TimeoutError"
     assert (

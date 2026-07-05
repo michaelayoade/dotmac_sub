@@ -157,6 +157,9 @@ class MikroTikConnection:
         self._last_connected: datetime | None = None
         self._last_attempt: datetime | None = None
         self._consecutive_failures: int = 0
+        # Background tasks that disconnect pools whose construction was still
+        # in-flight when connect() timed out. Held so asyncio does not GC them.
+        self._drain_tasks: set[asyncio.Task] = set()
 
     async def connect(self) -> bool:
         """Establish connection to the device."""
@@ -179,22 +182,36 @@ class MikroTikConnection:
             # ssl_verify stays off for now (encrypted but unverified) — cert
             # verification is a later step once the routers have trusted certs.
             use_ssl = self.port == 8729
-            pool = await asyncio.wait_for(
-                loop.run_in_executor(
-                    None,
-                    lambda: RouterOsApiPool(
-                        self.host,
-                        username=self.username,
-                        password=self.password,
-                        port=self.port,
-                        plaintext_login=True,
-                        use_ssl=use_ssl,
-                        ssl_verify=False,
-                        ssl_verify_hostname=False,
-                    ),
+            # Keep the executor future so that if wait_for TIMES OUT (the pool
+            # is not built yet at that instant, so it cannot be released from
+            # the except block below), we can still disconnect the session that
+            # the thread goes on to establish. shield() stops wait_for from
+            # cancelling the underlying future, keeping it awaitable for the
+            # drain. This closes the second door to the same session leak.
+            construct_future = loop.run_in_executor(
+                None,
+                lambda: RouterOsApiPool(
+                    self.host,
+                    username=self.username,
+                    password=self.password,
+                    port=self.port,
+                    plaintext_login=True,
+                    use_ssl=use_ssl,
+                    ssl_verify=False,
+                    ssl_verify_hostname=False,
                 ),
-                timeout=DEVICE_IO_TIMEOUT_SEC + 3,
             )
+            try:
+                pool = await asyncio.wait_for(
+                    asyncio.shield(construct_future),
+                    timeout=DEVICE_IO_TIMEOUT_SEC + 3,
+                )
+            except BaseException:
+                # The construction thread may still finish (and log in) after
+                # this timeout/cancellation; drain that late session instead of
+                # orphaning it. connect() still returns promptly.
+                self._drain_pool_future(loop, construct_future)
+                raise
             self._pool = pool
             if pool is None:
                 await self._release_pool(loop, pool)
@@ -233,6 +250,29 @@ class MikroTikConnection:
             logger.warning(
                 f"Error releasing orphaned pool for {self.host}: {_sanitize_exc(e)}"
             )
+
+    def _drain_pool_future(self, loop, construct_future) -> None:
+        """Disconnect a pool whose construction outran a connect() timeout.
+
+        The RouterOsApiPool constructor opens the socket and logs in. If
+        wait_for timed out before it returned, the executor thread keeps going
+        and establishes a session with no reference to release it. This awaits
+        that in-flight future in the background and disconnects the resulting
+        pool, so the session is not orphaned. Fire-and-forget: connect() has
+        already returned False by the time this runs.
+        """
+
+        async def _drain() -> None:
+            try:
+                pool = await construct_future
+            except Exception:
+                # Construction ultimately failed → no session was established.
+                return
+            await self._release_pool(loop, pool)
+
+        task = loop.create_task(_drain())
+        self._drain_tasks.add(task)
+        task.add_done_callback(self._drain_tasks.discard)
 
     async def disconnect(self):
         """Close the connection."""
