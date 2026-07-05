@@ -213,6 +213,118 @@ class TestRegisterRadioMac:
 
 
 # ---------------------------------------------------------------------------
+# Per-MAC advisory lock: check-then-write is serialized (race guard)
+# ---------------------------------------------------------------------------
+
+
+class TestMacLock:
+    def test_lock_key_is_deterministic_and_fits_signed_bigint(self):
+        key_a = radio_registration.mac_lock_key(MAC_COMPACT)
+        key_b = radio_registration.mac_lock_key(MAC_COMPACT)
+        assert key_a == key_b  # sha256-based, stable across processes
+        assert -(2**63) <= key_a < 2**63
+        assert key_a != radio_registration.mac_lock_key("aabbccddeeff")
+
+    def test_acquire_emits_pg_advisory_xact_lock_on_postgres(self):
+        from unittest.mock import MagicMock
+
+        db = MagicMock()
+        db.bind.dialect.name = "postgresql"
+
+        radio_registration.acquire_mac_lock(db, MAC_COMPACT)
+
+        assert db.execute.call_count == 1
+        statement, params = db.execute.call_args.args
+        assert "pg_advisory_xact_lock" in str(statement)
+        assert params == {"key": radio_registration.mac_lock_key(MAC_COMPACT)}
+
+    def test_acquire_is_noop_on_sqlite(self, db_session):
+        # Must not raise (SQLite has no advisory locks; single-writer anyway).
+        assert radio_registration.acquire_mac_lock(db_session, MAC_COMPACT) is None
+
+    def test_register_reads_after_lock_sees_concurrent_winner(
+        self, db_session, subscriber, catalog_offer, monkeypatch
+    ):
+        """The idempotency check runs AFTER the lock is acquired.
+
+        Simulates losing the race: while this request waits on the per-MAC
+        lock, a concurrent identical registration commits its row. When the
+        lock is granted, the existence check must observe that row and return
+        it (created=False) instead of inserting a duplicate.
+        """
+        subscription = _subscription(db_session, subscriber, catalog_offer)
+
+        def _lock_granted_after_competitor_won(db, mac_compact):
+            db.add(
+                CPEDevice(
+                    subscriber_id=subscriber.id,
+                    device_type=DeviceType.wireless_radio,
+                    mac_address=MAC,
+                )
+            )
+            db.flush()
+
+        monkeypatch.setattr(
+            radio_registration,
+            "acquire_mac_lock",
+            _lock_granted_after_competitor_won,
+        )
+
+        result = radio_registration.register_radio_mac(
+            db_session, subscription_id=str(subscription.id), mac=MAC
+        )
+
+        assert result.created is False
+        assert (
+            db_session.query(CPEDevice)
+            .filter(CPEDevice.subscriber_id == subscriber.id)
+            .count()
+            == 1
+        )
+
+    def test_open_item_reads_after_lock_sees_concurrent_ticket(
+        self, db_session, monkeypatch
+    ):
+        """open_item's find-then-create runs under the same per-MAC lock."""
+        from app.models.support import Ticket, TicketChannel, TicketStatus
+
+        def _lock_granted_after_competitor_won(db, mac_compact):
+            db.add(
+                Ticket(
+                    title="competitor",
+                    status=TicketStatus.open.value,
+                    channel=TicketChannel.api,
+                    ticket_type=unmatched_radio_queue.TICKET_TYPE,
+                    metadata_={"radio_mac": mac_compact, "occurrences": 1},
+                )
+            )
+            db.flush()
+
+        monkeypatch.setattr(
+            radio_registration,
+            "acquire_mac_lock",
+            _lock_granted_after_competitor_won,
+        )
+
+        ticket, created = unmatched_radio_queue.open_item(
+            db_session,
+            mac_compact=MAC_COMPACT,
+            reason=unmatched_radio_queue.REASON_NOT_ADOPTED,
+            title="t",
+            description="d",
+        )
+
+        assert created is False
+        assert ticket.title == "competitor"
+        assert (
+            db_session.query(Ticket)
+            .filter(Ticket.ticket_type == unmatched_radio_queue.TICKET_TYPE)
+            .count()
+            == 1
+        )
+
+
+# ---------------------------------------------------------------------------
 # Admin web route: registration + permission guard
 # ---------------------------------------------------------------------------
 

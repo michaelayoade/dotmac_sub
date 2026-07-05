@@ -108,6 +108,14 @@ def open_item(
     details: dict | None = None,
 ) -> tuple[Ticket, bool]:
     """Open (or bump) the single review item for a radio MAC. Flushes only."""
+    from app.services.radio_registration import acquire_mac_lock
+
+    # Same per-MAC advisory lock as radio registration (same key derivation):
+    # the find-then-create below is not atomic on its own, and concurrent
+    # detections of the same MAC must not spawn duplicate open items.
+    # Reentrant when the caller (register_radio_mac) already holds the lock.
+    acquire_mac_lock(db, mac_compact)
+
     existing = find_open_item(db, mac_compact)
     if existing is not None:
         meta = dict(existing.metadata_ or {})

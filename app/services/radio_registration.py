@@ -29,12 +29,13 @@ in tests/test_unmatched_radio_queue.py.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription, SubscriptionStatus
@@ -93,6 +94,41 @@ def _compact_mac_sql(column):
     for junk in (":", "-", ".", " "):
         expr = func.replace(expr, junk, "")
     return expr
+
+
+_MAC_LOCK_NAMESPACE = "radio_mac"
+
+
+def mac_lock_key(mac_compact: str) -> int:
+    """Stable signed-bigint advisory-lock key for a normalized MAC.
+
+    sha256-derived (NOT the builtin ``hash``, which is per-process salted) so
+    every process/worker derives the same key for the same MAC.
+    """
+    digest = hashlib.sha256(f"{_MAC_LOCK_NAMESPACE}:{mac_compact}".encode()).digest()[
+        :8
+    ]
+    return int.from_bytes(digest, byteorder="big", signed=True)
+
+
+def acquire_mac_lock(db: Session, mac_compact: str) -> None:
+    """Serialize check-then-write sections for one radio MAC.
+
+    Takes ``pg_advisory_xact_lock`` on the caller's session (released
+    automatically at commit/rollback), so a double-click on the admin form or
+    a timeout-retry from the CRM client blocks until the first transaction
+    finishes and then SEES its writes — the existence checks that follow the
+    lock stay correct under concurrency. Reentrant within a transaction.
+    No-op on non-PostgreSQL engines (SQLite tests), mirroring
+    ``locking.serial_advisory_lock``.
+    """
+    dialect_name = db.bind.dialect.name if db.bind else ""
+    if dialect_name != "postgresql":
+        return
+    db.execute(
+        text("SELECT pg_advisory_xact_lock(:key)"),
+        {"key": mac_lock_key(mac_compact)},
+    )
 
 
 def _resolve_subscription(db: Session, subscription_id: str) -> Subscription:
@@ -186,6 +222,13 @@ def register_radio_mac(
             "(e.g. 24:A4:3C:AA:BB:01)."
         )
     compact = canonical.replace(":", "").lower()
+
+    # Serialize the check-then-write below per MAC: a concurrent registration
+    # of the same MAC (form double-click, CRM client timeout-retry) waits here
+    # and then observes the first transaction's row, keeping the idempotency
+    # and conflict checks race-free. Released on the commit/rollback paths of
+    # this function.
+    acquire_mac_lock(db, compact)
 
     owners = _other_subscriber_owners(db, compact, subscription.subscriber_id)
     if owners:
