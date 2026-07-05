@@ -10,7 +10,11 @@ wireless/UFiber customer layer into sub's own tables:
     ``cpe_devices.subscriber_id`` is NOT NULL, so creation is MATCH-THEN-CREATE:
     a new radio only gets a row once its MAC resolves to exactly one subscriber
     over ACTIVE subscriptions (unmatched/ambiguous radios are counted and
-    retried naturally on later runs);
+    retried naturally on later runs). Rows pre-registered at install time
+    (``uisp_device_id`` NULL, subscriber known — see
+    ``app/services/radio_registration.py``) are ADOPTED by normalized MAC
+    before any matching/creation, so the install flow and this sync converge
+    on one row per radio;
   - UF-OLTs -> olt_devices and UFiber ONUs -> ont_units (parent resolved via
     the ONU's ``attributes.parentId``), both keyed by ``uisp_device_id``;
   - PON-port granularity for the UFiber plant: the generic ``/devices`` list
@@ -42,6 +46,7 @@ from sqlalchemy.orm import Session
 from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.network import (
     CPEDevice,
+    DeviceStatus,
     DeviceType,
     OLTDevice,
     OntUnit,
@@ -354,7 +359,9 @@ def _blank_stats() -> Counter:
             "updated": 0,
             "unchanged": 0,
             "edges_set": 0,
+            "edges_moved": 0,
             "matched": 0,
+            "adopted": 0,
             "ambiguous": 0,
             "unmatched_no_subscriber": 0,
             "skipped": 0,
@@ -365,6 +372,7 @@ def _blank_stats() -> Counter:
             "aps_unmatched": 0,
             "ports_created": 0,
             "onu_ports_set": 0,
+            "onu_ports_moved": 0,
             "onu_ports_unchanged": 0,
             "port_fetch_failures": 0,
             "links_created": 0,
@@ -374,6 +382,50 @@ def _blank_stats() -> Counter:
             "link_fetch_failures": 0,
         }
     )
+
+
+def _note_edge_move(
+    session: Session,
+    cpe: CPEDevice,
+    station: dict,
+    new_node: NetworkDevice,
+    stats: Counter,
+) -> None:
+    """Breadcrumb for a silent auto-heal: radio re-parented from one AP to another.
+
+    The sync corrects ``parent_network_device_id`` whenever UISP observes the
+    radio on a different AP — correct behavior (UISP is observed truth), but
+    otherwise completely silent. These ``logger.info`` lines flow to Loki and
+    are the only post-mortem history of when a customer's upstream path moved
+    (e.g. "why did this street's outage blast-radius change overnight?").
+    First-time parenting (old parent NULL) is a fill, not a move: no log, no
+    ``edges_moved`` count — ``edges_set`` alone covers it.
+    """
+    old_id = cpe.parent_network_device_id
+    if old_id is None or old_id == new_node.id:
+        return
+    old_node = session.get(NetworkDevice, old_id)
+    old_name = old_node.name if old_node is not None else None
+    logger.info(
+        "uisp_sync_edge_moved device=%s uisp_id=%s old_parent=%s old_parent_id=%s "
+        "new_parent=%s new_parent_id=%s",
+        _device_name(station),
+        cpe.uisp_device_id,
+        old_name,
+        old_id,
+        new_node.name,
+        new_node.id,
+        extra={
+            "event": "uisp_sync_edge_moved",
+            "device_name": _device_name(station),
+            "uisp_device_id": cpe.uisp_device_id,
+            "old_parent_id": str(old_id),
+            "old_parent_name": old_name,
+            "new_parent_id": str(new_node.id),
+            "new_parent_name": new_node.name,
+        },
+    )
+    stats["edges_moved"] += 1
 
 
 def _station_parent_ap_id(station: dict) -> str | None:
@@ -417,6 +469,33 @@ def _ap_side_station_index(
     return by_station_id, by_station_mac
 
 
+def _adoption_candidates(session: Session, mac: str | None) -> list[CPEDevice]:
+    """Pre-registered install-time cpe rows adoptable by a station's MAC.
+
+    The install-time capture flow (``radio_registration.register_radio_mac``,
+    PR #807) creates cpe rows with the subscriber known and ``uisp_device_id``
+    NULL, expecting this sync to ADOPT the row once UISP first reports the
+    radio. Safety scope: wireless radios only, never a row already bound to a
+    (different) UISP device, never a retired tombstone (the hourly
+    unmatched-radio review retires superseded placeholders). MAC comparison
+    is on the normalized bare-hex form — stored values may be canonical
+    colon-separated or free-form legacy.
+    """
+    if not mac:
+        return []
+    rows = (
+        session.query(CPEDevice)
+        .filter(
+            CPEDevice.uisp_device_id.is_(None),
+            CPEDevice.device_type == DeviceType.wireless_radio,
+            CPEDevice.status != DeviceStatus.retired,
+            CPEDevice.mac_address.isnot(None),
+        )
+        .all()
+    )
+    return [row for row in rows if _norm_mac(row.mac_address) == mac]
+
+
 def _upsert_station(
     session: Session,
     station: dict,
@@ -426,13 +505,26 @@ def _upsert_station(
 ) -> tuple[CPEDevice | None, bool]:
     """Upsert one wireless customer radio into cpe_devices by uisp_device_id.
 
-    MATCH-THEN-CREATE: ``cpe_devices.subscriber_id`` is NOT NULL in the
-    production schema, so a new row may only be created once its owner is
-    known. A new station's MAC is resolved against ACTIVE subscriptions
-    FIRST (exact match, exactly one distinct subscriber); no confirmed match
-    (none, or ambiguous) creates nothing — the radio is picked up on a later
-    run once a matching subscription exists. Existing rows keep updating as
-    before and their ``subscriber_id`` is never touched.
+    ADOPT-THEN-MATCH-THEN-CREATE: ``cpe_devices.subscriber_id`` is NOT NULL
+    in the production schema, so a new row may only be created once its owner
+    is known.
+
+    1. ADOPT (install-time contract, PR #807): the field flow pre-registers a
+       radio at turn-up as a cpe row with ``subscriber_id`` set and
+       ``uisp_device_id`` NULL. When the uisp-id lookup misses, a single such
+       row whose normalized MAC equals the station's is adopted in place —
+       ``uisp_device_id`` stamped, ``subscriber_id`` never touched, counted
+       as ``adopted`` — instead of creating a duplicate. Multiple candidates
+       for one MAC are genuinely ambiguous: nothing is adopted or created
+       (``ambiguous``), because inventing a third row would compound the
+       duplication.
+    2. MATCH-THEN-CREATE (unchanged): a new station's MAC is resolved against
+       ACTIVE subscriptions (exact match, exactly one distinct subscriber);
+       no confirmed match (none, or ambiguous) creates nothing — the radio is
+       picked up on a later run once a matching subscription exists.
+
+    Existing rows keep updating as before and their ``subscriber_id`` is
+    never touched.
     """
     uisp_id = _device_id(station)
     cpe = (
@@ -440,10 +532,28 @@ def _upsert_station(
         .filter(CPEDevice.uisp_device_id == uisp_id)
         .one_or_none()
     )
-    created = cpe is None
+    created = False
+    adopted = False
     changed = False
     if cpe is None:
         mac = _norm_mac(_ident(station).get("mac"))
+        candidates = _adoption_candidates(session, mac)
+        if len(candidates) > 1:
+            logger.warning(
+                "uisp_sync_adoption_ambiguous uisp_id=%s mac=%s candidates=%d",
+                uisp_id,
+                mac,
+                len(candidates),
+            )
+            stats["ambiguous"] += 1
+            return None, False
+        if candidates:
+            cpe = candidates[0]
+            cpe.uisp_device_id = uisp_id
+            adopted = True
+            changed = True
+            stats["adopted"] += 1
+    if cpe is None:
         subscribers = mac_index.get(mac or "", set())
         if len(subscribers) > 1:
             stats["ambiguous"] += 1
@@ -451,6 +561,7 @@ def _upsert_station(
         if len(subscribers) != 1:
             stats["unmatched_no_subscriber"] += 1
             return None, False
+        created = True
         cpe = CPEDevice(
             uisp_device_id=uisp_id,
             subscriber_id=next(iter(subscribers)),
@@ -479,6 +590,9 @@ def _upsert_station(
     session.flush()
     if created:
         stats["created"] += 1
+    elif adopted:
+        # Already counted as ``adopted``; not an update of a synced row.
+        pass
     elif changed:
         stats["updated"] += 1
     else:
@@ -750,6 +864,7 @@ def _ensure_pon_ports(
 
 
 def _apply_onu_pon_port(
+    session: Session,
     ont: OntUnit,
     device: dict,
     olt_ids_by_uisp: dict[str, UUID],
@@ -765,6 +880,12 @@ def _apply_onu_pon_port(
     OLT from this run; an ONT row whose ``olt_device_id`` points elsewhere
     (e.g. a Huawei OLT) is never touched. Missing port info leaves the field
     as-is.
+
+    A move (existing non-NULL port -> different port) is an otherwise-silent
+    auto-heal, so it leaves a breadcrumb: the ``logger.info`` line below flows
+    to Loki and is the only post-mortem history of re-splices/port drift.
+    First-time stamping (old port NULL) is a fill, not a move: no log, no
+    ``onu_ports_moved`` count — ``onu_ports_set`` alone covers it.
     """
     port_number = onu_ports_by_uisp.get(_device_id(device))
     if port_number is None:
@@ -776,6 +897,30 @@ def _apply_onu_pon_port(
     if port_id is None:
         return
     if ont.pon_port_id != port_id:
+        old_port_id = ont.pon_port_id
+        if old_port_id is not None:
+            old_port = session.get(PonPort, old_port_id)
+            old_port_name = old_port.name if old_port is not None else None
+            logger.info(
+                "uisp_sync_onu_pon_port_moved onu=%s uisp_id=%s old_port=%s "
+                "old_port_id=%s new_port=%s new_port_id=%s",
+                ont.name or ont.serial_number,
+                ont.uisp_device_id,
+                old_port_name,
+                old_port_id,
+                f"pon{port_number}",
+                port_id,
+                extra={
+                    "event": "uisp_sync_onu_pon_port_moved",
+                    "device_name": ont.name or ont.serial_number,
+                    "uisp_device_id": ont.uisp_device_id,
+                    "old_port_id": str(old_port_id),
+                    "old_port_name": old_port_name,
+                    "new_port_id": str(port_id),
+                    "new_port_number": port_number,
+                },
+            )
+            stats["onu_ports_moved"] += 1
         ont.pon_port_id = port_id
         stats["onu_ports_set"] += 1
     else:
@@ -957,6 +1102,7 @@ def sync(session: Session, client, now: datetime | None = None) -> dict:
                 )
                 node = ap_nodes.get(parent_ap_id) if parent_ap_id else None
                 if node is not None and cpe.parent_network_device_id != node.id:
+                    _note_edge_move(session, cpe, station, node, stats)
                     cpe.parent_network_device_id = node.id
                     stats["edges_set"] += 1
                 session.flush()
@@ -994,6 +1140,7 @@ def sync(session: Session, client, now: datetime | None = None) -> dict:
                 )
                 if ont is not None:
                     _apply_onu_pon_port(
+                        session,
                         ont,
                         device,
                         olt_ids_by_uisp,

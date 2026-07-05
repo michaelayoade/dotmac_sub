@@ -6,13 +6,15 @@ data in the external CRM system.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
 import os
 import threading
 import time
-from typing import Any, cast
+from datetime import datetime
+from typing import Any, ClassVar, cast
 
 import httpx
 from sqlalchemy.orm import Session
@@ -151,6 +153,11 @@ class CRMClient:
         self.settings_db = settings_db
         self._token: str | None = None
         self._token_expires_at: float = 0
+        # Cache of minted read-union portal tokens, keyed by (subscriber, actor),
+        # so the four mirror reconcilers reuse one token per subscriber per cycle
+        # instead of minting four (P4). Value: (token, epoch_expiry).
+        self._portal_read_tokens: dict[tuple[str, str], tuple[str, float]] = {}
+        self._portal_token_lock = threading.RLock()
 
     @property
     def cache_list_ttl(self) -> int:
@@ -680,6 +687,65 @@ class CRMClient:
             raise CRMClientError("portal token mint returned an empty token")
         return token
 
+    # The read scopes the four mirror reconcilers collectively need. Minting one
+    # token with the union lets a subscriber's referrals/projects/work-orders/
+    # quotes reads share it, instead of four separate single-scope mints.
+    _PORTAL_READ_SCOPES: ClassVar[list[str]] = [
+        "referrals:read",
+        "projects:read",
+        "work_orders:read",
+        "quotes:read",
+    ]
+
+    @staticmethod
+    def _portal_token_ttl_expiry(minted: dict, now: float) -> float:
+        """Epoch time until which a minted portal token may be cached.
+
+        Uses the token's own ``expires_at`` (epoch or ISO-8601) minus a 30s skew
+        buffer; falls back to a conservative 60s when it can't be parsed.
+        """
+        raw = minted.get("expires_at")
+        exp: float | None = None
+        if isinstance(raw, (int, float)):
+            exp = float(raw)
+        elif isinstance(raw, str) and raw:
+            with contextlib.suppress(ValueError):
+                exp = datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()
+        if exp is None:
+            return now + 60.0
+        return exp - 30.0
+
+    def _portal_read_token(
+        self, crm_subscriber_id: str, actor: str = "subscriber"
+    ) -> str:
+        """A cached read-union portal token for a subscriber (P4).
+
+        Reused across the four mirror reconcilers so one subscriber costs one
+        mint per cycle, not four. Thread-safe; re-mints once the cached token
+        nears expiry.
+        """
+        key = (crm_subscriber_id, actor)
+        now = time.time()
+        with self._portal_token_lock:
+            cached = self._portal_read_tokens.get(key)
+            if cached and cached[1] > now:
+                return cached[0]
+
+        minted = self.create_portal_session(
+            crm_subscriber_id=crm_subscriber_id,
+            actor=actor,
+            scopes=self._PORTAL_READ_SCOPES,
+        )
+        token = str(minted.get("portal_token") or "")
+        if not token:
+            raise CRMClientError("portal token mint returned an empty token")
+        with self._portal_token_lock:
+            self._portal_read_tokens[key] = (
+                token,
+                self._portal_token_ttl_expiry(minted, now),
+            )
+        return token
+
     def get_portal_referrals(self, crm_subscriber_id: str) -> dict[str, Any]:
         """Read a subscriber's referrals from the CRM Portal API (server-side).
 
@@ -687,7 +753,7 @@ class CRMClient:
         per-request ``Authorization`` overrides the service token). Used by the
         local-mirror reconcile, not the customer's own request path.
         """
-        token = self._portal_token(crm_subscriber_id, ["referrals:read"])
+        token = self._portal_read_token(crm_subscriber_id)
         data = self._request(
             "GET",
             "/api/v1/portal/referrals",
@@ -698,7 +764,7 @@ class CRMClient:
     def get_portal_projects(self, crm_subscriber_id: str) -> dict[str, Any]:
         """Read a subscriber's projects (with derived stages/progress) from the
         CRM Portal API (server-side). Used by the local-mirror reconcile."""
-        token = self._portal_token(crm_subscriber_id, ["projects:read"])
+        token = self._portal_read_token(crm_subscriber_id)
         data = self._request(
             "GET",
             "/api/v1/portal/projects",
@@ -709,7 +775,7 @@ class CRMClient:
     def get_portal_work_orders(self, crm_subscriber_id: str) -> dict[str, Any]:
         """Read a subscriber's work orders (technician, schedule, ETA, status)
         from the CRM Portal API (server-side). Used by the local-mirror reconcile."""
-        token = self._portal_token(crm_subscriber_id, ["work_orders:read"])
+        token = self._portal_read_token(crm_subscriber_id)
         data = self._request(
             "GET",
             "/api/v1/portal/work-orders",
@@ -786,7 +852,7 @@ class CRMClient:
     def get_portal_quotes(self, crm_subscriber_id: str) -> dict[str, Any]:
         """Read a subscriber's self-serve quotes (feasibility, estimate, deposit,
         status) from the CRM Portal API (server-side). Used by the mirror reconcile."""
-        token = self._portal_token(crm_subscriber_id, ["quotes:read"])
+        token = self._portal_read_token(crm_subscriber_id)
         data = self._request(
             "GET",
             "/api/v1/portal/quotes",

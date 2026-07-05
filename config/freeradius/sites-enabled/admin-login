@@ -15,11 +15,15 @@ clients admin_clients {
         ipaddr = 160.119.124.0/22
         secret = $ENV{ADMIN_RADIUS_SECRET}
         nas_type = other
+        require_message_authenticator = no
+        limit_proxy_state = no
     }
     client lagos_mgmt {
         ipaddr = 102.220.188.0/22
         secret = $ENV{ADMIN_RADIUS_SECRET}
         nas_type = other
+        require_message_authenticator = no
+        limit_proxy_state = no
     }
 }
 

@@ -430,3 +430,64 @@ def test_admin_labels_switched_to_topology():
     assert (
         '"label": "Network Topology", "url": "/admin/network/topology"' in design_system
     )
+
+
+def test_topology_graph_edges_carry_status_and_nodes_carry_role(db_session):
+    src = NetworkDevice(
+        name="Core X", role=DeviceRole.core, status=DeviceStatus.online, is_active=True
+    )
+    dst = NetworkDevice(
+        name="Edge X", role=DeviceRole.edge, status=DeviceStatus.online, is_active=True
+    )
+    db_session.add_all([src, dst])
+    db_session.flush()
+    topology_service.topology_links.create(
+        db_session,
+        data={
+            "source_device_id": str(src.id),
+            "target_device_id": str(dst.id),
+            "link_role": "uplink",
+            "medium": "fiber",
+        },
+    )
+
+    graph = topology_service.list_nodes_and_edges(db_session)
+
+    assert graph["edges"], "expected the created link to appear as an edge"
+    assert graph["edges"][0]["status"] == "up"  # enabled, active, no stale signal
+    roles = {node["role"] for node in graph["nodes"]}
+    assert {"core", "edge"} <= roles
+
+
+def test_derive_link_status_covers_admin_and_staleness():
+    from datetime import UTC, datetime, timedelta
+    from types import SimpleNamespace
+
+    from app.models.network_monitoring import TopologyLinkAdminStatus
+    from app.services.network_topology import _LINK_STALE_SECONDS, _derive_link_status
+
+    now = datetime(2026, 7, 5, 12, 0, tzinfo=UTC)
+
+    def link(admin, *, active=True, seen=now):
+        return SimpleNamespace(admin_status=admin, is_active=active, last_seen_at=seen)
+
+    assert _derive_link_status(link(TopologyLinkAdminStatus.enabled), now) == "up"
+    assert _derive_link_status(link(TopologyLinkAdminStatus.disabled), now) == "down"
+    assert (
+        _derive_link_status(link(TopologyLinkAdminStatus.enabled, active=False), now)
+        == "down"
+    )
+    assert (
+        _derive_link_status(link(TopologyLinkAdminStatus.maintenance), now)
+        == "degraded"
+    )
+    stale = now - timedelta(seconds=_LINK_STALE_SECONDS + 60)
+    assert (
+        _derive_link_status(link(TopologyLinkAdminStatus.enabled, seen=stale), now)
+        == "degraded"
+    )
+    # manual links (no last_seen_at) are never stale-degraded
+    assert (
+        _derive_link_status(link(TopologyLinkAdminStatus.enabled, seen=None), now)
+        == "up"
+    )

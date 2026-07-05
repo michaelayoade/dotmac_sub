@@ -286,6 +286,9 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.topology_lldp.run_lldp_topology_poll": _c(
         "network", SWEEP, IDEMP, HEALTH
     ),
+    "app.tasks.topology_metrics.export_topology_metrics": _c(
+        "network", SWEEP, IDEMP, HEALTH
+    ),
     "app.tasks.topology_sync.run_topology_reconcile": _c(
         "network", SWEEP, IDEMP, HEALTH
     ),
