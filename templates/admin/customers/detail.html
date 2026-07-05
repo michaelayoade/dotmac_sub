@@ -16,7 +16,7 @@
 <div x-data="customerDetail()" class="space-y-6">
     {% if map_data %}
     <!-- Leaflet CSS for mini-map -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css"
           integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="">
     <style>
         #customer-mini-map { height: 200px; }
@@ -3006,7 +3006,7 @@ function customerDetail(config = {}) {
 </script>
 
 {% if map_data %}
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+<script src="/static/vendor/leaflet/leaflet.js"
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <script>
 (function() {

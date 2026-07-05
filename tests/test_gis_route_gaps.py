@@ -104,7 +104,7 @@ def test_gis_dashboard_template_surfaces_sync_status() -> None:
 def test_area_form_template_includes_inline_polygon_editor() -> None:
     template = Path("templates/admin/gis/area_form.html").read_text()
     assert 'id="areaEditorMap"' in template
-    assert "leaflet-draw" in template
+    assert "/static/vendor/leaflet/leaflet.draw.js" in template
     assert "syncTextarea()" in template
     assert "type: 'MultiPolygon'" in template
     assert "geometry.type === 'MultiPolygon'" in template
