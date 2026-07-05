@@ -53,3 +53,43 @@ def test_reward_unknown_subscriber_raises_lookup(db_session):
             amount=Decimal("100"),
             external_ref="referral:x",
         )
+
+
+def test_credit_endpoint_requires_external_ref(db_session):
+    """Without external_ref the wallet entry reference is NULL (unconstrained),
+    so a retry would double-credit. The endpoint must reject it."""
+    from fastapi import HTTPException
+
+    from app.api.crm import create_crm_credit
+
+    sub = _subscriber(db_session)
+    with pytest.raises(HTTPException) as exc:
+        create_crm_credit(
+            payload={"subscriber_id": str(sub.id), "amount": "5000"},
+            db=db_session,
+        )
+    assert exc.value.status_code == 400
+    assert "external_ref" in str(exc.value.detail)
+
+
+def test_credit_integrity_error_reraised_when_no_existing_row(db_session, monkeypatch):
+    """If credit_wallet raises IntegrityError but no matching entry can be found
+    on re-query, the error is not swallowed (only a genuine duplicate is)."""
+    from sqlalchemy.exc import IntegrityError
+
+    from app.services import vas_wallet
+
+    sub = _subscriber(db_session)
+
+    def boom(db, wallet, **kw):
+        raise IntegrityError("some other constraint", {}, Exception())
+
+    monkeypatch.setattr(vas_wallet, "credit_wallet", boom)
+
+    with pytest.raises(IntegrityError):
+        crm_api.credit_referral_reward_to_wallet(
+            db_session,
+            subscriber_id=str(sub.id),
+            amount=Decimal("5000"),
+            external_ref="referral:no-existing",
+        )
