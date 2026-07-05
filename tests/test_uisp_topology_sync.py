@@ -1311,3 +1311,208 @@ def test_vanished_data_link_is_soft_pruned(db_session):
     )
     assert link.is_active is False
     assert result["links_pruned"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Secondary arm: bridge-mode radios linked by corroborated IP+name
+# (never reads or writes subscription.mac_address — RADIUS-auth-safe)
+# ---------------------------------------------------------------------------
+
+# A stale radio mgmt IP that, in the production dry-run, collided with a
+# DIFFERENT active customer by IP alone. The station's OWN MAC (below) never
+# matches any subscription MAC — bridge-mode subs authenticate on the customer
+# router's MAC, held in subscription.mac_address, a different device.
+BRIDGE_IP = "172.16.131.185"
+ROUTER_MAC = "AA:BB:CC:DD:EE:FF"  # customer router MAC on the subscription
+
+
+def _bridge_payload(station_name, station_ip, station_mac=STATION_MAC):
+    ap = _device(
+        AP_ID,
+        "AP-GARKI-SECTOR1",
+        role="ap",
+        ip="172.16.40.2/24",
+        mac="24:A4:3C:00:00:01",
+        site_id="site-bts-1",
+    )
+    station = _device(
+        STATION_ID,
+        station_name,
+        role="station",
+        mac=station_mac,
+        ip=station_ip,
+        ap_device_id=AP_ID,
+    )
+    return [ap, station]
+
+
+def _active_sub_with_ip(db_session, subscriber, catalog_offer, ipv4, mac=ROUTER_MAC):
+    subscription = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=catalog_offer.id,
+        status=SubscriptionStatus.active,
+        ipv4_address=ipv4,
+        mac_address=mac,
+    )
+    db_session.add(subscription)
+    db_session.flush()
+    return subscription
+
+
+def test_ip_name_corroborated_links_bridge_radio(db_session, subscriber, catalog_offer):
+    # Unique ACTIVE ipv4 == station mgmt IP AND the names agree: the row is
+    # created for that subscriber, with the AP edge and provenance note — and
+    # the subscription's (router) MAC is left completely untouched.
+    node = _ap_node(db_session)
+    subscriber.display_name = "Pro Alpha Ltd"
+    db_session.flush()
+    subscription = _active_sub_with_ip(db_session, subscriber, catalog_offer, BRIDGE_IP)
+    client = FakeUispClient(devices=_bridge_payload("Pro-Alpha Ltd", BRIDGE_IP))
+
+    result = sync(db_session, client)
+
+    cpe = (
+        db_session.query(CPEDevice).filter(CPEDevice.uisp_device_id == STATION_ID).one()
+    )
+    assert cpe.subscriber_id == subscriber.id
+    assert cpe.mac_address == STATION_MAC  # the RADIO's own MAC, not the router
+    assert cpe.device_type == DeviceType.wireless_radio
+    assert cpe.parent_network_device_id == node.id
+    assert f"linked via UISP ip+name {BRIDGE_IP} sim=" in (cpe.notes or "")
+    assert result["matched_by_ip_name"] == 1
+    assert result["matched"] == 0
+    assert result["created"] == 1
+    assert result["edges_set"] == 1
+    # RADIUS-auth safety: subscription.mac_address is never written.
+    db_session.refresh(subscription)
+    assert subscription.mac_address == ROUTER_MAC
+
+
+def test_ip_matches_but_name_below_threshold_creates_no_row(
+    db_session, subscriber, catalog_offer
+):
+    # The stale-IP false match from the dry-run: the radio's recorded IP now
+    # collides with a DIFFERENT customer. IP agrees but the names don't, so the
+    # name gate rejects it — no row, nothing linked, subscription MAC untouched.
+    _ap_node(db_session)
+    subscriber.display_name = "Hajia Hassana Mohammed"
+    db_session.flush()
+    subscription = _active_sub_with_ip(db_session, subscriber, catalog_offer, BRIDGE_IP)
+    client = FakeUispClient(devices=_bridge_payload("Pro-Alpha Ltd", BRIDGE_IP))
+
+    result = sync(db_session, client)
+
+    assert db_session.query(CPEDevice).count() == 0
+    assert result["matched_by_ip_name"] == 0
+    assert result["unmatched_no_subscriber"] == 1
+    db_session.refresh(subscription)
+    assert subscription.mac_address == ROUTER_MAC
+
+
+def test_ip_shared_by_two_active_subs_creates_no_row(
+    db_session, subscriber, catalog_offer
+):
+    # A reassigned PPPoE IP now sits on two ACTIVE subscribers: the IP is
+    # ambiguous and dropped from the index, so even a perfect name match can't
+    # link it (zero or >1 IP matches -> skip).
+    _ap_node(db_session)
+    subscriber.display_name = "Pro Alpha Ltd"
+    db_session.flush()
+    other = Subscriber(
+        first_name="Pro",
+        last_name="Alpha",
+        email=f"other-{uuid.uuid4().hex[:8]}@example.test",
+    )
+    db_session.add(other)
+    db_session.flush()
+    _active_sub_with_ip(
+        db_session, subscriber, catalog_offer, BRIDGE_IP, mac="AA:BB:CC:DD:EE:01"
+    )
+    _active_sub_with_ip(
+        db_session, other, catalog_offer, BRIDGE_IP, mac="AA:BB:CC:DD:EE:02"
+    )
+    client = FakeUispClient(devices=_bridge_payload("Pro-Alpha Ltd", BRIDGE_IP))
+
+    result = sync(db_session, client)
+
+    assert db_session.query(CPEDevice).count() == 0
+    assert result["matched_by_ip_name"] == 0
+    assert result["unmatched_no_subscriber"] == 1
+
+
+def test_mac_match_takes_precedence_over_ip_name(db_session, subscriber, catalog_offer):
+    # When the station's OWN MAC already matches an ACTIVE subscription, the MAC
+    # arm handles it: the ip+name arm is never reached, so there is no double
+    # count and no ip+name provenance note.
+    _ap_node(db_session)
+    subscriber.display_name = "Pro Alpha Ltd"
+    db_session.flush()
+    _active_sub_with_ip(
+        db_session, subscriber, catalog_offer, BRIDGE_IP, mac=STATION_MAC
+    )
+    client = FakeUispClient(devices=_bridge_payload("Pro-Alpha Ltd", BRIDGE_IP))
+
+    result = sync(db_session, client)
+
+    cpe = (
+        db_session.query(CPEDevice).filter(CPEDevice.uisp_device_id == STATION_ID).one()
+    )
+    assert cpe.subscriber_id == subscriber.id
+    assert cpe.notes is None  # created via the MAC arm, not ip+name
+    assert result["matched"] == 1
+    assert result["matched_by_ip_name"] == 0
+    assert result["created"] == 1
+
+
+def test_existing_row_is_not_relinked_by_ip_name(db_session, subscriber, catalog_offer):
+    # A row already keyed by uisp_device_id updates normally; the ip+name arm
+    # (reached only when no row exists) never fires, the operator-set owner
+    # stands, and the subscription MAC is untouched.
+    _ap_node(db_session)
+    owner = Subscriber(
+        first_name="Original",
+        last_name="Owner",
+        email=f"owner-{uuid.uuid4().hex[:8]}@example.test",
+    )
+    db_session.add(owner)
+    db_session.flush()
+    existing = CPEDevice(
+        uisp_device_id=STATION_ID,
+        subscriber_id=owner.id,
+        mac_address=STATION_MAC,
+    )
+    db_session.add(existing)
+    db_session.flush()
+    subscriber.display_name = "Pro Alpha Ltd"
+    db_session.flush()
+    subscription = _active_sub_with_ip(db_session, subscriber, catalog_offer, BRIDGE_IP)
+    client = FakeUispClient(devices=_bridge_payload("Pro-Alpha Ltd", BRIDGE_IP))
+
+    result = sync(db_session, client)
+
+    db_session.refresh(existing)
+    assert existing.subscriber_id == owner.id
+    assert result["matched_by_ip_name"] == 0
+    assert db_session.query(CPEDevice).count() == 1
+    db_session.refresh(subscription)
+    assert subscription.mac_address == ROUTER_MAC
+
+
+def test_ip_name_link_is_idempotent(db_session, subscriber, catalog_offer):
+    # Re-running makes no new rows and never re-links; the subscription MAC
+    # stays untouched across runs.
+    _ap_node(db_session)
+    subscriber.display_name = "Pro Alpha Ltd"
+    db_session.flush()
+    subscription = _active_sub_with_ip(db_session, subscriber, catalog_offer, BRIDGE_IP)
+    client = FakeUispClient(devices=_bridge_payload("Pro-Alpha Ltd", BRIDGE_IP))
+
+    first = sync(db_session, client)
+    second = sync(db_session, client)
+
+    assert first["matched_by_ip_name"] == 1
+    assert second["matched_by_ip_name"] == 0
+    assert second["unchanged"] == 1
+    assert db_session.query(CPEDevice).count() == 1
+    db_session.refresh(subscription)
+    assert subscription.mac_address == ROUTER_MAC

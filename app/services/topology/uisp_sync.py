@@ -38,6 +38,7 @@ import logging
 import re
 from collections import Counter
 from datetime import UTC, datetime
+from difflib import SequenceMatcher
 from uuid import UUID
 
 from sqlalchemy import or_
@@ -58,6 +59,7 @@ from app.models.network_monitoring import (
     NetworkTopologyLink,
     TopologyLinkMedium,
 )
+from app.models.subscriber import Subscriber
 from app.services.network.ont_status import apply_olt_status_observation
 from app.services.topology.lldp_poller import _canonical, build_device_index
 from app.services.topology.lldp_poller import _norm as _norm_label
@@ -78,6 +80,13 @@ _STATION_TYPES = {"airCube", "blackBox"}
 _SHARED_DEFAULT_IPS = {"192.168.1.1", "192.168.1.20"}
 
 _MAC_JUNK = re.compile(r"[^0-9a-f]")
+_NAME_JUNK = re.compile(r"[^a-z0-9]+")
+
+# Minimum name corroboration for the secondary IP+name link arm. A unique IP
+# hit alone is NOT trusted (RouterOS PPPoE IPs get reassigned, so a radio's
+# stale recorded mgmt IP can collide with a *different* live customer); the
+# UISP station name must also resemble the matched subscriber's name.
+_IP_NAME_SIM_THRESHOLD = 0.60
 
 
 def _now() -> datetime:
@@ -90,6 +99,46 @@ def _norm_mac(mac: str | None) -> str | None:
         return None
     normalized = _MAC_JUNK.sub("", str(mac).lower())
     return normalized if len(normalized) == 12 else None
+
+
+def _norm_name(value: str | None) -> str:
+    """Lowercase, collapse every non-alphanumeric run to a single space, trim."""
+    if not value:
+        return ""
+    return _NAME_JUNK.sub(" ", str(value).lower()).strip()
+
+
+def _name_similarity(name: str | None, candidates: list[str]) -> float:
+    """Best similarity of ``name`` to any candidate label (0.0–1.0).
+
+    Both signals are computed on the normalized (lowercase, alphanumeric-only)
+    forms and the larger wins, so either a token overlap (word-order-robust,
+    e.g. "Doe John" vs "John Doe") or a close character sequence (typos, glued
+    words) can corroborate:
+
+      - token Jaccard over the whitespace tokens, and
+      - ``SequenceMatcher`` ratio over the space-stripped compact strings.
+
+    Empty on either side scores 0.0 (an absent name never corroborates).
+    """
+    left = _norm_name(name)
+    if not left:
+        return 0.0
+    left_tokens = set(left.split())
+    left_compact = left.replace(" ", "")
+    best = 0.0
+    for candidate in candidates:
+        right = _norm_name(candidate)
+        if not right:
+            continue
+        right_tokens = set(right.split())
+        if left_tokens and right_tokens:
+            jaccard = len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
+        else:
+            jaccard = 0.0
+        ratio = SequenceMatcher(None, left_compact, right.replace(" ", "")).ratio()
+        best = max(best, jaccard, ratio)
+    return best
 
 
 def _ident(device: dict) -> dict:
@@ -290,6 +339,54 @@ def _active_subscriber_macs(session: Session) -> dict[str, set]:
     return index
 
 
+def _active_subscriber_ips(session: Session) -> dict[str, tuple[UUID, list[str]]]:
+    """Unique ``ipv4_address`` -> (subscriber id, name labels) over ACTIVE subs.
+
+    The secondary IP+name arm keys on the DESIRED served IPv4
+    (``Subscription.ipv4_address``), scoped to ACTIVE subscriptions. Because a
+    stale radio mgmt IP can collide with a *different* live customer, an IP is
+    only usable when it maps to EXACTLY ONE distinct active subscriber: IPs
+    shared across >1 subscriber are dropped here (never surfaced to the caller),
+    as are the factory-default shared addresses. Each retained entry also
+    carries the subscriber's name labels (display name, first+last, company) so
+    the caller can score name corroboration against a single candidate without
+    a second query.
+    """
+    seen: dict[str, set[UUID]] = {}
+    labels: dict[str, list[str]] = {}
+    rows = (
+        session.query(
+            Subscription.ipv4_address,
+            Subscription.subscriber_id,
+            Subscriber.display_name,
+            Subscriber.first_name,
+            Subscriber.last_name,
+            Subscriber.company_name,
+        )
+        .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
+        .filter(
+            Subscription.status == SubscriptionStatus.active,
+            Subscription.ipv4_address.isnot(None),
+        )
+        .all()
+    )
+    for ipv4, subscriber_id, display, first, last, company in rows:
+        ip = str(ipv4 or "").split("/", 1)[0].strip()
+        if not ip or ip in _SHARED_DEFAULT_IPS:
+            continue
+        seen.setdefault(ip, set()).add(subscriber_id)
+        labels[ip] = [
+            label
+            for label in (display, f"{first or ''} {last or ''}", company)
+            if _norm_name(label)
+        ]
+    return {
+        ip: (next(iter(subs)), labels[ip])
+        for ip, subs in seen.items()
+        if len(subs) == 1
+    }
+
+
 def _fill(obj, attr: str, value) -> bool:
     """Fill a NULL field only; never overwrite human-set data. True if set."""
     if value is None or value == "":
@@ -361,6 +458,7 @@ def _blank_stats() -> Counter:
             "edges_set": 0,
             "edges_moved": 0,
             "matched": 0,
+            "matched_by_ip_name": 0,
             "adopted": 0,
             "ambiguous": 0,
             "unmatched_no_subscriber": 0,
@@ -496,10 +594,36 @@ def _adoption_candidates(session: Session, mac: str | None) -> list[CPEDevice]:
     return [row for row in rows if _norm_mac(row.mac_address) == mac]
 
 
+def _match_by_ip_name(
+    station: dict, ip_index: dict[str, tuple[UUID, list[str]]]
+) -> tuple[UUID, str, float] | None:
+    """Corroborated bridge-mode match: (subscriber id, ip, score) or None.
+
+    The station's UISP mgmt IP must UNIQUELY equal one ACTIVE subscription's
+    ``ipv4_address`` (``ip_index`` already holds only unique, non-default IPs),
+    AND the UISP station name must resemble that subscriber's name at
+    ``>= _IP_NAME_SIM_THRESHOLD``. Name similarity is scored for at most the one
+    candidate the unique IP resolves to — never an all-pairs scan. Returns None
+    (skip) unless both signals hold.
+    """
+    ip = _mgmt_ip(station)
+    if not ip or ip in _SHARED_DEFAULT_IPS:
+        return None
+    entry = ip_index.get(ip)
+    if entry is None:
+        return None
+    subscriber_id, labels = entry
+    score = _name_similarity(_device_name(station), labels)
+    if score < _IP_NAME_SIM_THRESHOLD:
+        return None
+    return subscriber_id, ip, score
+
+
 def _upsert_station(
     session: Session,
     station: dict,
     mac_index: dict[str, set],
+    ip_index: dict[str, tuple[UUID, list[str]]],
     now: datetime,
     stats: Counter,
 ) -> tuple[CPEDevice | None, bool]:
@@ -518,11 +642,21 @@ def _upsert_station(
        for one MAC are genuinely ambiguous: nothing is adopted or created
        (``ambiguous``), because inventing a third row would compound the
        duplication.
-    2. MATCH-THEN-CREATE (unchanged): a new station's MAC is resolved against
-       ACTIVE subscriptions (exact match, exactly one distinct subscriber);
-       no confirmed match (none, or ambiguous) creates nothing — the radio is
-       picked up on a later run once a matching subscription exists.
+    2. MATCH-THEN-CREATE by MAC (unchanged): a new station's own MAC is
+       resolved against ACTIVE subscriptions (exact match, exactly one distinct
+       subscriber). An ambiguous MAC (>1 subscriber) creates nothing.
+    3. SECONDARY: corroborated IP+name (bridge-mode radios). Reached ONLY when
+       the MAC arm found no subscriber — bridge-mode stations authenticate with
+       the *customer router's* MAC (held in ``subscription.mac_address``), so
+       the radio's own MAC never matches a subscription and arm 2 always misses
+       for them. A row is created for the subscriber whose ACTIVE
+       ``ipv4_address`` UNIQUELY equals the station's UISP mgmt IP AND whose
+       name resembles the station name (``>= _IP_NAME_SIM_THRESHOLD``). IP alone
+       is not trusted (reassigned PPPoE IPs collide with other live customers),
+       so both signals must agree. ``subscription.mac_address`` is NEVER read or
+       written by this arm — overwriting it would risk breaking RADIUS auth.
 
+    A station whose MAC matched in arm 2 never reaches arm 3 (no double count).
     Existing rows keep updating as before and their ``subscriber_id`` is
     never touched.
     """
@@ -558,18 +692,35 @@ def _upsert_station(
         if len(subscribers) > 1:
             stats["ambiguous"] += 1
             return None, False
-        if len(subscribers) != 1:
+        if len(subscribers) == 1:
+            created = True
+            cpe = CPEDevice(
+                uisp_device_id=uisp_id,
+                subscriber_id=next(iter(subscribers)),
+                device_type=DeviceType.wireless_radio,
+                vendor="ubiquiti",
+            )
+            session.add(cpe)
+            stats["matched"] += 1
+    if cpe is None:
+        # SECONDARY ARM — the MAC found no subscriber (typical for bridge-mode
+        # radios, whose subscription authenticates on the customer router MAC).
+        # Corroborated IP+name only: a unique ACTIVE ipv4 hit AND a name match.
+        ip_match = _match_by_ip_name(station, ip_index)
+        if ip_match is None:
             stats["unmatched_no_subscriber"] += 1
             return None, False
+        subscriber_id, ip, score = ip_match
         created = True
         cpe = CPEDevice(
             uisp_device_id=uisp_id,
-            subscriber_id=next(iter(subscribers)),
+            subscriber_id=subscriber_id,
             device_type=DeviceType.wireless_radio,
             vendor="ubiquiti",
+            notes=f"linked via UISP ip+name {ip} sim={score:.2f}",
         )
         session.add(cpe)
-        stats["matched"] += 1
+        stats["matched_by_ip_name"] += 1
 
     ident = _ident(station)
     changed |= _fill(cpe, "mac_address", ident.get("mac"))
@@ -1074,6 +1225,10 @@ def sync(session: Session, client, now: datetime | None = None) -> dict:
     # cpe_devices.subscriber_id is NOT NULL, so the owner must be resolved
     # before any INSERT is attempted.
     mac_index = _active_subscriber_macs(session) if stations else {}
+    # Secondary IP+name arm index (unique ACTIVE ipv4 -> subscriber + names),
+    # built once per run like the MAC index. Reads ipv4_address only — the
+    # subscription MAC is never touched by the IP+name path.
+    ip_index = _active_subscriber_ips(session) if stations else {}
 
     # Seen = what UISP *reports*, taken from the raw inventory BEFORE the
     # upsert loop: a device whose upsert fails transiently is still present
@@ -1088,7 +1243,9 @@ def sync(session: Session, client, now: datetime | None = None) -> dict:
             # SAVEPOINT per item (the zabbix_host_sync idiom): a flush failure
             # rolls back only this device, not the surrounding transaction.
             with session.begin_nested():
-                cpe, _created = _upsert_station(session, station, mac_index, now, stats)
+                cpe, _created = _upsert_station(
+                    session, station, mac_index, ip_index, now, stats
+                )
                 if cpe is None:
                     # No confirmed subscriber match: nothing was created and
                     # the counters already say why.
