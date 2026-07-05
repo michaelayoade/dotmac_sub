@@ -279,3 +279,118 @@ def test_no_match_is_empty(db_session):
     node = _node(db_session, "orphan", "nas", uuid.uuid4())
     out = affected_customers(db_session, node=node)
     assert out["count"] == 0
+
+
+# --- Wireless arm: AP node -> subscriptions via the CPE -> AP edge ---
+
+
+def _cpe(db, subscriber_id, parent_id, uisp_status="active", **kw):
+    from app.models.network import CPEDevice
+
+    cpe = CPEDevice(
+        subscriber_id=subscriber_id,
+        parent_network_device_id=parent_id,
+        last_uisp_status=uisp_status,
+        **kw,
+    )
+    db.add(cpe)
+    db.flush()
+    return cpe
+
+
+def test_ap_node_affected_via_cpe_edge(db_session, catalog_offer):
+    ap = _node(db_session, "AP-Sector1")
+    other_ap = _node(db_session, "AP-Sector2")
+
+    sub_a = _sub(db_session, catalog_offer.id)
+    sub_b = _sub(db_session, catalog_offer.id)
+    inactive = _sub(db_session, catalog_offer.id, status=SubscriptionStatus.canceled)
+    vanished = _sub(db_session, catalog_offer.id)
+    elsewhere = _sub(db_session, catalog_offer.id)
+    _cpe(db_session, sub_a.subscriber_id, ap.id)
+    _cpe(db_session, sub_b.subscriber_id, ap.id, uisp_status="disconnected")
+    _cpe(db_session, inactive.subscriber_id, ap.id)  # sub not active, excluded
+    _cpe(db_session, vanished.subscriber_id, ap.id, uisp_status="vanished")  # excluded
+    _cpe(db_session, elsewhere.subscriber_id, other_ap.id)  # other AP, excluded
+
+    out = affected_customers(db_session, node=ap)
+    assert out["count"] == 2
+    assert {s.id for s in out["subscriptions"]} == {sub_a.id, sub_b.id}
+
+
+def test_ap_node_also_matched_nas_unions_both_arms(db_session, catalog_offer):
+    # A node can be Zabbix-matched as a NAS *and* be a UISP AP: the arms are
+    # additive and dedupe on subscription id.
+    nas = NasDevice(name="NAS-AP", management_ip="10.0.3.1")
+    db_session.add(nas)
+    db_session.flush()
+    node = _node(db_session, "bts-router", "nas", nas.id)
+    nas_sub = _sub(db_session, catalog_offer.id, nas_id=nas.id)
+    wireless_sub = _sub(db_session, catalog_offer.id)
+    both_sub = _sub(db_session, catalog_offer.id, nas_id=nas.id)
+    _cpe(db_session, wireless_sub.subscriber_id, node.id)
+    _cpe(db_session, both_sub.subscriber_id, node.id)  # in both arms, deduped
+
+    out = affected_customers(db_session, node=node)
+    assert out["count"] == 3
+    assert {s.id for s in out["subscriptions"]} == {
+        nas_sub.id,
+        wireless_sub.id,
+        both_sub.id,
+    }
+
+
+def test_ap_node_excludes_retired_cpe(db_session, catalog_offer):
+    from app.models.network import DeviceStatus
+
+    ap = _node(db_session, "AP-Retire")
+    live = _sub(db_session, catalog_offer.id)
+    retired = _sub(db_session, catalog_offer.id)
+    _cpe(db_session, live.subscriber_id, ap.id)
+    _cpe(db_session, retired.subscriber_id, ap.id, status=DeviceStatus.retired)
+
+    out = affected_customers(db_session, node=ap)
+    assert out["count"] == 1
+    assert out["subscriptions"][0].id == live.id
+
+
+def test_subscriptions_for_nodes_matches_per_node_results(
+    db_session, subscriber, catalog_offer
+):
+    # Batched resolver must agree with the single-node path on a mixed
+    # nas/olt/ap node set (including a node with no subscribers).
+    from app.services.topology.affected import (
+        subscriptions_for_node,
+        subscriptions_for_nodes,
+    )
+
+    nas = NasDevice(name="NAS-Mix", management_ip="10.0.4.1")
+    olt = OLTDevice(name="OLT-Mix", hostname="olt-mix", mgmt_ip="10.0.4.2")
+    db_session.add_all([nas, olt])
+    db_session.flush()
+    nas_node = _node(db_session, "mix-nas", "nas", nas.id)
+    olt_node = _node(db_session, "mix-olt", "olt", olt.id)
+    ap_node = _node(db_session, "mix-ap")
+    empty_node = _node(db_session, "mix-empty")
+
+    _sub(db_session, catalog_offer.id, nas_id=nas.id)
+    ont = OntUnit(serial_number="SN-MIX", olt_device_id=olt.id)
+    db_session.add(ont)
+    db_session.flush()
+    db_session.add(
+        OntAssignment(ont_unit_id=ont.id, subscriber_id=subscriber.id, active=True)
+    )
+    _sub(db_session, catalog_offer.id, subscriber_id=subscriber.id)
+    wireless_sub = _sub(db_session, catalog_offer.id, nas_id=nas.id)  # in both arms
+    _cpe(db_session, wireless_sub.subscriber_id, ap_node.id)
+    db_session.flush()
+
+    nodes = [nas_node, olt_node, ap_node, empty_node]
+    batched = subscriptions_for_nodes(db_session, [n.id for n in nodes])
+
+    assert set(batched) == {n.id for n in nodes}
+    for node in nodes:
+        assert {s.id for s in batched[node.id]} == {
+            s.id for s in subscriptions_for_node(db_session, node)
+        }
+    assert batched[empty_node.id] == []

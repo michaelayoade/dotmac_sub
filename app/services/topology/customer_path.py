@@ -18,6 +18,8 @@ from sqlalchemy.orm import Session
 
 from app.models.catalog import NasDevice, Subscription
 from app.models.network import (
+    CPEDevice,
+    DeviceStatus,
     FdhCabinet,
     OLTDevice,
     OntAssignment,
@@ -53,8 +55,10 @@ class CustomerPath:
     splitter: Splitter | None = None
     fdh: FdhCabinet | None = None
     pon_port: PonPort | None = None
-    access_device: Any | None = None  # OLTDevice | NasDevice
-    access_device_kind: str | None = None  # 'olt' | 'nas'
+    access_device: Any | None = None  # OLTDevice | NasDevice | NetworkDevice (AP)
+    access_device_kind: str | None = None  # 'olt' | 'nas' | 'ap'
+    # Wireless customer radio (UISP relationship layer); set on the 'ap' arm.
+    radio: CPEDevice | None = None
     node: NetworkDevice | None = None
     basestation: PopSite | None = None
     # Device hops above the access node toward core (LLDP graph), [agg... core].
@@ -245,6 +249,13 @@ def _finish(session: Session, path: CustomerPath, device_type: str) -> CustomerP
     if node is None:
         path.gap = GAP_NO_NODE
         return path
+    return _finish_at_node(session, path, node)
+
+
+def _finish_at_node(
+    session: Session, path: CustomerPath, node: NetworkDevice
+) -> CustomerPath:
+    """Walk node -> basestation (+ upstream chain), recording the first gap."""
     path.node = node
     path.upstream_chain = resolve_upstream_chain(session, node)
     if node.pop_site_id is None:
@@ -254,6 +265,36 @@ def _finish(session: Session, path: CustomerPath, device_type: str) -> CustomerP
     if path.basestation is None:
         path.gap = GAP_NO_BASESTATION
     return path
+
+
+def _active_wireless_cpe(
+    session: Session, subscription: Subscription
+) -> CPEDevice | None:
+    """The subscriber's active radio with a known parent AP, or None.
+
+    "Active" = CPE row not retired/inactive AND UISP has not reported the
+    device vanished ('active'/'disconnected'/NULL all count — a disconnected
+    radio is still the customer's access path; NULL covers rows written
+    before the status column existed). When several radios qualify, prefer
+    the most recently UISP-synced one (then lowest id) so repeated calls
+    resolve the same AP.
+    """
+    if subscription.subscriber_id is None:
+        return None
+    return (
+        session.query(CPEDevice)
+        .filter(
+            CPEDevice.subscriber_id == subscription.subscriber_id,
+            CPEDevice.parent_network_device_id.isnot(None),
+            CPEDevice.status == DeviceStatus.active,
+            or_(
+                CPEDevice.last_uisp_status.is_(None),
+                CPEDevice.last_uisp_status != "vanished",
+            ),
+        )
+        .order_by(CPEDevice.uisp_synced_at.desc().nullslast(), CPEDevice.id)
+        .first()
+    )
 
 
 def resolve_customer_path(session: Session, subscription: Subscription) -> CustomerPath:
@@ -273,6 +314,22 @@ def resolve_customer_path(session: Session, subscription: Subscription) -> Custo
             path.gap = GAP_NO_NODE  # ONT exists but no OLT to anchor it
             return path
         return _finish(session, path, "olt")
+
+    # Wireless: an active radio with a known parent AP (the UISP relationship
+    # layer's CPE -> AP edge). Tried before the NAS arm because it is finer:
+    # a wireless subscriber's PPPoE often terminates on a NAS at the BTS, and
+    # the NAS arm would resolve them coarsely (NAS -> basestation) while the
+    # radio arm pins them to their actual AP.
+    cpe = _active_wireless_cpe(session, subscription)
+    if cpe is not None:
+        node = session.get(NetworkDevice, cpe.parent_network_device_id)
+        if node is not None:
+            path.radio = cpe
+            path.access_device = node
+            path.access_device_kind = "ap"
+            return _finish_at_node(session, path, node)
+        # Parent edge points nowhere (row deleted mid-sync): fall through to
+        # the NAS arm rather than dead-ending a resolvable subscriber.
 
     # Non-fiber: the subscription's provisioning NAS.
     if subscription.provisioning_nas_device_id is not None:
