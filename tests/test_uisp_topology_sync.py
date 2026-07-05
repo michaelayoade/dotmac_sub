@@ -6,6 +6,7 @@ live uisp.dotmac.ng NMS v2.1 responses.
 
 from __future__ import annotations
 
+import logging
 import uuid
 
 from app.models.catalog import Subscription, SubscriptionStatus
@@ -396,6 +397,97 @@ def test_vanished_radio_is_soft_pruned(db_session, subscriber, catalog_offer):
 
 
 # ---------------------------------------------------------------------------
+# Edge-move breadcrumbs (auditability for the silent auto-heal)
+# ---------------------------------------------------------------------------
+
+AP2_ID = "0b0b0b0b-1111-2222-3333-444444444445"
+
+
+def _two_ap_payload(station_ap_id):
+    ap1 = _device(
+        AP_ID,
+        "AP-GARKI-SECTOR1",
+        role="ap",
+        ip="172.16.40.2/24",
+        mac="24:A4:3C:00:00:01",
+        site_id="site-bts-1",
+    )
+    ap2 = _device(
+        AP2_ID,
+        "AP-GUDU-SECTOR2",
+        role="ap",
+        ip="172.16.40.3/24",
+        mac="24:A4:3C:00:00:02",
+        site_id="site-bts-2",
+    )
+    station = _device(
+        STATION_ID,
+        "CUST-JOHN-DOE",
+        role="station",
+        mac=STATION_MAC,
+        ip="192.168.1.1",
+        ap_device_id=station_ap_id,
+    )
+    return [ap1, ap2, station]
+
+
+def _edge_move_records(caplog):
+    return [
+        r for r in caplog.records if getattr(r, "event", "") == "uisp_sync_edge_moved"
+    ]
+
+
+def test_radio_reparent_emits_edge_move_breadcrumb(
+    db_session, subscriber, catalog_offer, caplog
+):
+    node_a = _ap_node(db_session)
+    node_b = _ap_node(db_session, name="AP-GUDU-SECTOR2", mgmt_ip="172.16.40.3")
+    _active_subscription(db_session, subscriber, catalog_offer, STATION_MAC)
+
+    with caplog.at_level(logging.INFO, logger="app.services.topology.uisp_sync"):
+        first = sync(db_session, FakeUispClient(devices=_two_ap_payload(AP_ID)))
+    # First-time parenting is a fill, not a move: no breadcrumb, no counter.
+    assert first["edges_set"] == 1
+    assert first["edges_moved"] == 0
+    assert _edge_move_records(caplog) == []
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="app.services.topology.uisp_sync"):
+        second = sync(db_session, FakeUispClient(devices=_two_ap_payload(AP2_ID)))
+
+    cpe = (
+        db_session.query(CPEDevice).filter(CPEDevice.uisp_device_id == STATION_ID).one()
+    )
+    assert cpe.parent_network_device_id == node_b.id
+    assert second["edges_set"] == 1
+    assert second["edges_moved"] == 1
+    (record,) = _edge_move_records(caplog)
+    assert record.device_name == "CUST-JOHN-DOE"
+    assert record.uisp_device_id == STATION_ID
+    assert record.old_parent_id == str(node_a.id)
+    assert record.old_parent_name == "AP-GARKI-SECTOR1"
+    assert record.new_parent_id == str(node_b.id)
+    assert record.new_parent_name == "AP-GUDU-SECTOR2"
+
+
+def test_reparent_second_run_is_stable_no_further_moves(
+    db_session, subscriber, catalog_offer, caplog
+):
+    _ap_node(db_session)
+    _ap_node(db_session, name="AP-GUDU-SECTOR2", mgmt_ip="172.16.40.3")
+    _active_subscription(db_session, subscriber, catalog_offer, STATION_MAC)
+    sync(db_session, FakeUispClient(devices=_two_ap_payload(AP_ID)))
+    sync(db_session, FakeUispClient(devices=_two_ap_payload(AP2_ID)))
+
+    with caplog.at_level(logging.INFO, logger="app.services.topology.uisp_sync"):
+        third = sync(db_session, FakeUispClient(devices=_two_ap_payload(AP2_ID)))
+
+    assert third["edges_set"] == 0
+    assert third["edges_moved"] == 0
+    assert _edge_move_records(caplog) == []
+
+
+# ---------------------------------------------------------------------------
 # Archive-site exclusion
 # ---------------------------------------------------------------------------
 
@@ -745,6 +837,53 @@ def test_onu_port_change_moves_pon_port_id(db_session):
     assert result["onu_ports_set"] == 1
     assert result["ports_created"] == 1  # pon5; pon3 stays (match-don't-create)
     assert db_session.query(PonPort).count() == 2
+
+
+def test_onu_port_move_emits_breadcrumb(db_session, caplog):
+    # The pon_port_id auto-heal above is silent by design; the move must still
+    # leave a Loki breadcrumb. First-time stamping is a fill, not a move.
+    with caplog.at_level(logging.INFO, logger="app.services.topology.uisp_sync"):
+        first = sync(
+            db_session,
+            FakeUispClient(
+                devices=_ufiber_payload(),
+                onus_by_olt={OLT_ID: [_olt_onu_listing_entry(ONU_ID, 3)]},
+            ),
+        )
+    moves = [
+        r
+        for r in caplog.records
+        if getattr(r, "event", "") == "uisp_sync_onu_pon_port_moved"
+    ]
+    assert first["onu_ports_set"] == 1
+    assert first["onu_ports_moved"] == 0
+    assert moves == []
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="app.services.topology.uisp_sync"):
+        second = sync(
+            db_session,
+            FakeUispClient(
+                devices=_ufiber_payload(),
+                onus_by_olt={OLT_ID: [_olt_onu_listing_entry(ONU_ID, 5)]},
+            ),
+        )
+
+    assert second["onu_ports_set"] == 1
+    assert second["onu_ports_moved"] == 1
+    (record,) = [
+        r
+        for r in caplog.records
+        if getattr(r, "event", "") == "uisp_sync_onu_pon_port_moved"
+    ]
+    old_port = db_session.query(PonPort).filter(PonPort.port_number == 3).one()
+    new_port = db_session.query(PonPort).filter(PonPort.port_number == 5).one()
+    assert record.uisp_device_id == ONU_ID
+    assert record.device_name == "ONU-CUST-42"
+    assert record.old_port_id == str(old_port.id)
+    assert record.old_port_name == "pon3"
+    assert record.new_port_id == str(new_port.id)
+    assert record.new_port_number == 5
 
 
 def test_existing_pon_port_is_matched_not_duplicated(db_session):

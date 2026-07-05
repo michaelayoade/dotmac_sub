@@ -354,6 +354,7 @@ def _blank_stats() -> Counter:
             "updated": 0,
             "unchanged": 0,
             "edges_set": 0,
+            "edges_moved": 0,
             "matched": 0,
             "ambiguous": 0,
             "unmatched_no_subscriber": 0,
@@ -365,6 +366,7 @@ def _blank_stats() -> Counter:
             "aps_unmatched": 0,
             "ports_created": 0,
             "onu_ports_set": 0,
+            "onu_ports_moved": 0,
             "onu_ports_unchanged": 0,
             "port_fetch_failures": 0,
             "links_created": 0,
@@ -374,6 +376,50 @@ def _blank_stats() -> Counter:
             "link_fetch_failures": 0,
         }
     )
+
+
+def _note_edge_move(
+    session: Session,
+    cpe: CPEDevice,
+    station: dict,
+    new_node: NetworkDevice,
+    stats: Counter,
+) -> None:
+    """Breadcrumb for a silent auto-heal: radio re-parented from one AP to another.
+
+    The sync corrects ``parent_network_device_id`` whenever UISP observes the
+    radio on a different AP — correct behavior (UISP is observed truth), but
+    otherwise completely silent. These ``logger.info`` lines flow to Loki and
+    are the only post-mortem history of when a customer's upstream path moved
+    (e.g. "why did this street's outage blast-radius change overnight?").
+    First-time parenting (old parent NULL) is a fill, not a move: no log, no
+    ``edges_moved`` count — ``edges_set`` alone covers it.
+    """
+    old_id = cpe.parent_network_device_id
+    if old_id is None:
+        return
+    old_node = session.get(NetworkDevice, old_id)
+    old_name = old_node.name if old_node is not None else None
+    logger.info(
+        "uisp_sync_edge_moved device=%s uisp_id=%s old_parent=%s old_parent_id=%s "
+        "new_parent=%s new_parent_id=%s",
+        _device_name(station),
+        cpe.uisp_device_id,
+        old_name,
+        old_id,
+        new_node.name,
+        new_node.id,
+        extra={
+            "event": "uisp_sync_edge_moved",
+            "device_name": _device_name(station),
+            "uisp_device_id": cpe.uisp_device_id,
+            "old_parent_id": str(old_id),
+            "old_parent_name": old_name,
+            "new_parent_id": str(new_node.id),
+            "new_parent_name": new_node.name,
+        },
+    )
+    stats["edges_moved"] += 1
 
 
 def _station_parent_ap_id(station: dict) -> str | None:
@@ -750,6 +796,7 @@ def _ensure_pon_ports(
 
 
 def _apply_onu_pon_port(
+    session: Session,
     ont: OntUnit,
     device: dict,
     olt_ids_by_uisp: dict[str, UUID],
@@ -765,6 +812,12 @@ def _apply_onu_pon_port(
     OLT from this run; an ONT row whose ``olt_device_id`` points elsewhere
     (e.g. a Huawei OLT) is never touched. Missing port info leaves the field
     as-is.
+
+    A move (existing non-NULL port -> different port) is an otherwise-silent
+    auto-heal, so it leaves a breadcrumb: the ``logger.info`` line below flows
+    to Loki and is the only post-mortem history of re-splices/port drift.
+    First-time stamping (old port NULL) is a fill, not a move: no log, no
+    ``onu_ports_moved`` count — ``onu_ports_set`` alone covers it.
     """
     port_number = onu_ports_by_uisp.get(_device_id(device))
     if port_number is None:
@@ -776,6 +829,30 @@ def _apply_onu_pon_port(
     if port_id is None:
         return
     if ont.pon_port_id != port_id:
+        old_port_id = ont.pon_port_id
+        if old_port_id is not None:
+            old_port = session.get(PonPort, old_port_id)
+            old_port_name = old_port.name if old_port is not None else None
+            logger.info(
+                "uisp_sync_onu_pon_port_moved onu=%s uisp_id=%s old_port=%s "
+                "old_port_id=%s new_port=%s new_port_id=%s",
+                ont.name or ont.serial_number,
+                ont.uisp_device_id,
+                old_port_name,
+                old_port_id,
+                f"pon{port_number}",
+                port_id,
+                extra={
+                    "event": "uisp_sync_onu_pon_port_moved",
+                    "device_name": ont.name or ont.serial_number,
+                    "uisp_device_id": ont.uisp_device_id,
+                    "old_port_id": str(old_port_id),
+                    "old_port_name": old_port_name,
+                    "new_port_id": str(port_id),
+                    "new_port_number": port_number,
+                },
+            )
+            stats["onu_ports_moved"] += 1
         ont.pon_port_id = port_id
         stats["onu_ports_set"] += 1
     else:
@@ -957,6 +1034,7 @@ def sync(session: Session, client, now: datetime | None = None) -> dict:
                 )
                 node = ap_nodes.get(parent_ap_id) if parent_ap_id else None
                 if node is not None and cpe.parent_network_device_id != node.id:
+                    _note_edge_move(session, cpe, station, node, stats)
                     cpe.parent_network_device_id = node.id
                     stats["edges_set"] += 1
                 session.flush()
@@ -994,6 +1072,7 @@ def sync(session: Session, client, now: datetime | None = None) -> dict:
                 )
                 if ont is not None:
                     _apply_onu_pon_port(
+                        session,
                         ont,
                         device,
                         olt_ids_by_uisp,
