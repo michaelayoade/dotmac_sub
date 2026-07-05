@@ -8,7 +8,12 @@ wireless/UFiber customer layer into sub's own tables:
     ``parent_network_device_id`` (FK to the network_devices row the Zabbix
     reconcile owns) so customer paths can walk radio -> AP -> basestation;
   - UF-OLTs -> olt_devices and UFiber ONUs -> ont_units (parent resolved via
-    the ONU's ``attributes.parentId``), both keyed by ``uisp_device_id``.
+    the ONU's ``attributes.parentId``), both keyed by ``uisp_device_id``;
+  - PON-port granularity for the UFiber plant: the generic ``/devices`` list
+    carries no port info, so each imported UF-OLT's ONUs are re-listed via
+    ``/devices/onus?parentId=<olt>`` whose ``onu.port`` is the OLT-side PON
+    port number. Ports are ensured in ``pon_ports`` (match-don't-create by
+    ``(olt_id, port_number)``) and stamped onto ``ont_units.pon_port_id``.
 
 Monitoring/state stays with the Zabbix layer (the co-located UISP->Zabbix
 importer feeds it); this sync only owns *relationships* and identity fill-in.
@@ -31,7 +36,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription, SubscriptionStatus
-from app.models.network import CPEDevice, DeviceType, OLTDevice, OntUnit
+from app.models.network import CPEDevice, DeviceType, OLTDevice, OntUnit, PonPort
 from app.models.network_monitoring import NetworkDevice
 from app.services.topology.lldp_poller import _norm as _norm_label
 from app.services.topology.lldp_poller import build_device_index
@@ -123,6 +128,24 @@ def _serial(device: dict) -> str | None:
         if value:
             return value
     return None
+
+
+def _onu_pon_port(device: dict) -> int | None:
+    """OLT-side PON port number from a per-OLT ONU listing entry; None if absent.
+
+    Only the ``/devices/onus?parentId=...`` payload carries the top-level
+    ``onu`` object; its ``port`` is the OLT-side PON port (integer, 1-based).
+    """
+    onu = device.get("onu")
+    if not isinstance(onu, dict):
+        return None
+    port = onu.get("port")
+    if port is None or isinstance(port, bool):
+        return None
+    try:
+        return int(port)
+    except (TypeError, ValueError):
+        return None
 
 
 def _is_station(device: dict) -> bool:
@@ -262,6 +285,10 @@ def _blank_stats() -> Counter:
             "excluded_archive": 0,
             "aps_matched": 0,
             "aps_unmatched": 0,
+            "ports_created": 0,
+            "onu_ports_set": 0,
+            "onu_ports_unchanged": 0,
+            "port_fetch_failures": 0,
         }
     )
 
@@ -455,7 +482,8 @@ def _upsert_onu(
     created = ont is None
     changed = False
     if ont is None:
-        # pon_port stays NULL: the UISP list payload has no port granularity.
+        # pon_port_id is stamped separately from the per-OLT ONU listings
+        # (the generic /devices list payload has no port granularity).
         ont = OntUnit(serial_number=serial, olt_device_id=olt_id, vendor="ubiquiti")
         session.add(ont)
     elif ont.olt_device_id is None:
@@ -487,6 +515,136 @@ def _upsert_onu(
     else:
         stats["unchanged"] += 1
     return ont
+
+
+def _onu_parent_olt_id(device: dict, olt_ids_by_uisp: dict[str, UUID]) -> UUID | None:
+    parent_uisp_id = str(_attributes(device).get("parentId") or "").strip()
+    return olt_ids_by_uisp.get(parent_uisp_id)
+
+
+def _collect_onu_ports(
+    client, olt_ids_by_uisp: dict[str, UUID], stats: Counter
+) -> dict[str, int]:
+    """ONU uisp id -> OLT-side PON port, from one per-OLT listing per UF-OLT.
+
+    A single OLT's listing failing is logged and counted
+    (``port_fetch_failures``) but never aborts the run: the affected ONUs
+    simply keep their current ``pon_port_id``.
+    """
+    ports: dict[str, int] = {}
+    for olt_uisp_id in olt_ids_by_uisp:
+        try:
+            entries = client.list_olt_onus(olt_uisp_id)
+        except Exception as exc:  # one OLT failing must not abort the run
+            stats["port_fetch_failures"] += 1
+            logger.warning("uisp_olt_onu_list_failed olt=%s: %s", olt_uisp_id, exc)
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            onu_uisp_id = _device_id(entry)
+            port = _onu_pon_port(entry)
+            if onu_uisp_id and port is not None:
+                ports.setdefault(onu_uisp_id, port)
+    return ports
+
+
+def _ensure_pon_ports(
+    session: Session,
+    onus: list[dict],
+    olt_ids_by_uisp: dict[str, UUID],
+    onu_ports_by_uisp: dict[str, int],
+    stats: Counter,
+) -> dict[tuple[UUID, int], UUID]:
+    """Ensure a pon_ports row per (UF-OLT, port) the listings observed.
+
+    Match-don't-create by ``(olt_id, port_number)`` first (whatever its name),
+    then by the name this sync would mint (covers legacy rows whose
+    ``port_number`` is NULL — filled in, never overwritten). Only ports under
+    UISP-managed OLTs (the ones this run imported/matched) are ever touched.
+    """
+    needed: set[tuple[UUID, int]] = set()
+    for device in onus:
+        port_number = onu_ports_by_uisp.get(_device_id(device))
+        if port_number is None:
+            continue
+        olt_pk = _onu_parent_olt_id(device, olt_ids_by_uisp)
+        if olt_pk is not None:
+            needed.add((olt_pk, port_number))
+
+    port_ids: dict[tuple[UUID, int], UUID] = {}
+    for olt_pk, port_number in sorted(needed, key=lambda k: (str(k[0]), k[1])):
+        try:
+            with session.begin_nested():
+                port = (
+                    session.query(PonPort)
+                    .filter(
+                        PonPort.olt_id == olt_pk,
+                        PonPort.port_number == port_number,
+                    )
+                    .order_by(PonPort.name)
+                    .first()
+                )
+                if port is None:
+                    name = f"pon{port_number}"
+                    port = (
+                        session.query(PonPort)
+                        .filter(PonPort.olt_id == olt_pk, PonPort.name == name)
+                        .one_or_none()
+                    )
+                    if port is None:
+                        port = PonPort(
+                            olt_id=olt_pk,
+                            name=name,
+                            port_number=port_number,
+                            is_active=True,
+                            notes=f"Created by UISP topology sync ({SOURCE}).",
+                        )
+                        session.add(port)
+                        stats["ports_created"] += 1
+                    else:
+                        _fill(port, "port_number", port_number)
+                session.flush()
+                port_ids[(olt_pk, port_number)] = port.id
+        except Exception:
+            stats["failed"] += 1
+            logger.exception(
+                "uisp_sync_pon_port_failed olt=%s port=%s", olt_pk, port_number
+            )
+    return port_ids
+
+
+def _apply_onu_pon_port(
+    ont: OntUnit,
+    device: dict,
+    olt_ids_by_uisp: dict[str, UUID],
+    onu_ports_by_uisp: dict[str, int],
+    pon_port_ids: dict[tuple[UUID, int], UUID],
+    stats: Counter,
+) -> None:
+    """Point one UFiber ONU at its observed PON port (UISP is observed truth).
+
+    Fill-if-NULL *and* move-on-change: the OLT reports where the ONU is
+    physically registered, so a differing ``pon_port_id`` is drift and is
+    corrected. Strictly scoped to ONUs whose resolved parent is a UISP-managed
+    OLT from this run; an ONT row whose ``olt_device_id`` points elsewhere
+    (e.g. a Huawei OLT) is never touched. Missing port info leaves the field
+    as-is.
+    """
+    port_number = onu_ports_by_uisp.get(_device_id(device))
+    if port_number is None:
+        return
+    olt_pk = _onu_parent_olt_id(device, olt_ids_by_uisp)
+    if olt_pk is None or ont.olt_device_id != olt_pk:
+        return
+    port_id = pon_port_ids.get((olt_pk, port_number))
+    if port_id is None:
+        return
+    if ont.pon_port_id != port_id:
+        ont.pon_port_id = port_id
+        stats["onu_ports_set"] += 1
+    else:
+        stats["onu_ports_unchanged"] += 1
 
 
 def sync(session: Session, client, now: datetime | None = None) -> dict:
@@ -603,12 +761,30 @@ def sync(session: Session, client, now: datetime | None = None) -> dict:
         if olt is not None:
             olt_ids_by_uisp[_device_id(device)] = olt.id
 
+    # --- PON-port granularity: per-OLT ONU listings (onu.port) ---
+    onu_ports_by_uisp = _collect_onu_ports(client, olt_ids_by_uisp, stats)
+    pon_port_ids = _ensure_pon_ports(
+        session, onus, olt_ids_by_uisp, onu_ports_by_uisp, stats
+    )
+
     # --- UFiber ONUs -> ont_units ---
     seen_onu_keys: set[tuple] = set()
     for device in onus:
         try:
             with session.begin_nested():
-                _upsert_onu(session, device, olt_ids_by_uisp, seen_onu_keys, now, stats)
+                ont = _upsert_onu(
+                    session, device, olt_ids_by_uisp, seen_onu_keys, now, stats
+                )
+                if ont is not None:
+                    _apply_onu_pon_port(
+                        ont,
+                        device,
+                        olt_ids_by_uisp,
+                        onu_ports_by_uisp,
+                        pon_port_ids,
+                        stats,
+                    )
+                    session.flush()
         except Exception:
             stats["failed"] += 1
             logger.exception("uisp_sync_onu_failed uisp_id=%s", _device_id(device))
