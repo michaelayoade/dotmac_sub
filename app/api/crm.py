@@ -689,9 +689,10 @@ def create_crm_credit(
 ) -> dict[str, Any]:
     """Pay a referral reward into a subscriber's VAS wallet (a spendable
     balance) — used by the CRM to pay out referral rewards. Body:
-    ``{subscriber_id, amount, reason?, external_ref?, currency?}``. Idempotent on
-    ``external_ref``. Individual subscribers only (reseller float wallets are
-    never credited here).
+    ``{subscriber_id, amount, external_ref, reason?, currency?}``. ``external_ref``
+    is REQUIRED and is the idempotency key (a repeat call returns the existing
+    entry). Individual subscribers only (reseller float wallets are never
+    credited here).
     """
     errors: dict[str, list[str]] = {}
     subscriber_id = str(payload.get("subscriber_id") or "").strip()
@@ -705,14 +706,19 @@ def create_crm_credit(
     else:
         if amount <= 0:
             errors.setdefault("amount", []).append("Must be greater than 0.")
+    # external_ref is the idempotency key. Required: without it the wallet
+    # entry's unique `reference` is NULL (unconstrained), so a retry/redelivery
+    # would credit real spendable money twice.
+    external_ref = payload.get("external_ref")
+    external_ref = str(external_ref).strip() if external_ref not in (None, "") else None
+    if not external_ref:
+        errors.setdefault("external_ref", []).append("Required (idempotency key).")
     if errors:
         _error(status.HTTP_400_BAD_REQUEST, "Invalid credit payload.", errors)
 
     currency = str(payload.get("currency") or "NGN").strip().upper() or "NGN"
     reason = payload.get("reason")
     reason = str(reason).strip() if reason not in (None, "") else None
-    external_ref = payload.get("external_ref")
-    external_ref = str(external_ref).strip() if external_ref not in (None, "") else None
 
     try:
         entry = crm_api.credit_referral_reward_to_wallet(
