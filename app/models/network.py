@@ -341,10 +341,16 @@ class CPEDevice(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
+    # NOT NULL: matches the enforced production schema (the squashed baseline
+    # declares cpe_devices.subscriber_id NOT NULL; migration 026's relax to
+    # nullable never took effect there — the first authenticated uisp_sync run
+    # failed every INSERT with a NotNullViolation). Writers must resolve the
+    # owning subscriber BEFORE creating a row; keeping the model NOT NULL makes
+    # the test schema enforce the same invariant.
+    subscriber_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("subscribers.id", ondelete="SET NULL"),
-        nullable=True,
+        nullable=False,
     )
     service_address_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("addresses.id")
