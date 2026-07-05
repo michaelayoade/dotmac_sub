@@ -17,6 +17,8 @@ from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.network import (
+    CPEDevice,
+    DeviceStatus,
     FdhCabinet,
     OLTDevice,
     OntAssignment,
@@ -141,49 +143,93 @@ def downstream_nodes(
     return result
 
 
+def _wireless_subscriber_ids(session: Session, node: NetworkDevice) -> list:
+    """Subscriber ids of active radios parented to this node (CPE -> AP edge).
+
+    "Active" mirrors customer_path._active_wireless_cpe: CPE row status is
+    active and UISP has not reported the radio vanished (disconnected still
+    counts — that radio is still the customer's access path).
+    """
+    rows = (
+        session.query(CPEDevice.subscriber_id)
+        .filter(
+            CPEDevice.parent_network_device_id == node.id,
+            CPEDevice.subscriber_id.isnot(None),
+            CPEDevice.status == DeviceStatus.active,
+            or_(
+                CPEDevice.last_uisp_status.is_(None),
+                CPEDevice.last_uisp_status != "vanished",
+            ),
+        )
+        .distinct()
+        .all()
+    )
+    return [r[0] for r in rows]
+
+
 def subscriptions_for_node(session: Session, node: NetworkDevice) -> list[Subscription]:
-    """Active subscriptions whose access path terminates at this node."""
-    if node.matched_device_id is None:
-        return []
-    if node.matched_device_type == "nas":
-        return (
+    """Active subscriptions whose access path terminates at this node.
+
+    Unions the Zabbix-matched arm (nas/olt) with the wireless arm (radios
+    whose UISP CPE -> AP edge points at this node): an AP node may *also* be
+    matched as a NAS, so the arms are additive, deduped by subscription id.
+    """
+    subs: dict = {}
+    if node.matched_device_id is not None and node.matched_device_type == "nas":
+        for sub in (
             session.query(Subscription)
             .filter(
                 Subscription.provisioning_nas_device_id == node.matched_device_id,
                 Subscription.status == SubscriptionStatus.active,
             )
             .all()
-        )
-    if node.matched_device_type == "olt":
+        ):
+            subs[sub.id] = sub
+    if node.matched_device_id is not None and node.matched_device_type == "olt":
         ont_ids = [
             r[0]
             for r in session.query(OntUnit.id)
             .filter(OntUnit.olt_device_id == node.matched_device_id)
             .all()
         ]
-        if not ont_ids:
-            return []
-        subscriber_ids = [
-            r[0]
-            for r in session.query(OntAssignment.subscriber_id)
-            .filter(
-                OntAssignment.ont_unit_id.in_(ont_ids),
-                OntAssignment.active.is_(True),
-                OntAssignment.subscriber_id.isnot(None),
-            )
-            .all()
-        ]
-        if not subscriber_ids:
-            return []
-        return (
+        subscriber_ids = (
+            [
+                r[0]
+                for r in session.query(OntAssignment.subscriber_id)
+                .filter(
+                    OntAssignment.ont_unit_id.in_(ont_ids),
+                    OntAssignment.active.is_(True),
+                    OntAssignment.subscriber_id.isnot(None),
+                )
+                .all()
+            ]
+            if ont_ids
+            else []
+        )
+        if subscriber_ids:
+            for sub in (
+                session.query(Subscription)
+                .filter(
+                    Subscription.subscriber_id.in_(subscriber_ids),
+                    Subscription.status == SubscriptionStatus.active,
+                )
+                .all()
+            ):
+                subs[sub.id] = sub
+    # Wireless: active radios parented to this node (works whether or not the
+    # node is Zabbix-matched — the UISP edge alone makes it an AP).
+    wireless_subscriber_ids = _wireless_subscriber_ids(session, node)
+    if wireless_subscriber_ids:
+        for sub in (
             session.query(Subscription)
             .filter(
-                Subscription.subscriber_id.in_(subscriber_ids),
+                Subscription.subscriber_id.in_(wireless_subscriber_ids),
                 Subscription.status == SubscriptionStatus.active,
             )
             .all()
-        )
-    return []
+        ):
+            subs[sub.id] = sub
+    return list(subs.values())
 
 
 def subscriptions_for_fdh(session: Session, fdh: FdhCabinet) -> list[Subscription]:
