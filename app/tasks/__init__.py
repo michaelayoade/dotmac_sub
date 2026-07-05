@@ -117,6 +117,7 @@ from app.tasks.router_sync import (
 from app.tasks.topology_lldp import run_lldp_topology_poll
 from app.tasks.topology_metrics import export_topology_metrics
 from app.tasks.topology_sync import run_topology_reconcile, warm_topology_status
+from app.tasks.topology_ufiber_link import run_ufiber_onu_link
 from app.tasks.topology_uisp import run_uisp_topology_sync
 from app.tasks.tr069 import (
     apply_acs_config as tr069_apply_acs_config,
@@ -263,6 +264,7 @@ __all__ = [
     "warm_topology_status",
     "run_lldp_topology_poll",
     "run_uisp_topology_sync",
+    "run_ufiber_onu_link",
     "run_unmatched_radio_review",
     "export_topology_metrics",
     "tr069_sync_all_acs_devices",
