@@ -1542,6 +1542,25 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(topology_uisp_minutes * 60, 300),
         )
+        # UFiber ONU -> subscriber link: net-new, auth-safe association pass.
+        # Router-mode UF-Wifi ONUs carry the customer router MAC as their own
+        # MAC (from UISP), so a direct MAC match to an ACTIVE subscription
+        # fills the missing ont_assignments link. Never writes the subscription
+        # MAC. Runs after the UISP sync has imported/refreshed the ONUs, so an
+        # hourly default (vs the 15-min importer) is ample.
+        ufiber_onu_link_minutes = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "ufiber_onu_link_interval_minutes",
+            60,
+        )
+        _sync_scheduled_task(
+            session,
+            name="ufiber_onu_link",
+            task_name="app.tasks.topology_ufiber_link.run_ufiber_onu_link",
+            enabled=True,
+            interval_seconds=max(ufiber_onu_link_minutes * 60, 300),
+        )
         # Topology coverage + pipeline-health metrics export to
         # VictoriaMetrics (per-medium E2E match-rate, feeder-task staleness).
         # Default 15 minutes — matches the fastest feeder (topology_uisp_sync),
