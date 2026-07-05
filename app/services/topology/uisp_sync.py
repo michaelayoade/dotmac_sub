@@ -6,7 +6,11 @@ wireless/UFiber customer layer into sub's own tables:
   - wireless customer radios (airMax stations, airCube/blackBox) -> cpe_devices,
     keyed by ``uisp_device_id``, with the CPE -> AP edge stored as
     ``parent_network_device_id`` (FK to the network_devices row the Zabbix
-    reconcile owns) so customer paths can walk radio -> AP -> basestation;
+    reconcile owns) so customer paths can walk radio -> AP -> basestation.
+    ``cpe_devices.subscriber_id`` is NOT NULL, so creation is MATCH-THEN-CREATE:
+    a new radio only gets a row once its MAC resolves to exactly one subscriber
+    over ACTIVE subscriptions (unmatched/ambiguous radios are counted and
+    retried naturally on later runs);
   - UF-OLTs -> olt_devices and UFiber ONUs -> ont_units (parent resolved via
     the ONU's ``attributes.parentId``), both keyed by ``uisp_device_id``.
 
@@ -256,6 +260,7 @@ def _blank_stats() -> Counter:
             "edges_set": 0,
             "matched": 0,
             "ambiguous": 0,
+            "unmatched_no_subscriber": 0,
             "skipped": 0,
             "failed": 0,
             "pruned": 0,
@@ -310,10 +315,20 @@ def _ap_side_station_index(
 def _upsert_station(
     session: Session,
     station: dict,
+    mac_index: dict[str, set],
     now: datetime,
     stats: Counter,
-) -> tuple[CPEDevice, bool]:
-    """Upsert one wireless customer radio into cpe_devices by uisp_device_id."""
+) -> tuple[CPEDevice | None, bool]:
+    """Upsert one wireless customer radio into cpe_devices by uisp_device_id.
+
+    MATCH-THEN-CREATE: ``cpe_devices.subscriber_id`` is NOT NULL in the
+    production schema, so a new row may only be created once its owner is
+    known. A new station's MAC is resolved against ACTIVE subscriptions
+    FIRST (exact match, exactly one distinct subscriber); no confirmed match
+    (none, or ambiguous) creates nothing — the radio is picked up on a later
+    run once a matching subscription exists. Existing rows keep updating as
+    before and their ``subscriber_id`` is never touched.
+    """
     uisp_id = _device_id(station)
     cpe = (
         session.query(CPEDevice)
@@ -323,12 +338,22 @@ def _upsert_station(
     created = cpe is None
     changed = False
     if cpe is None:
+        mac = _norm_mac(_ident(station).get("mac"))
+        subscribers = mac_index.get(mac or "", set())
+        if len(subscribers) > 1:
+            stats["ambiguous"] += 1
+            return None, False
+        if len(subscribers) != 1:
+            stats["unmatched_no_subscriber"] += 1
+            return None, False
         cpe = CPEDevice(
             uisp_device_id=uisp_id,
+            subscriber_id=next(iter(subscribers)),
             device_type=DeviceType.wireless_radio,
             vendor="ubiquiti",
         )
         session.add(cpe)
+        stats["matched"] += 1
 
     ident = _ident(station)
     changed |= _fill(cpe, "mac_address", ident.get("mac"))
@@ -385,7 +410,22 @@ def _upsert_olt(
     created = olt is None
     changed = False
     if olt is None:
-        olt = OLTDevice(name=name or f"uisp-{uisp_id[:8]}", vendor="ubiquiti")
+        # is_active=False: ``ck_olt_devices_config_pack_required`` (see
+        # migration 154) demands a populated provisioning config_pack
+        # (internet/management VLANs + TR-069 profile) for ACTIVE OLTs, and a
+        # UF-OLT imported from UISP has none — it is a monitoring/topology
+        # object, not a provisioning target. Inactive placeholder rows are the
+        # combination the constraint exempts; the topology read-side
+        # (customer_path/affected/gaps/crm_api) resolves OLTs by primary key
+        # with no is_active filter, so UF-OLTs stay fully traceable. An
+        # operator activating one later must supply a config pack — exactly
+        # the governance the constraint encodes. Pre-existing matched rows are
+        # never flipped.
+        olt = OLTDevice(
+            name=name or f"uisp-{uisp_id[:8]}",
+            vendor="ubiquiti",
+            is_active=False,
+        )
         session.add(olt)
 
     ident = _ident(device)
@@ -543,7 +583,11 @@ def sync(session: Session, client, now: datetime | None = None) -> dict:
             client, aps, ap_nodes
         )
 
-    created_cpes: list[CPEDevice] = []
+    # Subscriber matching moved BEFORE creation (match-then-create):
+    # cpe_devices.subscriber_id is NOT NULL, so the owner must be resolved
+    # before any INSERT is attempted.
+    mac_index = _active_subscriber_macs(session) if stations else {}
+
     # Seen = what UISP *reports*, taken from the raw inventory BEFORE the
     # upsert loop: a device whose upsert fails transiently is still present
     # in UISP and must not be soft-pruned to 'vanished'.
@@ -557,7 +601,11 @@ def sync(session: Session, client, now: datetime | None = None) -> dict:
             # SAVEPOINT per item (the zabbix_host_sync idiom): a flush failure
             # rolls back only this device, not the surrounding transaction.
             with session.begin_nested():
-                cpe, created = _upsert_station(session, station, now, stats)
+                cpe, _created = _upsert_station(session, station, mac_index, now, stats)
+                if cpe is None:
+                    # No confirmed subscriber match: nothing was created and
+                    # the counters already say why.
+                    continue
                 parent_ap_id = (
                     _station_parent_ap_id(station)
                     or ap_by_station_id.get(uisp_id)
@@ -574,21 +622,6 @@ def sync(session: Session, client, now: datetime | None = None) -> dict:
             stats["failed"] += 1
             logger.exception("uisp_sync_station_failed uisp_id=%s", uisp_id)
             continue
-        if created:
-            created_cpes.append(cpe)
-
-    # --- Subscriber matching: NEWLY CREATED radios only, exact MAC ---
-    if created_cpes:
-        mac_index = _active_subscriber_macs(session)
-        for cpe in created_cpes:
-            normalized = _norm_mac(cpe.mac_address)
-            subscribers = mac_index.get(normalized or "", set())
-            if len(subscribers) == 1:
-                cpe.subscriber_id = next(iter(subscribers))
-                stats["matched"] += 1
-            elif len(subscribers) > 1:
-                stats["ambiguous"] += 1
-        session.flush()
 
     # --- UF-OLTs -> olt_devices ---
     olt_ids_by_uisp: dict[str, UUID] = {}

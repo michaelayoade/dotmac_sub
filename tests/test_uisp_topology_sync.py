@@ -139,8 +139,11 @@ def _wireless_payload(**station_kwargs):
 # ---------------------------------------------------------------------------
 
 
-def test_station_creates_cpe_with_edge_to_matched_ap(db_session):
+def test_station_creates_cpe_with_edge_to_matched_ap(
+    db_session, subscriber, catalog_offer
+):
     node = _ap_node(db_session)
+    _active_subscription(db_session, subscriber, catalog_offer, STATION_MAC)
     client = FakeUispClient(devices=_wireless_payload())
 
     result = sync(db_session, client)
@@ -155,15 +158,19 @@ def test_station_creates_cpe_with_edge_to_matched_ap(db_session):
     assert cpe.last_uisp_status == "active"
     assert cpe.uisp_synced_at is not None
     assert cpe.parent_network_device_id == node.id
+    # Match-then-create: the row is born with its owner set.
+    assert cpe.subscriber_id == subscriber.id
     db_session.refresh(node)
     assert node.uisp_device_id == AP_ID
     assert result["created"] == 1
+    assert result["matched"] == 1
     assert result["edges_set"] == 1
     assert result["aps_matched"] == 1
 
 
-def test_second_run_is_idempotent(db_session):
+def test_second_run_is_idempotent(db_session, subscriber, catalog_offer):
     _ap_node(db_session)
+    _active_subscription(db_session, subscriber, catalog_offer, STATION_MAC)
     client = FakeUispClient(devices=_wireless_payload())
 
     first = sync(db_session, client)
@@ -173,13 +180,15 @@ def test_second_run_is_idempotent(db_session):
     assert second["created"] == 0
     assert second["unchanged"] == 1
     assert second["edges_set"] == 0
+    assert second["matched"] == 0
     assert db_session.query(CPEDevice).count() == 1
 
 
-def test_sync_never_overwrites_human_set_fields(db_session):
+def test_sync_never_overwrites_human_set_fields(db_session, subscriber):
     _ap_node(db_session)
     existing = CPEDevice(
         uisp_device_id=STATION_ID,
+        subscriber_id=subscriber.id,
         device_type=DeviceType.router,
         model="Operator Model",
         mac_address="FF:FF:FF:FF:FF:FF",
@@ -195,13 +204,18 @@ def test_sync_never_overwrites_human_set_fields(db_session):
     assert existing.model == "Operator Model"
     assert existing.mac_address == "FF:FF:FF:FF:FF:FF"
     assert existing.device_type == DeviceType.router
+    assert existing.subscriber_id == subscriber.id
     # NULL fields are filled from UISP.
     assert existing.vendor == "ubiquiti"
 
 
-def test_sync_upgrades_placeholder_device_type(db_session):
+def test_sync_upgrades_placeholder_device_type(db_session, subscriber):
     _ap_node(db_session)
-    existing = CPEDevice(uisp_device_id=STATION_ID, device_type=DeviceType.other)
+    existing = CPEDevice(
+        uisp_device_id=STATION_ID,
+        subscriber_id=subscriber.id,
+        device_type=DeviceType.other,
+    )
     db_session.add(existing)
     db_session.flush()
     client = FakeUispClient(devices=_wireless_payload())
@@ -212,8 +226,9 @@ def test_sync_upgrades_placeholder_device_type(db_session):
     assert existing.device_type == DeviceType.wireless_radio
 
 
-def test_ap_side_station_list_fallback_sets_edge(db_session):
+def test_ap_side_station_list_fallback_sets_edge(db_session, subscriber, catalog_offer):
     node = _ap_node(db_session)
+    _active_subscription(db_session, subscriber, catalog_offer, STATION_MAC)
     devices = _wireless_payload(ap_device_id=None)
     client = FakeUispClient(
         devices=devices,
@@ -257,12 +272,23 @@ def test_ptp_master_matching_network_device_is_not_created(db_session):
     assert result["created"] == 0
 
 
-def test_flush_failure_is_isolated_and_prior_work_survives(db_session):
+def test_flush_failure_is_isolated_and_prior_work_survives(
+    db_session, subscriber, catalog_offer
+):
     # A mid-run flush failure (unbindable value -> DBAPI error, standing in
     # for a Postgres IntegrityError that would abort the transaction) must be
     # rolled back to its own savepoint: the run completes, earlier and later
     # devices' work survives, and only the bad device is counted as failed.
     node = _ap_node(db_session)
+    for mac in ("24:A4:3C:AA:BB:10", "24:A4:3C:AA:BB:12", "24:A4:3C:AA:BB:11"):
+        other = Subscriber(
+            first_name="Sub",
+            last_name=mac[-2:],
+            email=f"sub-{uuid.uuid4().hex[:8]}@example.test",
+        )
+        db_session.add(other)
+        db_session.flush()
+        _active_subscription(db_session, other, catalog_offer, mac)
     station_a = _device(
         "aaaaaaaa-0000-0000-0000-00000000000a",
         "CUST-BEFORE",
@@ -272,7 +298,8 @@ def test_flush_failure_is_isolated_and_prior_work_survives(db_session):
     station_bad = _device(
         "bbbbbbbb-0000-0000-0000-00000000000b",
         "CUST-BROKEN",
-        mac={"unbindable": True},  # fails at session.flush()
+        mac="24:A4:3C:AA:BB:12",
+        model={"unbindable": True},  # matched subscriber, fails at flush()
         ap_device_id=AP_ID,
     )
     station_c = _device(
@@ -309,12 +336,13 @@ def test_flush_failure_is_isolated_and_prior_work_survives(db_session):
     assert after.parent_network_device_id == node.id
 
 
-def test_failed_upsert_does_not_mark_device_vanished(db_session):
+def test_failed_upsert_does_not_mark_device_vanished(db_session, subscriber):
     # The seen-set is built from the raw UISP inventory, not from successful
     # upserts: a device whose upsert fails transiently is still reported by
     # UISP and must not be soft-pruned to 'vanished'.
     existing = CPEDevice(
         uisp_device_id=STATION_ID,
+        subscriber_id=subscriber.id,
         mac_address=None,
         last_uisp_status="active",
     )
@@ -331,8 +359,9 @@ def test_failed_upsert_does_not_mark_device_vanished(db_session):
     assert existing.last_uisp_status == "active"
 
 
-def test_vanished_radio_is_soft_pruned(db_session):
+def test_vanished_radio_is_soft_pruned(db_session, subscriber, catalog_offer):
     _ap_node(db_session)
+    _active_subscription(db_session, subscriber, catalog_offer, STATION_MAC)
     client = FakeUispClient(devices=_wireless_payload())
     sync(db_session, client)
 
@@ -380,8 +409,15 @@ def test_archive_site_devices_are_excluded(db_session):
 
 
 # ---------------------------------------------------------------------------
-# Subscriber MAC matching (newly created radios only)
+# Subscriber MAC matching (match-then-create: NOT NULL subscriber_id)
 # ---------------------------------------------------------------------------
+
+
+def test_model_enforces_subscriber_not_null():
+    # Regression guard for the prod NotNullViolation: the model (and thus the
+    # test schema) must carry the same NOT NULL the production schema enforces,
+    # so any INSERT attempt with subscriber_id=None fails loudly in tests too.
+    assert CPEDevice.__table__.c.subscriber_id.nullable is False
 
 
 def test_exact_mac_match_links_active_subscriber(db_session, subscriber, catalog_offer):
@@ -399,7 +435,23 @@ def test_exact_mac_match_links_active_subscriber(db_session, subscriber, catalog
     assert result["ambiguous"] == 0
 
 
-def test_ambiguous_mac_is_left_unlinked(db_session, subscriber, catalog_offer):
+def test_unmatched_station_creates_no_row(db_session):
+    # No ACTIVE subscription carries this MAC: with subscriber_id NOT NULL the
+    # row cannot exist yet, so nothing is created (and nothing FAILS — the
+    # insert is never attempted). The radio is retried on later runs.
+    _ap_node(db_session)
+    client = FakeUispClient(devices=_wireless_payload())
+
+    result = sync(db_session, client)
+
+    assert db_session.query(CPEDevice).count() == 0
+    assert result["created"] == 0
+    assert result["failed"] == 0
+    assert result["unmatched_no_subscriber"] == 1
+    assert result["matched"] == 0
+
+
+def test_ambiguous_mac_creates_no_row(db_session, subscriber, catalog_offer):
     _ap_node(db_session)
     other = Subscriber(
         first_name="Other",
@@ -414,12 +466,11 @@ def test_ambiguous_mac_is_left_unlinked(db_session, subscriber, catalog_offer):
 
     result = sync(db_session, client)
 
-    cpe = (
-        db_session.query(CPEDevice).filter(CPEDevice.uisp_device_id == STATION_ID).one()
-    )
-    assert cpe.subscriber_id is None
+    assert db_session.query(CPEDevice).count() == 0
     assert result["ambiguous"] == 1
     assert result["matched"] == 0
+    assert result["created"] == 0
+    assert result["failed"] == 0
 
 
 def test_inactive_subscription_mac_does_not_match(
@@ -435,18 +486,29 @@ def test_inactive_subscription_mac_does_not_match(
 
     result = sync(db_session, client)
 
-    cpe = (
-        db_session.query(CPEDevice).filter(CPEDevice.uisp_device_id == STATION_ID).one()
-    )
-    assert cpe.subscriber_id is None
+    assert db_session.query(CPEDevice).count() == 0
     assert result["matched"] == 0
+    assert result["unmatched_no_subscriber"] == 1
 
 
-def test_matching_applies_to_newly_created_radios_only(
+def test_existing_row_subscriber_is_never_relinked(
     db_session, subscriber, catalog_offer
 ):
+    # Matching decides CREATION only. An existing row keeps its operator-set
+    # owner even when ACTIVE subscriptions now map the MAC to someone else.
     _ap_node(db_session)
-    existing = CPEDevice(uisp_device_id=STATION_ID, mac_address=STATION_MAC)
+    owner = Subscriber(
+        first_name="Original",
+        last_name="Owner",
+        email=f"owner-{uuid.uuid4().hex[:8]}@example.test",
+    )
+    db_session.add(owner)
+    db_session.flush()
+    existing = CPEDevice(
+        uisp_device_id=STATION_ID,
+        subscriber_id=owner.id,
+        mac_address=STATION_MAC,
+    )
     db_session.add(existing)
     db_session.flush()
     _active_subscription(db_session, subscriber, catalog_offer, STATION_MAC)
@@ -455,8 +517,9 @@ def test_matching_applies_to_newly_created_radios_only(
     result = sync(db_session, client)
 
     db_session.refresh(existing)
-    assert existing.subscriber_id is None
+    assert existing.subscriber_id == owner.id
     assert result["matched"] == 0
+    assert result["created"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -491,6 +554,23 @@ def _ufiber_payload():
     return [olt, onu]
 
 
+def _satisfies_olt_config_pack_check(olt) -> bool:
+    """Python replica of ``ck_olt_devices_config_pack_required``.
+
+    SQLite does not carry this DB-level check (it is created by migrations
+    076/154, not the model), so tests assert the predicate directly. Per
+    migration 154: ``NOT is_active OR (config_pack ->> internet_vlan_id /
+    management_vlan_id / tr069_olt_profile_id are all non-null)``.
+    """
+    if not olt.is_active:
+        return True
+    pack = olt.config_pack or {}
+    return all(
+        pack.get(key) is not None
+        for key in ("internet_vlan_id", "management_vlan_id", "tr069_olt_profile_id")
+    )
+
+
 def test_ufiber_olt_and_onu_upsert(db_session):
     client = FakeUispClient(devices=_ufiber_payload())
 
@@ -500,6 +580,7 @@ def test_ufiber_olt_and_onu_upsert(db_session):
     assert olt.name == "GPON-GARKI-1"
     assert olt.vendor == "ubiquiti"
     assert olt.mgmt_ip == "172.16.60.2"
+    # The parent resolved: ONUs are no longer skipped once the OLT row exists.
     ont = db_session.query(OntUnit).filter(OntUnit.uisp_device_id == ONU_ID).one()
     assert ont.olt_device_id == olt.id
     assert ont.last_sync_source == "uisp"
@@ -511,6 +592,20 @@ def test_ufiber_olt_and_onu_upsert(db_session):
     second = sync(db_session, client)
     assert second["created"] == 0
     assert second["unchanged"] == 2
+
+
+def test_created_uf_olt_satisfies_config_pack_check(db_session):
+    # Prod's ck_olt_devices_config_pack_required rejected every UF-OLT INSERT
+    # (active + empty config_pack). UISP-managed OLTs are monitoring/topology
+    # objects, not provisioning targets: they are created INACTIVE, the
+    # combination the constraint exempts.
+    client = FakeUispClient(devices=_ufiber_payload())
+
+    sync(db_session, client)
+
+    olt = db_session.query(OLTDevice).filter(OLTDevice.uisp_device_id == OLT_ID).one()
+    assert olt.is_active is False
+    assert _satisfies_olt_config_pack_check(olt)
 
 
 def test_ufiber_olt_matches_existing_row_instead_of_creating(db_session):
@@ -525,6 +620,9 @@ def test_ufiber_olt_matches_existing_row_instead_of_creating(db_session):
     db_session.refresh(existing)
     assert existing.uisp_device_id == OLT_ID
     assert existing.vendor == "ubiquiti"
+    # A matched pre-existing row keeps its operator-set activation state:
+    # only rows this sync CREATES are inactive placeholders.
+    assert existing.is_active is True
 
 
 def test_onu_without_resolvable_parent_is_skipped(db_session):
