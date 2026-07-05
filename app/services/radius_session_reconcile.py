@@ -285,7 +285,7 @@ def reconcile_active_sessions_from_radacct(
         if s["nas_ip_address"] and nas_device_id is None:
             result["unresolved_nas"] += 1
 
-        row = existing.get(sid)
+        row: RadiusActiveSession | None = existing.get(sid)
         if row is None:
             db.add(
                 RadiusActiveSession(
