@@ -75,9 +75,9 @@
             </h2>
             <div class="flex flex-wrap items-center justify-end gap-x-4 gap-y-2 text-xs text-slate-600 dark:text-slate-300">
                 <span class="font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Links</span>
-                <span class="flex items-center gap-1"><span class="h-1 w-5 rounded-full bg-emerald-500"></span> Normal</span>
-                <span class="flex items-center gap-1"><span class="h-1 w-5 rounded-full bg-amber-500"></span> Warning (70%+)</span>
-                <span class="flex items-center gap-1"><span class="h-1 w-5 rounded-full bg-rose-500"></span> Critical (90%+)</span>
+                <span class="flex items-center gap-1"><span class="h-1 w-5 rounded-full bg-emerald-500"></span> Up</span>
+                <span class="flex items-center gap-1"><span class="h-1 w-5 rounded-full bg-amber-500"></span> Degraded</span>
+                <span class="flex items-center gap-1"><span class="h-1.5 w-5 rounded-full bg-rose-500"></span> Down</span>
                 <span class="flex items-center gap-1"><span class="h-1 w-5 rounded-full bg-slate-400"></span> Unknown</span>
                 <span class="ml-1 font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Nodes</span>
                 <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-full bg-emerald-500"></span> Online</span>
@@ -86,7 +86,10 @@
                 <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-full bg-indigo-500"></span> Maintenance</span>
             </div>
         </div>
-        <div id="topologyCanvas" style="height: 550px; position: relative;"></div>
+        <div id="topologyCanvas" style="height: 560px; position: relative;"></div>
+        <div class="border-t border-slate-200/60 px-6 py-2 text-xs text-slate-400 dark:border-slate-700/60 dark:text-slate-500">
+            Layered top→down by role · tap a node to see its links, tap a link for detail · scroll to zoom, drag to pan.
+        </div>
     </div>
 
     <!-- Node Detail Panel (hidden by default) -->
@@ -112,6 +115,7 @@
                     <tr class="bg-slate-50/80 dark:bg-slate-800/50">
                         <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Source</th>
                         <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Target</th>
+                        <th class="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
                         <th class="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Role</th>
                         <th class="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Medium</th>
                         <th class="px-4 py-3 text-right text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Capacity</th>
@@ -129,6 +133,13 @@
                         <td class="px-4 py-3">
                             <span class="text-sm font-medium text-slate-900 dark:text-white">{{ edge.target_device }}</span>
                             {% if edge.target_interface %}<br><span class="text-xs text-slate-500">{{ edge.target_interface }}</span>{% endif %}
+                        </td>
+                        <td class="px-4 py-3 text-center">
+                            <span class="inline-flex rounded-full px-2 py-0.5 text-xs font-semibold
+                                {% if edge.status == 'down' %}bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-400
+                                {% elif edge.status == 'degraded' %}bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400
+                                {% elif edge.status == 'up' %}bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400
+                                {% else %}bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300{% endif %}">{{ edge.status }}</span>
                         </td>
                         <td class="px-4 py-3 text-center">
                             <span class="inline-flex rounded-full bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-800 dark:bg-blue-900/30 dark:text-blue-400">{{ edge.role }}</span>
@@ -161,8 +172,10 @@
     {% endif %}
 </div>
 
-<!-- D3.js Topology Graph -->
-<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+<!-- Vendored Cytoscape.js + dagre topology graph (loaded only on this page) -->
+<script src="/static/js/vendor/cytoscape.min.js"></script>
+<script src="/static/js/vendor/dagre.min.js"></script>
+<script src="/static/js/vendor/cytoscape-dagre.min.js"></script>
 <script>
 function updateTopologyFilters() {
     var params = new URLSearchParams();
@@ -173,102 +186,109 @@ function updateTopologyFilters() {
     window.location = '/admin/network/topology' + (params.toString() ? '?' + params.toString() : '');
 }
 
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', function () {
     var container = document.getElementById('topologyCanvas');
-    var width = container.clientWidth;
-    var height = 550;
     var graphData = {{ graph | tojson }};
 
-    if (!graphData.nodes.length) {
-        container.textContent = '';
-        var empty = document.createElement('div');
-        empty.className = 'flex items-center justify-center h-full text-slate-400';
-        empty.textContent = 'No topology data. Add links between devices to build the graph.';
-        container.appendChild(empty);
+    if (!graphData.nodes || !graphData.nodes.length) {
+        container.innerHTML = '<div class="flex items-center justify-center h-full text-slate-400">No topology data. Add links between devices to build the graph.</div>';
         return;
     }
+    if (typeof cytoscape === 'undefined') {
+        container.innerHTML = '<div class="flex items-center justify-center h-full text-slate-400">Topology renderer failed to load.</div>';
+        return;
+    }
+    try { if (typeof cytoscapeDagre !== 'undefined') { cytoscape.use(cytoscapeDagre); } } catch (e) {}
 
-    var UTIL_COLORS = {normal: '#10b981', moderate: '#3b82f6', warning: '#f59e0b', critical: '#ef4444', unknown: '#94a3b8'};
-    var STATUS_COLORS = {online: '#10b981', offline: '#ef4444', degraded: '#f59e0b', maintenance: '#6366f1', unknown: '#94a3b8'};
-    var siteNames = Array.from(new Set(graphData.nodes.map(function(n) { return n.pop_site_name || 'Unassigned'; })));
-    var siteX = {};
-    siteNames.forEach(function(site, index) {
-        siteX[site] = siteNames.length === 1 ? width / 2 : 140 + index * ((width - 280) / Math.max(siteNames.length - 1, 1));
+    var STATUS = {online:'#10b981', up:'#10b981', degraded:'#f59e0b', maintenance:'#6366f1', offline:'#ef4444', down:'#ef4444', unknown:'#94a3b8'};
+    var TIER = {core:0, aggregation:1, distribution:2, access:3, edge:4, cpe:5};
+    function tierOf(role) { var t = TIER[(role || '').toLowerCase()]; return (t === undefined) ? 3 : t; }
+    function statusColor(s) { return STATUS[s] || STATUS.unknown; }
+    function linkWidth(s) { return s === 'down' ? 5 : (s === 'degraded' ? 3 : 2.5); }
+    function fmtCap(bps) { return bps ? Math.round(bps / 1e6) + ' Mbps' : '—'; }
+
+    var tierById = {};
+    graphData.nodes.forEach(function (n) { tierById[n.id] = tierOf(n.role); });
+
+    var els = [];
+    graphData.nodes.forEach(function (n) {
+        els.push({ data: { id: n.id, label: n.name, status: n.status, role: n.role || '',
+            tier: tierById[n.id], pop: n.pop_site_name || '', dtype: n.device_type || '', ip: n.ip || '' } });
+    });
+    graphData.edges.forEach(function (e) {
+        // Orient each link downward by role tier so dagre stacks tiers top→down.
+        var s = e.source, t = e.target;
+        if (tierById[s] > tierById[t]) { var tmp = s; s = t; t = tmp; }
+        els.push({ data: { id: e.id, source: s, target: t, status: e.status || 'unknown',
+            medium: e.medium || '', linkrole: e.role || '', capacity: e.capacity_bps || 0,
+            util: (e.utilization_pct == null ? '' : e.utilization_pct),
+            sdev: e.source_device || '', tdev: e.target_device || '', bundle: e.bundle_key || '' } });
     });
 
-    var svg = d3.select(container).append('svg')
-        .attr('width', width).attr('height', height)
-        .attr('viewBox', [0, 0, width, height]);
+    var isDark = document.documentElement.classList.contains('dark') || window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var labelColor = isDark ? '#cbd5e1' : '#475569';
 
-    var g = svg.append('g');
-    svg.call(d3.zoom().scaleExtent([0.2, 4]).on('zoom', function(event) { g.attr('transform', event.transform); }));
-
-    // Count parallel edges for offset
-    var edgeCounts = {};
-    graphData.edges.forEach(function(e) {
-        var key = [e.source, e.target].sort().join('|');
-        edgeCounts[key] = (edgeCounts[key] || 0) + 1;
-    });
-    var edgeIndex = {};
-    graphData.edges.forEach(function(e) {
-        var key = [e.source, e.target].sort().join('|');
-        edgeIndex[key] = (edgeIndex[key] || 0);
-        e._parallelIndex = edgeIndex[key];
-        e._parallelTotal = edgeCounts[key];
-        edgeIndex[key]++;
-    });
-
-    var simulation = d3.forceSimulation(graphData.nodes)
-        .force('link', d3.forceLink(graphData.edges).id(function(d) { return d.id; }).distance(150))
-        .force('charge', d3.forceManyBody().strength(-400))
-        .force('center', d3.forceCenter(width / 2, height / 2))
-        .force('x', d3.forceX(function(d) { return siteX[d.pop_site_name || 'Unassigned'] || width / 2; }).strength(0.35))
-        .force('y', d3.forceY(height / 2).strength(0.08))
-        .force('collision', d3.forceCollide().radius(40));
-
-    // Edges
-    var link = g.append('g').selectAll('path')
-        .data(graphData.edges).join('path')
-        .attr('stroke', function(d) { return UTIL_COLORS[d.util_state || 'unknown']; })
-        .attr('stroke-width', function(d) { return d.util_state === 'critical' ? 4 : d.util_state === 'warning' ? 3 : 2; })
-        .attr('fill', 'none')
-        .attr('stroke-opacity', 0.7);
-
-    // Edge hover tooltips
-    link.append('title').text(function(d) {
-        return d.source_device + ' → ' + d.target_device +
-            (d.source_interface ? ' (' + d.source_interface + ' → ' + d.target_interface + ')' : '') +
-            '\nRole: ' + d.role + ' | Medium: ' + d.medium +
-            (d.capacity_bps ? '\nCapacity: ' + (d.capacity_bps/1e6) + ' Mbps' : '') +
-            (d.utilization_pct !== null ? '\nUtilization: ' + d.utilization_pct + '%' : '');
+    var cy = cytoscape({
+        container: container,
+        elements: els,
+        wheelSensitivity: 0.2,
+        style: [
+            { selector: 'node', style: {
+                'background-color': function (e) { return statusColor(e.data('status')); },
+                'label': 'data(label)', 'font-size': 10, 'color': labelColor,
+                'text-valign': 'bottom', 'text-margin-y': 4, 'text-wrap': 'wrap', 'text-max-width': 92,
+                'width': 28, 'height': 28, 'border-width': 2, 'border-color': '#ffffff' } },
+            { selector: 'node[tier = 0]', style: { 'shape': 'hexagon', 'width': 46, 'height': 46 } },
+            { selector: 'node[tier = 1]', style: { 'shape': 'round-rectangle', 'width': 40, 'height': 40 } },
+            { selector: 'node[tier = 2]', style: { 'shape': 'round-rectangle', 'width': 36, 'height': 36 } },
+            { selector: 'edge', style: {
+                'curve-style': 'bezier', 'control-point-step-size': 24,
+                'width': function (e) { return linkWidth(e.data('status')); },
+                'line-color': function (e) { return statusColor(e.data('status')); },
+                'line-style': function (e) { return e.data('status') === 'degraded' ? 'dashed' : 'solid'; },
+                'opacity': 0.82, 'target-arrow-shape': 'none' } },
+            { selector: 'edge[status = "down"]', style: { 'line-style': 'dashed', 'line-dash-pattern': [8, 4] } },
+            { selector: '.dim', style: { 'opacity': 0.12 } },
+            { selector: 'node.sel', style: { 'border-width': 4, 'border-color': labelColor } },
+            { selector: 'edge.hi', style: { 'opacity': 1, 'width': function (e) { return linkWidth(e.data('status')) + 2; } } }
+        ],
+        layout: { name: 'dagre', rankDir: 'TB', nodeSep: 24, rankSep: 68, edgeSep: 12 }
     });
 
-    // Nodes
-    var node = g.append('g').selectAll('g')
-        .data(graphData.nodes).join('g')
-        .call(d3.drag()
-            .on('start', function(event, d) { if (!event.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
-            .on('drag', function(event, d) { d.fx = event.x; d.fy = event.y; })
-            .on('end', function(event, d) { if (!event.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; })
-        );
+    function reset() { cy.elements().removeClass('dim sel hi'); }
 
-    node.append('circle')
-        .attr('r', 18)
-        .attr('fill', function(d) { return STATUS_COLORS[d.status] || '#94a3b8'; })
-        .attr('stroke', '#fff').attr('stroke-width', 2)
-        .style('cursor', 'pointer');
+    // Tap a link → highlight it + its endpoints, show its status/role/medium/capacity/util.
+    cy.on('tap', 'edge', function (ev) {
+        var e = ev.target, d = e.data();
+        cy.elements().addClass('dim'); e.removeClass('dim'); e.connectedNodes().removeClass('dim');
+        cy.elements().removeClass('sel hi'); e.addClass('hi');
+        var panel = document.getElementById('nodeDetail');
+        document.getElementById('nodeDetailTitle').textContent = d.sdev + ' ↔ ' + d.tdev;
+        document.getElementById('nodeDetailContent').innerHTML =
+            '<div class="flex flex-wrap items-center gap-3 text-sm">'
+            + '<span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold text-white" style="background:' + statusColor(d.status) + '">' + d.status + '</span>'
+            + '<span class="text-slate-600 dark:text-slate-300">' + (d.linkrole || 'link') + ' · ' + (d.medium || '—') + '</span>'
+            + '<span class="text-slate-600 dark:text-slate-300">Capacity: ' + fmtCap(d.capacity) + '</span>'
+            + '<span class="text-slate-600 dark:text-slate-300">Utilization: ' + (d.util === '' ? '—' : d.util + '%') + '</span>'
+            + (d.bundle ? '<span class="text-slate-500">bundle: ' + d.bundle + '</span>' : '')
+            + '</div><div class="mt-2 text-xs text-slate-400">Parallel / bonded links fan out; each carries its own status.</div>'
+            + '<div class="mt-3"><a href="/admin/network/topology/links/' + d.id + '/edit" class="text-blue-600 hover:underline text-sm dark:text-blue-400">Edit link</a></div>';
+        panel.classList.remove('hidden');
+    });
 
-    node.append('text')
-        .attr('dy', 30).attr('text-anchor', 'middle')
-        .attr('class', 'text-xs font-medium')
-        .attr('fill', '#475569')
-        .text(function(d) { return d.name.length > 15 ? d.name.substring(0, 14) + '…' : d.name; });
+    // Tap a node → highlight it + its links + neighbours, then drill into the detail API.
+    cy.on('tap', 'node', function (ev) {
+        var n = ev.target, inc = n.connectedEdges(), nbr = inc.connectedNodes().add(n);
+        cy.elements().addClass('dim'); nbr.removeClass('dim'); inc.removeClass('dim');
+        cy.elements().removeClass('sel hi'); n.addClass('sel'); inc.addClass('hi');
+        loadNodeDetail(n.id());
+    });
+    cy.on('tap', function (ev) { if (ev.target === cy) { reset(); } });
 
-    // Node click → drilldown
-    node.on('click', function(event, d) {
-        fetch('/admin/network/topology/api/node/' + d.id)
-            .then(function(r) { return r.json(); })
-            .then(function(data) {
+    function loadNodeDetail(nodeId) {
+        fetch('/admin/network/topology/api/node/' + nodeId)
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
                 var panel = document.getElementById('nodeDetail');
                 document.getElementById('nodeDetailTitle').textContent = data.device.name + ' (' + data.device.status + ')';
                 var content = document.getElementById('nodeDetailContent');
@@ -313,13 +333,13 @@ document.addEventListener('DOMContentLoaded', function() {
                     thead.innerHTML = '<tr class="text-xs text-slate-500"><th class="text-left pr-4">Peer</th><th class="text-left pr-4">Interface</th><th class="text-right pr-4">Role</th><th class="text-right">Util</th></tr>';
                     table.appendChild(thead);
                     var tbody = document.createElement('tbody');
-                    data.links.forEach(function(l) {
-                        var peer = l.source === d.id ? l.target_device : l.source_device;
-                        var iface = l.source === d.id ? l.source_interface : l.target_interface;
+                    data.links.forEach(function (l) {
+                        var peer = l.source === nodeId ? l.target_device : l.source_device;
+                        var iface = l.source === nodeId ? l.source_interface : l.target_interface;
                         var tr = document.createElement('tr');
                         tr.className = 'border-t border-slate-100 dark:border-slate-700';
                         var utilText = l.utilization_pct !== null ? l.utilization_pct + '%' : '—';
-                        tr.innerHTML = '<td class="py-2 pr-4 font-medium">' + peer + '</td><td class="pr-4 font-mono text-xs">' + (iface||'—') + '</td><td class="pr-4 text-right">' + l.role + '</td><td class="text-right font-bold">' + utilText + '</td>';
+                        tr.innerHTML = '<td class="py-2 pr-4 font-medium">' + peer + '</td><td class="pr-4 font-mono text-xs">' + (iface || '—') + '</td><td class="pr-4 text-right">' + l.role + '</td><td class="text-right font-bold">' + utilText + '</td>';
                         tbody.appendChild(tr);
                     });
                     table.appendChild(tbody);
@@ -344,7 +364,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     ifaceHead.innerHTML = '<tr class="text-xs text-slate-500"><th class="text-left pr-4">Name</th><th class="text-left pr-4">Status</th><th class="text-right pr-4">Speed</th><th class="text-right">Monitored</th></tr>';
                     ifaceTable.appendChild(ifaceHead);
                     var ifaceBody = document.createElement('tbody');
-                    data.interfaces.forEach(function(i) {
+                    data.interfaces.forEach(function (i) {
                         var tr = document.createElement('tr');
                         tr.className = 'border-t border-slate-100 dark:border-slate-700';
                         var speedText = i.speed_mbps ? i.speed_mbps + ' Mbps' : '—';
@@ -364,22 +384,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 sectionWrap.appendChild(ifaceSection);
                 content.appendChild(sectionWrap);
                 panel.classList.remove('hidden');
-            });
-    });
-
-    simulation.on('tick', function() {
-        link.attr('d', function(d) {
-            if (d._parallelTotal <= 1) {
-                return 'M' + d.source.x + ',' + d.source.y + 'L' + d.target.x + ',' + d.target.y;
-            }
-            var dx = d.target.x - d.source.x, dy = d.target.y - d.source.y;
-            var dr = Math.sqrt(dx*dx + dy*dy);
-            var offset = (d._parallelIndex - (d._parallelTotal-1)/2) * 20;
-            var sweep = d._parallelIndex % 2;
-            return 'M' + d.source.x + ',' + d.source.y + 'A' + (dr + Math.abs(offset)*3) + ',' + (dr + Math.abs(offset)*3) + ' 0 0,' + sweep + ' ' + d.target.x + ',' + d.target.y;
-        });
-        node.attr('transform', function(d) { return 'translate(' + d.x + ',' + d.y + ')'; });
-    });
+            })
+            .catch(function () {});
+    }
 });
 </script>
 {% endblock %}
