@@ -240,6 +240,9 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.olt_health_retry.retry_single_olt": _c(
         "network", AUTORETRY, IDEMP, STATUS
     ),
+    "app.tasks.olt_mac_harvest.run_olt_mac_harvest": _c(
+        "network", SWEEP, IDEMP, HEALTH
+    ),
     "app.tasks.ont_bulk.execute_bulk_action": _c("network", ITEMS, PER_ITEM, STATUS),
     "app.tasks.ont_provisioning.authorize_ont": _c(
         "provisioning", STATE, STATEFUL, STATUS

@@ -48,7 +48,7 @@ def run_olt_mac_harvest() -> dict[str, Any]:
             return {"skipped_due_to_lock": 1}
 
         try:
-            from app.services.network.olt_mac_harvest import harvest_olt_mac_tables
+            from app.services.topology.olt_mac_harvest import harvest_olt_mac_tables
 
             result = harvest_olt_mac_tables(db)
             db.commit()

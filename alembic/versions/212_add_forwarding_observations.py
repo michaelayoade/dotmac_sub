@@ -22,7 +22,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from alembic import op
 
 revision = "212_add_forwarding_observations"
-down_revision = "211_seed_unmatched_radio_review_task"
+down_revision = "212_crm_invoice_idempotency"
 branch_labels = None
 depends_on = None
 

@@ -2364,7 +2364,7 @@ class ForwardingObservation(Base):
 
     General "hop-1" position -> MAC record: one row per (MAC, position) learned
     on a device's forwarding table. The Huawei OLT harvester
-    (``app/services/network/olt_mac_harvest.py``) parses ``display mac-address
+    (``app/services/topology/olt_mac_harvest.py``) parses ``display mac-address
     port <F/S/P>`` and emits one row per learned customer/router MAC, mapping it
     to the exact PON port (F/S/P) and ONT-ID (the VPI column). This is an
     ephemeral, periodically-refreshed table (rows are aged out) and the reusable

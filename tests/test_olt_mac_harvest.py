@@ -21,8 +21,8 @@ from app.models.network import (
     PonPort,
 )
 from app.models.subscriber import Subscriber
-from app.services.network import olt_mac_harvest
-from app.services.network.olt_mac_harvest import (
+from app.services.topology import olt_mac_harvest
+from app.services.topology.olt_mac_harvest import (
     harvest_olt_mac_tables,
     parse_mac_address_port,
 )
@@ -350,7 +350,7 @@ def test_task_skips_when_advisory_lock_held(monkeypatch):
         raise AssertionError("harvest must not run when lock is held")
 
     monkeypatch.setattr(
-        "app.services.network.olt_mac_harvest.harvest_olt_mac_tables", _boom
+        "app.services.topology.olt_mac_harvest.harvest_olt_mac_tables", _boom
     )
 
     result = task_mod.run_olt_mac_harvest()
