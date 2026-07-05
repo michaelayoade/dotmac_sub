@@ -207,7 +207,7 @@ def _mac_owner_count(db: Session, mac_compact: str) -> int:
     from app.models.catalog import Subscription, SubscriptionStatus
     from app.services.radio_registration import _compact_mac_sql
 
-    owners = set()
+    owners: set = set()
     rows = (
         db.query(Subscription.subscriber_id)
         .filter(
