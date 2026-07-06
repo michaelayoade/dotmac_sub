@@ -371,6 +371,9 @@ class PaymentRead(PaymentBase):
     id: UUID
     created_at: datetime
     updated_at: datetime
+    # Total refunded so far; gross `amount` is unchanged, so net = amount -
+    # refunded_amount. Consumers (e.g. ERP GL posting) use this to post net cash.
+    refunded_amount: Decimal = Decimal("0")
     allocations: list[PaymentAllocationRead] = Field(default_factory=list)
 
 
