@@ -92,6 +92,7 @@ from app.tasks.ont_provisioning import (
     provision_ont,
     queue_bulk_provisioning,
 )
+from app.tasks.ont_signal_observations import record_ont_observations
 from app.tasks.payment_reconciliation import reconcile_topups
 from app.tasks.profile_sync import (
     execute_due_profile_sync_tasks,
@@ -201,6 +202,7 @@ __all__ = [
     "run_radius_sync_job",
     "provision_ont",
     "queue_bulk_provisioning",
+    "record_ont_observations",
     "run_invoice_cycle",
     "charge_due_invoices",
     "check_overdue_arrangements",

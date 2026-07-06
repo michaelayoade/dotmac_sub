@@ -2410,6 +2410,64 @@ class ForwardingObservation(Base):
     source: Mapped[str] = mapped_column(Text, nullable=False, default="huawei_olt_mac")
 
 
+class OntSignalObservation(Base):
+    """Append-only per-ONT status + Rx snapshot — the splice-inference substrate.
+
+    The OLT sees every ONT's ``olt_status`` and ``onu_rx_signal_dbm``, but the
+    passive splitter's internal sub-split branch/splice is unpollable and the
+    manual ``SplitterPortAssignment`` plant records rot (design §4). This table
+    keeps the TIME SERIES those live ``ont_units`` columns lack: one row per ONT
+    per collection sweep. Splice inference (``app/services/topology/
+    splice_inference.py``, design §6) derives the hidden sub-PON topology from it
+    — ONTs that repeatedly go dark together (co-failure) or droop by the same dB
+    (correlated Rx) share a branch.
+
+    Append-only + periodically pruned (never updated in place); a snapshot is a
+    fact at ``observed_at``. TODO(retention): prune rows older than the inference
+    window (~90d) in the collector task once volume warrants it.
+    """
+
+    __tablename__ = "ont_signal_observations"
+    __table_args__ = (
+        Index(
+            "ix_ont_signal_observations_ont_observed",
+            "ont_unit_id",
+            "observed_at",
+        ),
+        Index(
+            "ix_ont_signal_observations_pon_observed",
+            "pon_port_id",
+            "observed_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    ont_unit_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ont_units.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    olt_device_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("olt_devices.id", ondelete="SET NULL")
+    )
+    pon_port_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pon_ports.id", ondelete="SET NULL")
+    )
+    olt_status: Mapped[OnuOnlineStatus] = mapped_column(
+        Enum(OnuOnlineStatus, name="onuonlinestatus", create_constraint=False),
+        nullable=False,
+    )
+    rx_signal_dbm: Mapped[float | None] = mapped_column(Float)
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        index=True,
+    )
+
+
 class NetworkZone(Base):
     """Geographic zone for organizing network infrastructure."""
 

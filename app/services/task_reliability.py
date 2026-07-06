@@ -253,6 +253,9 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.ont_provisioning.queue_bulk_provisioning": _c(
         "provisioning", ITEMS, PER_ITEM, STATUS
     ),
+    "app.tasks.ont_signal_observations.record_ont_observations": _c(
+        "network", SWEEP, IDEMP, HEALTH
+    ),
     "app.tasks.payment_reconciliation.reconcile_topups": _c(
         "billing", STATE, GUARDED, HEALTH
     ),
