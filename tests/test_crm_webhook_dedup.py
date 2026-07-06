@@ -1,8 +1,11 @@
 """S4: inbound CRM webhook delivery dedup (idempotency).
 
 A byte-identical redelivery of a signed webhook must not re-run its side effect
-(a duplicate chat/reward push). Covered here for the two side-effecting handlers;
-the mirror handlers are naturally idempotent (upserts) and out of scope.
+(a duplicate chat/reward push, a re-fired lifecycle push, or a delta re-apply
+that reverts a newer status). Covered here for the side-effecting handlers and,
+since P-3, the project/work-order/quote mirror handlers that apply a delta +
+fire a customer push (the ticket handler re-pulls authoritative state, so it
+stays idempotent without a claim).
 """
 
 from __future__ import annotations
@@ -20,11 +23,13 @@ from app.api.crm_webhooks import (
     _delivery_uuid,
     receive_crm_chat_event,
     receive_crm_referral_event,
+    receive_crm_work_order_event,
 )
 from app.config import settings
 from app.models.crm_webhook_delivery import CrmWebhookDelivery
 from app.models.referral import ReferralMirror
 from app.models.subscriber import Subscriber
+from app.models.work_order_mirror import WorkOrderMirror
 
 SECRET = "test-webhook-secret"
 
@@ -183,3 +188,62 @@ def test_delivery_uuid_falls_back_to_signature_deterministically():
     req_c = _FakeRequest(b"{}", {"X-Webhook-Signature-256": "sha256=xyz"})
     assert _delivery_uuid(req_a) == _delivery_uuid(req_b)
     assert _delivery_uuid(req_a) != _delivery_uuid(req_c)
+
+
+# ── work-order mirror dedup (P-3) ─────────────────────────────────────────
+
+
+def _post_work_order(db_session, body: dict, event="work_order.created"):
+    raw = json.dumps(body).encode()
+    return _run(
+        receive_crm_work_order_event(
+            _FakeRequest(raw, _headers(raw, event)), db_session
+        )
+    )
+
+
+def test_work_order_redelivery_is_deduped(db_session):
+    crm_id = uuid.uuid4()
+    _linked_subscriber(db_session, crm_id)
+    body = {
+        "crm_subscriber_id": str(crm_id),
+        "id": "wo-1",
+        "status": "scheduled",
+        "title": "Install",
+    }
+
+    with _with_secret(SECRET):
+        first = _post_work_order(db_session, body)
+        second = _post_work_order(db_session, body)
+
+    assert first["status"] == "ok"
+    assert second["status"] == "ignored" and second["reason"] == "duplicate"
+    # The mirror upsert ran exactly once; the redelivery never re-applied.
+    assert (
+        db_session.query(WorkOrderMirror).filter_by(crm_work_order_id="wo-1").count()
+        == 1
+    )
+    assert db_session.query(CrmWebhookDelivery).count() == 1
+
+
+def test_distinct_work_order_events_both_process(db_session):
+    crm_id = uuid.uuid4()
+    _linked_subscriber(db_session, crm_id)
+
+    with _with_secret(SECRET):
+        _post_work_order(
+            db_session,
+            {"crm_subscriber_id": str(crm_id), "id": "wo-1", "status": "scheduled"},
+        )
+        # Different body -> different signature -> different delivery id: a real
+        # later transition still applies (dedup only catches byte-identical
+        # redeliveries, not distinct events).
+        _post_work_order(
+            db_session,
+            {"crm_subscriber_id": str(crm_id), "id": "wo-1", "status": "in_progress"},
+            event="work_order.updated",
+        )
+
+    row = db_session.query(WorkOrderMirror).filter_by(crm_work_order_id="wo-1").one()
+    assert row.status == "in_progress"
+    assert db_session.query(CrmWebhookDelivery).count() == 2
