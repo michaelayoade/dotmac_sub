@@ -15,6 +15,7 @@ decision C re: wireless).
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from sqlalchemy import or_, select
@@ -229,7 +230,7 @@ MEDIUM_UNKNOWN = "unknown"
 
 
 def _live_nas_by_subscription(
-    db: Session, active_subs: list, subscriber_ids: set
+    db: Session, active_subs: Sequence, subscriber_ids: set
 ) -> dict[object, object]:
     """{subscription_id: live nas_device_id} — the batched mirror of
     customer_path._live_session_nas_device_id.
