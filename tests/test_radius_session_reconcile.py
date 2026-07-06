@@ -322,3 +322,20 @@ class TestActiveSessionReconcile:
             out = reconcile_active_sessions.run()
         assert out == {"skipped": "already_running"}
         spy.assert_not_called()
+
+
+def test_strip_inet_mask_accepts_ipaddress_objects():
+    """psycopg adapts Postgres inet to ipaddress objects, not strings — the
+    real prod behavior the string-mocked tests missed (crashed the reconciler)."""
+    import ipaddress
+
+    from app.services.radius_session_reconcile import _strip_inet_mask
+
+    assert (
+        _strip_inet_mask(ipaddress.IPv4Interface("160.119.127.95/32"))
+        == "160.119.127.95"
+    )
+    assert _strip_inet_mask(ipaddress.IPv4Address("10.0.0.1")) == "10.0.0.1"
+    assert _strip_inet_mask("172.16.0.5/32") == "172.16.0.5"  # string form still works
+    assert _strip_inet_mask(None) is None
+    assert _strip_inet_mask(ipaddress.IPv6Interface("2001:db8::/64")) == "2001:db8::/64"
