@@ -710,6 +710,38 @@ def build_beat_schedule() -> dict:
             enabled=usage_enabled,
             interval_seconds=radius_active_session_reconcile_interval_seconds,
         )
+        # Enforce billing suspensions at the live session (SP-1). A suspend only
+        # writes Auth-Type := Reject, which bites at the *next* re-auth — a stable
+        # PPPoE session survives it, so a suspended/terminated subscriber can stay
+        # online for days (revenue leak). run_enforcement_reconciler CoA-kicks open
+        # sessions whose user has no radcheck row or sits in a reject pool, and
+        # repairs walled-garden radreply drift. It caps kicks per run so systemic
+        # drift degrades to alerts rather than a mass disconnect — hence safe to
+        # run by default. Previously defined but never scheduled.
+        enforcement_reconciler_enabled = _effective_bool(
+            session,
+            SettingDomain.usage,
+            "enforcement_reconciler_enabled",
+            "ENFORCEMENT_RECONCILER_ENABLED",
+            True,
+        )
+        enforcement_reconciler_interval_seconds = max(
+            _effective_int(
+                session,
+                SettingDomain.usage,
+                "enforcement_reconciler_interval_seconds",
+                "ENFORCEMENT_RECONCILER_INTERVAL_SECONDS",
+                600,
+            ),
+            120,
+        )
+        _sync_scheduled_task(
+            session,
+            name="enforcement_reconciler",
+            task_name="app.tasks.radius.run_enforcement_reconciler",
+            enabled=enforcement_reconciler_enabled,
+            interval_seconds=enforcement_reconciler_interval_seconds,
+        )
         # Roll imported RADIUS accounting into quota buckets (feeds FUP/overage).
         # Gated by the same usage flag. This follows the RADIUS accounting
         # cadence instead of the daily usage-rating cadence so FUP decisions
