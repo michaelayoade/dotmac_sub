@@ -2098,7 +2098,7 @@ def mark_overdue_invoices(db: Session) -> dict[str, int]:
             logger.error("Failed to process overdue invoice %s: %s", invoice.id, exc)
             errors += 1
 
-    if marked or escalated:
+    if marked or escalated or skipped_on_hold:
         db.commit()
 
     logger.info(

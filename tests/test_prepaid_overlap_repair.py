@@ -197,7 +197,7 @@ def test_apply_repair_voids_bad_invoice_corrects_anchor_and_restores_bad_lock(
     assert result["subscriptions_restored"] == 1
     assert bad.status == InvoiceStatus.void
     assert bad.balance_due == Decimal("0.00")
-    assert subscription.next_billing_at == paid_end
+    assert subscription.next_billing_at.replace(tzinfo=UTC) == paid_end
     assert subscription.status == SubscriptionStatus.active
     assert subscriber_account.status == SubscriberStatus.active
     assert case.status == DunningCaseStatus.resolved
