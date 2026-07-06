@@ -175,6 +175,55 @@ def test_poll_all_upsert_idempotent_and_prune(db_session):
     assert len(inactive) == 1
 
 
+def test_edge_survives_when_its_observing_router_fails(db_session):
+    """An existing edge must NOT be pruned on a run where the router that
+    observes it failed (or was skipped). Only edges a SUCCESSFULLY-polled router
+    could have re-observed are prune-eligible — otherwise the routers that
+    routinely time out would flap their edges active/inactive every run."""
+    _spdc, r_spdc = _router_node(db_session, "SPDC Access")
+    _gbb, r_gbb = _router_node(db_session, "GBB")
+    switch = _plain(db_session, "SPDC-Switch", mgmt_ip="10.0.0.77")
+
+    neighbors = {
+        # spdc is the ONLY observer of the spdc<->switch edge
+        str(r_spdc.id): [
+            {"identity": "GBB", "interface": "sfp1"},
+            {"identity": "sw", "address": "10.0.0.77", "interface": "ether2"},
+        ],
+        str(r_gbb.id): [{"identity": "SPDC Access", "interface": "sfp1"}],
+    }
+
+    def healthy(router):
+        return neighbors.get(str(router.id), [])
+
+    r1 = poll_all(db_session, read_neighbors=healthy, now=NOW)
+    assert r1["created"] == 2  # spdc<->gbb + spdc<->switch
+    assert len(_active_links(db_session)) == 2
+
+    # --- spdc (the switch edge's only observer) times out this run ---
+    def spdc_fails(router):
+        if router.id == r_spdc.id:
+            raise OSError("routeros connect timeout")
+        return neighbors.get(str(router.id), [])
+
+    r2 = poll_all(
+        db_session,
+        read_neighbors=spdc_fails,
+        now=datetime(2026, 6, 17, 14, 10, tzinfo=UTC),
+    )
+    assert r2["routers_failed"] == 1
+    # No edge is pruned: the switch edge's only observer failed, and the
+    # spdc<->gbb edge was re-seen from gbb's side.
+    assert r2["pruned"] == 0
+    assert len(_active_links(db_session)) == 2
+    switch_links = [
+        _l
+        for _l in _active_links(db_session)
+        if switch.id in (_l.source_device_id, _l.target_device_id)
+    ]
+    assert len(switch_links) == 1, "spdc<->switch edge must survive spdc's failure"
+
+
 def test_neighbor_matched_by_identity_then_address(db_session):
     """Identity wins when present; address is the fallback key."""
     _spdc, r_spdc = _router_node(db_session, "SPDC Access")
