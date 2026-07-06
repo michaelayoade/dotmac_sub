@@ -15,8 +15,13 @@ from app.models.subscriber import Subscriber
 from app.services import crm_api
 from app.services.topology.outage import (
     AUTO_DETECT_ACTOR,
+    confirm_incident,
     declare_outage,
+    discard_incident,
+    open_classifier_incident,
+    resolve_classifier_incident,
     resolve_outage,
+    start_clearing,
 )
 
 
@@ -62,15 +67,21 @@ def test_list_serializes_scope_and_detection_source(db_session, catalog_offer):
     rows, total = crm_api.list_outage_incidents(db_session)
     assert total == 2
     by_id = {r["id"]: r for r in rows}
-    assert by_id[str(manual.id)]["detection_source"] == "manual"
-    assert by_id[str(auto.id)]["detection_source"] == "auto"
+    # Both are operator-provenance incidents; detection_source is the authoritative
+    # operator/classifier discriminator, declared_source keeps the auto/manual split.
+    assert by_id[str(manual.id)]["detection_source"] == "operator"
+    assert by_id[str(auto.id)]["detection_source"] == "operator"
+    assert by_id[str(manual.id)]["declared_source"] == "manual"
+    assert by_id[str(auto.id)]["declared_source"] == "auto"
     row = by_id[str(manual.id)]
     assert row["scope"]["type"] == "node"
     assert row["scope"]["name"] == node.name
     assert row["status"] == "open"
+    assert row["state"] == "open"
     assert row["affected_count"] == 2
     assert row["started_at"] is not None
     assert row["resolved_at"] is None
+    assert row["mttr_seconds"] is None
 
 
 def test_list_includes_recently_resolved_but_not_stale(db_session, catalog_offer):
@@ -91,6 +102,79 @@ def test_list_includes_recently_resolved_but_not_stale(db_session, catalog_offer
 
     resolved_rows, _ = crm_api.list_outage_incidents(db_session, status="resolved")
     assert {r["id"] for r in resolved_rows} == {str(recent.id), str(old.id)}
+
+
+def test_default_active_view_includes_confirmed_classifier_excludes_suspected(
+    db_session, catalog_offer
+):
+    """§7.6 finding 4: the default CRM list surfaces ACTIVE classifier incidents
+    (confirmed/clearing, resolved_at NULL) alongside operator ``open`` — but a
+    still-debouncing ``suspected`` incident is noise and stays hidden, and a
+    ``discarded`` false positive never shows."""
+    node = _nas_node_with_subs(db_session, catalog_offer.id, 2)
+    now = datetime.now(UTC)
+
+    op_open = declare_outage(db_session, node=node, declared_by="noc@x")
+
+    confirmed = open_classifier_incident(
+        db_session, root_node=node, affected_count=2, confidence=0.9, now=now
+    )
+    confirm_incident(db_session, confirmed, now=now)
+
+    clearing = open_classifier_incident(
+        db_session, root_node=node, affected_count=1, now=now
+    )
+    confirm_incident(db_session, clearing, now=now)
+    start_clearing(db_session, clearing, now=now)
+
+    suspected = open_classifier_incident(db_session, root_node=node, now=now)
+
+    discarded = open_classifier_incident(db_session, root_node=node, now=now)
+    discard_incident(db_session, discarded)
+    db_session.flush()
+
+    rows, _ = crm_api.list_outage_incidents(db_session)
+    ids = {r["id"] for r in rows}
+    assert str(op_open.id) in ids
+    assert str(confirmed.id) in ids  # debounced-real → visible
+    assert str(clearing.id) in ids  # still settling → visible
+    assert str(suspected.id) not in ids  # not yet confirmed → hidden noise
+    assert str(discarded.id) not in ids  # false positive → hidden
+
+    by_id = {r["id"]: r for r in rows}
+    conf_row = by_id[str(confirmed.id)]
+    assert conf_row["detection_source"] == "classifier"
+    assert conf_row["state"] == "confirmed"
+    assert conf_row["confirmed_at"] is not None
+    assert conf_row["confidence"] == 0.9
+    assert conf_row["mttr_seconds"] is None  # not resolved yet
+
+
+def test_row_carries_mttr_and_state_for_resolved_classifier(db_session, catalog_offer):
+    """A resolved classifier incident carries MTTR (resolved_at - confirmed_at)
+    and the terminal ``resolved`` state; narrowing by status='suspected' works."""
+    node = _nas_node_with_subs(db_session, catalog_offer.id, 1)
+    confirmed_at = datetime.now(UTC) - timedelta(minutes=30)
+    inc = open_classifier_incident(db_session, root_node=node, now=confirmed_at)
+    confirm_incident(db_session, inc, now=confirmed_at)
+    start_clearing(db_session, inc, now=confirmed_at + timedelta(minutes=20))
+    resolve_classifier_incident(
+        db_session, inc, now=confirmed_at + timedelta(minutes=30)
+    )
+    db_session.flush()
+
+    # Narrow to the terminal state to fetch it (excluded from the active default).
+    rows, _ = crm_api.list_outage_incidents(db_session, status="resolved")
+    row = next(r for r in rows if r["id"] == str(inc.id))
+    assert row["state"] == "resolved"
+    assert row["detection_source"] == "classifier"
+    assert row["mttr_seconds"] == 30 * 60
+
+    # A suspected incident is reachable only via explicit narrowing.
+    susp = open_classifier_incident(db_session, root_node=node, now=datetime.now(UTC))
+    db_session.flush()
+    susp_rows, _ = crm_api.list_outage_incidents(db_session, status="suspected")
+    assert {r["id"] for r in susp_rows} == {str(susp.id)}
 
 
 def test_list_filters_by_basestation_scope(db_session):
