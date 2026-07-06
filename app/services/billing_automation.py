@@ -728,6 +728,12 @@ def _emit_invoice_created_event(
         {
             "invoice_id": str(invoice.id),
             "account_id": str(invoice.account_id),
+            # invoice_number / amount / due_date feed the invoice_created email
+            # template — without them the notification was suppressed as having
+            # unresolved variables.
+            "invoice_number": invoice.invoice_number or "",
+            "amount": str(invoice.total) if invoice.total else "0.00",
+            "due_date": invoice.due_at.date().isoformat() if invoice.due_at else "",
             "status": invoice.status.value if invoice.status else None,
             "currency": invoice.currency,
             "subtotal": str(invoice.subtotal) if invoice.subtotal else "0.00",

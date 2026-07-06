@@ -850,6 +850,7 @@ def delete_policy_dunning_step(step_id: str, db: Session = Depends(get_db)):
     response_model=NasDeviceRead,
     status_code=status.HTTP_201_CREATED,
     tags=["nas-devices"],
+    operation_id="catalog_create_nas_device",
 )
 def create_nas_device(payload: NasDeviceCreate, db: Session = Depends(get_db)):
     return catalog_service.nas_devices.create(db, payload)
@@ -859,6 +860,7 @@ def create_nas_device(payload: NasDeviceCreate, db: Session = Depends(get_db)):
     "/nas-devices/{device_id}",
     response_model=NasDeviceRead,
     tags=["nas-devices"],
+    operation_id="catalog_get_nas_device",
 )
 def get_nas_device(device_id: str, db: Session = Depends(get_db)):
     return catalog_service.nas_devices.get(db, device_id)
@@ -868,6 +870,7 @@ def get_nas_device(device_id: str, db: Session = Depends(get_db)):
     "/nas-devices",
     response_model=ListResponse[NasDeviceRead],
     tags=["nas-devices"],
+    operation_id="catalog_list_nas_devices",
 )
 def list_nas_devices(
     vendor: str | None = None,
@@ -887,6 +890,7 @@ def list_nas_devices(
     "/nas-devices/{device_id}",
     response_model=NasDeviceRead,
     tags=["nas-devices"],
+    operation_id="catalog_update_nas_device",
 )
 def update_nas_device(
     device_id: str, payload: NasDeviceUpdate, db: Session = Depends(get_db)
@@ -898,6 +902,7 @@ def update_nas_device(
     "/nas-devices/{device_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["nas-devices"],
+    operation_id="catalog_delete_nas_device",
 )
 def delete_nas_device(device_id: str, db: Session = Depends(get_db)):
     catalog_service.nas_devices.delete(db, device_id)
