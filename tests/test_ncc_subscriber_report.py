@@ -92,7 +92,9 @@ def test_infer_state_falls_back_to_service_address():
 
 
 # ── integration ─────────────────────────────────────────────────────────────
-def _offer(db, *, access, speed, mode=BillingMode.prepaid) -> CatalogOffer:
+def _offer(
+    db, *, access, speed, upload_speed=None, mode=BillingMode.prepaid
+) -> CatalogOffer:
     o = CatalogOffer(
         name=f"Plan {uuid.uuid4().hex[:5]}",
         code=f"P-{uuid.uuid4().hex[:6]}",
@@ -102,6 +104,7 @@ def _offer(db, *, access, speed, mode=BillingMode.prepaid) -> CatalogOffer:
         billing_cycle=BillingCycle.monthly,
         billing_mode=mode,
         speed_download_mbps=speed,
+        speed_upload_mbps=upload_speed,
         is_active=True,
     )
     db.add(o)
@@ -183,11 +186,43 @@ def test_report_aggregates_active_subscriptions(db_session):
     assert r["by_billing_mode"] == {"postpaid": 1, "prepaid": 1}
     assert r["by_speed_band"]["10Mbps+"] == 1
     assert r["by_speed_band"]["2Mbps-<10Mbps"] == 1
+    assert r["average_speed"]["average_mbps"] == 52.5
+    assert r["average_speed"]["included_download_count"] == 2
+    assert r["average_speed"]["excluded_download_count"] == 0
     assert r["subscription_matrix"]["corporate"]["wired"] == 1
     assert r["subscription_matrix"]["individual"]["wireless"] == 1
     assert r["by_state"] == {"Federal Capital Territory": 1, "Lagos": 1}
     assert r["by_region"] == {"North Central": 1, "South West": 1}
     assert r["network_capacity"]["points_of_presence"] == 28
+
+
+def test_report_average_speed_excludes_missing_and_implausible_values(db_session):
+    sane = _offer(db_session, access=AccessType.fiber, speed=50, upload_speed=20)
+    slow = _offer(db_session, access=AccessType.fiber, speed=10, upload_speed=5)
+    missing = _offer(db_session, access=AccessType.fiber, speed=None, upload_speed=None)
+    outlier = _offer(
+        db_session, access=AccessType.fiber, speed=600000, upload_speed=600000
+    )
+    sub = _subscriber(db_session, region="Lagos")
+
+    for offer in (sane, slow, missing, outlier):
+        _subscription(db_session, sub, offer)
+
+    r = ncc.build_ncc_subscriber_report(db_session)
+
+    assert r["total_active_subscriptions"] == 4
+    assert r["average_speed"] == {
+        "average_mbps": 30.0,
+        "average_download_mbps": 30.0,
+        "average_upload_mbps": 12.5,
+        "basis": "active_subscription_offer_speed_mbps",
+        "included_download_count": 2,
+        "included_upload_count": 2,
+        "excluded_download_count": 2,
+        "excluded_upload_count": 2,
+        "total_active_subscriptions": 4,
+        "max_plausible_speed_mbps": 10000,
+    }
 
 
 def test_report_reduces_unknowns_with_city_and_service_address_fallback(db_session):
@@ -233,6 +268,8 @@ def test_report_empty(db_session):
     r = ncc.build_ncc_subscriber_report(db_session)
     assert r["total_active_subscriptions"] == 0
     assert r["by_state"] == {}
+    assert r["average_speed"]["average_mbps"] is None
+    assert r["average_speed"]["included_download_count"] == 0
     assert r["network_capacity"]["points_of_presence"] is None
 
 
@@ -304,5 +341,6 @@ def test_build_csv_layout(db_session):
     csv_text = ncc.build_ncc_subscriber_csv(report)
     assert "Total Active Internet Subscriptions,0" in csv_text
     assert "Corporate — Wired,0" in csv_text
+    assert "Average Internet Speed (Mbps)," in csv_text
     assert "Data Usage (TB) [manual]," in csv_text
     assert "Active Subscriptions per State" in csv_text

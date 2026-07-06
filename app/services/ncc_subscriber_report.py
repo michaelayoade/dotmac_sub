@@ -172,6 +172,7 @@ _CORPORATE = {
     SubscriberCategory.government,
     SubscriberCategory.ngo,
 }
+_MAX_PLAUSIBLE_SPEED_MBPS = 10_000
 
 
 def normalize_state(region: object) -> str:
@@ -331,6 +332,44 @@ def speed_band(mbps: int | None) -> str:
     return "10Mbps+"
 
 
+def _plausible_speed_mbps(value: object) -> int | None:
+    """Return a speed only when it is a plausible Mbps catalogue value."""
+    if not isinstance(value, int):
+        return None
+    if value <= 0 or value > _MAX_PLAUSIBLE_SPEED_MBPS:
+        return None
+    return value
+
+
+def _average_speed_payload(
+    *,
+    total: int,
+    download_values: list[int],
+    upload_values: list[int],
+    excluded_download_count: int,
+    excluded_upload_count: int,
+) -> dict[str, object]:
+    def avg(values: list[int]) -> float | None:
+        if not values:
+            return None
+        return round(sum(values) / len(values), 2)
+
+    return {
+        # NCC asks for average internet speed; download is the defensible single
+        # speed figure because the existing NCC bands are download-speed bands.
+        "average_mbps": avg(download_values),
+        "average_download_mbps": avg(download_values),
+        "average_upload_mbps": avg(upload_values),
+        "basis": "active_subscription_offer_speed_mbps",
+        "included_download_count": len(download_values),
+        "included_upload_count": len(upload_values),
+        "excluded_download_count": excluded_download_count,
+        "excluded_upload_count": excluded_upload_count,
+        "total_active_subscriptions": total,
+        "max_plausible_speed_mbps": _MAX_PLAUSIBLE_SPEED_MBPS,
+    }
+
+
 @dataclass(slots=True)
 class NccSubscriberReportParams:
     """Pickable parameters for the NCC subscriber return.
@@ -393,6 +432,10 @@ def build_ncc_subscriber_report(
     by_state: Counter = Counter()
     by_region: Counter = Counter()
     matrix: Counter = Counter()  # (corporate|individual, wired|wireless)
+    download_speeds: list[int] = []
+    upload_speeds: list[int] = []
+    excluded_download_speed_count = 0
+    excluded_upload_speed_count = 0
 
     for sub in subs:
         offer = sub.offer
@@ -425,6 +468,18 @@ def build_ncc_subscriber_report(
         billing["postpaid" if mode == BillingMode.postpaid else "prepaid"] += 1
 
         bands[speed_band(offer.speed_download_mbps if offer else None)] += 1
+        download_speed = _plausible_speed_mbps(
+            offer.speed_download_mbps if offer else None
+        )
+        if download_speed is None:
+            excluded_download_speed_count += 1
+        else:
+            download_speeds.append(download_speed)
+        upload_speed = _plausible_speed_mbps(offer.speed_upload_mbps if offer else None)
+        if upload_speed is None:
+            excluded_upload_speed_count += 1
+        else:
+            upload_speeds.append(upload_speed)
 
         state = infer_state(subscriber)
         by_state[state] += 1
@@ -448,6 +503,13 @@ def build_ncc_subscriber_report(
             "10Mbps+": bands.get("10Mbps+", 0),
             "unknown": bands.get("unknown", 0),
         },
+        "average_speed": _average_speed_payload(
+            total=total,
+            download_values=download_speeds,
+            upload_values=upload_speeds,
+            excluded_download_count=excluded_download_speed_count,
+            excluded_upload_count=excluded_upload_speed_count,
+        ),
         # NCC 6a/6b: corporate vs individual, each split wired/wireless.
         "subscription_matrix": {
             "corporate": {
@@ -562,6 +624,27 @@ def build_ncc_subscriber_csv(report: dict) -> str:
     w.writerow(["Speed 256kbps–<2Mbps", s["256kbps-<2Mbps"]])
     w.writerow(["Speed 2Mbps–<10Mbps", s["2Mbps-<10Mbps"]])
     w.writerow(["Speed 10Mbps & above", s["10Mbps+"]])
+    avg = report["average_speed"]
+    w.writerow(["Average Internet Speed (Mbps)", avg["average_mbps"] or ""])
+    w.writerow(
+        [
+            "Average Download Speed (Mbps)",
+            avg["average_download_mbps"] or "",
+        ]
+    )
+    w.writerow(["Average Upload Speed (Mbps)", avg["average_upload_mbps"] or ""])
+    w.writerow(
+        [
+            "Average Speed Included Subscriptions",
+            avg["included_download_count"],
+        ]
+    )
+    w.writerow(
+        [
+            "Average Speed Excluded Subscriptions",
+            avg["excluded_download_count"],
+        ]
+    )
 
     cap = report["network_capacity"]
     w.writerow(["Access Capacity (Gbps) [manual]", cap["access_capacity_gbps"] or ""])
