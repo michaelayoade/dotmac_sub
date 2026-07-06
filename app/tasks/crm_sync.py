@@ -93,12 +93,15 @@ def push_subscriber_change(
     Raises:
         CrmPushError: On any push failure, to trigger Celery retry.
     """
-    from app.services.crm_webhook import NATIVE_EXTERNAL_SYSTEM
+    from app.services.crm_webhook import (
+        NATIVE_EXTERNAL_SYSTEM,
+        SELFCARE_EXTERNAL_SYSTEM,
+    )
     from app.services.crm_webhook import push_subscriber_change as _push
 
     crm_subscriber_id = _push(external_id, subscriber_data, external_system)
     if crm_subscriber_id:
-        if external_system == NATIVE_EXTERNAL_SYSTEM:
+        if external_system in {NATIVE_EXTERNAL_SYSTEM, SELFCARE_EXTERNAL_SYSTEM}:
             _persist_crm_link(str(external_id), crm_subscriber_id)
         if billing_snapshot_subscriber_id:
             _stamp_billing_snapshot(billing_snapshot_subscriber_id, subscriber_data)

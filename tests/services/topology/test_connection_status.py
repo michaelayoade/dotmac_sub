@@ -98,15 +98,15 @@ def _ont(
     return ont
 
 
-def _live_session(db, sub):
+def _live_session(db, sub, *, now=NOW):
     db.add(
         RadiusActiveSession(
             subscriber_id=sub.subscriber_id,
             subscription_id=sub.id,
             username="u",
             acct_session_id=uuid.uuid4().hex,
-            session_start=NOW,
-            last_update=NOW,
+            session_start=now,
+            last_update=now,
         )
     )
     db.flush()
@@ -262,7 +262,7 @@ def test_status_json_returns_callers_own_status(db_session, catalog_offer):
     from app.web.customer import connection as conn_web
 
     sub = _sub(db_session, catalog_offer.id)
-    _live_session(db_session, sub)
+    _live_session(db_session, sub, now=datetime.now(UTC))
     req = Request({"type": "http", "headers": [], "query_string": b""})
     # The route only ever resolves THIS session's own subscription — a customer
     # can never address another's status.
