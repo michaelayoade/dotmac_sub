@@ -464,6 +464,52 @@ def list_open_incidents(session: Session) -> list[OutageIncident]:
     )
 
 
+def list_classifier_incidents(
+    session: Session, *, states: tuple[str, ...] = CLASSIFIER_OPEN_STATUSES
+) -> list[OutageIncident]:
+    """Persisted classifier incidents for the P4a console — the debounced truth
+    (§7.6). Defaults to the OPEN lifecycle states (suspected/confirmed/clearing),
+    newest first; terminal states (resolved/discarded) are excluded so the
+    console shows only what is live. Live-compute is a separate secondary view."""
+    return (
+        session.query(OutageIncident)
+        .filter(
+            OutageIncident.detection_source == CLASSIFIER_SOURCE,
+            OutageIncident.status.in_(states),
+        )
+        .order_by(OutageIncident.started_at.desc())
+        .all()
+    )
+
+
+def _aware(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def mttr_seconds(incident: OutageIncident) -> int | None:
+    """MTTR for a resolved incident: ``resolved_at - confirmed_at`` in seconds.
+    None unless BOTH stamps are set (operator rows have no confirmed_at)."""
+    confirmed = _aware(incident.confirmed_at)
+    resolved = _aware(incident.resolved_at)
+    if confirmed is None or resolved is None:
+        return None
+    return max(int((resolved - confirmed).total_seconds()), 0)
+
+
+def mttr_so_far_seconds(
+    incident: OutageIncident, *, now: datetime | None = None
+) -> int | None:
+    """Elapsed repair time on a still-live confirmed/clearing incident:
+    ``now - confirmed_at``. None until the incident is confirmed."""
+    confirmed = _aware(incident.confirmed_at)
+    if confirmed is None:
+        return None
+    now = now or datetime.now(UTC)
+    return max(int((now - confirmed).total_seconds()), 0)
+
+
 def list_operator_open_incidents(session: Session) -> list[OutageIncident]:
     """Open OPERATOR incidents only — the manual console's listing. Classifier
     incidents are omitted: they are lifecycle-managed by the reconcile loop and

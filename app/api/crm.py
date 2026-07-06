@@ -625,17 +625,27 @@ def list_outages(
     per_page: int = 100,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Outage incidents for the CRM/mobile backend: everything open plus
-    incidents resolved within ``resolved_within_hours`` (default 24). Each row
-    carries scope (node/basestation/FDH + name), ``detection_source`` (auto
-    vs manual), timestamps and the snapshotted affected-subscription count.
-    ``status_filter`` (open|resolved), ``basestation_id`` and ``node_id``
-    narrow the view."""
-    if status_filter is not None and status_filter not in ("open", "resolved"):
+    """Outage incidents for the CRM/mobile backend. The default "active" view is
+    operator ``open`` plus debounced-real classifier incidents (``confirmed``/
+    ``clearing``), plus anything resolved within ``resolved_within_hours``
+    (default 24); ``suspected``/``discarded`` are excluded from the default. Each
+    row carries scope (node/basestation/FDH + name), ``detection_source``
+    (operator vs classifier), ``state``, lifecycle timestamps, ``confidence`` and
+    ``mttr_seconds``. ``status_filter`` narrows to a single lifecycle state,
+    ``basestation_id`` and ``node_id`` narrow the scope."""
+    _valid_status = (
+        "open",
+        "resolved",
+        "suspected",
+        "confirmed",
+        "clearing",
+        "discarded",
+    )
+    if status_filter is not None and status_filter not in _valid_status:
         _error(
             status.HTTP_400_BAD_REQUEST,
             "Invalid query parameters.",
-            {"status_filter": ["Must be 'open' or 'resolved'."]},
+            {"status_filter": [f"Must be one of {', '.join(_valid_status)}."]},
         )
     page = max(1, page)
     per_page = max(1, min(per_page, 500))
