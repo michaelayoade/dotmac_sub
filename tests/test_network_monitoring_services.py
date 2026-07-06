@@ -252,6 +252,51 @@ def test_get_onu_status_summary_cold_cache_counts_onts_as_offline(
     assert summary["online"] == 0
 
 
+def test_get_onu_status_summary_uisp_managed_onts_not_dumped_offline(db_session):
+    """ONTs under inactive UISP-managed OLTs must not land in the offline
+    bucket via the unmonitored rollup: they are counted from their own last
+    observed olt_status (never-observed ones go to a distinct ``uisp_managed``
+    bucket), while unmonitored Huawei math is unchanged."""
+    seen = datetime(2026, 7, 5, 6, 0, tzinfo=UTC)
+    huawei_olt = OLTDevice(name="HW-UNMONITORED", vendor="Huawei")
+    uf_olt = OLTDevice(
+        name="GPON-UF-1",
+        vendor="ubiquiti",
+        uisp_device_id="uisp-olt-0001",
+        is_active=False,
+    )
+    db_session.add_all([huawei_olt, uf_olt])
+    db_session.flush()
+    db_session.add_all(
+        [
+            # Huawei ONT with no Zabbix-monitored OLT: stays offline-by-rollup.
+            OntUnit(serial_number="HW-ONT-1", olt_device_id=huawei_olt.id),
+            # UFiber ONTs: observed online / observed offline / never observed.
+            OntUnit(
+                serial_number="UF-ONT-ON",
+                olt_device_id=uf_olt.id,
+                olt_status=OnuOnlineStatus.online,
+                olt_status_seen_at=seen,
+            ),
+            OntUnit(
+                serial_number="UF-ONT-OFF",
+                olt_device_id=uf_olt.id,
+                olt_status=OnuOnlineStatus.offline,
+                olt_status_seen_at=seen,
+            ),
+            OntUnit(serial_number="UF-ONT-NEW", olt_device_id=uf_olt.id),
+        ]
+    )
+    db_session.commit()
+
+    summary = monitoring_service.get_onu_status_summary(db_session)
+
+    assert summary["online"] == 1  # observed-online UFiber ONT
+    assert summary["offline"] == 2  # observed-offline UFiber + unmonitored Huawei
+    assert summary["uisp_managed"] == 1  # never-observed UFiber ONT, NOT offline
+    assert summary["total"] == 3
+
+
 def test_get_onu_olt_status_summary_has_no_unknown_bucket(db_session, monkeypatch):
     olt = OLTDevice(
         name="OLT Link Summary OLT",

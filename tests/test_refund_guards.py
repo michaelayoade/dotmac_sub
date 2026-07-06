@@ -57,3 +57,31 @@ def test_partial_then_full_refund_accounting(db_session, subscriber):
     with pytest.raises(HTTPException) as e:
         Refunds.process_refund(db_session, str(p.id), refund_amount=Decimal("1.00"))
     assert e.value.status_code == 400
+
+
+def test_refunded_amount_tracks_running_total(db_session, subscriber):
+    """Gross `amount` is unchanged; refunded_amount accumulates each refund."""
+    p = _succeeded_payment(db_session, subscriber, "RF-4")
+    assert p.refunded_amount == Decimal("0.00")
+
+    Refunds.process_refund(db_session, str(p.id), refund_amount=Decimal("30.00"))
+    db_session.refresh(p)
+    assert p.amount == Decimal("100.00")  # gross captured figure unchanged
+    assert p.refunded_amount == Decimal("30.00")
+    assert p.status == PaymentStatus.partially_refunded
+
+    Refunds.process_refund(db_session, str(p.id), refund_amount=Decimal("70.00"))
+    db_session.refresh(p)
+    assert p.refunded_amount == Decimal("100.00")
+    assert p.status == PaymentStatus.refunded
+
+
+def test_payment_read_exposes_refunded_amount(db_session, subscriber):
+    """The ERP-facing PaymentRead surfaces refunded_amount (net = amount - it)."""
+    from app.schemas.billing import PaymentRead
+
+    p = _succeeded_payment(db_session, subscriber, "RF-5")
+    Refunds.process_refund(db_session, str(p.id), refund_amount=Decimal("25.00"))
+    db_session.refresh(p)
+    read = PaymentRead.model_validate(p)
+    assert read.refunded_amount == Decimal("25.00")
