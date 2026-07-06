@@ -161,11 +161,18 @@ def test_outage_detail_returns_per_customer_verdicts(db_session, catalog_offer):
     assert detail is not None
     assert detail["class"] == "node_outage"
     assert detail["count"] == 1
+    assert detail["node"]["medium"] == "network"
     assert len(detail["customers"]) == 1
     cust = detail["customers"][0]
-    # NAS-only customer (no ONT/radio linked) -> P2 can't see the last mile.
+    # NAS-only customer under a shared node outage should display as an area
+    # outage, while preserving the raw P2 evidence that no ONT/radio exists.
     assert cust["online"] is False
-    assert cust["verdict"] is not None
+    assert cust["verdict"] == "area_outage"
+    assert cust["medium"] == "network"
+    assert cust["customer_message"] == "Affected by shared network outage at outage."
+    assert cust["agent_action"] == "network_team_restore_node - restore outage"
+    assert cust["evidence"]["raw_verdict"] == "unknown"
+    assert cust["evidence"]["access_device_kind"] == "nas"
     # No OLT match -> no predictive branch alerts.
     assert detail["predictive"]["co_failure"] == []
     assert detail["predictive"]["rx_droop"] == []

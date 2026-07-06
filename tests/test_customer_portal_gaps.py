@@ -912,6 +912,37 @@ class TestAdminUsageTemplateDefaults:
         assert "Bandwidth Overview" in partial
         assert "NAS Throughput" in partial
 
+    def test_admin_monitoring_bandwidth_partial_renders_nas_items(self) -> None:
+        from app.web.templates import templates
+
+        template = templates.env.get_template(
+            "admin/network/monitoring/_bandwidth_partial.html"
+        )
+
+        html = template.render(
+            bandwidth={
+                "has_data": False,
+                "total_rx_formatted": "0 bps",
+                "total_tx_formatted": "0 bps",
+                "top_users": [],
+            },
+            nas_throughput={
+                "has_data": True,
+                "items": [
+                    {
+                        "name": "NAS A",
+                        "rx_bps": 10.0,
+                        "tx_bps": 5.0,
+                        "rx_formatted": "10 bps",
+                        "tx_formatted": "5 bps",
+                    }
+                ],
+            },
+        )
+
+        assert "NAS A" in html
+        assert "10 bps" in html
+
 
 class TestPortalNotificationsPage:
     def test_notifications_page_merges_event_queue_and_customer_notification_events(

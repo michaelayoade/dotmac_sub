@@ -72,6 +72,9 @@ MAX_DETAIL_CUSTOMERS = 300
 # monitoring_fault which are handled separately).
 _FAULT_CLASSES = frozenset({NODE_OUTAGE, SERVICE_FAULT})
 
+_AREA_OUTAGE_VERDICT = "area_outage"
+_NETWORK_MEDIUM = "network"
+
 
 def _pingable_infra_nodes(session: Session) -> list[NetworkDevice]:
     rows = (
@@ -101,13 +104,47 @@ def _node_medium(node: NetworkDevice) -> str:
     """Coarse access medium for a node (design §4 asymmetry).
 
     Fiber if it's an OLT; wireless if it's an access point / BTS radio; else
-    unknown. Only used for display + the fiber/wireless precision note.
+    network for a shared NAS/router node; otherwise unknown. Only used for
+    display + the fiber/wireless precision note.
     """
     if node.matched_device_type == "olt":
         return "fiber"
     if node.device_type == DeviceType.access_point:
         return "wireless"
+    if node.matched_device_type == "nas" or node.device_type == DeviceType.router:
+        return _NETWORK_MEDIUM
     return "unknown"
+
+
+def _customer_display_verdict(node: NetworkDevice, cls: str, verdict: dict) -> dict:
+    """Operator-facing customer verdict for an outage-domain table row.
+
+    P2 last-mile diagnosis is intentionally conservative: a NAS-only affected
+    subscription has no ONT/radio telemetry below the PPPoE session, so it
+    returns unknown. In a drill-in for a confirmed shared-node outage, the
+    operator-facing answer is still known: the customer is affected by the
+    selected network node being down.
+    """
+    evidence = verdict.get("evidence") or {}
+    if (
+        cls == NODE_OUTAGE
+        and verdict.get("verdict") == UNKNOWN
+        and evidence.get("access_device_kind") == "nas"
+    ):
+        display = dict(verdict)
+        display["verdict"] = _AREA_OUTAGE_VERDICT
+        display["medium"] = _NETWORK_MEDIUM
+        display["customer_message"] = (
+            f"Affected by shared network outage at {node.name}."
+        )
+        display["agent_action"] = f"network_team_restore_node - restore {node.name}"
+        display["evidence"] = {
+            **evidence,
+            "raw_verdict": verdict.get("verdict"),
+            "display_override": "shared_node_outage",
+        }
+        return display
+    return verdict
 
 
 def _node_brief(node: NetworkDevice, impact: dict, cls: str) -> dict:
@@ -305,7 +342,7 @@ def outage_detail(
     verdicts = diagnose_many(session, [s.id for s in subs], now=now)
     customers = []
     for s in subs:
-        v = verdicts.get(s.id, {})
+        v = _customer_display_verdict(node, cls, verdicts.get(s.id, {}))
         online = v.get("verdict") == "healthy"
         customers.append(
             {
