@@ -332,6 +332,124 @@ def test_nas_fallback_when_cpe_vanished(db_session, subscriber, subscription):
     assert path.radio is None
 
 
+# --- Live-session arm: prefer where the customer is connected RIGHT NOW ---
+
+
+def _session(db, subscription, nas_device_id, subscriber_id=None):
+    from datetime import UTC, datetime
+
+    from app.models.radius_active_session import RadiusActiveSession
+
+    ras = RadiusActiveSession(
+        subscriber_id=(
+            subscriber_id
+            if subscriber_id is not None
+            else getattr(subscription, "subscriber_id", None)
+        ),
+        subscription_id=getattr(subscription, "id", None),
+        nas_device_id=nas_device_id,
+        username="u",
+        acct_session_id="live-1",
+        session_start=datetime.now(UTC),
+    )
+    db.add(ras)
+    db.flush()
+    return ras
+
+
+def test_live_session_beats_provisioning_nas(db_session, subscriber, subscription):
+    # Customer online on a NAS other than the one provisioned (roaming/failover):
+    # the trace must land on the LIVE NAS's basestation, not the static one.
+    prov_nas = NasDevice(name="NAS-Prov", management_ip="10.0.9.1")
+    live_nas = NasDevice(name="NAS-Live", management_ip="10.0.9.2")
+    prov_pop = PopSite(name="Prov Site", zabbix_group_id="30")
+    live_pop = PopSite(name="Live Site", zabbix_group_id="31")
+    db_session.add_all([prov_nas, live_nas, prov_pop, live_pop])
+    db_session.flush()
+    db_session.add_all(
+        [
+            _node("nas", prov_nas.id, prov_pop.id, "401"),
+            _node("nas", live_nas.id, live_pop.id, "402"),
+        ]
+    )
+    subscription.provisioning_nas_device_id = prov_nas.id
+    db_session.flush()
+    _session(db_session, subscription, live_nas.id)
+
+    path = resolve_customer_path(db_session, subscription)
+
+    assert path.gap is None
+    assert path.access_device_kind == "nas"
+    assert path.access_device.id == live_nas.id
+    assert path.basestation.id == live_pop.id
+    assert path.live_session is True
+
+
+def test_no_live_session_falls_back_to_provisioning_unchanged(db_session, subscription):
+    # No live session: behavior is byte-for-byte the pre-change provisioning arm.
+    nas = NasDevice(name="NAS-Static", management_ip="10.0.9.3")
+    pop = PopSite(name="Static Site", zabbix_group_id="32")
+    db_session.add_all([nas, pop])
+    db_session.flush()
+    db_session.add(_node("nas", nas.id, pop.id, "403"))
+    subscription.provisioning_nas_device_id = nas.id
+    db_session.flush()
+
+    path = resolve_customer_path(db_session, subscription)
+
+    assert path.gap is None
+    assert path.access_device_kind == "nas"
+    assert path.access_device.id == nas.id
+    assert path.basestation.id == pop.id
+    assert path.live_session is False
+
+
+def test_live_session_with_null_nas_falls_back_to_provisioning(
+    db_session, subscription
+):
+    # A live session that never resolved to a nas_device_id must not mask the
+    # static provisioning arm.
+    nas = NasDevice(name="NAS-NullLive", management_ip="10.0.9.4")
+    pop = PopSite(name="Null Live Site", zabbix_group_id="33")
+    db_session.add_all([nas, pop])
+    db_session.flush()
+    db_session.add(_node("nas", nas.id, pop.id, "404"))
+    subscription.provisioning_nas_device_id = nas.id
+    db_session.flush()
+    _session(db_session, subscription, None)
+
+    path = resolve_customer_path(db_session, subscription)
+
+    assert path.access_device_kind == "nas"
+    assert path.access_device.id == nas.id
+    assert path.live_session is False
+
+
+def test_fiber_precedence_over_live_session(db_session, subscriber, subscription):
+    # An active ONT assignment implies fiber; a live RADIUS session must not
+    # preempt the OLT arm.
+    olt = OLTDevice(name="OLT-LS", hostname="olt-ls", mgmt_ip="10.0.9.5")
+    pop = PopSite(name="Fiber LS Site", zabbix_group_id="34")
+    nas = NasDevice(name="NAS-LS", management_ip="10.0.9.6")
+    db_session.add_all([olt, pop, nas])
+    db_session.flush()
+    db_session.add(_node("olt", olt.id, pop.id, "405"))
+    ont = OntUnit(serial_number="SN-LS", olt_device_id=olt.id)
+    db_session.add(ont)
+    db_session.flush()
+    db_session.add(
+        OntAssignment(ont_unit_id=ont.id, subscriber_id=subscriber.id, active=True)
+    )
+    db_session.flush()
+    _session(db_session, subscription, nas.id)
+
+    path = resolve_customer_path(db_session, subscription)
+
+    assert path.access_device_kind == "olt"
+    assert path.access_device.id == olt.id
+    assert path.live_session is False
+
+
 def test_multiple_radios_pick_most_recently_synced(
     db_session, subscriber, subscription
 ):

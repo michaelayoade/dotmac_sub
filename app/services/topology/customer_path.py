@@ -9,6 +9,7 @@ a blank panel.
 
 from __future__ import annotations
 
+import logging
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
@@ -36,7 +37,10 @@ from app.models.network_monitoring import (
     NetworkTopologyLink,
     PopSite,
 )
+from app.models.radius_active_session import RadiusActiveSession
 from app.services.topology.lldp_poller import SOURCE as LLDP_SOURCE
+
+logger = logging.getLogger(__name__)
 
 # Max hops to walk toward core (guards against pathological graphs).
 _MAX_UPSTREAM_HOPS = 8
@@ -57,6 +61,10 @@ class CustomerPath:
     pon_port: PonPort | None = None
     access_device: Any | None = None  # OLTDevice | NasDevice | NetworkDevice (AP)
     access_device_kind: str | None = None  # 'olt' | 'nas' | 'ap'
+    # True when the nas arm resolved via a live RadiusActiveSession (where the
+    # customer is connected right now) rather than the static provisioning NAS.
+    # Lets the panel flag a live-session (roaming/failover) trace.
+    live_session: bool = False
     # Wireless customer radio (UISP relationship layer); set on the 'ap' arm.
     radio: CPEDevice | None = None
     node: NetworkDevice | None = None
@@ -297,6 +305,41 @@ def _active_wireless_cpe(
     )
 
 
+def _live_session_nas_device_id(session: Session, subscription: Subscription):
+    """The NAS the subscriber is CONNECTED to right now, per the live RADIUS
+    sessions table, or None when there is no resolvable live session.
+
+    Reads ``radius_active_sessions.nas_device_id`` (a UUID FK) — the reconciler
+    already resolved each live session to a nas_device_id. No raw radacct or
+    inet columns are read here, so there is no psycopg inet/ipaddress type to
+    normalize (framed_ip_address/nas_ip_address are plain String and untouched).
+
+    Roaming/failover mean this can differ from
+    ``subscription.provisioning_nas_device_id`` (the static edge); when it does,
+    the live value is where the customer actually terminates. Prefers a session
+    bound to *this* subscription, else the subscriber's most recent one, so
+    repeated calls resolve the same NAS.
+    """
+    if subscription.subscriber_id is None:
+        return None
+    row = (
+        session.query(RadiusActiveSession.nas_device_id)
+        .filter(
+            RadiusActiveSession.subscriber_id == subscription.subscriber_id,
+            RadiusActiveSession.nas_device_id.isnot(None),
+        )
+        .order_by(
+            # Prefer a session for this exact subscription, then the freshest.
+            (RadiusActiveSession.subscription_id == subscription.id).desc(),
+            RadiusActiveSession.last_update.desc().nullslast(),
+            RadiusActiveSession.session_start.desc(),
+            RadiusActiveSession.id,
+        )
+        .first()
+    )
+    return row[0] if row is not None else None
+
+
 def resolve_customer_path(session: Session, subscription: Subscription) -> CustomerPath:
     """Resolve ONT -> access device -> basestation for a subscription."""
     path = CustomerPath()
@@ -331,12 +374,27 @@ def resolve_customer_path(session: Session, subscription: Subscription) -> Custo
         # Parent edge points nowhere (row deleted mid-sync): fall through to
         # the NAS arm rather than dead-ending a resolvable subscriber.
 
-    # Non-fiber: the subscription's provisioning NAS.
-    if subscription.provisioning_nas_device_id is not None:
-        path.access_device = session.get(
-            NasDevice, subscription.provisioning_nas_device_id
-        )
+    # Non-fiber: the NAS the customer terminates on. Prefer the LIVE session's
+    # NAS (where they are connected right now) over the static provisioning NAS
+    # — roaming/failover mean the two can differ, and the live one is the truth
+    # for a currently-online customer. Falls back to provisioning_nas_device_id
+    # when there is no live session, preserving all prior behavior for offline
+    # customers.
+    live_nas_id = _live_session_nas_device_id(session, subscription)
+    nas_device_id = live_nas_id or subscription.provisioning_nas_device_id
+    if nas_device_id is not None:
+        path.access_device = session.get(NasDevice, nas_device_id)
         path.access_device_kind = "nas"
+        path.live_session = live_nas_id is not None
+        if path.live_session:
+            # Adoption signal: how often live beats the static provisioning NAS.
+            logger.debug(
+                "customer_path: subscription %s resolved via live-session NAS "
+                "%s (provisioning NAS %s)",
+                subscription.id,
+                live_nas_id,
+                subscription.provisioning_nas_device_id,
+            )
         if path.access_device is None:
             path.gap = GAP_NO_ONT
             return path
