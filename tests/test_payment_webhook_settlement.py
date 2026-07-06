@@ -63,7 +63,7 @@ def _make_invoice(db, account_id, *, amount: str, invoice_number: str):
 
 
 def _paystack_body(
-    *, reference: str, tx_id: str, amount_kobo: int, metadata: dict
+    *, reference: str, tx_id: str, amount_kobo: int, metadata: dict, fees_kobo: int = 0
 ) -> bytes:
     return json.dumps(
         {
@@ -72,6 +72,7 @@ def _paystack_body(
                 "id": tx_id,
                 "reference": reference,
                 "amount": amount_kobo,
+                "fees": fees_kobo,
                 "currency": "NGN",
                 "status": "success",
                 "metadata": metadata,
@@ -81,7 +82,7 @@ def _paystack_body(
 
 
 def _flutterwave_body(
-    *, tx_ref: str, tx_id: str, amount: str, status: str, meta: dict
+    *, tx_ref: str, tx_id: str, amount: str, status: str, meta: dict, app_fee: str = "0"
 ) -> bytes:
     return json.dumps(
         {
@@ -90,6 +91,7 @@ def _flutterwave_body(
                 "id": tx_id,
                 "tx_ref": tx_ref,
                 "amount": amount,
+                "app_fee": app_fee,
                 "currency": "NGN",
                 "status": status,
                 "meta": meta,
@@ -138,6 +140,63 @@ def test_paystack_webhook_settles_invoice_end_to_end(db_session, subscriber):
     assert invoice.status == InvoiceStatus.paid
     event = db_session.query(PaymentProviderEvent).filter_by(external_id="990001").one()
     assert event.payment_id == payment.id
+
+
+def test_paystack_webhook_captures_provider_fee(db_session, subscriber):
+    """M-1: the gateway fee on the charge payload is persisted on the payment so
+    ERP can split the receipt and bank reconciliation ties."""
+    _make_provider(db_session)
+    invoice = _make_invoice(
+        db_session, subscriber.id, amount="3000.00", invoice_number="INV-FEE-1"
+    )
+    body = _paystack_body(
+        reference="DMAC-FEE-1",
+        tx_id="990010",
+        amount_kobo=300000,
+        fees_kobo=4500,  # ₦45.00 fee
+        metadata={"invoice_id": str(invoice.id)},
+    )
+
+    _post_paystack(db_session, body)
+
+    payment = db_session.query(Payment).filter_by(external_id="990010").one()
+    assert payment.amount == Decimal("3000.00")  # gross unchanged
+    assert payment.provider_fee == Decimal("45.00")  # fee captured
+
+
+def test_flutterwave_webhook_captures_app_fee(db_session, subscriber):
+    _make_provider(
+        db_session, provider_type=PaymentProviderType.flutterwave, name="Flutterwave"
+    )
+    invoice = _make_invoice(
+        db_session, subscriber.id, amount="5000.00", invoice_number="INV-FEE-2"
+    )
+    body = _flutterwave_body(
+        tx_ref="FW-FEE-2",
+        tx_id="880010",
+        amount="5000.00",
+        status="successful",
+        app_fee="70.00",
+        meta={"invoice_id": str(invoice.id)},
+    )
+
+    _post_flutterwave(db_session, body)
+
+    payment = db_session.query(Payment).filter_by(external_id="880010").one()
+    assert payment.amount == Decimal("5000.00")
+    assert payment.provider_fee == Decimal("70.00")
+
+
+def test_extract_settlement_defaults_fee_to_zero_when_absent(db_session):
+    from app.services.api_billing_webhooks import _extract_settlement
+
+    s = _extract_settlement(
+        "paystack",
+        "charge.success",
+        {"amount": 100000, "currency": "NGN", "reference": "r"},
+    )
+    assert s is not None
+    assert s.fee == Decimal("0.00")
 
 
 def test_paystack_webhook_replay_creates_one_payment(db_session, subscriber):

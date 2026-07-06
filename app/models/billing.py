@@ -638,6 +638,13 @@ class Payment(Base):
     refunded_amount: Mapped[Decimal] = mapped_column(
         Numeric(12, 2), default=Decimal("0.00"), server_default="0"
     )
+    # Payment-gateway fee withheld from settlement (Paystack `fees`,
+    # Flutterwave `app_fee`). `amount` stays the gross the customer was charged;
+    # the gateway settles `amount - provider_fee` to the bank. Exposed so ERP can
+    # split the receipt (Dr Bank net / Dr charges / Cr AR gross) and bank rec ties.
+    provider_fee: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), default=Decimal("0.00"), server_default="0"
+    )
     currency: Mapped[str] = mapped_column(String(3), default="NGN")
     status: Mapped[PaymentStatus] = mapped_column(
         Enum(PaymentStatus), default=PaymentStatus.pending
