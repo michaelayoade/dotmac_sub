@@ -13,12 +13,15 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from app.models.catalog import NasDevice, Subscription, SubscriptionStatus
 from app.models.network_monitoring import (
     DeviceRole,
     NetworkDevice,
     NetworkTopologyLink,
     OutageIncident,
+    PopSite,
 )
 from app.models.radius_active_session import RadiusActiveSession
 from app.models.subscriber import Subscriber
@@ -27,6 +30,10 @@ from app.services.topology.outage import (
     CLASSIFIER_SOURCE,
     declare_outage,
     list_open_incidents,
+    list_operator_open_incidents,
+    open_classifier_incident,
+    resolve_outage,
+    set_outage_status,
 )
 from app.services.topology.outage_reconcile import (
     confirm_window_seconds,
@@ -385,3 +392,119 @@ def test_operator_incidents_unaffected(db_session, catalog_offer):
     # Still surfaced as open, alongside the classifier incident.
     open_ids = {i.id for i in list_open_incidents(db_session)}
     assert op.id in open_ids
+
+
+# --- finding 1: one basestation = one incident within a pass ---------------
+
+
+def test_two_dark_components_same_basestation_open_one_incident(
+    db_session, catalog_offer
+):
+    # Two DISTINCT (unlinked) dark NAS nodes under the SAME basestation -> two
+    # boundaries, one incident (identity is the site), affected_count summed.
+    pop = PopSite(name="BTS-1", zabbix_group_id="10")
+    nas_a = _nas(db_session, "NAS-C1", "10.5.0.1")
+    nas_b = _nas(db_session, "NAS-C2", "10.5.0.2")
+    db_session.add(pop)
+    db_session.flush()
+    _node(db_session, "c1", mid=nas_a.id, live_status="down", pop=pop)
+    _node(db_session, "c2", mid=nas_b.id, live_status="down", pop=pop)
+    for _ in range(4):
+        _sub(db_session, catalog_offer.id, nas_a.id)
+    for _ in range(3):
+        _sub(db_session, catalog_offer.id, nas_b.id)
+
+    counters = reconcile_detected_outages(db_session, now=NOW)
+
+    incidents = _classifier_incidents(db_session)
+    assert len(incidents) == 1  # NOT two — merged by basestation
+    assert counters["suspected_opened"] == 1
+    inc = incidents[0]
+    assert inc.basestation_id == pop.id
+    assert inc.affected_count == 7  # 4 + 3 across both components
+
+
+# --- finding 2: suspicion sustained past W_confirm confirms, not discards ---
+
+
+def test_recovery_past_confirm_window_confirms_not_discards(
+    db_session, catalog_offer, monkeypatch
+):
+    kinds = _capture_events(monkeypatch)
+    node, nas = _dark_nas_node(db_session, catalog_offer.id, "edge-sustained", 3)
+    reconcile_detected_outages(db_session, now=NOW)  # suspected (600s window)
+    assert _classifier_incidents(db_session)[0].status == "suspected"
+
+    # It stayed dark PAST W_confirm (600s) but no pass ran in between; then it
+    # recovers -> must confirm (preserving MTTR) + start clearing, NOT discard.
+    node.live_status = "up"
+    db_session.flush()
+    counters = reconcile_detected_outages(db_session, now=NOW + timedelta(seconds=650))
+
+    inc = _classifier_incidents(db_session)[0]
+    assert inc.status == "clearing"
+    assert inc.confirmed_at is not None  # MTTR anchor preserved
+    assert inc.cleared_at is not None
+    assert counters["confirmed"] == 1 and counters["clearing"] == 1
+    assert counters["discarded"] == 0
+    assert "outage.confirmed" in kinds and "outage.discarded" not in kinds
+
+    # And it resolves after W_resolve (300s), giving a positive MTTR.
+    reconcile_detected_outages(db_session, now=NOW + timedelta(seconds=650 + 301))
+    inc = _classifier_incidents(db_session)[0]
+    assert inc.status == "resolved"
+    assert (inc.resolved_at - inc.confirmed_at).total_seconds() > 0
+
+
+def test_recovery_before_confirm_window_still_discards(db_session, catalog_offer):
+    # Control: recovered BEFORE W_confirm is still a false positive -> discarded.
+    node, nas = _dark_nas_node(db_session, catalog_offer.id, "edge-blip", 3)
+    reconcile_detected_outages(db_session, now=NOW)  # suspected (600s window)
+    node.live_status = "up"
+    db_session.flush()
+    counters = reconcile_detected_outages(db_session, now=NOW + timedelta(seconds=60))
+    inc = _classifier_incidents(db_session)[0]
+    assert inc.status == "discarded"
+    assert counters["discarded"] == 1 and counters["confirmed"] == 0
+
+
+# --- finding 3: operator console / resolve never touch classifier rows ------
+
+
+def test_operator_resolve_is_noop_on_classifier_incident(db_session, catalog_offer):
+    nas = _nas(db_session, "NAS-CL", "10.6.0.1")
+    node = _node(db_session, "cl", mid=nas.id, live_status="down")
+    inc = open_classifier_incident(
+        db_session,
+        root_node=node,
+        affected_count=3,
+        classification="node_outage",
+        now=NOW,
+    )
+    assert inc.status == "suspected"
+
+    result = resolve_outage(db_session, inc.id)  # operator Resolve button path
+    assert result.status == "suspected"  # untouched
+    assert result.resolved_at is None
+    # The low-level writer refuses classifier incidents outright.
+    with pytest.raises(ValueError):
+        set_outage_status(inc, "resolved")
+
+
+def test_operator_console_listing_excludes_classifier(db_session, catalog_offer):
+    # One operator open incident + one classifier incident.
+    op_nas = _nas(db_session, "NAS-OPC", "10.6.1.1")
+    op_node = _node(db_session, "opc", mid=op_nas.id, live_status="up")
+    op = declare_outage(db_session, node=op_node, declared_by="noc@x")
+    _dark_nas_node(db_session, catalog_offer.id, "edge-cl", 25)
+    reconcile_detected_outages(db_session, now=NOW)
+
+    operator_ids = {i.id for i in list_operator_open_incidents(db_session)}
+    assert op.id in operator_ids
+    # No classifier incident leaks into the operator console listing.
+    classifier_ids = {i.id for i in _classifier_incidents(db_session)}
+    assert operator_ids.isdisjoint(classifier_ids)
+    assert all(
+        i.detection_source == "operator"
+        for i in list_operator_open_incidents(db_session)
+    )

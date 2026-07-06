@@ -281,7 +281,10 @@ def outages_console(request: Request, db: Session = Depends(get_db)):
         list_fdh_cabinets,
         list_network_nodes,
     )
-    from app.services.topology.outage import is_stale_open, list_open_incidents
+    from app.services.topology.outage import (
+        is_stale_open,
+        list_operator_open_incidents,
+    )
     from app.services.topology.reachability import reachability_overview
 
     context = _base_context(request, db, active_page="monitoring")
@@ -292,7 +295,7 @@ def outages_console(request: Request, db: Session = Depends(get_db)):
     context["fdh_cabinets"] = list_fdh_cabinets(db)
     context["network_nodes"] = list_network_nodes(db)
     rows = []
-    for inc in list_open_incidents(db):
+    for inc in list_operator_open_incidents(db):
         if inc.basestation_id is not None:
             pop = db.get(PopSite, inc.basestation_id)
             target = f"BTS: {pop.name}" if pop else "BTS"

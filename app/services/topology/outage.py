@@ -59,10 +59,23 @@ STALE_OPEN_HOURS = 36
 
 
 def set_outage_status(incident: OutageIncident, status: str) -> bool:
-    """Guarded status writer. Returns True if it changed. Idempotent; stamps
-    resolved_at on the open->resolved transition only."""
+    """Guarded OPERATOR status writer (open/resolved). Returns True if it
+    changed. Idempotent; stamps resolved_at on the open->resolved transition.
+
+    Refuses classifier incidents: they carry a debounced lifecycle
+    (suspected/confirmed/clearing/resolved) driven ONLY by the reconcile loop.
+    Jumping one straight to ``resolved`` here would drop confirmed_at (breaking
+    MTTR = resolved_at - confirmed_at) and let the next reconcile re-open a
+    duplicate suspected incident for the still-dark node."""
     if status not in _OUTAGE_STATUSES:
         raise ValueError(f"invalid outage status: {status!r}")
+    # detection_source is None only for an un-flushed operator row; classifier
+    # incidents always carry CLASSIFIER_SOURCE from open_classifier_incident.
+    if incident.detection_source not in (None, OPERATOR_SOURCE):
+        raise ValueError(
+            "set_outage_status is operator-only; classifier incidents transition "
+            "via the reconcile lifecycle"
+        )
     if incident.status == status:
         return False
     incident.status = status
@@ -191,6 +204,10 @@ def resolve_outage(session: Session, incident_id) -> OutageIncident | None:
     incident = session.get(OutageIncident, incident_id)
     if incident is None:
         return None
+    # Classifier incidents are resolved ONLY by the reconcile lifecycle — the
+    # operator Resolve button is a no-op on them (never operator-terminated).
+    if incident.detection_source not in (None, OPERATOR_SOURCE):
+        return incident
     if set_outage_status(incident, "resolved"):
         session.flush()
         _emit_outage_event(session, incident, "outage.resolved")
@@ -434,12 +451,29 @@ def open_incident_for_path(
 
 
 def list_open_incidents(session: Session) -> list[OutageIncident]:
-    """Live incidents for the operator surfaces: operator ``open`` plus the
+    """Live incidents across BOTH provenances: operator ``open`` plus the
     non-terminal classifier states (suspected/confirmed/clearing). Terminal
-    states (resolved/discarded) are excluded."""
+    states (resolved/discarded) are excluded. Consumers that must not offer an
+    operator Resolve button on classifier rows use ``list_operator_open_incidents``.
+    """
     return (
         session.query(OutageIncident)
         .filter(OutageIncident.status.in_(_LIVE_STATUSES))
+        .order_by(OutageIncident.started_at.desc())
+        .all()
+    )
+
+
+def list_operator_open_incidents(session: Session) -> list[OutageIncident]:
+    """Open OPERATOR incidents only — the manual console's listing. Classifier
+    incidents are omitted: they are lifecycle-managed by the reconcile loop and
+    must never be operator-resolved (see set_outage_status/resolve_outage)."""
+    return (
+        session.query(OutageIncident)
+        .filter(
+            OutageIncident.detection_source == OPERATOR_SOURCE,
+            OutageIncident.status == "open",
+        )
         .order_by(OutageIncident.started_at.desc())
         .all()
     )

@@ -284,6 +284,35 @@ def _candidate_outages(session: Session, now: datetime) -> dict:
             classification=loc["class"],
             component_node_ids=component,
         )
+
+    # Several distinct dark components under ONE basestation are ONE outage
+    # (§7.6 decision 3: identity is the site). Merge them BEFORE find-or-open, or
+    # the second component — its incident excluded via ``used`` — would open a
+    # duplicate for the same basestation. Deepest boundary wins as root; union
+    # the components; sum affected across the (disjoint) components.
+    return _merge_by_basestation(candidates, dist)
+
+
+def _depth_key(dist: dict, node_id) -> tuple:
+    d = dist.get(node_id)
+    return (d is not None, d if d is not None else -1)
+
+
+def _merge_by_basestation(candidates: dict, dist: dict) -> dict:
+    by_bts: dict = {}
+    for fid, cand in candidates.items():
+        if cand.basestation_id is not None:
+            by_bts.setdefault(cand.basestation_id, []).append(fid)
+    for fids in by_bts.values():
+        if len(fids) < 2:
+            continue
+        # Deepest-dark boundary as the survivor/root; fold the rest into it.
+        fids_sorted = sorted(fids, key=lambda f: _depth_key(dist, f), reverse=True)
+        keep = candidates[fids_sorted[0]]
+        for other in fids_sorted[1:]:
+            merged = candidates.pop(other)
+            keep.component_node_ids.update(merged.component_node_ids)
+            keep.affected_count += merged.affected_count
     return candidates
 
 
@@ -392,9 +421,26 @@ def reconcile_detected_outages(
         try:
             with session.begin_nested():
                 if incident.status == "suspected":
-                    # Recovered before W_confirm -> false positive, discard.
-                    discard_incident(session, incident)
-                    counters["discarded"] += 1
+                    # A suspected incident with no candidate this pass recovered.
+                    # WHEN it recovered decides its fate: only a true pre-confirm
+                    # blip (recovered before W_confirm) is a false positive to
+                    # discard. If the suspicion already outlived W_confirm — the
+                    # reconcile cadence (~180s) can be longer than a small/med
+                    # confirm window, so a real sustained outage may never have
+                    # got a pass to flip to confirmed — confirm THEN begin
+                    # clearing, preserving confirmed_at (and hence MTTR) and
+                    # letting the resolve debounce run.
+                    window = confirm_window_seconds(
+                        incident.affected_count, **windows.confirm
+                    )
+                    if _elapsed_seconds(now, incident.suspected_at) >= window:
+                        confirm_incident(session, incident, now=now)
+                        counters["confirmed"] += 1
+                        start_clearing(session, incident, now=now)
+                        counters["clearing"] += 1
+                    else:
+                        discard_incident(session, incident)
+                        counters["discarded"] += 1
                 elif incident.status == "confirmed":
                     start_clearing(session, incident, now=now)
                     counters["clearing"] += 1

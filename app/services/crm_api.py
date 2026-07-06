@@ -1964,6 +1964,10 @@ def list_outage_incidents(
     """
     from app.models.network_monitoring import OutageIncident
 
+    # NOTE (§7.6 follow-on): the default view keys off status=='open' OR a recent
+    # resolved_at, so ACTIVE classifier incidents (confirmed/clearing with
+    # resolved_at NULL) are not surfaced here yet. The classifier-aware CRM/console
+    # read is a separate immediate follow-on that will add a lifecycle-aware view.
     query = session.query(OutageIncident)
     if status in ("open", "resolved"):
         query = query.filter(OutageIncident.status == status)
