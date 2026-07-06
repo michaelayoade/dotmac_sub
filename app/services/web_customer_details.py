@@ -453,6 +453,7 @@ def _build_activity_items(
         invoices = (
             db.query(Invoice)
             .filter(Invoice.account_id.in_(account_ids))
+            .filter(Invoice.is_active.is_(True))
             .order_by(func.coalesce(Invoice.issued_at, Invoice.created_at).desc())
             .limit(8)
             .all()
@@ -460,6 +461,7 @@ def _build_activity_items(
         payments = (
             db.query(Payment)
             .filter(Payment.account_id.in_(account_ids))
+            .filter(Payment.is_active.is_(True))
             .order_by(func.coalesce(Payment.paid_at, Payment.created_at).desc())
             .limit(8)
             .all()
@@ -662,6 +664,7 @@ def _build_common_financials(db: Session, account_ids):
         invoices = (
             db.query(Invoice)
             .filter(Invoice.account_id.in_(account_ids))
+            .filter(Invoice.is_active.is_(True))
             .order_by(func.coalesce(Invoice.issued_at, Invoice.created_at).desc())
             .limit(10)
             .all()
@@ -669,6 +672,7 @@ def _build_common_financials(db: Session, account_ids):
         payments = (
             db.query(Payment)
             .filter(Payment.account_id.in_(account_ids))
+            .filter(Payment.is_active.is_(True))
             .order_by(func.coalesce(Payment.paid_at, Payment.created_at).desc())
             .limit(10)
             .all()
@@ -690,12 +694,14 @@ def _build_common_financials(db: Session, account_ids):
         total_invoiced = (
             db.query(func.coalesce(func.sum(Invoice.total), 0))
             .filter(Invoice.account_id.in_(account_ids))
+            .filter(Invoice.is_active.is_(True))
             .scalar()
             or 0
         )
         total_paid = (
             db.query(func.coalesce(func.sum(Payment.amount), 0))
             .filter(Payment.account_id.in_(account_ids))
+            .filter(Payment.is_active.is_(True))
             .filter(Payment.status == PaymentStatus.succeeded)
             .scalar()
             or 0
@@ -703,6 +709,7 @@ def _build_common_financials(db: Session, account_ids):
         overdue_invoices = (
             db.query(func.count(Invoice.id))
             .filter(Invoice.account_id.in_(account_ids))
+            .filter(Invoice.is_active.is_(True))
             .filter(Invoice.status == InvoiceStatus.overdue)
             .scalar()
             or 0
@@ -710,6 +717,7 @@ def _build_common_financials(db: Session, account_ids):
         last_payment = (
             db.query(Payment)
             .filter(Payment.account_id.in_(account_ids))
+            .filter(Payment.is_active.is_(True))
             .filter(Payment.status == PaymentStatus.succeeded)
             .order_by(func.coalesce(Payment.paid_at, Payment.created_at).desc())
             .first()
@@ -717,6 +725,7 @@ def _build_common_financials(db: Session, account_ids):
         last_invoice = (
             db.query(Invoice)
             .filter(Invoice.account_id.in_(account_ids))
+            .filter(Invoice.is_active.is_(True))
             .order_by(func.coalesce(Invoice.issued_at, Invoice.created_at).desc())
             .first()
         )

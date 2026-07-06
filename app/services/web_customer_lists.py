@@ -78,6 +78,11 @@ def _valid_ipv4_text(value: object) -> str | None:
     return str(parsed)
 
 
+def _normalize_search(search: str | None) -> str | None:
+    normalized = str(search or "").strip()
+    return normalized or None
+
+
 def _active_subscription_clause():
     return Subscription.status == SubscriptionStatus.active
 
@@ -272,8 +277,9 @@ def _apply_customer_filters(
 
     if status_filter is not None:
         query = query.filter(status_filter)
-    if search:
-        exact_ipv4 = _parse_ipv4_search(search)
+    normalized_search = _normalize_search(search)
+    if normalized_search:
+        exact_ipv4 = _parse_ipv4_search(normalized_search)
         if exact_ipv4:
             query = query.filter(
                 or_(
@@ -288,7 +294,7 @@ def _apply_customer_filters(
                 )
             )
         else:
-            like = f"%{search}%"
+            like = f"%{normalized_search}%"
             query = query.filter(
                 Subscriber.first_name.ilike(like)
                 | Subscriber.last_name.ilike(like)
@@ -400,6 +406,7 @@ def build_customers_index_context(
     per_page: int,
 ) -> dict[str, Any]:
     """Build customer list context — all customers are subscribers."""
+    search = _normalize_search(search)
     offset = (page - 1) * per_page
     query = customer_scope_query(
         db,
