@@ -195,6 +195,25 @@ def reconcile_all(db: Session, *, stale_after_seconds: int = 3600) -> int:
     return done
 
 
+def _enqueue_lazy_refresh(subscriber_id: str) -> None:
+    """Enqueue a background mirror refresh (best-effort — the periodic reconcile
+    is the backstop, so an enqueue failure must not break the read)."""
+    from app.services.queue_adapter import enqueue_task
+
+    try:
+        enqueue_task(
+            "app.tasks.work_orders.refresh_work_order_mirror_for_subscriber",
+            args=[subscriber_id],
+            source="work_order_lazy_refresh",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "work_order_lazy_refresh_enqueue_failed subscriber=%s: %s",
+            subscriber_id,
+            exc,
+        )
+
+
 def read_for_subscriber(
     db: Session,
     subscriber_id: str,
@@ -207,7 +226,8 @@ def read_for_subscriber(
     sync = db.get(WorkOrderSyncState, sub_uuid)
     cutoff = datetime.now(UTC) - timedelta(seconds=max(0, refresh_ttl_seconds))
     synced = _as_utc(sync.synced_at) if sync else None
-    if sync is None or synced is None or synced < cutoff:
+    if sync is None or synced is None:
+        # Cold cache — fetch synchronously so the first load is populated.
         try:
             reconcile_subscriber(db, str(subscriber_id))
         except CRMClientError as exc:
@@ -215,6 +235,14 @@ def read_for_subscriber(
             logger.warning(
                 "work_order_lazy_refresh_failed subscriber=%s: %s", sub_uuid, exc
             )
+    elif synced < cutoff:
+        # Warm but stale — serve the stale copy now and refresh in the background
+        # so the request doesn't block on a CRM round-trip. Optimistically stamp
+        # synced_at so concurrent reads within the TTL don't each enqueue
+        # (debounce); the refresh task re-stamps after pulling.
+        sync.synced_at = datetime.now(UTC)
+        db.commit()
+        _enqueue_lazy_refresh(str(subscriber_id))
 
     rows = db.scalars(
         select(WorkOrderMirror)
