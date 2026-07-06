@@ -217,6 +217,7 @@ def subscriptions_for_nodes(
                 RadiusActiveSession.nas_device_id.in_(nas_node_ids),
                 Subscription.status == SubscriptionStatus.active,
             )
+            .tuples()
             .all()
         )
 
