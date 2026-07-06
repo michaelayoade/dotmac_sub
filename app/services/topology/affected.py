@@ -658,10 +658,15 @@ def affected_customers(
 ) -> dict:
     """Subscriptions affected by a failing node and/or basestation.
 
-    Returns {subscriptions, node_ids, subscriptions_by_node, count} (deduped;
-    subscriptions_by_node lets callers do per-node coverage checks without
-    re-resolving). For a basestation, all
+    Returns {subscriptions, node_ids, subscriptions_by_node, count,
+    online_by_node, online_count} (deduped; subscriptions_by_node lets callers
+    do per-node coverage checks without re-resolving). For a basestation, all
     its active nodes; for a node, it + its downstream access nodes.
+
+    ``online_by_node`` / ``online_count`` are the proof-of-life overlay
+    (outage classifier P1, design §2): how many affected subscriptions have a
+    FRESH live RADIUS session per node, and in total. ``online >= 1`` behind a
+    node vetoes "down" for that node and everything upstream (design §0).
     """
     node_ids: set = set()
     if basestation is not None:
@@ -685,11 +690,23 @@ def affected_customers(
     for node_subs in subscriptions_by_node.values():
         for s in node_subs:
             subs[s.id] = s
+
+    # Proof-of-life overlay (outage classifier P1, design §2). Local import
+    # keeps module load acyclic: health_classifier imports helpers from here.
+    from app.services.topology.health_classifier import online_subscription_ids
+
+    online_ids = online_subscription_ids(session, subs.keys())
+    online_by_node = {
+        nid: sum(1 for s in node_subs if s.id in online_ids)
+        for nid, node_subs in subscriptions_by_node.items()
+    }
     return {
         "subscriptions": list(subs.values()),
         "node_ids": node_ids,
         "subscriptions_by_node": subscriptions_by_node,
         "count": len(subs),
+        "online_by_node": online_by_node,
+        "online_count": len(online_ids),
     }
 
 
