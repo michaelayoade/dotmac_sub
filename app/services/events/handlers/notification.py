@@ -141,6 +141,25 @@ class EventNotificationSpec:
 
 
 EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
+    # Outage classifier (design docs/designs/OUTAGE_CLASSIFIER.md §P4). The
+    # outage notifier supplies the customer-safe {message} as event context; the
+    # channels here are the DEFAULT and remain config-overridable per type via
+    # the ``notification_event_<template_code>_channels`` setting — channel
+    # selection lives with the notification system, never in the outage notifier.
+    EventType.outage_area: EventNotificationSpec(
+        template_code="outage_area",
+        category="service",
+        channels=(NotificationChannel.email,),
+        subject="Service interruption in your area",
+        body="Dear {subscriber_name},\n\n{message}",
+    ),
+    EventType.outage_last_mile: EventNotificationSpec(
+        template_code="outage_last_mile",
+        category="service",
+        channels=(NotificationChannel.email,),
+        subject="About your connection",
+        body="Dear {subscriber_name},\n\n{message}",
+    ),
     EventType.subscriber_created: EventNotificationSpec(
         template_code="subscriber_created",
         category="account",
