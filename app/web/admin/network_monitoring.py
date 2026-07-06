@@ -282,8 +282,12 @@ def outages_console(request: Request, db: Session = Depends(get_db)):
         list_network_nodes,
     )
     from app.services.topology.outage import is_stale_open, list_open_incidents
+    from app.services.topology.reachability import reachability_overview
 
     context = _base_context(request, db, active_page="monitoring")
+    # Root-cause view of everything currently down: devices behind a down
+    # parent are unreachable, not independent outages (one failure, not N).
+    context["reachability"] = reachability_overview(db)
     context["basestations"] = list_basestations(db)
     context["fdh_cabinets"] = list_fdh_cabinets(db)
     context["network_nodes"] = list_network_nodes(db)

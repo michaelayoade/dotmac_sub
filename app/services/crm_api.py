@@ -1894,6 +1894,194 @@ def create_subscription(
     return {"subscription": subscription, "invoice": invoice, "created": True}
 
 
+def _outage_incident_scope(session: Session, incident) -> dict[str, Any]:
+    """Human-usable scope block for an incident: what failed, by name."""
+    if incident.root_node_id is not None:
+        node = session.get(NetworkDevice, incident.root_node_id)
+        return {
+            "type": "node",
+            "id": str(incident.root_node_id),
+            "name": getattr(node, "name", None),
+            "basestation_id": str(node.pop_site_id)
+            if node is not None and node.pop_site_id is not None
+            else None,
+        }
+    if incident.basestation_id is not None:
+        pop = session.get(PopSite, incident.basestation_id)
+        return {
+            "type": "basestation",
+            "id": str(incident.basestation_id),
+            "name": getattr(pop, "name", None),
+            "basestation_id": str(incident.basestation_id),
+        }
+    if incident.fdh_cabinet_id is not None:
+        from app.models.network import FdhCabinet
+
+        fdh = session.get(FdhCabinet, incident.fdh_cabinet_id)
+        return {
+            "type": "fdh",
+            "id": str(incident.fdh_cabinet_id),
+            "name": getattr(fdh, "code", None) or getattr(fdh, "name", None),
+            "basestation_id": None,
+        }
+    return {"type": None, "id": None, "name": None, "basestation_id": None}
+
+
+def outage_incident_row(session: Session, incident) -> dict[str, Any]:
+    """One incident, serialized for the CRM (list + detail header)."""
+    from app.services.topology.outage import detection_source
+
+    return {
+        "id": str(incident.id),
+        "status": incident.status,
+        "detection_source": detection_source(incident),
+        "scope": _outage_incident_scope(session, incident),
+        "severity": incident.severity,
+        "affected_count": incident.affected_count,
+        "note": incident.note,
+        "declared_by": incident.declared_by,
+        "started_at": utc_iso(incident.started_at),
+        "resolved_at": utc_iso(incident.resolved_at),
+    }
+
+
+def list_outage_incidents(
+    session: Session,
+    *,
+    status: str | None = None,
+    basestation_id: str | uuid.UUID | None = None,
+    node_id: str | uuid.UUID | None = None,
+    resolved_within_hours: int = 24,
+    page: int = 1,
+    per_page: int = 100,
+) -> tuple[list[dict[str, Any]], int]:
+    """Open + recently-resolved incidents for the CRM, newest first.
+
+    Default view: everything ``open`` plus incidents resolved within
+    ``resolved_within_hours`` (so a just-cleared outage is still visible to
+    agents). ``status`` narrows to open/resolved; ``basestation_id`` /
+    ``node_id`` narrow the scope. Returns ``(rows, total)``.
+    """
+    from app.models.network_monitoring import OutageIncident
+
+    query = session.query(OutageIncident)
+    if status in ("open", "resolved"):
+        query = query.filter(OutageIncident.status == status)
+    else:
+        cutoff = datetime.now(UTC) - timedelta(hours=max(resolved_within_hours, 0))
+        query = query.filter(
+            or_(
+                OutageIncident.status == "open",
+                OutageIncident.resolved_at >= cutoff,
+            )
+        )
+    if basestation_id:
+        query = query.filter(
+            OutageIncident.basestation_id == _uuid_or_none(basestation_id)
+        )
+    if node_id:
+        query = query.filter(OutageIncident.root_node_id == _uuid_or_none(node_id))
+    total = query.count()
+    incidents = (
+        query.order_by(OutageIncident.started_at.desc())
+        .offset(max(page - 1, 0) * per_page)
+        .limit(per_page)
+        .all()
+    )
+    return [outage_incident_row(session, i) for i in incidents], total
+
+
+def outage_incident_detail(
+    session: Session, incident_id: str, *, limit: int = 200
+) -> dict[str, Any] | None:
+    """One incident plus the subscriptions inside its blast radius.
+
+    Membership is re-derived through the SAME resolvers the declare path used
+    (``affected_customers`` over node/basestation/FDH), never re-implemented,
+    so the detail list always matches the snapshotted count's semantics.
+    Capped at ``limit`` entries (``affected_total`` carries the real size).
+    """
+    from app.models.network import FdhCabinet
+    from app.models.network_monitoring import OutageIncident
+    from app.services.topology.affected import affected_customers
+
+    incident_uuid = _uuid_or_none(incident_id)
+    incident = (
+        session.get(OutageIncident, incident_uuid)
+        if incident_uuid is not None
+        else None
+    )
+    if incident is None:
+        return None
+
+    node = (
+        session.get(NetworkDevice, incident.root_node_id)
+        if incident.root_node_id is not None
+        else None
+    )
+    basestation = (
+        session.get(PopSite, incident.basestation_id)
+        if incident.basestation_id is not None
+        else None
+    )
+    fdh = (
+        session.get(FdhCabinet, incident.fdh_cabinet_id)
+        if incident.fdh_cabinet_id is not None
+        else None
+    )
+    subscriptions: list = []
+    if node is not None or basestation is not None or fdh is not None:
+        subscriptions = affected_customers(
+            session, node=node, basestation=basestation, fdh=fdh
+        )["subscriptions"]
+
+    # Slice BEFORE hydrating: a big outage can cover thousands of
+    # subscriptions, and touching .subscriber/.service_address on each would
+    # lazy-load per row. Total/truncated come from the id list; only the
+    # capped page (deterministic id order) is re-fetched, with both
+    # relationships eager-loaded in one pass.
+    affected_total = len(subscriptions)
+    page_ids = [s.id for s in sorted(subscriptions, key=lambda s: str(s.id))][:limit]
+    entries = []
+    if page_ids:
+        page = (
+            session.query(Subscription)
+            .options(
+                selectinload(Subscription.subscriber),
+                selectinload(Subscription.service_address),
+            )
+            .filter(Subscription.id.in_(page_ids))
+            .all()
+        )
+        for sub in page:
+            subscriber = sub.subscriber
+            service_address = sub.service_address
+            entries.append(
+                {
+                    "subscription_id": str(sub.id),
+                    "status": enum_value(sub.status),
+                    "subscriber_id": str(sub.subscriber_id)
+                    if sub.subscriber_id
+                    else None,
+                    "subscriber_name": subscriber_name(subscriber)
+                    if subscriber is not None
+                    else None,
+                    "service_address": address_text(
+                        subscriber, [service_address] if service_address else None
+                    )
+                    if subscriber is not None
+                    else None,
+                }
+            )
+        entries.sort(key=lambda e: (e["subscriber_name"] or "", e["subscription_id"]))
+
+    row = outage_incident_row(session, incident)
+    row["affected_total"] = affected_total
+    row["affected_truncated"] = affected_total > limit
+    row["affected_subscriptions"] = entries
+    return row
+
+
 def _find_crm_subscription(
     session: Session, subscriber_id: uuid.UUID, external_ref: str
 ) -> dict | None:

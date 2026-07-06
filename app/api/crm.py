@@ -615,6 +615,58 @@ def outage_impact(
     )
 
 
+@router.get("/outages", dependencies=[Depends(require_crm_bearer)])
+def list_outages(
+    status_filter: str | None = None,
+    basestation_id: str | None = None,
+    node_id: str | None = None,
+    resolved_within_hours: int = 24,
+    page: int = 1,
+    per_page: int = 100,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Outage incidents for the CRM/mobile backend: everything open plus
+    incidents resolved within ``resolved_within_hours`` (default 24). Each row
+    carries scope (node/basestation/FDH + name), ``detection_source`` (auto
+    vs manual), timestamps and the snapshotted affected-subscription count.
+    ``status_filter`` (open|resolved), ``basestation_id`` and ``node_id``
+    narrow the view."""
+    if status_filter is not None and status_filter not in ("open", "resolved"):
+        _error(
+            status.HTTP_400_BAD_REQUEST,
+            "Invalid query parameters.",
+            {"status_filter": ["Must be 'open' or 'resolved'."]},
+        )
+    page = max(1, page)
+    per_page = max(1, min(per_page, 500))
+    rows, total = crm_api.list_outage_incidents(
+        db,
+        status=status_filter,
+        basestation_id=basestation_id,
+        node_id=node_id,
+        resolved_within_hours=max(0, min(resolved_within_hours, 24 * 30)),
+        page=page,
+        per_page=per_page,
+    )
+    return _envelope(rows, {"page": page, "per_page": per_page, "total": total})
+
+
+@router.get("/outages/{incident_id}", dependencies=[Depends(require_crm_bearer)])
+def outage_detail(
+    incident_id: str,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """One incident with the affected subscriptions (id, subscriber name,
+    service address, status), capped at ``limit`` (max 500) with
+    ``affected_total``/``affected_truncated`` for the full size. Membership is
+    derived via the same topology resolvers as the declare-time snapshot."""
+    row = crm_api.outage_incident_detail(db, incident_id, limit=max(1, min(limit, 500)))
+    if row is None:
+        _error(status.HTTP_404_NOT_FOUND, "Outage incident not found.")
+    return _envelope(row)
+
+
 @router.get("/service-extensions", dependencies=[Depends(require_crm_bearer)])
 def service_extensions(
     request: Request, db: Session = Depends(get_db)
