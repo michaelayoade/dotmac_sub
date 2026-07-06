@@ -345,6 +345,21 @@ class EnforcementHandler:
         if not account_id:
             logger.debug("Skipping throttle enforcement: event missing account_id")
             return
+        # Rebuild radreply so the credential's throttle profile actually shapes
+        # the line — populate() now honours the credential override, but only on
+        # a sweep. Without this immediate refresh the throttle wouldn't land
+        # until the next scheduled sweep (up to ~15 min). Best-effort; the
+        # periodic sweep is the backstop if the enqueue is lost.
+        try:
+            from app.tasks.radius_population import refresh_radius_from_subs
+
+            refresh_radius_from_subs.delay()
+        except Exception:
+            logger.warning(
+                "Failed to enqueue radius refresh after throttle for account %s",
+                account_id,
+                exc_info=True,
+            )
         refresh = settings_spec.resolve_value(
             db, SettingDomain.radius, "refresh_sessions_on_profile_change"
         )
