@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from app.models.catalog import NasDevice
 from app.models.network_monitoring import NetworkDevice
+from app.models.radius_active_session import RadiusActiveSession
 from app.services.topology.live_status import warm_topology_status
 
 
@@ -34,6 +36,27 @@ def _node(hostid, name):
         zabbix_hostid=hostid,
         is_active=True,
     )
+
+
+def _seed_live_session(db_session, device):
+    """Attach a NAS carrying one live RADIUS session to ``device``.
+
+    Mirrors the real data path: radius_active_sessions.nas_device_id ->
+    nas_devices.id -> nas_devices.network_device_id -> network_devices.id.
+    """
+    nas = NasDevice(name=f"nas-{device.zabbix_hostid}", network_device_id=device.id)
+    db_session.add(nas)
+    db_session.flush()
+    db_session.add(
+        RadiusActiveSession(
+            nas_device_id=nas.id,
+            username=f"cust-{device.zabbix_hostid}",
+            acct_session_id=f"sess-{device.zabbix_hostid}",
+            session_start=datetime.now(UTC),
+        )
+    )
+    db_session.flush()
+    return nas
 
 
 def test_warm_sets_live_status_per_node(db_session):
@@ -357,3 +380,85 @@ def test_snmp_host_without_uisp_status_unchanged(db_session):
     n = db_session.query(NetworkDevice).filter_by(zabbix_hostid="35").one()
     assert n.live_status == "up"
     assert result["via_uisp_status"] == 0
+
+
+def test_live_session_forces_up_over_polled_down(db_session):
+    # Headline false-down guard: polling says DOWN, but the device is carrying a
+    # live authenticated customer session -> forced UP, counted once.
+    node = _node("40", "serving-bng-polled-down")
+    db_session.add(node)
+    db_session.flush()
+    _seed_live_session(db_session, node)
+    hosts = [{"hostid": "40", "available": "2", "status": "0", "interfaces": []}]
+
+    result = warm_topology_status(db_session, _FakeClient(hosts, [], items=[]))
+
+    n = db_session.query(NetworkDevice).filter_by(zabbix_hostid="40").one()
+    assert n.live_status == "up"
+    assert result["via_live_session"] == 1
+
+
+def test_live_session_forces_up_over_unknown(db_session):
+    # UNKNOWN polling + a live session -> UP off the override.
+    node = _node("41", "serving-unknown")
+    db_session.add(node)
+    db_session.flush()
+    _seed_live_session(db_session, node)
+    hosts = [{"hostid": "41", "available": "0", "status": "0", "interfaces": []}]
+
+    result = warm_topology_status(db_session, _FakeClient(hosts, [], items=[]))
+
+    n = db_session.query(NetworkDevice).filter_by(zabbix_hostid="41").one()
+    assert n.live_status == "up"
+    assert result["via_live_session"] == 1
+
+
+def test_live_session_on_already_up_not_double_counted(db_session):
+    # Polling already UP + a live session -> stays UP, but the override did not
+    # change the verdict, so it is NOT counted.
+    node = _node("42", "serving-already-up")
+    db_session.add(node)
+    db_session.flush()
+    _seed_live_session(db_session, node)
+    hosts = [{"hostid": "42", "available": "1", "status": "0", "interfaces": []}]
+
+    result = warm_topology_status(db_session, _FakeClient(hosts, [], items=[]))
+
+    n = db_session.query(NetworkDevice).filter_by(zabbix_hostid="42").one()
+    assert n.live_status == "up"
+    assert result["via_live_session"] == 0
+
+
+def test_polled_down_without_live_session_stays_down(db_session):
+    # No live session riding it: the arm never fabricates UP — DOWN stays DOWN.
+    node = _node("43", "down-no-session")
+    db_session.add(node)
+    db_session.flush()
+    hosts = [{"hostid": "43", "available": "2", "status": "0", "interfaces": []}]
+
+    result = warm_topology_status(db_session, _FakeClient(hosts, [], items=[]))
+
+    n = db_session.query(NetworkDevice).filter_by(zabbix_hostid="43").one()
+    assert n.live_status == "down"
+    assert result["via_live_session"] == 0
+
+
+def test_live_session_wins_over_uisp_disconnected(db_session):
+    # Precedence: a live session AND a uisp.status="disconnected" trapper (which
+    # would otherwise colour DOWN) -> UP. Live sessions beat both polling and the
+    # uisp arm, and this counts as a live-session override.
+    node = _node("44", "serving-uisp-disconnected")
+    db_session.add(node)
+    db_session.flush()
+    _seed_live_session(db_session, node)
+    hosts = [{"hostid": "44", "available": "0", "status": "0", "interfaces": []}]
+    items = [{"hostid": "44", "key_": "uisp.status", "lastvalue": "disconnected"}]
+
+    result = warm_topology_status(db_session, _FakeClient(hosts, [], items))
+
+    n = db_session.query(NetworkDevice).filter_by(zabbix_hostid="44").one()
+    assert n.live_status == "up"
+    assert result["via_live_session"] == 1
+    # The uisp arm coloured it DOWN first, then the live-session override flipped
+    # it UP — so the uisp fallback still fired (counted) but did not win.
+    assert result["via_uisp_status"] == 1

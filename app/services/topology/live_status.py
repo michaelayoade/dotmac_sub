@@ -17,7 +17,9 @@ from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
+from app.models.catalog import NasDevice
 from app.models.network_monitoring import NetworkDevice
+from app.models.radius_active_session import RadiusActiveSession
 from app.services.topology.zabbix_reconcile import SOURCE
 
 UP = "up"
@@ -190,11 +192,27 @@ def warm_topology_status(session: Session, client) -> dict:
             host_id = str(item.get("hostid"))
             uisp_status[host_id] = _uisp_status(item.get("lastvalue"))
 
+    # Network devices currently carrying >=1 authenticated customer RADIUS
+    # session (radius_active_sessions.nas_device_id -> nas_devices.id ->
+    # nas_devices.network_device_id). radius_active_sessions is a live view (the
+    # reconciler prunes ended sessions every ~3 min), so every row is an open
+    # session — no status/ended filter needed. One DISTINCT query up front, then
+    # a cheap set membership test per node in the loop.
+    serving_device_ids: set = {
+        row[0]
+        for row in session.query(NasDevice.network_device_id)
+        .join(RadiusActiveSession, RadiusActiveSession.nas_device_id == NasDevice.id)
+        .filter(NasDevice.network_device_id.isnot(None))
+        .distinct()
+        .all()
+    }
+
     now = _now()
     sla_logging = _sla_log_enabled()
     coverage = _coverage() if sla_logging else None
     counts: Counter = Counter()
     via_uisp_status = 0  # nodes coloured from the uisp.status trapper fallback
+    via_live_session = 0  # nodes forced UP by a live customer session override
     for n in nodes:
         hid = n.zabbix_hostid
         if hid is None:  # filtered in the query; narrows for the type checker
@@ -214,6 +232,17 @@ def warm_topology_status(session: Session, client) -> dict:
             if fallback in (UP, DOWN):
                 status = fallback
                 via_uisp_status += 1
+        # Highest-precedence override: a device carrying live authenticated
+        # customer PPPoE sessions is DEFINITIVELY up — live customer traffic is
+        # stronger evidence than any ping or SNMP poll. Promote-only: it can
+        # only ever set UP, so it never masks a real outage of a device with no
+        # customers. It overrides even a polled DOWN (the exact false-down-on-a-
+        # serving-BNG case we want to make impossible) — distinct from the uisp
+        # arm above, which only fills an UNKNOWN. Count only when it actually
+        # CHANGED the verdict (status was not already UP).
+        if n.id in serving_device_ids and status != UP:
+            status = UP
+            via_live_session += 1
         # Stamp live_status_at only when the state CHANGES, so it marks when the
         # node entered its current state — the dwell clock the customer-facing
         # connection-status debounce relies on (see topology.selfcare).
@@ -233,4 +262,9 @@ def warm_topology_status(session: Session, client) -> dict:
             n.live_status_at = now
         counts[status] += 1
     session.flush()
-    return {"nodes": len(nodes), **counts, "via_uisp_status": via_uisp_status}
+    return {
+        "nodes": len(nodes),
+        **counts,
+        "via_uisp_status": via_uisp_status,
+        "via_live_session": via_live_session,
+    }
