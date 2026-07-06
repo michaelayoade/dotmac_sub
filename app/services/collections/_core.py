@@ -35,6 +35,7 @@ from app.schemas.collections import (
     DunningRunResponse,
 )
 from app.services import enforcement_window, settings_spec
+from app.services.billing_prepaid_overlap_repair import apply_prepaid_overlap_hold
 from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
 from app.services.common import (
     apply_ordering,
@@ -1485,7 +1486,9 @@ class DunningWorkflow(ListResponseMixin):
         )
         overdue_accounts: dict[UUID, list[Invoice]] = {}
         for invoice in invoices:
-            if (invoice.metadata_ or {}).get("reconciliation_hold"):
+            if (invoice.metadata_ or {}).get(
+                "reconciliation_hold"
+            ) or apply_prepaid_overlap_hold(db, invoice):
                 continue
             account_id = coerce_uuid(str(invoice.account_id))
             overdue_accounts.setdefault(account_id, []).append(invoice)
