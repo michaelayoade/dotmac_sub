@@ -12,8 +12,8 @@ caused a prod migration collision in #876. Existing operator rows keep
 ``detection_source = 'operator'`` via the server default; classifier incidents
 set 'classifier' at insert time.
 
-Revision ID: 216_outage_incident_lifecycle
-Revises: 215_add_payment_provider_fee
+Revision ID: 217_outage_incident_lifecycle
+Revises: 216_add_outage_notification_dispatches
 Create Date: 2026-07-06
 """
 
@@ -22,8 +22,8 @@ from sqlalchemy import inspect
 
 from alembic import op
 
-revision = "216_outage_incident_lifecycle"
-down_revision = "215_add_payment_provider_fee"
+revision = "217_outage_incident_lifecycle"
+down_revision = "216_add_outage_notification_dispatches"
 branch_labels = None
 depends_on = None
 
