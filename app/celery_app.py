@@ -92,9 +92,7 @@ celery_app.conf.task_routes = {
     "app.tasks.topology_ufiber_link.run_ufiber_onu_link": {"queue": "ingestion"},
     "app.tasks.topology_metrics.export_topology_metrics": {"queue": "ingestion"},
     "app.tasks.olt_mac_harvest.run_olt_mac_harvest": {"queue": "ingestion"},
-    "app.tasks.ont_signal_observations.record_ont_observations": {
-        "queue": "ingestion"
-    },
+    "app.tasks.ont_signal_observations.record_ont_observations": {"queue": "ingestion"},
     "app.tasks.usage.import_radius_accounting": {"queue": "ingestion"},
     "app.tasks.usage.reap_stale_radius_sessions": {"queue": "ingestion"},
     "app.tasks.radius.reap_radacct_ghosts": {"queue": "ingestion"},
