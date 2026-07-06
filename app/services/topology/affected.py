@@ -10,6 +10,7 @@ no usable graph it degrades safely to the node itself.
 
 from __future__ import annotations
 
+import logging
 from collections import deque
 
 from sqlalchemy import or_
@@ -34,12 +35,15 @@ from app.models.network_monitoring import (
     NetworkTopologyLink,
     PopSite,
 )
+from app.models.radius_active_session import RadiusActiveSession
 from app.models.subscriber import Address
 from app.services.network.signal_thresholds import (
     classify_signal,
     normalize_optical_signal_dbm,
 )
 from app.services.topology.lldp_poller import SOURCE as LLDP_SOURCE
+
+logger = logging.getLogger(__name__)
 
 
 def list_basestations(session: Session) -> list[PopSite]:
@@ -152,9 +156,16 @@ def subscriptions_for_nodes(
     ALL the given nodes (instead of up to five per node), so basestation
     sweeps and impact previews stay O(arms), not O(nodes).
 
-    Three additive arms, deduped by subscription id per node — an AP node may
+    Four additive arms, deduped by subscription id per node — an AP node may
     *also* be Zabbix-matched as a NAS:
-      - nas: subscriptions provisioned on the node's matched NAS;
+      - nas: subscriptions provisioned on the node's matched NAS
+        (Subscription.provisioning_nas_device_id — the STATIC edge);
+      - live: subscriptions with a live ``RadiusActiveSession`` on the node's
+        matched NAS (where the customer is ACTUALLY connected right now).
+        Additive to the nas arm and deduped by subscription id — roaming and
+        failover mean a customer can be online on a NAS other than the one
+        provisioned, so "NAS down -> affected" reflects who is currently
+        connected there, not only who is provisioned there;
       - olt: subscriptions with an active ONT assignment on the matched OLT;
       - wireless: subscriptions whose active radio is parented to the node
         via the UISP CPE -> AP edge. "Active" mirrors
@@ -182,11 +193,28 @@ def subscriptions_for_nodes(
         if n.matched_device_type == "nas" and n.matched_device_id is not None:
             nas_node_ids.setdefault(n.matched_device_id, []).append(n.id)
     nas_subs: list[Subscription] = []
+    # Live-session arm: (Subscription, live nas_device_id) pairs — the NAS the
+    # customer is connected to per radius_active_sessions, keyed the same way as
+    # provisioning (NasDevice.id -> matched nas node). Reading nas_device_id (a
+    # UUID FK) only — no raw radacct/inet columns are touched here.
+    live_rows: list[tuple] = []
     if nas_node_ids:
         nas_subs = (
             session.query(Subscription)
             .filter(
                 Subscription.provisioning_nas_device_id.in_(nas_node_ids),
+                Subscription.status == SubscriptionStatus.active,
+            )
+            .all()
+        )
+        live_rows = (
+            session.query(Subscription, RadiusActiveSession.nas_device_id)
+            .join(
+                RadiusActiveSession,
+                RadiusActiveSession.subscription_id == Subscription.id,
+            )
+            .filter(
+                RadiusActiveSession.nas_device_id.in_(nas_node_ids),
                 Subscription.status == SubscriptionStatus.active,
             )
             .all()
@@ -249,6 +277,21 @@ def subscriptions_for_nodes(
     for sub in nas_subs:
         for nid in nas_node_ids[sub.provisioning_nas_device_id]:
             result[nid][sub.id] = sub
+    live_added = 0
+    for sub, nas_device_id in live_rows:
+        for nid in nas_node_ids[nas_device_id]:
+            if sub.id not in result[nid]:
+                live_added += 1
+            result[nid][sub.id] = sub
+    if live_added:
+        # Adoption signal: subscriptions the live-session arm contributed on
+        # top of the static provisioning arm (roaming/failover/online-now).
+        logger.debug(
+            "affected: live-session arm added %d subscription(s) not covered "
+            "by provisioning_nas across %d node(s)",
+            live_added,
+            len(node_ids),
+        )
 
     return {nid: list(by_id.values()) for nid, by_id in result.items()}
 
