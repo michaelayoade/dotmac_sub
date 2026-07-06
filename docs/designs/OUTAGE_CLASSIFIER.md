@@ -143,3 +143,64 @@ records disagree with reality.
 
 Every phase consumes signals already on prod. The build is the **correlation engine
 + the temporal baseline** — no new collection.
+
+## §7.6 implementation — detected-outage incident lifecycle
+
+The classifier (§1–§3) is a **point-in-time** read: it says what is dark *now*,
+which is too twitchy to notify on. §7.6 adds the **time dimension** — a
+discover-reconcile loop (`app/services/topology/outage_reconcile.py`, task
+`app.tasks.topology_outage.reconcile_detected_outages`, ~180s, ingestion queue,
+advisory-lock single-flight) that **debounces** verdicts into a persisted
+`OutageIncident` with a lifecycle. That incident is the **spine** notify /
+ticket / restore / MTTR will later attach to. **Firing (customer/ticket
+notification) stays gated** — this layer only persists the lifecycle and emits
+lifecycle events into the existing webhook machinery.
+
+Operator-declared incidents are unchanged: they keep `open`/`resolved`, are
+treated as already-confirmed (no debounce), and are discriminated by the new
+`detection_source` column (`operator` vs `classifier`). `status` stays a
+**String validated in code, not a DB enum** — the enum route caused a prod
+migration collision (#876).
+
+### State machine (classifier incidents)
+
+```
+ suspected ──W_confirm──▶ confirmed ──recovery──▶ clearing ──W_resolve──▶ resolved
+     │                        ▲                        │
+ recovery before W_confirm    └──── re-darken ─────────┘   (clearing→confirmed,
+     ▼                             within W_resolve         resets cleared_at)
+ discarded  (false positive — no confirmed event ever fires)
+```
+
+Stamps: `suspected_at` on open, `confirmed_at` on confirm, `cleared_at` on
+entering clearing (cleared on reopen), `resolved_at` on resolve.
+**MTTR = `resolved_at − confirmed_at`.**
+
+### Scaled debounce windows (settings-backed; SettingDomain.network_monitoring)
+
+- **W_confirm** (`suspected → confirmed`) scales by `affected_count` — a large
+  blast radius is unambiguous, a small one waits out flaps:
+
+  | affected_count | window | setting (default) |
+  |---|---|---|
+  | ≥ 20 (`outage_confirm_threshold_large`) | confirm this cycle | `outage_confirm_seconds_large` (0s) |
+  | 5..19 (`outage_confirm_threshold_med`) | 360s | `outage_confirm_seconds_med` (360s) |
+  | < 5 | 600s | `outage_confirm_seconds_small` (600s) |
+
+- **W_resolve** (`clearing → resolved`): fixed sustained-recovery window,
+  `outage_resolve_seconds` (default 300s). A re-darken inside it reopens
+  (`clearing → confirmed`) instead of resolving (hysteresis).
+
+### Drift / identity rule (decision 3)
+
+Per pass the loop classifies every active zabbix-linked node with the online
+overlay (§2), keeps the `node_outage` nodes, and localizes each to the deepest
+dark-under-live boundary (§3) → one candidate per dark component. A candidate is
+matched to an **open** classifier incident (`suspected`/`confirmed`/`clearing`)
+by, in order: **`basestation_id`** when present, else **exact `root_node_id`**,
+else the incident's root falling **inside the current connected-dark component**.
+On a match the `root_node_id` is **re-pointed** to the current deepest-dark node
+(emitting a `rerooted` event) rather than opening a duplicate; a new incident is
+opened only when no open classifier incident covers the component. Idempotent
+across serialized runs (identity dedupe + state-guarded transitions);
+per-candidate savepoints isolate failures.
