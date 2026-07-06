@@ -209,3 +209,63 @@ def test_webhook_unknown_event_ignored(db_session):
         {"subscriber_id": str(sub.id), "work_order_id": "wo9"},
     )
     assert out["status"] == "ignored"
+
+
+def test_stale_read_serves_stale_and_refreshes_async(db_session):
+    """A warm-but-stale read serves the mirror immediately and refreshes in the
+    background instead of blocking on the CRM (P3-sub)."""
+    from datetime import UTC, datetime, timedelta
+
+    sub = _subscriber(db_session, crm_id=uuid.uuid4())
+    db_session.add(
+        WorkOrderMirror(
+            subscriber_id=sub.id,
+            crm_work_order_id="wo-stale",
+            title="Old",
+            status="scheduled",
+        )
+    )
+    db_session.add(
+        WorkOrderSyncState(
+            subscriber_id=sub.id, synced_at=datetime.now(UTC) - timedelta(hours=1)
+        )
+    )
+    db_session.commit()
+
+    enqueued: list = []
+    with (
+        patch("app.services.work_orders_mirror.reconcile_subscriber") as recon,
+        patch(
+            "app.services.queue_adapter.enqueue_task",
+            side_effect=lambda *a, **k: enqueued.append((a, k)),
+        ),
+    ):
+        out = work_orders_mirror.read_for_subscriber(db_session, str(sub.id))
+
+    recon.assert_not_called()  # did NOT block on the CRM
+    assert len(enqueued) == 1  # enqueued a background refresh
+    assert out["total"] == 1  # served the stale row immediately
+    assert out["work_orders"][0]["id"] == "wo-stale"
+    # synced_at optimistically bumped so concurrent reads don't re-enqueue (debounce)
+    st = db_session.get(WorkOrderSyncState, sub.id)
+    assert (datetime.now(UTC) - st.synced_at.replace(tzinfo=UTC)).total_seconds() < 60
+
+
+def test_cold_read_stays_synchronous_and_does_not_enqueue(db_session):
+    """A cold read (no local copy) fetches synchronously so the first load is
+    populated — it must not return empty + defer."""
+    sub = _subscriber(db_session, crm_id=uuid.uuid4())
+    client = MagicMock()
+    client.get_portal_work_orders.return_value = _crm_resp()
+    with (
+        patch("app.services.work_orders_mirror.get_crm_client", return_value=client),
+        patch(
+            "app.services.work_orders_mirror.resolve_crm_subscriber_id",
+            return_value="crm-1",
+        ),
+        patch("app.services.queue_adapter.enqueue_task") as enq,
+    ):
+        out = work_orders_mirror.read_for_subscriber(db_session, str(sub.id))
+
+    enq.assert_not_called()  # cold path fetched synchronously, no deferral
+    assert out["total"] == 1  # populated on first load
