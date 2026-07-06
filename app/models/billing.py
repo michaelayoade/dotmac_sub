@@ -632,6 +632,12 @@ class Payment(Base):
         UUID(as_uuid=True), ForeignKey("billing_accounts.id")
     )
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
+    # Total refunded so far (sum of refund ledger entries), maintained by the
+    # refund flow. `amount` stays the gross captured figure; net cash =
+    # amount - refunded_amount. Exposed so ERP posts the net after a refund.
+    refunded_amount: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), default=Decimal("0.00"), server_default="0"
+    )
     currency: Mapped[str] = mapped_column(String(3), default="NGN")
     status: Mapped[PaymentStatus] = mapped_column(
         Enum(PaymentStatus), default=PaymentStatus.pending
