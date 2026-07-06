@@ -79,6 +79,30 @@ def test_renders_partial_fiber_plant_as_not_mapped():
     assert "not mapped" in html
 
 
+def test_warns_when_customer_has_multiple_active_onts():
+    path = CustomerPath(
+        ont=SimpleNamespace(serial_number="SN-DUP-1"),
+        active_ont_assignments=[
+            SimpleNamespace(
+                ont_unit=SimpleNamespace(serial_number="SN-DUP-1"),
+                ont_unit_id="ont-1",
+            ),
+            SimpleNamespace(
+                ont_unit=SimpleNamespace(serial_number="SN-DUP-2"),
+                ont_unit_id="ont-2",
+            ),
+        ],
+        access_device=SimpleNamespace(name="OLT-Dup"),
+        access_device_kind="olt",
+    )
+
+    html = _render(path)
+
+    assert "Multiple active ONTs found" in html
+    assert "This path shows ONT SN-DUP-1 only" in html
+    assert "SN-DUP-1" in html and "SN-DUP-2" in html
+
+
 def test_renders_upstream_chain():
     path = CustomerPath(
         access_device=SimpleNamespace(name="SPDC Access"),

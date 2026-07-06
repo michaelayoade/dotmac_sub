@@ -751,7 +751,13 @@ class OntAssignmentBase(BaseModel):
 
 
 class OntAssignmentCreate(OntAssignmentBase):
-    pass
+    allow_multiple_active_onts: bool = Field(
+        default=False,
+        description=(
+            "Administrative override for intentionally assigning more than one "
+            "active ONT to the same subscriber."
+        ),
+    )
 
 
 class OntAssignmentUpdate(BaseModel):
@@ -778,6 +784,13 @@ class OntAssignmentUpdate(BaseModel):
     service_address_id: UUID | None = None
     assigned_at: datetime | None = None
     active: bool | None = None
+    allow_multiple_active_onts: bool = Field(
+        default=False,
+        description=(
+            "Administrative override for intentionally assigning more than one "
+            "active ONT to the same subscriber."
+        ),
+    )
     notes: str | None = None
 
     # Service configuration (subscriber settings for this ONT)

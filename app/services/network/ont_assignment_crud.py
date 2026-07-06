@@ -129,6 +129,37 @@ def _validate_assignment_customer_links(
     )
 
 
+def _validate_single_active_ont_for_subscriber(
+    db: Session,
+    *,
+    subscriber_id: object | None,
+    active: bool,
+    exclude_assignment_id: object | None = None,
+    allow_multiple: bool = False,
+) -> None:
+    if not active or subscriber_id is None or allow_multiple:
+        return
+
+    stmt = (
+        select(OntAssignment.id)
+        .where(OntAssignment.subscriber_id == subscriber_id)
+        .where(OntAssignment.active.is_(True))
+        .with_for_update()
+        .limit(1)
+    )
+    if exclude_assignment_id is not None:
+        stmt = stmt.where(OntAssignment.id != exclude_assignment_id)
+
+    if db.scalars(stmt).first() is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Subscriber already has an active ONT assignment. Release the "
+                "existing ONT first or use the explicit multi-ONT override."
+            ),
+        )
+
+
 def _has_other_active_assignment(
     db: Session,
     *,
@@ -162,6 +193,7 @@ class OntAssignments(CRUDManager[OntAssignment]):
         self._subscriber_validator = subscriber_validator
 
     def create(self, db: Session, payload: OntAssignmentCreate) -> OntAssignment:  # type: ignore[override]
+        allow_multiple_active_onts = bool(payload.allow_multiple_active_onts)
         ont, _pon_port = _validate_assignment_target(
             db,
             ont_unit_id=payload.ont_unit_id,
@@ -174,7 +206,15 @@ class OntAssignments(CRUDManager[OntAssignment]):
             service_address_id=payload.service_address_id,
             subscriber_validator=self._subscriber_validator,
         )
-        assignment = OntAssignment(**payload.model_dump())
+        _validate_single_active_ont_for_subscriber(
+            db,
+            subscriber_id=payload.subscriber_id,
+            active=payload.active,
+            allow_multiple=allow_multiple_active_onts,
+        )
+        assignment = OntAssignment(
+            **payload.model_dump(exclude={"allow_multiple_active_onts"})
+        )
         from app.services.network.cpe import ensure_cpe_for_ont
 
         for attempt in range(3):
@@ -259,6 +299,7 @@ class OntAssignments(CRUDManager[OntAssignment]):
             if "service_address_id" in fields_set
             else assignment.service_address_id
         )
+        allow_multiple_active_onts = bool(data.pop("allow_multiple_active_onts", False))
 
         ont, _pon_port = _validate_assignment_target(
             db,
@@ -273,6 +314,22 @@ class OntAssignments(CRUDManager[OntAssignment]):
             service_address_id=target_service_address_id,
             subscriber_validator=self._subscriber_validator,
         )
+        assigning_second_active_ont = (
+            bool(target_active)
+            and target_subscriber_id is not None
+            and (
+                not assignment.active
+                or assignment.subscriber_id != target_subscriber_id
+            )
+        )
+        if assigning_second_active_ont:
+            _validate_single_active_ont_for_subscriber(
+                db,
+                subscriber_id=target_subscriber_id,
+                active=bool(target_active),
+                exclude_assignment_id=assignment.id,
+                allow_multiple=allow_multiple_active_onts,
+            )
 
         original_ont = (
             ont

@@ -198,6 +198,8 @@ def parse_form_values(form) -> dict[str, object]:
         "pon_port_id": form.get("pon_port_id", "").strip(),
         "account_id": form.get("account_id", "").strip() or None,
         "service_address_id": form.get("service_address_id", "").strip() or None,
+        "allow_multiple_active_onts": form.get("allow_multiple_active_onts")
+        in {"1", "true", "on", "yes"},
         "notes": form.get("notes", "").strip() or None,
     }
 
@@ -321,6 +323,7 @@ def create_assignment(db: Session, ont, values: dict[str, object]) -> None:
         ),
         assigned_at=datetime.now(UTC),
         active=True,
+        allow_multiple_active_onts=bool(values.get("allow_multiple_active_onts")),
         notes=str(values.get("notes")) if values.get("notes") else None,
     )
     network_service.ont_assignments.create(db=db, payload=payload)
@@ -359,6 +362,7 @@ def claim_existing_assignment(
         ),
         assigned_at=getattr(assignment, "assigned_at", None) or datetime.now(UTC),
         active=True,
+        allow_multiple_active_onts=bool(values.get("allow_multiple_active_onts")),
         notes=str(values.get("notes")) if values.get("notes") else None,
     )
     network_service.ont_assignments.update(db, str(assignment.id), payload)
@@ -377,6 +381,9 @@ def form_payload(
         "account_id": values.get("account_id"),
         "account_label": "",
         "service_address_id": values.get("service_address_id"),
+        "allow_multiple_active_onts": bool(
+            values.get("allow_multiple_active_onts")
+        ),
         "notes": values.get("notes"),
     }
     # Look up subscriber label for typeahead repopulation
@@ -413,6 +420,7 @@ def assignment_form_payload_from_assignment(assignment) -> dict[str, object]:
         "service_address_id": (
             str(assignment.service_address_id) if assignment.service_address_id else ""
         ),
+        "allow_multiple_active_onts": False,
         "notes": assignment.notes or "",
     }
 
@@ -491,6 +499,9 @@ def create_assignment_from_form(db: Session, ont_id: str, form) -> AssignmentFor
             else "Could not create assignment due to a data conflict."
         )
         return AssignmentFormResult(ont=ont, values=values, error=msg)
+    except HTTPException as exc:
+        db.rollback()
+        return AssignmentFormResult(ont=ont, values=values, error=str(exc.detail))
     return AssignmentFormResult(ont=ont, values=values)
 
 
@@ -535,9 +546,19 @@ def update_assignment_from_form(
             if values.get("service_address_id")
             else None
         ),
+        allow_multiple_active_onts=bool(values.get("allow_multiple_active_onts")),
         notes=str(values.get("notes")) if values.get("notes") else None,
     )
-    network_service.ont_assignments.update(db, assignment_id, payload)
+    try:
+        network_service.ont_assignments.update(db, assignment_id, payload)
+    except HTTPException as exc:
+        db.rollback()
+        return AssignmentFormResult(
+            ont=loaded.ont,
+            assignment=assignment,
+            values=values,
+            error=str(exc.detail),
+        )
     return AssignmentFormResult(ont=loaded.ont, assignment=assignment, values=values)
 
 

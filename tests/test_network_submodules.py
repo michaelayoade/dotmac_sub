@@ -1228,6 +1228,85 @@ class TestOntAssignmentsCRUD:
         assert assignment.released_at is None
         assert assignment.release_reason is None
 
+    def test_assign_form_blocks_claiming_second_active_ont(
+        self, db_session, subscriber
+    ):
+        """The admin form should show a clean error for accidental duplicate ONTs."""
+        from app.services import web_network_ont_assignments
+
+        first_ont, first_pon = self._make_ont_and_pon(db_session)
+        second_ont, second_pon = self._make_ont_and_pon(db_session)
+        network_service.ont_assignments.create(
+            db_session,
+            OntAssignmentCreate(
+                ont_unit_id=first_ont.id,
+                pon_port_id=first_pon.id,
+                account_id=subscriber.id,
+            ),
+        )
+        second_assignment = OntAssignment(
+            ont_unit_id=second_ont.id,
+            pon_port_id=second_pon.id,
+            active=True,
+            assigned_at=datetime.now(UTC),
+        )
+        db_session.add(second_assignment)
+        db_session.commit()
+
+        result = web_network_ont_assignments.create_assignment_from_form(
+            db_session,
+            str(second_ont.id),
+            {
+                "pon_port_id": str(second_pon.id),
+                "account_id": str(subscriber.id),
+                "service_address_id": "",
+                "notes": "",
+            },
+        )
+
+        assert "Subscriber already has an active ONT assignment" in str(result.error)
+
+    def test_assign_form_allows_second_active_ont_with_override(
+        self, db_session, subscriber
+    ):
+        """The admin form checkbox is the explicit override for intentional duplicates."""
+        from app.services import web_network_ont_assignments
+
+        first_ont, first_pon = self._make_ont_and_pon(db_session)
+        second_ont, second_pon = self._make_ont_and_pon(db_session)
+        network_service.ont_assignments.create(
+            db_session,
+            OntAssignmentCreate(
+                ont_unit_id=first_ont.id,
+                pon_port_id=first_pon.id,
+                account_id=subscriber.id,
+            ),
+        )
+        second_assignment = OntAssignment(
+            ont_unit_id=second_ont.id,
+            pon_port_id=second_pon.id,
+            active=True,
+            assigned_at=datetime.now(UTC),
+        )
+        db_session.add(second_assignment)
+        db_session.commit()
+
+        result = web_network_ont_assignments.create_assignment_from_form(
+            db_session,
+            str(second_ont.id),
+            {
+                "pon_port_id": str(second_pon.id),
+                "account_id": str(subscriber.id),
+                "service_address_id": "",
+                "allow_multiple_active_onts": "1",
+                "notes": "",
+            },
+        )
+
+        db_session.refresh(second_assignment)
+        assert result.error is None
+        assert second_assignment.subscriber_id == subscriber.id
+
     def test_create_ont_assignment_auto_creates_matching_cpe(
         self, db_session, subscriber
     ):
@@ -1523,6 +1602,126 @@ class TestOntAssignmentsCRUD:
 
         assert exc_info.value.status_code == 409
         assert exc_info.value.detail == "ONT already has an active assignment"
+
+    def test_create_ont_assignment_rejects_second_active_ont_for_subscriber(
+        self, db_session, subscriber
+    ):
+        """A subscriber should not get a second active ONT by accident."""
+        first_ont, first_pon = self._make_ont_and_pon(db_session)
+        second_ont, second_pon = self._make_ont_and_pon(db_session)
+        network_service.ont_assignments.create(
+            db_session,
+            OntAssignmentCreate(
+                ont_unit_id=first_ont.id,
+                pon_port_id=first_pon.id,
+                account_id=subscriber.id,
+            ),
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            network_service.ont_assignments.create(
+                db_session,
+                OntAssignmentCreate(
+                    ont_unit_id=second_ont.id,
+                    pon_port_id=second_pon.id,
+                    account_id=subscriber.id,
+                ),
+            )
+
+        assert exc_info.value.status_code == 409
+        assert "Subscriber already has an active ONT assignment" in str(
+            exc_info.value.detail
+        )
+
+    def test_create_ont_assignment_allows_second_active_ont_with_override(
+        self, db_session, subscriber
+    ):
+        """The explicit override covers intentional multi-ONT customers."""
+        first_ont, first_pon = self._make_ont_and_pon(db_session)
+        second_ont, second_pon = self._make_ont_and_pon(db_session)
+        network_service.ont_assignments.create(
+            db_session,
+            OntAssignmentCreate(
+                ont_unit_id=first_ont.id,
+                pon_port_id=first_pon.id,
+                account_id=subscriber.id,
+            ),
+        )
+
+        second_assignment = network_service.ont_assignments.create(
+            db_session,
+            OntAssignmentCreate(
+                ont_unit_id=second_ont.id,
+                pon_port_id=second_pon.id,
+                account_id=subscriber.id,
+                allow_multiple_active_onts=True,
+            ),
+        )
+
+        assert second_assignment.subscriber_id == subscriber.id
+        assert second_assignment.active is True
+
+    def test_update_ont_assignment_rejects_claiming_second_active_ont(
+        self, db_session, subscriber
+    ):
+        """A topology-only active ONT cannot be claimed by a subscriber who already has one."""
+        first_ont, first_pon = self._make_ont_and_pon(db_session)
+        second_ont, second_pon = self._make_ont_and_pon(db_session)
+        network_service.ont_assignments.create(
+            db_session,
+            OntAssignmentCreate(
+                ont_unit_id=first_ont.id,
+                pon_port_id=first_pon.id,
+                account_id=subscriber.id,
+            ),
+        )
+        placeholder = network_service.ont_assignments.create(
+            db_session,
+            OntAssignmentCreate(ont_unit_id=second_ont.id, pon_port_id=second_pon.id),
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            network_service.ont_assignments.update(
+                db_session,
+                str(placeholder.id),
+                OntAssignmentUpdate(account_id=subscriber.id),
+            )
+
+        assert exc_info.value.status_code == 409
+        assert "Subscriber already has an active ONT assignment" in str(
+            exc_info.value.detail
+        )
+
+    def test_update_ont_assignment_allows_claiming_second_active_ont_with_override(
+        self, db_session, subscriber
+    ):
+        """The explicit override also applies when claiming an existing active ONT."""
+        first_ont, first_pon = self._make_ont_and_pon(db_session)
+        second_ont, second_pon = self._make_ont_and_pon(db_session)
+        network_service.ont_assignments.create(
+            db_session,
+            OntAssignmentCreate(
+                ont_unit_id=first_ont.id,
+                pon_port_id=first_pon.id,
+                account_id=subscriber.id,
+            ),
+        )
+        placeholder = network_service.ont_assignments.create(
+            db_session,
+            OntAssignmentCreate(ont_unit_id=second_ont.id, pon_port_id=second_pon.id),
+        )
+
+        updated = network_service.ont_assignments.update(
+            db_session,
+            str(placeholder.id),
+            OntAssignmentUpdate(
+                account_id=subscriber.id,
+                allow_multiple_active_onts=True,
+            ),
+        )
+
+        assert updated.subscriber_id == subscriber.id
+        assert updated.active is True
 
     def test_update_ont_assignment_rejects_cross_olt_port(self, db_session):
         """Updating an assignment should not move it to a port from another OLT."""

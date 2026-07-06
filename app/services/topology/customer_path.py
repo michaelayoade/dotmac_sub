@@ -51,6 +51,7 @@ GAP_NO_BASESTATION = "no_basestation"  # node not mapped to a basestation
 class CustomerPath:
     ont: OntUnit | None = None
     ont_assignment: OntAssignment | None = None
+    active_ont_assignments: list[OntAssignment] = field(default_factory=list)
     splitter_port: SplitterPort | None = None
     splitter: Splitter | None = None
     fdh: FdhCabinet | None = None
@@ -129,9 +130,9 @@ def resolve_upstream_chain(
     ]
 
 
-def _active_ont_assignment(
+def _active_ont_assignments(
     session: Session, subscription: Subscription
-) -> OntAssignment | None:
+) -> list[OntAssignment]:
     base = session.query(OntAssignment).filter(
         OntAssignment.subscriber_id == subscription.subscriber_id,
         OntAssignment.active.is_(True),
@@ -145,13 +146,22 @@ def _active_ont_assignment(
     # the batched gap reader (which orders by id) could pick different ONTs,
     # hence different OLTs/basestations, run to run.
     base = base.order_by(OntAssignment.id)
-    if subscription.service_address_id is not None:
-        by_addr = base.filter(
-            OntAssignment.service_address_id == subscription.service_address_id
-        ).first()
-        if by_addr is not None:
-            return by_addr
-    return base.first()
+    assignments = list(base.all())
+    if subscription.service_address_id is None:
+        return assignments
+
+    address_matches = [
+        assignment
+        for assignment in assignments
+        if assignment.service_address_id == subscription.service_address_id
+    ]
+    if not address_matches:
+        return assignments
+
+    matched_ids = {assignment.id for assignment in address_matches}
+    return address_matches + [
+        assignment for assignment in assignments if assignment.id not in matched_ids
+    ]
 
 
 def _splitter_port_assignment_for_subscription(
@@ -302,7 +312,9 @@ def resolve_customer_path(session: Session, subscription: Subscription) -> Custo
     path = CustomerPath()
 
     # Fiber first: an active ONT assignment implies a fiber/OLT path.
-    assignment = _active_ont_assignment(session, subscription)
+    active_ont_assignments = _active_ont_assignments(session, subscription)
+    path.active_ont_assignments = active_ont_assignments
+    assignment = next(iter(active_ont_assignments), None)
     if assignment is not None:
         ont = session.get(OntUnit, assignment.ont_unit_id)
         path.ont = ont

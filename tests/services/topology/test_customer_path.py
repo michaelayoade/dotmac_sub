@@ -54,6 +54,42 @@ def test_fiber_happy_path(db_session, subscriber, subscription):
     assert path.basestation.id == pop.id
 
 
+def test_fiber_path_exposes_multiple_active_ont_assignments(
+    db_session, subscriber, subscription
+):
+    olt = OLTDevice(name="OLT-Multi", hostname="olt-multi", mgmt_ip="10.0.0.12")
+    pop = PopSite(name="Maitama", zabbix_group_id="14")
+    db_session.add_all([olt, pop])
+    db_session.flush()
+    db_session.add(_node("olt", olt.id, pop.id, "205"))
+    first_ont = OntUnit(serial_number="SN-MULTI-1", olt_device_id=olt.id)
+    second_ont = OntUnit(serial_number="SN-MULTI-2", olt_device_id=olt.id)
+    db_session.add_all([first_ont, second_ont])
+    db_session.flush()
+    first_assignment = OntAssignment(
+        ont_unit_id=first_ont.id,
+        subscriber_id=subscriber.id,
+        active=True,
+    )
+    second_assignment = OntAssignment(
+        ont_unit_id=second_ont.id,
+        subscriber_id=subscriber.id,
+        active=True,
+    )
+    db_session.add_all([first_assignment, second_assignment])
+    db_session.flush()
+
+    path = resolve_customer_path(db_session, subscription)
+    expected_assignments = sorted(
+        [first_assignment, second_assignment], key=lambda assignment: assignment.id
+    )
+
+    assert path.ont.id == expected_assignments[0].ont_unit_id
+    assert [assignment.id for assignment in path.active_ont_assignments] == [
+        assignment.id for assignment in expected_assignments
+    ]
+
+
 def test_fiber_path_includes_physical_plant(db_session, subscriber, subscription):
     olt = OLTDevice(name="OLT-Plant", hostname="olt-plant", mgmt_ip="10.0.0.10")
     pop = PopSite(name="Gudu", zabbix_group_id="12")

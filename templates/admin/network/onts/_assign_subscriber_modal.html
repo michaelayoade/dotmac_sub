@@ -55,6 +55,16 @@
                 </div>
             </div>
 
+            <label class="mt-4 flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800/60 dark:bg-amber-900/20 dark:text-amber-200">
+                <input type="checkbox" name="allow_multiple_active_onts" value="1"
+                       {% if form and form.allow_multiple_active_onts %}checked{% endif %}
+                       class="mt-0.5 h-4 w-4 rounded border-amber-300 text-amber-600 focus:ring-amber-500 dark:border-amber-700 dark:bg-slate-800">
+                <span>
+                    <span class="font-medium">Allow multiple active ONTs for this subscriber</span>
+                    <span class="block text-xs text-amber-700 dark:text-amber-300">Use only when both ONTs are intentionally active.</span>
+                </span>
+            </label>
+
             <div class="mt-6 flex items-center justify-end gap-3">
                 <button type="button"
                         @click="open = false; $nextTick(() => document.getElementById('modal-container').replaceChildren())"

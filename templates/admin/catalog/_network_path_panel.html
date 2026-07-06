@@ -11,6 +11,19 @@
         Known outage{% if known_outage.note %} &mdash; {{ known_outage.note }}{% endif %} ({{ known_outage.affected_count }} subscriptions affected). This customer is within a declared outage.
     </div>
     {% endif %}
+    {% if network_path.active_ont_assignments|length > 1 %}
+    <div class="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-900/30 dark:text-amber-200">
+        <span class="font-semibold">Multiple active ONTs found.</span>
+        This path shows ONT {{ network_path.ont.serial_number if network_path.ont else 'selected by the system' }} only.
+        Check and release the stale ONT, unless both ONTs are intentionally active.
+        <span class="block text-xs text-amber-700 dark:text-amber-300">
+            Active ONTs:
+            {% for assignment in network_path.active_ont_assignments %}
+                {{ assignment.ont_unit.serial_number if assignment.ont_unit else assignment.ont_unit_id }}{% if not loop.last %}, {% endif %}
+            {% endfor %}
+        </span>
+    </div>
+    {% endif %}
     {% if network_path.ont %}
     <div class="mt-4 space-y-2">
         <div class="flex flex-wrap items-center gap-2 text-sm">
