@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/addon.dart';
+import '../models/connection_status.dart';
 import '../models/contact.dart';
 import '../models/invoice.dart';
 import '../models/service_status.dart';
@@ -263,6 +264,16 @@ final serviceStatusProvider = FutureProvider.autoDispose<ServiceStatus>((
 ) async {
   cacheFor(ref);
   return ref.watch(catalogRepositoryProvider).serviceStatus();
+});
+
+/// Per-customer connection verdict (GET /me/connection-status, outage
+/// classifier P4): "what's wrong with my connection?" with area-outage blame
+/// suppression. Drives the Connection status screen + the slim Home banner.
+final connectionStatusProvider = FutureProvider.autoDispose<ConnectionStatus>((
+  ref,
+) async {
+  cacheFor(ref);
+  return ref.watch(catalogRepositoryProvider).connectionStatus();
 });
 
 final subscriptionsProvider = FutureProvider.autoDispose<Page<Subscription>>((

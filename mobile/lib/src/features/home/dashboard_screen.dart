@@ -6,6 +6,7 @@ import '../../core/formatters.dart';
 import '../../core/semantic_colors.dart';
 import '../auth/biometric_enrollment_prompt.dart';
 import '../../models/project.dart';
+import '../../models/connection_status.dart';
 import '../../models/service_status.dart';
 import '../../models/subscription.dart';
 import '../../models/usage.dart';
@@ -257,6 +258,10 @@ class DashboardScreen extends ConsumerWidget {
               known: sessions.hasValue,
               serviceActive: currentService?.isActive ?? false,
               ipAddress: currentService?.ipv4Address,
+              // Outage-classifier verdict (P4): lets the banner suppress
+              // "check your router" during a known area outage and drill into
+              // the connection troubleshooter.
+              classifier: ref.watch(connectionStatusProvider).asData?.value,
             ),
             const SizedBox(height: 12),
             _StatusBanner(
@@ -587,7 +592,13 @@ class _ConnectionBanner extends StatelessWidget {
     required this.known,
     this.serviceActive = false,
     this.ipAddress,
+    this.classifier,
   });
+
+  /// The outage-classifier verdict for this customer, when loaded. Lets a
+  /// not-connected banner defer to a known area outage ("we're on it") instead
+  /// of blaming the customer's router, and makes the banner a drill-in.
+  final ConnectionStatus? classifier;
 
   /// Whether the displayed subscription is active. An active account that is
   /// merely not connected right now (router off, brief drop) is routine — it
@@ -630,11 +641,18 @@ class _ConnectionBanner extends StatelessWidget {
         if (start != null) 'up ${Fmt.uptime(start)}',
         if (ip != null && ip.isNotEmpty) ip,
       ].join(' · ');
+    } else if (classifier?.areaOutage ?? false) {
+      // A known area outage above this customer — reassure, don't blame their
+      // router. Calm tertiary styling, not alarming red.
+      bg = scheme.tertiaryContainer;
+      fg = scheme.onTertiaryContainer;
+      icon = Icons.cloud_off;
+      text = "Known outage in your area — we're on it";
     } else if (serviceActive) {
       bg = scheme.surfaceContainerHighest;
       fg = scheme.onSurfaceVariant;
       icon = Icons.wifi_off_outlined;
-      text = 'Not connected — service is active, check your router';
+      text = 'Not connected — tap to troubleshoot';
     } else {
       bg = scheme.errorContainer;
       fg = scheme.onErrorContainer;
@@ -642,21 +660,38 @@ class _ConnectionBanner extends StatelessWidget {
       text = 'Offline';
     }
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, color: fg),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(text,
-                style: TextStyle(color: fg, fontWeight: FontWeight.w600)),
-          ),
-        ],
+    // When there's a problem to explain, the banner drills into the full
+    // connection troubleshooter (the classifier's per-customer verdict/advice).
+    final tappable = known && session == null;
+    final row = Row(
+      children: [
+        Icon(icon, color: fg),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(text,
+              style: TextStyle(color: fg, fontWeight: FontWeight.w600)),
+        ),
+        if (tappable) Icon(Icons.chevron_right, color: fg),
+      ],
+    );
+    const shape = BorderRadius.all(Radius.circular(14));
+    if (!tappable) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(color: bg, borderRadius: shape),
+        child: row,
+      );
+    }
+    return Material(
+      color: bg,
+      borderRadius: shape,
+      child: InkWell(
+        borderRadius: shape,
+        onTap: () => context.push('/connection'),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          child: row,
+        ),
       ),
     );
   }
