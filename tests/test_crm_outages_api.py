@@ -67,12 +67,12 @@ def test_list_serializes_scope_and_detection_source(db_session, catalog_offer):
     rows, total = crm_api.list_outage_incidents(db_session)
     assert total == 2
     by_id = {r["id"]: r for r in rows}
-    # Both are operator-provenance incidents; detection_source is the authoritative
-    # operator/classifier discriminator, declared_source keeps the auto/manual split.
-    assert by_id[str(manual.id)]["detection_source"] == "operator"
-    assert by_id[str(auto.id)]["detection_source"] == "operator"
-    assert by_id[str(manual.id)]["declared_source"] == "manual"
-    assert by_id[str(auto.id)]["declared_source"] == "auto"
+    # detection_source stays the legacy auto/manual field (backward-compatible);
+    # provenance is the new operator/classifier discriminator.
+    assert by_id[str(manual.id)]["detection_source"] == "manual"
+    assert by_id[str(auto.id)]["detection_source"] == "auto"
+    assert by_id[str(manual.id)]["provenance"] == "operator"
+    assert by_id[str(auto.id)]["provenance"] == "operator"
     row = by_id[str(manual.id)]
     assert row["scope"]["type"] == "node"
     assert row["scope"]["name"] == node.name
@@ -143,7 +143,10 @@ def test_default_active_view_includes_confirmed_classifier_excludes_suspected(
 
     by_id = {r["id"]: r for r in rows}
     conf_row = by_id[str(confirmed.id)]
-    assert conf_row["detection_source"] == "classifier"
+    assert conf_row["provenance"] == "classifier"
+    # legacy field is auto/manual only; a classifier row (declared_by=CLASSIFIER_ACTOR)
+    # reports "manual" there — accurate provenance lives in the new field.
+    assert conf_row["detection_source"] == "manual"
     assert conf_row["state"] == "confirmed"
     assert conf_row["confirmed_at"] is not None
     assert conf_row["confidence"] == 0.9
@@ -167,7 +170,7 @@ def test_row_carries_mttr_and_state_for_resolved_classifier(db_session, catalog_
     rows, _ = crm_api.list_outage_incidents(db_session, status="resolved")
     row = next(r for r in rows if r["id"] == str(inc.id))
     assert row["state"] == "resolved"
-    assert row["detection_source"] == "classifier"
+    assert row["provenance"] == "classifier"
     assert row["mttr_seconds"] == 30 * 60
 
     # A suspected incident is reachable only via explicit narrowing.

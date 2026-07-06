@@ -1930,10 +1930,13 @@ def _outage_incident_scope(session: Session, incident) -> dict[str, Any]:
 def outage_incident_row(session: Session, incident) -> dict[str, Any]:
     """One incident, serialized for the CRM (list + detail header).
 
-    ``detection_source`` is the authoritative operator/classifier discriminator
+    ``detection_source`` is the legacy ``auto``/``manual`` field, left UNCHANGED
+    for backward compatibility (``auto`` = scanner-detected, ``manual`` =
+    hand-declared; classifier incidents report ``manual`` under this legacy
+    field). ``provenance`` is the NEW ``operator``/``classifier`` discriminator
     (the model column) so agents can tell a debounced classifier outage from an
-    operator-declared one. ``declared_source`` keeps the older auto/manual
-    provenance (whether an *operator* row was auto-detected or hand-declared).
+    operator-declared one — added additively rather than repurposing the
+    existing field, so any external reader of ``detection_source`` keeps working.
     ``state`` mirrors the lifecycle ``status`` (open/resolved for operator;
     suspected/confirmed/clearing/resolved/discarded for classifier). ``mttr_seconds``
     is ``resolved_at - confirmed_at`` once an incident is resolved.
@@ -1944,8 +1947,8 @@ def outage_incident_row(session: Session, incident) -> dict[str, Any]:
         "id": str(incident.id),
         "status": incident.status,
         "state": incident.status,
-        "detection_source": incident.detection_source,
-        "declared_source": detection_source(incident),
+        "detection_source": detection_source(incident),
+        "provenance": incident.detection_source,
         "scope": _outage_incident_scope(session, incident),
         "severity": incident.severity,
         "affected_count": incident.affected_count,
