@@ -71,6 +71,7 @@ def _make_subscription(
     status: SubscriptionStatus,
     ipv4_address: str | None = None,
     nas_device: NasDevice | None = None,
+    login: str | None = None,
 ) -> Subscription:
     subscription = Subscription(
         subscriber_id=customer.id,
@@ -79,6 +80,7 @@ def _make_subscription(
         billing_mode=BillingMode.postpaid,
         ipv4_address=ipv4_address,
         provisioning_nas_device_id=nas_device.id if nas_device else None,
+        login=login,
     )
     db_session.add(subscription)
     db_session.flush()
@@ -215,6 +217,45 @@ def test_customer_list_display_prefers_active_ipam_then_active_subscription(
     row = next(item for item in context["customers"] if item["email"] == customer.email)
     assert row["ipv4"] == "10.0.0.7"
     assert row["ipv4_label"] == "Current IPAM IPv4"
+
+
+def test_customer_list_trims_search_before_text_matching(db_session):
+    suffix = uuid.uuid4().hex[:8]
+    customer = _make_customer(db_session, f"trim-search-{suffix}@example.com")
+    customer.first_name = f"TrimName{suffix}"
+    customer.phone = f"080{suffix[:8]}"
+    customer.account_number = f"ACC-TRIM-{suffix}"
+    pppoe_login = f"pppoe-trim-{suffix}"
+    _make_subscription(
+        db_session,
+        customer,
+        status=SubscriptionStatus.active,
+        login=pppoe_login,
+    )
+    db_session.commit()
+
+    search_terms = [
+        customer.first_name,
+        customer.email,
+        customer.phone,
+        customer.account_number,
+        pppoe_login,
+    ]
+    for term in search_terms:
+        context = build_customers_index_context(
+            db_session,
+            search=f"  {term}  ",
+            status=None,
+            customer_type=None,
+            nas_id=None,
+            pop_site_id=None,
+            page=1,
+            per_page=25,
+        )
+
+        emails = {item["email"] for item in context["customers"]}
+        assert customer.email in emails
+        assert context["search"] == term
 
 
 def test_customer_list_does_not_display_placeholder_ipv4(db_session):

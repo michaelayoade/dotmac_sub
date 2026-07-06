@@ -13,7 +13,7 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
-from app.models.subscriber import Subscriber, SubscriberCategory
+from app.models.subscriber import Address, AddressType, Subscriber, SubscriberCategory
 from app.services import ncc_subscriber_report as ncc
 
 
@@ -23,8 +23,14 @@ def test_normalize_state_and_zone():
     assert ncc.normalize_state("Lagos State") == "Lagos"
     assert ncc.normalize_state("Abuja") == "Federal Capital Territory"
     assert ncc.normalize_state("FCT") == "Federal Capital Territory"
+    assert ncc.normalize_state("F.C.T") == "Federal Capital Territory"
+    assert ncc.normalize_state("F C T") == "Federal Capital Territory"
+    assert ncc.normalize_state("Federal Capital Territory") == (
+        "Federal Capital Territory"
+    )
     assert ncc.normalize_state("rivers") == "Rivers"
     assert ncc.normalize_state("Nowhere") == "Unknown"
+    assert ncc.normalize_state("None") == "Unknown"
     assert ncc.normalize_state(None) == "Unknown"
     assert ncc.zone_for_state("Lagos") == "South West"
     assert ncc.zone_for_state("Federal Capital Territory") == "North Central"
@@ -39,6 +45,50 @@ def test_speed_bands():
     assert ncc.speed_band(10) == "10Mbps+"
     assert ncc.speed_band(100) == "10Mbps+"
     assert ncc.speed_band(None) == "unknown"
+
+
+def test_infer_state_uses_city_and_area_aliases_without_profile_writes():
+    sub = Subscriber(
+        first_name="A",
+        last_name="B",
+        email="alias@example.test",
+        subscriber_number="S-ALIAS",
+        region=None,
+        city="Lekki",
+    )
+    assert ncc.infer_state(sub) == "Lagos"
+    assert sub.region is None
+    assert sub.city == "Lekki"
+
+    sub.city = "Port Harcourt"
+    assert ncc.infer_state(sub) == "Rivers"
+
+    sub.city = "Maitama"
+    assert ncc.infer_state(sub) == "Federal Capital Territory"
+
+    sub.city = "Awka"
+    assert ncc.infer_state(sub) == "Anambra"
+
+
+def test_infer_state_falls_back_to_service_address():
+    sub = Subscriber(
+        first_name="A",
+        last_name="B",
+        email="address-alias@example.test",
+        subscriber_number="S-ADDR",
+        region=None,
+        city=None,
+    )
+    sub.addresses = [
+        Address(
+            address_type=AddressType.service,
+            address_line1="No 9 Mamman Nasir Street Asokoro",
+            city=None,
+            region=None,
+            is_primary=True,
+        )
+    ]
+    assert ncc.infer_state(sub) == "Federal Capital Territory"
 
 
 # ── integration ─────────────────────────────────────────────────────────────
@@ -59,13 +109,16 @@ def _offer(db, *, access, speed, mode=BillingMode.prepaid) -> CatalogOffer:
     return o
 
 
-def _subscriber(db, *, region, category=SubscriberCategory.residential) -> Subscriber:
+def _subscriber(
+    db, *, region, city=None, category=SubscriberCategory.residential
+) -> Subscriber:
     s = Subscriber(
         first_name="A",
         last_name="B",
         email=f"s-{uuid.uuid4().hex[:8]}@x.io",
         subscriber_number=f"S-{uuid.uuid4().hex[:6]}",
         region=region,
+        city=city,
     )
     s.category = category
     db.add(s)
@@ -135,6 +188,45 @@ def test_report_aggregates_active_subscriptions(db_session):
     assert r["by_state"] == {"Federal Capital Territory": 1, "Lagos": 1}
     assert r["by_region"] == {"North Central": 1, "South West": 1}
     assert r["network_capacity"]["points_of_presence"] == 28
+
+
+def test_report_reduces_unknowns_with_city_and_service_address_fallback(db_session):
+    offer = _offer(db_session, access=AccessType.fiber, speed=50)
+    lagos = _subscriber(db_session, region=None, city="Lekki")
+    fct = _subscriber(db_session, region=None, city=None)
+    unknown = _subscriber(db_session, region=None, city="100010259")
+
+    db_session.add(
+        Address(
+            subscriber_id=fct.id,
+            address_type=AddressType.service,
+            address_line1=(
+                "Plot 3 Behind springview hotel off Julius Nyerere crescent Asokoro"
+            ),
+            city=None,
+            region=None,
+            is_primary=True,
+        )
+    )
+    db_session.commit()
+
+    _subscription(db_session, lagos, offer)
+    _subscription(db_session, fct, offer)
+    _subscription(db_session, unknown, offer)
+
+    r = ncc.build_ncc_subscriber_report(db_session)
+
+    assert r["total_active_subscriptions"] == 3
+    assert r["by_state"] == {
+        "Federal Capital Territory": 1,
+        "Lagos": 1,
+        "Unknown": 1,
+    }
+    assert r["by_region"] == {
+        "North Central": 1,
+        "South West": 1,
+        "Unknown": 1,
+    }
 
 
 def test_report_empty(db_session):

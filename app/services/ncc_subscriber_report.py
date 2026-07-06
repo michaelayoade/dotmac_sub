@@ -15,6 +15,7 @@ Aggregation runs in Python (not SQL group-by) so it can read the
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections import Counter
 from dataclasses import dataclass, field
@@ -79,11 +80,88 @@ _STATE_CANON = {s.lower(): s for s in _STATE_ZONE}
 _STATE_ALIASES = {
     "abuja": "Federal Capital Territory",
     "fct": "Federal Capital Territory",
+    "f c t": "Federal Capital Territory",
     "fct abuja": "Federal Capital Territory",
     "abuja fct": "Federal Capital Territory",
+    "federal capital territory abuja": "Federal Capital Territory",
+    "abuja federal capital territory": "Federal Capital Territory",
     "akwa-ibom": "Akwa Ibom",
     "cross-river": "Cross River",
     "nassarawa": "Nasarawa",
+}
+
+# City / area names that unambiguously identify a Nigerian state for NCC state
+# aggregation. This is report-only normalization; stored customer profiles are
+# not modified.
+_PLACE_STATE_ALIASES = {
+    # FCT / Abuja districts
+    "abuja": "Federal Capital Territory",
+    "area 1": "Federal Capital Territory",
+    "area 2": "Federal Capital Territory",
+    "area 3": "Federal Capital Territory",
+    "area 7": "Federal Capital Territory",
+    "area 8": "Federal Capital Territory",
+    "area 10": "Federal Capital Territory",
+    "area 11": "Federal Capital Territory",
+    "central business district": "Federal Capital Territory",
+    "cbd": "Federal Capital Territory",
+    "dakwo": "Federal Capital Territory",
+    "dawaki": "Federal Capital Territory",
+    "apo": "Federal Capital Territory",
+    "asokoro": "Federal Capital Territory",
+    "f c t": "Federal Capital Territory",
+    "fct": "Federal Capital Territory",
+    "fct abuja": "Federal Capital Territory",
+    "garki": "Federal Capital Territory",
+    "gudu": "Federal Capital Territory",
+    "gaduwa": "Federal Capital Territory",
+    "guzape": "Federal Capital Territory",
+    "gwarinpa": "Federal Capital Territory",
+    "gwarimpa": "Federal Capital Territory",
+    "idu": "Federal Capital Territory",
+    "jabi": "Federal Capital Territory",
+    "jahi": "Federal Capital Territory",
+    "kado": "Federal Capital Territory",
+    "karu abuja": "Federal Capital Territory",
+    "karsana": "Federal Capital Territory",
+    "kubwa": "Federal Capital Territory",
+    "katampe": "Federal Capital Territory",
+    "kantape": "Federal Capital Territory",
+    "life camp": "Federal Capital Territory",
+    "lokogoma": "Federal Capital Territory",
+    "lugbe": "Federal Capital Territory",
+    "maitama": "Federal Capital Territory",
+    "sun city abuja": "Federal Capital Territory",
+    "suncity abuja": "Federal Capital Territory",
+    "utako": "Federal Capital Territory",
+    "wuse": "Federal Capital Territory",
+    "wuye": "Federal Capital Territory",
+    # Lagos city / districts
+    "ajah": "Lagos",
+    "abule egba": "Lagos",
+    "ayobo": "Lagos",
+    "festac": "Lagos",
+    "ebute metta": "Lagos",
+    "ebutte metta": "Lagos",
+    "ikeja": "Lagos",
+    "ikorodu": "Lagos",
+    "ipaja": "Lagos",
+    "lagos city": "Lagos",
+    "lekki": "Lagos",
+    "ogudu": "Lagos",
+    "oshodi": "Lagos",
+    "oworonshoki": "Lagos",
+    "kosofe": "Lagos",
+    "surulere": "Lagos",
+    "victoria island": "Lagos",
+    "vi": "Lagos",
+    "yaba": "Lagos",
+    # Other common city aliases
+    "port harcourt": "Rivers",
+    "ph": "Rivers",
+    "phc": "Rivers",
+    "ibadan": "Oyo",
+    "awka": "Anambra",
 }
 _UNKNOWN = "Unknown"
 
@@ -98,9 +176,9 @@ _CORPORATE = {
 
 def normalize_state(region: object) -> str:
     """Free-text subscriber region → a canonical Nigerian state name (or Unknown)."""
-    if not region:
+    key = _normalize_location_key(region)
+    if not key:
         return _UNKNOWN
-    key = " ".join(str(region).strip().lower().split())
     if key.endswith(" state"):
         key = key[: -len(" state")].strip()
     if key in _STATE_ALIASES:
@@ -110,6 +188,135 @@ def normalize_state(region: object) -> str:
 
 def zone_for_state(state: str) -> str:
     return _STATE_ZONE.get(state, _UNKNOWN)
+
+
+def _normalize_location_key(value: object) -> str:
+    if value is None:
+        return ""
+    raw = str(value).strip().lower()
+    if not raw or raw in {"none", "null", "n/a", "na", "unknown"}:
+        return ""
+    raw = raw.replace("&", " and ")
+    raw = re.sub(r"[^a-z0-9]+", " ", raw)
+    return " ".join(raw.split())
+
+
+def _state_from_place(value: object) -> str:
+    key = _normalize_location_key(value)
+    if not key:
+        return _UNKNOWN
+    state = normalize_state(key)
+    if state != _UNKNOWN:
+        return state
+    return _PLACE_STATE_ALIASES.get(key, _UNKNOWN)
+
+
+def _state_from_address_text(value: object) -> str:
+    key = _normalize_location_key(value)
+    if not key:
+        return _UNKNOWN
+    state = normalize_state(key)
+    if state != _UNKNOWN:
+        return state
+    # Phrase containment is only used for unambiguous city/district aliases.
+    padded = f" {key} "
+    for alias, alias_state in _PLACE_STATE_ALIASES.items():
+        if f" {alias} " in padded:
+            return alias_state
+    return _UNKNOWN
+
+
+def _metadata_location_values(metadata: dict | None) -> list[object]:
+    if not isinstance(metadata, dict):
+        return []
+    values: list[object] = []
+    for key in (
+        "state",
+        "region",
+        "city",
+        "location",
+        "service_location",
+        "installation_address",
+        "service_address",
+        "address",
+    ):
+        value = metadata.get(key)
+        if isinstance(value, dict):
+            values.extend(
+                value.get(n) for n in ("state", "region", "city", "location", "address")
+            )
+        else:
+            values.append(value)
+    return values
+
+
+def infer_state(subscriber: Subscriber | None) -> str:
+    """Resolve a subscriber to a canonical state for the NCC aggregate only."""
+    if subscriber is None:
+        return _UNKNOWN
+
+    # State-like fields first. If present and valid, they are the strongest
+    # signal and avoid converting display values such as "Lekki" into profile
+    # data; this is only the report's canonical state projection.
+    for value in (
+        getattr(subscriber, "region", None),
+        getattr(subscriber, "billing_region", None),
+    ):
+        state = normalize_state(value)
+        if state != _UNKNOWN:
+            return state
+
+    addresses = list(getattr(subscriber, "addresses", None) or [])
+    addresses.sort(
+        key=lambda a: (
+            0 if getattr(a, "is_primary", False) else 1,
+            0 if str(getattr(a, "address_type", "")).endswith("service") else 1,
+        )
+    )
+    for address in addresses:
+        for value in (getattr(address, "region", None),):
+            state = normalize_state(value)
+            if state != _UNKNOWN:
+                return state
+
+    # City / location-like fields. These use a conservative alias table for
+    # cities and districts that unambiguously identify a Nigerian state.
+    for value in (
+        getattr(subscriber, "city", None),
+        getattr(subscriber, "billing_city", None),
+    ):
+        state = _state_from_place(value)
+        if state != _UNKNOWN:
+            return state
+    for address in addresses:
+        state = _state_from_place(getattr(address, "city", None))
+        if state != _UNKNOWN:
+            return state
+
+    # Address text and selected metadata keys are weakest signals; they are only
+    # searched for explicit state names or unambiguous aliases.
+    for value in (
+        getattr(subscriber, "address_line1", None),
+        getattr(subscriber, "address_line2", None),
+        getattr(subscriber, "billing_address_line1", None),
+        getattr(subscriber, "billing_address_line2", None),
+    ):
+        state = _state_from_address_text(value)
+        if state != _UNKNOWN:
+            return state
+    for address in addresses:
+        for value in (
+            getattr(address, "address_line1", None),
+            getattr(address, "address_line2", None),
+        ):
+            state = _state_from_address_text(value)
+            if state != _UNKNOWN:
+                return state
+    for value in _metadata_location_values(getattr(subscriber, "metadata_", None)):
+        state = _state_from_address_text(value)
+        if state != _UNKNOWN:
+            return state
+    return _UNKNOWN
 
 
 def speed_band(mbps: int | None) -> str:
@@ -158,7 +365,10 @@ def build_ncc_subscriber_report(
 
     query = (
         session.query(Subscription)
-        .options(joinedload(Subscription.offer), joinedload(Subscription.subscriber))
+        .options(
+            joinedload(Subscription.offer),
+            joinedload(Subscription.subscriber).joinedload(Subscriber.addresses),
+        )
         .filter(Subscription.status.in_(statuses))
         # Point-in-time "active as at as_of": started by then, not yet ended or
         # cancelled. (There is no per-subscription last-online column, so status
@@ -216,9 +426,7 @@ def build_ncc_subscriber_report(
 
         bands[speed_band(offer.speed_download_mbps if offer else None)] += 1
 
-        state = normalize_state(
-            getattr(subscriber, "region", None) if subscriber else None
-        )
+        state = infer_state(subscriber)
         by_state[state] += 1
         by_region[zone_for_state(state)] += 1
 
