@@ -56,7 +56,7 @@ _MIN_WINDOW_SECONDS = 300
 _CHUNK = 1000
 
 
-def _strip_inet_mask(value: str | None) -> str | None:
+def _strip_inet_mask(value: object) -> str | None:
     """Normalize a radacct ``inet`` value to a bare host IP.
 
     ``radacct.nasipaddress`` / ``framedipaddress`` are Postgres ``inet``
@@ -64,11 +64,20 @@ def _strip_inet_mask(value: str | None) -> str | None:
     but ``nas_devices`` and ``subscriptions`` store bare IPs
     (``160.119.127.95``). Without stripping the ``/mask`` the NAS lookup and
     any downstream framed-IP match silently miss (this left nas_device_id NULL
-    on every session). IPv6 prefixes keep their mask (handled separately).
+    on every session). IPv6 hosts keep their form (the ``:`` is meaningful).
+
+    psycopg adapts ``inet`` to ``ipaddress`` objects (``IPv4Address`` /
+    ``IPv4Interface``), NOT strings, so ``str(value)`` first — it normalizes
+    objects and raw string exports uniformly.
     """
     if value is None:
         return None
-    return value.split("/", 1)[0].strip() or None
+    text = str(value).strip()
+    if not text:
+        return None
+    host = text.split("/", 1)[0]
+    # IPv6 addresses keep their full form; IPv4 host masks (/32) are dropped.
+    return (text if ":" in host else host) or None
 
 
 def _chunked(values: list[str], size: int = _CHUNK):
