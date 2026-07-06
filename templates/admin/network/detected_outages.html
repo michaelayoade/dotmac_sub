@@ -1,0 +1,171 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Detected Outages - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div>
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Detected Outages</h1>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
+            Classifier-driven — reads live sessions (proof-of-life), device health, ONT/radio and last-mile signals to show what is <em>actually</em> down now, how deep, and why. No manual declaration. See the <a href="/admin/network/outages" class="underline">manual console</a> to declare/resolve incidents.
+        </p>
+    </div>
+
+    <!-- Health summary -->
+    <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <h2 class="mb-2 font-semibold text-slate-900 dark:text-white">Node health</h2>
+            <p class="mb-3 text-xs text-slate-500 dark:text-slate-400">{{ summary.total_nodes }} pingable infra nodes classified</p>
+            <div class="chart-container" style="min-height: 200px;">
+                <canvas id="node-health-chart"></canvas>
+            </div>
+        </div>
+        <div class="lg:col-span-2 rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <h2 class="mb-3 font-semibold text-slate-900 dark:text-white">By class</h2>
+            <dl class="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                {% set cls_meta = {
+                    'healthy': ('Healthy', 'emerald'),
+                    'node_outage': ('Node outage', 'red'),
+                    'service_fault': ('Service fault', 'amber'),
+                    'monitoring_fault': ('Monitoring fault', 'violet'),
+                    'unknown': ('Unknown', 'slate')
+                } %}
+                {% for key, meta in cls_meta.items() %}
+                <div class="rounded-lg border border-slate-100 p-3 dark:border-slate-700">
+                    <dt class="text-xs font-medium uppercase tracking-wide text-{{ meta[1] }}-600 dark:text-{{ meta[1] }}-400">{{ meta[0] }}</dt>
+                    <dd class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{{ summary.counts.get(key, 0) }}</dd>
+                </div>
+                {% endfor %}
+            </dl>
+        </div>
+    </div>
+
+    <!-- Active outages -->
+    <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <h2 class="mb-3 font-semibold text-slate-900 dark:text-white">Active outages <span class="text-sm font-normal text-slate-400">({{ active.outages | length }})</span></h2>
+        <div class="overflow-x-auto">
+            <table class="w-full text-left text-sm">
+                <thead class="text-xs uppercase tracking-wide text-slate-400">
+                    <tr>
+                        <th class="pb-2">Boundary node</th>
+                        <th class="pb-2">Class</th>
+                        <th class="pb-2">Medium</th>
+                        <th class="pb-2">Affected</th>
+                        <th class="pb-2">Online now</th>
+                        <th class="pb-2">Confidence</th>
+                        <th class="pb-2"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for o in active.outages %}
+                    <tr class="border-t border-slate-100 dark:border-slate-700">
+                        <td class="py-2 font-medium text-slate-900 dark:text-white">{{ o.name }}{% if not o.localized %} <span class="ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-500 dark:bg-slate-700 dark:text-slate-300" title="No deeper boundary localized — anchored on the classified node">unlocalized</span>{% endif %}</td>
+                        <td class="py-2">
+                            {% if o.class == 'node_outage' %}<span class="rounded bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/40 dark:text-red-300">node outage</span>
+                            {% else %}<span class="rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">{{ o.class.replace('_', ' ') }}</span>{% endif %}
+                        </td>
+                        <td class="py-2 text-slate-500">{{ o.medium }}</td>
+                        <td class="py-2 font-semibold text-slate-900 dark:text-white">{{ o.affected }}</td>
+                        <td class="py-2 text-slate-500">{{ o.online_now }}</td>
+                        <td class="py-2 text-slate-500">{{ o.confidence }}</td>
+                        <td class="py-2"><a href="/admin/network/detected-outages?node_id={{ o.failure_node }}" class="text-sky-600 hover:underline dark:text-sky-400">Diagnose →</a></td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="7" class="py-4 text-slate-400">No active outages — every classified domain has a live customer (proof-of-life).</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Monitoring-fault self-heal queue -->
+    {% if active.monitoring_faults %}
+    <div class="rounded-xl border border-violet-200 bg-violet-50 p-5 shadow-sm dark:border-violet-900/50 dark:bg-violet-950/30">
+        <h2 class="mb-1 font-semibold text-violet-900 dark:text-violet-200">Self-heal queue — monitoring faults <span class="text-sm font-normal text-violet-400">({{ active.monitoring_faults | length }})</span></h2>
+        <p class="mb-3 text-xs text-violet-700 dark:text-violet-300">A live session proves these nodes are up while ping/snmp reports down — the <em>check</em> is wrong, not the device. These are NOT outages; fix the monitoring path.</p>
+        <table class="w-full text-left text-sm">
+            <thead class="text-xs uppercase tracking-wide text-violet-400"><tr><th class="pb-2">Node</th><th class="pb-2">Reported</th><th class="pb-2">Online now</th></tr></thead>
+            <tbody>
+                {% for m in active.monitoring_faults %}
+                <tr class="border-t border-violet-100 dark:border-violet-900/40">
+                    <td class="py-2 font-medium text-violet-900 dark:text-violet-200">{{ m.name }}</td>
+                    <td class="py-2 text-violet-600 dark:text-violet-300">{{ m.live_status or '—' }}</td>
+                    <td class="py-2 text-violet-600 dark:text-violet-300">{{ m.online_count }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+
+    <!-- Drill-in detail -->
+    {% if detail %}
+    <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="mb-3 flex items-baseline justify-between">
+            <h2 class="font-semibold text-slate-900 dark:text-white">Domain: {{ detail.node.name }}</h2>
+            <span class="text-sm text-slate-500">{{ detail.class.replace('_', ' ') }} · {{ detail.online_count }}/{{ detail.count }} online · {{ detail.node.medium }}</span>
+        </div>
+        {% if detail.capped %}<p class="mb-2 text-xs text-amber-600">Showing the first {{ detail.customers | length }} customers (domain larger than the per-view cap).</p>{% endif %}
+
+        {% if detail.predictive.co_failure or detail.predictive.rx_droop %}
+        <div class="mb-4 rounded-lg border border-sky-200 bg-sky-50 p-3 dark:border-sky-900/50 dark:bg-sky-950/30">
+            <h3 class="text-sm font-semibold text-sky-900 dark:text-sky-200">Predictive branch alerts (splice inference)</h3>
+            {% for b in detail.predictive.co_failure %}
+            <p class="mt-1 text-xs text-sky-700 dark:text-sky-300">Co-failure branch — {{ b.ont_unit_ids | length }} ONTs go dark together (support {{ b.support }}, {{ b.confidence }})</p>
+            {% endfor %}
+            {% for d in detail.predictive.rx_droop %}
+            <p class="mt-1 text-xs text-sky-700 dark:text-sky-300">Correlated Rx droop — {{ d.ont_unit_ids | length }} ONTs down {{ d.shared_shift_db }} dB together, a splice may be failing ({{ d.confidence }})</p>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <div class="overflow-x-auto">
+            <table class="w-full text-left text-sm">
+                <thead class="text-xs uppercase tracking-wide text-slate-400">
+                    <tr><th class="pb-2">Customer</th><th class="pb-2">Verdict</th><th class="pb-2">Medium</th><th class="pb-2">Signal</th><th class="pb-2">Action</th></tr>
+                </thead>
+                <tbody>
+                    {% for c in detail.customers %}
+                    <tr class="border-t border-slate-100 dark:border-slate-700">
+                        <td class="py-2 text-slate-700 dark:text-slate-200">{{ c.subscriber_name }}</td>
+                        <td class="py-2">
+                            {% if c.online %}<span class="rounded bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">online</span>
+                            {% elif c.verdict %}<span class="rounded bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-200">{{ c.verdict.replace('_', ' ') }}</span>
+                            {% else %}<span class="text-slate-400">—</span>{% endif %}
+                        </td>
+                        <td class="py-2 text-slate-500">{{ c.medium or '—' }}</td>
+                        <td class="py-2 text-slate-500">{% if c.signal_dbm is not none %}{{ c.signal_dbm }} dBm{% else %}—{% endif %}</td>
+                        <td class="py-2 text-slate-500">{{ c.agent_action or '—' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/vendor/echarts.min.js"></script>
+<script src="/static/js/echarts-charts.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const ctx = document.getElementById('node-health-chart');
+    if (!ctx || !window.DotmacCharts) return;
+    const chartData = {
+        labels: ['Healthy', 'Node outage', 'Service fault', 'Monitoring fault', 'Unknown'],
+        values: [
+            {{ summary.counts.get('healthy', 0) }},
+            {{ summary.counts.get('node_outage', 0) }},
+            {{ summary.counts.get('service_fault', 0) }},
+            {{ summary.counts.get('monitoring_fault', 0) }},
+            {{ summary.counts.get('unknown', 0) }}
+        ],
+        colors: ['#10b981', '#ef4444', '#f59e0b', '#8b5cf6', '#94a3b8']
+    };
+    const chart = DotmacCharts.createDoughnutChart(ctx, chartData, { legendPosition: 'bottom' });
+    DotmacCharts.registerChart('node-health-chart', chart);
+});
+</script>
+{% endblock %}
