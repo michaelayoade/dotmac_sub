@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/formatters.dart';
 import '../../core/semantic_colors.dart';
 import '../auth/biometric_enrollment_prompt.dart';
+import '../service/connection_status_screen.dart' show connectionVisual;
 import '../../models/project.dart';
 import '../../models/connection_status.dart';
 import '../../models/service_status.dart';
@@ -253,7 +254,7 @@ class DashboardScreen extends ConsumerWidget {
           children: [
             const BiometricEnrollmentPrompt(),
             const OfflineBanner(),
-            _ConnectionBanner(
+            ConnectionBanner(
               session: activeSession,
               known: sessions.hasValue,
               serviceActive: currentService?.isActive ?? false,
@@ -585,9 +586,14 @@ String? _suspendedMessage(
 }
 
 /// Network connection status — the headline reason customers open the app.
-/// Derived from whether an open RADIUS accounting session exists.
-class _ConnectionBanner extends StatelessWidget {
-  const _ConnectionBanner({
+/// When the outage-classifier verdict ([classifier]) is loaded it is the
+/// SOURCE OF TRUTH, so this banner agrees with the /connection screen and the
+/// web portal (no more "Connected" here while the screen says "trouble"). It
+/// falls back to the live RADIUS-session signal when the verdict isn't ready.
+@visibleForTesting
+class ConnectionBanner extends StatelessWidget {
+  const ConnectionBanner({
+    super.key,
     required this.session,
     required this.known,
     this.serviceActive = false,
@@ -595,9 +601,11 @@ class _ConnectionBanner extends StatelessWidget {
     this.classifier,
   });
 
-  /// The outage-classifier verdict for this customer, when loaded. Lets a
-  /// not-connected banner defer to a known area outage ("we're on it") instead
-  /// of blaming the customer's router, and makes the banner a drill-in.
+  /// The outage-classifier verdict for this customer, when loaded. This is the
+  /// SOURCE OF TRUTH for the displayed state: connected → healthy, trouble →
+  /// amber, outage → red (carrying the classifier's headline/message/advice).
+  /// Null while it loads or errors, in which case the banner falls back to the
+  /// session-derived rendering below so it never shows a blank/spinner.
   final ConnectionStatus? classifier;
 
   /// Whether the displayed subscription is active. An active account that is
@@ -615,6 +623,21 @@ class _ConnectionBanner extends StatelessWidget {
   /// (statically-assigned plans).
   final String? ipAddress;
 
+  /// The friendly "Connected · up 3h · 10.0.0.5" line, built from the live
+  /// session when we have one (framed IP is the live dynamic address; the
+  /// subscription's assigned IP is the static fallback). Degrades to a bare
+  /// "Connected" when the classifier says healthy but no session is loaded.
+  String _connectedLine() {
+    final s = session;
+    final start = s?.sessionStart;
+    final ip = s?.framedIpAddress ?? ipAddress;
+    return [
+      'Connected',
+      if (start != null) 'up ${Fmt.uptime(start)}',
+      if (ip != null && ip.isNotEmpty) ip,
+    ].join(' · ');
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -622,55 +645,99 @@ class _ConnectionBanner extends StatelessWidget {
     final Color fg;
     final IconData icon;
     final String text;
+    // Optional second line — the ONE action (classifier `advice`) or the
+    // plain-language `message`, shown under the headline for a problem state.
+    String? subtitle;
+    // Whether tapping drills into the full /connection troubleshooter; there's
+    // only something to troubleshoot when we're not cleanly connected.
+    final bool tappable;
 
-    if (!known) {
+    final c = classifier;
+    if (c != null && c.state == ConnectionHealth.connected) {
+      // CLASSIFIER (source of truth): healthy. Keep the friendly filled
+      // treatment and enrich the line with the live session detail when we
+      // have it (uptime / IP).
+      bg = scheme.secondaryContainer;
+      fg = scheme.onSecondaryContainer;
+      icon = Icons.wifi;
+      text = _connectedLine();
+      tappable = false;
+    } else if (c != null &&
+        (c.state == ConnectionHealth.trouble ||
+            c.state == ConnectionHealth.outage)) {
+      // CLASSIFIER (source of truth): trouble = amber, outage = red — the same
+      // visual language as the /connection screen (via [connectionVisual]) so
+      // the Home banner can never disagree with it. Under a known area outage
+      // the state is `outage` and the classifier's own message is the
+      // reassuring "we're on it", so the calm wording falls out naturally here.
+      final visual = connectionVisual(context, c.state);
+      bg = visual.color.withValues(alpha: 0.12);
+      fg = visual.color;
+      icon = visual.icon;
+      text = c.headline;
+      // `advice` is the ONE action; the server nulls it under an area outage
+      // (this guard is belt-and-suspenders) so the banner never self-blames.
+      subtitle = (c.advice != null && !c.areaOutage) ? c.advice! : c.message;
+      tappable = true;
+    } else if (!known) {
+      // FALLBACK (classifier absent / loading / unknown): the original
+      // session-derived rendering, so the banner always shows something sane.
       bg = scheme.surfaceContainerHighest;
       fg = scheme.onSurfaceVariant;
       icon = Icons.wifi_find_outlined;
       text = 'Checking connection…';
+      tappable = false;
     } else if (session != null) {
-      final start = session!.sessionStart;
-      // The session's framed IP is the live address (covers dynamic plans);
-      // the subscription's assigned IP is the fallback.
-      final ip = session!.framedIpAddress ?? ipAddress;
       bg = scheme.secondaryContainer;
       fg = scheme.onSecondaryContainer;
       icon = Icons.wifi;
-      text = [
-        'Connected',
-        if (start != null) 'up ${Fmt.uptime(start)}',
-        if (ip != null && ip.isNotEmpty) ip,
-      ].join(' · ');
-    } else if (classifier?.areaOutage ?? false) {
+      text = _connectedLine();
+      tappable = false;
+    } else if (c?.areaOutage ?? false) {
       // A known area outage above this customer — reassure, don't blame their
       // router. Calm tertiary styling, not alarming red.
       bg = scheme.tertiaryContainer;
       fg = scheme.onTertiaryContainer;
       icon = Icons.cloud_off;
       text = "Known outage in your area — we're on it";
+      tappable = true;
     } else if (serviceActive) {
       bg = scheme.surfaceContainerHighest;
       fg = scheme.onSurfaceVariant;
       icon = Icons.wifi_off_outlined;
       text = 'Not connected — tap to troubleshoot';
+      tappable = true;
     } else {
       bg = scheme.errorContainer;
       fg = scheme.onErrorContainer;
       icon = Icons.wifi_off_outlined;
       text = 'Offline';
+      tappable = true;
     }
 
-    // When there's a problem to explain, the banner drills into the full
-    // connection troubleshooter (the classifier's per-customer verdict/advice).
-    final tappable = known && session == null;
+    final Widget label = subtitle == null
+        ? Text(text, style: TextStyle(color: fg, fontWeight: FontWeight.w600))
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(text,
+                  style: TextStyle(color: fg, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 2),
+              Text(
+                subtitle,
+                style: TextStyle(
+                  color: fg.withValues(alpha: 0.9),
+                  fontSize: 12.5,
+                ),
+              ),
+            ],
+          );
     final row = Row(
       children: [
         Icon(icon, color: fg),
         const SizedBox(width: 10),
-        Expanded(
-          child: Text(text,
-              style: TextStyle(color: fg, fontWeight: FontWeight.w600)),
-        ),
+        Expanded(child: label),
         if (tappable) Icon(Icons.chevron_right, color: fg),
       ],
     );
