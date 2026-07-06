@@ -1413,3 +1413,79 @@ class TestAllocatePeerAddress:
             )
         assert exc_info.value.status_code == 400
         assert "not in server network" in exc_info.value.detail
+
+
+# ============================================================================
+# RouterSyncService — RouterOS session leak regression
+# ============================================================================
+
+
+class _FakeSyncPool:
+    """Fake RouterOsApiPool whose get_api() fails after a successful login.
+
+    Constructing the real pool opens the socket and logs in, so a session
+    exists on the router; get_api() raising must still lead to disconnect().
+    """
+
+    def __init__(self, *args, **kwargs):
+        self.disconnect_calls = 0
+
+    def get_api(self):
+        raise RuntimeError("router busy: get_api timed out")
+
+    def disconnect(self):
+        self.disconnect_calls += 1
+
+
+class TestRouterSyncSessionLeak:
+    """A failure after the pool logs in must release the session, not orphan it."""
+
+    _CONN = {
+        "host": "192.0.2.10",
+        "port": 8728,
+        "ssl": False,
+        "username": "admin",
+        "password": "secret",
+        "interface_name": "wg-infra",
+    }
+
+    def _patch(self, monkeypatch, holder):
+        import routeros_api
+
+        from app.services.wireguard import RouterSyncService
+
+        def _factory(*args, **kwargs):
+            holder["pool"] = _FakeSyncPool()
+            return holder["pool"]
+
+        monkeypatch.setattr(routeros_api, "RouterOsApiPool", _factory)
+        monkeypatch.setattr(
+            RouterSyncService, "_get_router_connection", lambda server: dict(self._CONN)
+        )
+        return RouterSyncService
+
+    def test_sync_peer_disconnects_pool_when_get_api_fails(self, monkeypatch):
+        holder: dict = {}
+        service = self._patch(monkeypatch, holder)
+
+        peer = MagicMock()
+        ok, message = service.sync_peer_to_router(
+            db=None, peer=peer, server=MagicMock()
+        )
+
+        assert ok is False
+        assert "Failed to sync peer to router" in message
+        assert holder["pool"].disconnect_calls == 1
+
+    def test_remove_peer_disconnects_pool_when_get_api_fails(self, monkeypatch):
+        holder: dict = {}
+        service = self._patch(monkeypatch, holder)
+
+        peer = MagicMock()
+        ok, message = service.remove_peer_from_router(
+            db=None, peer=peer, server=MagicMock()
+        )
+
+        assert ok is False
+        assert "Failed to remove peer from router" in message
+        assert holder["pool"].disconnect_calls == 1

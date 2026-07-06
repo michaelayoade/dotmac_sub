@@ -72,6 +72,11 @@ class Settings:
 
     # CRM integration (DotMac Omni CRM)
     crm_base_url: str = os.getenv("CRM_BASE_URL", "")
+    # Static service ApiKey for machine-to-machine CRM auth (auth-unification
+    # phase 2b). When set, the CRM client authenticates with X-API-Key and does
+    # NOT perform the staff username/password login below. The staff credentials
+    # remain only as a transitional fallback while this token is unset.
+    crm_service_token: str = os.getenv("CRM_SERVICE_TOKEN", "")
     crm_username: str = os.getenv("CRM_USERNAME", "")
     crm_password: str = os.getenv("CRM_PASSWORD", "")
     # Shared secret for inbound CRM webhook deliveries (HMAC-SHA256).
@@ -197,6 +202,15 @@ class Settings:
     infra_sla_target_percent: float = float(
         os.getenv("INFRA_SLA_TARGET_PERCENT", "99.5")
     )
+
+    # Outage-classifier customer notifications (design docs/designs/OUTAGE_CLASSIFIER.md
+    # §P4). Default OFF: the notifier only ever *plans* messages (recipients,
+    # bodies) for review — it never dispatches, and the live send-path is gated
+    # on comms policy, not on this flag. Flip on only once the send-path exists
+    # and the operator has approved customer outage messaging.
+    outage_notify_enabled: bool = os.getenv(
+        "OUTAGE_NOTIFY_ENABLED", "false"
+    ).lower() in ("true", "1", "yes")
 
 
 settings = Settings()

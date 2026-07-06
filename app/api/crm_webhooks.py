@@ -20,12 +20,15 @@ import hashlib
 import hmac
 import json
 import logging
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db import get_db
+from app.models.crm_webhook_delivery import CrmWebhookDelivery
 from app.services import (
     projects_mirror,
     quotes_mirror,
@@ -40,6 +43,66 @@ router = APIRouter(prefix="/webhooks/crm", tags=["crm-webhook"])
 
 SIGNATURE_HEADER = "X-Webhook-Signature-256"
 EVENT_HEADER = "X-Webhook-Event"
+DELIVERY_HEADER = "X-Webhook-Delivery-Id"
+
+# Stable namespace for deriving a delivery id from the HMAC signature when the
+# CRM sends no X-Webhook-Delivery-Id (the selfcare pushes don't). Deterministic
+# across processes, so identical redeliveries map to the same uuid.
+_DELIVERY_NAMESPACE = uuid.uuid5(
+    uuid.NAMESPACE_URL, "https://dotmac.io/crm-webhook-delivery"
+)
+
+
+def _delivery_uuid(request: Request) -> uuid.UUID:
+    """Stable id for this delivery: the CRM delivery header when present, else a
+    deterministic uuid5 of the signature (identical body -> identical signature
+    -> same id), so a byte-identical redelivery collides on the dedup PK."""
+    raw = (request.headers.get(DELIVERY_HEADER) or "").strip()
+    if raw:
+        try:
+            return uuid.UUID(raw)
+        except ValueError:
+            pass
+    signature = request.headers.get(SIGNATURE_HEADER) or ""
+    return uuid.uuid5(_DELIVERY_NAMESPACE, signature)
+
+
+def _claim_delivery(
+    db: Session,
+    delivery_id: uuid.UUID,
+    event_type: str,
+    *,
+    event_id: str | None = None,
+) -> bool:
+    """Record this delivery as processed; return False if already recorded.
+
+    Check-first (the common case for a sequential redelivery), with the unique
+    primary key as a concurrency backstop: a simultaneous delivery that loses the
+    race raises IntegrityError and is likewise treated as a duplicate. Fails OPEN
+    (returns True) on any other store error — a dedup-store outage must never drop
+    a real event. Mirrors the idempotency used for CRM payments (C1).
+    """
+    try:
+        if db.get(CrmWebhookDelivery, delivery_id) is not None:
+            return False
+        db.add(
+            CrmWebhookDelivery(
+                delivery_id=delivery_id,
+                event_id=event_id,
+                event_type=event_type or "unknown",
+                status="processed",
+            )
+        )
+        db.commit()
+        return True
+    except IntegrityError:
+        db.rollback()
+        return False
+    except SQLAlchemyError:
+        db.rollback()
+        logger.exception("crm_webhook_dedup_store_error event=%s", event_type)
+        return True
+
 
 # CRM ticket events that should refresh the local copy.
 TICKET_EVENTS = {"ticket.created", "ticket.resolved", "ticket.escalated"}
@@ -193,6 +256,10 @@ async def receive_crm_chat_event(
     if not isinstance(payload, dict):
         payload = {}
 
+    # Dedup: a redelivered chat push must not wake the device twice.
+    if not _claim_delivery(db, _delivery_uuid(request), event_type):
+        return {"status": "ignored", "reason": "duplicate", "event": event_type}
+
     # The CRM wraps event data under "payload" (event envelope); tolerate a flat
     # body too so the contract isn't brittle.
     inner = payload.get("payload")
@@ -264,6 +331,11 @@ async def receive_crm_referral_event(
     inner = payload.get("payload")
     body = inner if isinstance(inner, dict) else payload
 
+    # Dedup: a redelivered referral event must not re-fire the "reward added"
+    # push. The credit itself is already idempotent on the referral id.
+    if not _claim_delivery(db, _delivery_uuid(request), event_type):
+        return {"status": "ignored", "reason": "duplicate", "event": event_type}
+
     return referrals_mirror.apply_webhook(db, event_type, body)
 
 
@@ -292,6 +364,13 @@ async def receive_crm_project_event(
         ) from None
     if not isinstance(payload, dict):
         payload = {}
+
+    # Dedup: a redelivered lifecycle event must not re-fire the customer push
+    # or re-apply the delta (a redelivery of an older event can otherwise revert
+    # a newer status). The periodic reconcile is the backstop for the rare
+    # claim-then-fail case.
+    if not _claim_delivery(db, _delivery_uuid(request), event_type):
+        return {"status": "ignored", "reason": "duplicate", "event": event_type}
 
     inner = payload.get("payload")
     body = inner if isinstance(inner, dict) else payload
@@ -325,6 +404,13 @@ async def receive_crm_work_order_event(
     if not isinstance(payload, dict):
         payload = {}
 
+    # Dedup: a redelivered lifecycle event must not re-fire the customer push
+    # or re-apply the delta (a redelivery of an older event can otherwise revert
+    # a newer status). The periodic reconcile is the backstop for the rare
+    # claim-then-fail case.
+    if not _claim_delivery(db, _delivery_uuid(request), event_type):
+        return {"status": "ignored", "reason": "duplicate", "event": event_type}
+
     inner = payload.get("payload")
     body = inner if isinstance(inner, dict) else payload
 
@@ -355,6 +441,13 @@ async def receive_crm_quote_event(
         ) from None
     if not isinstance(payload, dict):
         payload = {}
+
+    # Dedup: a redelivered lifecycle event must not re-fire the customer push
+    # or re-apply the delta (a redelivery of an older event can otherwise revert
+    # a newer status). The periodic reconcile is the backstop for the rare
+    # claim-then-fail case.
+    if not _claim_delivery(db, _delivery_uuid(request), event_type):
+        return {"status": "ignored", "reason": "duplicate", "event": event_type}
 
     inner = payload.get("payload")
     body = inner if isinstance(inner, dict) else payload

@@ -23,7 +23,12 @@ from app.models.network_monitoring import (
     PopSite,
 )
 from app.models.subscriber import Address, Subscriber
-from app.services.topology.affected import affected_customers, fdh_impact_rows
+from app.services.topology.affected import (
+    affected_customers,
+    fdh_impact_branches,
+    fdh_impact_rows,
+    impact_breakdown,
+)
 
 
 def _node(db, name, mtype=None, mid=None, pop_site_id=None, role=DeviceRole.edge):
@@ -394,3 +399,153 @@ def test_subscriptions_for_nodes_matches_per_node_results(
             s.id for s in subscriptions_for_node(db_session, node)
         }
     assert batched[empty_node.id] == []
+
+
+def test_impact_breakdown_ranks_and_scales_branches(db_session, catalog_offer):
+    pop = PopSite(name="Kubwa", zabbix_group_id="20")
+    db_session.add(pop)
+    db_session.flush()
+    nas_a = NasDevice(name="AA", management_ip="10.0.2.1")
+    nas_b = NasDevice(name="BB", management_ip="10.0.2.2")
+    nas_c = NasDevice(name="CC", management_ip="10.0.2.3")
+    db_session.add_all([nas_a, nas_b, nas_c])
+    db_session.flush()
+    node_a = _node(
+        db_session,
+        "node-a",
+        "nas",
+        nas_a.id,
+        pop_site_id=pop.id,
+        role=DeviceRole.access,
+    )
+    _node(
+        db_session,
+        "node-b",
+        "nas",
+        nas_b.id,
+        pop_site_id=pop.id,
+        role=DeviceRole.access,
+    )
+    _node(
+        db_session, "node-c", "nas", nas_c.id, pop_site_id=pop.id
+    )  # 0 subs -> dropped
+    node_a.live_status = "down"
+    db_session.flush()
+    _sub(db_session, catalog_offer.id, nas_id=nas_a.id)
+    _sub(db_session, catalog_offer.id, nas_id=nas_a.id)
+    _sub(db_session, catalog_offer.id, nas_id=nas_b.id)
+
+    result = affected_customers(db_session, basestation=pop)
+    branches = impact_breakdown(db_session, result)
+
+    # zero-count node-c dropped; sorted by count desc
+    assert [b["name"] for b in branches] == ["node-a", "node-b"]
+    assert branches[0]["count"] == 2 and branches[0]["pct"] == 100
+    assert branches[0]["live_status"] == "down"
+    assert branches[0]["role"] == "access"
+    assert branches[1]["count"] == 1 and branches[1]["pct"] == 50
+
+
+# --- Live-session arm: RadiusActiveSession.nas_device_id (who's online now) ---
+
+
+def _session(db, subscription, nas_device_id, subscriber_id=None):
+    from datetime import UTC, datetime
+
+    from app.models.radius_active_session import RadiusActiveSession
+
+    ras = RadiusActiveSession(
+        subscriber_id=(
+            subscriber_id
+            if subscriber_id is not None
+            else getattr(subscription, "subscriber_id", None)
+        ),
+        subscription_id=getattr(subscription, "id", None),
+        nas_device_id=nas_device_id,
+        username="u",
+        acct_session_id=uuid.uuid4().hex,
+        session_start=datetime.now(UTC),
+    )
+    db.add(ras)
+    db.flush()
+    return ras
+
+
+def test_live_session_arm_unions_with_provisioning_and_dedupes(
+    db_session, catalog_offer
+):
+    # A NAS node: the live-session arm adds who is CONNECTED there now (roaming/
+    # failover) on top of who is provisioned there, deduped by subscription id.
+    nas = NasDevice(name="NAS-Live", management_ip="10.0.5.1")
+    other = NasDevice(name="NAS-Other", management_ip="10.0.5.2")
+    db_session.add_all([nas, other])
+    db_session.flush()
+    node = _node(db_session, "live-nas", "nas", nas.id)
+
+    prov_only = _sub(db_session, catalog_offer.id, nas_id=nas.id)  # provisioned here
+    live_only = _sub(db_session, catalog_offer.id, nas_id=other.id)  # live here only
+    both = _sub(db_session, catalog_offer.id, nas_id=nas.id)  # both arms -> deduped
+    elsewhere = _sub(db_session, catalog_offer.id, nas_id=other.id)  # live on other
+    canceled = _sub(
+        db_session,
+        catalog_offer.id,
+        nas_id=other.id,
+        status=SubscriptionStatus.canceled,
+    )  # live here but inactive subscription -> excluded
+
+    _session(db_session, live_only, nas.id)
+    _session(db_session, both, nas.id)  # also in provisioning arm
+    _session(db_session, elsewhere, other.id)  # session on a different NAS
+    _session(db_session, canceled, nas.id)
+
+    out = affected_customers(db_session, node=node)
+    assert out["count"] == 3
+    assert {s.id for s in out["subscriptions"]} == {
+        prov_only.id,
+        live_only.id,
+        both.id,
+    }
+
+
+def test_subscriptions_for_nodes_live_session_parity(db_session, catalog_offer):
+    # Batched must agree with the single-node path once the live-session arm
+    # contributes (a node with a live session + an empty node).
+    from app.services.topology.affected import (
+        subscriptions_for_node,
+        subscriptions_for_nodes,
+    )
+
+    nas = NasDevice(name="NAS-P", management_ip="10.0.6.1")
+    other = NasDevice(name="NAS-Q", management_ip="10.0.6.2")
+    db_session.add_all([nas, other])
+    db_session.flush()
+    node = _node(db_session, "parity-nas", "nas", nas.id)
+    empty = _node(db_session, "parity-empty", "nas", other.id)
+
+    _sub(db_session, catalog_offer.id, nas_id=nas.id)  # provisioning arm
+    live = _sub(db_session, catalog_offer.id, nas_id=other.id)  # live arm only
+    _session(db_session, live, nas.id)
+
+    nodes = [node, empty]
+    batched = subscriptions_for_nodes(db_session, [n.id for n in nodes])
+    assert set(batched) == {n.id for n in nodes}
+    for n in nodes:
+        assert {s.id for s in batched[n.id]} == {
+            s.id for s in subscriptions_for_node(db_session, n)
+        }
+
+
+def test_fdh_impact_branches_group_and_scale():
+    rows = [
+        {"splitter_name": "SPL-1"},
+        {"splitter_name": "SPL-1"},
+        {"splitter_name": "SPL-2"},
+        {"splitter_name": None},
+    ]
+    branches = fdh_impact_branches(rows)
+    by_name = {b["name"]: b for b in branches}
+    assert by_name["SPL-1"]["count"] == 2 and by_name["SPL-1"]["pct"] == 100
+    assert by_name["SPL-2"]["count"] == 1 and by_name["SPL-2"]["pct"] == 50
+    assert by_name["—"]["count"] == 1  # None -> em dash bucket
+    assert branches[0]["name"] == "SPL-1"  # busiest first
+    assert all(b["live_status"] == "plant" for b in branches)

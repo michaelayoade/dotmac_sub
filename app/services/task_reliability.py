@@ -240,6 +240,9 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.olt_health_retry.retry_single_olt": _c(
         "network", AUTORETRY, IDEMP, STATUS
     ),
+    "app.tasks.olt_mac_harvest.run_olt_mac_harvest": _c(
+        "network", SWEEP, IDEMP, HEALTH
+    ),
     "app.tasks.ont_bulk.execute_bulk_action": _c("network", ITEMS, PER_ITEM, STATUS),
     "app.tasks.ont_provisioning.authorize_ont": _c(
         "provisioning", STATE, STATEFUL, STATUS
@@ -250,6 +253,9 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.ont_provisioning.queue_bulk_provisioning": _c(
         "provisioning", ITEMS, PER_ITEM, STATUS
     ),
+    "app.tasks.ont_signal_observations.record_ont_observations": _c(
+        "network", SWEEP, IDEMP, HEALTH
+    ),
     "app.tasks.payment_reconciliation.reconcile_topups": _c(
         "billing", STATE, GUARDED, HEALTH
     ),
@@ -257,6 +263,13 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "network", STATE, STATEFUL, STATUS
     ),
     "app.tasks.projects.reconcile_project_mirror": _c("crm", SWEEP, IDEMP, HEALTH),
+    "app.tasks.projects.refresh_project_mirror_for_subscriber": _c(
+        "crm",
+        NONE,
+        IDEMP,
+        LOG,
+        "Best-effort on-view refresh; periodic reconcile backs it.",
+    ),
     "app.tasks.provisioning.reap_stale_provisioning_runs": _c(
         "provisioning", SWEEP, IDEMP, STATUS
     ),
@@ -270,10 +283,18 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "provisioning", ITEMS, PER_ITEM, STATUS
     ),
     "app.tasks.quotes.reconcile_quote_mirror": _c("crm", SWEEP, IDEMP, HEALTH),
+    "app.tasks.quotes.refresh_quote_mirror_for_subscriber": _c(
+        "crm",
+        NONE,
+        IDEMP,
+        LOG,
+        "Best-effort on-view refresh; periodic reconcile backs it.",
+    ),
     "app.tasks.radius.audit_ip_consistency": _c("radius", SWEEP, IDEMP, HEALTH),
     "app.tasks.radius.audit_suspension_enforcement": _c("radius", SWEEP, IDEMP, HEALTH),
     "app.tasks.radius.connectivity_shadow_audit": _c("radius", SWEEP, IDEMP, HEALTH),
     "app.tasks.radius.reap_radacct_ghosts": _c("radius", SWEEP, IDEMP, HEALTH),
+    "app.tasks.radius.reconcile_active_sessions": _c("radius", SWEEP, IDEMP, HEALTH),
     "app.tasks.radius.run_enforcement_reconciler": _c("radius", STATE, GUARDED, STATUS),
     "app.tasks.radius.run_radius_sync_job": _c("radius", SWEEP, IDEMP, STATUS),
     "app.tasks.radius_population.refresh_radius_from_subs": _c(
@@ -283,7 +304,17 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.referrals.reconcile_referral_mirror": _c(
         "billing", SWEEP, IDEMP, HEALTH
     ),
+    "app.tasks.referrals.refresh_referral_mirror_for_subscriber": _c(
+        "crm",
+        NONE,
+        IDEMP,
+        LOG,
+        "Best-effort on-view refresh; periodic reconcile backs it.",
+    ),
     "app.tasks.topology_lldp.run_lldp_topology_poll": _c(
+        "network", SWEEP, IDEMP, HEALTH
+    ),
+    "app.tasks.topology_metrics.export_topology_metrics": _c(
         "network", SWEEP, IDEMP, HEALTH
     ),
     "app.tasks.topology_outage.run_outage_scan": _c(
@@ -297,12 +328,23 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "network", SWEEP, IDEMP, HEALTH
     ),
     "app.tasks.topology_sync.warm_topology_status": _c("network", SWEEP, IDEMP, HEALTH),
+    "app.tasks.topology_ufiber_link.run_ufiber_onu_link": _c(
+        "network", SWEEP, IDEMP, HEALTH
+    ),
     "app.tasks.topology_uisp.run_uisp_topology_sync": _c(
         "network",
         SWEEP,
         IDEMP,
         HEALTH,
         "Scheduled UISP relationship sync; advisory lock prevents overlap.",
+    ),
+    "app.tasks.unmatched_radio.run_unmatched_radio_review": _c(
+        "network",
+        SWEEP,
+        IDEMP,
+        HEALTH,
+        "Scheduled unmatched-radio review; re-links radios whose MAC now "
+        "matches a subscriber and refreshes the residual ops queue.",
     ),
     "app.tasks.tr069.apply_acs_config": _c("tr069", STATE, STATEFUL, STATUS),
     "app.tasks.tr069.apply_saved_ont_service_config": _c(
@@ -346,6 +388,13 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     ),
     "app.tasks.work_orders.reconcile_work_order_mirror": _c(
         "crm", SWEEP, IDEMP, HEALTH
+    ),
+    "app.tasks.work_orders.refresh_work_order_mirror_for_subscriber": _c(
+        "crm",
+        NONE,
+        IDEMP,
+        LOG,
+        "Best-effort on-view refresh; periodic reconcile backs it.",
     ),
     "app.tasks.workflow.detect_sla_breaches": _c("workflow", SWEEP, IDEMP, STATUS),
     "app.tasks.zabbix_ingestion.dispatch_portal_usage_ingestion": _c(

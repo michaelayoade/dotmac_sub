@@ -262,3 +262,98 @@ def test_disabled_or_maintenance_host_is_unknown(db_session):
     }
     assert by_host["10"] == "unknown"
     assert by_host["11"] == "unknown"
+
+
+def test_trapper_only_uisp_host_active_is_up(db_session):
+    # A trapper-only UISP host: no polled interface, no icmpping, only a live
+    # uisp.status="active" trapper -> coloured UP off the trapper fallback.
+    db_session.add(_node("30", "onu-active"))
+    db_session.flush()
+    hosts = [{"hostid": "30", "available": "0", "status": "0", "interfaces": []}]
+    items = [{"hostid": "30", "key_": "uisp.status", "lastvalue": "active"}]
+
+    result = warm_topology_status(db_session, _FakeClient(hosts, [], items))
+
+    n = db_session.query(NetworkDevice).filter_by(zabbix_hostid="30").one()
+    assert n.live_status == "up"
+    assert result["via_uisp_status"] == 1
+
+
+def test_trapper_only_uisp_host_disconnected_is_down(db_session):
+    db_session.add(_node("31", "onu-disconnected"))
+    db_session.flush()
+    hosts = [{"hostid": "31", "available": "0", "status": "0", "interfaces": []}]
+    items = [{"hostid": "31", "key_": "uisp.status", "lastvalue": "disconnected"}]
+
+    result = warm_topology_status(db_session, _FakeClient(hosts, [], items))
+
+    n = db_session.query(NetworkDevice).filter_by(zabbix_hostid="31").one()
+    assert n.live_status == "down"
+    assert result["via_uisp_status"] == 1
+
+
+def test_trapper_only_uisp_host_unknown_or_empty_is_unknown(db_session):
+    # "unknown"/unauthorized/empty/other -> UNKNOWN, and NOT counted as a
+    # fallback colouring (the trapper supplied no usable colour).
+    db_session.add_all([_node("32", "onu-unknown"), _node("33", "onu-empty")])
+    db_session.flush()
+    hosts = [
+        {"hostid": "32", "available": "0", "status": "0", "interfaces": []},
+        {"hostid": "33", "available": "0", "status": "0", "interfaces": []},
+    ]
+    items = [
+        {"hostid": "32", "key_": "uisp.status", "lastvalue": "unknown"},
+        {"hostid": "33", "key_": "uisp.status", "lastvalue": ""},
+    ]
+
+    result = warm_topology_status(db_session, _FakeClient(hosts, [], items))
+
+    by_host = {
+        n.zabbix_hostid: n.live_status
+        for n in db_session.query(NetworkDevice)
+        .filter(NetworkDevice.zabbix_hostid.in_(["32", "33"]))
+        .all()
+    }
+    assert by_host["32"] == "unknown"
+    assert by_host["33"] == "unknown"
+    assert result["via_uisp_status"] == 0
+
+
+def test_polled_icmp_wins_over_uisp_trapper(db_session):
+    # Host with BOTH icmp=up AND a stale uisp.status="disconnected": polling is
+    # authoritative and real-time, so the node stays UP and the trapper does
+    # NOT override — nor is it counted as a fallback colouring.
+    db_session.add(_node("34", "station-icmp-up-uisp-down"))
+    db_session.flush()
+    hosts = [{"hostid": "34", "available": "0", "status": "0", "interfaces": []}]
+    items = [
+        {"hostid": "34", "key_": "icmpping", "lastvalue": "1"},
+        {"hostid": "34", "key_": "uisp.status", "lastvalue": "disconnected"},
+    ]
+
+    result = warm_topology_status(db_session, _FakeClient(hosts, [], items))
+
+    n = db_session.query(NetworkDevice).filter_by(zabbix_hostid="34").one()
+    assert n.live_status == "up"
+    assert result["via_uisp_status"] == 0
+
+
+def test_snmp_host_without_uisp_status_unchanged(db_session):
+    # An SNMP host with interface available=up and no uisp.status trapper is
+    # coloured exactly as before — the trapper arm never touches it.
+    db_session.add(_node("35", "snmp-up"))
+    db_session.flush()
+    hosts = [
+        {
+            "hostid": "35",
+            "available": "0",
+            "status": "0",
+            "interfaces": [{"main": "1", "available": "1"}],
+        }
+    ]
+
+    result = warm_topology_status(db_session, _FakeClient(hosts, [], items=[]))
+
+    n = db_session.query(NetworkDevice).filter_by(zabbix_hostid="35").one()
+    assert n.live_status == "up"
+    assert result["via_uisp_status"] == 0

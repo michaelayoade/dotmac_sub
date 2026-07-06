@@ -700,6 +700,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
         min_value=300,
     ),
     SettingSpec(
+        domain=SettingDomain.usage,
+        key="radius_active_session_reconcile_interval_seconds",
+        env_var="RADIUS_ACTIVE_SESSION_RECONCILE_INTERVAL_SECONDS",
+        value_type=SettingValueType.integer,
+        default=120,
+        min_value=60,
+    ),
+    SettingSpec(
         domain=SettingDomain.collections,
         key="dunning_enabled",
         env_var="DUNNING_ENABLED",
@@ -2658,6 +2666,16 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.network,
+        key="olt_mac_harvest_age_out_hours",
+        env_var="NETWORK_OLT_MAC_HARVEST_AGE_OUT_HOURS",
+        value_type=SettingValueType.integer,
+        default=6,
+        label="OLT MAC-forwarding observation age-out (hours)",
+        min_value=1,
+        max_value=168,
+    ),
+    SettingSpec(
+        domain=SettingDomain.network,
         key="coa_negative_cache_ttl_minutes",
         env_var="NETWORK_COA_NEGATIVE_CACHE_TTL_MINUTES",
         value_type=SettingValueType.integer,
@@ -3196,6 +3214,15 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=2,
         min_value=1,
         max_value=10,
+    ),
+    SettingSpec(
+        domain=SettingDomain.network_monitoring,
+        key="topology_metrics_interval_seconds",
+        label="Topology Metrics Export Interval (seconds)",
+        env_var="TOPOLOGY_METRICS_INTERVAL_SECONDS",
+        value_type=SettingValueType.integer,
+        default=900,
+        min_value=300,
     ),
     SettingSpec(
         domain=SettingDomain.radius,

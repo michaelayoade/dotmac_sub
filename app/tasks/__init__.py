@@ -83,6 +83,7 @@ from app.tasks.olt_health_retry import (
     retry_single_olt,
     trigger_immediate_retry,
 )
+from app.tasks.olt_mac_harvest import run_olt_mac_harvest
 from app.tasks.ont_bulk import execute_bulk_action as execute_ont_bulk_action
 from app.tasks.ont_provisioning import (
     authorize_ont as authorize_ont_task,
@@ -91,6 +92,7 @@ from app.tasks.ont_provisioning import (
     provision_ont,
     queue_bulk_provisioning,
 )
+from app.tasks.ont_signal_observations import record_ont_observations
 from app.tasks.payment_reconciliation import reconcile_topups
 from app.tasks.profile_sync import (
     execute_due_profile_sync_tasks,
@@ -114,8 +116,10 @@ from app.tasks.router_sync import (
     sync_all_system_info,
 )
 from app.tasks.topology_lldp import run_lldp_topology_poll
+from app.tasks.topology_metrics import export_topology_metrics
 from app.tasks.topology_outage import run_outage_scan
 from app.tasks.topology_sync import run_topology_reconcile, warm_topology_status
+from app.tasks.topology_ufiber_link import run_ufiber_onu_link
 from app.tasks.topology_uisp import run_uisp_topology_sync
 from app.tasks.tr069 import (
     apply_acs_config as tr069_apply_acs_config,
@@ -141,6 +145,7 @@ from app.tasks.tr069 import (
 from app.tasks.tr069 import (
     sync_all_acs_devices as tr069_sync_all_acs_devices,
 )
+from app.tasks.unmatched_radio import run_unmatched_radio_review
 from app.tasks.usage import (
     import_radius_accounting,
     notify_expiring_data_bundles,
@@ -198,6 +203,7 @@ __all__ = [
     "run_radius_sync_job",
     "provision_ont",
     "queue_bulk_provisioning",
+    "record_ont_observations",
     "run_invoice_cycle",
     "charge_due_invoices",
     "check_overdue_arrangements",
@@ -238,6 +244,7 @@ __all__ = [
     "aggregate_bandwidth_to_metrics",
     "trim_bandwidth_stream",
     "backup_all_olts",
+    "run_olt_mac_harvest",
     "retry_failed_olt_connections",
     "retry_single_olt",
     "trigger_immediate_retry",
@@ -261,6 +268,9 @@ __all__ = [
     "run_lldp_topology_poll",
     "run_outage_scan",
     "run_uisp_topology_sync",
+    "run_ufiber_onu_link",
+    "run_unmatched_radio_review",
+    "export_topology_metrics",
     "tr069_sync_all_acs_devices",
     "tr069_execute_pending_jobs",
     "tr069_execute_bulk_action",

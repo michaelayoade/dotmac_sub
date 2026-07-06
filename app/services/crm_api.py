@@ -1308,14 +1308,31 @@ def credit_referral_reward_to_wallet(
             return existing
 
     wallet = vas_wallet.get_or_create_wallet(db, str(sub_uuid))
-    return vas_wallet.credit_wallet(
-        db,
-        wallet,
-        amount=amount,
-        category=VasEntryCategory.adjustment,
-        reference=external_ref,
-        memo=(reason or "Referral reward").strip(),
-    )
+    from sqlalchemy.exc import IntegrityError
+
+    try:
+        return vas_wallet.credit_wallet(
+            db,
+            wallet,
+            amount=amount,
+            category=VasEntryCategory.adjustment,
+            reference=external_ref,
+            memo=(reason or "Referral reward").strip(),
+        )
+    except IntegrityError:
+        # A concurrent duplicate lost the race on the unique wallet-entry
+        # `reference`. The credit is idempotent — roll back our losing insert
+        # and return the entry the winner wrote (never double-credit).
+        db.rollback()
+        if external_ref:
+            existing = (
+                db.query(VasWalletEntry)
+                .filter(VasWalletEntry.reference == external_ref)
+                .first()
+            )
+            if existing is not None:
+                return existing
+        raise
 
 
 def create_installation_invoice(
@@ -1347,14 +1364,7 @@ def create_installation_invoice(
         raise LookupError("subscriber_not_found")
 
     if external_ref:
-        existing = (
-            db.query(Invoice)
-            .filter(Invoice.account_id == subscriber.id)
-            .filter(Invoice.is_active.is_(True))
-            .filter(Invoice.metadata_["crm_external_ref"].astext == str(external_ref))
-            .order_by(Invoice.created_at.desc())
-            .first()
-        )
+        existing = _find_invoice_by_crm_ref(db, external_ref)
         if existing is not None:
             return existing
 
@@ -1380,11 +1390,36 @@ def create_installation_invoice(
     metadata["source"] = "dotmac_crm"
     if external_ref:
         metadata["crm_external_ref"] = str(external_ref)
+        invoice.crm_external_ref = str(external_ref)
     invoice.metadata_ = metadata
     db.add(invoice)
-    db.commit()
+    from sqlalchemy.exc import IntegrityError
+
+    try:
+        db.commit()
+    except IntegrityError:
+        # A concurrent duplicate lost the race on uq_invoices_active_crm_external_ref
+        # — the create is idempotent, so return the invoice the winner wrote.
+        db.rollback()
+        if external_ref:
+            existing = _find_invoice_by_crm_ref(db, external_ref)
+            if existing is not None:
+                return existing
+        raise
     db.refresh(invoice)
     return invoice
+
+
+def _find_invoice_by_crm_ref(db: Session, external_ref: str) -> Invoice | None:
+    """Locate the active CRM-created invoice for an external_ref (the
+    uq_invoices_active_crm_external_ref key)."""
+    return (
+        db.query(Invoice)
+        .filter(Invoice.is_active.is_(True))
+        .filter(Invoice.crm_external_ref == str(external_ref))
+        .order_by(Invoice.created_at.desc())
+        .first()
+    )
 
 
 def outage_impact(
@@ -1681,9 +1716,21 @@ def record_external_payment(
         memo=memo or "CRM sales payment",
         allocations=allocations,
     )
-    return billing_service.payments.create(
-        session, payload, auto_allocate=(allocations is None)
-    )
+    from sqlalchemy.exc import IntegrityError
+
+    try:
+        return billing_service.payments.create(
+            session, payload, auto_allocate=(allocations is None)
+        )
+    except IntegrityError:
+        # A concurrent /crm/payments push won the race on
+        # uq_payments_active_crm_external_id. The write is idempotent — roll back
+        # our losing insert and return the already-recorded payment.
+        session.rollback()
+        existing = session.query(Payment).filter(Payment.external_id == ext_id).first()
+        if existing is not None:
+            return existing
+        raise
 
 
 def list_catalog_offers(
@@ -1772,6 +1819,9 @@ def create_subscription(
     picks a real offer, so no fuzzy matching. Idempotent on ``external_ref``
     (recorded on the first invoice's metadata).
     """
+    from fastapi import HTTPException
+    from sqlalchemy.exc import IntegrityError
+
     from app.models.catalog import SubscriptionStatus
     from app.schemas.catalog import SubscriptionCreate
     from app.services.billing.invoices import Invoices
@@ -1784,22 +1834,11 @@ def create_subscription(
     if offer is None:
         raise LookupError("offer not found")
 
-    # Idempotent: an invoice already tagged with this crm_external_ref means the
+    # Idempotent: a first invoice tagged with this crm_external_ref means the
     # subscription was synced before — return it rather than duplicating.
-    for inv in (
-        session.query(Invoice)
-        .filter(Invoice.account_id == subscriber.id, Invoice.is_active.is_(True))
-        .order_by(Invoice.created_at.desc())
-        .all()
-    ):
-        meta = inv.metadata_ or {}
-        if meta.get("crm_external_ref") == str(external_ref) and meta.get(
-            "crm_subscription_id"
-        ):
-            existing = session.get(
-                Subscription, coerce_subscriber_id(str(meta["crm_subscription_id"]))
-            )
-            return {"subscription": existing, "invoice": inv, "created": False}
+    existing = _find_crm_subscription(session, subscriber.id, external_ref)
+    if existing is not None:
+        return existing
 
     price_override = None
     if unit_price is not None:
@@ -1808,16 +1847,27 @@ def create_subscription(
         except (InvalidOperation, TypeError, ValueError):
             price_override = None
 
-    subscription = Subscriptions.create(
-        session,
-        SubscriptionCreate(
-            subscriber_id=subscriber.id,
-            offer_id=offer.id,
-            status=SubscriptionStatus.pending,
-            start_at=start_at or datetime.now(UTC),
-            unit_price=price_override,
-        ),
-    )
+    try:
+        subscription = Subscriptions.create(
+            session,
+            SubscriptionCreate(
+                subscriber_id=subscriber.id,
+                offer_id=offer.id,
+                status=SubscriptionStatus.pending,
+                start_at=start_at or datetime.now(UTC),
+                unit_price=price_override,
+            ),
+        )
+    except HTTPException:
+        # enforce_single_active_subscription treats pending as active and rejects
+        # a second one — so a concurrent/previous create already won. It raises
+        # before adding anything (no state to roll back); if that winner is this
+        # same CRM sale, return it idempotently, else surface the rejection.
+        existing = _find_crm_subscription(session, subscriber.id, external_ref)
+        if existing is not None:
+            return existing
+        raise
+
     invoice = Invoices.create_for_subscription(
         session, str(subscriber.id), str(subscription.id), allow_prepaid=True
     )
@@ -1826,7 +1876,21 @@ def create_subscription(
     meta["crm_external_ref"] = str(external_ref)
     meta["crm_subscription_id"] = str(subscription.id)
     invoice.metadata_ = meta
-    session.commit()
+    # DB backstop: uq_invoices_active_crm_external_ref (migration 212). Both
+    # creators commit internally, so on a true-concurrency collision the sub +
+    # invoice are already persisted — cancel the orphan and return the winner.
+    invoice.crm_external_ref = str(external_ref)
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        subscription.status = SubscriptionStatus.canceled
+        invoice.is_active = False
+        session.commit()
+        existing = _find_crm_subscription(session, subscriber.id, external_ref)
+        if existing is not None:
+            return existing
+        raise
     return {"subscription": subscription, "invoice": invoice, "created": True}
 
 
@@ -2016,3 +2080,25 @@ def outage_incident_detail(
     row["affected_truncated"] = affected_total > limit
     row["affected_subscriptions"] = entries
     return row
+
+
+def _find_crm_subscription(
+    session: Session, subscriber_id: uuid.UUID, external_ref: str
+) -> dict | None:
+    """The existing CRM-synced subscription for an external_ref, as the
+    ``{subscription, invoice, created: False}`` shape. Keyed on the first
+    invoice's ``crm_external_ref`` column (+ its ``crm_subscription_id`` tag)."""
+    inv = (
+        session.query(Invoice)
+        .filter(Invoice.account_id == subscriber_id, Invoice.is_active.is_(True))
+        .filter(Invoice.crm_external_ref == str(external_ref))
+        .order_by(Invoice.created_at.desc())
+        .first()
+    )
+    if inv is None:
+        return None
+    sub_id = (inv.metadata_ or {}).get("crm_subscription_id")
+    if not sub_id:
+        return None
+    subscription = session.get(Subscription, coerce_subscriber_id(str(sub_id)))
+    return {"subscription": subscription, "invoice": inv, "created": False}

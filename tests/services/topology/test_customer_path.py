@@ -332,6 +332,241 @@ def test_nas_fallback_when_cpe_vanished(db_session, subscriber, subscription):
     assert path.radio is None
 
 
+# --- Live-session arm: prefer where the customer is connected RIGHT NOW ---
+
+
+def _session(db, subscription, nas_device_id, subscriber_id=None):
+    from datetime import UTC, datetime
+
+    from app.models.radius_active_session import RadiusActiveSession
+
+    ras = RadiusActiveSession(
+        subscriber_id=(
+            subscriber_id
+            if subscriber_id is not None
+            else getattr(subscription, "subscriber_id", None)
+        ),
+        subscription_id=getattr(subscription, "id", None),
+        nas_device_id=nas_device_id,
+        username="u",
+        acct_session_id="live-1",
+        session_start=datetime.now(UTC),
+    )
+    db.add(ras)
+    db.flush()
+    return ras
+
+
+def test_live_session_beats_provisioning_nas(db_session, subscriber, subscription):
+    # Customer online on a NAS other than the one provisioned (roaming/failover):
+    # the trace must land on the LIVE NAS's basestation, not the static one.
+    prov_nas = NasDevice(name="NAS-Prov", management_ip="10.0.9.1")
+    live_nas = NasDevice(name="NAS-Live", management_ip="10.0.9.2")
+    prov_pop = PopSite(name="Prov Site", zabbix_group_id="30")
+    live_pop = PopSite(name="Live Site", zabbix_group_id="31")
+    db_session.add_all([prov_nas, live_nas, prov_pop, live_pop])
+    db_session.flush()
+    db_session.add_all(
+        [
+            _node("nas", prov_nas.id, prov_pop.id, "401"),
+            _node("nas", live_nas.id, live_pop.id, "402"),
+        ]
+    )
+    subscription.provisioning_nas_device_id = prov_nas.id
+    db_session.flush()
+    _session(db_session, subscription, live_nas.id)
+
+    path = resolve_customer_path(db_session, subscription)
+
+    assert path.gap is None
+    assert path.access_device_kind == "nas"
+    assert path.access_device.id == live_nas.id
+    assert path.basestation.id == live_pop.id
+    assert path.live_session is True
+
+
+def test_live_session_unresolvable_falls_back_to_static(
+    db_session, subscriber, subscription
+):
+    # Customer online on a NAS not yet Zabbix-matched (NasDevice row exists but
+    # no topology node), while the static provisioning NAS resolves completely.
+    # The live session must NOT regress the sub to a gap — resolve via static,
+    # and the live_session marker reflects that static (not live) was used.
+    static_nas = NasDevice(name="NAS-Static-OK", management_ip="10.0.9.7")
+    unmatched_nas = NasDevice(name="NAS-Unmatched", management_ip="10.0.9.8")
+    pop = PopSite(name="Static OK Site", zabbix_group_id="35")
+    db_session.add_all([static_nas, unmatched_nas, pop])
+    db_session.flush()
+    # Only the static NAS has a topology node -> basestation.
+    db_session.add(_node("nas", static_nas.id, pop.id, "406"))
+    subscription.provisioning_nas_device_id = static_nas.id
+    db_session.flush()
+    _session(db_session, subscription, unmatched_nas.id)  # live on the unmatched NAS
+
+    path = resolve_customer_path(db_session, subscription)
+
+    assert path.gap is None
+    assert path.access_device_kind == "nas"
+    assert path.access_device.id == static_nas.id
+    assert path.basestation.id == pop.id
+    assert path.live_session is False
+
+
+def test_sibling_subscription_session_is_excluded(db_session, subscriber, subscription):
+    # The subscriber owns sub A (the `subscription` fixture, which OWNS the
+    # session) and sub B (no own session). Resolving B must NOT borrow A's
+    # session (duplicate-login case) — it falls back to B's static NAS.
+    from app.models.catalog import Subscription, SubscriptionStatus
+
+    a_live_nas = NasDevice(name="NAS-A-Live", management_ip="10.0.9.9")
+    b_static_nas = NasDevice(name="NAS-B-Static", management_ip="10.0.10.1")
+    a_pop = PopSite(name="A Live Site", zabbix_group_id="36")
+    b_pop = PopSite(name="B Static Site", zabbix_group_id="37")
+    db_session.add_all([a_live_nas, b_static_nas, a_pop, b_pop])
+    db_session.flush()
+    db_session.add_all(
+        [
+            _node("nas", a_live_nas.id, a_pop.id, "407"),
+            _node("nas", b_static_nas.id, b_pop.id, "408"),
+        ]
+    )
+    # The session belongs to sub A on a_live_nas.
+    _session(db_session, subscription, a_live_nas.id)
+    # Sub B: same subscriber, own static provisioning NAS, no session of its own.
+    sub_b = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=subscription.offer_id,
+        status=SubscriptionStatus.active,
+        provisioning_nas_device_id=b_static_nas.id,
+    )
+    db_session.add(sub_b)
+    db_session.flush()
+
+    path = resolve_customer_path(db_session, sub_b)
+
+    assert path.access_device_kind == "nas"
+    assert path.access_device.id == b_static_nas.id  # B's static NAS, not A's live
+    assert path.basestation.id == b_pop.id
+    assert path.live_session is False
+
+
+def test_own_bound_session_beats_null_bound(db_session, subscriber, subscription):
+    # Own-binding is the PRIMARY tie-break, ahead of freshness: even a FRESHER
+    # null-bound session must not preempt this subscription's own session. Locks
+    # the CASE order-by against the Postgres NULLS-FIRST-under-DESC quirk.
+    from datetime import UTC, datetime
+
+    from app.models.radius_active_session import RadiusActiveSession
+
+    own_nas = NasDevice(name="NAS-Own", management_ip="10.0.12.1")
+    null_nas = NasDevice(name="NAS-Null", management_ip="10.0.12.2")
+    own_pop = PopSite(name="Own Site", zabbix_group_id="38")
+    null_pop = PopSite(name="Null Site", zabbix_group_id="39")
+    db_session.add_all([own_nas, null_nas, own_pop, null_pop])
+    db_session.flush()
+    db_session.add_all(
+        [
+            _node("nas", own_nas.id, own_pop.id, "409"),
+            _node("nas", null_nas.id, null_pop.id, "410"),
+        ]
+    )
+    db_session.add_all(
+        [
+            RadiusActiveSession(
+                subscriber_id=subscriber.id,
+                subscription_id=subscription.id,  # own binding, but OLDER
+                nas_device_id=own_nas.id,
+                username="u",
+                acct_session_id="own-1",
+                session_start=datetime(2026, 6, 1, tzinfo=UTC),
+                last_update=datetime(2026, 6, 1, tzinfo=UTC),
+            ),
+            RadiusActiveSession(
+                subscriber_id=subscriber.id,
+                subscription_id=None,  # null binding, but FRESHER
+                nas_device_id=null_nas.id,
+                username="u",
+                acct_session_id="null-1",
+                session_start=datetime(2026, 7, 1, tzinfo=UTC),
+                last_update=datetime(2026, 7, 1, tzinfo=UTC),
+            ),
+        ]
+    )
+    db_session.flush()
+
+    path = resolve_customer_path(db_session, subscription)
+
+    assert path.access_device_kind == "nas"
+    assert path.access_device.id == own_nas.id  # own beats fresher null-bound
+    assert path.basestation.id == own_pop.id
+    assert path.live_session is True
+
+
+def test_no_live_session_falls_back_to_provisioning_unchanged(db_session, subscription):
+    # No live session: behavior is byte-for-byte the pre-change provisioning arm.
+    nas = NasDevice(name="NAS-Static", management_ip="10.0.9.3")
+    pop = PopSite(name="Static Site", zabbix_group_id="32")
+    db_session.add_all([nas, pop])
+    db_session.flush()
+    db_session.add(_node("nas", nas.id, pop.id, "403"))
+    subscription.provisioning_nas_device_id = nas.id
+    db_session.flush()
+
+    path = resolve_customer_path(db_session, subscription)
+
+    assert path.gap is None
+    assert path.access_device_kind == "nas"
+    assert path.access_device.id == nas.id
+    assert path.basestation.id == pop.id
+    assert path.live_session is False
+
+
+def test_live_session_with_null_nas_falls_back_to_provisioning(
+    db_session, subscription
+):
+    # A live session that never resolved to a nas_device_id must not mask the
+    # static provisioning arm.
+    nas = NasDevice(name="NAS-NullLive", management_ip="10.0.9.4")
+    pop = PopSite(name="Null Live Site", zabbix_group_id="33")
+    db_session.add_all([nas, pop])
+    db_session.flush()
+    db_session.add(_node("nas", nas.id, pop.id, "404"))
+    subscription.provisioning_nas_device_id = nas.id
+    db_session.flush()
+    _session(db_session, subscription, None)
+
+    path = resolve_customer_path(db_session, subscription)
+
+    assert path.access_device_kind == "nas"
+    assert path.access_device.id == nas.id
+    assert path.live_session is False
+
+
+def test_fiber_precedence_over_live_session(db_session, subscriber, subscription):
+    # An active ONT assignment implies fiber; a live RADIUS session must not
+    # preempt the OLT arm.
+    olt = OLTDevice(name="OLT-LS", hostname="olt-ls", mgmt_ip="10.0.9.5")
+    pop = PopSite(name="Fiber LS Site", zabbix_group_id="34")
+    nas = NasDevice(name="NAS-LS", management_ip="10.0.9.6")
+    db_session.add_all([olt, pop, nas])
+    db_session.flush()
+    db_session.add(_node("olt", olt.id, pop.id, "405"))
+    ont = OntUnit(serial_number="SN-LS", olt_device_id=olt.id)
+    db_session.add(ont)
+    db_session.flush()
+    db_session.add(
+        OntAssignment(ont_unit_id=ont.id, subscriber_id=subscriber.id, active=True)
+    )
+    db_session.flush()
+    _session(db_session, subscription, nas.id)
+
+    path = resolve_customer_path(db_session, subscription)
+
+    assert path.access_device_kind == "olt"
+    assert path.access_device.id == olt.id
+    assert path.live_session is False
+
+
 def test_multiple_radios_pick_most_recently_synced(
     db_session, subscriber, subscription
 ):

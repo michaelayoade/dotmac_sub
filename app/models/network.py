@@ -341,10 +341,16 @@ class CPEDevice(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
+    # NOT NULL: matches the enforced production schema (the squashed baseline
+    # declares cpe_devices.subscriber_id NOT NULL; migration 026's relax to
+    # nullable never took effect there — the first authenticated uisp_sync run
+    # failed every INSERT with a NotNullViolation). Writers must resolve the
+    # owning subscriber BEFORE creating a row; keeping the model NOT NULL makes
+    # the test schema enforce the same invariant.
+    subscriber_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("subscribers.id", ondelete="SET NULL"),
-        nullable=True,
+        nullable=False,
     )
     service_address_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("addresses.id")
@@ -2351,6 +2357,115 @@ class OntAssignment(Base):
     pon_port = relationship("PonPort", back_populates="ont_assignments")
     subscriber = relationship("Subscriber", back_populates="ont_assignments")
     service_address = relationship("Address")
+
+
+class ForwardingObservation(Base):
+    """A MAC-forwarding observation harvested from network hardware.
+
+    General "hop-1" position -> MAC record: one row per (MAC, position) learned
+    on a device's forwarding table. The Huawei OLT harvester
+    (``app/services/topology/olt_mac_harvest.py``) parses ``display mac-address
+    port <F/S/P>`` and emits one row per learned customer/router MAC, mapping it
+    to the exact PON port (F/S/P) and ONT-ID (the VPI column). This is an
+    ephemeral, periodically-refreshed table (rows are aged out) and the reusable
+    foundation for ONT<->subscriber drift detection today and bridge-mode
+    UF-Nano / wireless linking later. It is read-only toward assignments.
+    """
+
+    __tablename__ = "forwarding_observations"
+    __table_args__ = (
+        # Upsert identity: one row per learned MAC at a given (OLT, ONT-ID)
+        # position. Re-harvesting refreshes observed_at/vlan/pon_port in place.
+        UniqueConstraint(
+            "olt_device_id",
+            "mac",
+            "ont_id_on_olt",
+            name="uq_forwarding_observations_olt_mac_ont",
+        ),
+        Index("ix_forwarding_observations_mac", "mac"),
+        Index("ix_forwarding_observations_observed_at", "observed_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    olt_device_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("olt_devices.id", ondelete="CASCADE")
+    )
+    ont_unit_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ont_units.id", ondelete="SET NULL")
+    )
+    pon_port_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pon_ports.id", ondelete="SET NULL")
+    )
+    # The ONT-ID on the OLT for the learned MAC (the VPI column in Huawei's
+    # ``display mac-address port`` output).
+    ont_id_on_olt: Mapped[int | None] = mapped_column(Integer)
+    # Canonical MAC (uppercase colon-separated, matching subscriptions.mac_address).
+    mac: Mapped[str] = mapped_column(Text, nullable=False)
+    vlan: Mapped[int | None] = mapped_column(Integer)
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    source: Mapped[str] = mapped_column(Text, nullable=False, default="huawei_olt_mac")
+
+
+class OntSignalObservation(Base):
+    """Append-only per-ONT status + Rx snapshot — the splice-inference substrate.
+
+    The OLT sees every ONT's ``olt_status`` and ``onu_rx_signal_dbm``, but the
+    passive splitter's internal sub-split branch/splice is unpollable and the
+    manual ``SplitterPortAssignment`` plant records rot (design §4). This table
+    keeps the TIME SERIES those live ``ont_units`` columns lack: one row per ONT
+    per collection sweep. Splice inference (``app/services/topology/
+    splice_inference.py``, design §6) derives the hidden sub-PON topology from it
+    — ONTs that repeatedly go dark together (co-failure) or droop by the same dB
+    (correlated Rx) share a branch.
+
+    Append-only + periodically pruned (never updated in place); a snapshot is a
+    fact at ``observed_at``. TODO(retention): prune rows older than the inference
+    window (~90d) in the collector task once volume warrants it.
+    """
+
+    __tablename__ = "ont_signal_observations"
+    __table_args__ = (
+        Index(
+            "ix_ont_signal_observations_ont_observed",
+            "ont_unit_id",
+            "observed_at",
+        ),
+        Index(
+            "ix_ont_signal_observations_pon_observed",
+            "pon_port_id",
+            "observed_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    ont_unit_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ont_units.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    olt_device_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("olt_devices.id", ondelete="SET NULL")
+    )
+    pon_port_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pon_ports.id", ondelete="SET NULL")
+    )
+    olt_status: Mapped[OnuOnlineStatus] = mapped_column(
+        Enum(OnuOnlineStatus, name="onuonlinestatus", create_constraint=False),
+        nullable=False,
+    )
+    rx_signal_dbm: Mapped[float | None] = mapped_column(Float)
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        index=True,
+    )
 
 
 class NetworkZone(Base):

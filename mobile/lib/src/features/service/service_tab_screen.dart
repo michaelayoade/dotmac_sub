@@ -127,6 +127,18 @@ class ServiceTabScreen extends ConsumerWidget {
             // scroll past the history charts.
             const LiveBandwidthCard(),
             const SizedBox(height: 16),
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.troubleshoot_outlined),
+                title: const Text('Connection status'),
+                subtitle: const Text(
+                  "See what's wrong and what to do if you're offline",
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => context.push('/connection'),
+              ),
+            ),
+            const SizedBox(height: 16),
             Text(
               'Grow your service',
               style: Theme.of(context).textTheme.titleMedium,

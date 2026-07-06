@@ -741,9 +741,10 @@ def create_crm_credit(
 ) -> dict[str, Any]:
     """Pay a referral reward into a subscriber's VAS wallet (a spendable
     balance) — used by the CRM to pay out referral rewards. Body:
-    ``{subscriber_id, amount, reason?, external_ref?, currency?}``. Idempotent on
-    ``external_ref``. Individual subscribers only (reseller float wallets are
-    never credited here).
+    ``{subscriber_id, amount, external_ref, reason?, currency?}``. ``external_ref``
+    is REQUIRED and is the idempotency key (a repeat call returns the existing
+    entry). Individual subscribers only (reseller float wallets are never
+    credited here).
     """
     errors: dict[str, list[str]] = {}
     subscriber_id = str(payload.get("subscriber_id") or "").strip()
@@ -757,14 +758,19 @@ def create_crm_credit(
     else:
         if amount <= 0:
             errors.setdefault("amount", []).append("Must be greater than 0.")
+    # external_ref is the idempotency key. Required: without it the wallet
+    # entry's unique `reference` is NULL (unconstrained), so a retry/redelivery
+    # would credit real spendable money twice.
+    external_ref = payload.get("external_ref")
+    external_ref = str(external_ref).strip() if external_ref not in (None, "") else None
+    if not external_ref:
+        errors.setdefault("external_ref", []).append("Required (idempotency key).")
     if errors:
         _error(status.HTTP_400_BAD_REQUEST, "Invalid credit payload.", errors)
 
     currency = str(payload.get("currency") or "NGN").strip().upper() or "NGN"
     reason = payload.get("reason")
     reason = str(reason).strip() if reason not in (None, "") else None
-    external_ref = payload.get("external_ref")
-    external_ref = str(external_ref).strip() if external_ref not in (None, "") else None
 
     try:
         entry = crm_api.credit_referral_reward_to_wallet(
@@ -847,5 +853,67 @@ def create_crm_invoice(
             "total": str(invoice.total),
             "status": invoice.status.value,
             "account_id": str(invoice.account_id),
+        }
+    )
+
+
+@router.post(
+    "/subscriptions/{subscription_id}/radio-mac",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_crm_bearer)],
+    tags=["provisioning"],
+)
+def register_subscription_radio_mac(
+    subscription_id: str,
+    payload: dict[str, Any] = Body(default_factory=dict),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Register the customer's wireless-radio MAC at install time.
+
+    Called by the field/mobile app at turn-up so the radio is traceable by
+    construction instead of waiting for the UISP sync's MAC guess. Body:
+    ``{mac_address}``. Idempotent: re-posting the same MAC for the same
+    subscriber returns the existing device with ``created: false``. A MAC
+    already bound to a DIFFERENT subscriber is rejected with 409 and an
+    unmatched-radio ops review item is opened.
+    """
+    from app.services import radio_registration
+
+    mac = payload.get("mac_address") or payload.get("mac")
+    if not str(mac or "").strip():
+        _error(
+            status.HTTP_400_BAD_REQUEST,
+            "Invalid radio MAC payload.",
+            {"mac_address": ["Required."]},
+        )
+    try:
+        result = radio_registration.register_radio_mac(
+            db,
+            subscription_id=subscription_id,
+            mac=str(mac),
+            source=radio_registration.SOURCE_CRM_API,
+        )
+    except LookupError:
+        _error(status.HTTP_404_NOT_FOUND, "Subscription not found.")
+    except radio_registration.InvalidMacError as exc:
+        _error(
+            status.HTTP_400_BAD_REQUEST,
+            "Invalid radio MAC payload.",
+            {"mac_address": [str(exc)]},
+        )
+    except radio_registration.MacConflictError as exc:
+        _error(status.HTTP_409_CONFLICT, str(exc))
+
+    device = result.device
+    return _envelope(
+        {
+            "id": str(device.id),
+            "mac_address": device.mac_address,
+            "device_type": device.device_type.value,
+            "subscriber_id": str(device.subscriber_id),
+            "created": result.created,
+            "subscription_mac_stamped": result.subscription_mac_stamped,
+            "uisp_confirmed": device.uisp_device_id is not None,
+            "warnings": result.warnings,
         }
     )

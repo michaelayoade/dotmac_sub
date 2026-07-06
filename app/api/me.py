@@ -163,6 +163,7 @@ from app.services.bandwidth import (
     bandwidth_samples,
     with_subscriber_directions,
 )
+from app.services.topology import connection_status as connection_status_service
 from app.services.topology import selfcare as topology_selfcare
 
 router = APIRouter(prefix="/me", tags=["me"])
@@ -475,6 +476,44 @@ def my_connection_status(
     ):
         raise HTTPException(status_code=404, detail="Subscription not found")
     return topology_selfcare.customer_connection_status(db, subscription)
+
+
+# Calm, non-alarming fallback when the caller has no resolvable active service
+# (mirrors the portal /connection surface so the two never disagree).
+_NO_SERVICE_CONNECTION_STATUS = {
+    "state": "connected",
+    "headline": "No active service",
+    "message": "We couldn't find an active service on your account to check.",
+    "advice": None,
+    "medium": None,
+    "area_outage": False,
+    "checked_at": None,
+}
+
+
+@router.get("/connection-status")
+def my_connection_status_detail(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> dict:
+    """Richer connection status for the caller's active service (outage
+    classifier P4): the per-customer last-mile verdict with area-outage blame
+    suppression, from ``topology.connection_status``.
+
+    Bearer-auth sibling of the portal ``/portal/connection/status.json`` — same
+    customer-safe payload ``{state, headline, message, advice, medium,
+    area_outage, checked_at}`` (no node names / signal values / internals), so
+    the mobile app can reach the richer surface the cookie-only portal route
+    isn't reachable for. Self-scoped: only ever the caller's own subscription.
+    """
+    _subscriber_id(principal)  # enforce a subscriber principal (403 otherwise)
+    try:
+        subscription = bandwidth_samples.get_user_active_subscription(db, principal)
+    except HTTPException:
+        subscription = None
+    if subscription is None:
+        return dict(_NO_SERVICE_CONNECTION_STATUS)
+    return connection_status_service.connection_status(db, subscription)
 
 
 @router.post(

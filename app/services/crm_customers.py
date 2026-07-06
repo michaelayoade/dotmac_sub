@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import or_
+from sqlalchemy import or_, text
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType
@@ -160,6 +160,28 @@ def _metadata_match_via(metadata: dict[str, Any]) -> str:
     if _text(metadata.get("crm_quote_id")):
         return "crm_quote_id"
     return "crm_metadata"
+
+
+def _lock_crm_person(db: Session, metadata: dict[str, Any]) -> None:
+    """Serialize concurrent customer-create webhooks for one CRM person.
+
+    ``crm_person_id`` is the identity key but lives in ``metadata_`` JSON with no
+    unique constraint, so two webhooks firing near-simultaneously (project
+    created + order confirmed) both see "not found" and both insert — one CRM
+    person becomes two subscribers. A transaction-level advisory lock keyed on
+    the person id makes the second webhook block until the first commits, so it
+    then matches the existing row instead of racing it. No-op off PostgreSQL
+    (SQLite test harness) and when no person id is present.
+    """
+    person_id = _text(metadata.get("crm_person_id"))
+    if not person_id:
+        return
+    if db.get_bind().dialect.name != "postgresql":
+        return
+    db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+        {"key": f"crm_customer:{person_id}"},
+    )
 
 
 def _find_existing_customer(
@@ -363,6 +385,9 @@ def upsert_customer_from_payload(
 ) -> dict[str, Any]:
     metadata = _crm_metadata(payload)
     _, _, display_name = _name_parts(payload)
+    # Take the per-person lock BEFORE the find so a concurrent create for the
+    # same CRM person can't slip between our find and insert (see _lock_crm_person).
+    _lock_crm_person(db, metadata)
     existing, matched_via = _find_existing_customer(db, payload, metadata, display_name)
     logger.info(
         "crm_customer_match_decision action=%s matched_via=%s crm_person_id=%s crm_quote_id=%s crm_sales_order_id=%s subscriber_id=%s",

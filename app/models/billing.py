@@ -209,6 +209,17 @@ class Invoice(Base):
             unique=True,
             postgresql_where=text("is_active AND splynx_invoice_id IS NOT NULL"),
         ),
+        # Idempotency key for CRM-created invoices (installation charges). A
+        # dedicated column, not metadata->>'crm_external_ref', so the partial
+        # unique index is portable to the SQLite test suite. sqlite_where keeps
+        # the predicate (else SQLite would constrain inactive/voided rows too).
+        Index(
+            "uq_invoices_active_crm_external_ref",
+            "crm_external_ref",
+            unique=True,
+            postgresql_where=text("is_active AND crm_external_ref IS NOT NULL"),
+            sqlite_where=text("is_active AND crm_external_ref IS NOT NULL"),
+        ),
         # Backs the per-account billing list (active invoices, newest first)
         # and FK joins on account_id.
         Index(
@@ -250,6 +261,9 @@ class Invoice(Base):
         UUID(as_uuid=True), ForeignKey("subscribers.id")
     )
     splynx_invoice_id: Mapped[int | None] = mapped_column(Integer)
+    # Idempotency key for CRM-created invoices (also mirrored into metadata for
+    # back-compat reads); backs uq_invoices_active_crm_external_ref.
+    crm_external_ref: Mapped[str | None] = mapped_column(String(120))
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSONB)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
@@ -577,6 +591,23 @@ class Payment(Base):
             unique=True,
             postgresql_where=text("is_active AND splynx_payment_id IS NOT NULL"),
         ),
+        # Idempotency backstop for CRM-originated payments. These are recorded
+        # with external_id = "crm:<ref>" and NO provider_id, so they fall outside
+        # uq_payments_active_external_id (which requires provider_id NOT NULL).
+        # A concurrent /crm/payments push could otherwise double-record cash.
+        Index(
+            "uq_payments_active_crm_external_id",
+            "external_id",
+            unique=True,
+            postgresql_where=text(
+                "is_active AND external_id IS NOT NULL AND external_id LIKE 'crm:%'"
+            ),
+            # Keep the predicate partial on SQLite too (tests) so non-CRM
+            # payments sharing an external_id aren't wrongly constrained.
+            sqlite_where=text(
+                "is_active AND external_id IS NOT NULL AND external_id LIKE 'crm:%'"
+            ),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -601,6 +632,12 @@ class Payment(Base):
         UUID(as_uuid=True), ForeignKey("billing_accounts.id")
     )
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
+    # Total refunded so far (sum of refund ledger entries), maintained by the
+    # refund flow. `amount` stays the gross captured figure; net cash =
+    # amount - refunded_amount. Exposed so ERP posts the net after a refund.
+    refunded_amount: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), default=Decimal("0.00"), server_default="0"
+    )
     currency: Mapped[str] = mapped_column(String(3), default="NGN")
     status: Mapped[PaymentStatus] = mapped_column(
         Enum(PaymentStatus), default=PaymentStatus.pending

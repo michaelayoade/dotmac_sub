@@ -9,11 +9,12 @@ a blank panel.
 
 from __future__ import annotations
 
+import logging
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import or_
+from sqlalchemy import case, or_
 from sqlalchemy.orm import Session
 
 from app.models.catalog import NasDevice, Subscription
@@ -36,7 +37,10 @@ from app.models.network_monitoring import (
     NetworkTopologyLink,
     PopSite,
 )
+from app.models.radius_active_session import RadiusActiveSession
 from app.services.topology.lldp_poller import SOURCE as LLDP_SOURCE
+
+logger = logging.getLogger(__name__)
 
 # Max hops to walk toward core (guards against pathological graphs).
 _MAX_UPSTREAM_HOPS = 8
@@ -57,6 +61,10 @@ class CustomerPath:
     pon_port: PonPort | None = None
     access_device: Any | None = None  # OLTDevice | NasDevice | NetworkDevice (AP)
     access_device_kind: str | None = None  # 'olt' | 'nas' | 'ap'
+    # True when the nas arm resolved via a live RadiusActiveSession (where the
+    # customer is connected right now) rather than the static provisioning NAS.
+    # Lets the panel flag a live-session (roaming/failover) trace.
+    live_session: bool = False
     # Wireless customer radio (UISP relationship layer); set on the 'ap' arm.
     radio: CPEDevice | None = None
     node: NetworkDevice | None = None
@@ -297,6 +305,79 @@ def _active_wireless_cpe(
     )
 
 
+def _live_session_nas_device_id(session: Session, subscription: Subscription):
+    """The NAS the subscriber is CONNECTED to right now, per the live RADIUS
+    sessions table, or None when there is no resolvable live session.
+
+    Reads ``radius_active_sessions.nas_device_id`` (a UUID FK) — the reconciler
+    already resolved each live session to a nas_device_id. No raw radacct or
+    inet columns are read here, so there is no psycopg inet/ipaddress type to
+    normalize (framed_ip_address/nas_ip_address are plain String and untouched).
+
+    Roaming/failover mean this can differ from
+    ``subscription.provisioning_nas_device_id`` (the static edge); when it does,
+    the live value is where the customer actually terminates.
+
+    A session explicitly bound to a *different* sibling subscription of the same
+    subscriber is excluded (only this subscription's own session, or a session
+    with no subscription binding, is eligible) — otherwise the known
+    duplicate-login case (subscriber owns subs A and B, the session belongs to
+    A) would report B as live on A's NAS. This mirrors affected.py, which joins
+    strictly on ``subscription_id``. Among eligible sessions, prefers this
+    subscription's own binding, then the freshest, so calls are stable.
+    """
+    if subscription.subscriber_id is None:
+        return None
+    row = (
+        session.query(RadiusActiveSession.nas_device_id)
+        .filter(
+            RadiusActiveSession.subscriber_id == subscription.subscriber_id,
+            RadiusActiveSession.nas_device_id.isnot(None),
+            or_(
+                RadiusActiveSession.subscription_id == subscription.id,
+                RadiusActiveSession.subscription_id.is_(None),
+            ),
+        )
+        .order_by(
+            # Own-binding first (0), everything else — including a NULL-bound
+            # session — after (1). An explicit CASE, not a boolean .desc(): in
+            # Postgres a NULL-bound session's ``subscription_id == id`` is NULL,
+            # which under DESC sorts NULLS FIRST and would let a null-bound
+            # session preempt this subscription's own. This ranks identically to
+            # gaps.py._order_key so the per-sub and batched pickers never diverge.
+            case((RadiusActiveSession.subscription_id == subscription.id, 0), else_=1),
+            RadiusActiveSession.last_update.desc().nullslast(),
+            RadiusActiveSession.session_start.desc(),
+            RadiusActiveSession.id,
+        )
+        .first()
+    )
+    return row[0] if row is not None else None
+
+
+def _resolve_nas_arm(
+    session: Session,
+    subscription: Subscription,
+    nas_device_id,
+    *,
+    live: bool,
+) -> CustomerPath:
+    """Resolve the NAS arm for one NasDevice id into a fresh CustomerPath.
+
+    Reuses the existing NasDevice -> node -> basestation machinery (``_finish``).
+    ``path.gap is None`` iff it resolved to a complete E2E path. ``live`` stamps
+    the ``live_session`` marker so a caller can tell which NAS won.
+    """
+    path = CustomerPath()
+    path.access_device = session.get(NasDevice, nas_device_id)
+    path.access_device_kind = "nas"
+    path.live_session = live
+    if path.access_device is None:
+        path.gap = GAP_NO_ONT
+        return path
+    return _finish(session, path, "nas")
+
+
 def resolve_customer_path(session: Session, subscription: Subscription) -> CustomerPath:
     """Resolve ONT -> access device -> basestation for a subscription."""
     path = CustomerPath()
@@ -331,16 +412,52 @@ def resolve_customer_path(session: Session, subscription: Subscription) -> Custo
         # Parent edge points nowhere (row deleted mid-sync): fall through to
         # the NAS arm rather than dead-ending a resolvable subscriber.
 
-    # Non-fiber: the subscription's provisioning NAS.
-    if subscription.provisioning_nas_device_id is not None:
-        path.access_device = session.get(
-            NasDevice, subscription.provisioning_nas_device_id
+    # Non-fiber: the NAS the customer terminates on. Prefer the LIVE session's
+    # NAS (where they are connected right now) over the static provisioning NAS
+    # — roaming/failover mean the two can differ, and the live one is the truth
+    # for a currently-online customer.
+    #
+    # But the live NAS only wins when it resolves to a COMPLETE path: a
+    # roaming/failover customer can land on a NAS not yet Zabbix-matched (no
+    # topology node), which today the static provisioning NAS still resolves.
+    # So if the live NAS fails to resolve (device row or topology node missing),
+    # fall back to the static provisioning NAS before recording any gap — a live
+    # session must never *regress* a subscription that resolves statically. A
+    # gap is only recorded when BOTH the live and the static NAS fail.
+    live_nas_id = _live_session_nas_device_id(session, subscription)
+    static_nas_id = subscription.provisioning_nas_device_id
+
+    live_path: CustomerPath | None = None
+    if live_nas_id is not None:
+        live_path = _resolve_nas_arm(session, subscription, live_nas_id, live=True)
+        if live_path.gap is None:
+            # Adoption signal: how often live beats the static provisioning NAS.
+            logger.debug(
+                "customer_path: subscription %s resolved via live-session NAS "
+                "%s (provisioning NAS %s)",
+                subscription.id,
+                live_nas_id,
+                static_nas_id,
+            )
+            return live_path
+        logger.debug(
+            "customer_path: subscription %s live-session NAS %s did not resolve "
+            "(gap=%s); falling back to provisioning NAS %s",
+            subscription.id,
+            live_nas_id,
+            live_path.gap,
+            static_nas_id,
         )
-        path.access_device_kind = "nas"
-        if path.access_device is None:
-            path.gap = GAP_NO_ONT
-            return path
-        return _finish(session, path, "nas")
+
+    if static_nas_id is not None:
+        # Static fallback: its outcome is exactly the pre-live behavior, so a
+        # live session can only ever improve, never worsen, the verdict.
+        return _resolve_nas_arm(session, subscription, static_nas_id, live=False)
+
+    if live_path is not None:
+        # The live NAS was the ONLY access device (no provisioning NAS on the
+        # sub): keep its partial result rather than claiming no device at all.
+        return live_path
 
     # No resolvable access device at all.
     path.gap = GAP_NO_ONT

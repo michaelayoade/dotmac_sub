@@ -90,9 +90,14 @@ celery_app.conf.task_routes = {
     "app.tasks.topology_lldp.run_lldp_topology_poll": {"queue": "ingestion"},
     "app.tasks.topology_outage.run_outage_scan": {"queue": "ingestion"},
     "app.tasks.topology_uisp.run_uisp_topology_sync": {"queue": "ingestion"},
+    "app.tasks.topology_ufiber_link.run_ufiber_onu_link": {"queue": "ingestion"},
+    "app.tasks.topology_metrics.export_topology_metrics": {"queue": "ingestion"},
+    "app.tasks.olt_mac_harvest.run_olt_mac_harvest": {"queue": "ingestion"},
+    "app.tasks.ont_signal_observations.record_ont_observations": {"queue": "ingestion"},
     "app.tasks.usage.import_radius_accounting": {"queue": "ingestion"},
     "app.tasks.usage.reap_stale_radius_sessions": {"queue": "ingestion"},
     "app.tasks.radius.reap_radacct_ghosts": {"queue": "ingestion"},
+    "app.tasks.radius.reconcile_active_sessions": {"queue": "ingestion"},
     "app.tasks.usage.meter_usage_into_quota": {"queue": "ingestion"},
     # Safety-net FUP reset runs off the billing queue on purpose, so expired
     # throttle/block enforcement is still lifted when the billing queue stalls.

@@ -12,6 +12,7 @@ from starlette.datastructures import FormData
 
 from app.db import get_db
 from app.services import catalog as catalog_service
+from app.services import radio_registration as radio_registration_service
 from app.services import web_admin as web_admin_service
 from app.services import web_bulk_tariff_change as web_bulk_tariff_change_service
 from app.services import web_catalog_calculator as web_catalog_calculator_service
@@ -616,7 +617,63 @@ def catalog_subscription_detail(
         from app.services.topology.outage import open_incident_for_path
 
         context["known_outage"] = open_incident_for_path(db, network_path)
+    context["registered_radios"] = (
+        radio_registration_service.list_radios_for_subscriber(
+            db, subscription_obj.subscriber_id
+        )
+        if subscription_obj is not None
+        else []
+    )
     return templates.TemplateResponse("admin/catalog/subscription_detail.html", context)
+
+
+@router.post(
+    "/subscriptions/{subscription_id}/register-radio-mac",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
+def catalog_subscription_register_radio_mac(
+    request: Request,
+    subscription_id: str,
+    form: FormData = Depends(parse_form_data),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """Record the customer radio MAC at install time (capture at source)."""
+    base_url = f"/admin/catalog/subscriptions/{subscription_id}"
+    mac = str(form.get("mac_address") or "")
+    try:
+        result = radio_registration_service.register_radio_mac(
+            db,
+            subscription_id=subscription_id,
+            mac=mac,
+            actor_id=_get_actor_id(request),
+            source=radio_registration_service.SOURCE_ADMIN,
+            request=request,
+        )
+    except LookupError:
+        return RedirectResponse(
+            f"{base_url}?error={quote_plus('Subscription not found.')}",
+            status_code=303,
+        )
+    except radio_registration_service.InvalidMacError as exc:
+        return RedirectResponse(
+            f"{base_url}?error={quote_plus(str(exc))}", status_code=303
+        )
+    except radio_registration_service.MacConflictError as exc:
+        return RedirectResponse(
+            f"{base_url}?error={quote_plus(str(exc))}", status_code=303
+        )
+    mac_display = result.device.mac_address
+    if result.created:
+        message = f"Radio MAC {mac_display} registered."
+    else:
+        message = f"Radio MAC {mac_display} was already registered."
+    if result.warnings:
+        message = f"{message} {' '.join(result.warnings)}"
+        return RedirectResponse(
+            f"{base_url}?warning={quote_plus(message)}", status_code=303
+        )
+    return RedirectResponse(f"{base_url}?notice={quote_plus(message)}", status_code=303)
 
 
 @router.post(

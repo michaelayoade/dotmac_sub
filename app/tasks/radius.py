@@ -23,6 +23,35 @@ def reap_radacct_ghosts() -> dict:
         session.close()
 
 
+@celery_app.task(name="app.tasks.radius.reconcile_active_sessions")
+def reconcile_active_sessions(window_seconds: int | None = None) -> dict:
+    """Rebuild the live ``radius_active_sessions`` view from OPEN external
+    radacct sessions (username->login->subscriber, nasip->nas_device), upserting
+    open sessions and pruning ended ones. Discover-reconcile, so it self-heals
+    even though the FreeRADIUS accounting hook that was meant to populate the
+    table is not firing in prod. Read-only against the external radius DB.
+
+    Single-flight via an advisory lock so overlapping beats don't double-run."""
+    from app.services.radius_session_reconcile import (
+        ADVISORY_LOCK_KEY,
+        reconcile_active_sessions_from_radacct,
+    )
+
+    with db_session_adapter.advisory_lock(ADVISORY_LOCK_KEY) as (session, acquired):
+        if not acquired:
+            logger.info(
+                "reconcile_active_sessions skipped: previous run still in progress"
+            )
+            return {"skipped": "already_running"}
+        try:
+            return reconcile_active_sessions_from_radacct(
+                session, window_seconds=window_seconds
+            )
+        except Exception:
+            session.rollback()
+            raise
+
+
 @celery_app.task(name="app.tasks.radius.run_radius_sync_job")
 def run_radius_sync_job(job_id: str) -> dict[str, int]:
     logger.info("Starting run_radius_sync_job for job_id=%s", job_id)

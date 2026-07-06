@@ -687,6 +687,61 @@ def build_beat_schedule() -> dict:
             enabled=radius_reap_enabled,
             interval_seconds=radius_reap_interval_seconds,
         )
+        # Rebuild the live radius_active_sessions view from OPEN external radacct
+        # sessions. The accounting-hook populator isn't firing in prod (the table
+        # starved to 1 row while radacct carries ~893 open sessions), so this
+        # discover-reconcile sweep is the authoritative populator. Gated by the
+        # usage flag; refreshes often (it's a live view). Default-on so the view
+        # actually gets populated.
+        radius_active_session_reconcile_interval_seconds = max(
+            _effective_int(
+                session,
+                SettingDomain.usage,
+                "radius_active_session_reconcile_interval_seconds",
+                "RADIUS_ACTIVE_SESSION_RECONCILE_INTERVAL_SECONDS",
+                120,
+            ),
+            60,
+        )
+        _sync_scheduled_task(
+            session,
+            name="radius_active_session_reconcile",
+            task_name="app.tasks.radius.reconcile_active_sessions",
+            enabled=usage_enabled,
+            interval_seconds=radius_active_session_reconcile_interval_seconds,
+        )
+        # Enforce billing suspensions at the live session (SP-1). A suspend only
+        # writes Auth-Type := Reject, which bites at the *next* re-auth — a stable
+        # PPPoE session survives it, so a suspended/terminated subscriber can stay
+        # online for days (revenue leak). run_enforcement_reconciler CoA-kicks open
+        # sessions whose user has no radcheck row or sits in a reject pool, and
+        # repairs walled-garden radreply drift. It caps kicks per run so systemic
+        # drift degrades to alerts rather than a mass disconnect — hence safe to
+        # run by default. Previously defined but never scheduled.
+        enforcement_reconciler_enabled = _effective_bool(
+            session,
+            SettingDomain.usage,
+            "enforcement_reconciler_enabled",
+            "ENFORCEMENT_RECONCILER_ENABLED",
+            True,
+        )
+        enforcement_reconciler_interval_seconds = max(
+            _effective_int(
+                session,
+                SettingDomain.usage,
+                "enforcement_reconciler_interval_seconds",
+                "ENFORCEMENT_RECONCILER_INTERVAL_SECONDS",
+                600,
+            ),
+            120,
+        )
+        _sync_scheduled_task(
+            session,
+            name="enforcement_reconciler",
+            task_name="app.tasks.radius.run_enforcement_reconciler",
+            enabled=enforcement_reconciler_enabled,
+            interval_seconds=enforcement_reconciler_interval_seconds,
+        )
         # Roll imported RADIUS accounting into quota buckets (feeds FUP/overage).
         # Gated by the same usage flag. This follows the RADIUS accounting
         # cadence instead of the daily usage-rating cadence so FUP decisions
@@ -1558,6 +1613,42 @@ def build_beat_schedule() -> dict:
             task_name="app.tasks.topology_uisp.run_uisp_topology_sync",
             enabled=True,
             interval_seconds=max(topology_uisp_minutes * 60, 300),
+        )
+        # UFiber ONU -> subscriber link: net-new, auth-safe association pass.
+        # Router-mode UF-Wifi ONUs carry the customer router MAC as their own
+        # MAC (from UISP), so a direct MAC match to an ACTIVE subscription
+        # fills the missing ont_assignments link. Never writes the subscription
+        # MAC. Runs after the UISP sync has imported/refreshed the ONUs, so an
+        # hourly default (vs the 15-min importer) is ample.
+        ufiber_onu_link_minutes = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "ufiber_onu_link_interval_minutes",
+            60,
+        )
+        _sync_scheduled_task(
+            session,
+            name="ufiber_onu_link",
+            task_name="app.tasks.topology_ufiber_link.run_ufiber_onu_link",
+            enabled=True,
+            interval_seconds=max(ufiber_onu_link_minutes * 60, 300),
+        )
+        # Topology coverage + pipeline-health metrics export to
+        # VictoriaMetrics (per-medium E2E match-rate, feeder-task staleness).
+        # Default 15 minutes — matches the fastest feeder (topology_uisp_sync),
+        # so every feeder run is reflected without redundant recomputation.
+        topology_metrics_seconds = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "topology_metrics_interval_seconds",
+            900,
+        )
+        _sync_scheduled_task(
+            session,
+            name="topology_metrics_export",
+            task_name="app.tasks.topology_metrics.export_topology_metrics",
+            enabled=True,
+            interval_seconds=max(topology_metrics_seconds, 300),
         )
         dashboard_cache_seconds = _resolve_int(
             session,

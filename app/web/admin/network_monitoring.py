@@ -194,7 +194,9 @@ def outage_impact_page(
     from app.models.network_monitoring import NetworkDevice, PopSite
     from app.services.topology.affected import (
         affected_customers,
+        fdh_impact_branches,
         fdh_impact_rows,
+        impact_breakdown,
         list_basestations,
         list_fdh_cabinets,
         list_network_nodes,
@@ -236,6 +238,7 @@ def outage_impact_page(
         if detailed_rows is not None:
             context["impact_rows"] = detailed_rows
             context["impact_detail_mode"] = "fdh"
+            context["impact_branches"] = fdh_impact_branches(detailed_rows)
         else:
             context["impact_rows"] = [
                 {
@@ -250,6 +253,7 @@ def outage_impact_page(
                 for s in result["subscriptions"]
             ]
             context["impact_detail_mode"] = "basic"
+            context["impact_branches"] = impact_breakdown(db, result)
     return templates.TemplateResponse("admin/network/outage_impact.html", context)
 
 
@@ -367,6 +371,41 @@ def outages_resolve(incident_id: str, request: Request, db: Session = Depends(ge
     except (ValueError, TypeError):
         pass
     return RedirectResponse("/admin/network/outages", status_code=303)
+
+
+@router.get(
+    "/detected-outages",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def detected_outages_console(
+    request: Request,
+    node_id: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """Classifier-driven outage console (design §P4): what is ACTUALLY down now,
+    from the P1/P2/P3 engines — no operator declaration. Optional ``node_id``
+    drills into one failure domain (per-customer P2 verdicts + P3 branch
+    alerts)."""
+    import uuid as _uuid
+
+    from app.services.topology.outage_console import (
+        active_outages,
+        network_health_summary,
+        outage_detail,
+    )
+
+    context = _base_context(request, db, active_page="monitoring")
+    context["summary"] = network_health_summary(db)
+    context["active"] = active_outages(db)
+    detail = None
+    if node_id:
+        try:
+            detail = outage_detail(db, _uuid.UUID(node_id))
+        except (ValueError, TypeError):
+            detail = None
+    context["detail"] = detail
+    return templates.TemplateResponse("admin/network/detected_outages.html", context)
 
 
 @router.get(

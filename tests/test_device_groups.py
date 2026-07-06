@@ -75,11 +75,18 @@ def test_enqueue_ont_group_action_queues_existing_bulk_task(db_session, monkeypa
     assert calls == [([str(ont.id)], "reboot", {"initiated_by": "admin"})]
 
 
-def test_device_group_detail_context_includes_candidates_and_history(db_session):
+def test_device_group_detail_context_includes_candidates_and_history(
+    db_session, subscriber
+):
     group = device_groups.create_device_group(db_session, name="Audit Cohort")
     included = OntUnit(serial_number="DG-INCLUDED", is_active=True)
     candidate = OntUnit(serial_number="DG-CANDIDATE", is_active=True, model="HG8245")
-    cpe = CPEDevice(serial_number="DG-CPE-001", mac_address="00:11:22:33:44:55")
+    # cpe_devices.subscriber_id is NOT NULL (prod parity): CPE rows need owners.
+    cpe = CPEDevice(
+        subscriber_id=subscriber.id,
+        serial_number="DG-CPE-001",
+        mac_address="00:11:22:33:44:55",
+    )
     db_session.add_all([included, candidate, cpe])
     db_session.flush()
     device_groups.add_device_group_member(

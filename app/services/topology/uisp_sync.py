@@ -6,9 +6,22 @@ wireless/UFiber customer layer into sub's own tables:
   - wireless customer radios (airMax stations, airCube/blackBox) -> cpe_devices,
     keyed by ``uisp_device_id``, with the CPE -> AP edge stored as
     ``parent_network_device_id`` (FK to the network_devices row the Zabbix
-    reconcile owns) so customer paths can walk radio -> AP -> basestation;
+    reconcile owns) so customer paths can walk radio -> AP -> basestation.
+    ``cpe_devices.subscriber_id`` is NOT NULL, so creation is MATCH-THEN-CREATE:
+    a new radio only gets a row once its MAC resolves to exactly one subscriber
+    over ACTIVE subscriptions (unmatched/ambiguous radios are counted and
+    retried naturally on later runs). Rows pre-registered at install time
+    (``uisp_device_id`` NULL, subscriber known — see
+    ``app/services/radio_registration.py``) are ADOPTED by normalized MAC
+    before any matching/creation, so the install flow and this sync converge
+    on one row per radio;
   - UF-OLTs -> olt_devices and UFiber ONUs -> ont_units (parent resolved via
-    the ONU's ``attributes.parentId``), both keyed by ``uisp_device_id``.
+    the ONU's ``attributes.parentId``), both keyed by ``uisp_device_id``;
+  - PON-port granularity for the UFiber plant: the generic ``/devices`` list
+    carries no port info, so each imported UF-OLT's ONUs are re-listed via
+    ``/devices/onus?parentId=<olt>`` whose ``onu.port`` is the OLT-side PON
+    port number. Ports are ensured in ``pon_ports`` (match-don't-create by
+    ``(olt_id, port_number)``) and stamped onto ``ont_units.pon_port_id``.
 
 Monitoring/state stays with the Zabbix layer (the co-located UISP->Zabbix
 importer feeds it); this sync only owns *relationships* and identity fill-in.
@@ -25,16 +38,31 @@ import logging
 import re
 from collections import Counter
 from datetime import UTC, datetime
+from difflib import SequenceMatcher
 from uuid import UUID
 
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription, SubscriptionStatus
-from app.models.network import CPEDevice, DeviceType, OLTDevice, OntUnit
-from app.models.network_monitoring import NetworkDevice
+from app.models.network import (
+    CPEDevice,
+    DeviceStatus,
+    DeviceType,
+    OLTDevice,
+    OntUnit,
+    OnuOnlineStatus,
+    PonPort,
+)
+from app.models.network_monitoring import (
+    NetworkDevice,
+    NetworkTopologyLink,
+    TopologyLinkMedium,
+)
+from app.models.subscriber import Subscriber
+from app.services.network.ont_status import apply_olt_status_observation
+from app.services.topology.lldp_poller import _canonical, build_device_index
 from app.services.topology.lldp_poller import _norm as _norm_label
-from app.services.topology.lldp_poller import build_device_index
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +80,13 @@ _STATION_TYPES = {"airCube", "blackBox"}
 _SHARED_DEFAULT_IPS = {"192.168.1.1", "192.168.1.20"}
 
 _MAC_JUNK = re.compile(r"[^0-9a-f]")
+_NAME_JUNK = re.compile(r"[^a-z0-9]+")
+
+# Minimum name corroboration for the secondary IP+name link arm. A unique IP
+# hit alone is NOT trusted (RouterOS PPPoE IPs get reassigned, so a radio's
+# stale recorded mgmt IP can collide with a *different* live customer); the
+# UISP station name must also resemble the matched subscriber's name.
+_IP_NAME_SIM_THRESHOLD = 0.60
 
 
 def _now() -> datetime:
@@ -64,6 +99,46 @@ def _norm_mac(mac: str | None) -> str | None:
         return None
     normalized = _MAC_JUNK.sub("", str(mac).lower())
     return normalized if len(normalized) == 12 else None
+
+
+def _norm_name(value: str | None) -> str:
+    """Lowercase, collapse every non-alphanumeric run to a single space, trim."""
+    if not value:
+        return ""
+    return _NAME_JUNK.sub(" ", str(value).lower()).strip()
+
+
+def _name_similarity(name: str | None, candidates: list[str]) -> float:
+    """Best similarity of ``name`` to any candidate label (0.0–1.0).
+
+    Both signals are computed on the normalized (lowercase, alphanumeric-only)
+    forms and the larger wins, so either a token overlap (word-order-robust,
+    e.g. "Doe John" vs "John Doe") or a close character sequence (typos, glued
+    words) can corroborate:
+
+      - token Jaccard over the whitespace tokens, and
+      - ``SequenceMatcher`` ratio over the space-stripped compact strings.
+
+    Empty on either side scores 0.0 (an absent name never corroborates).
+    """
+    left = _norm_name(name)
+    if not left:
+        return 0.0
+    left_tokens = set(left.split())
+    left_compact = left.replace(" ", "")
+    best = 0.0
+    for candidate in candidates:
+        right = _norm_name(candidate)
+        if not right:
+            continue
+        right_tokens = set(right.split())
+        if left_tokens and right_tokens:
+            jaccard = len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
+        else:
+            jaccard = 0.0
+        ratio = SequenceMatcher(None, left_compact, right.replace(" ", "")).ratio()
+        best = max(best, jaccard, ratio)
+    return best
 
 
 def _ident(device: dict) -> dict:
@@ -100,6 +175,67 @@ def _device_status(device: dict) -> str | None:
     return status[:20] or None
 
 
+_DATA_LINK_SOURCE = "uisp_data_link"
+
+
+def _onu_status(device: dict) -> OnuOnlineStatus | None:
+    """Map a UISP device status string to OnuOnlineStatus; None when absent."""
+    raw = (_device_status(device) or "").lower()
+    if not raw:
+        return None
+    # Offline first: "disconnected" contains "connected", so an online check
+    # must not win on a down radio.
+    if any(token in raw for token in ("offline", "disconnect", "down", "inactive")):
+        return OnuOnlineStatus.offline
+    if any(token in raw for token in ("online", "active", "connected", "running")):
+        return OnuOnlineStatus.online
+    return None
+
+
+def _onu_signal(device: dict) -> float | None:
+    """Best-effort ONU receive signal (dBm) from the UISP overview; None if absent."""
+    overview = device.get("overview")
+    if not isinstance(overview, dict):
+        return None
+    for key in ("signal", "receivePower", "rxPower", "rxSignal"):
+        val = overview.get(key)
+        if isinstance(val, (int, float)) and not isinstance(val, bool):
+            return float(val)
+    return None
+
+
+def _link_endpoint_uisp_id(side: object) -> str | None:
+    """UISP device id of one end of a data-link, tolerating shape variance."""
+    if not isinstance(side, dict):
+        return None
+    device = side.get("device")
+    if not isinstance(device, dict):
+        return None
+    ident = device.get("identification")
+    if not isinstance(ident, dict):
+        return None
+    return str(ident.get("id") or "").strip() or None
+
+
+def _link_is_disabled(link: dict) -> bool:
+    """True only when UISP explicitly marks the link disabled/inactive."""
+    if link.get("enabled") is False:
+        return True
+    state = str(link.get("state") or link.get("status") or "").strip().lower()
+    return state in {"inactive", "disabled", "deleted"}
+
+
+def _link_medium(link: dict) -> TopologyLinkMedium:
+    kind = str(link.get("type") or link.get("medium") or "").strip().lower()
+    if "fiber" in kind or "fibre" in kind or "pon" in kind:
+        return TopologyLinkMedium.fiber
+    if "ethernet" in kind:
+        return TopologyLinkMedium.ethernet
+    if any(token in kind for token in ("wireless", "air", "ptp", "ptmp", "rf")):
+        return TopologyLinkMedium.wireless
+    return TopologyLinkMedium.unknown
+
+
 def _device_site_id(device: dict) -> str | None:
     site = _ident(device).get("site")
     if not isinstance(site, dict):
@@ -123,6 +259,24 @@ def _serial(device: dict) -> str | None:
         if value:
             return value
     return None
+
+
+def _onu_pon_port(device: dict) -> int | None:
+    """OLT-side PON port number from a per-OLT ONU listing entry; None if absent.
+
+    Only the ``/devices/onus?parentId=...`` payload carries the top-level
+    ``onu`` object; its ``port`` is the OLT-side PON port (integer, 1-based).
+    """
+    onu = device.get("onu")
+    if not isinstance(onu, dict):
+        return None
+    port = onu.get("port")
+    if port is None or isinstance(port, bool):
+        return None
+    try:
+        return int(port)
+    except (TypeError, ValueError):
+        return None
 
 
 def _is_station(device: dict) -> bool:
@@ -183,6 +337,54 @@ def _active_subscriber_macs(session: Session) -> dict[str, set]:
         if normalized:
             index.setdefault(normalized, set()).add(subscriber_id)
     return index
+
+
+def _active_subscriber_ips(session: Session) -> dict[str, tuple[UUID, list[str]]]:
+    """Unique ``ipv4_address`` -> (subscriber id, name labels) over ACTIVE subs.
+
+    The secondary IP+name arm keys on the DESIRED served IPv4
+    (``Subscription.ipv4_address``), scoped to ACTIVE subscriptions. Because a
+    stale radio mgmt IP can collide with a *different* live customer, an IP is
+    only usable when it maps to EXACTLY ONE distinct active subscriber: IPs
+    shared across >1 subscriber are dropped here (never surfaced to the caller),
+    as are the factory-default shared addresses. Each retained entry also
+    carries the subscriber's name labels (display name, first+last, company) so
+    the caller can score name corroboration against a single candidate without
+    a second query.
+    """
+    seen: dict[str, set[UUID]] = {}
+    labels: dict[str, list[str]] = {}
+    rows = (
+        session.query(
+            Subscription.ipv4_address,
+            Subscription.subscriber_id,
+            Subscriber.display_name,
+            Subscriber.first_name,
+            Subscriber.last_name,
+            Subscriber.company_name,
+        )
+        .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
+        .filter(
+            Subscription.status == SubscriptionStatus.active,
+            Subscription.ipv4_address.isnot(None),
+        )
+        .all()
+    )
+    for ipv4, subscriber_id, display, first, last, company in rows:
+        ip = str(ipv4 or "").split("/", 1)[0].strip()
+        if not ip or ip in _SHARED_DEFAULT_IPS:
+            continue
+        seen.setdefault(ip, set()).add(subscriber_id)
+        labels[ip] = [
+            label
+            for label in (display, f"{first or ''} {last or ''}", company)
+            if _norm_name(label)
+        ]
+    return {
+        ip: (next(iter(subs)), labels[ip])
+        for ip, subs in seen.items()
+        if len(subs) == 1
+    }
 
 
 def _fill(obj, attr: str, value) -> bool:
@@ -254,16 +456,74 @@ def _blank_stats() -> Counter:
             "updated": 0,
             "unchanged": 0,
             "edges_set": 0,
+            "edges_moved": 0,
             "matched": 0,
+            "matched_by_ip_name": 0,
+            "adopted": 0,
             "ambiguous": 0,
+            "unmatched_no_subscriber": 0,
             "skipped": 0,
             "failed": 0,
             "pruned": 0,
             "excluded_archive": 0,
             "aps_matched": 0,
             "aps_unmatched": 0,
+            "ports_created": 0,
+            "onu_ports_set": 0,
+            "onu_ports_moved": 0,
+            "onu_ports_unchanged": 0,
+            "port_fetch_failures": 0,
+            "links_created": 0,
+            "links_updated": 0,
+            "links_pruned": 0,
+            "links_skipped": 0,
+            "link_fetch_failures": 0,
         }
     )
+
+
+def _note_edge_move(
+    session: Session,
+    cpe: CPEDevice,
+    station: dict,
+    new_node: NetworkDevice,
+    stats: Counter,
+) -> None:
+    """Breadcrumb for a silent auto-heal: radio re-parented from one AP to another.
+
+    The sync corrects ``parent_network_device_id`` whenever UISP observes the
+    radio on a different AP — correct behavior (UISP is observed truth), but
+    otherwise completely silent. These ``logger.info`` lines flow to Loki and
+    are the only post-mortem history of when a customer's upstream path moved
+    (e.g. "why did this street's outage blast-radius change overnight?").
+    First-time parenting (old parent NULL) is a fill, not a move: no log, no
+    ``edges_moved`` count — ``edges_set`` alone covers it.
+    """
+    old_id = cpe.parent_network_device_id
+    if old_id is None or old_id == new_node.id:
+        return
+    old_node = session.get(NetworkDevice, old_id)
+    old_name = old_node.name if old_node is not None else None
+    logger.info(
+        "uisp_sync_edge_moved device=%s uisp_id=%s old_parent=%s old_parent_id=%s "
+        "new_parent=%s new_parent_id=%s",
+        _device_name(station),
+        cpe.uisp_device_id,
+        old_name,
+        old_id,
+        new_node.name,
+        new_node.id,
+        extra={
+            "event": "uisp_sync_edge_moved",
+            "device_name": _device_name(station),
+            "uisp_device_id": cpe.uisp_device_id,
+            "old_parent_id": str(old_id),
+            "old_parent_name": old_name,
+            "new_parent_id": str(new_node.id),
+            "new_parent_name": new_node.name,
+        },
+    )
+    stats["edges_moved"] += 1
 
 
 def _station_parent_ap_id(station: dict) -> str | None:
@@ -307,28 +567,160 @@ def _ap_side_station_index(
     return by_station_id, by_station_mac
 
 
+def _adoption_candidates(session: Session, mac: str | None) -> list[CPEDevice]:
+    """Pre-registered install-time cpe rows adoptable by a station's MAC.
+
+    The install-time capture flow (``radio_registration.register_radio_mac``,
+    PR #807) creates cpe rows with the subscriber known and ``uisp_device_id``
+    NULL, expecting this sync to ADOPT the row once UISP first reports the
+    radio. Safety scope: wireless radios only, never a row already bound to a
+    (different) UISP device, never a retired tombstone (the hourly
+    unmatched-radio review retires superseded placeholders). MAC comparison
+    is on the normalized bare-hex form — stored values may be canonical
+    colon-separated or free-form legacy.
+    """
+    if not mac:
+        return []
+    rows = (
+        session.query(CPEDevice)
+        .filter(
+            CPEDevice.uisp_device_id.is_(None),
+            CPEDevice.device_type == DeviceType.wireless_radio,
+            CPEDevice.status != DeviceStatus.retired,
+            CPEDevice.mac_address.isnot(None),
+        )
+        .all()
+    )
+    return [row for row in rows if _norm_mac(row.mac_address) == mac]
+
+
+def _match_by_ip_name(
+    station: dict, ip_index: dict[str, tuple[UUID, list[str]]]
+) -> tuple[UUID, str, float] | None:
+    """Corroborated bridge-mode match: (subscriber id, ip, score) or None.
+
+    The station's UISP mgmt IP must UNIQUELY equal one ACTIVE subscription's
+    ``ipv4_address`` (``ip_index`` already holds only unique, non-default IPs),
+    AND the UISP station name must resemble that subscriber's name at
+    ``>= _IP_NAME_SIM_THRESHOLD``. Name similarity is scored for at most the one
+    candidate the unique IP resolves to — never an all-pairs scan. Returns None
+    (skip) unless both signals hold.
+    """
+    ip = _mgmt_ip(station)
+    if not ip or ip in _SHARED_DEFAULT_IPS:
+        return None
+    entry = ip_index.get(ip)
+    if entry is None:
+        return None
+    subscriber_id, labels = entry
+    score = _name_similarity(_device_name(station), labels)
+    if score < _IP_NAME_SIM_THRESHOLD:
+        return None
+    return subscriber_id, ip, score
+
+
 def _upsert_station(
     session: Session,
     station: dict,
+    mac_index: dict[str, set],
+    ip_index: dict[str, tuple[UUID, list[str]]],
     now: datetime,
     stats: Counter,
-) -> tuple[CPEDevice, bool]:
-    """Upsert one wireless customer radio into cpe_devices by uisp_device_id."""
+) -> tuple[CPEDevice | None, bool]:
+    """Upsert one wireless customer radio into cpe_devices by uisp_device_id.
+
+    ADOPT-THEN-MATCH-THEN-CREATE: ``cpe_devices.subscriber_id`` is NOT NULL
+    in the production schema, so a new row may only be created once its owner
+    is known.
+
+    1. ADOPT (install-time contract, PR #807): the field flow pre-registers a
+       radio at turn-up as a cpe row with ``subscriber_id`` set and
+       ``uisp_device_id`` NULL. When the uisp-id lookup misses, a single such
+       row whose normalized MAC equals the station's is adopted in place —
+       ``uisp_device_id`` stamped, ``subscriber_id`` never touched, counted
+       as ``adopted`` — instead of creating a duplicate. Multiple candidates
+       for one MAC are genuinely ambiguous: nothing is adopted or created
+       (``ambiguous``), because inventing a third row would compound the
+       duplication.
+    2. MATCH-THEN-CREATE by MAC (unchanged): a new station's own MAC is
+       resolved against ACTIVE subscriptions (exact match, exactly one distinct
+       subscriber). An ambiguous MAC (>1 subscriber) creates nothing.
+    3. SECONDARY: corroborated IP+name (bridge-mode radios). Reached ONLY when
+       the MAC arm found no subscriber — bridge-mode stations authenticate with
+       the *customer router's* MAC (held in ``subscription.mac_address``), so
+       the radio's own MAC never matches a subscription and arm 2 always misses
+       for them. A row is created for the subscriber whose ACTIVE
+       ``ipv4_address`` UNIQUELY equals the station's UISP mgmt IP AND whose
+       name resembles the station name (``>= _IP_NAME_SIM_THRESHOLD``). IP alone
+       is not trusted (reassigned PPPoE IPs collide with other live customers),
+       so both signals must agree. ``subscription.mac_address`` is NEVER read or
+       written by this arm — overwriting it would risk breaking RADIUS auth.
+
+    A station whose MAC matched in arm 2 never reaches arm 3 (no double count).
+    Existing rows keep updating as before and their ``subscriber_id`` is
+    never touched.
+    """
     uisp_id = _device_id(station)
     cpe = (
         session.query(CPEDevice)
         .filter(CPEDevice.uisp_device_id == uisp_id)
         .one_or_none()
     )
-    created = cpe is None
+    created = False
+    adopted = False
     changed = False
     if cpe is None:
+        mac = _norm_mac(_ident(station).get("mac"))
+        candidates = _adoption_candidates(session, mac)
+        if len(candidates) > 1:
+            logger.warning(
+                "uisp_sync_adoption_ambiguous uisp_id=%s mac=%s candidates=%d",
+                uisp_id,
+                mac,
+                len(candidates),
+            )
+            stats["ambiguous"] += 1
+            return None, False
+        if candidates:
+            cpe = candidates[0]
+            cpe.uisp_device_id = uisp_id
+            adopted = True
+            changed = True
+            stats["adopted"] += 1
+    if cpe is None:
+        subscribers = mac_index.get(mac or "", set())
+        if len(subscribers) > 1:
+            stats["ambiguous"] += 1
+            return None, False
+        if len(subscribers) == 1:
+            created = True
+            cpe = CPEDevice(
+                uisp_device_id=uisp_id,
+                subscriber_id=next(iter(subscribers)),
+                device_type=DeviceType.wireless_radio,
+                vendor="ubiquiti",
+            )
+            session.add(cpe)
+            stats["matched"] += 1
+    if cpe is None:
+        # SECONDARY ARM — the MAC found no subscriber (typical for bridge-mode
+        # radios, whose subscription authenticates on the customer router MAC).
+        # Corroborated IP+name only: a unique ACTIVE ipv4 hit AND a name match.
+        ip_match = _match_by_ip_name(station, ip_index)
+        if ip_match is None:
+            stats["unmatched_no_subscriber"] += 1
+            return None, False
+        subscriber_id, ip, score = ip_match
+        created = True
         cpe = CPEDevice(
             uisp_device_id=uisp_id,
+            subscriber_id=subscriber_id,
             device_type=DeviceType.wireless_radio,
             vendor="ubiquiti",
+            notes=f"linked via UISP ip+name {ip} sim={score:.2f}",
         )
         session.add(cpe)
+        stats["matched_by_ip_name"] += 1
 
     ident = _ident(station)
     changed |= _fill(cpe, "mac_address", ident.get("mac"))
@@ -349,6 +741,9 @@ def _upsert_station(
     session.flush()
     if created:
         stats["created"] += 1
+    elif adopted:
+        # Already counted as ``adopted``; not an update of a synced row.
+        pass
     elif changed:
         stats["updated"] += 1
     else:
@@ -385,7 +780,22 @@ def _upsert_olt(
     created = olt is None
     changed = False
     if olt is None:
-        olt = OLTDevice(name=name or f"uisp-{uisp_id[:8]}", vendor="ubiquiti")
+        # is_active=False: ``ck_olt_devices_config_pack_required`` (see
+        # migration 154) demands a populated provisioning config_pack
+        # (internet/management VLANs + TR-069 profile) for ACTIVE OLTs, and a
+        # UF-OLT imported from UISP has none — it is a monitoring/topology
+        # object, not a provisioning target. Inactive placeholder rows are the
+        # combination the constraint exempts; the topology read-side
+        # (customer_path/affected/gaps/crm_api) resolves OLTs by primary key
+        # with no is_active filter, so UF-OLTs stay fully traceable. An
+        # operator activating one later must supply a config pack — exactly
+        # the governance the constraint encodes. Pre-existing matched rows are
+        # never flipped.
+        olt = OLTDevice(
+            name=name or f"uisp-{uisp_id[:8]}",
+            vendor="ubiquiti",
+            is_active=False,
+        )
         session.add(olt)
 
     ident = _ident(device)
@@ -455,7 +865,8 @@ def _upsert_onu(
     created = ont is None
     changed = False
     if ont is None:
-        # pon_port stays NULL: the UISP list payload has no port granularity.
+        # pon_port_id is stamped separately from the per-OLT ONU listings
+        # (the generic /devices list payload has no port granularity).
         ont = OntUnit(serial_number=serial, olt_device_id=olt_id, vendor="ubiquiti")
         session.add(ont)
     elif ont.olt_device_id is None:
@@ -479,6 +890,23 @@ def _upsert_onu(
     ont.last_sync_source = "uisp"
     ont.last_sync_at = now
 
+    # Live telemetry UISP owns for UF-OLT ONUs (Huawei ONTs get theirs from
+    # SNMP — different rows). Applied only when UISP actually reports a status,
+    # so a missing field never blanks a known value. olt_status is a
+    # status-owner field: it MUST go through the sanctioned setter (it also
+    # stamps olt_status_seen_at / last_seen_at / offline_reason), never a
+    # direct assignment here. Signal is not status-owned, so it's set inline.
+    status = _onu_status(device)
+    if status is not None and (
+        ont.olt_status != status or ont.olt_status_seen_at is None
+    ):
+        apply_olt_status_observation(ont, status, now=now)
+        changed = True
+    signal = _onu_signal(device)
+    if signal is not None and ont.onu_rx_signal_dbm != signal:
+        ont.onu_rx_signal_dbm = signal
+        changed = True
+
     session.flush()
     if created:
         stats["created"] += 1
@@ -487,6 +915,256 @@ def _upsert_onu(
     else:
         stats["unchanged"] += 1
     return ont
+
+
+def _onu_parent_olt_id(device: dict, olt_ids_by_uisp: dict[str, UUID]) -> UUID | None:
+    parent_uisp_id = str(_attributes(device).get("parentId") or "").strip()
+    return olt_ids_by_uisp.get(parent_uisp_id)
+
+
+def _collect_onu_ports(
+    client, olt_ids_by_uisp: dict[str, UUID], stats: Counter
+) -> dict[str, int]:
+    """ONU uisp id -> OLT-side PON port, from one per-OLT listing per UF-OLT.
+
+    A single OLT's listing failing is logged and counted
+    (``port_fetch_failures``) but never aborts the run: the affected ONUs
+    simply keep their current ``pon_port_id``.
+    """
+    ports: dict[str, int] = {}
+    for olt_uisp_id in olt_ids_by_uisp:
+        try:
+            entries = client.list_olt_onus(olt_uisp_id)
+        except Exception as exc:  # one OLT failing must not abort the run
+            stats["port_fetch_failures"] += 1
+            logger.warning("uisp_olt_onu_list_failed olt=%s: %s", olt_uisp_id, exc)
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            onu_uisp_id = _device_id(entry)
+            port = _onu_pon_port(entry)
+            if onu_uisp_id and port is not None:
+                ports.setdefault(onu_uisp_id, port)
+    return ports
+
+
+def _ensure_pon_ports(
+    session: Session,
+    onus: list[dict],
+    olt_ids_by_uisp: dict[str, UUID],
+    onu_ports_by_uisp: dict[str, int],
+    stats: Counter,
+) -> dict[tuple[UUID, int], UUID]:
+    """Ensure a pon_ports row per (UF-OLT, port) the listings observed.
+
+    Match-don't-create by ``(olt_id, port_number)`` first (whatever its name),
+    then by the name this sync would mint (covers legacy rows whose
+    ``port_number`` is NULL — filled in, never overwritten). Only ports under
+    UISP-managed OLTs (the ones this run imported/matched) are ever touched.
+    """
+    needed: set[tuple[UUID, int]] = set()
+    for device in onus:
+        port_number = onu_ports_by_uisp.get(_device_id(device))
+        if port_number is None:
+            continue
+        olt_pk = _onu_parent_olt_id(device, olt_ids_by_uisp)
+        if olt_pk is not None:
+            needed.add((olt_pk, port_number))
+
+    port_ids: dict[tuple[UUID, int], UUID] = {}
+    for olt_pk, port_number in sorted(needed, key=lambda k: (str(k[0]), k[1])):
+        try:
+            with session.begin_nested():
+                port = (
+                    session.query(PonPort)
+                    .filter(
+                        PonPort.olt_id == olt_pk,
+                        PonPort.port_number == port_number,
+                    )
+                    .order_by(PonPort.name)
+                    .first()
+                )
+                if port is None:
+                    name = f"pon{port_number}"
+                    port = (
+                        session.query(PonPort)
+                        .filter(PonPort.olt_id == olt_pk, PonPort.name == name)
+                        .one_or_none()
+                    )
+                    if port is None:
+                        port = PonPort(
+                            olt_id=olt_pk,
+                            name=name,
+                            port_number=port_number,
+                            is_active=True,
+                            notes=f"Created by UISP topology sync ({SOURCE}).",
+                        )
+                        session.add(port)
+                        stats["ports_created"] += 1
+                    else:
+                        _fill(port, "port_number", port_number)
+                session.flush()
+                port_ids[(olt_pk, port_number)] = port.id
+        except Exception:
+            stats["failed"] += 1
+            logger.exception(
+                "uisp_sync_pon_port_failed olt=%s port=%s", olt_pk, port_number
+            )
+    return port_ids
+
+
+def _apply_onu_pon_port(
+    session: Session,
+    ont: OntUnit,
+    device: dict,
+    olt_ids_by_uisp: dict[str, UUID],
+    onu_ports_by_uisp: dict[str, int],
+    pon_port_ids: dict[tuple[UUID, int], UUID],
+    stats: Counter,
+) -> None:
+    """Point one UFiber ONU at its observed PON port (UISP is observed truth).
+
+    Fill-if-NULL *and* move-on-change: the OLT reports where the ONU is
+    physically registered, so a differing ``pon_port_id`` is drift and is
+    corrected. Strictly scoped to ONUs whose resolved parent is a UISP-managed
+    OLT from this run; an ONT row whose ``olt_device_id`` points elsewhere
+    (e.g. a Huawei OLT) is never touched. Missing port info leaves the field
+    as-is.
+
+    A move (existing non-NULL port -> different port) is an otherwise-silent
+    auto-heal, so it leaves a breadcrumb: the ``logger.info`` line below flows
+    to Loki and is the only post-mortem history of re-splices/port drift.
+    First-time stamping (old port NULL) is a fill, not a move: no log, no
+    ``onu_ports_moved`` count — ``onu_ports_set`` alone covers it.
+    """
+    port_number = onu_ports_by_uisp.get(_device_id(device))
+    if port_number is None:
+        return
+    olt_pk = _onu_parent_olt_id(device, olt_ids_by_uisp)
+    if olt_pk is None or ont.olt_device_id != olt_pk:
+        return
+    port_id = pon_port_ids.get((olt_pk, port_number))
+    if port_id is None:
+        return
+    if ont.pon_port_id != port_id:
+        old_port_id = ont.pon_port_id
+        if old_port_id is not None:
+            old_port = session.get(PonPort, old_port_id)
+            old_port_name = old_port.name if old_port is not None else None
+            logger.info(
+                "uisp_sync_onu_pon_port_moved onu=%s uisp_id=%s old_port=%s "
+                "old_port_id=%s new_port=%s new_port_id=%s",
+                ont.name or ont.serial_number,
+                ont.uisp_device_id,
+                old_port_name,
+                old_port_id,
+                f"pon{port_number}",
+                port_id,
+                extra={
+                    "event": "uisp_sync_onu_pon_port_moved",
+                    "device_name": ont.name or ont.serial_number,
+                    "uisp_device_id": ont.uisp_device_id,
+                    "old_port_id": str(old_port_id),
+                    "old_port_name": old_port_name,
+                    "new_port_id": str(port_id),
+                    "new_port_number": port_number,
+                },
+            )
+            stats["onu_ports_moved"] += 1
+        ont.pon_port_id = port_id
+        stats["onu_ports_set"] += 1
+    else:
+        stats["onu_ports_unchanged"] += 1
+
+
+def _import_data_links(session: Session, client, now: datetime, stats: Counter) -> None:
+    """Import active UISP data-links into ``NetworkTopologyLink`` (backhaul).
+
+    Owns ``source='uisp_data_link'`` rows only (upsert + soft-prune), mirroring
+    the LLDP poller. A link is kept only when BOTH endpoints resolve to a
+    ``network_devices`` row by stamped ``uisp_device_id`` — client stations
+    (``cpe_devices``) never carry a network-device uisp id, so customer links
+    are excluded structurally. Endpoint/shape variance is tolerated per link
+    (a malformed link is skipped, never fatal); UISP unreachable is counted and
+    leaves existing links untouched.
+    """
+    node_by_uisp: dict[str, UUID] = {
+        uid: nid
+        for uid, nid in session.query(
+            NetworkDevice.uisp_device_id, NetworkDevice.id
+        ).filter(NetworkDevice.uisp_device_id.isnot(None))
+    }
+    try:
+        links = client.list_data_links()
+    except Exception as exc:  # UISP unreachable must not abort the sync
+        stats["link_fetch_failures"] += 1
+        logger.warning("uisp_data_links_fetch_failed: %s", exc)
+        return
+
+    edges: dict[tuple[UUID, UUID], TopologyLinkMedium] = {}
+    for link in links:
+        if not isinstance(link, dict):
+            continue
+        if _link_is_disabled(link):
+            stats["links_skipped"] += 1
+            continue
+        a = _link_endpoint_uisp_id(link.get("from"))
+        b = _link_endpoint_uisp_id(link.get("to"))
+        na = node_by_uisp.get(a) if a else None
+        nb = node_by_uisp.get(b) if b else None
+        if na is None or nb is None or na == nb:
+            stats["links_skipped"] += 1
+            continue
+        key = _canonical(na, nb)
+        if key not in edges:
+            edges[key] = _link_medium(link)
+
+    for key, medium in edges.items():
+        existing = (
+            session.query(NetworkTopologyLink)
+            .filter(
+                NetworkTopologyLink.source == _DATA_LINK_SOURCE,
+                NetworkTopologyLink.source_device_id == key[0],
+                NetworkTopologyLink.target_device_id == key[1],
+                NetworkTopologyLink.source_interface_id.is_(None),
+                NetworkTopologyLink.target_interface_id.is_(None),
+            )
+            .first()
+        )
+        if existing is None:
+            session.add(
+                NetworkTopologyLink(
+                    source_device_id=key[0],
+                    target_device_id=key[1],
+                    source=_DATA_LINK_SOURCE,
+                    medium=medium,
+                    is_active=True,
+                    discovered_at=now,
+                    last_seen_at=now,
+                )
+            )
+            stats["links_created"] += 1
+        else:
+            existing.medium = medium
+            existing.is_active = True
+            existing.last_seen_at = now
+            stats["links_updated"] += 1
+    session.flush()
+
+    for link_row in (
+        session.query(NetworkTopologyLink)
+        .filter(
+            NetworkTopologyLink.source == _DATA_LINK_SOURCE,
+            NetworkTopologyLink.is_active.is_(True),
+        )
+        .all()
+    ):
+        pair = _canonical(link_row.source_device_id, link_row.target_device_id)
+        if pair not in edges:
+            link_row.is_active = False
+            stats["links_pruned"] += 1
+    session.flush()
 
 
 def sync(session: Session, client, now: datetime | None = None) -> dict:
@@ -543,7 +1221,15 @@ def sync(session: Session, client, now: datetime | None = None) -> dict:
             client, aps, ap_nodes
         )
 
-    created_cpes: list[CPEDevice] = []
+    # Subscriber matching moved BEFORE creation (match-then-create):
+    # cpe_devices.subscriber_id is NOT NULL, so the owner must be resolved
+    # before any INSERT is attempted.
+    mac_index = _active_subscriber_macs(session) if stations else {}
+    # Secondary IP+name arm index (unique ACTIVE ipv4 -> subscriber + names),
+    # built once per run like the MAC index. Reads ipv4_address only — the
+    # subscription MAC is never touched by the IP+name path.
+    ip_index = _active_subscriber_ips(session) if stations else {}
+
     # Seen = what UISP *reports*, taken from the raw inventory BEFORE the
     # upsert loop: a device whose upsert fails transiently is still present
     # in UISP and must not be soft-pruned to 'vanished'.
@@ -557,7 +1243,13 @@ def sync(session: Session, client, now: datetime | None = None) -> dict:
             # SAVEPOINT per item (the zabbix_host_sync idiom): a flush failure
             # rolls back only this device, not the surrounding transaction.
             with session.begin_nested():
-                cpe, created = _upsert_station(session, station, now, stats)
+                cpe, _created = _upsert_station(
+                    session, station, mac_index, ip_index, now, stats
+                )
+                if cpe is None:
+                    # No confirmed subscriber match: nothing was created and
+                    # the counters already say why.
+                    continue
                 parent_ap_id = (
                     _station_parent_ap_id(station)
                     or ap_by_station_id.get(uisp_id)
@@ -567,6 +1259,7 @@ def sync(session: Session, client, now: datetime | None = None) -> dict:
                 )
                 node = ap_nodes.get(parent_ap_id) if parent_ap_id else None
                 if node is not None and cpe.parent_network_device_id != node.id:
+                    _note_edge_move(session, cpe, station, node, stats)
                     cpe.parent_network_device_id = node.id
                     stats["edges_set"] += 1
                 session.flush()
@@ -574,21 +1267,6 @@ def sync(session: Session, client, now: datetime | None = None) -> dict:
             stats["failed"] += 1
             logger.exception("uisp_sync_station_failed uisp_id=%s", uisp_id)
             continue
-        if created:
-            created_cpes.append(cpe)
-
-    # --- Subscriber matching: NEWLY CREATED radios only, exact MAC ---
-    if created_cpes:
-        mac_index = _active_subscriber_macs(session)
-        for cpe in created_cpes:
-            normalized = _norm_mac(cpe.mac_address)
-            subscribers = mac_index.get(normalized or "", set())
-            if len(subscribers) == 1:
-                cpe.subscriber_id = next(iter(subscribers))
-                stats["matched"] += 1
-            elif len(subscribers) > 1:
-                stats["ambiguous"] += 1
-        session.flush()
 
     # --- UF-OLTs -> olt_devices ---
     olt_ids_by_uisp: dict[str, UUID] = {}
@@ -603,12 +1281,31 @@ def sync(session: Session, client, now: datetime | None = None) -> dict:
         if olt is not None:
             olt_ids_by_uisp[_device_id(device)] = olt.id
 
+    # --- PON-port granularity: per-OLT ONU listings (onu.port) ---
+    onu_ports_by_uisp = _collect_onu_ports(client, olt_ids_by_uisp, stats)
+    pon_port_ids = _ensure_pon_ports(
+        session, onus, olt_ids_by_uisp, onu_ports_by_uisp, stats
+    )
+
     # --- UFiber ONUs -> ont_units ---
     seen_onu_keys: set[tuple] = set()
     for device in onus:
         try:
             with session.begin_nested():
-                _upsert_onu(session, device, olt_ids_by_uisp, seen_onu_keys, now, stats)
+                ont = _upsert_onu(
+                    session, device, olt_ids_by_uisp, seen_onu_keys, now, stats
+                )
+                if ont is not None:
+                    _apply_onu_pon_port(
+                        session,
+                        ont,
+                        device,
+                        olt_ids_by_uisp,
+                        onu_ports_by_uisp,
+                        pon_port_ids,
+                        stats,
+                    )
+                    session.flush()
         except Exception:
             stats["failed"] += 1
             logger.exception("uisp_sync_onu_failed uisp_id=%s", _device_id(device))
@@ -633,6 +1330,9 @@ def sync(session: Session, client, now: datetime | None = None) -> dict:
             cpe.uisp_synced_at = now
             stats["pruned"] += 1
     session.flush()
+
+    # --- Backhaul topology: UISP data-links -> NetworkTopologyLink ---
+    _import_data_links(session, client, now, stats)
 
     result = dict(stats)
     log_extra = {"event": "uisp_topology_sync_complete"}

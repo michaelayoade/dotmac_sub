@@ -40,6 +40,7 @@ import '../features/reseller/reseller_revenue_screen.dart';
 import '../features/reseller/reseller_service_requests_screen.dart';
 import '../features/service/add_ons_screen.dart';
 import '../features/service/change_plan_screen.dart';
+import '../features/service/connection_status_screen.dart';
 import '../features/service/data_bundle_screen.dart';
 import '../features/service/quote_request_screen.dart';
 import '../features/service/quotes_screen.dart';
@@ -154,6 +155,12 @@ final routerProvider = Provider<GoRouter>((ref) {
             TopUpScreen(saveCardInitial: state.extra == true),
       ),
       GoRoute(path: '/wallet', builder: (_, __) => const WalletScreen()),
+      // Connection troubleshooter (outage classifier P4) — reached from the
+      // slim Home banner and the Service tab; a drill-in that keeps the shell.
+      GoRoute(
+        path: '/connection',
+        builder: (_, __) => const ConnectionStatusScreen(),
+      ),
       // Live technician tracking for an in-progress visit — a full-screen map
       // on its own, reached from the Home visit banner or Help → Visits (kept
       // off the dashboard so Home stays calm).

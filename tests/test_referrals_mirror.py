@@ -258,3 +258,38 @@ def test_webhook_incomplete_ignored(db_session):
         db_session, "referral.captured", {"referral_id": "rX"}
     )
     assert out["reason"] == "incomplete_payload"
+
+
+def test_stale_read_serves_stale_and_refreshes_async(db_session):
+    """A warm-but-stale referral read serves the mirror immediately and refreshes
+    in the background instead of blocking on the CRM (P3-sub, cache variant)."""
+    from datetime import timedelta
+
+    sub = _subscriber(db_session, crm_id=uuid.uuid4())
+    cache = _fresh_cache(db_session, sub)
+    cache.synced_at = datetime.now(UTC) - timedelta(hours=1)  # make it stale
+    db_session.add(
+        ReferralMirror(
+            crm_referral_id="r-stale",
+            subscriber_id=sub.id,
+            referred_name="Old",
+            status="pending",
+        )
+    )
+    db_session.commit()
+
+    enqueued: list = []
+    with (
+        patch("app.services.referrals_mirror.reconcile_subscriber") as recon,
+        patch(
+            "app.services.queue_adapter.enqueue_task",
+            side_effect=lambda *a, **k: enqueued.append((a, k)),
+        ),
+    ):
+        out = referrals_mirror.read_for_subscriber(db_session, str(sub.id))
+
+    recon.assert_not_called()  # did NOT block on the CRM
+    assert len(enqueued) == 1  # enqueued a background refresh
+    assert out["totals"]["total"] == 1  # served the stale row immediately
+    st = db_session.get(ReferralProgramCache, sub.id)
+    assert (datetime.now(UTC) - st.synced_at.replace(tzinfo=UTC)).total_seconds() < 60
