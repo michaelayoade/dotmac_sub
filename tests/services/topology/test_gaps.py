@@ -142,3 +142,117 @@ def test_wireless_subscriber_ap_without_basestation_is_gap_no_basestation(
 
     assert gaps.subscription_gap_count == 1
     assert gaps.subscription_gaps[0]["gap"] == "no_basestation"
+
+
+# --- Live-session arm: batched classifier stays in sync with resolve_customer_path ---
+
+
+def _nas_node(db, nas_id, pop_id, hostid):
+    db.add(
+        NetworkDevice(
+            name=f"nas-node-{hostid}",
+            source="zabbix_reconcile",
+            matched_device_type="nas",
+            matched_device_id=nas_id,
+            pop_site_id=pop_id,
+            zabbix_hostid=hostid,
+        )
+    )
+    db.flush()
+
+
+def _live_session(db, subscription, nas_device_id):
+    from datetime import UTC, datetime
+
+    from app.models.radius_active_session import RadiusActiveSession
+
+    ras = RadiusActiveSession(
+        subscriber_id=subscription.subscriber_id,
+        subscription_id=subscription.id,
+        nas_device_id=nas_device_id,
+        username="u",
+        acct_session_id=uuid.uuid4().hex,
+        session_start=datetime.now(UTC),
+    )
+    db.add(ras)
+    db.flush()
+    return ras
+
+
+def test_live_session_only_subscriber_is_not_a_gap(
+    db_session, subscriber, catalog_offer
+):
+    # A sub with NO provisioning NAS, resolvable ONLY via a live session, must
+    # count as resolved in the batched classifier (mirrors resolve_customer_path
+    # now resolving it via the live NAS).
+    from app.models.catalog import NasDevice
+    from app.services.topology.gaps import classify_active_subscriptions
+
+    nas = NasDevice(name="NAS-Live-Gaps", management_ip="10.0.11.1")
+    pop = PopSite(name="Live Gaps Site", zabbix_group_id="50")
+    db_session.add_all([nas, pop])
+    db_session.flush()
+    _nas_node(db_session, nas.id, pop.id, "501")
+    sub = _sub(subscriber.id, catalog_offer.id)  # provisioning_nas is None
+    db_session.add(sub)
+    db_session.flush()
+    _live_session(db_session, sub, nas.id)
+
+    rows = {r["id"]: r for r in classify_active_subscriptions(db_session)}
+    assert rows[sub.id]["gap"] is None
+    assert rows[sub.id]["medium"] == "nas"
+
+
+def test_no_session_nas_subscriber_unchanged(db_session, subscriber, catalog_offer):
+    # Behavior for a NAS sub with no live session is unchanged: it still
+    # resolves via the static provisioning NAS.
+    from app.models.catalog import NasDevice
+    from app.services.topology.gaps import classify_active_subscriptions
+
+    nas = NasDevice(name="NAS-Static-Gaps", management_ip="10.0.11.2")
+    pop = PopSite(name="Static Gaps Site", zabbix_group_id="51")
+    db_session.add_all([nas, pop])
+    db_session.flush()
+    _nas_node(db_session, nas.id, pop.id, "502")
+    sub = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=catalog_offer.id,
+        status=SubscriptionStatus.active,
+        provisioning_nas_device_id=nas.id,
+    )
+    db_session.add(sub)
+    db_session.flush()
+
+    rows = {r["id"]: r for r in classify_active_subscriptions(db_session)}
+    assert rows[sub.id]["gap"] is None
+    assert rows[sub.id]["medium"] == "nas"
+
+
+def test_live_session_unresolvable_falls_back_to_static_in_classifier(
+    db_session, subscriber, catalog_offer
+):
+    # Live session on an unmatched NAS (no node) but a resolvable static
+    # provisioning NAS: the batched classifier must fall back to static (gap
+    # None), matching resolve_customer_path's fix, not mark a spurious gap.
+    from app.models.catalog import NasDevice
+    from app.services.topology.gaps import classify_active_subscriptions
+
+    static_nas = NasDevice(name="NAS-Static-OK-G", management_ip="10.0.11.3")
+    unmatched_nas = NasDevice(name="NAS-Unmatched-G", management_ip="10.0.11.4")
+    pop = PopSite(name="Static OK Gaps Site", zabbix_group_id="52")
+    db_session.add_all([static_nas, unmatched_nas, pop])
+    db_session.flush()
+    _nas_node(db_session, static_nas.id, pop.id, "503")  # only static has a node
+    sub = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=catalog_offer.id,
+        status=SubscriptionStatus.active,
+        provisioning_nas_device_id=static_nas.id,
+    )
+    db_session.add(sub)
+    db_session.flush()
+    _live_session(db_session, sub, unmatched_nas.id)
+
+    rows = {r["id"]: r for r in classify_active_subscriptions(db_session)}
+    assert rows[sub.id]["gap"] is None
+    assert rows[sub.id]["medium"] == "nas"

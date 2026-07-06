@@ -385,6 +385,71 @@ def test_live_session_beats_provisioning_nas(db_session, subscriber, subscriptio
     assert path.live_session is True
 
 
+def test_live_session_unresolvable_falls_back_to_static(
+    db_session, subscriber, subscription
+):
+    # Customer online on a NAS not yet Zabbix-matched (NasDevice row exists but
+    # no topology node), while the static provisioning NAS resolves completely.
+    # The live session must NOT regress the sub to a gap — resolve via static,
+    # and the live_session marker reflects that static (not live) was used.
+    static_nas = NasDevice(name="NAS-Static-OK", management_ip="10.0.9.7")
+    unmatched_nas = NasDevice(name="NAS-Unmatched", management_ip="10.0.9.8")
+    pop = PopSite(name="Static OK Site", zabbix_group_id="35")
+    db_session.add_all([static_nas, unmatched_nas, pop])
+    db_session.flush()
+    # Only the static NAS has a topology node -> basestation.
+    db_session.add(_node("nas", static_nas.id, pop.id, "406"))
+    subscription.provisioning_nas_device_id = static_nas.id
+    db_session.flush()
+    _session(db_session, subscription, unmatched_nas.id)  # live on the unmatched NAS
+
+    path = resolve_customer_path(db_session, subscription)
+
+    assert path.gap is None
+    assert path.access_device_kind == "nas"
+    assert path.access_device.id == static_nas.id
+    assert path.basestation.id == pop.id
+    assert path.live_session is False
+
+
+def test_sibling_subscription_session_is_excluded(db_session, subscriber, subscription):
+    # The subscriber owns sub A (the `subscription` fixture, which OWNS the
+    # session) and sub B (no own session). Resolving B must NOT borrow A's
+    # session (duplicate-login case) — it falls back to B's static NAS.
+    from app.models.catalog import Subscription, SubscriptionStatus
+
+    a_live_nas = NasDevice(name="NAS-A-Live", management_ip="10.0.9.9")
+    b_static_nas = NasDevice(name="NAS-B-Static", management_ip="10.0.10.1")
+    a_pop = PopSite(name="A Live Site", zabbix_group_id="36")
+    b_pop = PopSite(name="B Static Site", zabbix_group_id="37")
+    db_session.add_all([a_live_nas, b_static_nas, a_pop, b_pop])
+    db_session.flush()
+    db_session.add_all(
+        [
+            _node("nas", a_live_nas.id, a_pop.id, "407"),
+            _node("nas", b_static_nas.id, b_pop.id, "408"),
+        ]
+    )
+    # The session belongs to sub A on a_live_nas.
+    _session(db_session, subscription, a_live_nas.id)
+    # Sub B: same subscriber, own static provisioning NAS, no session of its own.
+    sub_b = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=subscription.offer_id,
+        status=SubscriptionStatus.active,
+        provisioning_nas_device_id=b_static_nas.id,
+    )
+    db_session.add(sub_b)
+    db_session.flush()
+
+    path = resolve_customer_path(db_session, sub_b)
+
+    assert path.access_device_kind == "nas"
+    assert path.access_device.id == b_static_nas.id  # B's static NAS, not A's live
+    assert path.basestation.id == b_pop.id
+    assert path.live_session is False
+
+
 def test_no_live_session_falls_back_to_provisioning_unchanged(db_session, subscription):
     # No live session: behavior is byte-for-byte the pre-change provisioning arm.
     nas = NasDevice(name="NAS-Static", management_ip="10.0.9.3")
