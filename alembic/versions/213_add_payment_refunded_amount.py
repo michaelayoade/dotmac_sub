@@ -17,7 +17,7 @@ from sqlalchemy import inspect, text
 from alembic import op
 
 revision = "213_add_payment_refunded_amount"
-down_revision = "212_crm_invoice_idempotency"
+down_revision = "212_add_forwarding_observations"
 branch_labels = None
 depends_on = None
 
