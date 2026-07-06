@@ -172,6 +172,16 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.enforcement.cleanup_subscription_block_sessions": _c(
         "enforcement", SWEEP, IDEMP, HEALTH
     ),
+    "app.tasks.enforcement.detect_stale_overdue_locks": _c(
+        "enforcement", SWEEP, IDEMP, STATUS, "Dry-run detector; writes nothing."
+    ),
+    "app.tasks.enforcement.reconcile_account_status_drift": _c(
+        "enforcement",
+        SWEEP,
+        GUARDED,
+        STATUS,
+        "Beat-rerun self-heals; all-active cohort filter is the guard.",
+    ),
     "app.tasks.events.cleanup_old_events": _c("events", SWEEP, IDEMP, LOG),
     "app.tasks.events.mark_stale_processing_events": _c("events", SWEEP, IDEMP, STATUS),
     "app.tasks.events.retry_failed_events": _c("events", STATE, STATEFUL, STATUS),

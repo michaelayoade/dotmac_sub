@@ -742,6 +742,42 @@ def build_beat_schedule() -> dict:
             enabled=enforcement_reconciler_enabled,
             interval_seconds=enforcement_reconciler_interval_seconds,
         )
+        # Daily status-backstop reconcilers (SP-8): the event path normally
+        # clears these, but the sweeps are the catch-up for lost events.
+        # account_status: auto-repair subscribers stuck `blocked` while all subs
+        # are active (walled-gardened despite active service) — the all-active
+        # filter is a robust guard, pure service-state, so apply mode is safe.
+        account_status_reconcile_enabled = _effective_bool(
+            session,
+            SettingDomain.billing,
+            "account_status_reconcile_enabled",
+            "ACCOUNT_STATUS_RECONCILE_ENABLED",
+            True,
+        )
+        _sync_scheduled_task(
+            session,
+            name="account_status_reconcile",
+            task_name="app.tasks.enforcement.reconcile_account_status_drift",
+            enabled=account_status_reconcile_enabled,
+            interval_seconds=86400,
+        )
+        # stale overdue locks: money-adjacent, so DETECT-only (dry-run) — it
+        # WARNs with the candidate count for an operator to clear after review,
+        # rather than auto-clearing an overdue lock on a possibly-wrong "no debt".
+        stale_overdue_lock_detect_enabled = _effective_bool(
+            session,
+            SettingDomain.billing,
+            "stale_overdue_lock_detect_enabled",
+            "STALE_OVERDUE_LOCK_DETECT_ENABLED",
+            True,
+        )
+        _sync_scheduled_task(
+            session,
+            name="stale_overdue_lock_detect",
+            task_name="app.tasks.enforcement.detect_stale_overdue_locks",
+            enabled=stale_overdue_lock_detect_enabled,
+            interval_seconds=86400,
+        )
         # Roll imported RADIUS accounting into quota buckets (feeds FUP/overage).
         # Gated by the same usage flag. This follows the RADIUS accounting
         # cadence instead of the daily usage-rating cadence so FUP decisions
