@@ -8,8 +8,8 @@ and every dispatch attempt is audited (who, when, which operator, outcome).
 All columns are plain types (no Postgres ENUM) on purpose — status/scope/channel
 are short strings so this migration never emits CREATE TYPE.
 
-Revision ID: 215_add_outage_notification_dispatches
-Revises: 214_add_ont_signal_observations
+Revision ID: 216_add_outage_notification_dispatches
+Revises: 215_add_payment_provider_fee
 Create Date: 2026-07-06
 """
 
@@ -20,8 +20,8 @@ from sqlalchemy.dialects.postgresql import UUID
 
 from alembic import op
 
-revision = "215_add_outage_notification_dispatches"
-down_revision = "214_add_ont_signal_observations"
+revision = "216_add_outage_notification_dispatches"
+down_revision = "215_add_payment_provider_fee"
 branch_labels = None
 depends_on = None
 
