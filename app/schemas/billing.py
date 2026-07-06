@@ -374,6 +374,9 @@ class PaymentRead(PaymentBase):
     # Total refunded so far; gross `amount` is unchanged, so net = amount -
     # refunded_amount. Consumers (e.g. ERP GL posting) use this to post net cash.
     refunded_amount: Decimal = Decimal("0")
+    # Gateway fee withheld from settlement (bank received amount - provider_fee).
+    # ERP splits the receipt (Dr Bank net / Dr bank-charges / Cr AR gross).
+    provider_fee: Decimal = Decimal("0")
     allocations: list[PaymentAllocationRead] = Field(default_factory=list)
 
 

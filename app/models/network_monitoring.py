@@ -837,11 +837,23 @@ class NetworkTopologyLink(Base):
 
 
 class OutageIncident(Base):
-    """An operator-declared outage against a node or basestation (Phase 4b).
+    """An outage against a node, basestation, or FDH cabinet (Phase 4b/5b/§7.6).
 
-    Manual only — no auto-detection. ``affected_count`` is snapshotted from
-    affected_customers at declare time. Kept lean (the Alert model is
-    rule/metric-bound and not reused).
+    Two provenances share this table, distinguished by ``detection_source``:
+
+    - ``operator`` — declared from the console (or the Phase-5b auto-detect
+      scan, which reuses the operator declare path). Lifecycle ``open`` ->
+      ``resolved``; treated as already-confirmed, no debounce.
+    - ``classifier`` — driven by the outage classifier's reconcile loop
+      (§7.6). Debounced lifecycle ``suspected`` -> ``confirmed`` ->
+      ``clearing`` -> ``resolved`` (plus ``discarded`` for false positives).
+
+    ``status`` stays a free-form String (NOT a DB enum — the enum route caused
+    a prod migration collision in #876) and is validated in code. The
+    ``*_at`` lifecycle stamps make MTTR derivable as
+    ``resolved_at - confirmed_at``. ``affected_count`` is snapshotted from
+    affected_customers at declare time. ``crm_ticket_id`` is a placeholder for
+    the future CRM ticket integration — nothing fires on it yet.
     """
 
     __tablename__ = "outage_incidents"
@@ -865,13 +877,29 @@ class OutageIncident(Base):
         UUID(as_uuid=True), ForeignKey("fdh_cabinets.id")
     )
     declared_by: Mapped[str | None] = mapped_column(String(120))
-    status: Mapped[str] = mapped_column(String(20), default="open")  # open / resolved
+    # operator: open/resolved ; classifier: suspected/confirmed/clearing/
+    # resolved/discarded. Kept String and validated in code (see #876).
+    status: Mapped[str] = mapped_column(String(20), default="open")
+    # 'operator' (console/auto-detect declare) | 'classifier' (§7.6 reconcile).
+    detection_source: Mapped[str] = mapped_column(
+        String(20), default="operator", server_default="operator", nullable=False
+    )
     severity: Mapped[str | None] = mapped_column(String(20))
     affected_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Classifier ladder verdict (node_outage / service_fault / ...) + coarse
+    # confidence, snapshotted on each reconcile pass. NULL for operator rows.
+    classification: Mapped[str | None] = mapped_column(String(40))
+    confidence: Mapped[float | None] = mapped_column(Float)
+    # Placeholder for the future CRM ticket link (§7.6 firing stays gated).
+    crm_ticket_id: Mapped[str | None] = mapped_column(String(120))
     note: Mapped[str | None] = mapped_column(Text)
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
+    # §7.6 debounce lifecycle stamps (classifier incidents only).
+    suspected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cleared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     created_at: Mapped[datetime] = mapped_column(
@@ -881,6 +909,63 @@ class OutageIncident(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
+    )
+
+
+class OutageNotificationDispatch(Base):
+    """Persisted audit + debounce record for a customer outage notification
+    (outage classifier P4, design docs/designs/OUTAGE_CLASSIFIER.md §P4).
+
+    One row per dispatch *attempt* (or a boundary-level skip). It is the durable,
+    cross-worker source for BOTH:
+      - **debounce** — a boundary is muted while it has a recent ``sent`` row
+        (replaces the old in-memory dict, which didn't survive restarts or span
+        Celery workers), and
+      - **audit** — who was notified, when, by which operator, and the outcome.
+
+    ``status='sent'`` means the notification was **emitted to the notification
+    system** (which owns channel selection + final delivery); this table does not
+    track downstream delivery. ``channel`` stores the outage notification *type*
+    (area / last_mile) — the concrete channels are the notification system's
+    config-driven concern, not the outage notifier's. No FKs: the audit must
+    outlive a deleted node/subscriber (same rationale as AvailabilitySnapshot).
+    """
+
+    __tablename__ = "outage_notification_dispatches"
+    __table_args__ = (
+        Index(
+            "ix_outage_notif_dispatch_boundary",
+            "boundary_node_id",
+            "status",
+            "created_at",
+        ),
+        Index("ix_outage_notif_dispatch_dedup", "dedup_key", "created_at"),
+        Index("ix_outage_notif_dispatch_subscriber", "subscriber_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    # 'area' | 'per_customer'
+    scope: Mapped[str] = mapped_column(String(16))
+    # The assess() boundary key: an access-node id (inferred) OR an operator
+    # OutageIncident id (declared). Used as the debounce/group key.
+    boundary_node_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    subscriber_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    subscription_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    # Outage notification *type* (channels are resolved by the notification
+    # system, so we record the type/category, not a hardcoded channel).
+    channel: Mapped[str | None] = mapped_column(String(40))
+    category: Mapped[str] = mapped_column(String(20))
+    recipient: Mapped[str | None] = mapped_column(String(255))
+    subject: Mapped[str | None] = mapped_column(String(255))
+    dedup_key: Mapped[str] = mapped_column(String(200))
+    # sent | failed | suppressed_optout | skipped_debounce |
+    # skipped_low_confidence | skipped_cap | skipped_no_recipient
+    status: Mapped[str] = mapped_column(String(32))
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
 
 

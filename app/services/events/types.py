@@ -163,6 +163,12 @@ class EventType(enum.Enum):
     tr069_device_discovered = "tr069_device.discovered"
     tr069_device_stale = "tr069_device.stale"
 
+    # Outage classifier customer notifications (design docs/designs/OUTAGE_CLASSIFIER.md
+    # §P4). Emitted by the outage notifier so the notification system owns channel
+    # selection + per-subscriber preferences; the notifier only supplies content.
+    outage_area = "outage.area"
+    outage_last_mile = "outage.last_mile"
+
     # Custom event type for extensibility
     custom = "custom"
 

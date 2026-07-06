@@ -211,6 +211,17 @@ class Settings:
     outage_notify_enabled: bool = os.getenv(
         "OUTAGE_NOTIFY_ENABLED", "false"
     ).lower() in ("true", "1", "yes")
+    # Safety knobs for the (still operator-triggered) outage dispatch. Channel
+    # selection is NOT here — it lives in the notification system's per-type
+    # registry. These bound blast radius, dedup, and the confidence gate.
+    outage_notify_max_per_run: int = int(os.getenv("OUTAGE_NOTIFY_MAX_PER_RUN", "500"))
+    outage_notify_batch_size: int = int(os.getenv("OUTAGE_NOTIFY_BATCH_SIZE", "50"))
+    outage_notify_debounce_hours: int = int(
+        os.getenv("OUTAGE_NOTIFY_DEBOUNCE_HOURS", "6")
+    )
+    outage_notify_area_min_affected: int = int(
+        os.getenv("OUTAGE_NOTIFY_AREA_MIN_AFFECTED", "5")
+    )
 
 
 settings = Settings()

@@ -408,6 +408,121 @@ def detected_outages_console(
     return templates.TemplateResponse("admin/network/detected_outages.html", context)
 
 
+def _actor_id(request: Request):
+    """Current operator's user id (uuid) for outage-notify audit, or None."""
+    import uuid as _uuid
+
+    from app.web.admin import get_current_user
+
+    user = get_current_user(request)
+    raw = user.get("id") if isinstance(user, dict) else getattr(user, "id", None)
+    try:
+        return _uuid.UUID(str(raw)) if raw else None
+    except (ValueError, TypeError):
+        return None
+
+
+def _boundary_and_subscription_ids(db: Session, node_id: str | None):
+    """Resolve a boundary NetworkDevice + its affected subscription ids."""
+    import uuid as _uuid
+
+    from app.models.network_monitoring import NetworkDevice
+    from app.services.topology.affected import affected_customers
+
+    try:
+        node = db.get(NetworkDevice, _uuid.UUID(node_id)) if node_id else None
+    except (ValueError, TypeError):
+        node = None
+    if node is None:
+        return None, []
+    sub_ids = [s.id for s in affected_customers(db, node=node)["subscriptions"]]
+    return node, sub_ids
+
+
+@router.get(
+    "/detected-outages/notify",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def detected_outage_notify_preview(
+    request: Request,
+    node_id: str,
+    db: Session = Depends(get_db),
+):
+    """Preview the outage notification plan for one boundary (design §P4).
+
+    Read-only: shows who *would* be emailed (area vs per-customer, opt-out
+    suppressed, qualifies/debounced) and the current OUTAGE_NOTIFY_ENABLED
+    state. Never sends — the confirm POST is the only dispatch path."""
+    from app.services.topology.outage_notifications import (
+        plan_outage_notifications,
+        recent_dispatches,
+    )
+
+    context = _base_context(request, db, active_page="monitoring")
+    node, sub_ids = _boundary_and_subscription_ids(db, node_id)
+    context["node"] = node
+    context["node_id"] = str(node.id) if node is not None else node_id
+    if node is None:
+        return templates.TemplateResponse(
+            "admin/network/detected_outages_notify.html", context, status_code=404
+        )
+    context["plan"] = plan_outage_notifications(db, sub_ids)
+    context["recent"] = recent_dispatches(db, node.id)
+    return templates.TemplateResponse(
+        "admin/network/detected_outages_notify.html", context
+    )
+
+
+@router.post(
+    "/detected-outages/notify",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:write"))],
+)
+def detected_outage_notify_send(
+    request: Request,
+    node_id: str = Form(...),
+    confirm: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+):
+    """Confirm + dispatch outage notifications for one boundary (design §P4).
+
+    The ONLY path that dispatches. Requires an explicit ``confirm=send`` (a
+    stray navigation never sends) and passes the operator's ``actor_id`` to the
+    hard-gated dispatcher, which itself no-ops unless OUTAGE_NOTIFY_ENABLED is
+    on. COMMITS the session so audit rows + the persisted debounce survive."""
+    from app.services.topology.outage_notifications import (
+        dispatch_outage_notifications,
+        plan_outage_notifications,
+        recent_dispatches,
+    )
+
+    node, sub_ids = _boundary_and_subscription_ids(db, node_id)
+    if node is None:
+        return RedirectResponse("/admin/network/detected-outages", status_code=303)
+
+    context = _base_context(request, db, active_page="monitoring")
+    context["node"] = node
+    context["node_id"] = str(node.id)
+    if confirm != "send":
+        # No explicit confirmation — re-show the preview, dispatch nothing.
+        context["plan"] = plan_outage_notifications(db, sub_ids)
+        context["recent"] = recent_dispatches(db, node.id)
+        context["needs_confirm"] = True
+        return templates.TemplateResponse(
+            "admin/network/detected_outages_notify.html", context
+        )
+
+    result = dispatch_outage_notifications(db, sub_ids, actor_id=_actor_id(request))
+    db.commit()
+    context["result"] = result
+    context["plan"] = plan_outage_notifications(db, sub_ids)
+    context["recent"] = recent_dispatches(db, node.id)
+    return templates.TemplateResponse(
+        "admin/network/detected_outages_notify.html", context
+    )
+
+
 @router.get(
     "/monitoring",
     response_class=HTMLResponse,
