@@ -33,6 +33,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.models.billing import (
+    Payment,
     PaymentProviderType,
     PaymentStatus,
     PaymentWebhookDeadLetter,
@@ -149,6 +150,9 @@ class _Settlement:
     currency: str | None = None
     reference: str | None = None
     metadata: dict | None = None
+    # Gateway fee withheld from settlement (same currency as ``amount``). The
+    # bank receives ``amount - fee``; ERP books the fee as a bank charge.
+    fee: Decimal = Decimal("0.00")
 
 
 def _extract_settlement(
@@ -173,6 +177,8 @@ def _extract_settlement(
             currency=str(data.get("currency") or "NGN"),
             reference=str(data.get("reference") or "") or None,
             metadata=metadata if isinstance(metadata, dict) else {},
+            # Paystack reports its fee (in kobo) on the charge payload.
+            fee=kobo_to_naira(data.get("fees") or 0),
         )
     if provider_type == "flutterwave":
         # Flutterwave reuses charge.completed for both outcomes; the charge
@@ -188,6 +194,8 @@ def _extract_settlement(
                 currency=str(data.get("currency") or "NGN"),
                 reference=str(data.get("tx_ref") or "") or None,
                 metadata=metadata if isinstance(metadata, dict) else {},
+                # Flutterwave reports its fee (in the charge currency) as app_fee.
+                fee=Decimal(str(data.get("app_fee") or 0)),
             )
         if charge_status == "failed":
             return _Settlement(
@@ -387,6 +395,22 @@ def _process_webhook(
         and settlement.status_hint == PaymentStatus.succeeded
         and event.payment_id is not None
     ):
+        # Persist the gateway fee on the payment (M-1) so ERP can split the
+        # receipt (Dr Bank net / Dr charges / Cr AR gross) and bank rec ties.
+        # Best-effort: the payment is already recorded; a failure here must not
+        # make the provider retry it.
+        if settlement.fee and settlement.fee > Decimal("0.00"):
+            try:
+                pay = db.get(Payment, event.payment_id)
+                if pay is not None and not pay.provider_fee:
+                    pay.provider_fee = settlement.fee
+                    db.commit()
+            except Exception:
+                logger.warning(
+                    "Failed to persist provider_fee after webhook settlement",
+                    exc_info=True,
+                )
+                db.rollback()
         if topup_intent is not None:
             try:
                 _finalize_webhook_topup_intent(

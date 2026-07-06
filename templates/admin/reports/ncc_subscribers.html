@@ -46,12 +46,12 @@
     </div>
 
     <div class="mt-5 border-t border-slate-100 pt-5 dark:border-slate-700/50">
-      <span class="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-400">Network capacity — manual inputs (not subscriber data)</span>
+      <span class="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-400">Network capacity — manual inputs and POP override</span>
       <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {% set caps = [
           ("access_capacity_gbps", "Access Capacity (Gbps)"),
           ("unutilized_capacity_mbps", "Un-utilised Capacity (Mbps)"),
-          ("points_of_presence", "Points of Presence"),
+          ("points_of_presence", "Points of Presence override"),
           ("data_usage_tb", "Data Usage (TB)")
         ] %}
         {% for name, label in caps %}
@@ -121,12 +121,17 @@
         ("256kbps – <2Mbps", report.by_speed_band["256kbps-<2Mbps"]),
         ("2Mbps – <10Mbps", report.by_speed_band["2Mbps-<10Mbps"]),
         ("10Mbps & above", report.by_speed_band["10Mbps+"]),
+        ("Average Internet Speed (Mbps)", report.average_speed.average_mbps),
+        ("Avg upload speed (Mbps)", report.average_speed.average_upload_mbps),
+        ("Speed records included", report.average_speed.included_download_count),
+        ("Speed records excluded", report.average_speed.excluded_download_count),
     ]) }}
 
-    {{ kv_table("Network capacity (manual)", [
+    {{ kv_table("Network capacity", [
         ("Access Capacity (Gbps)", report.network_capacity.access_capacity_gbps),
         ("Un-utilised Capacity (Mbps)", report.network_capacity.unutilized_capacity_mbps),
         ("Points of Presence", report.network_capacity.points_of_presence),
+        ("Points of Presence source", report.network_capacity.points_of_presence_source),
         ("Data Usage (TB)", report.network_capacity.data_usage_tb),
     ]) }}
 
