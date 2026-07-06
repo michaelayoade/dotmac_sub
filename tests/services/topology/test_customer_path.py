@@ -450,6 +450,58 @@ def test_sibling_subscription_session_is_excluded(db_session, subscriber, subscr
     assert path.live_session is False
 
 
+def test_own_bound_session_beats_null_bound(db_session, subscriber, subscription):
+    # Own-binding is the PRIMARY tie-break, ahead of freshness: even a FRESHER
+    # null-bound session must not preempt this subscription's own session. Locks
+    # the CASE order-by against the Postgres NULLS-FIRST-under-DESC quirk.
+    from datetime import UTC, datetime
+
+    from app.models.radius_active_session import RadiusActiveSession
+
+    own_nas = NasDevice(name="NAS-Own", management_ip="10.0.12.1")
+    null_nas = NasDevice(name="NAS-Null", management_ip="10.0.12.2")
+    own_pop = PopSite(name="Own Site", zabbix_group_id="38")
+    null_pop = PopSite(name="Null Site", zabbix_group_id="39")
+    db_session.add_all([own_nas, null_nas, own_pop, null_pop])
+    db_session.flush()
+    db_session.add_all(
+        [
+            _node("nas", own_nas.id, own_pop.id, "409"),
+            _node("nas", null_nas.id, null_pop.id, "410"),
+        ]
+    )
+    db_session.add_all(
+        [
+            RadiusActiveSession(
+                subscriber_id=subscriber.id,
+                subscription_id=subscription.id,  # own binding, but OLDER
+                nas_device_id=own_nas.id,
+                username="u",
+                acct_session_id="own-1",
+                session_start=datetime(2026, 6, 1, tzinfo=UTC),
+                last_update=datetime(2026, 6, 1, tzinfo=UTC),
+            ),
+            RadiusActiveSession(
+                subscriber_id=subscriber.id,
+                subscription_id=None,  # null binding, but FRESHER
+                nas_device_id=null_nas.id,
+                username="u",
+                acct_session_id="null-1",
+                session_start=datetime(2026, 7, 1, tzinfo=UTC),
+                last_update=datetime(2026, 7, 1, tzinfo=UTC),
+            ),
+        ]
+    )
+    db_session.flush()
+
+    path = resolve_customer_path(db_session, subscription)
+
+    assert path.access_device_kind == "nas"
+    assert path.access_device.id == own_nas.id  # own beats fresher null-bound
+    assert path.basestation.id == own_pop.id
+    assert path.live_session is True
+
+
 def test_no_live_session_falls_back_to_provisioning_unchanged(db_session, subscription):
     # No live session: behavior is byte-for-byte the pre-change provisioning arm.
     nas = NasDevice(name="NAS-Static", management_ip="10.0.9.3")

@@ -256,3 +256,81 @@ def test_live_session_unresolvable_falls_back_to_static_in_classifier(
     rows = {r["id"]: r for r in classify_active_subscriptions(db_session)}
     assert rows[sub.id]["gap"] is None
     assert rows[sub.id]["medium"] == "nas"
+
+
+def test_batched_classifier_excludes_sibling_subscription_session(
+    db_session, subscriber, catalog_offer
+):
+    # The invariant that regressed in #848, guarded through the BATCHED path:
+    # subscriber owns sub A (owns a live session on a matched NAS) + sub B (no
+    # own session, no provisioning NAS). The batched classifier must NOT credit
+    # B with A's live NAS — B has no access device and gaps as GAP_NO_ONT.
+    from app.models.catalog import NasDevice
+    from app.services.topology.gaps import classify_active_subscriptions
+
+    a_live_nas = NasDevice(name="NAS-A-Live-G", management_ip="10.0.11.5")
+    a_pop = PopSite(name="A Live Gaps Site", zabbix_group_id="53")
+    db_session.add_all([a_live_nas, a_pop])
+    db_session.flush()
+    _nas_node(db_session, a_live_nas.id, a_pop.id, "504")
+    sub_a = _sub(subscriber.id, catalog_offer.id)  # owns the session
+    db_session.add(sub_a)
+    db_session.flush()
+    _live_session(db_session, sub_a, a_live_nas.id)
+    sub_b = _sub(subscriber.id, catalog_offer.id)  # same subscriber, no session/NAS
+    db_session.add(sub_b)
+    db_session.flush()
+
+    rows = {r["id"]: r for r in classify_active_subscriptions(db_session)}
+    assert rows[sub_a.id]["gap"] is None  # A resolves via its own live NAS
+    # B must NOT borrow A's session -> no resolvable access device at all.
+    assert rows[sub_b.id]["gap"] == "no_ont"
+    assert rows[sub_b.id]["medium"] == "unknown"
+
+
+def test_batched_picker_prefers_own_bound_over_null_bound(
+    db_session, subscriber, catalog_offer
+):
+    # Batched mirror of test_own_bound_session_beats_null_bound: own-binding is
+    # the primary key ahead of freshness, so a fresher null-bound session must
+    # not preempt the subscription's own. Exercises _live_nas_by_subscription
+    # directly (the Python 0/1 ranking that mirrors the SQL CASE).
+    from datetime import UTC, datetime
+
+    from app.models.catalog import NasDevice
+    from app.models.radius_active_session import RadiusActiveSession
+    from app.services.topology.gaps import _live_nas_by_subscription
+
+    own_nas = NasDevice(name="NAS-Own-B", management_ip="10.0.12.3")
+    null_nas = NasDevice(name="NAS-Null-B", management_ip="10.0.12.4")
+    db_session.add_all([own_nas, null_nas])
+    db_session.flush()
+    sub = _sub(subscriber.id, catalog_offer.id)
+    db_session.add(sub)
+    db_session.flush()
+    db_session.add_all(
+        [
+            RadiusActiveSession(
+                subscriber_id=subscriber.id,
+                subscription_id=sub.id,  # own binding, OLDER
+                nas_device_id=own_nas.id,
+                username="u",
+                acct_session_id="own-b",
+                session_start=datetime(2026, 6, 1, tzinfo=UTC),
+                last_update=datetime(2026, 6, 1, tzinfo=UTC),
+            ),
+            RadiusActiveSession(
+                subscriber_id=subscriber.id,
+                subscription_id=None,  # null binding, FRESHER
+                nas_device_id=null_nas.id,
+                username="u",
+                acct_session_id="null-b",
+                session_start=datetime(2026, 7, 1, tzinfo=UTC),
+                last_update=datetime(2026, 7, 1, tzinfo=UTC),
+            ),
+        ]
+    )
+    db_session.flush()
+
+    picked = _live_nas_by_subscription(db_session, [sub], {subscriber.id})
+    assert picked[sub.id] == own_nas.id  # own beats fresher null-bound

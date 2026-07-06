@@ -14,7 +14,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import or_
+from sqlalchemy import case, or_
 from sqlalchemy.orm import Session
 
 from app.models.catalog import NasDevice, Subscription
@@ -339,8 +339,13 @@ def _live_session_nas_device_id(session: Session, subscription: Subscription):
             ),
         )
         .order_by(
-            # Prefer a session for this exact subscription, then the freshest.
-            (RadiusActiveSession.subscription_id == subscription.id).desc(),
+            # Own-binding first (0), everything else — including a NULL-bound
+            # session — after (1). An explicit CASE, not a boolean .desc(): in
+            # Postgres a NULL-bound session's ``subscription_id == id`` is NULL,
+            # which under DESC sorts NULLS FIRST and would let a null-bound
+            # session preempt this subscription's own. This ranks identically to
+            # gaps.py._order_key so the per-sub and batched pickers never diverge.
+            case((RadiusActiveSession.subscription_id == subscription.id, 0), else_=1),
             RadiusActiveSession.last_update.desc().nullslast(),
             RadiusActiveSession.session_start.desc(),
             RadiusActiveSession.id,
