@@ -57,12 +57,7 @@ class CrmSyncHandler:
             return
 
         # Resolve subscriber and external identity
-        subscriber_id = (
-            event.account_id
-            or event.subscriber_id
-            or event.payload.get("account_id")
-            or event.payload.get("subscriber_id")
-        )
+        subscriber_id = event.account_id or event.payload.get("account_id")
         if not subscriber_id:
             return
 
