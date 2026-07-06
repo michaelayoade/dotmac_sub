@@ -27,9 +27,7 @@ def reconcile_work_order_mirror() -> dict[str, int]:
         db.close()
 
 
-@celery_app.task(
-    name="app.tasks.work_orders.refresh_work_order_mirror_for_subscriber"
-)
+@celery_app.task(name="app.tasks.work_orders.refresh_work_order_mirror_for_subscriber")
 def refresh_work_order_mirror_for_subscriber(subscriber_id: str) -> dict[str, bool]:
     """Refresh one subscriber's work-order mirror from the CRM — enqueued by a
     stale on-view read so the request doesn't block on the CRM round-trip."""

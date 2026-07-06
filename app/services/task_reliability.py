@@ -260,6 +260,13 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "network", STATE, STATEFUL, STATUS
     ),
     "app.tasks.projects.reconcile_project_mirror": _c("crm", SWEEP, IDEMP, HEALTH),
+    "app.tasks.projects.refresh_project_mirror_for_subscriber": _c(
+        "crm",
+        NONE,
+        IDEMP,
+        LOG,
+        "Best-effort on-view refresh; periodic reconcile backs it.",
+    ),
     "app.tasks.provisioning.reap_stale_provisioning_runs": _c(
         "provisioning", SWEEP, IDEMP, STATUS
     ),
@@ -273,6 +280,13 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "provisioning", ITEMS, PER_ITEM, STATUS
     ),
     "app.tasks.quotes.reconcile_quote_mirror": _c("crm", SWEEP, IDEMP, HEALTH),
+    "app.tasks.quotes.refresh_quote_mirror_for_subscriber": _c(
+        "crm",
+        NONE,
+        IDEMP,
+        LOG,
+        "Best-effort on-view refresh; periodic reconcile backs it.",
+    ),
     "app.tasks.radius.audit_ip_consistency": _c("radius", SWEEP, IDEMP, HEALTH),
     "app.tasks.radius.audit_suspension_enforcement": _c("radius", SWEEP, IDEMP, HEALTH),
     "app.tasks.radius.connectivity_shadow_audit": _c("radius", SWEEP, IDEMP, HEALTH),
@@ -286,6 +300,13 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.radius_population.sync_device_login": _c("radius", SWEEP, IDEMP, STATUS),
     "app.tasks.referrals.reconcile_referral_mirror": _c(
         "billing", SWEEP, IDEMP, HEALTH
+    ),
+    "app.tasks.referrals.refresh_referral_mirror_for_subscriber": _c(
+        "crm",
+        NONE,
+        IDEMP,
+        LOG,
+        "Best-effort on-view refresh; periodic reconcile backs it.",
     ),
     "app.tasks.topology_lldp.run_lldp_topology_poll": _c(
         "network", SWEEP, IDEMP, HEALTH
@@ -357,6 +378,13 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     ),
     "app.tasks.work_orders.reconcile_work_order_mirror": _c(
         "crm", SWEEP, IDEMP, HEALTH
+    ),
+    "app.tasks.work_orders.refresh_work_order_mirror_for_subscriber": _c(
+        "crm",
+        NONE,
+        IDEMP,
+        LOG,
+        "Best-effort on-view refresh; periodic reconcile backs it.",
     ),
     "app.tasks.workflow.detect_sla_breaches": _c("workflow", SWEEP, IDEMP, STATUS),
     "app.tasks.zabbix_ingestion.dispatch_portal_usage_ingestion": _c(
