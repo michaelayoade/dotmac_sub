@@ -837,11 +837,23 @@ class NetworkTopologyLink(Base):
 
 
 class OutageIncident(Base):
-    """An operator-declared outage against a node or basestation (Phase 4b).
+    """An outage against a node, basestation, or FDH cabinet (Phase 4b/5b/§7.6).
 
-    Manual only — no auto-detection. ``affected_count`` is snapshotted from
-    affected_customers at declare time. Kept lean (the Alert model is
-    rule/metric-bound and not reused).
+    Two provenances share this table, distinguished by ``detection_source``:
+
+    - ``operator`` — declared from the console (or the Phase-5b auto-detect
+      scan, which reuses the operator declare path). Lifecycle ``open`` ->
+      ``resolved``; treated as already-confirmed, no debounce.
+    - ``classifier`` — driven by the outage classifier's reconcile loop
+      (§7.6). Debounced lifecycle ``suspected`` -> ``confirmed`` ->
+      ``clearing`` -> ``resolved`` (plus ``discarded`` for false positives).
+
+    ``status`` stays a free-form String (NOT a DB enum — the enum route caused
+    a prod migration collision in #876) and is validated in code. The
+    ``*_at`` lifecycle stamps make MTTR derivable as
+    ``resolved_at - confirmed_at``. ``affected_count`` is snapshotted from
+    affected_customers at declare time. ``crm_ticket_id`` is a placeholder for
+    the future CRM ticket integration — nothing fires on it yet.
     """
 
     __tablename__ = "outage_incidents"
@@ -865,13 +877,29 @@ class OutageIncident(Base):
         UUID(as_uuid=True), ForeignKey("fdh_cabinets.id")
     )
     declared_by: Mapped[str | None] = mapped_column(String(120))
-    status: Mapped[str] = mapped_column(String(20), default="open")  # open / resolved
+    # operator: open/resolved ; classifier: suspected/confirmed/clearing/
+    # resolved/discarded. Kept String and validated in code (see #876).
+    status: Mapped[str] = mapped_column(String(20), default="open")
+    # 'operator' (console/auto-detect declare) | 'classifier' (§7.6 reconcile).
+    detection_source: Mapped[str] = mapped_column(
+        String(20), default="operator", server_default="operator", nullable=False
+    )
     severity: Mapped[str | None] = mapped_column(String(20))
     affected_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Classifier ladder verdict (node_outage / service_fault / ...) + coarse
+    # confidence, snapshotted on each reconcile pass. NULL for operator rows.
+    classification: Mapped[str | None] = mapped_column(String(40))
+    confidence: Mapped[float | None] = mapped_column(Float)
+    # Placeholder for the future CRM ticket link (§7.6 firing stays gated).
+    crm_ticket_id: Mapped[str | None] = mapped_column(String(120))
     note: Mapped[str | None] = mapped_column(Text)
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
+    # §7.6 debounce lifecycle stamps (classifier incidents only).
+    suspected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cleared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     created_at: Mapped[datetime] = mapped_column(

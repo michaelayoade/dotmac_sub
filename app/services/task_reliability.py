@@ -324,6 +324,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         HEALTH,
         "Outage auto-detect scan; open-incident check dedupes across runs.",
     ),
+    "app.tasks.topology_outage.reconcile_detected_outages": _c(
+        "network",
+        SWEEP,
+        IDEMP,
+        HEALTH,
+        "Classifier outage lifecycle debounce (§7.6); identity dedupes and "
+        "every transition is state-guarded, so re-runs are idempotent.",
+    ),
     "app.tasks.topology_sync.run_topology_reconcile": _c(
         "network", SWEEP, IDEMP, HEALTH
     ),

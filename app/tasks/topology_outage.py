@@ -67,3 +67,43 @@ def run_outage_scan() -> dict[str, Any]:
             db.rollback()
             logger.exception("topology_outage_scan_failed")
             return {"error": str(exc)}
+
+
+@celery_app.task(
+    name="app.tasks.topology_outage.reconcile_detected_outages",
+    soft_time_limit=150,
+    time_limit=180,
+)
+def reconcile_detected_outages() -> dict[str, Any]:
+    """Run one §7.6 debounce pass over the classifier-driven incident lifecycle.
+
+    Discover-reconcile: classify -> localize -> find-or-open -> debounce the
+    suspected/confirmed/clearing/resolved/discarded transitions, persisting a
+    trustworthy incident and emitting lifecycle events. Firing (notify/ticket)
+    stays GATED. Single-flight via the same advisory-lock helper as the scan; an
+    overlapping run is skipped (transitions are guarded reads + writes)."""
+    from app.services.topology.outage_reconcile import (
+        ADVISORY_LOCK_KEY,
+    )
+    from app.services.topology.outage_reconcile import (
+        reconcile_detected_outages as _reconcile,
+    )
+
+    with db_session_adapter.advisory_lock(
+        ADVISORY_LOCK_KEY, timeout_ms=_LOCK_TIMEOUT_MS
+    ) as (db, acquired):
+        if not acquired:
+            logger.info("outage_reconcile_skipped: previous run still in progress")
+            return {"skipped": "already_running"}
+        try:
+            result = _reconcile(db)
+            db.commit()
+            return result
+        except SoftTimeLimitExceeded:
+            db.rollback()
+            logger.warning("outage_reconcile_timed_out")
+            return {"error": "outage_reconcile_timed_out"}
+        except Exception as exc:  # noqa: BLE001 - report and roll back
+            db.rollback()
+            logger.exception("outage_reconcile_failed")
+            return {"error": str(exc)}

@@ -27,8 +27,27 @@ from app.services.topology.affected import (
 
 logger = logging.getLogger(__name__)
 
-# status is a free-form String column; these are the only legal values.
+# status is a free-form String column (String, not a DB enum — the enum route
+# caused a prod migration collision in #876; validated here in code instead).
+# Operator-declared incidents use open/resolved; the classifier-driven lifecycle
+# (§7.6) adds suspected/confirmed/clearing/resolved/discarded.
 _OUTAGE_STATUSES = frozenset({"open", "resolved"})
+# Actor stamped on classifier incidents — distinct from AUTO_DETECT_ACTOR so the
+# two auto provenances never collide. The ``detection_source`` COLUMN (not
+# ``declared_by``) is the authoritative operator/classifier discriminator.
+CLASSIFIER_ACTOR = "system:outage-classifier"
+CLASSIFIER_SOURCE = "classifier"
+OPERATOR_SOURCE = "operator"
+# Open classifier states: an incident still describing a live/settling outage.
+# suspected (debouncing up), confirmed (declared), clearing (debouncing down).
+CLASSIFIER_OPEN_STATUSES = ("suspected", "confirmed", "clearing")
+CLASSIFIER_TERMINAL_STATUSES = ("resolved", "discarded")
+_CLASSIFIER_STATUSES = frozenset(CLASSIFIER_OPEN_STATUSES) | frozenset(
+    CLASSIFIER_TERMINAL_STATUSES
+)
+# Statuses that keep an incident "live" for the open-incidents surfaces: operator
+# open + every non-terminal classifier state (resolved/discarded excluded).
+_LIVE_STATUSES = ("open",) + CLASSIFIER_OPEN_STATUSES
 # ``declared_by`` sentinel marking auto-detected incidents (see module doc).
 AUTO_DETECT_ACTOR = "system:outage-autodetect"
 AUTO_NOTE_PREFIX = "AUTO-DETECTED:"
@@ -178,6 +197,179 @@ def resolve_outage(session: Session, incident_id) -> OutageIncident | None:
     return incident
 
 
+# --- classifier-driven lifecycle (§7.6) -----------------------------------
+#
+# State machine (classifier incidents only; operator open/resolved is untouched):
+#
+#     suspected --W_confirm--> confirmed --recovery--> clearing --W_resolve--> resolved
+#         |                                               ^  |
+#     recovery (discard)                        re-darken |  | (stays until window)
+#         v                                               |  v
+#      discarded                                     confirmed (reopen)
+#
+# W_confirm is scaled by affected_count; W_resolve is fixed. Firing (customer /
+# ticket notification) stays GATED — these helpers only persist the lifecycle
+# and fan lifecycle events into the existing webhook machinery.
+
+
+def open_classifier_incident(
+    session: Session,
+    *,
+    root_node: NetworkDevice | None = None,
+    basestation_id=None,
+    affected_count: int = 0,
+    confidence: float | None = None,
+    classification: str | None = None,
+    now: datetime,
+) -> OutageIncident:
+    """Open a fresh ``suspected`` classifier incident and emit its event."""
+    incident = OutageIncident(
+        root_node_id=root_node.id if root_node is not None else None,
+        basestation_id=basestation_id,
+        declared_by=CLASSIFIER_ACTOR,
+        detection_source=CLASSIFIER_SOURCE,
+        status="suspected",
+        affected_count=affected_count,
+        confidence=confidence,
+        classification=classification,
+        started_at=now,
+        suspected_at=now,
+    )
+    session.add(incident)
+    session.flush()
+    _emit_outage_event(session, incident, "outage.suspected")
+    return incident
+
+
+def find_open_classifier_incident(
+    session: Session,
+    *,
+    basestation_id=None,
+    root_node_id=None,
+    component_node_ids=None,
+    exclude_ids=None,
+) -> OutageIncident | None:
+    """The OPEN classifier incident covering this outage (§7.6 decision 3).
+
+    Identity is matched by ``basestation_id`` when present, else by an exact
+    ``root_node_id``, else by the incident's root falling inside the current
+    connected-dark ``component_node_ids`` (localization drift). Oldest match
+    wins; ``exclude_ids`` skips incidents already claimed this pass.
+    """
+    exclude = set(exclude_ids or ())
+
+    def _q():
+        return (
+            session.query(OutageIncident)
+            .filter(
+                OutageIncident.detection_source == CLASSIFIER_SOURCE,
+                OutageIncident.status.in_(CLASSIFIER_OPEN_STATUSES),
+            )
+            .order_by(OutageIncident.started_at.asc())
+        )
+
+    def _pick(rows):
+        for inc in rows:
+            if inc.id not in exclude:
+                return inc
+        return None
+
+    if basestation_id is not None:
+        inc = _pick(_q().filter(OutageIncident.basestation_id == basestation_id).all())
+        if inc is not None:
+            return inc
+    if root_node_id is not None:
+        inc = _pick(_q().filter(OutageIncident.root_node_id == root_node_id).all())
+        if inc is not None:
+            return inc
+    ids = [nid for nid in (component_node_ids or ()) if nid is not None]
+    if ids:
+        inc = _pick(_q().filter(OutageIncident.root_node_id.in_(ids)).all())
+        if inc is not None:
+            return inc
+    return None
+
+
+def update_classifier_snapshot(
+    incident: OutageIncident,
+    *,
+    affected_count: int | None = None,
+    confidence: float | None = None,
+    classification: str | None = None,
+) -> None:
+    """Refresh the per-pass verdict fields on an open classifier incident."""
+    if affected_count is not None:
+        incident.affected_count = affected_count
+    if confidence is not None:
+        incident.confidence = confidence
+    if classification is not None:
+        incident.classification = classification
+
+
+def repoint_root(
+    session: Session, incident: OutageIncident, root_node: NetworkDevice | None
+) -> bool:
+    """Re-point an open classifier incident to the current deepest-dark node on
+    localization drift (§7.6 decision 3) — no new incident. Emits a rerooted
+    event and returns True when the root actually moved."""
+    new_id = root_node.id if root_node is not None else None
+    if incident.root_node_id == new_id:
+        return False
+    incident.root_node_id = new_id
+    session.flush()
+    _emit_outage_event(session, incident, "outage.rerooted")
+    return True
+
+
+def confirm_incident(
+    session: Session, incident: OutageIncident, *, now: datetime
+) -> None:
+    """suspected -> confirmed (debounce satisfied). Stamps confirmed_at."""
+    incident.status = "confirmed"
+    incident.confirmed_at = now
+    session.flush()
+    _emit_outage_event(session, incident, "outage.confirmed")
+
+
+def discard_incident(session: Session, incident: OutageIncident) -> None:
+    """suspected -> discarded (recovered before W_confirm — a false positive).
+    No confirmed event ever fires for a discarded incident."""
+    incident.status = "discarded"
+    session.flush()
+    _emit_outage_event(session, incident, "outage.discarded")
+
+
+def start_clearing(
+    session: Session, incident: OutageIncident, *, now: datetime
+) -> None:
+    """confirmed -> clearing (recovery observed). Stamps cleared_at; the
+    W_resolve window must elapse sustained before this becomes resolved."""
+    incident.status = "clearing"
+    incident.cleared_at = now
+    session.flush()
+    _emit_outage_event(session, incident, "outage.clearing")
+
+
+def reopen_incident(session: Session, incident: OutageIncident) -> None:
+    """clearing -> confirmed (re-darkened inside W_resolve — hysteresis). Clears
+    cleared_at so the resolve window restarts on the next recovery."""
+    incident.status = "confirmed"
+    incident.cleared_at = None
+    session.flush()
+    _emit_outage_event(session, incident, "outage.reopened")
+
+
+def resolve_classifier_incident(
+    session: Session, incident: OutageIncident, *, now: datetime
+) -> None:
+    """clearing -> resolved (recovery sustained past W_resolve). Stamps
+    resolved_at; MTTR = resolved_at - confirmed_at."""
+    incident.status = "resolved"
+    incident.resolved_at = now
+    session.flush()
+    _emit_outage_event(session, incident, "outage.resolved")
+
+
 def open_incident_for_path(
     session: Session, path, *, dist: dict | None = None, adjacency: dict | None = None
 ) -> OutageIncident | None:
@@ -242,9 +434,12 @@ def open_incident_for_path(
 
 
 def list_open_incidents(session: Session) -> list[OutageIncident]:
+    """Live incidents for the operator surfaces: operator ``open`` plus the
+    non-terminal classifier states (suspected/confirmed/clearing). Terminal
+    states (resolved/discarded) are excluded."""
     return (
         session.query(OutageIncident)
-        .filter(OutageIncident.status == "open")
+        .filter(OutageIncident.status.in_(_LIVE_STATUSES))
         .order_by(OutageIncident.started_at.desc())
         .all()
     )
