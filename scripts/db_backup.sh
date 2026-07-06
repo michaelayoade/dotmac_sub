@@ -14,6 +14,7 @@ DB_CONTAINER="${DB_CONTAINER:-dotmac_pg_local}"
 BACKUP_DIR="${DB_BACKUP_DIR:-/var/backups/dotmac_sub}"
 BACKUP_BASENAME="${DB_BACKUP_BASENAME:-dotmac_sub}"
 BACKUP_RETENTION_COUNT="${DB_BACKUP_RETENTION_COUNT:-5}"
+BACKUP_DB_USER="${DB_BACKUP_DB_USER:-postgres}"
 
 if [[ ! -f "${ROOT_DIR}/.env" ]]; then
   echo "Missing ${ROOT_DIR}/.env" >&2
@@ -40,15 +41,23 @@ if ! docker inspect "${DB_CONTAINER}" >/dev/null 2>&1; then
   exit 1
 fi
 
+BACKUP_DB_NAME="${DB_BACKUP_DB_NAME:-${DATABASE_URL##*/}}"
+BACKUP_DB_NAME="${BACKUP_DB_NAME%%\?*}"
+if [[ -z "${BACKUP_DB_NAME}" || "${BACKUP_DB_NAME}" == "${DATABASE_URL}" ]]; then
+  echo "Could not derive DB_BACKUP_DB_NAME from DATABASE_URL" >&2
+  exit 1
+fi
+
 mkdir -p "${BACKUP_DIR}"
 STAMP=$(date +"%F_%H%M%S")
 OUT_FILE="${BACKUP_DIR}/${BACKUP_BASENAME}_${STAMP}.sql.gz"
 
 echo "Starting DB backup to ${OUT_FILE}"
-# -Fp (plain) piped through gzip; pg_dump reads the full connection URI so no
-# separate creds are needed. Fail the whole pipe if pg_dump errors.
+# -Fp (plain) piped through gzip. Dump from inside the DB container as the
+# container-local backup user so non-app schemas are included too.
 set -o pipefail
-docker exec "${DB_CONTAINER}" pg_dump --no-owner --no-privileges "${DATABASE_URL}" \
+docker exec "${DB_CONTAINER}" pg_dump -U "${BACKUP_DB_USER}" -d "${BACKUP_DB_NAME}" \
+  --no-owner --no-privileges \
   | gzip > "${OUT_FILE}"
 
 if [[ ! -s "${OUT_FILE}" ]]; then

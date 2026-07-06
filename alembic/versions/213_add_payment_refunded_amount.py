@@ -49,13 +49,19 @@ def upgrade() -> None:
         ),
     )
     # Backfill the running total from the refund ledger entries (positive
-    # amounts, subtracted from the gross elsewhere).
+    # amounts, subtracted from the gross elsewhere). Use a single aggregate pass
+    # over ledger_entries; the per-payment correlated form times out on prod data.
+    bind.execute(text("SET LOCAL statement_timeout = 0"))
     bind.execute(
         text(
-            "UPDATE payments SET refunded_amount = COALESCE(("
-            "SELECT SUM(le.amount) FROM ledger_entries le "
-            "WHERE le.payment_id = payments.id AND le.source = 'refund'"
-            "), 0)"
+            "UPDATE payments p SET refunded_amount = refunds.total "
+            "FROM ("
+            "SELECT le.payment_id, SUM(le.amount) AS total "
+            "FROM ledger_entries le "
+            "WHERE le.source = 'refund' AND le.payment_id IS NOT NULL "
+            "GROUP BY le.payment_id"
+            ") refunds "
+            "WHERE refunds.payment_id = p.id"
         )
     )
 
