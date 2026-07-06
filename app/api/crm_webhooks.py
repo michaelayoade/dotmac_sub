@@ -365,6 +365,13 @@ async def receive_crm_project_event(
     if not isinstance(payload, dict):
         payload = {}
 
+    # Dedup: a redelivered lifecycle event must not re-fire the customer push
+    # or re-apply the delta (a redelivery of an older event can otherwise revert
+    # a newer status). The periodic reconcile is the backstop for the rare
+    # claim-then-fail case.
+    if not _claim_delivery(db, _delivery_uuid(request), event_type):
+        return {"status": "ignored", "reason": "duplicate", "event": event_type}
+
     inner = payload.get("payload")
     body = inner if isinstance(inner, dict) else payload
 
@@ -397,6 +404,13 @@ async def receive_crm_work_order_event(
     if not isinstance(payload, dict):
         payload = {}
 
+    # Dedup: a redelivered lifecycle event must not re-fire the customer push
+    # or re-apply the delta (a redelivery of an older event can otherwise revert
+    # a newer status). The periodic reconcile is the backstop for the rare
+    # claim-then-fail case.
+    if not _claim_delivery(db, _delivery_uuid(request), event_type):
+        return {"status": "ignored", "reason": "duplicate", "event": event_type}
+
     inner = payload.get("payload")
     body = inner if isinstance(inner, dict) else payload
 
@@ -427,6 +441,13 @@ async def receive_crm_quote_event(
         ) from None
     if not isinstance(payload, dict):
         payload = {}
+
+    # Dedup: a redelivered lifecycle event must not re-fire the customer push
+    # or re-apply the delta (a redelivery of an older event can otherwise revert
+    # a newer status). The periodic reconcile is the backstop for the rare
+    # claim-then-fail case.
+    if not _claim_delivery(db, _delivery_uuid(request), event_type):
+        return {"status": "ignored", "reason": "duplicate", "event": event_type}
 
     inner = payload.get("payload")
     body = inner if isinstance(inner, dict) else payload
