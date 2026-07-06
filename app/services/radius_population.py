@@ -57,6 +57,29 @@ def _rate_limit(offer: CatalogOffer, profile: RadiusProfile | None) -> str | Non
     return None
 
 
+def _effective_profile(
+    cred: AccessCredential | None,
+    subscription_profile: RadiusProfile | None,
+    profiles_by_id: dict,
+) -> RadiusProfile | None:
+    """Resolve the RADIUS profile that should shape a credential's radreply.
+
+    A dunning/FUP throttle is applied by setting ``AccessCredential.
+    radius_profile_id``; that credential-level override must win over the
+    subscription profile, otherwise the authoritative populate() sweep rebuilds
+    radreply from the offer/subscription speed and silently reverts the throttle
+    (SP-2). Mirrors the credential>subscription precedence in
+    ``enforcement.resolve_radius_profile``. Falls back to the subscription
+    profile when the credential carries no override (the normal, non-throttled
+    case — behaviour unchanged), or when the referenced profile can't be found.
+    """
+    if cred is not None and cred.radius_profile_id:
+        override = profiles_by_id.get(cred.radius_profile_id)
+        if override is not None:
+            return override
+    return subscription_profile
+
+
 def _radreply_attrs(
     sub: Subscription,
     offer: CatalogOffer,
@@ -214,6 +237,18 @@ def populate(dry_run: bool = True) -> dict[str, int]:
             ).all()
         }
 
+        # Pre-fetch RadiusProfiles by id so a credential-level profile override
+        # (a dunning/FUP throttle sets AccessCredential.radius_profile_id) can be
+        # resolved in memory. Without this, populate() rebuilds radreply purely
+        # from the subscription/offer profile and silently reverts every throttle
+        # within one sweep — the throttle never reaches the router (SP-2). This
+        # mirrors the credential>subscription precedence in
+        # enforcement.resolve_radius_profile; the offer-derived fallback below is
+        # unchanged, so a non-throttled customer's speed is untouched.
+        radius_profiles_by_id: dict = {
+            p.id: p for p in db.scalars(select(RadiusProfile)).all()
+        }
+
         # Pre-fetch blocked subscriber IDs. Customer-level block triggers
         # walled-garden regardless of subscription status.
         from app.models.subscriber import Subscriber, SubscriberStatus
@@ -331,10 +366,16 @@ def populate(dry_run: bool = True) -> dict[str, int]:
             eff_ipv4 = sub.ipv4_address
             if not eff_ipv4 or eff_ipv4 == "0.0.0.0":  # nosec B104  # noqa: S104
                 eff_ipv4 = ipv4_by_subscriber.get(sub.subscriber_id)
+            # Credential-level profile (throttle/FUP) takes precedence over the
+            # subscription profile, so an applied throttle actually shapes the
+            # radreply instead of being reverted to full offer speed each sweep.
+            effective_profile = _effective_profile(
+                cred, sub.radius_profile, radius_profiles_by_id
+            )
             attrs = _radreply_attrs(
                 sub,
                 sub.offer,
-                sub.radius_profile,
+                effective_profile,
                 sub_blocked,
                 captive_redirect_enabled=captive,
                 additional_routes=routes_by_subscriber.get(sub.subscriber_id),
