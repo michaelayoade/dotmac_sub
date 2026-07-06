@@ -492,6 +492,13 @@ def build_ncc_subscriber_report(
         by_state[state] += 1
         by_region[zone_for_state(state)] += 1
 
+    average_speed = _average_speed_payload(
+        total=total,
+        download_values=download_speeds,
+        upload_values=upload_speeds,
+        excluded_download_count=excluded_download_speed_count,
+        excluded_upload_count=excluded_upload_speed_count,
+    )
     cap = params.capacity or {}
     points_of_presence = cap.get("points_of_presence")
     points_of_presence_source = "manual"
@@ -515,13 +522,12 @@ def build_ncc_subscriber_report(
             "10Mbps+": bands.get("10Mbps+", 0),
             "unknown": bands.get("unknown", 0),
         },
-        "average_speed": _average_speed_payload(
-            total=total,
-            download_values=download_speeds,
-            upload_values=upload_speeds,
-            excluded_download_count=excluded_download_speed_count,
-            excluded_upload_count=excluded_upload_speed_count,
-        ),
+        "average_speed": average_speed,
+        # Flat aliases for external NCC pack consumers that do not read the
+        # nested ``average_speed`` object.
+        "average_internet_speed_mbps": average_speed["average_mbps"],
+        "average_download_speed_mbps": average_speed["average_download_mbps"],
+        "average_upload_speed_mbps": average_speed["average_upload_mbps"],
         # NCC 6a/6b: corporate vs individual, each split wired/wireless.
         "subscription_matrix": {
             "corporate": {

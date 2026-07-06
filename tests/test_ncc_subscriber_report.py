@@ -188,6 +188,9 @@ def test_report_aggregates_active_subscriptions(db_session):
     assert r["by_speed_band"]["10Mbps+"] == 1
     assert r["by_speed_band"]["2Mbps-<10Mbps"] == 1
     assert r["average_speed"]["average_mbps"] == 52.5
+    assert r["average_internet_speed_mbps"] == 52.5
+    assert r["average_download_speed_mbps"] == 52.5
+    assert r["average_upload_speed_mbps"] is None
     assert r["average_speed"]["included_download_count"] == 2
     assert r["average_speed"]["excluded_download_count"] == 0
     assert r["subscription_matrix"]["corporate"]["wired"] == 1
