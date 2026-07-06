@@ -126,6 +126,22 @@ def _derive(avail: str, icmp_up: bool | None = None) -> str:
     return UNKNOWN
 
 
+def _uisp_status(value: str | None) -> str:
+    """Map a UISP ``overview.status`` trapper value to up/down/unknown.
+
+    The ``uisp.status`` trapper carries whatever UISP reports; be defensive
+    about empty or unexpected values. Only ``active`` is healthy and
+    ``disconnected``/``offline`` are down; everything else (``unauthorized``,
+    ``unknown``, ``""``, or anything unforeseen) reads unknown.
+    """
+    v = (value or "").strip().lower()
+    if v == "active":
+        return UP
+    if v in ("disconnected", "offline"):
+        return DOWN
+    return UNKNOWN
+
+
 def warm_topology_status(session: Session, client) -> dict:
     """Refresh live_status for every reconciled, Zabbix-linked node."""
     nodes = (
@@ -144,6 +160,12 @@ def warm_topology_status(session: Session, client) -> dict:
     avail: dict[str, str] = {}
     icmp_allowed: dict[str, bool] = {}
     icmp_up: dict[str, bool] = {}
+    # UISP-observed status (hostid -> up/down/unknown), from the live
+    # ``uisp.status`` trapper the importer pushes every cycle. Only trapper-only
+    # UISP hosts (ONUs / non-ICMP stations) have this; it fills the gap where
+    # there is no polled interface or icmpping, so those nodes are no longer
+    # blindly "unknown". Polling always wins — see the per-node loop below.
+    uisp_status: dict[str, str] = {}
     for chunk in _chunks(host_ids, _CHUNK):
         for h in client.get_hosts(host_ids=chunk):
             host_id = str(h.get("hostid"))
@@ -160,11 +182,19 @@ def warm_topology_status(session: Session, client) -> dict:
                 icmp_up[host_id] = True
             elif value == "0":
                 icmp_up[host_id] = False
+        for item in client.get_items(
+            host_ids=chunk, metric="uisp.status", limit=100000
+        ):
+            if str(item.get("key_") or "") != "uisp.status":
+                continue
+            host_id = str(item.get("hostid"))
+            uisp_status[host_id] = _uisp_status(item.get("lastvalue"))
 
     now = _now()
     sla_logging = _sla_log_enabled()
     coverage = _coverage() if sla_logging else None
     counts: Counter = Counter()
+    via_uisp_status = 0  # nodes coloured from the uisp.status trapper fallback
     for n in nodes:
         hid = n.zabbix_hostid
         if hid is None:  # filtered in the query; narrows for the type checker
@@ -174,6 +204,16 @@ def warm_topology_status(session: Session, client) -> dict:
             raw_icmp if raw_icmp is False or icmp_allowed.get(hid, False) else None
         )
         status = _derive(avail.get(hid, UNKNOWN), zabbix_icmp)
+        # Real Zabbix polling (interface availability + icmpping) is more
+        # authoritative and real-time than the ~15-min UISP trapper, so it wins.
+        # Only when the polled result is UNKNOWN — a trapper-only UISP host with
+        # no polled interface or icmpping — do we fall back to its UISP-observed
+        # status. A host with both keeps its icmp/interface result untouched.
+        if status == UNKNOWN:
+            fallback = uisp_status.get(hid)
+            if fallback in (UP, DOWN):
+                status = fallback
+                via_uisp_status += 1
         # Stamp live_status_at only when the state CHANGES, so it marks when the
         # node entered its current state — the dwell clock the customer-facing
         # connection-status debounce relies on (see topology.selfcare).
@@ -193,4 +233,4 @@ def warm_topology_status(session: Session, client) -> dict:
             n.live_status_at = now
         counts[status] += 1
     session.flush()
-    return {"nodes": len(nodes), **counts}
+    return {"nodes": len(nodes), **counts, "via_uisp_status": via_uisp_status}
