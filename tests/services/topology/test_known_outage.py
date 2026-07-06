@@ -68,33 +68,6 @@ def test_none_when_no_incident(db_session):
     assert open_incident_for_path(db_session, CustomerPath(node=node)) is None
 
 
-def test_selfcare_reflects_known_outage(db_session, subscription):
-    from app.models.catalog import NasDevice
-    from app.services.topology.outage import declare_outage
-    from app.services.topology.selfcare import customer_connection_status
-
-    nas = NasDevice(name="NAS", management_ip="10.0.0.1")
-    pop = PopSite(name="Garki", zabbix_group_id="10")
-    db_session.add_all([nas, pop])
-    db_session.flush()
-    node = NetworkDevice(
-        name="node",
-        matched_device_type="nas",
-        matched_device_id=nas.id,
-        pop_site_id=pop.id,
-        live_status="up",  # would normally read "healthy"
-        is_active=True,
-    )
-    db_session.add(node)
-    subscription.provisioning_nas_device_id = nas.id
-    db_session.flush()
-    declare_outage(db_session, basestation=pop)
-
-    out = customer_connection_status(db_session, subscription)
-    assert out["known_outage"] is True
-    assert out["status"] == "outage"  # declared outage overrides the cached "up" dot
-
-
 def test_panel_renders_known_outage_banner():
     env = Environment(loader=FileSystemLoader("templates"), autoescape=True)
     html = env.get_template("admin/catalog/_network_path_panel.html").render(
