@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 
 import '../core/http.dart';
 import '../models/addon.dart';
+import '../models/connection_status.dart';
 import '../models/page.dart';
 import '../models/plan_change.dart';
 import '../models/service_status.dart';
@@ -36,6 +37,14 @@ class CatalogRepository {
   Future<ServiceStatus> serviceStatus() async {
     final data = await guard(() => dio.get('/me/service-status'));
     return ServiceStatus.fromJson((data as Map).cast<String, dynamic>());
+  }
+
+  /// GET /me/connection-status — the outage classifier's per-customer verdict
+  /// ("what's wrong with my connection?") with area-outage blame suppression
+  /// already applied server-side. Self-scoped to the caller's active service.
+  Future<ConnectionStatus> connectionStatus() async {
+    final data = await guard(() => dio.get('/me/connection-status'));
+    return ConnectionStatus.fromJson((data as Map).cast<String, dynamic>());
   }
 
   /// GET /subscriptions/{id}
