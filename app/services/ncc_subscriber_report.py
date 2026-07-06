@@ -5,9 +5,10 @@ for, entirely from the subscriber/catalog data: active subscriptions split by
 customer type, connection (wired/wireless), billing (prepaid/postpaid), speed
 band, State and geopolitical region.
 
-The three network-capacity lines (installed/un-utilised capacity, PoP count,
-data-usage TB) are NOT subscriber data — they are supplied as manual inputs by
-the caller and merely echoed into the return.
+Most network-capacity lines (installed/un-utilised capacity, data-usage TB) are
+NOT subscriber data — they are supplied as manual inputs by the caller and
+merely echoed into the return. PoP count is populated from active ``PopSite``
+inventory unless a manual override is provided.
 
 Aggregation runs in Python (not SQL group-by) so it can read the
 ``Subscriber.category`` JSON-metadata property and stays dialect-independent.
@@ -25,6 +26,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.catalog import AccessType, BillingMode, Subscription, SubscriptionStatus
+from app.models.network_monitoring import PopSite
 from app.models.subscriber import Subscriber, SubscriberCategory
 
 # ── Nigerian geography ──────────────────────────────────────────────────────
@@ -370,6 +372,11 @@ def _average_speed_payload(
     }
 
 
+def active_points_of_presence(session: Session) -> int:
+    """Count active POP inventory rows for the NCC PoP figure."""
+    return session.query(PopSite).filter(PopSite.is_active.is_(True)).count()
+
+
 @dataclass(slots=True)
 class NccSubscriberReportParams:
     """Pickable parameters for the NCC subscriber return.
@@ -381,9 +388,9 @@ class NccSubscriberReportParams:
       "active" excludes churned/expired; defaults to ``active`` only, but the
       operator can widen it (e.g. include ``suspended``) per NCC guidance.
     - ``reseller_id``: optionally scope the return to one reseller/partner.
-    - ``capacity``: manual network figures (access_capacity_gbps,
-      unutilized_capacity_mbps, points_of_presence, data_usage_tb) echoed into
-      the return — these are not subscriber data.
+    - ``capacity``: network figures. Most are manual
+      (access_capacity_gbps, unutilized_capacity_mbps, data_usage_tb). If
+      points_of_presence is omitted, it is populated from active ``pop_sites``.
     """
 
     as_of: datetime | None = None
@@ -486,6 +493,11 @@ def build_ncc_subscriber_report(
         by_region[zone_for_state(state)] += 1
 
     cap = params.capacity or {}
+    points_of_presence = cap.get("points_of_presence")
+    points_of_presence_source = "manual"
+    if points_of_presence is None:
+        points_of_presence = active_points_of_presence(session)
+        points_of_presence_source = "active_pop_sites"
     return {
         "parameters": {
             "as_of": as_of.isoformat(),
@@ -523,11 +535,13 @@ def build_ncc_subscriber_report(
         },
         "by_state": dict(sorted(by_state.items())),
         "by_region": dict(sorted(by_region.items())),
-        # Manual network-capacity inputs, echoed for the return.
+        # Capacity values for the NCC return. PoP is calculated from active
+        # POP inventory unless manually overridden.
         "network_capacity": {
             "access_capacity_gbps": cap.get("access_capacity_gbps"),
             "unutilized_capacity_mbps": cap.get("unutilized_capacity_mbps"),
-            "points_of_presence": cap.get("points_of_presence"),
+            "points_of_presence": points_of_presence,
+            "points_of_presence_source": points_of_presence_source,
             "data_usage_tb": cap.get("data_usage_tb"),
         },
     }
@@ -651,9 +665,9 @@ def build_ncc_subscriber_csv(report: dict) -> str:
     w.writerow(
         ["Un-utilised Capacity (Mbps) [manual]", cap["unutilized_capacity_mbps"] or ""]
     )
-    w.writerow(
-        ["Number of Points of Presence [manual]", cap["points_of_presence"] or ""]
-    )
+    pop_count = cap["points_of_presence"]
+    w.writerow(["Number of Points of Presence", "" if pop_count is None else pop_count])
+    w.writerow(["Points of Presence Source", cap["points_of_presence_source"] or ""])
     w.writerow(["Data Usage (TB) [manual]", cap["data_usage_tb"] or ""])
 
     w.writerow([])

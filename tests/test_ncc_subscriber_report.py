@@ -13,6 +13,7 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
+from app.models.network_monitoring import PopSite
 from app.models.subscriber import Address, AddressType, Subscriber, SubscriberCategory
 from app.services import ncc_subscriber_report as ncc
 
@@ -194,6 +195,32 @@ def test_report_aggregates_active_subscriptions(db_session):
     assert r["by_state"] == {"Federal Capital Territory": 1, "Lagos": 1}
     assert r["by_region"] == {"North Central": 1, "South West": 1}
     assert r["network_capacity"]["points_of_presence"] == 28
+    assert r["network_capacity"]["points_of_presence_source"] == "manual"
+
+
+def test_report_populates_points_of_presence_from_active_pop_sites(db_session):
+    db_session.add(PopSite(name="Active POP A", is_active=True))
+    db_session.add(PopSite(name="Active POP B", is_active=True))
+    db_session.add(PopSite(name="Inactive POP", is_active=False))
+    db_session.commit()
+
+    r = ncc.build_ncc_subscriber_report(db_session)
+
+    assert r["network_capacity"]["points_of_presence"] == 2
+    assert r["network_capacity"]["points_of_presence_source"] == "active_pop_sites"
+
+
+def test_report_points_of_presence_manual_override_wins(db_session):
+    db_session.add(PopSite(name="Active POP A", is_active=True))
+    db_session.commit()
+
+    r = ncc.build_ncc_subscriber_report(
+        db_session,
+        ncc.NccSubscriberReportParams(capacity={"points_of_presence": "28"}),
+    )
+
+    assert r["network_capacity"]["points_of_presence"] == "28"
+    assert r["network_capacity"]["points_of_presence_source"] == "manual"
 
 
 def test_report_average_speed_excludes_missing_and_implausible_values(db_session):
@@ -270,7 +297,8 @@ def test_report_empty(db_session):
     assert r["by_state"] == {}
     assert r["average_speed"]["average_mbps"] is None
     assert r["average_speed"]["included_download_count"] == 0
-    assert r["network_capacity"]["points_of_presence"] is None
+    assert r["network_capacity"]["points_of_presence"] == 0
+    assert r["network_capacity"]["points_of_presence_source"] == "active_pop_sites"
 
 
 def test_point_in_time_and_status_params(db_session):
@@ -342,5 +370,7 @@ def test_build_csv_layout(db_session):
     assert "Total Active Internet Subscriptions,0" in csv_text
     assert "Corporate — Wired,0" in csv_text
     assert "Average Internet Speed (Mbps)," in csv_text
+    assert "Number of Points of Presence,0" in csv_text
+    assert "Points of Presence Source,active_pop_sites" in csv_text
     assert "Data Usage (TB) [manual]," in csv_text
     assert "Active Subscriptions per State" in csv_text
