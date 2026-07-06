@@ -2172,6 +2172,10 @@ class Refunds:
         else:
             payment.status = PaymentStatus.partially_refunded
 
+        # Track the running refunded total on the payment (gross `amount` is left
+        # unchanged) so consumers can derive net cash without summing the ledger.
+        payment.refunded_amount = round_money(already_refunded + amount_to_refund)
+
         # Recalculate invoice totals for all allocated invoices
         for allocation in payment.allocations:
             invoice = get_by_id(db, Invoice, allocation.invoice_id)
