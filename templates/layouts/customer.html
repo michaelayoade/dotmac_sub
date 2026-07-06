@@ -89,7 +89,7 @@
                                 x-on:keydown.escape.window="open = false"
                                 :aria-expanded="open.toString()"
                                 aria-controls="customer-services-menu"
-                                class="flex items-center gap-1 px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200 {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page in ['services', 'usage', 'speedtest'] else 'text-stone-600 hover:text-stone-900 hover:bg-stone-100 dark:text-stone-400 dark:hover:text-white dark:hover:bg-stone-800' }}">
+                                class="flex items-center gap-1 px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200 {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page in ['services', 'usage', 'speedtest', 'connection'] else 'text-stone-600 hover:text-stone-900 hover:bg-stone-100 dark:text-stone-400 dark:hover:text-white dark:hover:bg-stone-800' }}">
                             Services
                             <svg class="h-4 w-4 transition-transform" :class="open && 'rotate-180'" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
@@ -117,6 +117,9 @@
                             </a>
                             <a href="/portal/speedtest" class="flex items-center gap-3 px-4 py-2.5 text-sm text-stone-700 hover:bg-stone-50 dark:text-stone-300 dark:hover:bg-stone-700/50 {{ 'bg-stone-50 dark:bg-stone-700/50' if active_page == 'speedtest' else '' }}">
                                 Speed Test
+                            </a>
+                            <a href="/portal/connection" class="flex items-center gap-3 px-4 py-2.5 text-sm text-stone-700 hover:bg-stone-50 dark:text-stone-300 dark:hover:bg-stone-700/50 {{ 'bg-stone-50 dark:bg-stone-700/50' if active_page == 'connection' else '' }}">
+                                Connection Status
                             </a>
                             {% endif %}
                         </div>
@@ -449,6 +452,10 @@
                 <a href="/portal/speedtest" class="flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-xl {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page == 'speedtest' else 'text-stone-600 hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800' }} transition-colors">
                     <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
                     Speed Test
+                </a>
+                <a href="/portal/connection" class="flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-xl {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page == 'connection' else 'text-stone-600 hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800' }} transition-colors">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 20h.01M8.5 16.4a5 5 0 017 0M5 12.9a10 10 0 0114 0M2 9.4a15 15 0 0120 0"/></svg>
+                    Connection Status
                 </a>
                 {% endif %}
                 <a href="/portal/support" class="flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-xl {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page == 'support' else 'text-stone-600 hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800' }} transition-colors">
