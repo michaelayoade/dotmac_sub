@@ -253,16 +253,32 @@ def test_status_json_requires_auth(db_session):
     assert json.loads(bytes(resp.body)) == {"detail": "Not authenticated"}
 
 
-def test_status_json_returns_callers_own_status(db_session, catalog_offer):
+def test_status_json_returns_callers_own_status(db_session, catalog_offer, monkeypatch):
     import json
     from unittest.mock import patch
 
     from fastapi import Request
 
+    from app.services.topology import connection_status as conn_status_svc
+    from app.services.topology import last_mile as last_mile_svc
     from app.web.customer import connection as conn_web
 
     sub = _sub(db_session, catalog_offer.id)
-    _live_session(db_session, sub, now=datetime.now(UTC))
+    _live_session(db_session, sub)  # last_update pinned to NOW, like every sibling test
+
+    # The route calls connection_status(db, sub) with NO ``now`` override, so its
+    # 20-min session-freshness gate falls through to wall-clock datetime.now(UTC).
+    # Freeze that wall clock to NOW for just this test so the outcome is
+    # deterministic no matter when the suite runs (mirrors the _FrozenDateTime
+    # convention in test_customer_plan_change_prepaid.py).
+    class _FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW if tz is None else NOW.astimezone(tz)
+
+    monkeypatch.setattr(last_mile_svc, "datetime", _FrozenDateTime)
+    monkeypatch.setattr(conn_status_svc, "datetime", _FrozenDateTime)
+
     req = Request({"type": "http", "headers": [], "query_string": b""})
     # The route only ever resolves THIS session's own subscription — a customer
     # can never address another's status.
