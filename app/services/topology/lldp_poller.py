@@ -269,6 +269,13 @@ def poll_all(
     routers = session.query(Router).filter(Router.is_active.is_(True)).all()
 
     edges: dict = {}
+    # NetworkDevice ids of routers we SUCCESSFULLY read this run. Only these
+    # devices could have re-observed (or stopped observing) their neighbors, so
+    # only their edges are eligible for pruning below. Routers that failed
+    # (routers_failed) or were skipped (skipped_time_budget / no-device) never
+    # enter this set, so edges whose only observer was unreachable this cycle
+    # are left untouched instead of flapping active/inactive every run.
+    polled_device_ids: set = set()
     for router in routers:
         local = (
             session.get(NetworkDevice, router.network_device_id)
@@ -311,6 +318,7 @@ def poll_all(
         stats["routers_polled"] += 1
         stats["via_binary_api"] += 1
         stats["neighbors_seen"] += len(neighbors)
+        polled_device_ids.add(local.id)
         accumulate_edges(edges, local, neighbors, index)
 
     # Upsert by canonical pair, scoped to our source (query-before-insert: the
@@ -352,7 +360,12 @@ def poll_all(
             stats["updated"] += 1
     session.flush()
 
-    # Soft-prune our rows not seen this run.
+    # Soft-prune our rows not seen this run — but ONLY when a router that could
+    # have re-observed the edge was actually polled this run and didn't report
+    # it. An edge whose only observing router failed or was skipped this cycle
+    # is left active (it'll be re-verified once that router is reachable again),
+    # otherwise the 2/25 routers that routinely time out would flap their edges
+    # active/inactive on every run and churn the topology graph.
     pruned = 0
     for link in (
         session.query(NetworkTopologyLink)
@@ -362,7 +375,13 @@ def poll_all(
         )
         .all()
     ):
-        if _canonical(link.source_device_id, link.target_device_id) not in seen_pairs:
+        if _canonical(link.source_device_id, link.target_device_id) in seen_pairs:
+            continue
+        observed_by_polled_router = (
+            link.source_device_id in polled_device_ids
+            or link.target_device_id in polled_device_ids
+        )
+        if observed_by_polled_router:
             link.is_active = False
             pruned += 1
     session.flush()
