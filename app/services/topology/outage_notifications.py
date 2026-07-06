@@ -467,3 +467,38 @@ def dispatch_outage_notifications(
     }
     logger.info("outage-notify DISPATCH by actor=%s: %s", actor_id, counts)
     return result
+
+
+def recent_dispatches(
+    session: Session, boundary_node_id: uuid.UUID, *, limit: int = 25
+) -> dict:
+    """Recent dispatch audit rows for one area boundary (operator console view).
+
+    Read-only. Returns the most recent ``OutageNotificationDispatch`` rows for
+    this boundary (newest first) plus a status tally, so an operator can see who
+    was notified, when, by whom, and why anything was suppressed/debounced.
+    Per-customer rows (``boundary_node_id is None``) are not shown here — this is
+    the area view keyed on the boundary.
+    """
+    rows = (
+        session.query(OutageNotificationDispatch)
+        .filter(OutageNotificationDispatch.boundary_node_id == boundary_node_id)
+        .order_by(OutageNotificationDispatch.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    counts: dict[str, int] = {}
+    out = []
+    for r in rows:
+        counts[r.status] = counts.get(r.status, 0) + 1
+        out.append(
+            {
+                "created_at": r.created_at,
+                "status": r.status,
+                "scope": r.scope,
+                "recipient": r.recipient,
+                "subject": r.subject,
+                "actor_id": str(r.actor_id) if r.actor_id else None,
+            }
+        )
+    return {"rows": out, "counts": counts}

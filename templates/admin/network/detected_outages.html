@@ -68,7 +68,10 @@
                         <td class="py-2 font-semibold text-slate-900 dark:text-white">{{ o.affected }}</td>
                         <td class="py-2 text-slate-500">{{ o.online_now }}</td>
                         <td class="py-2 text-slate-500">{{ o.confidence }}</td>
-                        <td class="py-2"><a href="/admin/network/detected-outages?node_id={{ o.failure_node }}" class="text-sky-600 hover:underline dark:text-sky-400">Diagnose →</a></td>
+                        <td class="py-2 space-x-3 whitespace-nowrap">
+                            <a href="/admin/network/detected-outages?node_id={{ o.failure_node }}" class="text-sky-600 hover:underline dark:text-sky-400">Diagnose →</a>
+                            <a href="/admin/network/detected-outages/notify?node_id={{ o.failure_node }}" class="text-sky-600 hover:underline dark:text-sky-400">Notify →</a>
+                        </td>
                     </tr>
                     {% else %}
                     <tr><td colspan="7" class="py-4 text-slate-400">No active outages — every classified domain has a live customer (proof-of-life).</td></tr>
