@@ -370,6 +370,41 @@ def outages_resolve(incident_id: str, request: Request, db: Session = Depends(ge
 
 
 @router.get(
+    "/detected-outages",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def detected_outages_console(
+    request: Request,
+    node_id: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """Classifier-driven outage console (design §P4): what is ACTUALLY down now,
+    from the P1/P2/P3 engines — no operator declaration. Optional ``node_id``
+    drills into one failure domain (per-customer P2 verdicts + P3 branch
+    alerts)."""
+    import uuid as _uuid
+
+    from app.services.topology.outage_console import (
+        active_outages,
+        network_health_summary,
+        outage_detail,
+    )
+
+    context = _base_context(request, db, active_page="monitoring")
+    context["summary"] = network_health_summary(db)
+    context["active"] = active_outages(db)
+    detail = None
+    if node_id:
+        try:
+            detail = outage_detail(db, _uuid.UUID(node_id))
+        except (ValueError, TypeError):
+            detail = None
+    context["detail"] = detail
+    return templates.TemplateResponse("admin/network/detected_outages.html", context)
+
+
+@router.get(
     "/monitoring",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("monitoring:read"))],
