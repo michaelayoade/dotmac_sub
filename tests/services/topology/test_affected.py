@@ -446,6 +446,95 @@ def test_impact_breakdown_ranks_and_scales_branches(db_session, catalog_offer):
     assert branches[1]["count"] == 1 and branches[1]["pct"] == 50
 
 
+# --- Live-session arm: RadiusActiveSession.nas_device_id (who's online now) ---
+
+
+def _session(db, subscription, nas_device_id, subscriber_id=None):
+    from datetime import UTC, datetime
+
+    from app.models.radius_active_session import RadiusActiveSession
+
+    ras = RadiusActiveSession(
+        subscriber_id=(
+            subscriber_id
+            if subscriber_id is not None
+            else getattr(subscription, "subscriber_id", None)
+        ),
+        subscription_id=getattr(subscription, "id", None),
+        nas_device_id=nas_device_id,
+        username="u",
+        acct_session_id=uuid.uuid4().hex,
+        session_start=datetime.now(UTC),
+    )
+    db.add(ras)
+    db.flush()
+    return ras
+
+
+def test_live_session_arm_unions_with_provisioning_and_dedupes(
+    db_session, catalog_offer
+):
+    # A NAS node: the live-session arm adds who is CONNECTED there now (roaming/
+    # failover) on top of who is provisioned there, deduped by subscription id.
+    nas = NasDevice(name="NAS-Live", management_ip="10.0.5.1")
+    other = NasDevice(name="NAS-Other", management_ip="10.0.5.2")
+    db_session.add_all([nas, other])
+    db_session.flush()
+    node = _node(db_session, "live-nas", "nas", nas.id)
+
+    prov_only = _sub(db_session, catalog_offer.id, nas_id=nas.id)  # provisioned here
+    live_only = _sub(db_session, catalog_offer.id, nas_id=other.id)  # live here only
+    both = _sub(db_session, catalog_offer.id, nas_id=nas.id)  # both arms -> deduped
+    elsewhere = _sub(db_session, catalog_offer.id, nas_id=other.id)  # live on other
+    canceled = _sub(
+        db_session,
+        catalog_offer.id,
+        nas_id=other.id,
+        status=SubscriptionStatus.canceled,
+    )  # live here but inactive subscription -> excluded
+
+    _session(db_session, live_only, nas.id)
+    _session(db_session, both, nas.id)  # also in provisioning arm
+    _session(db_session, elsewhere, other.id)  # session on a different NAS
+    _session(db_session, canceled, nas.id)
+
+    out = affected_customers(db_session, node=node)
+    assert out["count"] == 3
+    assert {s.id for s in out["subscriptions"]} == {
+        prov_only.id,
+        live_only.id,
+        both.id,
+    }
+
+
+def test_subscriptions_for_nodes_live_session_parity(db_session, catalog_offer):
+    # Batched must agree with the single-node path once the live-session arm
+    # contributes (a node with a live session + an empty node).
+    from app.services.topology.affected import (
+        subscriptions_for_node,
+        subscriptions_for_nodes,
+    )
+
+    nas = NasDevice(name="NAS-P", management_ip="10.0.6.1")
+    other = NasDevice(name="NAS-Q", management_ip="10.0.6.2")
+    db_session.add_all([nas, other])
+    db_session.flush()
+    node = _node(db_session, "parity-nas", "nas", nas.id)
+    empty = _node(db_session, "parity-empty", "nas", other.id)
+
+    _sub(db_session, catalog_offer.id, nas_id=nas.id)  # provisioning arm
+    live = _sub(db_session, catalog_offer.id, nas_id=other.id)  # live arm only
+    _session(db_session, live, nas.id)
+
+    nodes = [node, empty]
+    batched = subscriptions_for_nodes(db_session, [n.id for n in nodes])
+    assert set(batched) == {n.id for n in nodes}
+    for n in nodes:
+        assert {s.id for s in batched[n.id]} == {
+            s.id for s in subscriptions_for_node(db_session, n)
+        }
+
+
 def test_fdh_impact_branches_group_and_scale():
     rows = [
         {"splitter_name": "SPL-1"},
