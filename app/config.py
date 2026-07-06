@@ -203,5 +203,14 @@ class Settings:
         os.getenv("INFRA_SLA_TARGET_PERCENT", "99.5")
     )
 
+    # Outage-classifier customer notifications (design docs/designs/OUTAGE_CLASSIFIER.md
+    # §P4). Default OFF: the notifier only ever *plans* messages (recipients,
+    # bodies) for review — it never dispatches, and the live send-path is gated
+    # on comms policy, not on this flag. Flip on only once the send-path exists
+    # and the operator has approved customer outage messaging.
+    outage_notify_enabled: bool = os.getenv(
+        "OUTAGE_NOTIFY_ENABLED", "false"
+    ).lower() in ("true", "1", "yes")
+
 
 settings = Settings()
