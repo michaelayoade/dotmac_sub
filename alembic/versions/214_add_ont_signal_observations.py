@@ -17,7 +17,7 @@ from __future__ import annotations
 from uuid import uuid4
 
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import ENUM, UUID
 
 from alembic import op
 
@@ -56,11 +56,15 @@ def upgrade() -> None:
                 sa.ForeignKey("pon_ports.id", ondelete="SET NULL"),
                 nullable=True,
             ),
-            # Reuse the existing onuonlinestatus enum (create_type=False so this
-            # migration never tries to re-CREATE TYPE — ont_units already owns it).
+            # Reuse the existing onuonlinestatus enum. Must be postgresql.ENUM,
+            # not sa.Enum: create_type=False is honoured only by the PG dialect
+            # type — with the generic sa.Enum it is silently ignored and alembic
+            # still emits CREATE TYPE, which collides with the enum ont_units
+            # already owns (the type is created by the initial schema, always
+            # present before this migration runs).
             sa.Column(
                 "olt_status",
-                sa.Enum(
+                ENUM(
                     "online",
                     "offline",
                     name="onuonlinestatus",
