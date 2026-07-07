@@ -425,29 +425,52 @@ class MoneySelfConsistencyCheck:
             if not _money_differs(actual, expected):
                 continue
             is_legacy_splynx_import = splynx_invoice_id is not None
-            severity = SEVERITY_MEDIUM if is_legacy_splynx_import else SEVERITY_HIGH
+            legacy_missing_line_totals = (
+                is_legacy_splynx_import
+                and expected == Decimal("0.00")
+                and actual > Decimal("0.00")
+            )
+            mismatch_type = (
+                "legacy_invoice_line_totals_missing"
+                if legacy_missing_line_totals
+                else "invoice_total_mismatch"
+            )
+            severity = (
+                SEVERITY_LOW
+                if legacy_missing_line_totals
+                else SEVERITY_MEDIUM
+                if is_legacy_splynx_import
+                else SEVERITY_HIGH
+            )
             source = "legacy_splynx_import" if is_legacy_splynx_import else "native"
             suggested_owner = (
                 "finance migration review"
                 if is_legacy_splynx_import
                 else "billing invoice recalculation"
             )
-            suggested_action = (
-                "Review the historical Splynx import header mapping; imported "
-                "invoice totals were preserved, but subtotal/tax_total may be "
-                "missing or net/gross split differently. Do not recalculate "
-                "paid historical invoices without finance sign-off."
-                if is_legacy_splynx_import
-                else (
+            if legacy_missing_line_totals:
+                suggested_action = (
+                    "Historical Splynx invoice total was preserved, but imported "
+                    "line subtotal/tax fields are empty. Treat as archive data "
+                    "completeness, not a current invoice arithmetic bug."
+                )
+            elif is_legacy_splynx_import:
+                suggested_action = (
+                    "Review the historical Splynx import header mapping; imported "
+                    "invoice totals were preserved, but subtotal/tax_total may be "
+                    "missing or net/gross split differently. Do not recalculate "
+                    "paid historical invoices without finance sign-off."
+                )
+            else:
+                suggested_action = (
                     "Recalculate this invoice from active lines and verify "
                     "subtotal + tax_total equals total before ERP sync."
                 )
-            )
             yield Finding(
                 check_name=self.name,
                 entity_type="invoice",
                 canonical_entity_id=str(invoice_id),
-                mismatch_type="invoice_total_mismatch",
+                mismatch_type=mismatch_type,
                 severity=severity,
                 evidence={
                     "invoice_number": invoice_number,
@@ -528,30 +551,54 @@ class MoneySelfConsistencyCheck:
             if not _money_differs(actual_balance, expected_balance):
                 continue
             is_legacy_splynx_import = splynx_invoice_id is not None
-            severity = SEVERITY_MEDIUM if is_legacy_splynx_import else SEVERITY_HIGH
+            legacy_paid_reconstruction_gap = (
+                is_legacy_splynx_import
+                and status == InvoiceStatus.paid
+                and actual_balance == Decimal("0.00")
+            )
+            mismatch_type = (
+                "legacy_paid_invoice_allocation_gap"
+                if legacy_paid_reconstruction_gap
+                else "invoice_balance_mismatch"
+            )
+            severity = (
+                SEVERITY_LOW
+                if legacy_paid_reconstruction_gap
+                else SEVERITY_MEDIUM
+                if is_legacy_splynx_import
+                else SEVERITY_HIGH
+            )
             source = "legacy_splynx_import" if is_legacy_splynx_import else "native"
             suggested_owner = (
                 "finance migration review"
                 if is_legacy_splynx_import
                 else "billing invoice recalculation"
             )
-            suggested_action = (
-                "Review the historical Splynx settlement import for this "
-                "invoice; imported balance_due/status may reflect Splynx-paid "
-                "state even when local allocations do not reconstruct it. Do "
-                "not reopen or recalculate paid historical invoices without "
-                "finance sign-off."
-                if is_legacy_splynx_import
-                else (
+            if legacy_paid_reconstruction_gap:
+                suggested_action = (
+                    "Historical Splynx invoice was imported as paid with zero "
+                    "balance, but local allocation rows do not reconstruct the "
+                    "settlement. Treat as archive allocation completeness, not "
+                    "current receivable drift."
+                )
+            elif is_legacy_splynx_import:
+                suggested_action = (
+                    "Review the historical Splynx settlement import for this "
+                    "invoice; imported balance_due/status may reflect Splynx-paid "
+                    "state even when local allocations do not reconstruct it. Do "
+                    "not reopen or recalculate paid historical invoices without "
+                    "finance sign-off."
+                )
+            else:
+                suggested_action = (
                     "Run the invoice recalculation path for this invoice and "
                     "review active allocations/credit applications."
                 )
-            )
             yield Finding(
                 check_name=self.name,
                 entity_type="invoice",
                 canonical_entity_id=str(invoice_id),
-                mismatch_type="invoice_balance_mismatch",
+                mismatch_type=mismatch_type,
                 severity=severity,
                 evidence={
                     "invoice_number": invoice_number,
