@@ -1,0 +1,127 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import page_header, card, status_badge, icon_warning %}
+
+{% block title %}Cross-App Drift - Admin{% endblock %}
+
+{% macro sev_variant(sev) %}{{ 'error' if sev == 'critical' else 'warning' if sev == 'high' else 'info' if sev == 'medium' else 'neutral' }}{% endmacro %}
+
+{% block content %}
+<div class="space-y-6">
+    {% call page_header(title="Cross-App Drift", subtitle="Where CRM / sub / ERP disagree on the facts that matter — what is broken, how bad, who owns it, and the evidence.", icon=icon_warning(), color="rose", color2="amber") %}
+    {% endcall %}
+
+    <div class="grid grid-cols-2 gap-4 sm:grid-cols-5">
+        {% for sev in ['critical', 'high', 'medium', 'low'] %}
+        <a href="/admin/drift?status=open&severity={{ sev }}" class="rounded-lg border border-slate-200 bg-white p-4 transition hover:border-rose-300 dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">{{ sev|title }} (open)</p>
+            <p class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{{ open_by_severity.get(sev, 0) }}</p>
+        </a>
+        {% endfor %}
+        <div class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">SLA breached</p>
+            <p class="mt-1 text-2xl font-bold {{ 'text-rose-600 dark:text-rose-400' if breached_count else 'text-slate-900 dark:text-white' }}">{{ breached_count }}</p>
+        </div>
+    </div>
+
+    {% call card("Filters") %}
+    <form method="get" action="/admin/drift" class="grid grid-cols-1 gap-3 md:grid-cols-6">
+        <select name="status" class="rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+            {% for item in statuses %}
+            <option value="{{ item }}" {% if status == item %}selected{% endif %}>{{ item|title }}</option>
+            {% endfor %}
+        </select>
+        <select name="severity" class="rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+            <option value="">All severities</option>
+            {% for item in severities %}
+            <option value="{{ item }}" {% if severity == item %}selected{% endif %}>{{ item|title }}</option>
+            {% endfor %}
+        </select>
+        <select name="check" class="rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+            <option value="">All checks</option>
+            {% for item in checks %}
+            <option value="{{ item }}" {% if check == item %}selected{% endif %}>{{ item }}</option>
+            {% endfor %}
+        </select>
+        <select name="entity_type" class="rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+            <option value="">All entities</option>
+            {% for item in entity_types %}
+            <option value="{{ item }}" {% if entity_type == item %}selected{% endif %}>{{ item }}</option>
+            {% endfor %}
+        </select>
+        <input type="text" name="owner" value="{{ owner }}" placeholder="Owner contains…" class="rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+        <button type="submit" class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200">Apply</button>
+    </form>
+    {% endcall %}
+
+    {% call card("Findings") %}
+    <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <p class="text-sm text-slate-500 dark:text-slate-400">{{ total }} matching finding{{ "s" if total != 1 else "" }}</p>
+        {% if total_pages > 1 %}
+        <div class="flex items-center gap-2 text-sm">
+            <a href="/admin/drift?status={{ status }}&severity={{ severity }}&check={{ check }}&entity_type={{ entity_type }}&owner={{ owner }}&per_page={{ per_page }}&page={{ page - 1 }}" class="rounded-md border border-slate-200 px-2.5 py-1.5 font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800 {% if not has_previous_page %}pointer-events-none opacity-50{% endif %}">Previous</a>
+            <span class="text-xs font-semibold text-slate-500 dark:text-slate-400">Page {{ page }} of {{ total_pages }}</span>
+            <a href="/admin/drift?status={{ status }}&severity={{ severity }}&check={{ check }}&entity_type={{ entity_type }}&owner={{ owner }}&per_page={{ per_page }}&page={{ page + 1 }}" class="rounded-md border border-slate-200 px-2.5 py-1.5 font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800 {% if not has_next_page %}pointer-events-none opacity-50{% endif %}">Next</a>
+        </div>
+        {% endif %}
+    </div>
+    {% if findings %}
+    <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
+            <thead>
+                <tr class="text-left text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">
+                    <th class="px-3 py-2">Severity</th>
+                    <th class="px-3 py-2">Condition</th>
+                    <th class="px-3 py-2">Entity</th>
+                    <th class="px-3 py-2">Owner &amp; action</th>
+                    <th class="px-3 py-2">Evidence</th>
+                    <th class="px-3 py-2">Ageing</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+                {% for f in findings %}
+                <tr class="align-top">
+                    <td class="px-3 py-3">
+                        <div class="space-y-1">
+                            {{ status_badge(f.severity|title, sev_variant(f.severity), size='sm') }}
+                            {{ status_badge(f.status|title, 'success' if f.status == 'resolved' else 'neutral' if f.status == 'waived' else sev_variant(f.severity), size='sm') }}
+                            {% if f.sla.breached %}{{ status_badge("SLA breached", 'error', size='sm') }}{% endif %}
+                        </div>
+                    </td>
+                    <td class="px-3 py-3">
+                        <p class="font-semibold text-slate-900 dark:text-white">{{ f.mismatch_type }}</p>
+                        <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{{ f.check }}</p>
+                    </td>
+                    <td class="px-3 py-3">
+                        <p class="text-slate-700 dark:text-slate-200">{{ f.entity_type }}</p>
+                        <p class="mt-0.5 font-mono text-[11px] text-slate-500 dark:text-slate-400">{{ f.canonical_entity_id }}</p>
+                    </td>
+                    <td class="px-3 py-3">
+                        <p class="text-xs font-semibold text-slate-700 dark:text-slate-200">{{ f.suggested_owner or '—' }}</p>
+                        {% if f.suggested_action %}<p class="mt-1 max-w-sm text-xs text-slate-500 dark:text-slate-400">{{ f.suggested_action }}</p>{% endif %}
+                    </td>
+                    <td class="px-3 py-3">
+                        {% if f.evidence %}
+                        <dl class="max-w-xs space-y-0.5 font-mono text-[11px] text-slate-600 dark:text-slate-300">
+                            {% for key, value in f.evidence.items() %}
+                            <div class="flex gap-1"><dt class="text-slate-400">{{ key }}:</dt><dd class="break-all">{{ value }}</dd></div>
+                            {% endfor %}
+                        </dl>
+                        {% else %}<span class="text-slate-400">—</span>{% endif %}
+                    </td>
+                    <td class="px-3 py-3 text-xs text-slate-500 dark:text-slate-400">
+                        <p>seen {{ f.occurrences }}×</p>
+                        <p class="mt-0.5">first {{ f.first_seen_at[:16] if f.first_seen_at else '' }}</p>
+                        <p>last {{ f.last_seen_at[:16] if f.last_seen_at else '' }}</p>
+                        {% if f.sla.due_at %}<p class="mt-0.5 {{ 'text-rose-600 dark:text-rose-400' if f.sla.breached else '' }}">due {{ f.sla.due_at[:16] }}</p>{% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <p class="py-8 text-center text-sm text-slate-500 dark:text-slate-400">No findings match these filters — nothing drifting here.</p>
+    {% endif %}
+    {% endcall %}
+</div>
+{% endblock %}

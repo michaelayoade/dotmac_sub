@@ -169,6 +169,13 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.crm_ticket_push.push_ticket_to_crm": _c(
         "crm", AUTORETRY, GUARDED, STATUS
     ),
+    "app.tasks.cross_app_drift.run_cross_app_drift_detection": _c(
+        "monitoring",
+        SWEEP,
+        IDEMP,
+        STATUS,
+        "Read-only; findings deduped by fingerprint.",
+    ),
     "app.tasks.enforcement.cleanup_subscription_block_sessions": _c(
         "enforcement", SWEEP, IDEMP, HEALTH
     ),

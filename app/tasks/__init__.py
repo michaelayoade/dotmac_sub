@@ -37,6 +37,7 @@ from app.tasks.crm_ticket_push import (
     push_comment_to_crm,
     push_ticket_to_crm,
 )
+from app.tasks.cross_app_drift import run_cross_app_drift_detection
 from app.tasks.enforcement import cleanup_subscription_block_sessions
 from app.tasks.events import (
     cleanup_old_events,
@@ -228,6 +229,7 @@ __all__ = [
     "mark_stale_processing_events",
     "cleanup_old_events",
     "cleanup_subscription_block_sessions",
+    "run_cross_app_drift_detection",
     "run_usage_rating",
     "import_radius_accounting",
     "reap_stale_radius_sessions",
