@@ -13,6 +13,11 @@ from types import SimpleNamespace
 
 import pytest
 from billiard.exceptions import SoftTimeLimitExceeded
+from routeros_api.exceptions import (
+    RouterOsApiCommunicationError,
+    RouterOsApiConnectionError,
+    RouterOsApiParsingError,
+)
 
 from app.models.network_monitoring import NetworkDevice, NetworkTopologyLink
 from app.models.router_management import Router
@@ -20,6 +25,12 @@ from app.services.topology import lldp_poller
 from app.services.topology.lldp_poller import SOURCE, poll_all
 
 NOW = datetime(2026, 6, 17, 14, 0, tzinfo=UTC)
+
+
+def _empty_table_error():
+    """The exact parse failure routeros_api raises for an empty neighbor table:
+    a bare '!empty' sentence that some library builds refuse to parse."""
+    return RouterOsApiParsingError("Malformed sentence %s", [b"!empty", b".tag=2"])
 
 
 def _router_node(db, name, mgmt_ip=None, is_active=True, network_device=True):
@@ -71,28 +82,33 @@ def _active_links(db):
 
 
 class _FakeResource:
-    def __init__(self, rows):
+    def __init__(self, rows, get_error=None):
         self._rows = rows
+        self._get_error = get_error
 
     def get(self):
+        if self._get_error is not None:
+            raise self._get_error
         return self._rows
 
 
 class _FakeApi:
-    def __init__(self, rows):
+    def __init__(self, rows, get_error=None):
         self._rows = rows
+        self._get_error = get_error
 
     def get_resource(self, path):
         assert path == "/ip/neighbor", path
-        return _FakeResource(self._rows)
+        return _FakeResource(self._rows, get_error=self._get_error)
 
 
 class _FakePool:
     """Stand-in for RouterOsApiPool: records lifecycle for hygiene assertions."""
 
-    def __init__(self, rows=None, get_api_error=None):
+    def __init__(self, rows=None, get_api_error=None, get_error=None):
         self._rows = rows or []
         self._get_api_error = get_api_error
+        self._get_error = get_error
         self.disconnected = False
         self.timeout = None
 
@@ -102,7 +118,7 @@ class _FakePool:
     def get_api(self):
         if self._get_api_error is not None:
             raise self._get_api_error
-        return _FakeApi(self._rows)
+        return _FakeApi(self._rows, get_error=self._get_error)
 
     def disconnect(self):
         self.disconnected = True
@@ -388,3 +404,331 @@ def test_time_budget_exhaustion_skips_remainder_without_failing(db_session):
     assert r["skipped_time_budget"] == 1  # remainder skipped, not failed
     assert r["routers_failed"] == 0
     assert r["created"] == 1  # run still reconciles what it saw
+
+
+# --- Empty neighbor table (robustness: '!empty' parse crash) ------------------
+
+
+def test_empty_neighbor_table_yields_no_neighbors():
+    """A router with an EMPTY neighbor table raises routeros_api's '!empty' parse
+    error; the fetch swallows it as 0 neighbors and still disconnects cleanly."""
+    pool = _FakePool(get_error=_empty_table_error())
+    out = lldp_poller._read_neighbors_via_binary_api(
+        _fake_router(), pool_factory=lambda *a, **k: pool
+    )
+    assert out == []
+    assert pool.disconnected is True  # no session leak on the empty path
+
+
+def test_non_empty_parse_error_still_propagates():
+    """Only the '!empty' marker is swallowed; a genuinely malformed sentence
+    (a real bug/corruption) must still surface as a router failure."""
+    pool = _FakePool(
+        get_error=RouterOsApiParsingError("Malformed attribute %s", b"=garbage")
+    )
+    with pytest.raises(RouterOsApiParsingError):
+        lldp_poller._read_neighbors_via_binary_api(
+            _fake_router(), pool_factory=lambda *a, **k: pool
+        )
+    assert pool.disconnected is True
+
+
+def test_poll_all_empty_table_not_counted_as_failure(db_session):
+    """End-to-end: an empty table is 0 neighbors, NOT routers_failed."""
+    _node, _router = _router_node(db_session, "SPDC Access")
+    _plain(db_session, "GBB")
+
+    pool = _FakePool(get_error=_empty_table_error())
+
+    def read(router):
+        return lldp_poller._read_neighbors_via_binary_api(
+            router, pool_factory=lambda *a, **k: pool
+        )
+
+    r = poll_all(db_session, read_neighbors=read, now=NOW)
+    assert r["routers_failed"] == 0
+    assert r["routers_polled"] == 1
+    assert r["via_binary_api"] == 1
+    assert r["neighbors_seen"] == 0
+    assert r["created"] == 0
+    assert len(_active_links(db_session)) == 0
+
+
+# --- REST (443) fallback for REST-only cores (8728 filtered) ------------------
+
+
+def _conn_error():
+    """A binary-API CONNECTION-class failure (8728 filtered/timeout/refused)."""
+    return RouterOsApiConnectionError("timed out")
+
+
+def _auth_error():
+    """A binary-API AUTH failure (bad creds / device-side RADIUS reject).
+
+    routeros_api surfaces a login trap as RouterOsApiCommunicationError, which is
+    deliberately NOT a connection-class error -> no REST fallback."""
+    return RouterOsApiCommunicationError("cannot log in", b"!trap")
+
+
+def test_dispatch_falls_back_to_rest_on_binary_connection_failure():
+    """8728 filtered (Garki Core / Abuja Medallion): binary connection failure
+    falls back to REST(443), which returns the parsed neighbors."""
+    rest_rows = [{"identity": "Abuja Medallion Peer", "interface": "sfp-sfpplus1"}]
+
+    def binary(router):
+        raise _conn_error()
+
+    def rest(router):
+        return rest_rows
+
+    out, transport = lldp_poller._read_neighbors(
+        _fake_router(), binary_reader=binary, rest_reader=rest
+    )
+    assert transport == "rest"
+    assert out == rest_rows
+
+
+def test_dispatch_does_not_fall_back_on_auth_failure():
+    """An AUTH failure (Kubwa-style RADIUS reject) must NOT retry over REST —
+    REST hits the same auth backend. The error propagates; REST is never called."""
+    rest_called = {"n": 0}
+
+    def binary(router):
+        raise _auth_error()
+
+    def rest(router):
+        rest_called["n"] += 1
+        return [{"identity": "should-not-happen"}]
+
+    with pytest.raises(RouterOsApiCommunicationError):
+        lldp_poller._read_neighbors(
+            _fake_router(), binary_reader=binary, rest_reader=rest
+        )
+    assert rest_called["n"] == 0
+
+
+def test_dispatch_binary_success_never_calls_rest():
+    """When 8728 answers, the REST path is never touched."""
+    rest_called = {"n": 0}
+
+    def binary(router):
+        return [{"identity": "GBB", "interface": "sfp1"}]
+
+    def rest(router):
+        rest_called["n"] += 1
+        return []
+
+    out, transport = lldp_poller._read_neighbors(
+        _fake_router(), binary_reader=binary, rest_reader=rest
+    )
+    assert transport == "binary"
+    assert out == [{"identity": "GBB", "interface": "sfp1"}]
+    assert rest_called["n"] == 0
+
+
+def test_rest_reader_parses_json_array_into_neighbor_dict_shape(monkeypatch):
+    """REST returns /ip/neighbor as a JSON array with the hyphenated fields; the
+    reader yields the SAME dict shape the binary reader does (address6/mac/
+    interface/board-name preserved) so downstream matching is unchanged."""
+    rest_json = [
+        {
+            "identity": "Garki Core",
+            "address": "160.119.127.252",
+            "address4": "160.119.127.252",
+            "address6": "fe80::baxa",
+            "mac-address": "48:8F:5A:11:22:33",
+            "interface": "sfp-sfpplus2",
+            "board-name": "CCR1072-1G-8S+",
+            "platform": "MikroTik",
+        }
+    ]
+    captured = {}
+
+    def fake_execute(router, method, path, **kwargs):
+        captured["method"] = method
+        captured["path"] = path
+        captured["kwargs"] = kwargs
+        return rest_json
+
+    import app.services.router_management.connection as conn
+
+    monkeypatch.setattr(conn.RouterConnectionService, "execute", fake_execute)
+
+    out = lldp_poller._read_neighbors_via_rest(_fake_router())
+
+    assert out == rest_json
+    assert out[0]["mac-address"] == "48:8F:5A:11:22:33"
+    assert out[0]["address6"] == "fe80::baxa"
+    assert out[0]["interface"] == "sfp-sfpplus2"
+    assert out[0]["board-name"] == "CCR1072-1G-8S+"
+    # Reused the established REST layer: GET /ip/neighbor with discovery-grade
+    # tunables (one attempt, ~12s read bound).
+    assert (captured["method"], captured["path"]) == ("GET", "/ip/neighbor")
+    assert captured["kwargs"]["max_retries"] == lldp_poller.ROUTER_REST_MAX_RETRIES
+    assert captured["kwargs"]["read_timeout"] == lldp_poller.ROUTER_REST_READ_TIMEOUT
+
+
+def test_poll_all_rest_fallback_end_to_end(db_session):
+    """poll_all via the real dispatcher: binary connection-fails, REST supplies
+    the neighbors, and the run counts the read as via_rest (not routers_failed)."""
+    _node, _r = _router_node(db_session, "Garki Core")
+    _plain(db_session, "GBB")
+
+    def binary(router):
+        raise _conn_error()
+
+    def rest(router):
+        return [{"identity": "GBB", "interface": "sfp-sfpplus1"}]
+
+    def read(router):
+        return lldp_poller._read_neighbors(
+            router, binary_reader=binary, rest_reader=rest
+        )
+
+    r = poll_all(db_session, read_neighbors=read, now=NOW)
+    assert r["via_rest"] == 1
+    assert r["via_binary_api"] == 0
+    assert r["routers_failed"] == 0
+    assert r["created"] == 1
+
+
+def test_poll_all_auth_failure_counts_as_failed_no_rest(db_session):
+    """An AUTH failure end-to-end: no REST fallback, counted as routers_failed."""
+    _node, _r = _router_node(db_session, "Kubwa Core")
+    _plain(db_session, "GBB")
+    rest_called = {"n": 0}
+
+    def binary(router):
+        raise _auth_error()
+
+    def rest(router):
+        rest_called["n"] += 1
+        return []
+
+    def read(router):
+        return lldp_poller._read_neighbors(
+            router, binary_reader=binary, rest_reader=rest
+        )
+
+    r = poll_all(db_session, read_neighbors=read, now=NOW)
+    assert r["routers_failed"] == 1
+    assert r["via_rest"] == 0
+    assert r["via_binary_api"] == 0
+    assert r["created"] == 0
+    assert rest_called["n"] == 0
+
+
+# --- Smarter matcher (identity aliases, mgmt_ip, fe80::, ambiguity) -----------
+
+
+def test_matcher_identity_alias_mgmt_ip_and_ambiguity(db_session):
+    """The advertised /system identity often differs from the modeled device
+    name; the fuzzy fallback resolves those aliases, mgmt_ip address matches
+    work, and ambiguous stripped forms are NOT guessed."""
+    _node, r_edge = _router_node(db_session, "Edge Access")
+    _plain(db_session, "Garki Core")  # <- identity "Abuja Core I Garki"
+    _plain(db_session, "BOI Asokoro")  # <- identity "BOI Asokoro Access"
+    _plain(db_session, "Airport Switch", mgmt_ip="172.16.151.2")  # by address
+    # Two devices collapse to the same stripped form -> ambiguous -> no match.
+    _plain(db_session, "Kubwa Core")
+    _plain(db_session, "Kubwa Switch")
+
+    neighbors = {
+        str(r_edge.id): [
+            {"identity": "Abuja Core I Garki", "interface": "sfp1"},
+            {"identity": "BOI Asokoro Access", "interface": "sfp2"},
+            {"identity": "sw", "address": "172.16.151.2", "interface": "ether3"},
+            {"identity": "Kubwa Router", "interface": "ether4"},  # ambiguous
+        ]
+    }
+    stub = lambda router: neighbors.get(str(router.id), [])  # noqa: E731
+
+    r = poll_all(db_session, read_neighbors=stub, now=NOW)
+    assert r["created"] == 3  # garki + boi (stripped) + airport (address)
+    assert r["matched_by_stripped_identity"] == 2
+    assert r["matched_by_address"] == 1
+    remotes = {link.metadata_["remote_identity"] for link in _active_links(db_session)}
+    assert "Abuja Core I Garki" in remotes
+    assert "BOI Asokoro Access" in remotes
+    assert "Kubwa Router" not in remotes  # ambiguity never guessed
+
+
+def test_fe80_only_neighbor_matches_by_identity(db_session):
+    """A neighbor whose ONLY advertised address is an IPv6 link-local (fe80::)
+    must not be dropped on the address step — it falls through to identity."""
+    _node, r_edge = _router_node(db_session, "Edge Access")
+    _plain(db_session, "GBB", mgmt_ip="10.9.9.9")
+
+    neighbors = {
+        str(r_edge.id): [
+            # fe80:: sits in the 'address' field: it must be ignored (not tried
+            # as an IP) and identity 'GBB' must still resolve the edge.
+            {"identity": "GBB", "address": "fe80::1", "interface": "sfp1"},
+        ]
+    }
+    stub = lambda router: neighbors.get(str(router.id), [])  # noqa: E731
+
+    r = poll_all(db_session, read_neighbors=stub, now=NOW)
+    assert r["created"] == 1
+    assert r["matched_by_identity"] == 1
+    assert r["matched_by_address"] == 0
+
+
+# --- No duplicate of the manually-modeled backbone ----------------------------
+
+
+def test_manual_backbone_link_not_duplicated_and_survives(db_session):
+    """A canonical pair already carrying an ACTIVE manual (non-lldp) link must
+    not get a SECOND lldp row; the manual link stays authoritative and the
+    source='lldp_neighbor' soft-prune never touches it."""
+    node_a, r_a = _router_node(db_session, "Abuja Core")
+    node_b, r_b = _router_node(db_session, "Lagos Core")
+    # A device pair modeled by hand with source='manual', plus a NULL-source one.
+    node_c, r_c = _router_node(db_session, "Wuse Core")
+    node_d = _plain(db_session, "Ikeja Core")
+
+    manual = NetworkTopologyLink(
+        source_device_id=node_a.id,
+        target_device_id=node_b.id,
+        source="manual",
+        topology_group="abuja-backbone",
+        is_active=True,
+        discovered_at=NOW,
+    )
+    manual_null = NetworkTopologyLink(
+        source_device_id=node_c.id,
+        target_device_id=node_d.id,
+        source=None,  # operator insert with no source stamped
+        topology_group="lagos-backbone",
+        is_active=True,
+        discovered_at=NOW,
+    )
+    db_session.add_all([manual, manual_null])
+    db_session.flush()
+
+    neighbors = {
+        # Both endpoints rediscover the manually-modeled pair (either direction).
+        str(r_a.id): [{"identity": "Lagos Core", "interface": "sfp1"}],
+        str(r_b.id): [{"identity": "Abuja Core", "interface": "sfp1"}],
+        str(r_c.id): [{"identity": "Ikeja Core", "interface": "sfp1"}],
+    }
+    stub = lambda router: neighbors.get(str(router.id), [])  # noqa: E731
+
+    r = poll_all(db_session, read_neighbors=stub, now=NOW)
+    assert r["created"] == 0  # neither manual pair duplicated
+    assert r["skipped_manual_dup"] == 2
+
+    # No lldp row exists for either canonical pair; the manual links survive.
+    assert len(_active_links(db_session)) == 0  # source='lldp_neighbor' rows
+    db_session.refresh(manual)
+    db_session.refresh(manual_null)
+    assert manual.is_active is True and manual.source == "manual"
+    assert manual_null.is_active is True and manual_null.source is None
+
+    # A second run (prune pass) must still leave the manual links untouched.
+    r2 = poll_all(
+        db_session, read_neighbors=stub, now=datetime(2026, 6, 17, 14, 5, tzinfo=UTC)
+    )
+    assert r2["pruned"] == 0
+    db_session.refresh(manual)
+    assert manual.is_active is True
