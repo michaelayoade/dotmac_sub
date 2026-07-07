@@ -141,6 +141,10 @@ def _allocatable_payments(
         .filter(Payment.account_id == coerce_uuid(account_id))
         .filter(Payment.is_active.is_(True))
         .filter(Payment.status == PaymentStatus.succeeded)
+        # Imported Splynx payments are historical evidence, not current wallet
+        # backing. Reusing them to settle new local invoices over-allocates old
+        # receipts and destroys the migrated deposit trail.
+        .filter(Payment.splynx_payment_id.is_(None))
         .order_by(Payment.paid_at.asc().nulls_last(), Payment.created_at.asc())
         .all()
     )
