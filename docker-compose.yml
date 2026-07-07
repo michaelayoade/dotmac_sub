@@ -10,8 +10,8 @@ services:
     image: ${APP_IMAGE:?APP_IMAGE must be set in .env to an immutable app image}
     container_name: dotmac_sub_app
     restart: unless-stopped
-    mem_limit: 5g
-    mem_reservation: 512m
+    mem_limit: 8g
+    mem_reservation: 1g
     cpus: 4.0
     pids_limit: 256
     logging: *id001
@@ -247,8 +247,8 @@ services:
     image: ${APP_IMAGE:?APP_IMAGE must be set in .env to an immutable app image}
     container_name: dotmac_sub_celery_worker_bandwidth
     restart: unless-stopped
-    mem_limit: 768m
-    mem_reservation: 256m
+    mem_limit: 2g
+    mem_reservation: 512m
     cpus: 0.5
     pids_limit: 64
     logging: *id001

@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 from starlette.routing import Match
 
@@ -21,6 +22,7 @@ from app.models.subscriber import Address
 from app.services import network_topology as topology_service
 from app.services.topology.customer_path import GAP_NO_NODE
 from app.services.topology.gaps import topology_gaps
+from app.timezone import DisplayObject
 from app.web.admin import network_weathermap as topology_routes
 from app.web.admin import router as admin_router
 
@@ -42,6 +44,54 @@ def _matched_route(router, path: str, method: str = "GET"):
         if match == Match.FULL:
             return route
     return None
+
+
+def test_topology_link_form_renders_display_object_edit_link() -> None:
+    link = DisplayObject(
+        SimpleNamespace(
+            id="link-1",
+            source_device_id="source-device",
+            source_interface_id="source-iface",
+            target_device_id="target-device",
+            target_interface_id="target-iface",
+            link_role="uplink",
+            medium="fiber",
+            capacity_bps=1_000_000_000,
+            admin_status="enabled",
+            bundle_key="",
+            topology_group="",
+            notes="",
+        )
+    )
+
+    html = topology_routes.templates.env.get_template(
+        "admin/network/topology/link_form.html"
+    ).render(
+        {
+            "request": SimpleNamespace(
+                state=SimpleNamespace(csrf_token="csrf-token"), query_params={}
+            ),
+            "current_user": {"name": "Admin", "email": "admin@example.test"},
+            "sidebar_stats": {},
+            "active_page": "topology",
+            "active_menu": "network",
+            "link": link,
+            "action_url": "/admin/network/topology/links/link-1/edit",
+            "error": None,
+            "devices": [
+                {"id": "source-device", "name": "Source Device"},
+                {"id": "target-device", "name": "Target Device"},
+            ],
+            "link_roles": ["unknown", "uplink"],
+            "mediums": ["unknown", "fiber"],
+            "admin_statuses": ["enabled", "disabled"],
+        }
+    )
+
+    assert 'value="source-device" selected' in html
+    assert 'value="target-device" selected' in html
+    assert 'id="sourceInterfaceSelected" value="source-iface"' in html
+    assert 'id="targetInterfaceSelected" value="target-iface"' in html
 
 
 def test_topology_link_update_can_change_endpoints(db_session):
