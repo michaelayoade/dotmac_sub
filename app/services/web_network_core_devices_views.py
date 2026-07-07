@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.catalog import (
@@ -22,8 +22,10 @@ from app.models.catalog import (
 from app.models.network import CPEDevice
 from app.models.network_monitoring import (
     DeviceInterface,
+    DeviceMetric,
     DeviceRole,
     DeviceStatus,
+    MetricType,
     NetworkDevice,
 )
 from app.models.network_operation import (
@@ -2995,6 +2997,106 @@ def get_change_request_asset(
     return db.get(model, asset_id)
 
 
+def _core_device_table_maps(
+    db: Session, devices: Sequence[object]
+) -> dict[str, object]:
+    from app.services.web_network_core_devices_forms import (
+        _display_status_value,
+        _format_uptime_short,
+        _zabbix_live_status_available,
+    )
+
+    real_devices = [device for device in devices if isinstance(device, NetworkDevice)]
+    device_ids = [device.id for device in real_devices]
+    zabbix_live_status_available = _zabbix_live_status_available()
+    display_status_map: dict[str, str] = {}
+    for device in devices:
+        key = str(getattr(device, "id", ""))
+        if isinstance(device, NetworkDevice):
+            display_status_map[key] = _display_status_value(
+                device, zabbix_live_status_available=zabbix_live_status_available
+            )
+            continue
+        live_status = str(getattr(device, "live_status", "") or "").strip().lower()
+        if live_status == "up":
+            display_status_map[key] = DeviceStatus.online.value
+        elif live_status == "down":
+            display_status_map[key] = DeviceStatus.offline.value
+        elif live_status == "problem":
+            display_status_map[key] = DeviceStatus.degraded.value
+        else:
+            status = getattr(device, "status", None)
+            display_status_map[key] = (
+                getattr(status, "value", status) or DeviceStatus.offline.value
+            )
+
+    uptime_map: dict[str, str | None] = {}
+    ping_history_map: dict[str, list[dict[str, object]]] = {}
+    if device_ids:
+        latest_uptime_subq = (
+            select(
+                DeviceMetric.device_id,
+                func.max(DeviceMetric.recorded_at).label("latest"),
+            )
+            .where(DeviceMetric.device_id.in_(device_ids))
+            .where(DeviceMetric.metric_type == MetricType.uptime)
+            .group_by(DeviceMetric.device_id)
+            .subquery()
+        )
+        latest_uptime_metrics = db.scalars(
+            select(DeviceMetric)
+            .join(
+                latest_uptime_subq,
+                and_(
+                    DeviceMetric.device_id == latest_uptime_subq.c.device_id,
+                    DeviceMetric.recorded_at == latest_uptime_subq.c.latest,
+                ),
+            )
+            .where(DeviceMetric.metric_type == MetricType.uptime)
+        ).all()
+        for metric in latest_uptime_metrics:
+            uptime_map[str(metric.device_id)] = _format_uptime_short(metric.value)
+
+        latest_ping_subq = (
+            select(
+                DeviceMetric.device_id,
+                func.max(DeviceMetric.recorded_at).label("latest"),
+            )
+            .where(DeviceMetric.device_id.in_(device_ids))
+            .where(DeviceMetric.metric_type == MetricType.custom)
+            .where(DeviceMetric.unit.in_(["ping_ms", "ping_timeout"]))
+            .group_by(DeviceMetric.device_id)
+            .subquery()
+        )
+        latest_ping_metrics = db.scalars(
+            select(DeviceMetric)
+            .join(
+                latest_ping_subq,
+                and_(
+                    DeviceMetric.device_id == latest_ping_subq.c.device_id,
+                    DeviceMetric.recorded_at == latest_ping_subq.c.latest,
+                ),
+            )
+            .where(DeviceMetric.metric_type == MetricType.custom)
+            .where(DeviceMetric.unit.in_(["ping_ms", "ping_timeout"]))
+        ).all()
+        for metric in latest_ping_metrics:
+            ok = metric.unit == "ping_ms" and metric.value >= 0
+            ping_history_map[str(metric.device_id)] = [
+                {
+                    "ok": ok,
+                    "label": f"{metric.value}ms" if ok else "Timeout",
+                    "recorded_at": metric.recorded_at,
+                }
+            ]
+
+    return {
+        "display_status_map": display_status_map,
+        "uptime_map": uptime_map,
+        "ping_history_map": ping_history_map,
+    }
+
+
 def consolidated_page_data(
     tab: str, db: Session, search: str | None = None
 ) -> dict[str, object]:
@@ -3027,7 +3129,7 @@ def consolidated_page_data(
             str(getattr(device, "name", "") or "").strip(),
         )
         not in promoted_olt_keys
-    ][:200]
+    ]
     core_device_keys = {
         (
             str(getattr(device, "mgmt_ip", "") or "").strip(),
@@ -3303,6 +3405,7 @@ def consolidated_page_data(
             )
         ]
 
+    core_table_maps = _core_device_table_maps(db, core_devices)
     stats = {
         "core_total": len(core_devices),
         "core_roles": core_roles,
@@ -3335,6 +3438,7 @@ def consolidated_page_data(
         "search": search or "",
         "stats": stats,
         "core_devices": core_devices,
+        **core_table_maps,
         "olts": olts,
         "olt_stats": olt_stats,
         "onts": onts,
