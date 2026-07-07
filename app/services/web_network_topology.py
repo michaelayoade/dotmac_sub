@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 from sqlalchemy.orm import Session
 
 from app.services import network_topology as topology_service
@@ -20,6 +22,68 @@ def topology_page_context(
             pop_site_id=site,
             include_utilization=True,
         ),
+        "form_options": topology_service.get_form_options(db),
+        "selected_group": group or "",
+        "selected_site": site or "",
+    }
+
+
+def _weather_summary(graph: dict[str, object]) -> dict[str, object]:
+    nodes = cast(list[dict[str, Any]], graph.get("nodes") or [])
+    edges = cast(list[dict[str, Any]], graph.get("edges") or [])
+    node_counts = {"up": 0, "down": 0, "problem": 0, "unknown": 0}
+    edge_counts = {"up": 0, "degraded": 0, "down": 0, "unknown": 0}
+    for node in nodes:
+        status = str(node.get("status") or "unknown").lower()
+        if status in ("online", "up"):
+            node_counts["up"] += 1
+        elif status in ("offline", "down"):
+            node_counts["down"] += 1
+        elif status in ("degraded", "maintenance", "problem"):
+            node_counts["problem"] += 1
+        else:
+            node_counts["unknown"] += 1
+    for edge in edges:
+        status = str(edge.get("status") or "unknown").lower()
+        edge_counts[status if status in edge_counts else "unknown"] += 1
+    hot_edges = sorted(
+        [
+            edge
+            for edge in edges
+            if edge.get("utilization_pct") is not None
+            and float(edge["utilization_pct"]) >= 70
+        ],
+        key=lambda edge: float(edge.get("utilization_pct") or 0),
+        reverse=True,
+    )[:10]
+    dark_nodes = [
+        node
+        for node in nodes
+        if str(node.get("status") or "").lower() in ("down", "offline")
+    ][:10]
+    return {
+        "node_counts": node_counts,
+        "edge_counts": edge_counts,
+        "hot_edges": hot_edges,
+        "dark_nodes": dark_nodes,
+    }
+
+
+def weathermap_page_context(
+    db: Session,
+    *,
+    group: str | None = None,
+    site: str | None = None,
+) -> dict[str, object]:
+    graph = topology_service.list_nodes_and_edges(
+        db,
+        topology_group=group,
+        pop_site_id=site,
+        include_utilization=True,
+    )
+    return {
+        "graph": graph,
+        "weather": _weather_summary(graph),
         "form_options": topology_service.get_form_options(db),
         "selected_group": group or "",
         "selected_site": site or "",

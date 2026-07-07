@@ -47,10 +47,23 @@ def network_topology(
     return templates.TemplateResponse("admin/network/topology/index.html", context)
 
 
-# Legacy weathermap URL redirect
-@router.get("/weathermap", response_class=HTMLResponse)
-def network_weathermap_redirect() -> RedirectResponse:
-    return RedirectResponse(url="/admin/network/topology", status_code=301)
+@router.get(
+    "/weathermap",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:weathermap:read"))],
+)
+def network_weathermap(
+    request: Request,
+    group: str | None = None,
+    site: str | None = None,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """Read-only operational weather map."""
+    context = _base_context(request, db, active_page="weathermap")
+    context.update(
+        web_topology_service.weathermap_page_context(db, group=group, site=site)
+    )
+    return templates.TemplateResponse("admin/network/weathermap.html", context)
 
 
 # ── Link CRUD ────────────────────────────────────────────────────────

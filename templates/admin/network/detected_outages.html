@@ -29,6 +29,7 @@
                         <th class="pb-2">Suspected</th>
                         <th class="pb-2">Confirmed</th>
                         <th class="pb-2">MTTR so far</th>
+                        <th class="pb-2"></th>
                     </tr>
                 </thead>
                 <tbody>
@@ -48,9 +49,16 @@
                         <td class="py-2 text-slate-500">{{ row.suspected_at.strftime('%Y-%m-%d %H:%M') if row.suspected_at else '—' }}</td>
                         <td class="py-2 text-slate-500">{{ row.confirmed_at.strftime('%Y-%m-%d %H:%M') if row.confirmed_at else '—' }}</td>
                         <td class="py-2 text-slate-500">{% if row.mttr_so_far_seconds is not none %}{{ (row.mttr_so_far_seconds // 60) }} min{% else %}—{% endif %}</td>
+                        <td class="py-2 whitespace-nowrap">
+                            {% if row.state in ['confirmed', 'clearing'] %}
+                            <a href="/admin/network/detected-outages/notify?incident_id={{ row.incident.id }}" class="text-sky-600 hover:underline dark:text-sky-400">Notify →</a>
+                            {% else %}
+                            <span class="text-slate-400">—</span>
+                            {% endif %}
+                        </td>
                     </tr>
                     {% else %}
-                    <tr><td colspan="10" class="py-4 text-slate-400">No live classifier incidents — nothing suspected, confirmed, or clearing right now.</td></tr>
+                    <tr><td colspan="11" class="py-4 text-slate-400">No live classifier incidents — nothing suspected, confirmed, or clearing right now.</td></tr>
                     {% endfor %}
                 </tbody>
             </table>
@@ -119,7 +127,6 @@
                         <td class="py-2 text-slate-500">{{ o.confidence }}</td>
                         <td class="py-2 space-x-3 whitespace-nowrap">
                             <a href="/admin/network/detected-outages?node_id={{ o.failure_node }}" class="text-sky-600 hover:underline dark:text-sky-400">Diagnose →</a>
-                            <a href="/admin/network/detected-outages/notify?node_id={{ o.failure_node }}" class="text-sky-600 hover:underline dark:text-sky-400">Notify →</a>
                         </td>
                     </tr>
                     {% else %}

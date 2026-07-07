@@ -8,7 +8,11 @@ from jinja2 import Environment, FileSystemLoader
 
 from app.models.network_monitoring import NetworkDevice, OutageIncident, PopSite
 from app.services.topology.customer_path import CustomerPath
-from app.services.topology.outage import open_incident_for_path
+from app.services.topology.outage import (
+    confirm_incident,
+    open_classifier_incident,
+    open_incident_for_path,
+)
 
 
 def _node(db, name):
@@ -61,6 +65,33 @@ def test_resolved_incident_not_matched(db_session):
     inc.status = "resolved"
     db_session.flush()
     assert open_incident_for_path(db_session, CustomerPath(node=node)) is None
+
+
+def test_confirmed_classifier_incident_is_customer_visible(db_session):
+    from datetime import UTC, datetime
+
+    node = _node(db_session, "classifier-node")
+    inc = open_classifier_incident(db_session, root_node=node, now=datetime.now(UTC))
+    confirm_incident(db_session, inc, now=datetime.now(UTC))
+
+    assert open_incident_for_path(db_session, CustomerPath(node=node)).id == inc.id
+
+
+def test_suspected_classifier_incident_only_matches_for_scanner_dedupe(db_session):
+    from datetime import UTC, datetime
+
+    node = _node(db_session, "suspected-node")
+    inc = open_classifier_incident(db_session, root_node=node, now=datetime.now(UTC))
+
+    assert open_incident_for_path(db_session, CustomerPath(node=node)) is None
+    assert (
+        open_incident_for_path(
+            db_session,
+            CustomerPath(node=node),
+            include_suspected_classifier=True,
+        ).id
+        == inc.id
+    )
 
 
 def test_none_when_no_incident(db_session):

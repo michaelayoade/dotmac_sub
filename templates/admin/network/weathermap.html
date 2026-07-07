@@ -1,0 +1,267 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, stats_card %}
+
+{% block title %}Network Weather Map - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("emerald", "sky") }}
+
+<div class="relative space-y-6">
+    {% call page_header(
+        title="Network Weather Map",
+        subtitle="Read-only operational health from warmed live status, link freshness, and interface utilization.",
+        icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 15a4 4 0 004 4h9a5 5 0 10-.9-9.9A7 7 0 103 15z"/></svg>',
+        color="emerald",
+        color2="sky"
+    ) %}
+        <div class="flex items-center gap-2">
+            <select id="siteFilter" onchange="updateWeatherFilters()" class="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="">All POP Sites</option>
+                {% for site in form_options.pop_sites %}
+                <option value="{{ site.id }}" {% if selected_site == site.id %}selected{% endif %}>{{ site.name }}</option>
+                {% endfor %}
+            </select>
+            <select id="groupFilter" onchange="updateWeatherFilters()" class="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="">All Groups</option>
+                {% for g in form_options.topology_groups %}
+                <option value="{{ g }}" {% if selected_group == g %}selected{% endif %}>{{ g }}</option>
+                {% endfor %}
+            </select>
+            <a href="/admin/network/topology" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700">
+                Topology Editor
+            </a>
+        </div>
+    {% endcall %}
+
+    <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {{ stats_card("Nodes Up", weather.node_counts.up,
+            '<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>',
+            color="emerald", color2="teal") }}
+        {{ stats_card("Nodes Down", weather.node_counts.down,
+            '<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 12H6"/></svg>',
+            color="rose", color2="red") }}
+        {{ stats_card("Hot Links", weather.hot_edges | length,
+            '<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7"/></svg>',
+            color="amber", color2="orange") }}
+        {{ stats_card("Boundary Nodes", graph.stats.boundary_node_count,
+            '<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h8M8 12h8m-8 5h8"/></svg>',
+            color="sky", color2="cyan") }}
+    </div>
+
+    <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div class="overflow-hidden rounded-xl border border-slate-200/70 bg-white shadow-sm dark:border-slate-700/70 dark:bg-slate-800">
+            <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/70 px-5 py-4 dark:border-slate-700/70">
+                <h2 class="text-lg font-display font-bold text-slate-900 dark:text-white">Live Network State</h2>
+                <div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-600 dark:text-slate-300">
+                    <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-full bg-emerald-500"></span> Up</span>
+                    <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-full bg-amber-500"></span> Problem</span>
+                    <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-full bg-rose-500"></span> Down</span>
+                    <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-full bg-slate-400"></span> Unknown</span>
+                    <span class="flex items-center gap-1"><span class="h-3 w-3 rounded border border-sky-500 bg-white dark:bg-slate-800"></span> Boundary</span>
+                </div>
+            </div>
+            <div id="weatherCanvas" class="h-[620px]"></div>
+        </div>
+
+        <div class="space-y-4">
+            <div id="weatherDetail" class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Selection</h3>
+                <p class="mt-3 text-sm text-slate-500 dark:text-slate-400">Select a node or link for operational detail.</p>
+            </div>
+
+            <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Hot Links</h3>
+                <div class="mt-3 space-y-3">
+                    {% for edge in weather.hot_edges %}
+                    <div class="rounded-lg border border-slate-100 p-3 text-sm dark:border-slate-700">
+                        <div class="font-medium text-slate-900 dark:text-white">{{ edge.source_device }} &rarr; {{ edge.target_device }}</div>
+                        <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ edge.utilization_pct }}% {{ edge.dominant_direction or '' }}{% if edge.capacity_bps %} of {{ (edge.capacity_bps / 1000000) | int }} Mbps{% endif %}</div>
+                    </div>
+                    {% else %}
+                    <p class="text-sm text-slate-500 dark:text-slate-400">No links above 70% utilization.</p>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Dark Nodes</h3>
+                <div class="mt-3 space-y-3">
+                    {% for node in weather.dark_nodes %}
+                    <div class="rounded-lg border border-slate-100 p-3 text-sm dark:border-slate-700">
+                        <div class="font-medium text-slate-900 dark:text-white">{{ node.name }}</div>
+                        <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ node.pop_site_name }}{% if node.live_status_at %} · since {{ node.live_status_at }}{% endif %}</div>
+                    </div>
+                    {% else %}
+                    <p class="text-sm text-slate-500 dark:text-slate-400">No down nodes in the current graph.</p>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="/static/js/vendor/cytoscape.min.js"></script>
+<script src="/static/js/vendor/dagre.min.js"></script>
+<script src="/static/js/vendor/cytoscape-dagre.min.js"></script>
+<script>
+function updateWeatherFilters() {
+    var params = new URLSearchParams();
+    var site = document.getElementById('siteFilter').value;
+    var group = document.getElementById('groupFilter').value;
+    if (site) params.set('site', site);
+    if (group) params.set('group', group);
+    window.location = '/admin/network/weathermap' + (params.toString() ? '?' + params.toString() : '');
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+    var container = document.getElementById('weatherCanvas');
+    var detail = document.getElementById('weatherDetail');
+    var graphData = {{ graph | tojson }};
+    var STATUS = {online:'#10b981', up:'#10b981', degraded:'#f59e0b', maintenance:'#f59e0b', problem:'#f59e0b', offline:'#ef4444', down:'#ef4444', unknown:'#94a3b8'};
+    var TIER = {core:0, aggregation:1, distribution:2, access:3, edge:4, cpe:5};
+
+    function tierOf(role) {
+        var t = TIER[(role || '').toLowerCase()];
+        return t === undefined ? 3 : t;
+    }
+    function statusColor(status) {
+        return STATUS[(status || '').toLowerCase()] || STATUS.unknown;
+    }
+    function edgeWidth(edge) {
+        var util = Number(edge.data('util') || 0);
+        if (util >= 90) return 7;
+        if (util >= 70) return 5;
+        if (edge.data('status') === 'down') return 5;
+        if (edge.data('status') === 'degraded') return 3.5;
+        return 2.5;
+    }
+    function make(tag, className, text) {
+        var el = document.createElement(tag);
+        if (className) el.className = className;
+        if (text !== undefined && text !== null) el.textContent = String(text);
+        return el;
+    }
+    function addKV(parent, label, value) {
+        var row = make('div', 'flex justify-between gap-4 border-t border-slate-100 py-2 text-sm dark:border-slate-700');
+        row.appendChild(make('span', 'text-slate-500 dark:text-slate-400', label));
+        row.appendChild(make('span', 'text-right font-medium text-slate-800 dark:text-slate-100', value || '-'));
+        parent.appendChild(row);
+    }
+    function resetDetail(title) {
+        detail.textContent = '';
+        detail.appendChild(make('h3', 'text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400', title));
+    }
+
+    if (!graphData.nodes || !graphData.nodes.length) {
+        container.textContent = 'No topology data for this weather map.';
+        container.className = 'flex h-[620px] items-center justify-center text-sm text-slate-400';
+        return;
+    }
+    if (typeof cytoscape === 'undefined') {
+        container.textContent = 'Weather map renderer failed to load.';
+        container.className = 'flex h-[620px] items-center justify-center text-sm text-slate-400';
+        return;
+    }
+    try { if (typeof cytoscapeDagre !== 'undefined') { cytoscape.use(cytoscapeDagre); } } catch (e) {}
+
+    var tierById = {};
+    graphData.nodes.forEach(function (n) { tierById[n.id] = tierOf(n.role); });
+    var els = [];
+    graphData.nodes.forEach(function (n) {
+        els.push({ data: {
+            id: n.id, label: n.name, status: n.status || 'unknown', role: n.role || '',
+            tier: tierById[n.id], pop: n.pop_site_name || '', ip: n.ip || '',
+            live: n.live_status || 'unknown', liveAt: n.live_status_at || '',
+            external: n.is_external ? 'yes' : 'no'
+        } });
+    });
+    graphData.edges.forEach(function (e) {
+        var source = e.source, target = e.target;
+        if (tierById[source] > tierById[target]) { var tmp = source; source = target; target = tmp; }
+        els.push({ data: {
+            id: e.id, source: source, target: target, status: e.status || 'unknown',
+            medium: e.medium || '', role: e.role || '', capacity: e.capacity_bps || 0,
+            util: e.utilization_pct == null ? '' : e.utilization_pct,
+            direction: e.dominant_direction || '', rx: e.rx_bps || '', tx: e.tx_bps || '',
+            sdev: e.source_device || '', tdev: e.target_device || '', bundle: e.bundle_key || ''
+        } });
+    });
+
+    var isDark = document.documentElement.classList.contains('dark') || window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var labelColor = isDark ? '#cbd5e1' : '#334155';
+
+    var cy = cytoscape({
+        container: container,
+        elements: els,
+        wheelSensitivity: 0.2,
+        style: [
+            { selector: 'node', style: {
+                'background-color': function (e) { return statusColor(e.data('status')); },
+                'label': 'data(label)', 'font-size': 10, 'color': labelColor,
+                'text-valign': 'bottom', 'text-margin-y': 5, 'text-wrap': 'wrap', 'text-max-width': 104,
+                'width': 30, 'height': 30, 'border-width': 2, 'border-color': '#ffffff'
+            } },
+            { selector: 'node[external = "yes"]', style: { 'border-width': 4, 'border-color': '#0ea5e9' } },
+            { selector: 'node[tier = 0]', style: { 'shape': 'hexagon', 'width': 48, 'height': 48 } },
+            { selector: 'node[tier = 1]', style: { 'shape': 'round-rectangle', 'width': 42, 'height': 42 } },
+            { selector: 'node[tier = 2]', style: { 'shape': 'round-rectangle', 'width': 38, 'height': 38 } },
+            { selector: 'edge', style: {
+                'curve-style': 'bezier', 'control-point-step-size': 24,
+                'width': edgeWidth,
+                'line-color': function (e) {
+                    var util = Number(e.data('util') || 0);
+                    if (util >= 90) return '#ef4444';
+                    if (util >= 70) return '#f59e0b';
+                    return statusColor(e.data('status'));
+                },
+                'line-style': function (e) { return e.data('status') === 'degraded' ? 'dashed' : 'solid'; },
+                'opacity': 0.86, 'target-arrow-shape': 'none'
+            } },
+            { selector: '.dim', style: { 'opacity': 0.14 } },
+            { selector: '.hi', style: { 'opacity': 1 } },
+            { selector: 'node.sel', style: { 'border-width': 5, 'border-color': labelColor } }
+        ],
+        layout: { name: 'dagre', rankDir: 'TB', nodeSep: 30, rankSep: 78, edgeSep: 16 }
+    });
+
+    cy.on('tap', 'node', function (ev) {
+        var n = ev.target;
+        var inc = n.connectedEdges();
+        var nbr = inc.connectedNodes().add(n);
+        cy.elements().addClass('dim').removeClass('sel hi');
+        nbr.removeClass('dim');
+        inc.removeClass('dim').addClass('hi');
+        n.addClass('sel');
+        resetDetail('Node');
+        addKV(detail, 'Name', n.data('label'));
+        addKV(detail, 'Live status', n.data('live'));
+        addKV(detail, 'Status since', n.data('liveAt'));
+        addKV(detail, 'Role', n.data('role'));
+        addKV(detail, 'POP', n.data('pop'));
+        addKV(detail, 'IP / Host', n.data('ip'));
+        addKV(detail, 'Boundary', n.data('external') === 'yes' ? 'Yes' : 'No');
+    });
+
+    cy.on('tap', 'edge', function (ev) {
+        var e = ev.target;
+        cy.elements().addClass('dim').removeClass('sel hi');
+        e.removeClass('dim').addClass('hi');
+        e.connectedNodes().removeClass('dim');
+        resetDetail('Link');
+        addKV(detail, 'Path', e.data('sdev') + ' -> ' + e.data('tdev'));
+        addKV(detail, 'Status', e.data('status'));
+        addKV(detail, 'Role', e.data('role'));
+        addKV(detail, 'Medium', e.data('medium'));
+        addKV(detail, 'Utilization', e.data('util') === '' ? '-' : e.data('util') + '% ' + e.data('direction'));
+        addKV(detail, 'Capacity', e.data('capacity') ? Math.round(Number(e.data('capacity')) / 1000000) + ' Mbps' : '-');
+        addKV(detail, 'Bundle', e.data('bundle'));
+    });
+
+    cy.on('tap', function (ev) {
+        if (ev.target === cy) {
+            cy.elements().removeClass('dim sel hi');
+        }
+    });
+});
+</script>
+{% endblock %}
