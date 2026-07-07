@@ -28,7 +28,11 @@ from app.services.topology.connection_status import (
     assess,
     connection_status,
 )
-from app.services.topology.outage import declare_outage
+from app.services.topology.outage import (
+    confirm_incident,
+    declare_outage,
+    open_classifier_incident,
+)
 
 NOW = datetime(2026, 7, 6, 12, 0, tzinfo=UTC)
 
@@ -178,6 +182,31 @@ def test_area_outage_suppresses_last_mile_blame(db_session, catalog_offer):
     # blame suppressed: no "reboot" advice, message is the area message.
     assert out["advice"] is None
     assert "area" in out["message"].lower()
+
+
+def test_confirmed_classifier_incident_suppresses_last_mile_blame(
+    db_session, catalog_offer
+):
+    sub = _sub(db_session, catalog_offer.id)
+    olt, node = _olt_with_node(db_session)
+    _ont(
+        db_session, sub.subscriber_id, olt_device_id=olt.id, acs_age=timedelta(hours=2)
+    )
+    inc = open_classifier_incident(
+        db_session,
+        root_node=node,
+        affected_count=1,
+        confidence=0.9,
+        classification="node_outage",
+        now=NOW,
+    )
+    confirm_incident(db_session, inc, now=NOW)
+
+    out = connection_status(db_session, sub, now=NOW)
+
+    assert out["state"] == STATE_OUTAGE
+    assert out["area_outage"] is True
+    assert out["advice"] is None
 
 
 def test_area_outage_via_inference_when_node_dark(db_session, catalog_offer):

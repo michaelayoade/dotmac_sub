@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime, timedelta
 
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.models.network import FdhCabinet
@@ -41,6 +42,7 @@ OPERATOR_SOURCE = "operator"
 # Open classifier states: an incident still describing a live/settling outage.
 # suspected (debouncing up), confirmed (declared), clearing (debouncing down).
 CLASSIFIER_OPEN_STATUSES = ("suspected", "confirmed", "clearing")
+CLASSIFIER_CUSTOMER_VISIBLE_STATUSES = ("confirmed", "clearing")
 CLASSIFIER_TERMINAL_STATUSES = ("resolved", "discarded")
 _CLASSIFIER_STATUSES = frozenset(CLASSIFIER_OPEN_STATUSES) | frozenset(
     CLASSIFIER_TERMINAL_STATUSES
@@ -144,6 +146,7 @@ def _emit_outage_event(session: Session, incident: OutageIncident, kind: str) ->
                 "incident_id": str(incident.id),
                 "status": incident.status,
                 "detection_source": detection_source(incident),
+                "provenance": incident.detection_source,
                 "scope": scope,
                 "severity": incident.severity,
                 "affected_count": incident.affected_count,
@@ -388,14 +391,20 @@ def resolve_classifier_incident(
 
 
 def open_incident_for_path(
-    session: Session, path, *, dist: dict | None = None, adjacency: dict | None = None
+    session: Session,
+    path,
+    *,
+    dist: dict | None = None,
+    adjacency: dict | None = None,
+    include_suspected_classifier: bool = False,
 ) -> OutageIncident | None:
-    """The open incident covering a customer's path, if any — matched on the
-    access node, any upstream hop, the basestation, or by sitting within an
-    incident's blast radius. ``path`` is a CustomerPath (duck-typed to avoid a
-    circular import). ``dist``/``adjacency`` are optional precomputed graph
-    maps for callers that check many scopes in one run (the auto-detect scan);
-    per-request callers omit them and pay at most one BFS per call."""
+    """The live incident covering a customer's path, if any.
+
+    Customer-facing callers see operator ``open`` incidents plus debounced-real
+    classifier incidents (``confirmed``/``clearing``). The auto-detect scanner can
+    opt into suspected classifier incidents so it does not duplicate a candidate
+    already owned by the debounce lifecycle.
+    """
     if path is None:
         return None
     customer_node_ids = set()
@@ -408,9 +417,25 @@ def open_incident_for_path(
     basestation = getattr(path, "basestation", None)
     basestation_id = basestation.id if basestation is not None else None
 
+    classifier_statuses = (
+        CLASSIFIER_OPEN_STATUSES
+        if include_suspected_classifier
+        else CLASSIFIER_CUSTOMER_VISIBLE_STATUSES
+    )
     incidents = (
         session.query(OutageIncident)
-        .filter(OutageIncident.status == "open")
+        .filter(
+            or_(
+                and_(
+                    OutageIncident.detection_source == OPERATOR_SOURCE,
+                    OutageIncident.status == "open",
+                ),
+                and_(
+                    OutageIncident.detection_source == CLASSIFIER_SOURCE,
+                    OutageIncident.status.in_(classifier_statuses),
+                ),
+            )
+        )
         .order_by(OutageIncident.started_at.desc())
         .all()
     )

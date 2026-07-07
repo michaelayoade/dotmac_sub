@@ -466,21 +466,51 @@ def _actor_id(request: Request):
         return None
 
 
-def _boundary_and_subscription_ids(db: Session, node_id: str | None):
-    """Resolve a boundary NetworkDevice + its affected subscription ids."""
+def _incident_boundary_and_subscription_ids(db: Session, incident_id: str | None):
+    """Resolve a notifiable classifier incident + affected subscription ids."""
     import uuid as _uuid
 
-    from app.models.network_monitoring import NetworkDevice
+    from app.models.network import FdhCabinet
+    from app.models.network_monitoring import NetworkDevice, OutageIncident, PopSite
     from app.services.topology.affected import affected_customers
+    from app.services.topology.outage import (
+        CLASSIFIER_CUSTOMER_VISIBLE_STATUSES,
+        CLASSIFIER_SOURCE,
+    )
 
     try:
-        node = db.get(NetworkDevice, _uuid.UUID(node_id)) if node_id else None
+        incident = (
+            db.get(OutageIncident, _uuid.UUID(incident_id)) if incident_id else None
+        )
     except (ValueError, TypeError):
-        node = None
-    if node is None:
-        return None, []
-    sub_ids = [s.id for s in affected_customers(db, node=node)["subscriptions"]]
-    return node, sub_ids
+        incident = None
+    if (
+        incident is None
+        or incident.detection_source != CLASSIFIER_SOURCE
+        or incident.status not in CLASSIFIER_CUSTOMER_VISIBLE_STATUSES
+    ):
+        return None, None, []
+    node = (
+        db.get(NetworkDevice, incident.root_node_id)
+        if incident.root_node_id is not None
+        else None
+    )
+    basestation = (
+        db.get(PopSite, incident.basestation_id)
+        if incident.basestation_id is not None
+        else None
+    )
+    fdh = (
+        db.get(FdhCabinet, incident.fdh_cabinet_id)
+        if incident.fdh_cabinet_id is not None
+        else None
+    )
+    if node is None and basestation is None and fdh is None:
+        return incident, None, []
+    impact = affected_customers(db, node=node, basestation=basestation, fdh=fdh)
+    sub_ids = [s.id for s in impact["subscriptions"]]
+    boundary = node or basestation or fdh
+    return incident, boundary, sub_ids
 
 
 @router.get(
@@ -490,7 +520,7 @@ def _boundary_and_subscription_ids(db: Session, node_id: str | None):
 )
 def detected_outage_notify_preview(
     request: Request,
-    node_id: str,
+    incident_id: str,
     db: Session = Depends(get_db),
 ):
     """Preview the outage notification plan for one boundary (design §P4).
@@ -504,15 +534,18 @@ def detected_outage_notify_preview(
     )
 
     context = _base_context(request, db, active_page="monitoring")
-    node, sub_ids = _boundary_and_subscription_ids(db, node_id)
-    context["node"] = node
-    context["node_id"] = str(node.id) if node is not None else node_id
-    if node is None:
+    incident, boundary, sub_ids = _incident_boundary_and_subscription_ids(
+        db, incident_id
+    )
+    context["incident"] = incident
+    context["boundary"] = boundary
+    context["incident_id"] = str(incident.id) if incident is not None else incident_id
+    if incident is None or boundary is None:
         return templates.TemplateResponse(
             "admin/network/detected_outages_notify.html", context, status_code=404
         )
-    context["plan"] = plan_outage_notifications(db, sub_ids)
-    context["recent"] = recent_dispatches(db, node.id)
+    context["plan"] = plan_outage_notifications(db, sub_ids, incident_id=incident.id)
+    context["recent"] = recent_dispatches(db, incident.id)
     return templates.TemplateResponse(
         "admin/network/detected_outages_notify.html", context
     )
@@ -525,7 +558,7 @@ def detected_outage_notify_preview(
 )
 def detected_outage_notify_send(
     request: Request,
-    node_id: str = Form(...),
+    incident_id: str = Form(...),
     confirm: str | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
@@ -541,27 +574,34 @@ def detected_outage_notify_send(
         recent_dispatches,
     )
 
-    node, sub_ids = _boundary_and_subscription_ids(db, node_id)
-    if node is None:
+    incident, boundary, sub_ids = _incident_boundary_and_subscription_ids(
+        db, incident_id
+    )
+    if incident is None or boundary is None:
         return RedirectResponse("/admin/network/detected-outages", status_code=303)
 
     context = _base_context(request, db, active_page="monitoring")
-    context["node"] = node
-    context["node_id"] = str(node.id)
+    context["incident"] = incident
+    context["boundary"] = boundary
+    context["incident_id"] = str(incident.id)
     if confirm != "send":
         # No explicit confirmation — re-show the preview, dispatch nothing.
-        context["plan"] = plan_outage_notifications(db, sub_ids)
-        context["recent"] = recent_dispatches(db, node.id)
+        context["plan"] = plan_outage_notifications(
+            db, sub_ids, incident_id=incident.id
+        )
+        context["recent"] = recent_dispatches(db, incident.id)
         context["needs_confirm"] = True
         return templates.TemplateResponse(
             "admin/network/detected_outages_notify.html", context
         )
 
-    result = dispatch_outage_notifications(db, sub_ids, actor_id=_actor_id(request))
+    result = dispatch_outage_notifications(
+        db, sub_ids, actor_id=_actor_id(request), incident_id=incident.id
+    )
     db.commit()
     context["result"] = result
-    context["plan"] = plan_outage_notifications(db, sub_ids)
-    context["recent"] = recent_dispatches(db, node.id)
+    context["plan"] = plan_outage_notifications(db, sub_ids, incident_id=incident.id)
+    context["recent"] = recent_dispatches(db, incident.id)
     return templates.TemplateResponse(
         "admin/network/detected_outages_notify.html", context
     )

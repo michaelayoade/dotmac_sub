@@ -12,15 +12,16 @@
         </p>
     </div>
 
-    {% if node is none %}
+    {% if incident is none or boundary is none %}
     <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-800 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-200">
-        Unknown boundary — nothing to preview.
+        Unknown or non-notifiable classifier incident — nothing to preview.
     </div>
     {% else %}
 
     <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
         <span class="text-xs uppercase tracking-wide text-slate-400">Boundary</span>
-        <div class="font-semibold text-slate-900 dark:text-white">{{ node.name }}</div>
+        <div class="font-semibold text-slate-900 dark:text-white">{{ boundary.name or boundary.code or incident.id }}</div>
+        <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">Incident {{ incident.id }} · {{ incident.status }}</div>
     </div>
 
     {# --- dispatch result flash (only after a confirmed POST) --- #}
@@ -96,7 +97,7 @@
     {# --- confirm form (the only dispatch path) --- #}
     <form method="post" action="/admin/network/detected-outages/notify" class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
         {% include "components/forms/csrf_input.html" %}
-        <input type="hidden" name="node_id" value="{{ node_id }}">
+        <input type="hidden" name="incident_id" value="{{ incident_id }}">
         <input type="hidden" name="confirm" value="send">
         <p class="mb-3 text-sm text-slate-500 dark:text-slate-400">
             {% if plan.enabled %}This will email the qualifying customers above.{% else %}Sending is disabled — this is a no-op preview run.{% endif %}
