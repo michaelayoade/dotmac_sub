@@ -298,6 +298,8 @@ class NetworkDevice(Base):
     # up/down/problem/unknown.
     live_status: Mapped[str | None] = mapped_column(String(20))
     live_status_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    topology_x: Mapped[float | None] = mapped_column(Float)
+    topology_y: Mapped[float | None] = mapped_column(Float)
 
     # Capacity tracking
     max_concurrent_subscribers: Mapped[int | None] = mapped_column(Integer)

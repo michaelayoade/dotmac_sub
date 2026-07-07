@@ -29,13 +29,13 @@
                     <select name="source_device_id" id="sourceDevice" required class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                         <option value="">Select device...</option>
                         {% for d in devices %}
-                        <option value="{{ d.id }}" {% if link and ((link.source_device_id | string) == d.id or (link.get('source_device_id', '') | string) == d.id) %}selected{% endif %}>{{ d.name }}</option>
+                        <option value="{{ d.id }}" {% if link and (link.source_device_id | default('', true) | string) == d.id %}selected{% endif %}>{{ d.name }}</option>
                         {% endfor %}
                     </select>
                 </div>
                 <div>
                     <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Source Interface (optional)</label>
-                    <input type="hidden" id="sourceInterfaceSelected" value="{% if link and link.source_interface_id %}{{ link.source_interface_id }}{% elif link and link.get %}{{ link.get('source_interface_id', '') }}{% endif %}">
+                    <input type="hidden" id="sourceInterfaceSelected" value="{{ link.source_interface_id | default('', true) if link else '' }}">
                     <select name="source_interface_id" id="sourceInterface" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                         <option value="">Select interface...</option>
                     </select>
@@ -45,13 +45,13 @@
                     <select name="target_device_id" id="targetDevice" required class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                         <option value="">Select device...</option>
                         {% for d in devices %}
-                        <option value="{{ d.id }}" {% if link and ((link.target_device_id | string) == d.id or (link.get('target_device_id', '') | string) == d.id) %}selected{% endif %}>{{ d.name }}</option>
+                        <option value="{{ d.id }}" {% if link and (link.target_device_id | default('', true) | string) == d.id %}selected{% endif %}>{{ d.name }}</option>
                         {% endfor %}
                     </select>
                 </div>
                 <div>
                     <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Target Interface (optional)</label>
-                    <input type="hidden" id="targetInterfaceSelected" value="{% if link and link.target_interface_id %}{{ link.target_interface_id }}{% elif link and link.get %}{{ link.get('target_interface_id', '') }}{% endif %}">
+                    <input type="hidden" id="targetInterfaceSelected" value="{{ link.target_interface_id | default('', true) if link else '' }}">
                     <select name="target_interface_id" id="targetInterface" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                         <option value="">Select interface...</option>
                     </select>
