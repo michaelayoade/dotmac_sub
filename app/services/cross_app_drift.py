@@ -19,12 +19,21 @@ from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Protocol
 from urllib.parse import urlencode
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.models.billing import (
+    CreditNoteApplication,
+    Invoice,
+    InvoiceStatus,
+    Payment,
+    PaymentAllocation,
+    PaymentStatus,
+)
 from app.models.catalog import (
     AccessCredential,
     RadiusProfile,
@@ -54,6 +63,7 @@ from app.models.cross_app_drift import (
 )
 from app.models.radius_active_session import RadiusActiveSession
 from app.models.subscriber import Subscriber
+from app.services.common import round_money, to_decimal
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +81,27 @@ _NON_SERVICEABLE_STATUSES = {
 }
 # Grace so normal async enforcement lag (suspend -> CoA kick) isn't flagged.
 _ENFORCEMENT_GRACE = timedelta(minutes=15)
+_MONEY_TOLERANCE = Decimal("0.01")
+_POSTED_INVOICE_STATUSES = {
+    InvoiceStatus.issued,
+    InvoiceStatus.partially_paid,
+    InvoiceStatus.paid,
+    InvoiceStatus.overdue,
+    InvoiceStatus.written_off,
+}
+_OPEN_INVOICE_STATUSES = {
+    InvoiceStatus.issued,
+    InvoiceStatus.partially_paid,
+    InvoiceStatus.overdue,
+}
+
+
+def _money(value) -> Decimal:  # noqa: ANN001
+    return round_money(to_decimal(value))
+
+
+def _money_differs(left, right) -> bool:  # noqa: ANN001
+    return abs(_money(left) - _money(right)) > _MONEY_TOLERANCE
 
 
 @dataclass
@@ -318,9 +349,206 @@ class ServiceEnforcementCheck:
             )
 
 
+class MoneySelfConsistencyCheck:
+    """Sub-internal invoice/payment invariants before ERP reads exist.
+
+    These checks compare denormalized billing columns to the same local source
+    rows the billing services use to maintain them. They do not decide ERP truth;
+    they catch sub-side money drift before it propagates cross-app.
+    """
+
+    name = "money_self_consistency"
+
+    def run(self, db: Session) -> Iterable[Finding]:
+        yield from self._invoice_header_mismatch(db)
+        yield from self._invoice_balance_mismatch(db)
+        yield from self._payment_overallocated(db)
+        yield from self._negative_invoice_balance(db)
+
+    def _invoice_header_mismatch(self, db: Session) -> Iterable[Finding]:
+        invoices = db.scalars(select(Invoice).where(Invoice.is_active.is_(True))).all()
+        for invoice in invoices:
+            if invoice.status not in _POSTED_INVOICE_STATUSES:
+                continue
+            expected = _money(invoice.subtotal) + _money(invoice.tax_total)
+            actual = _money(invoice.total)
+            if not _money_differs(actual, expected):
+                continue
+            yield Finding(
+                check_name=self.name,
+                entity_type="invoice",
+                canonical_entity_id=str(invoice.id),
+                mismatch_type="invoice_total_mismatch",
+                severity=SEVERITY_HIGH,
+                evidence={
+                    "invoice_number": invoice.invoice_number,
+                    "subtotal": str(_money(invoice.subtotal)),
+                    "tax_total": str(_money(invoice.tax_total)),
+                    "expected_total": str(expected),
+                    "actual_total": str(actual),
+                    "delta": str(_money(actual - expected)),
+                    "status": invoice.status.value if invoice.status else None,
+                },
+                details={
+                    "suggested_owner": "billing invoice recalculation",
+                    "suggested_action": (
+                        "Recalculate this invoice from active lines and verify "
+                        "subtotal + tax_total equals total before ERP sync."
+                    ),
+                },
+            )
+
+    def _invoice_balance_mismatch(self, db: Session) -> Iterable[Finding]:
+        allocation_rows = db.execute(
+            select(
+                PaymentAllocation.invoice_id,
+                func.coalesce(func.sum(PaymentAllocation.amount), Decimal("0.00")),
+            )
+            .join(Payment, Payment.id == PaymentAllocation.payment_id)
+            .where(PaymentAllocation.is_active.is_(True))
+            .where(Payment.is_active.is_(True))
+            .where(Payment.status == PaymentStatus.succeeded)
+            .group_by(PaymentAllocation.invoice_id)
+        ).all()
+        allocated_by_invoice = {
+            invoice_id: round_money(to_decimal(amount))
+            for invoice_id, amount in allocation_rows
+        }
+        credit_rows = db.execute(
+            select(
+                CreditNoteApplication.invoice_id,
+                func.coalesce(func.sum(CreditNoteApplication.amount), Decimal("0.00")),
+            ).group_by(CreditNoteApplication.invoice_id)
+        ).all()
+        credits_by_invoice = {
+            invoice_id: round_money(to_decimal(amount))
+            for invoice_id, amount in credit_rows
+        }
+
+        invoices = db.scalars(select(Invoice).where(Invoice.is_active.is_(True))).all()
+        for invoice in invoices:
+            if invoice.status == InvoiceStatus.draft:
+                continue
+            if invoice.status in (InvoiceStatus.void, InvoiceStatus.written_off):
+                expected_balance = Decimal("0.00")
+            else:
+                expected_balance = max(
+                    Decimal("0.00"),
+                    _money(
+                        _money(invoice.total)
+                        - allocated_by_invoice.get(invoice.id, Decimal("0.00"))
+                        - credits_by_invoice.get(invoice.id, Decimal("0.00"))
+                    ),
+                )
+            actual_balance = _money(invoice.balance_due)
+            if not _money_differs(actual_balance, expected_balance):
+                continue
+            yield Finding(
+                check_name=self.name,
+                entity_type="invoice",
+                canonical_entity_id=str(invoice.id),
+                mismatch_type="invoice_balance_mismatch",
+                severity=SEVERITY_HIGH,
+                evidence={
+                    "invoice_number": invoice.invoice_number,
+                    "status": invoice.status.value if invoice.status else None,
+                    "total": str(_money(invoice.total)),
+                    "succeeded_allocations": str(
+                        allocated_by_invoice.get(invoice.id, Decimal("0.00"))
+                    ),
+                    "credit_applications": str(
+                        credits_by_invoice.get(invoice.id, Decimal("0.00"))
+                    ),
+                    "expected_balance_due": str(expected_balance),
+                    "actual_balance_due": str(actual_balance),
+                    "delta": str(_money(actual_balance - expected_balance)),
+                },
+                details={
+                    "suggested_owner": "billing invoice recalculation",
+                    "suggested_action": (
+                        "Run the invoice recalculation path for this invoice and "
+                        "review active allocations/credit applications."
+                    ),
+                },
+            )
+
+    def _payment_overallocated(self, db: Session) -> Iterable[Finding]:
+        rows = db.execute(
+            select(
+                Payment.id,
+                Payment.amount,
+                Payment.currency,
+                Payment.status,
+                func.coalesce(func.sum(PaymentAllocation.amount), Decimal("0.00")),
+            )
+            .join(PaymentAllocation, PaymentAllocation.payment_id == Payment.id)
+            .where(Payment.is_active.is_(True))
+            .where(PaymentAllocation.is_active.is_(True))
+            .group_by(Payment.id, Payment.amount, Payment.currency, Payment.status)
+        ).all()
+        for payment_id, amount, currency, status, allocated in rows:
+            payment_amount = _money(amount)
+            allocated_amount = _money(allocated)
+            if allocated_amount - payment_amount <= _MONEY_TOLERANCE:
+                continue
+            yield Finding(
+                check_name=self.name,
+                entity_type="payment",
+                canonical_entity_id=str(payment_id),
+                mismatch_type="payment_over_allocated",
+                severity=SEVERITY_CRITICAL,
+                evidence={
+                    "payment_amount": str(payment_amount),
+                    "allocated_amount": str(allocated_amount),
+                    "over_by": str(_money(allocated_amount - payment_amount)),
+                    "currency": currency,
+                    "payment_status": status.value if status else None,
+                },
+                details={
+                    "suggested_owner": "billing payment allocation",
+                    "suggested_action": (
+                        "Review active payment allocations; total active "
+                        "allocations must not exceed the payment amount."
+                    ),
+                },
+            )
+
+    def _negative_invoice_balance(self, db: Session) -> Iterable[Finding]:
+        invoices = db.scalars(
+            select(Invoice)
+            .where(Invoice.is_active.is_(True))
+            .where(Invoice.status.in_(_OPEN_INVOICE_STATUSES))
+        ).all()
+        for invoice in invoices:
+            balance = _money(invoice.balance_due)
+            if balance >= -_MONEY_TOLERANCE:
+                continue
+            yield Finding(
+                check_name=self.name,
+                entity_type="invoice",
+                canonical_entity_id=str(invoice.id),
+                mismatch_type="negative_invoice_balance",
+                severity=SEVERITY_HIGH,
+                evidence={
+                    "invoice_number": invoice.invoice_number,
+                    "status": invoice.status.value if invoice.status else None,
+                    "balance_due": str(balance),
+                    "total": str(_money(invoice.total)),
+                },
+                details={
+                    "suggested_owner": "billing payments / credits",
+                    "suggested_action": (
+                        "Recalculate the invoice and inspect allocations/credits; "
+                        "an open invoice must not carry negative balance_due."
+                    ),
+                },
+            )
+
+
 DEFAULT_CHECKS: list[DriftCheck] = [
     IdentityCardinalityCheck(),
     ServiceEnforcementCheck(),
+    MoneySelfConsistencyCheck(),
 ]
 
 

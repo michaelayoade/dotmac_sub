@@ -10,7 +10,18 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
+from app.models.billing import (
+    CreditNote,
+    CreditNoteApplication,
+    CreditNoteStatus,
+    Invoice,
+    InvoiceStatus,
+    Payment,
+    PaymentAllocation,
+    PaymentStatus,
+)
 from app.models.cross_app_drift import (
     EVENT_CREATED,
     EVENT_RECURRING,
@@ -328,6 +339,193 @@ def test_throttle_profile_mismatch_is_medium(db_session, subscriber):
     )
     assert f.severity == "medium"
     assert f.evidence["radius_profile"] == "missing_or_inactive"
+
+
+# --- money self-consistency check ------------------------------------------
+
+
+def _invoice(
+    db,
+    subscriber,
+    *,
+    status=InvoiceStatus.issued,
+    subtotal=Decimal("100.00"),
+    tax_total=Decimal("0.00"),
+    total=Decimal("100.00"),
+    balance_due=Decimal("100.00"),
+):
+    inv = Invoice(
+        account_id=subscriber.id,
+        status=status,
+        subtotal=subtotal,
+        tax_total=tax_total,
+        total=total,
+        balance_due=balance_due,
+        currency="NGN",
+        is_active=True,
+    )
+    db.add(inv)
+    db.flush()
+    return inv
+
+
+def _payment(db, subscriber, *, amount=Decimal("100.00")):
+    payment = Payment(
+        account_id=subscriber.id,
+        amount=amount,
+        currency="NGN",
+        status=PaymentStatus.succeeded,
+        paid_at=datetime.now(UTC),
+        is_active=True,
+    )
+    db.add(payment)
+    db.flush()
+    return payment
+
+
+def test_money_check_flags_invoice_header_total_mismatch(db_session, subscriber):
+    inv = _invoice(
+        db_session,
+        subscriber,
+        subtotal=Decimal("100.00"),
+        tax_total=Decimal("7.50"),
+        total=Decimal("120.00"),
+        balance_due=Decimal("120.00"),
+    )
+
+    run_detection(db_session, checks=[cross_app_drift.MoneySelfConsistencyCheck()])
+
+    f = (
+        db_session.query(CrossAppDriftFinding)
+        .filter_by(mismatch_type="invoice_total_mismatch")
+        .one()
+    )
+    assert f.severity == "high"
+    assert f.canonical_entity_id == str(inv.id)
+    assert f.evidence["expected_total"] == "107.50"
+    assert f.evidence["actual_total"] == "120.00"
+
+
+def test_money_check_flags_invoice_balance_mismatch(db_session, subscriber):
+    inv = _invoice(db_session, subscriber)
+    payment = _payment(db_session, subscriber, amount=Decimal("40.00"))
+    db_session.add(
+        PaymentAllocation(
+            payment_id=payment.id,
+            invoice_id=inv.id,
+            amount=Decimal("40.00"),
+            is_active=True,
+        )
+    )
+    db_session.flush()
+
+    run_detection(db_session, checks=[cross_app_drift.MoneySelfConsistencyCheck()])
+
+    f = (
+        db_session.query(CrossAppDriftFinding)
+        .filter_by(mismatch_type="invoice_balance_mismatch")
+        .one()
+    )
+    assert f.severity == "high"
+    assert f.evidence["expected_balance_due"] == "60.00"
+    assert f.evidence["actual_balance_due"] == "100.00"
+    assert f.evidence["succeeded_allocations"] == "40.00"
+
+
+def test_money_check_flags_payment_overallocated(db_session, subscriber):
+    inv_a = _invoice(db_session, subscriber, total=Decimal("30.00"))
+    inv_b = _invoice(db_session, subscriber, total=Decimal("30.00"))
+    payment = _payment(db_session, subscriber, amount=Decimal("50.00"))
+    db_session.add_all(
+        [
+            PaymentAllocation(
+                payment_id=payment.id,
+                invoice_id=inv_a.id,
+                amount=Decimal("30.00"),
+                is_active=True,
+            ),
+            PaymentAllocation(
+                payment_id=payment.id,
+                invoice_id=inv_b.id,
+                amount=Decimal("30.00"),
+                is_active=True,
+            ),
+        ]
+    )
+    db_session.flush()
+
+    run_detection(db_session, checks=[cross_app_drift.MoneySelfConsistencyCheck()])
+
+    f = (
+        db_session.query(CrossAppDriftFinding)
+        .filter_by(mismatch_type="payment_over_allocated")
+        .one()
+    )
+    assert f.severity == "critical"
+    assert f.canonical_entity_id == str(payment.id)
+    assert f.evidence["payment_amount"] == "50.00"
+    assert f.evidence["allocated_amount"] == "60.00"
+    assert f.evidence["over_by"] == "10.00"
+
+
+def test_money_check_flags_negative_invoice_balance(db_session, subscriber):
+    inv = _invoice(
+        db_session,
+        subscriber,
+        status=InvoiceStatus.overdue,
+        total=Decimal("25.00"),
+        balance_due=Decimal("-0.02"),
+    )
+
+    run_detection(db_session, checks=[cross_app_drift.MoneySelfConsistencyCheck()])
+
+    f = (
+        db_session.query(CrossAppDriftFinding)
+        .filter_by(mismatch_type="negative_invoice_balance")
+        .one()
+    )
+    assert f.severity == "high"
+    assert f.canonical_entity_id == str(inv.id)
+    assert f.evidence["status"] == "overdue"
+    assert f.evidence["balance_due"] == "-0.02"
+
+
+def test_money_balance_check_includes_credit_note_applications(db_session, subscriber):
+    inv = _invoice(
+        db_session,
+        subscriber,
+        total=Decimal("100.00"),
+        balance_due=Decimal("60.00"),
+    )
+    credit = CreditNote(
+        account_id=subscriber.id,
+        status=CreditNoteStatus.issued,
+        subtotal=Decimal("40.00"),
+        tax_total=Decimal("0.00"),
+        total=Decimal("40.00"),
+        applied_total=Decimal("40.00"),
+        currency="NGN",
+        is_active=True,
+    )
+    db_session.add(credit)
+    db_session.flush()
+    db_session.add(
+        CreditNoteApplication(
+            credit_note_id=credit.id,
+            invoice_id=inv.id,
+            amount=Decimal("40.00"),
+        )
+    )
+    db_session.flush()
+
+    run_detection(db_session, checks=[cross_app_drift.MoneySelfConsistencyCheck()])
+
+    assert (
+        db_session.query(CrossAppDriftFinding)
+        .filter_by(mismatch_type="invoice_balance_mismatch")
+        .count()
+        == 0
+    )
 
 
 # --- alert path + read view ------------------------------------------------
