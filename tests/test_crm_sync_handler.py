@@ -25,6 +25,7 @@ from app.services.crm_webhook import (
 )
 from app.services.events.handlers.crm_sync import CRM_SYNC_EVENTS, CrmSyncHandler
 from app.services.events.types import Event, EventType
+from app.tasks import crm_sync
 from app.tasks.crm_sync import CrmPushError, push_subscriber_change
 
 
@@ -272,6 +273,57 @@ class TestCrmSyncHandler:
             enqueue, _ = self._handle(event, db)
         enqueue.assert_not_called()
 
+    def test_subscriber_created_resolves_subscriber_id_context(self):
+        """Creation events carry subscriber_id, not account_id, in production."""
+        native = _subscriber(splynx_id=None)
+        db = MagicMock()
+        db.get.return_value = native
+        subscriber_id = uuid.uuid4()
+        event = Event(
+            event_type=EventType.subscriber_created,
+            payload={"subscriber_id": str(subscriber_id)},
+            subscriber_id=subscriber_id,
+        )
+        with crm_base_url("https://crm.example"):
+            enqueue, _ = self._handle(event, db)
+
+        db.get.assert_called()
+        assert db.get.call_args.args[1] == subscriber_id
+        enqueue.assert_called_once()
+        _, kwargs = enqueue.call_args
+        external_id, payload, external_system = kwargs["args"]
+        assert external_id == str(native.id)
+        assert external_system == "selfcare"
+        assert payload["status"] == "active"
+
+    def test_subscriber_updated_enqueues_selfcare_payload(self):
+        """Admin customer edits emit subscriber.updated and should sync to CRM."""
+        subscriber = _subscriber(splynx_id=None, first="Favour", last="Eze")
+        db = MagicMock()
+        db.get.return_value = subscriber
+        subscriber_id = uuid.uuid4()
+        event = Event(
+            event_type=EventType.subscriber_updated,
+            payload={
+                "subscriber_id": str(subscriber_id),
+                "updated_fields": ["first_name", "last_name", "email"],
+            },
+            subscriber_id=subscriber_id,
+        )
+        with crm_base_url("https://crm.example"):
+            enqueue, http = self._handle(event, db)
+
+        http.assert_not_called()
+        db.get.assert_called()
+        assert db.get.call_args.args[1] == subscriber_id
+        enqueue.assert_called_once()
+        _, kwargs = enqueue.call_args
+        external_id, payload, external_system = kwargs["args"]
+        assert external_id == str(subscriber.id)
+        assert external_system == "selfcare"
+        assert payload["status"] == "active"
+        assert "Favour Eze" in payload["notes"]
+
     def test_skips_when_no_account_id(self):
         event = Event(
             event_type=EventType.subscriber_suspended,
@@ -302,6 +354,8 @@ class TestCrmSyncHandler:
 
     def test_all_sync_events_covered(self):
         # Guard against silently dropping an event type from the dispatch map.
+        assert EventType.subscriber_created in CRM_SYNC_EVENTS
+        assert EventType.subscriber_updated in CRM_SYNC_EVENTS
         assert EventType.subscriber_suspended in CRM_SYNC_EVENTS
         assert EventType.subscription_activated in CRM_SYNC_EVENTS
         assert EventType.subscription_canceled in CRM_SYNC_EVENTS
@@ -342,6 +396,41 @@ class TestPushTask:
                 is True
             )
         persist.assert_called_once_with(local_id, crm_id)
+
+    def test_selfcare_push_persists_crm_link(self):
+        local_id = str(uuid.uuid4())
+        crm_id = str(uuid.uuid4())
+        with (
+            patch(
+                "app.services.crm_webhook.push_subscriber_change",
+                return_value=crm_id,
+            ),
+            patch("app.tasks.crm_sync._persist_crm_link") as persist,
+        ):
+            assert (
+                push_subscriber_change.run(local_id, {"status": "active"}, "selfcare")
+                is True
+            )
+        persist.assert_called_once_with(local_id, crm_id)
+
+    def test_persist_crm_link_stamps_success_metadata(self, db_session, subscriber):
+        crm_id = str(uuid.uuid4())
+        subscriber.crm_subscriber_id = None
+        subscriber.metadata_ = {"existing": True}
+        db_session.commit()
+
+        @contextmanager
+        def _fake_session():
+            yield db_session
+
+        with patch("app.db.task_session", _fake_session):
+            crm_sync._persist_crm_link(str(subscriber.id), crm_id)
+
+        db_session.refresh(subscriber)
+        assert str(subscriber.crm_subscriber_id) == crm_id
+        assert subscriber.metadata_["existing"] is True
+        assert subscriber.metadata_["crm_sync"]["crm_subscriber_id"] == crm_id
+        assert "last_success_at" in subscriber.metadata_["crm_sync"]
 
     def test_splynx_push_does_not_persist(self):
         with (

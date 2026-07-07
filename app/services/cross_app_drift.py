@@ -23,7 +23,7 @@ from decimal import Decimal
 from typing import Protocol
 from urllib.parse import urlencode
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.models.billing import (
@@ -381,6 +381,67 @@ class ServiceEnforcementCheck:
             )
 
 
+# Bound the detector's working set so no single run can OOM the app container.
+# Source scans stream instead of materializing every row; reconciliation resolves
+# stale findings in id batches; high-cardinality legacy noise is aggregated.
+_SCAN_YIELD = 1000
+_RESOLVE_BATCH = 1000
+_AGG_SAMPLE_LIMIT = 20
+
+
+def _id_batches(ids: list, size: int) -> Iterable[list]:
+    for start in range(0, len(ids), size):
+        yield ids[start : start + size]
+
+
+class _LegacyAggregator:
+    """Roll a high-cardinality legacy archive-completeness class into ONE finding.
+
+    Historical Splynx-import noise (e.g. ~105k invoices with empty line totals)
+    has no per-invoice action — emitting one finding per row both spams the queue
+    and OOMs detection. Instead we accumulate a count, the total absolute delta,
+    and a bounded sample, and emit a single aggregated finding for the class.
+    """
+
+    def __init__(self) -> None:
+        self.count = 0
+        self.total_abs_delta = Decimal("0.00")
+        self.samples: list[dict] = []
+
+    def add(self, invoice_id: object, invoice_number: object, delta: Decimal) -> None:
+        self.count += 1
+        self.total_abs_delta += abs(_money(delta))
+        if len(self.samples) < _AGG_SAMPLE_LIMIT:
+            self.samples.append(
+                {
+                    "invoice_id": str(invoice_id),
+                    "invoice_number": invoice_number,
+                    "delta": str(_money(delta)),
+                }
+            )
+
+    def finding(self, check_name: str, mismatch_type: str, action: str) -> Finding:
+        return Finding(
+            check_name=check_name,
+            entity_type="invoice_class",
+            canonical_entity_id=f"legacy_splynx_import:{mismatch_type}",
+            mismatch_type=mismatch_type,
+            severity=SEVERITY_LOW,
+            evidence={
+                "invoice_source": "legacy_splynx_import",
+                "aggregated": True,
+                "count": self.count,
+                "total_abs_delta": str(_money(self.total_abs_delta)),
+                "sample_invoices": self.samples,
+                "sample_limit": _AGG_SAMPLE_LIMIT,
+            },
+            details={
+                "suggested_owner": "finance migration review",
+                "suggested_action": action,
+            },
+        )
+
+
 class MoneySelfConsistencyCheck:
     """Sub-internal invoice/payment invariants before ERP reads exist.
 
@@ -398,7 +459,7 @@ class MoneySelfConsistencyCheck:
         yield from self._negative_invoice_balance(db)
 
     def _invoice_header_mismatch(self, db: Session) -> Iterable[Finding]:
-        rows = db.execute(
+        stmt = (
             select(
                 Invoice.id,
                 Invoice.invoice_number,
@@ -406,21 +467,62 @@ class MoneySelfConsistencyCheck:
                 Invoice.subtotal,
                 Invoice.tax_total,
                 Invoice.total,
+                Invoice.splynx_invoice_id,
             )
             .where(Invoice.is_active.is_(True))
             .where(Invoice.status.in_(_POSTED_INVOICE_STATUSES))
-        ).all()
-        for invoice_id, invoice_number, status, subtotal, tax_total, total in rows:
+        )
+        legacy = _LegacyAggregator()
+        for (
+            invoice_id,
+            invoice_number,
+            status,
+            subtotal,
+            tax_total,
+            total,
+            splynx_invoice_id,
+        ) in db.execute(stmt.execution_options(yield_per=_SCAN_YIELD)):
             expected = _money(subtotal) + _money(tax_total)
             actual = _money(total)
             if not _money_differs(actual, expected):
                 continue
+            is_legacy_splynx_import = splynx_invoice_id is not None
+            legacy_missing_line_totals = (
+                is_legacy_splynx_import
+                and expected == Decimal("0.00")
+                and actual > Decimal("0.00")
+            )
+            # Archive-completeness noise (imported total preserved, line totals
+            # empty) has no per-invoice action — roll it up, don't emit one row
+            # each. Native + other-legacy header drift stays per-invoice.
+            if legacy_missing_line_totals:
+                legacy.add(invoice_id, invoice_number, actual - expected)
+                continue
+            source = "legacy_splynx_import" if is_legacy_splynx_import else "native"
+            severity = SEVERITY_MEDIUM if is_legacy_splynx_import else SEVERITY_HIGH
+            suggested_owner = (
+                "finance migration review"
+                if is_legacy_splynx_import
+                else "billing invoice recalculation"
+            )
+            if is_legacy_splynx_import:
+                suggested_action = (
+                    "Review the historical Splynx import header mapping; imported "
+                    "invoice totals were preserved, but subtotal/tax_total may be "
+                    "missing or net/gross split differently. Do not recalculate "
+                    "paid historical invoices without finance sign-off."
+                )
+            else:
+                suggested_action = (
+                    "Recalculate this invoice from active lines and verify "
+                    "subtotal + tax_total equals total before ERP sync."
+                )
             yield Finding(
                 check_name=self.name,
                 entity_type="invoice",
                 canonical_entity_id=str(invoice_id),
                 mismatch_type="invoice_total_mismatch",
-                severity=SEVERITY_HIGH,
+                severity=severity,
                 evidence={
                     "invoice_number": invoice_number,
                     "subtotal": str(_money(subtotal)),
@@ -429,14 +531,21 @@ class MoneySelfConsistencyCheck:
                     "actual_total": str(actual),
                     "delta": str(_money(actual - expected)),
                     "status": status.value if status else None,
+                    "invoice_source": source,
+                    "splynx_invoice_id": splynx_invoice_id,
                 },
                 details={
-                    "suggested_owner": "billing invoice recalculation",
-                    "suggested_action": (
-                        "Recalculate this invoice from active lines and verify "
-                        "subtotal + tax_total equals total before ERP sync."
-                    ),
+                    "suggested_owner": suggested_owner,
+                    "suggested_action": suggested_action,
                 },
+            )
+        if legacy.count:
+            yield legacy.finding(
+                self.name,
+                "legacy_invoice_line_totals_missing",
+                "Historical Splynx invoices whose imported totals were preserved "
+                "but line subtotal/tax fields are empty. Archive-data completeness, "
+                "not a current invoice arithmetic bug — no per-invoice action.",
             )
 
     def _invoice_balance_mismatch(self, db: Session) -> Iterable[Finding]:
@@ -466,18 +575,27 @@ class MoneySelfConsistencyCheck:
             for invoice_id, amount in credit_rows
         }
 
-        rows = db.execute(
+        stmt = (
             select(
                 Invoice.id,
                 Invoice.invoice_number,
                 Invoice.status,
                 Invoice.total,
                 Invoice.balance_due,
+                Invoice.splynx_invoice_id,
             )
             .where(Invoice.is_active.is_(True))
             .where(Invoice.status != InvoiceStatus.draft)
-        ).all()
-        for invoice_id, invoice_number, status, total, balance_due in rows:
+        )
+        legacy = _LegacyAggregator()
+        for (
+            invoice_id,
+            invoice_number,
+            status,
+            total,
+            balance_due,
+            splynx_invoice_id,
+        ) in db.execute(stmt.execution_options(yield_per=_SCAN_YIELD)):
             if status in (InvoiceStatus.void, InvoiceStatus.written_off):
                 expected_balance = Decimal("0.00")
             else:
@@ -492,12 +610,47 @@ class MoneySelfConsistencyCheck:
             actual_balance = _money(balance_due)
             if not _money_differs(actual_balance, expected_balance):
                 continue
+            is_legacy_splynx_import = splynx_invoice_id is not None
+            legacy_paid_reconstruction_gap = (
+                is_legacy_splynx_import
+                and status == InvoiceStatus.paid
+                and actual_balance == Decimal("0.00")
+            )
+            # Archive allocation-completeness (imported paid/zero-balance, but
+            # local allocations don't reconstruct settlement) has no per-invoice
+            # action — roll it up. Native + other-legacy balance drift stays
+            # per-invoice (it can indicate a live receivable error).
+            if legacy_paid_reconstruction_gap:
+                legacy.add(
+                    invoice_id, invoice_number, actual_balance - expected_balance
+                )
+                continue
+            source = "legacy_splynx_import" if is_legacy_splynx_import else "native"
+            severity = SEVERITY_MEDIUM if is_legacy_splynx_import else SEVERITY_HIGH
+            suggested_owner = (
+                "finance migration review"
+                if is_legacy_splynx_import
+                else "billing invoice recalculation"
+            )
+            if is_legacy_splynx_import:
+                suggested_action = (
+                    "Review the historical Splynx settlement import for this "
+                    "invoice; imported balance_due/status may reflect Splynx-paid "
+                    "state even when local allocations do not reconstruct it. Do "
+                    "not reopen or recalculate paid historical invoices without "
+                    "finance sign-off."
+                )
+            else:
+                suggested_action = (
+                    "Run the invoice recalculation path for this invoice and "
+                    "review active allocations/credit applications."
+                )
             yield Finding(
                 check_name=self.name,
                 entity_type="invoice",
                 canonical_entity_id=str(invoice_id),
                 mismatch_type="invoice_balance_mismatch",
-                severity=SEVERITY_HIGH,
+                severity=severity,
                 evidence={
                     "invoice_number": invoice_number,
                     "status": status.value if status else None,
@@ -511,14 +664,22 @@ class MoneySelfConsistencyCheck:
                     "expected_balance_due": str(expected_balance),
                     "actual_balance_due": str(actual_balance),
                     "delta": str(_money(actual_balance - expected_balance)),
+                    "invoice_source": source,
+                    "splynx_invoice_id": splynx_invoice_id,
                 },
                 details={
-                    "suggested_owner": "billing invoice recalculation",
-                    "suggested_action": (
-                        "Run the invoice recalculation path for this invoice and "
-                        "review active allocations/credit applications."
-                    ),
+                    "suggested_owner": suggested_owner,
+                    "suggested_action": suggested_action,
                 },
+            )
+        if legacy.count:
+            yield legacy.finding(
+                self.name,
+                "legacy_paid_invoice_allocation_gap",
+                "Historical Splynx invoices imported as paid with zero balance "
+                "whose local allocation rows do not reconstruct the settlement. "
+                "Archive allocation completeness, not current receivable drift — "
+                "no per-invoice action.",
             )
 
     def _payment_overallocated(self, db: Session) -> Iterable[Finding]:
@@ -829,13 +990,16 @@ def run_detection(
     run.checks_run = len(checks)
 
     waived = _active_waiver_fingerprints(db, now)
-    existing = {
-        f.fingerprint: f for f in db.scalars(select(CrossAppDriftFinding)).all()
-    }
 
+    # Upsert only the emitted findings, one point-lookup each. `current` is
+    # bounded (high-cardinality legacy classes are aggregated to one finding),
+    # so we never materialize the whole findings table — the detector's memory
+    # scales with emitted + open findings, not with all-time resolved history.
     new_count = 0
     for fp, found in current.items():
-        finding = existing.get(fp)
+        finding = db.scalar(
+            select(CrossAppDriftFinding).where(CrossAppDriftFinding.fingerprint == fp)
+        )
         if finding is None:
             finding = CrossAppDriftFinding(
                 fingerprint=fp,
@@ -880,16 +1044,40 @@ def run_detection(
         else:
             _log_event(db, finding, run, EVENT_RECURRING, found.details)
 
+    # Resolve open/waived findings whose fingerprint was not re-emitted. Only
+    # non-terminal findings can transition, so we scan just those (never the
+    # resolved history), collect their ids, and resolve in id batches so a large
+    # backlog (e.g. the one-time legacy-noise cleanup) cannot OOM the run.
+    current_fps = set(current.keys())
+    stale_ids = [
+        fid
+        for fid, fp in db.execute(
+            select(CrossAppDriftFinding.id, CrossAppDriftFinding.fingerprint).where(
+                CrossAppDriftFinding.status.in_((STATUS_OPEN, STATUS_WAIVED))
+            )
+        )
+        if fp not in current_fps
+    ]
     resolved_count = 0
-    for fp, finding in existing.items():
-        if fp in current:
-            continue
-        if finding.status in (STATUS_OPEN, STATUS_WAIVED):
-            finding.status = STATUS_RESOLVED
-            finding.resolved_at = now
-            finding.last_run_id = run.id
-            _log_event(db, finding, run, EVENT_RESOLVED, None)
-            resolved_count += 1
+    for batch in _id_batches(stale_ids, _RESOLVE_BATCH):
+        db.execute(
+            update(CrossAppDriftFinding)
+            .where(CrossAppDriftFinding.id.in_(batch))
+            .values(status=STATUS_RESOLVED, resolved_at=now, last_run_id=run.id)
+            .execution_options(synchronize_session=False),
+        )
+        for fid in batch:
+            db.add(
+                CrossAppDriftFindingEvent(
+                    finding_id=fid,
+                    run_id=run.id,
+                    event_type=EVENT_RESOLVED,
+                    at=now,
+                    snapshot=None,
+                )
+            )
+        db.flush()
+        resolved_count += len(batch)
 
     db.flush()  # persist status changes so the open-count reflects this run
     open_count = db.scalar(

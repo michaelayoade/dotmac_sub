@@ -34,6 +34,7 @@ from app.models.catalog import (
 )
 from app.models.collections import DunningCase, DunningCaseStatus
 from app.models.communication_log import CommunicationLog
+from app.models.crm_sync_failure import CrmSyncFailure, CrmSyncFailureStatus
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.gis import (
     CustomerLocationChangeRequest,
@@ -1407,6 +1408,66 @@ def reveal_customer_pppoe_password(
     return password or "", bool(password)
 
 
+def _build_crm_sync_status(db: Session, customer: Subscriber) -> dict[str, Any]:
+    def _display_datetime(value: object) -> str | None:
+        if isinstance(value, datetime):
+            return value.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
+        if value:
+            return str(value)
+        return None
+
+    latest_failure = (
+        db.query(CrmSyncFailure)
+        .filter(CrmSyncFailure.entity == "subscriber")
+        .filter(CrmSyncFailure.external_id == str(customer.id))
+        .order_by(CrmSyncFailure.created_at.desc())
+        .first()
+    )
+    unresolved_failure = (
+        latest_failure
+        if latest_failure and latest_failure.status == CrmSyncFailureStatus.unresolved
+        else None
+    )
+    crm_meta = {}
+    metadata = customer.metadata_ if isinstance(customer.metadata_, dict) else {}
+    raw_crm_meta = metadata.get("crm_sync") if metadata else None
+    if isinstance(raw_crm_meta, dict):
+        crm_meta = raw_crm_meta
+
+    crm_subscriber_id = (
+        str(customer.crm_subscriber_id) if customer.crm_subscriber_id else None
+    )
+    last_success_at = crm_meta.get("last_success_at")
+    last_activity_at: object | None
+    if unresolved_failure:
+        status = "failed"
+        label = "Sync failed"
+        last_activity_at = (
+            unresolved_failure.updated_at or unresolved_failure.created_at
+        )
+    elif crm_subscriber_id:
+        status = "linked"
+        label = "Synced"
+        last_activity_at = last_success_at
+    else:
+        status = "pending"
+        label = "Pending sync"
+        last_activity_at = None
+
+    return {
+        "status": status,
+        "label": label,
+        "crm_subscriber_id": crm_subscriber_id,
+        "last_success_at": last_success_at,
+        "last_activity_at": last_activity_at,
+        "last_success_display": _display_datetime(last_success_at),
+        "last_activity_display": _display_datetime(last_activity_at),
+        "dead_letter_id": str(unresolved_failure.id) if unresolved_failure else None,
+        "error": unresolved_failure.error if unresolved_failure else None,
+        "attempts": unresolved_failure.attempts if unresolved_failure else 0,
+    }
+
+
 def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, Any]:
     """Build unified customer detail snapshot.
 
@@ -1626,6 +1687,7 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
         "has_any_subscribers": total_subscribers > 0,
         "activity_items": activity_items,
         "customer_user_access": customer_user_access,
+        "crm_sync_status": _build_crm_sync_status(db, customer),
         "pppoe_access": pppoe_access,
         "billing_policy": _billing_policy_snapshot(db, accounts),
         "billing_workspace": billing_workspace,

@@ -33,7 +33,29 @@ APP_SERVICES=(app celery-worker celery-worker-bandwidth celery-worker-billing \
 
 log() { printf '\n==> %s\n' "$*"; }
 
+# Deploy-integrity gate. The immutable image must not be shadowed by a host
+# source bind-mount: a `/app/app` mount means a dev overlay (docker-compose.dev.yml,
+# or a legacy auto-loaded docker-compose.override.yml) got layered on, so the
+# RUNNING code is the host working tree — not the tag we just deployed. This is
+# invisible to the health gate (host code can be perfectly healthy), so check it
+# explicitly. `/app/uploads` and other named volumes are fine; only `/app/app`
+# (the Python package) shadowing the image is the failure.
+assert_no_source_mount() {
+  local mounts
+  mounts="$(docker inspect "${APP_CONTAINER}" \
+    --format '{{range .Mounts}}{{println .Destination}}{{end}}' 2>/dev/null || true)"
+  if grep -qx '/app/app' <<<"${mounts}"; then
+    echo "DEPLOY INTEGRITY FAILURE: ${APP_CONTAINER} has a host bind-mount at /app/app —" >&2
+    echo "the working tree is shadowing the image, so '${TAG:-?}' is NOT the running code." >&2
+    echo "Cause: a dev overlay was loaded (stray docker-compose.override.yml, or a bare" >&2
+    echo "'docker compose up/restart' on the host). Fix on the host, then redeploy:" >&2
+    echo "  docker compose -f docker-compose.yml up -d --force-recreate ${APP_SERVICES[*]}" >&2
+    return 1
+  fi
+}
+
 cd "${DEPLOY_DIR}"
+COMPOSE=(docker compose -f docker-compose.yml)
 
 pinned_image() { grep -E '^APP_IMAGE=' .env | cut -d= -f2-; }
 
@@ -83,15 +105,21 @@ if git -C "${REPO_DIR}" rev-parse --verify --quiet "${TAG#sha-}^{commit}" >/dev/
 fi
 
 log "Pulling image"
-docker compose pull app
+"${COMPOSE[@]}" pull app
 
 # Multi-head safe: sub has hit multi-head states (e.g. the bundles migration that
 # merged heads), so use `heads` (plural), never `head`.
 log "Applying migrations (alembic upgrade heads)"
-docker compose run --rm --no-deps app alembic upgrade heads
+"${COMPOSE[@]}" run --rm --no-deps app alembic upgrade heads
 
 log "Recreating services: ${APP_SERVICES[*]}"
-docker compose up -d "${APP_SERVICES[@]}"
+"${COMPOSE[@]}" up -d "${APP_SERVICES[@]}"
+
+log "Verifying deploy integrity (no host source bind-mount shadowing the image)"
+if ! assert_no_source_mount; then
+  trap - ERR
+  exit 1
+fi
 
 # The app service has no docker healthcheck, so gate on its HTTP /health endpoint.
 log "Waiting for app health at ${HEALTH_URL} (timeout ${HEALTH_TIMEOUT_SECONDS}s)"
@@ -110,8 +138,8 @@ if ((healthy == 0)); then
   log "Health gate FAILED (${HEALTH_URL} never became healthy) — rolling back to ${PREV_IMAGE:-none}"
   if [[ -n "${PREV_IMAGE}" ]]; then
     repin_prev
-    docker compose pull app || true
-    docker compose up -d "${APP_SERVICES[@]}"
+    "${COMPOSE[@]}" pull app || true
+    "${COMPOSE[@]}" up -d "${APP_SERVICES[@]}"
     log "Rolled back to ${PREV_IMAGE}. NOTE: migrations from ${TAG} were NOT reverted."
   else
     log "No previous image recorded — cannot auto-roll-back. Investigate the app container."
