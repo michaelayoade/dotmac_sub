@@ -15,9 +15,16 @@ path saw zero neighbors and the backbone graph never populated. We iterate the
 ``routers`` table directly (each row carries the same user account for API and
 REST) and map each router to its ``network_device_id``.
 
-Match: neighbor ``identity`` (normalized) -> network_device name/hostname, then
-``address``/``address4`` -> mgmt_ip. Empty identity or no match -> dropped
-(CPE/unknown).
+Match (``_match_with_strategy``, additive + conservative): exact normalized
+neighbor ``identity`` -> network_device name/hostname; then IPv4
+``address``/``address4`` -> mgmt_ip (a colon marks an IPv6/``fe80::`` value and
+is ignored so link-local-only neighbors still fall through to identity); then a
+guarded fuzzy identity match (token subset, ambiguous -> no match) so aliases
+like ``BOI Asokoro Access`` -> ``BOI Asokoro`` and ``Abuja Core I Garki`` ->
+``Garki Core`` resolve. Empty identity with no IP hit or no match -> dropped
+(CPE/unknown). Discovered pairs that already have an authoritative manual link
+are not duplicated. There is no device-MAC column on ``network_devices``, so a
+MAC strategy is intentionally not implemented (no schema is invented).
 """
 
 from __future__ import annotations
@@ -31,6 +38,8 @@ from datetime import UTC, datetime
 
 import routeros_api
 from billiard.exceptions import SoftTimeLimitExceeded
+from routeros_api.exceptions import RouterOsApiParsingError
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.models.network_monitoring import (
@@ -76,12 +85,42 @@ def _norm(value: str | None) -> str:
     return re.sub(r"[\s\-]+", " ", (value or "").strip().lower())
 
 
+# Generic role/site tokens stripped before fuzzy identity matching. A neighbor's
+# advertised /system identity and the modeled device name often differ only by
+# these ("BOI Asokoro Access" vs "BOI Asokoro"; "Gudu SW" vs "Gudu Switch" —
+# 'sw' and 'switch' both drop, so they compare equal; "Abuja Core I Garki" vs
+# "Garki Core"). Kept deliberately small/conservative: it only removes generic
+# words, never the distinguishing site token.
+ROLE_WORDS = frozenset({"access", "switch", "sw", "router", "abj", "core"})
+
+
+def _strip_tokens(value: str | None) -> frozenset[str]:
+    """Significant-token set of a name/identity for fuzzy matching.
+
+    Lowercase, split on any non-alphanumeric run, and drop the generic
+    ``ROLE_WORDS``. Returns the remaining tokens as a set so that word order and
+    generic role/site suffixes don't defeat the comparison.
+    """
+    tokens = re.split(r"[^a-z0-9]+", (value or "").lower())
+    return frozenset(t for t in tokens if t and t not in ROLE_WORDS)
+
+
 def _neighbor_identity(nb: dict) -> str:
     return str(nb.get("identity") or "")
 
 
 def _neighbor_address(nb: dict) -> str | None:
-    return nb.get("address4") or nb.get("address") or None
+    """The neighbor's IPv4 address, or None.
+
+    Only an IPv4 address can key into ``mgmt_ip``; a colon marks an IPv6 value
+    (including the ``fe80::`` link-local that MANY neighbors advertise as their
+    ONLY address). Such neighbors must not be dropped — returning None here lets
+    them fall through to identity matching instead of failing on the address."""
+    for key in ("address4", "address"):
+        val = nb.get(key)
+        if val and ":" not in val:
+            return val
+    return None
 
 
 def build_device_index(
@@ -102,25 +141,88 @@ def build_device_index(
     return by_name, by_ip
 
 
-def match_in_index(index, nb: dict) -> NetworkDevice | None:
-    """Match a neighbor against a prebuilt (by_name, by_ip) index."""
-    by_name, by_ip = index
+def _build_match_index(
+    session: Session,
+) -> tuple[dict[str, NetworkDevice], dict[str, NetworkDevice], list]:
+    """Richer index for the poller's matcher: (by_name, by_ip, stripped).
+
+    ``stripped`` is a list of ``(token_set, device)`` used for the conservative
+    fuzzy identity fallback (strategy c). Kept separate from
+    ``build_device_index`` — whose 2-tuple shape other callers rely on — so
+    those callers stay untouched. Devices contribute one entry per label
+    (name/hostname); matches are deduplicated by device id."""
+    by_name: dict[str, NetworkDevice] = {}
+    by_ip: dict[str, NetworkDevice] = {}
+    stripped: list[tuple[frozenset[str], NetworkDevice]] = []
+    for d in (
+        session.query(NetworkDevice).filter(NetworkDevice.is_active.is_(True)).all()
+    ):
+        for label in (d.name, d.hostname):
+            n = _norm(label)
+            if n:
+                by_name.setdefault(n, d)
+            toks = _strip_tokens(label)
+            if toks:
+                stripped.append((toks, d))
+        if d.mgmt_ip:
+            by_ip.setdefault(d.mgmt_ip, d)
+    return by_name, by_ip, stripped
+
+
+def _match_stripped(stripped, identity: str) -> NetworkDevice | None:
+    """Conservative fuzzy identity match (strategy c).
+
+    Compare the neighbor identity's stripped token-set to each device's. A match
+    requires one set to be a (non-empty) subset of the other — so
+    ``BOI Asokoro Access`` <-> ``BOI Asokoro`` and ``Abuja Core I Garki`` ->
+    ``Garki Core`` resolve, while generic role words never distinguish. If more
+    than one distinct device matches, it is ambiguous -> None (never guess)."""
+    id_set = _strip_tokens(identity)
+    if not id_set:
+        return None
+    matches: dict = {}
+    for dev_set, dev in stripped:
+        if dev_set and (dev_set <= id_set or id_set <= dev_set):
+            matches[dev.id] = dev
+    if len(matches) == 1:
+        return next(iter(matches.values()))
+    return None
+
+
+def _match_with_strategy(index, nb: dict) -> tuple[NetworkDevice | None, str | None]:
+    """Match a neighbor row to a device, returning (device, strategy).
+
+    Priority (each additive, conservative, guarded):
+      identity           - exact normalized identity -> name/hostname
+      address            - neighbor IPv4 address == a device mgmt_ip
+      stripped_identity  - fuzzy token-subset identity match, unique device only
+    Empty identity with no IP hit (CPE) or no match at all returns (None, None).
+    """
+    by_name, by_ip, stripped = index
     norm = _norm(_neighbor_identity(nb))
     if norm and norm in by_name:
-        return by_name[norm]
+        return by_name[norm], "identity"
     addr = _neighbor_address(nb)
     if addr and addr in by_ip:
-        return by_ip[addr]
-    return None
+        return by_ip[addr], "address"
+    remote = _match_stripped(stripped, _neighbor_identity(nb))
+    if remote is not None:
+        return remote, "stripped_identity"
+    return None, None
+
+
+def match_in_index(index, nb: dict) -> NetworkDevice | None:
+    """Match a neighbor against a prebuilt (by_name, by_ip, stripped) index."""
+    return _match_with_strategy(index, nb)[0]
 
 
 def match_neighbor(session: Session, nb: dict) -> NetworkDevice | None:
     """Match a single ``/ip/neighbor`` row to a known network_device, or None.
 
-    Priority: normalized identity -> name/hostname, then address -> mgmt_ip.
+    Priority: exact identity -> address (mgmt_ip) -> conservative fuzzy identity.
     Empty identity with no IP hit (CPE) or no match at all returns None.
     """
-    return match_in_index(build_device_index(session), nb)
+    return match_in_index(_build_match_index(session), nb)
 
 
 # --- Edge building -----------------------------------------------------------
@@ -141,21 +243,31 @@ def _canonical(a: uuid.UUID, b: uuid.UUID) -> tuple[uuid.UUID, uuid.UUID]:
 
 
 def accumulate_edges(
-    edges: dict, local: NetworkDevice, neighbors: list[dict], index
+    edges: dict,
+    local: NetworkDevice,
+    neighbors: list[dict],
+    index,
+    strategy_counter: dict | None = None,
 ) -> dict:
     """Add this node's matched neighbor edges into ``edges`` (keyed by canonical
     device pair). Drops empty-identity/unmatched neighbors (CPE/unknown) and
     self-links; first observation of a pair wins (A<->B + repeats dedup).
 
     The neighbor ``interface`` string (e.g. ``"sfp-sfpplus3=>AFR Fiber"`` from
-    the binary API) is the local port on ``local`` and is stashed on the edge."""
+    the binary API) is the local port on ``local`` and is stashed on the edge.
+
+    ``strategy_counter`` (if given) is bumped per new edge with the match
+    strategy that resolved it (``matched_by_identity`` /
+    ``matched_by_address`` / ``matched_by_stripped_identity``) for debugging."""
     for nb in neighbors:
-        remote = match_in_index(index, nb)
+        remote, strategy = _match_with_strategy(index, nb)
         if remote is None or remote.id == local.id:
             continue
         key = _canonical(local.id, remote.id)
         if key in edges:
             continue
+        if strategy_counter is not None and strategy:
+            strategy_counter[f"matched_by_{strategy}"] += 1
         local_iface = nb.get("interface") or ""
         edges[key] = {
             "source_device_id": key[0],
@@ -174,6 +286,27 @@ def accumulate_edges(
 
 
 # --- Connection + poll -------------------------------------------------------
+
+
+def _is_empty_neighbor_table(exc: BaseException) -> bool:
+    """True iff ``exc`` is routeros_api's parse failure for an EMPTY reply.
+
+    A router whose ``/ip/neighbor`` table is empty answers with a bare
+    ``!empty`` sentence that some ``routeros_api`` builds refuse to parse,
+    raising ``RouterOsApiParsingError('Malformed sentence %s', [b'!empty', ...])``.
+    That is legitimately "0 neighbors", not a router failure — so it is
+    swallowed. Surgical: matches ONLY the ``!empty`` marker; every other parse
+    error (genuinely malformed sentence/attribute) still propagates."""
+    if not isinstance(exc, RouterOsApiParsingError):
+        return False
+    if "!empty" in str(exc):
+        return True
+    for arg in getattr(exc, "args", ()):
+        if isinstance(arg, (list, tuple)) and any(
+            isinstance(a, (bytes, bytearray)) and b"!empty" in a for a in arg
+        ):
+            return True
+    return False
 
 
 def _read_neighbors_via_binary_api(router: Router, pool_factory=None) -> list[dict]:
@@ -209,7 +342,14 @@ def _read_neighbors_via_binary_api(router: Router, pool_factory=None) -> list[di
         except Exception:  # noqa: BLE001 - timeout tuning is best-effort
             pass
         api = pool.get_api()
-        rows = list(api.get_resource("/ip/neighbor").get())
+        try:
+            rows = list(api.get_resource("/ip/neighbor").get())
+        except RouterOsApiParsingError as exc:
+            # An empty neighbor table (bare '!empty' reply) is 0 neighbors, not
+            # a router failure — real parse errors still propagate.
+            if _is_empty_neighbor_table(exc):
+                return []
+            raise
         return [dict(row) for row in rows]
     finally:
         # The pool (and thus the router-side session) exists the moment
@@ -250,7 +390,7 @@ def poll_all(
     now = now or datetime.now(UTC)
     started = time.monotonic()
     budget_logged = False
-    index = build_device_index(session)
+    index = _build_match_index(session)
     stats: Counter = Counter(
         {
             "routers_polled": 0,
@@ -263,6 +403,12 @@ def poll_all(
             "updated": 0,
             "pruned": 0,
             "edges": 0,
+            # Debug: how many edges each match strategy resolved this run.
+            "matched_by_identity": 0,
+            "matched_by_address": 0,
+            "matched_by_stripped_identity": 0,
+            # Canonical pairs left to an authoritative manual/other-source link.
+            "skipped_manual_dup": 0,
         }
     )
 
@@ -320,7 +466,7 @@ def poll_all(
         stats["via_binary_api"] += 1
         stats["neighbors_seen"] += len(neighbors)
         polled_device_ids.add(local.id)
-        accumulate_edges(edges, local, neighbors, index)
+        accumulate_edges(edges, local, neighbors, index, strategy_counter=stats)
 
     # Upsert by canonical pair, scoped to our source (query-before-insert: the
     # 4-tuple unique constraint treats NULL interfaces as distinct, so we keep
@@ -340,6 +486,36 @@ def poll_all(
             .first()
         )
         if link is None:
+            # Operators model the abuja/lagos backbone by hand (TopologyLinks.create,
+            # source='manual'/NULL, topology_group in {abuja-backbone,...}). Now that
+            # the improved matcher can rediscover those same canonical pairs, do NOT
+            # create a SECOND active row — leave the manual link authoritative. Check
+            # BOTH endpoint orderings since manual links aren't canonicalized.
+            a, b = e["source_device_id"], e["target_device_id"]
+            manual = (
+                session.query(NetworkTopologyLink)
+                .filter(
+                    NetworkTopologyLink.is_active.is_(True),
+                    or_(
+                        NetworkTopologyLink.source != SOURCE,
+                        NetworkTopologyLink.source.is_(None),
+                    ),
+                    or_(
+                        and_(
+                            NetworkTopologyLink.source_device_id == a,
+                            NetworkTopologyLink.target_device_id == b,
+                        ),
+                        and_(
+                            NetworkTopologyLink.source_device_id == b,
+                            NetworkTopologyLink.target_device_id == a,
+                        ),
+                    ),
+                )
+                .first()
+            )
+            if manual is not None:
+                stats["skipped_manual_dup"] += 1
+                continue
             session.add(
                 NetworkTopologyLink(
                     source_device_id=e["source_device_id"],
