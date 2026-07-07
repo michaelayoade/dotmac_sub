@@ -34,6 +34,7 @@ APP_SERVICES=(app celery-worker celery-worker-bandwidth celery-worker-billing \
 log() { printf '\n==> %s\n' "$*"; }
 
 cd "${DEPLOY_DIR}"
+COMPOSE=(docker compose -f docker-compose.yml)
 
 pinned_image() { grep -E '^APP_IMAGE=' .env | cut -d= -f2-; }
 
@@ -83,15 +84,15 @@ if git -C "${REPO_DIR}" rev-parse --verify --quiet "${TAG#sha-}^{commit}" >/dev/
 fi
 
 log "Pulling image"
-docker compose pull app
+"${COMPOSE[@]}" pull app
 
 # Multi-head safe: sub has hit multi-head states (e.g. the bundles migration that
 # merged heads), so use `heads` (plural), never `head`.
 log "Applying migrations (alembic upgrade heads)"
-docker compose run --rm --no-deps app alembic upgrade heads
+"${COMPOSE[@]}" run --rm --no-deps app alembic upgrade heads
 
 log "Recreating services: ${APP_SERVICES[*]}"
-docker compose up -d "${APP_SERVICES[@]}"
+"${COMPOSE[@]}" up -d "${APP_SERVICES[@]}"
 
 # The app service has no docker healthcheck, so gate on its HTTP /health endpoint.
 log "Waiting for app health at ${HEALTH_URL} (timeout ${HEALTH_TIMEOUT_SECONDS}s)"
@@ -110,8 +111,8 @@ if ((healthy == 0)); then
   log "Health gate FAILED (${HEALTH_URL} never became healthy) — rolling back to ${PREV_IMAGE:-none}"
   if [[ -n "${PREV_IMAGE}" ]]; then
     repin_prev
-    docker compose pull app || true
-    docker compose up -d "${APP_SERVICES[@]}"
+    "${COMPOSE[@]}" pull app || true
+    "${COMPOSE[@]}" up -d "${APP_SERVICES[@]}"
     log "Rolled back to ${PREV_IMAGE}. NOTE: migrations from ${TAG} were NOT reverted."
   else
     log "No previous image recorded — cannot auto-roll-back. Investigate the app container."
