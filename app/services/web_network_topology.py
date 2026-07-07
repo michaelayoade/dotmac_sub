@@ -160,3 +160,7 @@ def graph_data(
     return topology_service.list_nodes_and_edges(
         db, topology_group=group, pop_site_id=site
     )
+
+
+def save_node_positions(db: Session, positions: list[dict]) -> dict:
+    return topology_service.save_node_positions(db, positions)

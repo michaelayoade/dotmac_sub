@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -310,6 +311,12 @@ def list_nodes_and_edges(
                 "is_external": bool(
                     selected_pop_id and dev.pop_site_id != selected_pop_id
                 ),
+                "position": {
+                    "x": float(dev.topology_x),
+                    "y": float(dev.topology_y),
+                }
+                if dev.topology_x is not None and dev.topology_y is not None
+                else None,
             }
         )
 
@@ -649,6 +656,39 @@ def node_summary(db: Session, device_id: str) -> dict:
         "link_count": len(links),
         "interface_count": len(interfaces),
     }
+
+
+def save_node_positions(db: Session, positions: list[dict]) -> dict:
+    """Persist operator-arranged topology canvas coordinates for devices."""
+    if not isinstance(positions, list):
+        raise ValueError("positions must be a list")
+
+    normalized: dict[UUID, tuple[float, float]] = {}
+    for item in positions:
+        if not isinstance(item, dict):
+            raise ValueError("each position must be an object")
+        device_id = coerce_uuid(str(item.get("id") or ""))
+        try:
+            x = float(item["x"])
+            y = float(item["y"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("each position requires numeric x and y") from exc
+        if not math.isfinite(x) or not math.isfinite(y):
+            raise ValueError("position coordinates must be finite")
+        normalized[device_id] = (round(x, 2), round(y, 2))
+
+    if not normalized:
+        return {"saved": 0}
+
+    devices = list(
+        db.scalars(select(NetworkDevice).where(NetworkDevice.id.in_(normalized))).all()
+    )
+    for device in devices:
+        x, y = normalized[device.id]
+        device.topology_x = x
+        device.topology_y = y
+    db.commit()
+    return {"saved": len(devices)}
 
 
 # ── Form Helpers ─────────────────────────────────────────────────────

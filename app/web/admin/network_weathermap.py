@@ -1,6 +1,6 @@
 """Admin network topology routes (replaces legacy weathermap)."""
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -181,6 +181,22 @@ def topology_device_interfaces(device_id: str, db: Session = Depends(get_db)):
 def topology_node_summary(device_id: str, db: Session = Depends(get_db)):
     """Return node summary for drilldown panel."""
     return web_topology_service.node_summary(db, device_id)
+
+
+@router.post(
+    "/topology/api/node-positions",
+    response_class=JSONResponse,
+    dependencies=[Depends(require_permission("network:weathermap:write"))],
+)
+async def topology_save_node_positions(request: Request, db: Session = Depends(get_db)):
+    """Persist manually arranged topology node positions."""
+    try:
+        payload = await request.json()
+        positions = payload.get("positions", []) if isinstance(payload, dict) else []
+        result = web_topology_service.save_node_positions(db, positions)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return result
 
 
 @router.get(

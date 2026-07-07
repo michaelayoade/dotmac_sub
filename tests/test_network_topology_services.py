@@ -259,6 +259,55 @@ def test_topology_graph_falls_back_to_active_inventory_when_no_links(db_session)
     assert graph["stats"]["node_count"] == 2
 
 
+def test_topology_graph_includes_saved_node_position(db_session):
+    device = NetworkDevice(
+        name="Positioned Core",
+        role=DeviceRole.core,
+        device_type=DeviceType.router,
+        status=DeviceStatus.online,
+        is_active=True,
+        topology_x=123.45,
+        topology_y=678.9,
+    )
+    db_session.add(device)
+    db_session.commit()
+
+    graph = topology_service.list_nodes_and_edges(db_session)
+
+    node = next(item for item in graph["nodes"] if item["id"] == str(device.id))
+    assert node["position"] == {"x": 123.45, "y": 678.9}
+
+
+def test_save_node_positions_updates_devices(db_session):
+    device = NetworkDevice(
+        name="Dragged Node",
+        role=DeviceRole.edge,
+        device_type=DeviceType.switch,
+        status=DeviceStatus.online,
+        is_active=True,
+    )
+    db_session.add(device)
+    db_session.commit()
+
+    result = topology_service.save_node_positions(
+        db_session,
+        [{"id": str(device.id), "x": 42.126, "y": -18.555}],
+    )
+
+    db_session.refresh(device)
+    assert result == {"saved": 1}
+    assert device.topology_x == 42.13
+    assert device.topology_y == -18.55
+
+
+def test_topology_template_exposes_layout_save_controls() -> None:
+    template = Path("templates/admin/network/topology/index.html").read_text()
+
+    assert 'id="topologySaveLayout"' in template
+    assert "/admin/network/topology/api/node-positions" in template
+    assert "'X-CSRF-Token': csrfToken()" in template
+
+
 def test_topology_gaps_respects_subscription_service_address(
     db_session,
     subscriber,
