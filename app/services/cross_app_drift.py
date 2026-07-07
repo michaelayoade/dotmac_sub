@@ -20,6 +20,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
+from urllib.parse import urlencode
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
@@ -566,6 +567,14 @@ def sync_drift_alerts(db: Session) -> dict[str, int]:
                 "evidence": finding.evidence,
                 **remediation,
             },
+            target_url="/admin/drift?"
+            + urlencode(
+                {
+                    "status": STATUS_OPEN,
+                    "check": finding.check_name,
+                    "entity_type": finding.entity_type,
+                }
+            ),
         )
         if sync_alert(db, alert) in ("opened", "escalated"):
             opened_or_escalated += 1
@@ -678,7 +687,8 @@ def drift_findings_context(
     page_rows = rows[start : start + per_page]
     total_pages = max(1, (total + per_page - 1) // per_page)
 
-    # Filter option lists + open-severity counts (over all findings).
+    # Filter option lists + top-level counts are global so the summary cards
+    # don't change meaning when the table is filtered.
     all_findings = list(db.scalars(select(CrossAppDriftFinding)).all())
     return {
         "findings": page_rows,
@@ -704,6 +714,8 @@ def drift_findings_context(
         "statuses": [STATUS_OPEN, STATUS_WAIVED, STATUS_RESOLVED, "all"],
         "open_by_severity": open_findings_by_severity(db),
         "breached_count": sum(
-            1 for r in rows if r["status"] == STATUS_OPEN and r["sla"]["breached"]
+            1
+            for f in all_findings
+            if f.status == STATUS_OPEN and sla_status(f, now)["breached"]
         ),
     }
