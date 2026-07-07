@@ -38,7 +38,9 @@ def upgrade() -> None:
             sa.Column("finished_at", sa.DateTime(timezone=True)),
             sa.Column("status", sa.String(20), nullable=False),
             sa.Column("checks_run", sa.Integer(), nullable=False, server_default="0"),
-            sa.Column("findings_open", sa.Integer(), nullable=False, server_default="0"),
+            sa.Column(
+                "findings_open", sa.Integer(), nullable=False, server_default="0"
+            ),
             sa.Column("findings_new", sa.Integer(), nullable=False, server_default="0"),
             sa.Column(
                 "findings_resolved", sa.Integer(), nullable=False, server_default="0"
