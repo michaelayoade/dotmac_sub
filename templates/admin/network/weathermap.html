@@ -60,7 +60,7 @@
                     <span class="flex items-center gap-1"><span class="h-3 w-3 rounded border border-sky-500 bg-white dark:bg-slate-800"></span> Boundary</span>
                 </div>
             </div>
-            <div id="weatherCanvas" class="h-[620px]"></div>
+            <div id="weatherCanvas" style="height: min(620px, calc(100vh - 220px)); min-height: 420px;"></div>
         </div>
 
         <div class="space-y-4">
@@ -154,12 +154,12 @@ document.addEventListener('DOMContentLoaded', function () {
 
     if (!graphData.nodes || !graphData.nodes.length) {
         container.textContent = 'No topology data for this weather map.';
-        container.className = 'flex h-[620px] items-center justify-center text-sm text-slate-400';
+        container.className = 'flex items-center justify-center text-sm text-slate-400';
         return;
     }
     if (typeof cytoscape === 'undefined') {
         container.textContent = 'Weather map renderer failed to load.';
-        container.className = 'flex h-[620px] items-center justify-center text-sm text-slate-400';
+        container.className = 'flex items-center justify-center text-sm text-slate-400';
         return;
     }
     try { if (typeof cytoscapeDagre !== 'undefined') { cytoscape.use(cytoscapeDagre); } } catch (e) {}
