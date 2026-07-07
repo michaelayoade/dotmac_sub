@@ -74,21 +74,28 @@
                 Topology Graph
             </h2>
             <div class="flex flex-wrap items-center justify-end gap-x-4 gap-y-2 text-xs text-slate-600 dark:text-slate-300">
-                <span class="font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Links</span>
-                <span class="flex items-center gap-1"><span class="h-1 w-5 rounded-full bg-emerald-500"></span> Up</span>
-                <span class="flex items-center gap-1"><span class="h-1 w-5 rounded-full bg-amber-500"></span> Degraded</span>
-                <span class="flex items-center gap-1"><span class="h-1.5 w-5 rounded-full bg-rose-500"></span> Down</span>
-                <span class="flex items-center gap-1"><span class="h-1 w-5 rounded-full bg-slate-400"></span> Unknown</span>
-                <span class="ml-1 font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Nodes</span>
-                <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-full bg-emerald-500"></span> Online</span>
-                <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-full bg-amber-500"></span> Degraded</span>
-                <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-full bg-rose-500"></span> Offline</span>
-                <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-full bg-indigo-500"></span> Maintenance</span>
+                <div class="flex flex-wrap items-center justify-end gap-x-4 gap-y-2">
+                    <span class="font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Links</span>
+                    <span class="flex items-center gap-1"><span class="h-1 w-5 rounded-full bg-emerald-500"></span> Up</span>
+                    <span class="flex items-center gap-1"><span class="h-1 w-5 rounded-full bg-amber-500"></span> Degraded</span>
+                    <span class="flex items-center gap-1"><span class="h-1.5 w-5 rounded-full bg-rose-500"></span> Down</span>
+                    <span class="flex items-center gap-1"><span class="h-1 w-5 rounded-full bg-slate-400"></span> Unknown</span>
+                    <span class="ml-1 font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Nodes</span>
+                    <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-full bg-emerald-500"></span> Online</span>
+                    <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-full bg-amber-500"></span> Degraded</span>
+                    <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-full bg-rose-500"></span> Offline</span>
+                    <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-full bg-indigo-500"></span> Maintenance</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <span id="topologyLayoutStatus" class="text-slate-400 dark:text-slate-500">Layout saved</span>
+                    <button id="topologyResetLayout" type="button" class="inline-flex items-center rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Auto layout</button>
+                    <button id="topologySaveLayout" type="button" disabled class="inline-flex items-center rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500 dark:disabled:bg-slate-700 dark:disabled:text-slate-400">Save layout</button>
+                </div>
             </div>
         </div>
         <div id="topologyCanvas" style="height: 560px; position: relative;"></div>
         <div class="border-t border-slate-200/60 px-6 py-2 text-xs text-slate-400 dark:border-slate-700/60 dark:text-slate-500">
-            Layered top→down by role · tap a node to see its links, tap a link for detail · scroll to zoom, drag to pan.
+            Layered top→down by role · tap a node to see its links, tap a link for detail · scroll to zoom, drag to pan, save to keep node positions.
         </div>
     </div>
 
@@ -217,14 +224,24 @@ document.addEventListener('DOMContentLoaded', function () {
         row.appendChild(td);
         return td;
     }
+    function csrfToken() {
+        var meta = document.querySelector('meta[name="csrf-token"]');
+        if (meta && meta.content) return meta.content;
+        var match = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/);
+        return match ? decodeURIComponent(match[1]) : '';
+    }
 
     var tierById = {};
     graphData.nodes.forEach(function (n) { tierById[n.id] = tierOf(n.role); });
 
     var els = [];
     graphData.nodes.forEach(function (n) {
-        els.push({ data: { id: n.id, label: n.name, status: n.status, role: n.role || '',
-            tier: tierById[n.id], pop: n.pop_site_name || '', dtype: n.device_type || '', ip: n.ip || '' } });
+        var node = { data: { id: n.id, label: n.name, status: n.status, role: n.role || '',
+            tier: tierById[n.id], pop: n.pop_site_name || '', dtype: n.device_type || '', ip: n.ip || '' } };
+        if (n.position && typeof n.position.x === 'number' && typeof n.position.y === 'number') {
+            node.position = { x: n.position.x, y: n.position.y };
+        }
+        els.push(node);
     });
     graphData.edges.forEach(function (e) {
         // Orient each link downward by role tier so dagre stacks tiers top→down.
@@ -265,6 +282,82 @@ document.addEventListener('DOMContentLoaded', function () {
         ],
         layout: { name: 'dagre', rankDir: 'TB', nodeSep: 24, rankSep: 68, edgeSep: 12 }
     });
+    var saveButton = document.getElementById('topologySaveLayout');
+    var resetLayoutButton = document.getElementById('topologyResetLayout');
+    var layoutStatus = document.getElementById('topologyLayoutStatus');
+    var layoutDirty = false;
+
+    function setLayoutStatus(text, dirty) {
+        layoutDirty = !!dirty;
+        if (layoutStatus) layoutStatus.textContent = text;
+        if (saveButton) saveButton.disabled = !layoutDirty;
+    }
+
+    function applySavedPositions() {
+        var applied = false;
+        graphData.nodes.forEach(function (n) {
+            if (!n.position || typeof n.position.x !== 'number' || typeof n.position.y !== 'number') return;
+            var node = cy.getElementById(n.id);
+            if (node && node.length) {
+                node.position({ x: n.position.x, y: n.position.y });
+                applied = true;
+            }
+        });
+        if (applied) cy.fit(cy.elements(), 32);
+    }
+
+    function currentPositions() {
+        return cy.nodes().map(function (node) {
+            var pos = node.position();
+            return { id: node.id(), x: Math.round(pos.x * 100) / 100, y: Math.round(pos.y * 100) / 100 };
+        });
+    }
+
+    function runAutoLayout() {
+        cy.layout({ name: 'dagre', rankDir: 'TB', nodeSep: 24, rankSep: 68, edgeSep: 12, fit: true, padding: 32 }).run();
+        setLayoutStatus('Unsaved layout', true);
+    }
+
+    cy.ready(function () {
+        applySavedPositions();
+        setLayoutStatus('Layout saved', false);
+    });
+
+    cy.on('dragfree', 'node', function () {
+        setLayoutStatus('Unsaved layout', true);
+    });
+
+    if (resetLayoutButton) {
+        resetLayoutButton.addEventListener('click', runAutoLayout);
+    }
+
+    if (saveButton) {
+        saveButton.addEventListener('click', function () {
+            if (!layoutDirty) return;
+            saveButton.disabled = true;
+            if (layoutStatus) layoutStatus.textContent = 'Saving...';
+            fetch('/admin/network/topology/api/node-positions', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-Token': csrfToken()
+                },
+                body: JSON.stringify({ positions: currentPositions() })
+            })
+                .then(function (response) {
+                    if (!response.ok) throw new Error('Save failed');
+                    return response.json();
+                })
+                .then(function () {
+                    setLayoutStatus('Layout saved', false);
+                    if (window.htmx) htmx.trigger(document.body, 'showToast', { message: 'Topology layout saved.', type: 'success' });
+                })
+                .catch(function () {
+                    setLayoutStatus('Save failed', true);
+                    if (window.htmx) htmx.trigger(document.body, 'showToast', { message: 'Could not save topology layout.', type: 'error' });
+                });
+        });
+    }
 
     function reset() { cy.elements().removeClass('dim sel hi'); }
 
