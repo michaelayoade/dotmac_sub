@@ -1425,8 +1425,7 @@ def _build_crm_sync_status(db: Session, customer: Subscriber) -> dict[str, Any]:
     )
     unresolved_failure = (
         latest_failure
-        if latest_failure
-        and latest_failure.status == CrmSyncFailureStatus.unresolved
+        if latest_failure and latest_failure.status == CrmSyncFailureStatus.unresolved
         else None
     )
     crm_meta = {}
@@ -1438,14 +1437,18 @@ def _build_crm_sync_status(db: Session, customer: Subscriber) -> dict[str, Any]:
     crm_subscriber_id = (
         str(customer.crm_subscriber_id) if customer.crm_subscriber_id else None
     )
+    last_success_at = crm_meta.get("last_success_at")
+    last_activity_at: object | None
     if unresolved_failure:
         status = "failed"
         label = "Sync failed"
-        last_activity_at = unresolved_failure.updated_at or unresolved_failure.created_at
+        last_activity_at = (
+            unresolved_failure.updated_at or unresolved_failure.created_at
+        )
     elif crm_subscriber_id:
         status = "linked"
         label = "Synced"
-        last_activity_at = crm_meta.get("last_success_at")
+        last_activity_at = last_success_at
     else:
         status = "pending"
         label = "Pending sync"
@@ -1455,9 +1458,9 @@ def _build_crm_sync_status(db: Session, customer: Subscriber) -> dict[str, Any]:
         "status": status,
         "label": label,
         "crm_subscriber_id": crm_subscriber_id,
-        "last_success_at": crm_meta.get("last_success_at"),
+        "last_success_at": last_success_at,
         "last_activity_at": last_activity_at,
-        "last_success_display": _display_datetime(crm_meta.get("last_success_at")),
+        "last_success_display": _display_datetime(last_success_at),
         "last_activity_display": _display_datetime(last_activity_at),
         "dead_letter_id": str(unresolved_failure.id) if unresolved_failure else None,
         "error": unresolved_failure.error if unresolved_failure else None,

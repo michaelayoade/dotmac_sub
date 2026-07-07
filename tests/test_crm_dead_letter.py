@@ -37,9 +37,7 @@ class TestRecordDeadLetter:
             return_value=None,
         ):
             with pytest.raises(CrmPushError):
-                push_subscriber_change.run(
-                    "sub-1", {"status": "active"}, "selfcare"
-                )
+                push_subscriber_change.run("sub-1", {"status": "active"}, "selfcare")
 
     def test_on_failure_records_row(self, db_session):
         from app.tasks import crm_sync
