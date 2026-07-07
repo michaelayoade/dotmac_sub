@@ -366,28 +366,37 @@ class MoneySelfConsistencyCheck:
         yield from self._negative_invoice_balance(db)
 
     def _invoice_header_mismatch(self, db: Session) -> Iterable[Finding]:
-        invoices = db.scalars(select(Invoice).where(Invoice.is_active.is_(True))).all()
-        for invoice in invoices:
-            if invoice.status not in _POSTED_INVOICE_STATUSES:
-                continue
-            expected = _money(invoice.subtotal) + _money(invoice.tax_total)
-            actual = _money(invoice.total)
+        rows = db.execute(
+            select(
+                Invoice.id,
+                Invoice.invoice_number,
+                Invoice.status,
+                Invoice.subtotal,
+                Invoice.tax_total,
+                Invoice.total,
+            )
+            .where(Invoice.is_active.is_(True))
+            .where(Invoice.status.in_(_POSTED_INVOICE_STATUSES))
+        ).all()
+        for invoice_id, invoice_number, status, subtotal, tax_total, total in rows:
+            expected = _money(subtotal) + _money(tax_total)
+            actual = _money(total)
             if not _money_differs(actual, expected):
                 continue
             yield Finding(
                 check_name=self.name,
                 entity_type="invoice",
-                canonical_entity_id=str(invoice.id),
+                canonical_entity_id=str(invoice_id),
                 mismatch_type="invoice_total_mismatch",
                 severity=SEVERITY_HIGH,
                 evidence={
-                    "invoice_number": invoice.invoice_number,
-                    "subtotal": str(_money(invoice.subtotal)),
-                    "tax_total": str(_money(invoice.tax_total)),
+                    "invoice_number": invoice_number,
+                    "subtotal": str(_money(subtotal)),
+                    "tax_total": str(_money(tax_total)),
                     "expected_total": str(expected),
                     "actual_total": str(actual),
                     "delta": str(_money(actual - expected)),
-                    "status": invoice.status.value if invoice.status else None,
+                    "status": status.value if status else None,
                 },
                 details={
                     "suggested_owner": "billing invoice recalculation",
@@ -425,39 +434,47 @@ class MoneySelfConsistencyCheck:
             for invoice_id, amount in credit_rows
         }
 
-        invoices = db.scalars(select(Invoice).where(Invoice.is_active.is_(True))).all()
-        for invoice in invoices:
-            if invoice.status == InvoiceStatus.draft:
-                continue
-            if invoice.status in (InvoiceStatus.void, InvoiceStatus.written_off):
+        rows = db.execute(
+            select(
+                Invoice.id,
+                Invoice.invoice_number,
+                Invoice.status,
+                Invoice.total,
+                Invoice.balance_due,
+            )
+            .where(Invoice.is_active.is_(True))
+            .where(Invoice.status != InvoiceStatus.draft)
+        ).all()
+        for invoice_id, invoice_number, status, total, balance_due in rows:
+            if status in (InvoiceStatus.void, InvoiceStatus.written_off):
                 expected_balance = Decimal("0.00")
             else:
                 expected_balance = max(
                     Decimal("0.00"),
                     _money(
-                        _money(invoice.total)
-                        - allocated_by_invoice.get(invoice.id, Decimal("0.00"))
-                        - credits_by_invoice.get(invoice.id, Decimal("0.00"))
+                        _money(total)
+                        - allocated_by_invoice.get(invoice_id, Decimal("0.00"))
+                        - credits_by_invoice.get(invoice_id, Decimal("0.00"))
                     ),
                 )
-            actual_balance = _money(invoice.balance_due)
+            actual_balance = _money(balance_due)
             if not _money_differs(actual_balance, expected_balance):
                 continue
             yield Finding(
                 check_name=self.name,
                 entity_type="invoice",
-                canonical_entity_id=str(invoice.id),
+                canonical_entity_id=str(invoice_id),
                 mismatch_type="invoice_balance_mismatch",
                 severity=SEVERITY_HIGH,
                 evidence={
-                    "invoice_number": invoice.invoice_number,
-                    "status": invoice.status.value if invoice.status else None,
-                    "total": str(_money(invoice.total)),
+                    "invoice_number": invoice_number,
+                    "status": status.value if status else None,
+                    "total": str(_money(total)),
                     "succeeded_allocations": str(
-                        allocated_by_invoice.get(invoice.id, Decimal("0.00"))
+                        allocated_by_invoice.get(invoice_id, Decimal("0.00"))
                     ),
                     "credit_applications": str(
-                        credits_by_invoice.get(invoice.id, Decimal("0.00"))
+                        credits_by_invoice.get(invoice_id, Decimal("0.00"))
                     ),
                     "expected_balance_due": str(expected_balance),
                     "actual_balance_due": str(actual_balance),
@@ -514,26 +531,33 @@ class MoneySelfConsistencyCheck:
             )
 
     def _negative_invoice_balance(self, db: Session) -> Iterable[Finding]:
-        invoices = db.scalars(
-            select(Invoice)
+        rows = db.execute(
+            select(
+                Invoice.id,
+                Invoice.invoice_number,
+                Invoice.status,
+                Invoice.balance_due,
+                Invoice.total,
+            )
             .where(Invoice.is_active.is_(True))
             .where(Invoice.status.in_(_OPEN_INVOICE_STATUSES))
+            .where(Invoice.balance_due < -_MONEY_TOLERANCE)
         ).all()
-        for invoice in invoices:
-            balance = _money(invoice.balance_due)
+        for invoice_id, invoice_number, status, balance_due, total in rows:
+            balance = _money(balance_due)
             if balance >= -_MONEY_TOLERANCE:
                 continue
             yield Finding(
                 check_name=self.name,
                 entity_type="invoice",
-                canonical_entity_id=str(invoice.id),
+                canonical_entity_id=str(invoice_id),
                 mismatch_type="negative_invoice_balance",
                 severity=SEVERITY_HIGH,
                 evidence={
-                    "invoice_number": invoice.invoice_number,
-                    "status": invoice.status.value if invoice.status else None,
+                    "invoice_number": invoice_number,
+                    "status": status.value if status else None,
                     "balance_due": str(balance),
-                    "total": str(_money(invoice.total)),
+                    "total": str(_money(total)),
                 },
                 details={
                     "suggested_owner": "billing payments / credits",
