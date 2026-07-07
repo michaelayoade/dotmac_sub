@@ -176,5 +176,154 @@ def test_identity_check_flags_one_crm_person_with_two_subscribers(db_session):
     assert f.severity == SEVERITY_HIGH
     assert f.mismatch_type == "duplicate_sub_subscriber"
     assert f.canonical_entity_id == person
-    assert set(f.details["sub_subscriber_ids"]) == {str(a.id), str(b.id)}
+    assert set(f.evidence["sub_subscriber_ids"]) == {str(a.id), str(b.id)}
     assert f.details["suggested_owner"]
+
+
+# --- service enforcement check ---------------------------------------------
+
+
+def _subscription(db, subscriber, offer, status, *, updated_at=None):
+    from app.models.catalog import Subscription
+
+    sub = Subscription(subscriber_id=subscriber.id, offer_id=offer.id, status=status)
+    db.add(sub)
+    db.flush()
+    if updated_at is not None:
+        sub.updated_at = updated_at
+        db.flush()
+    return sub
+
+
+def _live_session(db, subscriber, subscription, *, now):
+    from app.models.radius_active_session import RadiusActiveSession
+
+    db.add(
+        RadiusActiveSession(
+            subscriber_id=subscriber.id,
+            subscription_id=subscription.id,
+            username=f"u-{uuid.uuid4().hex[:8]}",
+            acct_session_id=uuid.uuid4().hex,
+            session_start=now,
+            last_update=now,
+        )
+    )
+    db.flush()
+
+
+def test_suspended_but_online_is_critical(db_session, subscriber, catalog_offer):
+    from app.models.catalog import SubscriptionStatus
+
+    now = datetime.now(UTC)
+    sub = _subscription(
+        db_session,
+        subscriber,
+        catalog_offer,
+        SubscriptionStatus.suspended,
+        updated_at=now - timedelta(hours=1),  # suspended long enough (past grace)
+    )
+    _live_session(db_session, subscriber, sub, now=now)
+
+    run_detection(db_session, checks=[cross_app_drift.ServiceEnforcementCheck()])
+
+    f = (
+        db_session.query(CrossAppDriftFinding)
+        .filter_by(mismatch_type="suspended_but_online")
+        .one()
+    )
+    assert f.severity == "critical"
+    assert f.canonical_entity_id == str(subscriber.id)
+    assert f.evidence["active_sessions"] == 1
+    assert f.evidence["radius_authorized"] is True
+    assert "suspended" in f.evidence["billing_status"]
+
+
+def test_recently_suspended_is_within_grace(db_session, subscriber, catalog_offer):
+    from app.models.catalog import SubscriptionStatus
+
+    now = datetime.now(UTC)
+    sub = _subscription(
+        db_session,
+        subscriber,
+        catalog_offer,
+        SubscriptionStatus.suspended,
+        updated_at=now,  # just suspended — enforcement may still be in flight
+    )
+    _live_session(db_session, subscriber, sub, now=now)
+
+    run_detection(db_session, checks=[cross_app_drift.ServiceEnforcementCheck()])
+
+    assert (
+        db_session.query(CrossAppDriftFinding)
+        .filter_by(mismatch_type="suspended_but_online")
+        .count()
+        == 0
+    )
+
+
+def test_active_and_online_is_not_flagged(db_session, subscriber, catalog_offer):
+    from app.models.catalog import SubscriptionStatus
+
+    now = datetime.now(UTC)
+    sub = _subscription(
+        db_session, subscriber, catalog_offer, SubscriptionStatus.active
+    )
+    _live_session(db_session, subscriber, sub, now=now)
+
+    run_detection(db_session, checks=[cross_app_drift.ServiceEnforcementCheck()])
+
+    assert (
+        db_session.query(CrossAppDriftFinding)
+        .filter_by(check_name="service_enforcement")
+        .count()
+        == 0
+    )
+
+
+def test_active_but_blocked_is_high(db_session, subscriber, catalog_offer):
+    from app.models.catalog import SubscriptionStatus
+    from app.models.subscriber import SubscriberStatus
+
+    subscriber.status = SubscriberStatus.blocked  # walled-gardened at the BNG
+    _subscription(db_session, subscriber, catalog_offer, SubscriptionStatus.active)
+    db_session.flush()
+
+    run_detection(db_session, checks=[cross_app_drift.ServiceEnforcementCheck()])
+
+    f = (
+        db_session.query(CrossAppDriftFinding)
+        .filter_by(mismatch_type="active_but_blocked")
+        .one()
+    )
+    assert f.severity == "high"
+    assert f.canonical_entity_id == str(subscriber.id)
+    assert f.evidence["subscriber_status"] == "blocked"
+
+
+def test_throttle_profile_mismatch_is_medium(db_session, subscriber):
+    from app.models.catalog import AccessCredential, RadiusProfile
+
+    # A deactivated profile still referenced by a live credential — the FK
+    # forbids a truly-missing one, so "inactive" is the realistic drift.
+    dead_profile = RadiusProfile(name="retired-throttle", is_active=False)
+    db_session.add(dead_profile)
+    db_session.flush()
+    db_session.add(
+        AccessCredential(
+            subscriber_id=subscriber.id,
+            username=f"u-{uuid.uuid4().hex[:8]}",
+            radius_profile_id=dead_profile.id,
+            is_active=True,
+        )
+    )
+    db_session.flush()
+
+    run_detection(db_session, checks=[cross_app_drift.ServiceEnforcementCheck()])
+
+    f = (
+        db_session.query(CrossAppDriftFinding)
+        .filter_by(mismatch_type="throttle_profile_mismatch")
+        .one()
+    )
+    assert f.severity == "medium"
+    assert f.evidence["radius_profile"] == "missing_or_inactive"

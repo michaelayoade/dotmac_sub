@@ -106,7 +106,10 @@ class CrossAppDriftFinding(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     first_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     last_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    # Mismatch payload + suggested_owner / suggested_action for the human.
+    # Compact both-sides-of-the-mismatch snapshot (e.g. billing_status vs
+    # radius_authorized + active_sessions) — for dashboard / incident review.
+    evidence: Mapped[dict | None] = mapped_column(JSON)
+    # Remediation metadata: suggested_owner / suggested_action for the human.
     details: Mapped[dict | None] = mapped_column(JSON)
 
 
