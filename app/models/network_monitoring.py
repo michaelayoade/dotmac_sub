@@ -740,6 +740,41 @@ class TopologyLinkAdminStatus(enum.Enum):
     maintenance = "maintenance"
 
 
+class NetworkWeathermapView(Base):
+    """Saved operational weather-map layout and display settings."""
+
+    __tablename__ = "network_weathermap_views"
+    __table_args__ = (
+        UniqueConstraint("slug", name="uq_network_weathermap_views_slug"),
+        Index("ix_network_weathermap_views_pop_site", "pop_site_id"),
+        Index("ix_network_weathermap_views_default", "is_default"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    slug: Mapped[str] = mapped_column(String(80), nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    topology_group: Mapped[str | None] = mapped_column(String(80))
+    pop_site_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pop_sites.id")
+    )
+    layout: Mapped[dict | None] = mapped_column(JSON)
+    settings: Mapped[dict | None] = mapped_column(JSON)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    pop_site = relationship("PopSite")
+
+
 class NetworkTopologyLink(Base):
     """Explicit link between two device interfaces.
 

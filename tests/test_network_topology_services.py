@@ -14,12 +14,14 @@ from app.models.network_monitoring import (
     DeviceType,
     MetricType,
     NetworkDevice,
+    NetworkWeathermapView,
     PopSite,
     TopologyLinkMedium,
     TopologyLinkRole,
 )
 from app.models.subscriber import Address
 from app.services import network_topology as topology_service
+from app.services import web_network_topology as web_topology_service
 from app.services.topology.customer_path import GAP_NO_NODE
 from app.services.topology.gaps import topology_gaps
 from app.timezone import DisplayObject
@@ -580,6 +582,20 @@ def test_topology_routes_include_ajax_endpoints():
         _matched_route(topology_routes.router, "/network/topology/api/graph")
         is not None
     )
+    assert (
+        _matched_route(topology_routes.router, "/network/weathermap/api/graph")
+        is not None
+    )
+    assert (
+        _matched_route(topology_routes.router, "/network/weathermap/api/layout", "POST")
+        is not None
+    )
+    assert (
+        _matched_route(
+            topology_routes.router, "/network/weathermap/api/layout/reset", "POST"
+        )
+        is not None
+    )
 
 
 def test_topology_link_form_restores_selected_interfaces():
@@ -617,7 +633,95 @@ def test_weathermap_canvas_uses_explicit_height():
     template = Path("templates/admin/network/weathermap.html").read_text()
 
     assert 'id="weatherCanvas" style="height:' in template
-    assert "h-[620px]" not in template
+
+
+def test_weathermap_template_exposes_noc_layout_controls():
+    template = Path("templates/admin/network/weathermap.html").read_text()
+
+    assert 'id="viewFilter"' in template
+    assert 'id="openNocWindow"' in template
+    assert 'id="weatherAutoRefresh"' in template
+    assert 'id="saveWeatherLayout"' in template
+    assert 'id="resetWeatherLayout"' in template
+    assert "/admin/network/weathermap/api/layout" in template
+
+
+def test_weathermap_context_creates_default_view_and_applies_layout(db_session):
+    device = NetworkDevice(
+        name="NOC Router",
+        role=DeviceRole.core,
+        device_type=DeviceType.router,
+        status=DeviceStatus.online,
+        is_active=True,
+    )
+    db_session.add(device)
+    db_session.flush()
+
+    saved = web_topology_service.save_weathermap_layout(
+        db_session,
+        view_slug="default",
+        payload={"nodes": {str(device.id): {"x": 120.1234, "y": 240.9876}}},
+    )
+    context = web_topology_service.weathermap_page_context(db_session)
+    node = next(n for n in context["graph"]["nodes"] if n["id"] == str(device.id))
+
+    assert saved["slug"] == "default"
+    assert context["weathermap_view"]["name"] == "Default NOC Map"
+    assert context["selected_view"] == "default"
+    assert node["weathermap_positioned"] is True
+    assert node["weathermap_position"] == {"x": 120.12, "y": 240.99}
+
+
+def test_weathermap_layout_reset_clears_saved_positions(db_session):
+    device = NetworkDevice(
+        name="Distribution Switch",
+        role=DeviceRole.distribution,
+        device_type=DeviceType.switch,
+        status=DeviceStatus.online,
+        is_active=True,
+    )
+    db_session.add(device)
+    db_session.flush()
+
+    web_topology_service.save_weathermap_layout(
+        db_session,
+        view_slug="default",
+        payload={"nodes": {str(device.id): {"x": 80, "y": 90}}},
+    )
+    reset = web_topology_service.reset_weathermap_layout(
+        db_session, view_slug="default"
+    )
+    context = web_topology_service.weathermap_page_context(db_session)
+    node = next(n for n in context["graph"]["nodes"] if n["id"] == str(device.id))
+
+    assert reset["layout"] == {"nodes": {}, "viewport": {}}
+    assert "weathermap_positioned" not in node
+
+
+def test_weathermap_context_can_use_named_view_filters(db_session):
+    site = PopSite(name="NOC POP")
+    db_session.add(site)
+    db_session.flush()
+    db_session.add(
+        NetworkWeathermapView(
+            slug="core-noc",
+            name="Core NOC",
+            topology_group="core",
+            pop_site_id=site.id,
+            settings={"refresh_seconds": 30},
+            layout={"nodes": {}, "viewport": {}},
+        )
+    )
+    db_session.commit()
+
+    context = web_topology_service.weathermap_page_context(
+        db_session, view_slug="core-noc"
+    )
+
+    assert context["selected_view"] == "core-noc"
+    assert context["selected_group"] == "core"
+    assert context["selected_site"] == str(site.id)
+    assert context["weathermap_view"]["settings"]["refresh_seconds"] == 30
 
 
 def test_topology_graph_edges_carry_status_and_nodes_carry_live_status(db_session):

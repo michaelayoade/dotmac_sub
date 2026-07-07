@@ -14,7 +14,12 @@
         color="emerald",
         color2="sky"
     ) %}
-        <div class="flex items-center gap-2">
+        <div class="flex flex-wrap items-center gap-2">
+            <select id="viewFilter" onchange="updateWeatherFilters()" class="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                {% for map_view in weathermap_views %}
+                <option value="{{ map_view.slug }}" {% if selected_view == map_view.slug %}selected{% endif %}>{{ map_view.name }}</option>
+                {% endfor %}
+            </select>
             <select id="siteFilter" onchange="updateWeatherFilters()" class="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                 <option value="">All POP Sites</option>
                 {% for site in form_options.pop_sites %}
@@ -30,9 +35,35 @@
             <a href="/admin/network/topology" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700">
                 Topology Editor
             </a>
+            <a id="openNocWindow" href="/admin/network/weathermap?view={{ selected_view }}&noc=1" target="_blank" rel="noopener" class="inline-flex items-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-100 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-200">
+                Open NOC
+            </a>
         </div>
     {% endcall %}
 
+    <div class="rounded-xl border border-emerald-200/70 bg-emerald-50/80 px-5 py-4 text-sm text-emerald-900 shadow-sm dark:border-emerald-800/60 dark:bg-emerald-950/30 dark:text-emerald-100">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+            <div>
+                <div class="font-semibold">{{ weathermap_view.name }}</div>
+                <div class="mt-1 text-xs text-emerald-800/80 dark:text-emerald-200/80">Weather Map has its own saved NOC layout and refresh settings; topology links remain the inventory source.</div>
+            </div>
+            <div class="flex flex-wrap items-center gap-2">
+                <label class="inline-flex items-center gap-2 rounded-lg border border-emerald-300 bg-white px-3 py-2 text-xs font-semibold text-emerald-800 dark:border-emerald-700 dark:bg-slate-900 dark:text-emerald-200">
+                    <input id="weatherAutoRefresh" type="checkbox" class="h-4 w-4 rounded border-emerald-300 text-emerald-600">
+                    Auto-refresh {{ weathermap_view.settings.refresh_seconds }}s
+                </label>
+                <button id="saveWeatherLayout" type="button" class="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700">
+                    Save Layout
+                </button>
+                <button id="resetWeatherLayout" type="button" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">
+                    Reset
+                </button>
+                <span id="weatherLayoutState" class="text-xs font-medium text-emerald-700 dark:text-emerald-200"></span>
+            </div>
+        </div>
+    </div>
+
+    {% if not noc_mode %}
     <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {{ stats_card("Nodes Up", weather.node_counts.up,
             '<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>',
@@ -47,6 +78,7 @@
             '<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h8M8 12h8m-8 5h8"/></svg>',
             color="sky", color2="cyan") }}
     </div>
+    {% endif %}
 
     <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div class="overflow-hidden rounded-xl border border-slate-200/70 bg-white shadow-sm dark:border-slate-700/70 dark:bg-slate-800">
@@ -60,7 +92,7 @@
                     <span class="flex items-center gap-1"><span class="h-3 w-3 rounded border border-sky-500 bg-white dark:bg-slate-800"></span> Boundary</span>
                 </div>
             </div>
-            <div id="weatherCanvas" style="height: min(620px, calc(100vh - 220px)); min-height: 420px;"></div>
+            <div id="weatherCanvas" style="height: {% if noc_mode %}calc(100vh - 250px){% else %}min(620px, calc(100vh - 220px)){% endif %}; min-height: 420px;"></div>
         </div>
 
         <div class="space-y-4">
@@ -106,19 +138,33 @@
 <script>
 function updateWeatherFilters() {
     var params = new URLSearchParams();
+    var view = document.getElementById('viewFilter').value;
     var site = document.getElementById('siteFilter').value;
     var group = document.getElementById('groupFilter').value;
+    if (view) params.set('view', view);
     if (site) params.set('site', site);
     if (group) params.set('group', group);
+    {% if noc_mode %}params.set('noc', '1');{% endif %}
     window.location = '/admin/network/weathermap' + (params.toString() ? '?' + params.toString() : '');
 }
 
 document.addEventListener('DOMContentLoaded', function () {
     var container = document.getElementById('weatherCanvas');
     var detail = document.getElementById('weatherDetail');
+    var saveButton = document.getElementById('saveWeatherLayout');
+    var resetButton = document.getElementById('resetWeatherLayout');
+    var stateText = document.getElementById('weatherLayoutState');
+    var autoRefresh = document.getElementById('weatherAutoRefresh');
     var graphData = {{ graph | tojson }};
+    var weatherMapView = {{ weathermap_view | tojson }};
+    var weatherMapSettings = weatherMapView.settings || {};
+    var warningThreshold = Number(weatherMapSettings.warning_threshold_pct || 70);
+    var criticalThreshold = Number(weatherMapSettings.critical_threshold_pct || 90);
+    var selectedView = weatherMapView.slug || 'default';
     var STATUS = {online:'#10b981', up:'#10b981', degraded:'#f59e0b', maintenance:'#f59e0b', problem:'#f59e0b', offline:'#ef4444', down:'#ef4444', unknown:'#94a3b8'};
     var TIER = {core:0, aggregation:1, distribution:2, access:3, edge:4, cpe:5};
+    var hasSavedPositions = false;
+    var layoutDirty = false;
 
     function tierOf(role) {
         var t = TIER[(role || '').toLowerCase()];
@@ -129,11 +175,42 @@ document.addEventListener('DOMContentLoaded', function () {
     }
     function edgeWidth(edge) {
         var util = Number(edge.data('util') || 0);
-        if (util >= 90) return 7;
-        if (util >= 70) return 5;
+        if (util >= criticalThreshold) return 7;
+        if (util >= warningThreshold) return 5;
         if (edge.data('status') === 'down') return 5;
         if (edge.data('status') === 'degraded') return 3.5;
         return 2.5;
+    }
+    function fmtBps(value) {
+        var bps = Number(value || 0);
+        if (!bps) return '';
+        if (bps >= 1000000000) return (bps / 1000000000).toFixed(bps >= 10000000000 ? 0 : 1) + ' Gbps';
+        if (bps >= 1000000) return Math.round(bps / 1000000) + ' Mbps';
+        if (bps >= 1000) return Math.round(bps / 1000) + ' Kbps';
+        return Math.round(bps) + ' bps';
+    }
+    function edgeTrafficLabel(edge) {
+        var util = edge.utilization_pct == null ? '' : edge.utilization_pct + '%';
+        var dominant = edge.dominant_direction === 'tx' ? edge.tx_bps : edge.rx_bps;
+        var traffic = fmtBps(dominant || edge.tx_bps || edge.rx_bps);
+        if (traffic && util) return traffic + ' / ' + util;
+        return traffic || util;
+    }
+    function csrfToken() {
+        if (typeof getCsrfToken === 'function') return getCsrfToken();
+        var meta = document.querySelector('meta[name="csrf-token"]');
+        return meta ? meta.content : '';
+    }
+    function notify(type, message) {
+        window.dispatchEvent(new CustomEvent('toast', { detail: { type: type, message: message } }));
+        stateText.textContent = message;
+        window.setTimeout(function () {
+            if (stateText.textContent === message) stateText.textContent = '';
+        }, 3200);
+    }
+    function markDirty() {
+        layoutDirty = true;
+        stateText.textContent = 'Unsaved layout';
     }
     function make(tag, className, text) {
         var el = document.createElement(tag);
@@ -168,12 +245,17 @@ document.addEventListener('DOMContentLoaded', function () {
     graphData.nodes.forEach(function (n) { tierById[n.id] = tierOf(n.role); });
     var els = [];
     graphData.nodes.forEach(function (n) {
-        els.push({ data: {
+        var nodeEl = { data: {
             id: n.id, label: n.name, status: n.status || 'unknown', role: n.role || '',
             tier: tierById[n.id], pop: n.pop_site_name || '', ip: n.ip || '',
             live: n.live_status || 'unknown', liveAt: n.live_status_at || '',
             external: n.is_external ? 'yes' : 'no'
-        } });
+        } };
+        if (n.weathermap_position && n.weathermap_positioned) {
+            nodeEl.position = { x: Number(n.weathermap_position.x), y: Number(n.weathermap_position.y) };
+            hasSavedPositions = true;
+        }
+        els.push(nodeEl);
     });
     graphData.edges.forEach(function (e) {
         var source = e.source, target = e.target;
@@ -182,6 +264,7 @@ document.addEventListener('DOMContentLoaded', function () {
             id: e.id, source: source, target: target, status: e.status || 'unknown',
             medium: e.medium || '', role: e.role || '', capacity: e.capacity_bps || 0,
             util: e.utilization_pct == null ? '' : e.utilization_pct,
+            trafficLabel: edgeTrafficLabel(e),
             direction: e.dominant_direction || '', rx: e.rx_bps || '', tx: e.tx_bps || '',
             sdev: e.source_device || '', tdev: e.target_device || '', bundle: e.bundle_key || ''
         } });
@@ -210,19 +293,28 @@ document.addEventListener('DOMContentLoaded', function () {
                 'width': edgeWidth,
                 'line-color': function (e) {
                     var util = Number(e.data('util') || 0);
-                    if (util >= 90) return '#ef4444';
-                    if (util >= 70) return '#f59e0b';
+                    if (util >= criticalThreshold) return '#ef4444';
+                    if (util >= warningThreshold) return '#f59e0b';
                     return statusColor(e.data('status'));
                 },
                 'line-style': function (e) { return e.data('status') === 'degraded' ? 'dashed' : 'solid'; },
-                'opacity': 0.86, 'target-arrow-shape': 'none'
+                'opacity': 0.86, 'target-arrow-shape': 'none',
+                'label': function (e) { return weatherMapSettings.show_link_labels === false ? '' : e.data('trafficLabel'); },
+                'font-size': 9, 'color': labelColor, 'text-background-color': isDark ? '#0f172a' : '#ffffff',
+                'text-background-opacity': 0.8, 'text-background-padding': 2
             } },
             { selector: '.dim', style: { 'opacity': 0.14 } },
             { selector: '.hi', style: { 'opacity': 1 } },
             { selector: 'node.sel', style: { 'border-width': 5, 'border-color': labelColor } }
         ],
-        layout: { name: 'dagre', rankDir: 'TB', nodeSep: 30, rankSep: 78, edgeSep: 16 }
+        layout: hasSavedPositions ? { name: 'preset', fit: true, padding: 40 } : { name: 'dagre', rankDir: 'TB', nodeSep: 30, rankSep: 78, edgeSep: 16 }
     });
+    var viewport = (weatherMapView.layout && weatherMapView.layout.viewport) || {};
+    if (hasSavedPositions && viewport.zoom) {
+        cy.zoom(Number(viewport.zoom));
+        cy.pan({ x: Number(viewport.pan_x || 0), y: Number(viewport.pan_y || 0) });
+    }
+    cy.on('dragfree', 'node', markDirty);
 
     cy.on('tap', 'node', function (ev) {
         var n = ev.target;
@@ -262,6 +354,60 @@ document.addEventListener('DOMContentLoaded', function () {
             cy.elements().removeClass('dim sel hi');
         }
     });
+
+    saveButton.addEventListener('click', function () {
+        cy.scratch('_savingLayout', true);
+        var positions = {};
+        cy.nodes().forEach(function (node) {
+            var pos = node.position();
+            positions[node.id()] = { x: pos.x, y: pos.y };
+        });
+        var pan = cy.pan();
+        var payload = {
+            nodes: positions,
+            viewport: { zoom: cy.zoom(), pan_x: pan.x, pan_y: pan.y }
+        };
+        fetch('/admin/network/weathermap/api/layout?view=' + encodeURIComponent(selectedView), {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken() },
+            body: JSON.stringify(payload)
+        }).then(function (response) {
+            if (!response.ok) throw new Error('Save failed');
+            return response.json();
+        }).then(function () {
+            layoutDirty = false;
+            notify('success', 'Weather map layout saved');
+        }).catch(function () {
+            notify('error', 'Unable to save weather map layout');
+        }).finally(function () {
+            cy.scratch('_savingLayout', false);
+        });
+    });
+
+    resetButton.addEventListener('click', function () {
+        fetch('/admin/network/weathermap/api/layout/reset?view=' + encodeURIComponent(selectedView), {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'X-CSRF-Token': csrfToken() }
+        }).then(function (response) {
+            if (!response.ok) throw new Error('Reset failed');
+            window.location.reload();
+        }).catch(function () {
+            notify('error', 'Unable to reset weather map layout');
+        });
+    });
+
+    var refreshKey = 'weathermap:auto-refresh:' + selectedView;
+    autoRefresh.checked = localStorage.getItem(refreshKey) === '1';
+    autoRefresh.addEventListener('change', function () {
+        localStorage.setItem(refreshKey, autoRefresh.checked ? '1' : '0');
+    });
+    window.setInterval(function () {
+        if (autoRefresh.checked && !layoutDirty) {
+            window.location.reload();
+        }
+    }, Math.max(15, Number(weatherMapSettings.refresh_seconds || 60)) * 1000);
 });
 </script>
 {% endblock %}
