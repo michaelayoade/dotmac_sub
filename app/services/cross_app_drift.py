@@ -528,37 +528,86 @@ class MoneySelfConsistencyCheck:
                 Payment.amount,
                 Payment.currency,
                 Payment.status,
+                Payment.external_id,
+                Payment.splynx_payment_id,
+                Payment.provider_id,
+                Payment.payment_channel_id,
+                Payment.payment_method_id,
                 func.coalesce(func.sum(PaymentAllocation.amount), Decimal("0.00")),
             )
             .join(PaymentAllocation, PaymentAllocation.payment_id == Payment.id)
             .where(Payment.is_active.is_(True))
             .where(PaymentAllocation.is_active.is_(True))
-            .group_by(Payment.id, Payment.amount, Payment.currency, Payment.status)
+            .group_by(
+                Payment.id,
+                Payment.amount,
+                Payment.currency,
+                Payment.status,
+                Payment.external_id,
+                Payment.splynx_payment_id,
+                Payment.provider_id,
+                Payment.payment_channel_id,
+                Payment.payment_method_id,
+            )
         ).all()
-        for payment_id, amount, currency, status, allocated in rows:
+        for (
+            payment_id,
+            amount,
+            currency,
+            status,
+            external_id,
+            splynx_payment_id,
+            provider_id,
+            payment_channel_id,
+            payment_method_id,
+            allocated,
+        ) in rows:
             payment_amount = _money(amount)
             allocated_amount = _money(allocated)
             if allocated_amount - payment_amount <= _MONEY_TOLERANCE:
                 continue
+            is_legacy_splynx_import = (
+                splynx_payment_id is not None
+                and external_id is None
+                and provider_id is None
+                and payment_channel_id is None
+                and payment_method_id is None
+            )
+            severity = SEVERITY_MEDIUM if is_legacy_splynx_import else SEVERITY_CRITICAL
+            source = "legacy_splynx_import" if is_legacy_splynx_import else "native"
+            suggested_owner = (
+                "finance migration review"
+                if is_legacy_splynx_import
+                else "billing payment allocation"
+            )
+            suggested_action = (
+                "Review the historical Splynx import mapping for this payment; "
+                "do not mutate current allocations until finance confirms the "
+                "legacy receipt-to-invoice treatment."
+                if is_legacy_splynx_import
+                else (
+                    "Review active payment allocations; total active "
+                    "allocations must not exceed the payment amount."
+                )
+            )
             yield Finding(
                 check_name=self.name,
                 entity_type="payment",
                 canonical_entity_id=str(payment_id),
                 mismatch_type="payment_over_allocated",
-                severity=SEVERITY_CRITICAL,
+                severity=severity,
                 evidence={
                     "payment_amount": str(payment_amount),
                     "allocated_amount": str(allocated_amount),
                     "over_by": str(_money(allocated_amount - payment_amount)),
                     "currency": currency,
                     "payment_status": status.value if status else None,
+                    "payment_source": source,
+                    "splynx_payment_id": splynx_payment_id,
                 },
                 details={
-                    "suggested_owner": "billing payment allocation",
-                    "suggested_action": (
-                        "Review active payment allocations; total active "
-                        "allocations must not exceed the payment amount."
-                    ),
+                    "suggested_owner": suggested_owner,
+                    "suggested_action": suggested_action,
                 },
             )
 

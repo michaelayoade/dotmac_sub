@@ -371,7 +371,7 @@ def _invoice(
     return inv
 
 
-def _payment(db, subscriber, *, amount=Decimal("100.00")):
+def _payment(db, subscriber, *, amount=Decimal("100.00"), **overrides):
     payment = Payment(
         account_id=subscriber.id,
         amount=amount,
@@ -379,6 +379,7 @@ def _payment(db, subscriber, *, amount=Decimal("100.00")):
         status=PaymentStatus.succeeded,
         paid_at=datetime.now(UTC),
         is_active=True,
+        **overrides,
     )
     db.add(payment)
     db.flush()
@@ -468,6 +469,50 @@ def test_money_check_flags_payment_overallocated(db_session, subscriber):
     assert f.evidence["payment_amount"] == "50.00"
     assert f.evidence["allocated_amount"] == "60.00"
     assert f.evidence["over_by"] == "10.00"
+    assert f.evidence["payment_source"] == "native"
+
+
+def test_money_check_marks_legacy_splynx_overallocation_for_review(
+    db_session, subscriber
+):
+    inv_a = _invoice(db_session, subscriber, total=Decimal("30.00"))
+    inv_b = _invoice(db_session, subscriber, total=Decimal("30.00"))
+    payment = _payment(
+        db_session,
+        subscriber,
+        amount=Decimal("50.00"),
+        splynx_payment_id=12345,
+    )
+    db_session.add_all(
+        [
+            PaymentAllocation(
+                payment_id=payment.id,
+                invoice_id=inv_a.id,
+                amount=Decimal("30.00"),
+                is_active=True,
+            ),
+            PaymentAllocation(
+                payment_id=payment.id,
+                invoice_id=inv_b.id,
+                amount=Decimal("30.00"),
+                is_active=True,
+            ),
+        ]
+    )
+    db_session.flush()
+
+    run_detection(db_session, checks=[cross_app_drift.MoneySelfConsistencyCheck()])
+
+    f = (
+        db_session.query(CrossAppDriftFinding)
+        .filter_by(mismatch_type="payment_over_allocated")
+        .one()
+    )
+    assert f.severity == "medium"
+    assert f.canonical_entity_id == str(payment.id)
+    assert f.evidence["payment_source"] == "legacy_splynx_import"
+    assert f.evidence["splynx_payment_id"] == 12345
+    assert f.details["suggested_owner"] == "finance migration review"
 
 
 def test_money_check_flags_negative_invoice_balance(db_session, subscriber):
