@@ -23,7 +23,7 @@ from decimal import Decimal
 from typing import Protocol
 from urllib.parse import urlencode
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.models.billing import (
@@ -94,6 +94,13 @@ _OPEN_INVOICE_STATUSES = {
     InvoiceStatus.partially_paid,
     InvoiceStatus.overdue,
 }
+_RECONCILIATION_HOLD_INVOICE_STATUSES = {
+    InvoiceStatus.draft,
+    InvoiceStatus.issued,
+    InvoiceStatus.partially_paid,
+    InvoiceStatus.overdue,
+}
+_RECONCILIATION_HOLD_REVIEW_WINDOW = timedelta(hours=48)
 
 
 def _money(value) -> Decimal:  # noqa: ANN001
@@ -102,6 +109,31 @@ def _money(value) -> Decimal:  # noqa: ANN001
 
 def _money_differs(left, right) -> bool:  # noqa: ANN001
     return abs(_money(left) - _money(right)) > _MONEY_TOLERANCE
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    return value.astimezone(UTC) if value.tzinfo else value.replace(tzinfo=UTC)
+
+
+def _parse_metadata_datetime(value: object) -> datetime | None:
+    if isinstance(value, datetime):
+        return _as_utc(value)
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return _as_utc(datetime.fromisoformat(value.replace("Z", "+00:00")))
+    except ValueError:
+        return None
+
+
+def _metadata_truthy(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return False
 
 
 @dataclass
@@ -349,6 +381,67 @@ class ServiceEnforcementCheck:
             )
 
 
+# Bound the detector's working set so no single run can OOM the app container.
+# Source scans stream instead of materializing every row; reconciliation resolves
+# stale findings in id batches; high-cardinality legacy noise is aggregated.
+_SCAN_YIELD = 1000
+_RESOLVE_BATCH = 1000
+_AGG_SAMPLE_LIMIT = 20
+
+
+def _id_batches(ids: list, size: int) -> Iterable[list]:
+    for start in range(0, len(ids), size):
+        yield ids[start : start + size]
+
+
+class _LegacyAggregator:
+    """Roll a high-cardinality legacy archive-completeness class into ONE finding.
+
+    Historical Splynx-import noise (e.g. ~105k invoices with empty line totals)
+    has no per-invoice action — emitting one finding per row both spams the queue
+    and OOMs detection. Instead we accumulate a count, the total absolute delta,
+    and a bounded sample, and emit a single aggregated finding for the class.
+    """
+
+    def __init__(self) -> None:
+        self.count = 0
+        self.total_abs_delta = Decimal("0.00")
+        self.samples: list[dict] = []
+
+    def add(self, invoice_id: object, invoice_number: object, delta: Decimal) -> None:
+        self.count += 1
+        self.total_abs_delta += abs(_money(delta))
+        if len(self.samples) < _AGG_SAMPLE_LIMIT:
+            self.samples.append(
+                {
+                    "invoice_id": str(invoice_id),
+                    "invoice_number": invoice_number,
+                    "delta": str(_money(delta)),
+                }
+            )
+
+    def finding(self, check_name: str, mismatch_type: str, action: str) -> Finding:
+        return Finding(
+            check_name=check_name,
+            entity_type="invoice_class",
+            canonical_entity_id=f"legacy_splynx_import:{mismatch_type}",
+            mismatch_type=mismatch_type,
+            severity=SEVERITY_LOW,
+            evidence={
+                "invoice_source": "legacy_splynx_import",
+                "aggregated": True,
+                "count": self.count,
+                "total_abs_delta": str(_money(self.total_abs_delta)),
+                "sample_invoices": self.samples,
+                "sample_limit": _AGG_SAMPLE_LIMIT,
+            },
+            details={
+                "suggested_owner": "finance migration review",
+                "suggested_action": action,
+            },
+        )
+
+
 class MoneySelfConsistencyCheck:
     """Sub-internal invoice/payment invariants before ERP reads exist.
 
@@ -366,36 +459,93 @@ class MoneySelfConsistencyCheck:
         yield from self._negative_invoice_balance(db)
 
     def _invoice_header_mismatch(self, db: Session) -> Iterable[Finding]:
-        invoices = db.scalars(select(Invoice).where(Invoice.is_active.is_(True))).all()
-        for invoice in invoices:
-            if invoice.status not in _POSTED_INVOICE_STATUSES:
-                continue
-            expected = _money(invoice.subtotal) + _money(invoice.tax_total)
-            actual = _money(invoice.total)
+        stmt = (
+            select(
+                Invoice.id,
+                Invoice.invoice_number,
+                Invoice.status,
+                Invoice.subtotal,
+                Invoice.tax_total,
+                Invoice.total,
+                Invoice.splynx_invoice_id,
+            )
+            .where(Invoice.is_active.is_(True))
+            .where(Invoice.status.in_(_POSTED_INVOICE_STATUSES))
+        )
+        legacy = _LegacyAggregator()
+        for (
+            invoice_id,
+            invoice_number,
+            status,
+            subtotal,
+            tax_total,
+            total,
+            splynx_invoice_id,
+        ) in db.execute(stmt.execution_options(yield_per=_SCAN_YIELD)):
+            expected = _money(subtotal) + _money(tax_total)
+            actual = _money(total)
             if not _money_differs(actual, expected):
                 continue
+            is_legacy_splynx_import = splynx_invoice_id is not None
+            legacy_missing_line_totals = (
+                is_legacy_splynx_import
+                and expected == Decimal("0.00")
+                and actual > Decimal("0.00")
+            )
+            # Archive-completeness noise (imported total preserved, line totals
+            # empty) has no per-invoice action — roll it up, don't emit one row
+            # each. Native + other-legacy header drift stays per-invoice.
+            if legacy_missing_line_totals:
+                legacy.add(invoice_id, invoice_number, actual - expected)
+                continue
+            source = "legacy_splynx_import" if is_legacy_splynx_import else "native"
+            severity = SEVERITY_MEDIUM if is_legacy_splynx_import else SEVERITY_HIGH
+            suggested_owner = (
+                "finance migration review"
+                if is_legacy_splynx_import
+                else "billing invoice recalculation"
+            )
+            if is_legacy_splynx_import:
+                suggested_action = (
+                    "Review the historical Splynx import header mapping; imported "
+                    "invoice totals were preserved, but subtotal/tax_total may be "
+                    "missing or net/gross split differently. Do not recalculate "
+                    "paid historical invoices without finance sign-off."
+                )
+            else:
+                suggested_action = (
+                    "Recalculate this invoice from active lines and verify "
+                    "subtotal + tax_total equals total before ERP sync."
+                )
             yield Finding(
                 check_name=self.name,
                 entity_type="invoice",
-                canonical_entity_id=str(invoice.id),
+                canonical_entity_id=str(invoice_id),
                 mismatch_type="invoice_total_mismatch",
-                severity=SEVERITY_HIGH,
+                severity=severity,
                 evidence={
-                    "invoice_number": invoice.invoice_number,
-                    "subtotal": str(_money(invoice.subtotal)),
-                    "tax_total": str(_money(invoice.tax_total)),
+                    "invoice_number": invoice_number,
+                    "subtotal": str(_money(subtotal)),
+                    "tax_total": str(_money(tax_total)),
                     "expected_total": str(expected),
                     "actual_total": str(actual),
                     "delta": str(_money(actual - expected)),
-                    "status": invoice.status.value if invoice.status else None,
+                    "status": status.value if status else None,
+                    "invoice_source": source,
+                    "splynx_invoice_id": splynx_invoice_id,
                 },
                 details={
-                    "suggested_owner": "billing invoice recalculation",
-                    "suggested_action": (
-                        "Recalculate this invoice from active lines and verify "
-                        "subtotal + tax_total equals total before ERP sync."
-                    ),
+                    "suggested_owner": suggested_owner,
+                    "suggested_action": suggested_action,
                 },
+            )
+        if legacy.count:
+            yield legacy.finding(
+                self.name,
+                "legacy_invoice_line_totals_missing",
+                "Historical Splynx invoices whose imported totals were preserved "
+                "but line subtotal/tax fields are empty. Archive-data completeness, "
+                "not a current invoice arithmetic bug — no per-invoice action.",
             )
 
     def _invoice_balance_mismatch(self, db: Session) -> Iterable[Finding]:
@@ -425,51 +575,111 @@ class MoneySelfConsistencyCheck:
             for invoice_id, amount in credit_rows
         }
 
-        invoices = db.scalars(select(Invoice).where(Invoice.is_active.is_(True))).all()
-        for invoice in invoices:
-            if invoice.status == InvoiceStatus.draft:
-                continue
-            if invoice.status in (InvoiceStatus.void, InvoiceStatus.written_off):
+        stmt = (
+            select(
+                Invoice.id,
+                Invoice.invoice_number,
+                Invoice.status,
+                Invoice.total,
+                Invoice.balance_due,
+                Invoice.splynx_invoice_id,
+            )
+            .where(Invoice.is_active.is_(True))
+            .where(Invoice.status != InvoiceStatus.draft)
+        )
+        legacy = _LegacyAggregator()
+        for (
+            invoice_id,
+            invoice_number,
+            status,
+            total,
+            balance_due,
+            splynx_invoice_id,
+        ) in db.execute(stmt.execution_options(yield_per=_SCAN_YIELD)):
+            if status in (InvoiceStatus.void, InvoiceStatus.written_off):
                 expected_balance = Decimal("0.00")
             else:
                 expected_balance = max(
                     Decimal("0.00"),
                     _money(
-                        _money(invoice.total)
-                        - allocated_by_invoice.get(invoice.id, Decimal("0.00"))
-                        - credits_by_invoice.get(invoice.id, Decimal("0.00"))
+                        _money(total)
+                        - allocated_by_invoice.get(invoice_id, Decimal("0.00"))
+                        - credits_by_invoice.get(invoice_id, Decimal("0.00"))
                     ),
                 )
-            actual_balance = _money(invoice.balance_due)
+            actual_balance = _money(balance_due)
             if not _money_differs(actual_balance, expected_balance):
                 continue
+            is_legacy_splynx_import = splynx_invoice_id is not None
+            legacy_paid_reconstruction_gap = (
+                is_legacy_splynx_import
+                and status == InvoiceStatus.paid
+                and actual_balance == Decimal("0.00")
+            )
+            # Archive allocation-completeness (imported paid/zero-balance, but
+            # local allocations don't reconstruct settlement) has no per-invoice
+            # action — roll it up. Native + other-legacy balance drift stays
+            # per-invoice (it can indicate a live receivable error).
+            if legacy_paid_reconstruction_gap:
+                legacy.add(
+                    invoice_id, invoice_number, actual_balance - expected_balance
+                )
+                continue
+            source = "legacy_splynx_import" if is_legacy_splynx_import else "native"
+            severity = SEVERITY_MEDIUM if is_legacy_splynx_import else SEVERITY_HIGH
+            suggested_owner = (
+                "finance migration review"
+                if is_legacy_splynx_import
+                else "billing invoice recalculation"
+            )
+            if is_legacy_splynx_import:
+                suggested_action = (
+                    "Review the historical Splynx settlement import for this "
+                    "invoice; imported balance_due/status may reflect Splynx-paid "
+                    "state even when local allocations do not reconstruct it. Do "
+                    "not reopen or recalculate paid historical invoices without "
+                    "finance sign-off."
+                )
+            else:
+                suggested_action = (
+                    "Run the invoice recalculation path for this invoice and "
+                    "review active allocations/credit applications."
+                )
             yield Finding(
                 check_name=self.name,
                 entity_type="invoice",
-                canonical_entity_id=str(invoice.id),
+                canonical_entity_id=str(invoice_id),
                 mismatch_type="invoice_balance_mismatch",
-                severity=SEVERITY_HIGH,
+                severity=severity,
                 evidence={
-                    "invoice_number": invoice.invoice_number,
-                    "status": invoice.status.value if invoice.status else None,
-                    "total": str(_money(invoice.total)),
+                    "invoice_number": invoice_number,
+                    "status": status.value if status else None,
+                    "total": str(_money(total)),
                     "succeeded_allocations": str(
-                        allocated_by_invoice.get(invoice.id, Decimal("0.00"))
+                        allocated_by_invoice.get(invoice_id, Decimal("0.00"))
                     ),
                     "credit_applications": str(
-                        credits_by_invoice.get(invoice.id, Decimal("0.00"))
+                        credits_by_invoice.get(invoice_id, Decimal("0.00"))
                     ),
                     "expected_balance_due": str(expected_balance),
                     "actual_balance_due": str(actual_balance),
                     "delta": str(_money(actual_balance - expected_balance)),
+                    "invoice_source": source,
+                    "splynx_invoice_id": splynx_invoice_id,
                 },
                 details={
-                    "suggested_owner": "billing invoice recalculation",
-                    "suggested_action": (
-                        "Run the invoice recalculation path for this invoice and "
-                        "review active allocations/credit applications."
-                    ),
+                    "suggested_owner": suggested_owner,
+                    "suggested_action": suggested_action,
                 },
+            )
+        if legacy.count:
+            yield legacy.finding(
+                self.name,
+                "legacy_paid_invoice_allocation_gap",
+                "Historical Splynx invoices imported as paid with zero balance "
+                "whose local allocation rows do not reconstruct the settlement. "
+                "Archive allocation completeness, not current receivable drift — "
+                "no per-invoice action.",
             )
 
     def _payment_overallocated(self, db: Session) -> Iterable[Finding]:
@@ -479,61 +689,117 @@ class MoneySelfConsistencyCheck:
                 Payment.amount,
                 Payment.currency,
                 Payment.status,
+                Payment.external_id,
+                Payment.splynx_payment_id,
+                Payment.provider_id,
+                Payment.payment_channel_id,
+                Payment.payment_method_id,
                 func.coalesce(func.sum(PaymentAllocation.amount), Decimal("0.00")),
             )
             .join(PaymentAllocation, PaymentAllocation.payment_id == Payment.id)
             .where(Payment.is_active.is_(True))
             .where(PaymentAllocation.is_active.is_(True))
-            .group_by(Payment.id, Payment.amount, Payment.currency, Payment.status)
+            .group_by(
+                Payment.id,
+                Payment.amount,
+                Payment.currency,
+                Payment.status,
+                Payment.external_id,
+                Payment.splynx_payment_id,
+                Payment.provider_id,
+                Payment.payment_channel_id,
+                Payment.payment_method_id,
+            )
         ).all()
-        for payment_id, amount, currency, status, allocated in rows:
+        for (
+            payment_id,
+            amount,
+            currency,
+            status,
+            external_id,
+            splynx_payment_id,
+            provider_id,
+            payment_channel_id,
+            payment_method_id,
+            allocated,
+        ) in rows:
             payment_amount = _money(amount)
             allocated_amount = _money(allocated)
             if allocated_amount - payment_amount <= _MONEY_TOLERANCE:
                 continue
+            is_legacy_splynx_import = (
+                splynx_payment_id is not None
+                and external_id is None
+                and provider_id is None
+                and payment_channel_id is None
+                and payment_method_id is None
+            )
+            severity = SEVERITY_MEDIUM if is_legacy_splynx_import else SEVERITY_CRITICAL
+            source = "legacy_splynx_import" if is_legacy_splynx_import else "native"
+            suggested_owner = (
+                "finance migration review"
+                if is_legacy_splynx_import
+                else "billing payment allocation"
+            )
+            suggested_action = (
+                "Review the historical Splynx import mapping for this payment; "
+                "do not mutate current allocations until finance confirms the "
+                "legacy receipt-to-invoice treatment."
+                if is_legacy_splynx_import
+                else (
+                    "Review active payment allocations; total active "
+                    "allocations must not exceed the payment amount."
+                )
+            )
             yield Finding(
                 check_name=self.name,
                 entity_type="payment",
                 canonical_entity_id=str(payment_id),
                 mismatch_type="payment_over_allocated",
-                severity=SEVERITY_CRITICAL,
+                severity=severity,
                 evidence={
                     "payment_amount": str(payment_amount),
                     "allocated_amount": str(allocated_amount),
                     "over_by": str(_money(allocated_amount - payment_amount)),
                     "currency": currency,
                     "payment_status": status.value if status else None,
+                    "payment_source": source,
+                    "splynx_payment_id": splynx_payment_id,
                 },
                 details={
-                    "suggested_owner": "billing payment allocation",
-                    "suggested_action": (
-                        "Review active payment allocations; total active "
-                        "allocations must not exceed the payment amount."
-                    ),
+                    "suggested_owner": suggested_owner,
+                    "suggested_action": suggested_action,
                 },
             )
 
     def _negative_invoice_balance(self, db: Session) -> Iterable[Finding]:
-        invoices = db.scalars(
-            select(Invoice)
+        rows = db.execute(
+            select(
+                Invoice.id,
+                Invoice.invoice_number,
+                Invoice.status,
+                Invoice.balance_due,
+                Invoice.total,
+            )
             .where(Invoice.is_active.is_(True))
             .where(Invoice.status.in_(_OPEN_INVOICE_STATUSES))
+            .where(Invoice.balance_due < -_MONEY_TOLERANCE)
         ).all()
-        for invoice in invoices:
-            balance = _money(invoice.balance_due)
+        for invoice_id, invoice_number, status, balance_due, total in rows:
+            balance = _money(balance_due)
             if balance >= -_MONEY_TOLERANCE:
                 continue
             yield Finding(
                 check_name=self.name,
                 entity_type="invoice",
-                canonical_entity_id=str(invoice.id),
+                canonical_entity_id=str(invoice_id),
                 mismatch_type="negative_invoice_balance",
                 severity=SEVERITY_HIGH,
                 evidence={
-                    "invoice_number": invoice.invoice_number,
-                    "status": invoice.status.value if invoice.status else None,
+                    "invoice_number": invoice_number,
+                    "status": status.value if status else None,
                     "balance_due": str(balance),
-                    "total": str(_money(invoice.total)),
+                    "total": str(_money(total)),
                 },
                 details={
                     "suggested_owner": "billing payments / credits",
@@ -545,10 +811,121 @@ class MoneySelfConsistencyCheck:
             )
 
 
+class BillingReconciliationHoldCheck:
+    """Open invoices parked for manual reconciliation must stay visible.
+
+    The prepaid-overlap repair intentionally creates holds for invoices with
+    partial payments or allocations because auto-deciding them would be unsafe.
+    This check turns those holds into durable drift findings until billing
+    either clears the hold or closes the invoice.
+    """
+
+    name = "billing_reconciliation_hold"
+
+    def run(self, db: Session) -> Iterable[Finding]:
+        now = datetime.now(UTC)
+        rows = db.execute(
+            select(
+                Invoice.id,
+                Invoice.account_id,
+                Invoice.invoice_number,
+                Invoice.status,
+                Invoice.total,
+                Invoice.balance_due,
+                Invoice.metadata_,
+                Invoice.created_at,
+                Invoice.updated_at,
+            )
+            .where(Invoice.is_active.is_(True))
+            .where(Invoice.status.in_(_RECONCILIATION_HOLD_INVOICE_STATUSES))
+        ).all()
+        for (
+            invoice_id,
+            account_id,
+            invoice_number,
+            status,
+            total,
+            balance_due,
+            metadata,
+            created_at,
+            updated_at,
+        ) in rows:
+            metadata = metadata or {}
+            if not _metadata_truthy(metadata.get("reconciliation_hold")):
+                continue
+
+            repair = metadata.get("prepaid_overlap_repair")
+            repair = repair if isinstance(repair, dict) else {}
+            reason = (
+                metadata.get("reconciliation_hold_reason")
+                or repair.get("reason")
+                or "reconciliation_hold"
+            )
+            held_since = (
+                _parse_metadata_datetime(repair.get("detected_at"))
+                or _parse_metadata_datetime(metadata.get("reconciliation_hold_at"))
+                or _as_utc(updated_at)
+                or _as_utc(created_at)
+            )
+            hold_age_hours = None
+            if held_since is not None:
+                elapsed = max(timedelta(), now - held_since)
+                hold_age_hours = round(elapsed.total_seconds() / 3600, 2)
+            sla_hours = int(_RECONCILIATION_HOLD_REVIEW_WINDOW.total_seconds() // 3600)
+            sla_breached = (
+                held_since is not None
+                and now - held_since > _RECONCILIATION_HOLD_REVIEW_WINDOW
+            )
+            repair_evidence = {
+                key: str(repair[key])
+                for key in (
+                    "detected_at",
+                    "valid_paid_invoice_id",
+                    "valid_paid_invoice_number",
+                    "paid_through",
+                    "reason",
+                )
+                if key in repair
+            }
+
+            yield Finding(
+                check_name=self.name,
+                entity_type="invoice",
+                canonical_entity_id=str(invoice_id),
+                mismatch_type="reconciliation_hold_pending_review",
+                severity=SEVERITY_HIGH if sla_breached else SEVERITY_MEDIUM,
+                evidence={
+                    "invoice_id": str(invoice_id),
+                    "invoice_number": invoice_number,
+                    "account_id": str(account_id),
+                    "status": status.value if status else None,
+                    "total": str(_money(total)),
+                    "balance_due": str(_money(balance_due)),
+                    "reconciliation_hold_reason": str(reason),
+                    "held_since": held_since.isoformat() if held_since else None,
+                    "hold_age_hours": hold_age_hours,
+                    "hold_review_sla_hours": sla_hours,
+                    "hold_sla_breached": sla_breached,
+                    "prepaid_overlap_repair": repair_evidence,
+                },
+                details={
+                    "suggested_owner": "billing manual review",
+                    "suggested_action": (
+                        "Review the held invoice: void or credit it if it is a "
+                        "prepaid-overlap duplicate; otherwise clear the hold so "
+                        "normal billing can resume."
+                    ),
+                    "hold_review_sla_hours": sla_hours,
+                    "hold_sla_breached": sla_breached,
+                },
+            )
+
+
 DEFAULT_CHECKS: list[DriftCheck] = [
     IdentityCardinalityCheck(),
     ServiceEnforcementCheck(),
     MoneySelfConsistencyCheck(),
+    BillingReconciliationHoldCheck(),
 ]
 
 
@@ -613,13 +990,16 @@ def run_detection(
     run.checks_run = len(checks)
 
     waived = _active_waiver_fingerprints(db, now)
-    existing = {
-        f.fingerprint: f for f in db.scalars(select(CrossAppDriftFinding)).all()
-    }
 
+    # Upsert only the emitted findings, one point-lookup each. `current` is
+    # bounded (high-cardinality legacy classes are aggregated to one finding),
+    # so we never materialize the whole findings table — the detector's memory
+    # scales with emitted + open findings, not with all-time resolved history.
     new_count = 0
     for fp, found in current.items():
-        finding = existing.get(fp)
+        finding = db.scalar(
+            select(CrossAppDriftFinding).where(CrossAppDriftFinding.fingerprint == fp)
+        )
         if finding is None:
             finding = CrossAppDriftFinding(
                 fingerprint=fp,
@@ -664,16 +1044,40 @@ def run_detection(
         else:
             _log_event(db, finding, run, EVENT_RECURRING, found.details)
 
+    # Resolve open/waived findings whose fingerprint was not re-emitted. Only
+    # non-terminal findings can transition, so we scan just those (never the
+    # resolved history), collect their ids, and resolve in id batches so a large
+    # backlog (e.g. the one-time legacy-noise cleanup) cannot OOM the run.
+    current_fps = set(current.keys())
+    stale_ids = [
+        fid
+        for fid, fp in db.execute(
+            select(CrossAppDriftFinding.id, CrossAppDriftFinding.fingerprint).where(
+                CrossAppDriftFinding.status.in_((STATUS_OPEN, STATUS_WAIVED))
+            )
+        )
+        if fp not in current_fps
+    ]
     resolved_count = 0
-    for fp, finding in existing.items():
-        if fp in current:
-            continue
-        if finding.status in (STATUS_OPEN, STATUS_WAIVED):
-            finding.status = STATUS_RESOLVED
-            finding.resolved_at = now
-            finding.last_run_id = run.id
-            _log_event(db, finding, run, EVENT_RESOLVED, None)
-            resolved_count += 1
+    for batch in _id_batches(stale_ids, _RESOLVE_BATCH):
+        db.execute(
+            update(CrossAppDriftFinding)
+            .where(CrossAppDriftFinding.id.in_(batch))
+            .values(status=STATUS_RESOLVED, resolved_at=now, last_run_id=run.id)
+            .execution_options(synchronize_session=False),
+        )
+        for fid in batch:
+            db.add(
+                CrossAppDriftFindingEvent(
+                    finding_id=fid,
+                    run_id=run.id,
+                    event_type=EVENT_RESOLVED,
+                    at=now,
+                    snapshot=None,
+                )
+            )
+        db.flush()
+        resolved_count += len(batch)
 
     db.flush()  # persist status changes so the open-count reflects this run
     open_count = db.scalar(
@@ -705,6 +1109,7 @@ def open_findings_by_severity(db: Session) -> dict[str, int]:
 _ALERTING_SEVERITIES = (SEVERITY_CRITICAL, SEVERITY_HIGH)
 _DRIFT_ALERT_PREFIX = "drift:"
 _DRIFT_ALERT_CATEGORY = "cross_app_drift"
+_DRIFT_ALERT_DETAIL_LIMIT = 500
 
 # Ageing SLA: how long an open finding may sit before it needs action. Paged
 # severities get a clock; medium/low are tracked on the dashboard, never paged.
@@ -733,7 +1138,7 @@ def sla_status(finding: CrossAppDriftFinding, now: datetime | None = None) -> di
     }
 
 
-def sync_drift_alerts(db: Session) -> dict[str, int]:
+def sync_drift_alerts(db: Session) -> dict[str, int | str]:
     """Mirror open critical/high findings into the admin alert console and
     resolve alerts whose finding cleared or dropped below material.
 
@@ -760,6 +1165,80 @@ def sync_drift_alerts(db: Session) -> dict[str, int]:
     now = datetime.now(UTC)
     active: set[str] = set()
     opened_or_escalated = 0
+    if len(findings) > _DRIFT_ALERT_DETAIL_LIMIT:
+        groups: dict[tuple[str, str, str, str], list[CrossAppDriftFinding]] = (
+            defaultdict(list)
+        )
+        for finding in findings:
+            groups[
+                (
+                    finding.severity,
+                    finding.check_name,
+                    finding.mismatch_type,
+                    finding.entity_type,
+                )
+            ].append(finding)
+
+        for (severity, check_name, mismatch_type, entity_type), items in groups.items():
+            alert_fp = (
+                f"{_DRIFT_ALERT_PREFIX}summary:{severity}:{check_name}:"
+                f"{mismatch_type}:{entity_type}"
+            )
+            active.add(alert_fp)
+            sample = items[:5]
+            breached = any(sla_status(finding, now)["breached"] for finding in items)
+            alert_severity = (
+                AlertSeverity.critical
+                if (severity == SEVERITY_CRITICAL or breached)
+                else AlertSeverity.warning
+            )
+            alert = AlertFinding(
+                fingerprint=alert_fp,
+                category=_DRIFT_ALERT_CATEGORY,
+                source=check_name,
+                severity=alert_severity,
+                title=f"{len(items)} {mismatch_type} drift finding(s)"[:180],
+                summary=(
+                    "Material cross-app drift exceeded per-finding alert volume; "
+                    "review the grouped findings in /admin/drift."
+                )[:255],
+                details={
+                    "check": check_name,
+                    "mismatch_type": mismatch_type,
+                    "entity_type": entity_type,
+                    "drift_severity": severity,
+                    "finding_count": len(items),
+                    "alert_mode": "grouped",
+                    "per_finding_alert_limit": _DRIFT_ALERT_DETAIL_LIMIT,
+                    "sample_finding_ids": [str(finding.id) for finding in sample],
+                    "sample_canonical_entity_ids": [
+                        finding.canonical_entity_id for finding in sample
+                    ],
+                    "sample_evidence": [finding.evidence for finding in sample],
+                },
+                target_url="/admin/drift?"
+                + urlencode(
+                    {
+                        "status": STATUS_OPEN,
+                        "check": check_name,
+                        "entity_type": entity_type,
+                    }
+                ),
+            )
+            if sync_alert(db, alert) in ("opened", "escalated"):
+                opened_or_escalated += 1
+
+        resolved = resolve_missing_alerts(
+            db, managed_prefix=_DRIFT_ALERT_PREFIX, active_fingerprints=active
+        )
+        db.commit()
+        return {
+            "alerted": len(active),
+            "opened_or_escalated": opened_or_escalated,
+            "resolved": resolved,
+            "mode": "grouped",
+        }
+
     for finding in findings:
         alert_fp = f"{_DRIFT_ALERT_PREFIX}{finding.fingerprint}"
         active.add(alert_fp)
@@ -815,6 +1294,7 @@ def sync_drift_alerts(db: Session) -> dict[str, int]:
         "alerted": len(active),
         "opened_or_escalated": opened_or_escalated,
         "resolved": resolved,
+        "mode": "per_finding",
     }
 
 

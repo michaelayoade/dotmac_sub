@@ -1,0 +1,66 @@
+# Development overlay — EXPLICIT opt-in only (dev/local). NOT auto-loaded.
+#
+# This file was formerly `docker-compose.override.yml`, which `docker compose`
+# auto-loads for EVERY bare invocation. On a prod host that meant a single stray
+# `docker compose up/restart` silently re-mounted host source over the immutable
+# image — so "deployed sha-X" stopped meaning the image code was running. It was
+# renamed to `docker-compose.dev.yml` precisely so it can NEVER auto-load again.
+#
+# Restores `build:` + source bind-mounts on the app-code services so local
+# iteration uses the working-tree code without rebuilding the image.
+#
+# Use it (dev only) by naming it explicitly — the Makefile `docker-*` targets do:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#
+# PRODUCTION MUST NEVER LOAD THIS FILE. Prod runs the immutable base alone via
+# `docker compose -f docker-compose.yml ...` (see Makefile prod-* / scripts/deploy.sh),
+# so prod code comes only from the baked image, never from this checkout. deploy.sh
+# now hard-fails if a `/app/app` bind-mount is ever detected on the app container.
+services:
+  app:
+    build: .
+    volumes:
+      - ./app:/app/app
+      - ./VERSION:/app/VERSION:ro
+      - ./templates:/app/templates
+      - ./static:/app/static
+      - ./alembic:/app/alembic
+      - ./scripts:/app/scripts
+      - ./tests:/app/tests
+
+  celery-worker:
+    build: .
+    volumes:
+      - ./app:/app/app
+      - ./scripts:/app/scripts
+
+  celery-worker-bandwidth:
+    build: .
+    volumes:
+      - ./app:/app/app
+
+  celery-worker-billing:
+    build: .
+    volumes:
+      - ./app:/app/app
+      - ./scripts:/app/scripts
+
+  celery-worker-tr069:
+    build: .
+    volumes:
+      - ./app:/app/app
+
+  celery-beat:
+    build: .
+    volumes:
+      - ./app:/app/app
+
+  bandwidth-poller:
+    build: .
+    volumes:
+      - ./app:/app/app
+
+  syslog-listener:
+    build: .
+    volumes:
+      - ./app:/app/app

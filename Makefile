@@ -2,10 +2,12 @@
 
 # Production runs IMMUTABLE images: the base docker-compose.yml has no source
 # bind-mounts and pulls code only from the baked image (built by `prod-build`).
-# `-f docker-compose.yml` deliberately EXCLUDES docker-compose.override.yml (the
-# dev-only overlay that re-adds build:/bind-mounts), so prod never runs from this
-# working tree. Plain `docker compose` (dev) auto-loads the override.
+# The dev overlay (docker-compose.dev.yml) that re-adds build:/bind-mounts is
+# NEVER auto-loaded — it must be named explicitly. So both prod (PROD_COMPOSE)
+# and any bare `docker compose` on a prod host run the immutable image only;
+# only the dev targets below (DEV_COMPOSE) opt into the working-tree mounts.
 PROD_COMPOSE = docker compose -f docker-compose.yml
+DEV_COMPOSE = docker compose -f docker-compose.yml -f docker-compose.dev.yml
 # Image tag baked/run by the prod stack. Override per-deploy, e.g.
 #   make prod-build APP_IMAGE=dotmac_sub:$(git rev-parse --short HEAD)
 APP_IMAGE ?= dotmac_sub:latest
@@ -96,17 +98,17 @@ beat: ## Run Celery beat scheduler
 
 # ─── Docker ───────────────────────────────────────────────
 
-docker-up: ## Start all Docker containers
-	docker compose up -d
+docker-up: ## Start all Docker containers (dev overlay: working-tree bind-mounts)
+	$(DEV_COMPOSE) up -d
 
 docker-down: ## Stop all Docker containers
-	docker compose down
+	$(DEV_COMPOSE) down
 
 docker-logs: ## Tail Docker container logs
-	docker compose logs -f --tail=100
+	$(DEV_COMPOSE) logs -f --tail=100
 
-docker-rebuild: ## Rebuild and restart app container
-	docker compose build app && docker compose up -d app
+docker-rebuild: ## Rebuild and restart app container (dev)
+	$(DEV_COMPOSE) build app && $(DEV_COMPOSE) up -d app
 
 docker-shell: ## Open shell in app container
 	docker exec -it dotmac_sub_app bash
