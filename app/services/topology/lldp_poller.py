@@ -197,8 +197,13 @@ def _match_with_strategy(index, nb: dict) -> tuple[NetworkDevice | None, str | N
       address            - neighbor IPv4 address == a device mgmt_ip
       stripped_identity  - fuzzy token-subset identity match, unique device only
     Empty identity with no IP hit (CPE) or no match at all returns (None, None).
-    """
-    by_name, by_ip, stripped = index
+
+    Back-compatible with the classic ``build_device_index`` 2-tuple ``(by_name,
+    by_ip)``: when the ``stripped`` list is absent the fuzzy strategy is simply
+    skipped (exact identity + mgmt_ip still run), so ANY caller's index works —
+    not just ``poll_all``'s 3-tuple ``_build_match_index``."""
+    by_name, by_ip, *rest = index
+    stripped = rest[0] if rest else []
     norm = _norm(_neighbor_identity(nb))
     if norm and norm in by_name:
         return by_name[norm], "identity"
