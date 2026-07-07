@@ -353,6 +353,7 @@ def _invoice(
     tax_total=Decimal("0.00"),
     total=Decimal("100.00"),
     balance_due=Decimal("100.00"),
+    metadata=None,
 ):
     inv = Invoice(
         account_id=subscriber.id,
@@ -362,6 +363,7 @@ def _invoice(
         total=total,
         balance_due=balance_due,
         currency="NGN",
+        metadata_=metadata,
         is_active=True,
     )
     db.add(inv)
@@ -526,6 +528,74 @@ def test_money_balance_check_includes_credit_note_applications(db_session, subsc
         .count()
         == 0
     )
+
+
+# --- billing reconciliation hold check -------------------------------------
+
+
+def test_reconciliation_hold_check_tracks_stale_open_holds(db_session, subscriber):
+    detected_at = datetime.now(UTC) - timedelta(days=3)
+    inv = _invoice(
+        db_session,
+        subscriber,
+        status=InvoiceStatus.draft,
+        total=Decimal("80.00"),
+        balance_due=Decimal("80.00"),
+        metadata={
+            "reconciliation_hold": True,
+            "reconciliation_hold_reason": "prepaid_paid_coverage_overlap",
+            "prepaid_overlap_repair": {
+                "detected_at": detected_at.isoformat(),
+                "valid_paid_invoice_id": str(uuid.uuid4()),
+                "paid_through": "2026-07-31T23:59:59+00:00",
+                "reason": "prepaid_paid_coverage_overlap",
+            },
+        },
+    )
+
+    run_detection(db_session, checks=[cross_app_drift.BillingReconciliationHoldCheck()])
+
+    f = (
+        db_session.query(CrossAppDriftFinding)
+        .filter_by(mismatch_type="reconciliation_hold_pending_review")
+        .one()
+    )
+    assert f.check_name == "billing_reconciliation_hold"
+    assert f.canonical_entity_id == str(inv.id)
+    assert f.severity == SEVERITY_HIGH
+    assert f.details["suggested_owner"] == "billing manual review"
+    assert f.details["hold_sla_breached"] is True
+    assert f.evidence["status"] == "draft"
+    assert f.evidence["reconciliation_hold_reason"] == "prepaid_paid_coverage_overlap"
+    assert f.evidence["hold_review_sla_hours"] == 48
+    assert f.evidence["hold_age_hours"] >= 72
+    assert f.evidence["prepaid_overlap_repair"]["valid_paid_invoice_id"]
+
+
+def test_reconciliation_hold_check_resolves_when_hold_is_cleared(
+    db_session, subscriber
+):
+    inv = _invoice(
+        db_session,
+        subscriber,
+        status=InvoiceStatus.issued,
+        metadata={
+            "reconciliation_hold": True,
+            "reconciliation_hold_reason": "prepaid_paid_coverage_overlap",
+        },
+    )
+    run_detection(db_session, checks=[cross_app_drift.BillingReconciliationHoldCheck()])
+
+    inv.metadata_ = {
+        **(inv.metadata_ or {}),
+        "reconciliation_hold": False,
+        "reconciliation_hold_cleared_at": datetime.now(UTC).isoformat(),
+    }
+    db_session.flush()
+    run_detection(db_session, checks=[cross_app_drift.BillingReconciliationHoldCheck()])
+
+    f = db_session.query(CrossAppDriftFinding).one()
+    assert f.status == STATUS_RESOLVED
 
 
 # --- alert path + read view ------------------------------------------------
