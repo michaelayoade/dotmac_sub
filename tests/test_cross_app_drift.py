@@ -354,6 +354,7 @@ def _invoice(
     total=Decimal("100.00"),
     balance_due=Decimal("100.00"),
     metadata=None,
+    **overrides,
 ):
     inv = Invoice(
         account_id=subscriber.id,
@@ -365,6 +366,7 @@ def _invoice(
         currency="NGN",
         metadata_=metadata,
         is_active=True,
+        **overrides,
     )
     db.add(inv)
     db.flush()
@@ -407,6 +409,34 @@ def test_money_check_flags_invoice_header_total_mismatch(db_session, subscriber)
     assert f.canonical_entity_id == str(inv.id)
     assert f.evidence["expected_total"] == "107.50"
     assert f.evidence["actual_total"] == "120.00"
+    assert f.evidence["invoice_source"] == "native"
+
+
+def test_money_check_marks_legacy_splynx_invoice_header_mismatch_for_review(
+    db_session, subscriber
+):
+    inv = _invoice(
+        db_session,
+        subscriber,
+        subtotal=Decimal("0.00"),
+        tax_total=Decimal("0.00"),
+        total=Decimal("107.50"),
+        balance_due=Decimal("0.00"),
+        splynx_invoice_id=12345,
+    )
+
+    run_detection(db_session, checks=[cross_app_drift.MoneySelfConsistencyCheck()])
+
+    f = (
+        db_session.query(CrossAppDriftFinding)
+        .filter_by(mismatch_type="invoice_total_mismatch")
+        .one()
+    )
+    assert f.severity == "medium"
+    assert f.canonical_entity_id == str(inv.id)
+    assert f.evidence["invoice_source"] == "legacy_splynx_import"
+    assert f.evidence["splynx_invoice_id"] == 12345
+    assert f.details["suggested_owner"] == "finance migration review"
 
 
 def test_money_check_flags_invoice_balance_mismatch(db_session, subscriber):
