@@ -40,6 +40,7 @@ from app.services import enforcement_window, settings_spec
 from app.services.billing import _recalculate_invoice_totals
 from app.services.billing.invoices import next_invoice_number
 from app.services.billing.reconcile_unposted import settle_open_invoices_from_credit
+from app.services.billing_prepaid_overlap_repair import apply_prepaid_overlap_hold
 from app.services.billing_settings import (
     accounts_with_collectible_service,
     resolve_payment_due_days,
@@ -2047,7 +2048,9 @@ def mark_overdue_invoices(db: Session) -> dict[str, int]:
         # phantom duplicate-billing cleanup) must not be marked overdue or
         # drive suspension/dunning. Setting this flag immediately stops dunning
         # before the invoices are voided.
-        if metadata.get("reconciliation_hold"):
+        if metadata.get("reconciliation_hold") or apply_prepaid_overlap_hold(
+            db, invoice
+        ):
             skipped_on_hold += 1
             continue
         if metadata.get("overdue_event_sent"):
@@ -2097,7 +2100,7 @@ def mark_overdue_invoices(db: Session) -> dict[str, int]:
             logger.error("Failed to process overdue invoice %s: %s", invoice.id, exc)
             errors += 1
 
-    if marked or escalated:
+    if marked or escalated or skipped_on_hold:
         db.commit()
 
     logger.info(

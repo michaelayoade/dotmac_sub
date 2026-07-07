@@ -109,3 +109,7 @@ billing_violations_*.csv
 billing_dryrun_*.json
 # Billing remediation manifests (invoice line ids, account refs) — runtime artifacts
 remediation_*.json
+# Generated static reports can contain customer PII; keep operational exports local.
+/static/reports/*.csv
+# One-off production remediations with embedded account/invoice identifiers stay local.
+/scripts/one_off/remediate_prepaid_overlap_locks.py

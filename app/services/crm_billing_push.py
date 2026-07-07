@@ -85,7 +85,7 @@ def push_billing_snapshots(
     stamps the snapshot key on SUCCESS, so a record we couldn't deliver stays
     unstamped and is naturally re-enqueued next run (auto-heal).
     """
-    from app.services.crm_webhook import NATIVE_EXTERNAL_SYSTEM
+    from app.services.crm_webhook import SELFCARE_EXTERNAL_SYSTEM
     from app.tasks.crm_sync import push_subscriber_change as push_task
 
     stats: dict[str, Any] = {"considered": 0, "enqueued": 0, "unchanged": 0}
@@ -115,7 +115,7 @@ def push_billing_snapshots(
             payload = {k: v for k, v in sendable.items() if k != "billing_cycle"}
         else:
             external_id = str(subscriber.id)
-            external_system = NATIVE_EXTERNAL_SYSTEM
+            external_system = SELFCARE_EXTERNAL_SYSTEM
             payload = sendable
         # Dedupe on exactly what we transmit, which is what the task stamps.
         metadata = dict(subscriber.metadata_ or {})
