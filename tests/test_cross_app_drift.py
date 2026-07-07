@@ -418,9 +418,9 @@ def test_money_check_marks_legacy_splynx_invoice_header_mismatch_for_review(
     inv = _invoice(
         db_session,
         subscriber,
-        subtotal=Decimal("0.00"),
-        tax_total=Decimal("0.00"),
-        total=Decimal("107.50"),
+        subtotal=Decimal("100.00"),
+        tax_total=Decimal("7.50"),
+        total=Decimal("120.00"),
         balance_due=Decimal("0.00"),
         splynx_invoice_id=12345,
     )
@@ -433,6 +433,31 @@ def test_money_check_marks_legacy_splynx_invoice_header_mismatch_for_review(
         .one()
     )
     assert f.severity == "medium"
+    assert f.canonical_entity_id == str(inv.id)
+    assert f.evidence["invoice_source"] == "legacy_splynx_import"
+    assert f.evidence["splynx_invoice_id"] == 12345
+    assert f.details["suggested_owner"] == "finance migration review"
+
+
+def test_money_check_splits_legacy_splynx_missing_line_totals(db_session, subscriber):
+    inv = _invoice(
+        db_session,
+        subscriber,
+        subtotal=Decimal("0.00"),
+        tax_total=Decimal("0.00"),
+        total=Decimal("107.50"),
+        balance_due=Decimal("0.00"),
+        splynx_invoice_id=12345,
+    )
+
+    run_detection(db_session, checks=[cross_app_drift.MoneySelfConsistencyCheck()])
+
+    f = (
+        db_session.query(CrossAppDriftFinding)
+        .filter_by(mismatch_type="legacy_invoice_line_totals_missing")
+        .one()
+    )
+    assert f.severity == "low"
     assert f.canonical_entity_id == str(inv.id)
     assert f.evidence["invoice_source"] == "legacy_splynx_import"
     assert f.evidence["splynx_invoice_id"] == 12345
@@ -472,6 +497,44 @@ def test_money_check_marks_legacy_splynx_invoice_balance_mismatch_for_review(
     inv = _invoice(
         db_session,
         subscriber,
+        status=InvoiceStatus.issued,
+        total=Decimal("100.00"),
+        balance_due=Decimal("100.00"),
+        splynx_invoice_id=12345,
+    )
+    payment = _payment(db_session, subscriber, amount=Decimal("40.00"))
+    db_session.add(
+        PaymentAllocation(
+            payment_id=payment.id,
+            invoice_id=inv.id,
+            amount=Decimal("40.00"),
+            is_active=True,
+        )
+    )
+    db_session.flush()
+
+    run_detection(db_session, checks=[cross_app_drift.MoneySelfConsistencyCheck()])
+
+    f = (
+        db_session.query(CrossAppDriftFinding)
+        .filter_by(mismatch_type="invoice_balance_mismatch")
+        .one()
+    )
+    assert f.severity == "medium"
+    assert f.canonical_entity_id == str(inv.id)
+    assert f.evidence["expected_balance_due"] == "60.00"
+    assert f.evidence["actual_balance_due"] == "100.00"
+    assert f.evidence["invoice_source"] == "legacy_splynx_import"
+    assert f.evidence["splynx_invoice_id"] == 12345
+    assert f.details["suggested_owner"] == "finance migration review"
+
+
+def test_money_check_splits_legacy_paid_splynx_invoice_allocation_gap(
+    db_session, subscriber
+):
+    inv = _invoice(
+        db_session,
+        subscriber,
         status=InvoiceStatus.paid,
         total=Decimal("100.00"),
         balance_due=Decimal("0.00"),
@@ -482,10 +545,10 @@ def test_money_check_marks_legacy_splynx_invoice_balance_mismatch_for_review(
 
     f = (
         db_session.query(CrossAppDriftFinding)
-        .filter_by(mismatch_type="invoice_balance_mismatch")
+        .filter_by(mismatch_type="legacy_paid_invoice_allocation_gap")
         .one()
     )
-    assert f.severity == "medium"
+    assert f.severity == "low"
     assert f.canonical_entity_id == str(inv.id)
     assert f.evidence["expected_balance_due"] == "100.00"
     assert f.evidence["actual_balance_due"] == "0.00"
