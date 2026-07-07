@@ -82,7 +82,7 @@ def test_native_subscriber_enqueues_generic_webhook(
     args, _ = task.delay.call_args
     external_id, payload, system = args
     assert external_id == str(subscriber.id)
-    assert system == "dotmac"
+    assert system == "selfcare"
     assert payload["billing_cycle"]
 
 
