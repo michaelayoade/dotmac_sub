@@ -463,6 +463,35 @@ def test_money_check_flags_invoice_balance_mismatch(db_session, subscriber):
     assert f.evidence["expected_balance_due"] == "60.00"
     assert f.evidence["actual_balance_due"] == "100.00"
     assert f.evidence["succeeded_allocations"] == "40.00"
+    assert f.evidence["invoice_source"] == "native"
+
+
+def test_money_check_marks_legacy_splynx_invoice_balance_mismatch_for_review(
+    db_session, subscriber
+):
+    inv = _invoice(
+        db_session,
+        subscriber,
+        status=InvoiceStatus.paid,
+        total=Decimal("100.00"),
+        balance_due=Decimal("0.00"),
+        splynx_invoice_id=12345,
+    )
+
+    run_detection(db_session, checks=[cross_app_drift.MoneySelfConsistencyCheck()])
+
+    f = (
+        db_session.query(CrossAppDriftFinding)
+        .filter_by(mismatch_type="invoice_balance_mismatch")
+        .one()
+    )
+    assert f.severity == "medium"
+    assert f.canonical_entity_id == str(inv.id)
+    assert f.evidence["expected_balance_due"] == "100.00"
+    assert f.evidence["actual_balance_due"] == "0.00"
+    assert f.evidence["invoice_source"] == "legacy_splynx_import"
+    assert f.evidence["splynx_invoice_id"] == 12345
+    assert f.details["suggested_owner"] == "finance migration review"
 
 
 def test_money_check_flags_payment_overallocated(db_session, subscriber):
