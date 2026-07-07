@@ -9,11 +9,21 @@ touches manual/other links.
 Fetch mechanism: the neighbor tables are read over the RouterOS **binary API**
 (port 8728, the ``routeros_api`` library) — the exact transport the bandwidth
 poller (``app/poller/mikrotik_poller.py``) already uses against these routers.
-The REST API is *not* enabled on the fleet: every ``/rest/...`` call returns
-400 "no such command or directory (rest)", so the previous NAS-centric REST
-path saw zero neighbors and the backbone graph never populated. We iterate the
-``routers`` table directly (each row carries the same user account for API and
-REST) and map each router to its ``network_device_id``.
+REST is enabled on MOST of the fleet but binary works on more of it, so binary
+is tried first. We iterate the ``routers`` table directly (each row carries the
+same user account for API and REST) and map each router to its
+``network_device_id``.
+
+REST (443) fallback: the fleet is MIXED — a few core routers (Garki Core,
+Abuja Medallion; both CCR1072) have 8728 FILTERED and answer only on HTTPS/REST
+(443). #840 moved the poller from REST to binary because binary reached most
+routers, but that orphaned those REST-only cores. So a binary read that fails
+with a CONNECTION-class error (timeout / refused / no route /
+``RouterOsApiConnectionError``) falls back to ``GET /rest/ip/neighbor`` over 443
+(:func:`_read_neighbors_via_rest`, the pre-#840 REST path restored). An AUTH
+failure is deliberately NOT retried over REST — REST hits the same user/RADIUS
+backend, so it would fail identically (e.g. Kubwa's device-side RADIUS "could
+not authenticate") — and counts as a plain ``routers_failed`` as before.
 
 Match (``_match_with_strategy``, additive + conservative): exact normalized
 neighbor ``identity`` -> network_device name/hostname; then IPv4
@@ -38,7 +48,10 @@ from datetime import UTC, datetime
 
 import routeros_api
 from billiard.exceptions import SoftTimeLimitExceeded
-from routeros_api.exceptions import RouterOsApiParsingError
+from routeros_api.exceptions import (
+    RouterOsApiConnectionError,
+    RouterOsApiParsingError,
+)
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
@@ -63,6 +76,14 @@ BINARY_API_PORT = 8728
 # dropping router. 2/25 routinely time out (heavily-loaded cores); they are
 # counted, not fatal.
 ROUTER_SOCKET_TIMEOUT = 15.0
+
+# Discovery-grade REST (443) fallback tunables — the pre-#840 REST path (PR #786)
+# restored for REST-only cores (Garki Core / Abuja Medallion: 8728 filtered,
+# HTTPS answers). One attempt, tight timeouts (~12s read bound), same "skip this
+# router this hour, retry next" philosophy as the binary socket timeout above.
+ROUTER_REST_CONNECT_TIMEOUT = 5.0
+ROUTER_REST_READ_TIMEOUT = 12.0
+ROUTER_REST_MAX_RETRIES = 1
 
 # Wall-clock safety net: the Celery task has soft_time_limit=300 — stop
 # attempting new devices before that so the run finishes cleanly (upsert +
@@ -369,6 +390,88 @@ def _read_neighbors_via_binary_api(router: Router, pool_factory=None) -> list[di
             )
 
 
+def _read_neighbors_via_rest(router: Router) -> list[dict]:
+    """Read a router's ``/ip/neighbor`` over the RouterOS REST API (443).
+
+    Fallback transport for the REST-only cores (Garki Core, Abuja Medallion)
+    whose 8728 is filtered but whose HTTPS/REST answers. This restores the
+    pre-#840 REST path (removed by #840; originally added in PR #786): it reuses
+    :class:`RouterConnectionService` — the exact connection layer config
+    snapshots use — with discovery-grade tunables (one attempt, tight timeouts)
+    so a dead router costs seconds, not the snapshot retry budget. The service
+    decrypts the same ``rest_api_*`` credentials, builds the
+    ``management_ip``/``rest_api_port``/``use_ssl`` base URL, prepends ``/rest``,
+    and closes the httpx client via its ``with`` context (no session leak).
+
+    TLS: RouterOS presents a self-signed cert, so verification is governed by
+    the router row's ``verify_tls`` column (``RouterConnectionService.get_client``
+    passes ``verify=router.verify_tls``) — a per-router, settings/DB-driven flag,
+    NOT a hand-rolled ``verify=False``. This is the established project pattern,
+    consistent with the pre-#840 REST poller and every other config-snapshot
+    call; no new insecure default is introduced here.
+
+    REST returns ``/ip/neighbor`` as a JSON array whose objects already carry the
+    hyphenated fields (``identity``, ``address``, ``address4``, ``address6``,
+    ``mac-address``, ``interface``, ``board``/``board-name``/``platform``) — the
+    SAME dict shape :func:`_read_neighbors_via_binary_api` yields — so downstream
+    matching/edge-building is unchanged.
+    """
+    # Imported lazily: the REST connection layer pulls in httpx/sshtunnel and is
+    # only needed on the rare REST-only-core fallback path.
+    from app.services.router_management.connection import RouterConnectionService
+
+    data = RouterConnectionService.execute(
+        router,
+        "GET",
+        "/ip/neighbor",
+        connect_timeout=ROUTER_REST_CONNECT_TIMEOUT,
+        read_timeout=ROUTER_REST_READ_TIMEOUT,
+        max_retries=ROUTER_REST_MAX_RETRIES,
+    )
+    return [dict(row) for row in data] if isinstance(data, list) else []
+
+
+# A binary-API read failure that WARRANTS a REST(443) retry: the router didn't
+# answer on 8728 at all — connection refused / timeout / no route / TLS/socket
+# error. ``RouterOsApiConnectionError`` (and its ConnectionClosedError subclass)
+# is the library's wrapper; a bare ``OSError``/``socket.timeout`` can also reach
+# us. An AUTH failure surfaces as ``RouterOsApiCommunicationError`` (NOT in this
+# tuple), so it is never retried over REST — REST hits the same auth backend.
+_BINARY_CONNECTION_ERRORS = (RouterOsApiConnectionError, OSError)
+
+
+def _read_neighbors(
+    router: Router,
+    *,
+    binary_reader=None,
+    rest_reader=None,
+) -> tuple[list[dict], str]:
+    """Dispatch a neighbor read: binary API (8728) first, REST (443) on fallback.
+
+    Returns ``(neighbors, transport)`` where ``transport`` is ``"binary"`` or
+    ``"rest"``. Tries the binary API; on a CONNECTION-class failure (see
+    ``_BINARY_CONNECTION_ERRORS`` — timeout / refused / no route) falls back to
+    the REST reader for the REST-only cores. Does NOT fall back on an AUTH
+    failure (``RouterOsApiCommunicationError``: REST would fail identically) nor
+    on ``SoftTimeLimitExceeded`` (which must reach the task's graceful handler);
+    both propagate to ``poll_all`` and count as ``routers_failed``. The
+    sub-readers are injectable for tests. ``binary_reader`` returning ``[]`` for
+    an empty neighbor table is a SUCCESS, not a fallback trigger."""
+    binary_reader = binary_reader or _read_neighbors_via_binary_api
+    rest_reader = rest_reader or _read_neighbors_via_rest
+    try:
+        return binary_reader(router), "binary"
+    except SoftTimeLimitExceeded:
+        raise
+    except _BINARY_CONNECTION_ERRORS as exc:
+        logger.info(
+            "lldp_poll_binary_unreachable router=%s: %s -- falling back to REST(443)",
+            router.name,
+            _sanitize_exc(exc),
+        )
+    return rest_reader(router), "rest"
+
+
 def poll_all(
     session: Session,
     read_neighbors=None,
@@ -377,8 +480,10 @@ def poll_all(
 ) -> dict:
     """Poll every active router's neighbors, upsert lldp_neighbor edges, soft-prune.
 
-    Iterates active ``routers`` rows and reads each one's ``/ip/neighbor`` over
-    the binary API (``via_binary_api``). A router maps to its
+    Iterates active ``routers`` rows and reads each one's ``/ip/neighbor`` via
+    the transport dispatcher (:func:`_read_neighbors`): binary API on 8728 first
+    (``via_binary_api``), falling back to REST on 443 (``via_rest``) for the
+    REST-only cores whose 8728 is filtered. A router maps to its
     ``network_device_id``; a router without one is counted in
     ``skipped_no_device`` (it cannot anchor an edge). A router that is
     unreachable or errors mid-read is counted in ``routers_failed`` and skipped
@@ -391,7 +496,7 @@ def poll_all(
     Idempotent: edges are keyed by canonical device pair (NULL interfaces), so a
     re-run only bumps ``last_seen_at``.
     """
-    read_neighbors = read_neighbors or _read_neighbors_via_binary_api
+    read_neighbors = read_neighbors or _read_neighbors
     now = now or datetime.now(UTC)
     started = time.monotonic()
     budget_logged = False
@@ -401,6 +506,7 @@ def poll_all(
             "routers_polled": 0,
             "routers_failed": 0,
             "via_binary_api": 0,
+            "via_rest": 0,
             "skipped_no_device": 0,
             "skipped_time_budget": 0,
             "neighbors_seen": 0,
@@ -453,7 +559,7 @@ def poll_all(
             stats["skipped_time_budget"] += 1
             continue
         try:
-            neighbors = read_neighbors(router)
+            result = read_neighbors(router)
         except SoftTimeLimitExceeded:
             # Celery's soft timeout must reach the task's graceful handler —
             # counting it as routers_failed would keep looping until the hard
@@ -467,8 +573,15 @@ def poll_all(
                 _sanitize_exc(exc),
             )
             continue
+        # The dispatcher reports the transport it used as ``(neighbors,
+        # transport)``; a legacy/injected reader returning a bare list is
+        # treated as the binary path so existing callers/tests are unaffected.
+        if isinstance(result, tuple):
+            neighbors, transport = result
+        else:
+            neighbors, transport = result, "binary"
         stats["routers_polled"] += 1
-        stats["via_binary_api"] += 1
+        stats["via_rest" if transport == "rest" else "via_binary_api"] += 1
         stats["neighbors_seen"] += len(neighbors)
         polled_device_ids.add(local.id)
         accumulate_edges(edges, local, neighbors, index, strategy_counter=stats)
