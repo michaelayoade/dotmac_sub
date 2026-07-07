@@ -94,6 +94,13 @@ _OPEN_INVOICE_STATUSES = {
     InvoiceStatus.partially_paid,
     InvoiceStatus.overdue,
 }
+_RECONCILIATION_HOLD_INVOICE_STATUSES = {
+    InvoiceStatus.draft,
+    InvoiceStatus.issued,
+    InvoiceStatus.partially_paid,
+    InvoiceStatus.overdue,
+}
+_RECONCILIATION_HOLD_REVIEW_WINDOW = timedelta(hours=48)
 
 
 def _money(value) -> Decimal:  # noqa: ANN001
@@ -102,6 +109,31 @@ def _money(value) -> Decimal:  # noqa: ANN001
 
 def _money_differs(left, right) -> bool:  # noqa: ANN001
     return abs(_money(left) - _money(right)) > _MONEY_TOLERANCE
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    return value.astimezone(UTC) if value.tzinfo else value.replace(tzinfo=UTC)
+
+
+def _parse_metadata_datetime(value: object) -> datetime | None:
+    if isinstance(value, datetime):
+        return _as_utc(value)
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return _as_utc(datetime.fromisoformat(value.replace("Z", "+00:00")))
+    except ValueError:
+        return None
+
+
+def _metadata_truthy(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return False
 
 
 @dataclass
@@ -569,10 +601,121 @@ class MoneySelfConsistencyCheck:
             )
 
 
+class BillingReconciliationHoldCheck:
+    """Open invoices parked for manual reconciliation must stay visible.
+
+    The prepaid-overlap repair intentionally creates holds for invoices with
+    partial payments or allocations because auto-deciding them would be unsafe.
+    This check turns those holds into durable drift findings until billing
+    either clears the hold or closes the invoice.
+    """
+
+    name = "billing_reconciliation_hold"
+
+    def run(self, db: Session) -> Iterable[Finding]:
+        now = datetime.now(UTC)
+        rows = db.execute(
+            select(
+                Invoice.id,
+                Invoice.account_id,
+                Invoice.invoice_number,
+                Invoice.status,
+                Invoice.total,
+                Invoice.balance_due,
+                Invoice.metadata_,
+                Invoice.created_at,
+                Invoice.updated_at,
+            )
+            .where(Invoice.is_active.is_(True))
+            .where(Invoice.status.in_(_RECONCILIATION_HOLD_INVOICE_STATUSES))
+        ).all()
+        for (
+            invoice_id,
+            account_id,
+            invoice_number,
+            status,
+            total,
+            balance_due,
+            metadata,
+            created_at,
+            updated_at,
+        ) in rows:
+            metadata = metadata or {}
+            if not _metadata_truthy(metadata.get("reconciliation_hold")):
+                continue
+
+            repair = metadata.get("prepaid_overlap_repair")
+            repair = repair if isinstance(repair, dict) else {}
+            reason = (
+                metadata.get("reconciliation_hold_reason")
+                or repair.get("reason")
+                or "reconciliation_hold"
+            )
+            held_since = (
+                _parse_metadata_datetime(repair.get("detected_at"))
+                or _parse_metadata_datetime(metadata.get("reconciliation_hold_at"))
+                or _as_utc(updated_at)
+                or _as_utc(created_at)
+            )
+            hold_age_hours = None
+            if held_since is not None:
+                elapsed = max(timedelta(), now - held_since)
+                hold_age_hours = round(elapsed.total_seconds() / 3600, 2)
+            sla_hours = int(_RECONCILIATION_HOLD_REVIEW_WINDOW.total_seconds() // 3600)
+            sla_breached = (
+                held_since is not None
+                and now - held_since > _RECONCILIATION_HOLD_REVIEW_WINDOW
+            )
+            repair_evidence = {
+                key: str(repair[key])
+                for key in (
+                    "detected_at",
+                    "valid_paid_invoice_id",
+                    "valid_paid_invoice_number",
+                    "paid_through",
+                    "reason",
+                )
+                if key in repair
+            }
+
+            yield Finding(
+                check_name=self.name,
+                entity_type="invoice",
+                canonical_entity_id=str(invoice_id),
+                mismatch_type="reconciliation_hold_pending_review",
+                severity=SEVERITY_HIGH if sla_breached else SEVERITY_MEDIUM,
+                evidence={
+                    "invoice_id": str(invoice_id),
+                    "invoice_number": invoice_number,
+                    "account_id": str(account_id),
+                    "status": status.value if status else None,
+                    "total": str(_money(total)),
+                    "balance_due": str(_money(balance_due)),
+                    "reconciliation_hold_reason": str(reason),
+                    "held_since": held_since.isoformat() if held_since else None,
+                    "hold_age_hours": hold_age_hours,
+                    "hold_review_sla_hours": sla_hours,
+                    "hold_sla_breached": sla_breached,
+                    "prepaid_overlap_repair": repair_evidence,
+                },
+                details={
+                    "suggested_owner": "billing manual review",
+                    "suggested_action": (
+                        "Review the held invoice: void or credit it if it is a "
+                        "prepaid-overlap duplicate; otherwise clear the hold so "
+                        "normal billing can resume."
+                    ),
+                    "hold_review_sla_hours": sla_hours,
+                    "hold_sla_breached": sla_breached,
+                },
+            )
+
+
 DEFAULT_CHECKS: list[DriftCheck] = [
     IdentityCardinalityCheck(),
     ServiceEnforcementCheck(),
     MoneySelfConsistencyCheck(),
+    BillingReconciliationHoldCheck(),
 ]
 
 
