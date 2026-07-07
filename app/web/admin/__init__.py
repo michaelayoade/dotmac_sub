@@ -36,6 +36,7 @@ from app.web.admin.customers import contacts_router
 from app.web.admin.customers import router as customers_router
 from app.web.admin.dashboard import router as dashboard_router
 from app.web.admin.design_system import router as design_system_router
+from app.web.admin.drift import router as drift_router
 from app.web.admin.gis import router as gis_router
 from app.web.admin.integrations import router as integrations_router
 from app.web.admin.legal import router as legal_router
@@ -360,6 +361,7 @@ router.include_router(
 router.include_router(resellers_router)
 router.include_router(service_requests_queue_router)
 router.include_router(alerts_router)
+router.include_router(drift_router)
 router.include_router(
     notifications_router,
     dependencies=[

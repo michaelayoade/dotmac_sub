@@ -16,6 +16,7 @@ from app.models.cross_app_drift import (
     EVENT_RECURRING,
     EVENT_RESOLVED,
     EVENT_WORSENED,
+    SEVERITY_CRITICAL,
     SEVERITY_HIGH,
     SEVERITY_MEDIUM,
     STATUS_OPEN,
@@ -327,3 +328,134 @@ def test_throttle_profile_mismatch_is_medium(db_session, subscriber):
     )
     assert f.severity == "medium"
     assert f.evidence["radius_profile"] == "missing_or_inactive"
+
+
+# --- alert path + read view ------------------------------------------------
+
+
+def test_material_finding_raises_admin_alert(db_session):
+    from app.models.admin_alert import AdminAlert, AlertStatus
+
+    run_detection(db_session, checks=[_StubCheck([_finding("x", SEVERITY_CRITICAL)])])
+    result = cross_app_drift.sync_drift_alerts(db_session)
+
+    alert = (
+        db_session.query(AdminAlert)
+        .filter(AdminAlert.category == "cross_app_drift")
+        .one()
+    )
+    assert alert.status == AlertStatus.open
+    assert alert.fingerprint.startswith("drift:")
+    assert alert.details["drift_severity"] == "critical"
+    assert result["alerted"] == 1
+    assert result["opened_or_escalated"] == 1
+
+
+def test_medium_finding_does_not_raise_alert(db_session):
+    from app.models.admin_alert import AdminAlert
+
+    run_detection(db_session, checks=[_StubCheck([_finding("x", SEVERITY_MEDIUM)])])
+    cross_app_drift.sync_drift_alerts(db_session)
+
+    assert (
+        db_session.query(AdminAlert)
+        .filter(AdminAlert.category == "cross_app_drift")
+        .count()
+        == 0
+    )
+
+
+def test_cleared_finding_resolves_its_alert(db_session):
+    from app.models.admin_alert import AdminAlert, AlertStatus
+
+    run_detection(db_session, checks=[_StubCheck([_finding("x", SEVERITY_CRITICAL)])])
+    cross_app_drift.sync_drift_alerts(db_session)
+    # The finding clears on the next run...
+    run_detection(db_session, checks=[_StubCheck([])])
+    result = cross_app_drift.sync_drift_alerts(db_session)
+
+    alert = (
+        db_session.query(AdminAlert)
+        .filter(AdminAlert.category == "cross_app_drift")
+        .one()
+    )
+    assert alert.status == AlertStatus.resolved
+    assert result["resolved"] == 1
+
+
+def test_open_findings_report_is_worst_first_with_evidence(db_session):
+    run_detection(
+        db_session,
+        checks=[
+            _StubCheck(
+                [_finding("x", SEVERITY_MEDIUM), _finding("y", SEVERITY_CRITICAL)]
+            )
+        ],
+    )
+    report = cross_app_drift.open_findings_report(db_session)
+
+    assert [row["severity"] for row in report] == ["critical", "medium"]
+    assert "evidence" in report[0]
+    assert "suggested_owner" in report[0]
+
+
+# --- SLA ageing + read view ------------------------------------------------
+
+
+def test_sla_status_by_severity_and_age(db_session):
+    now = datetime.now(UTC)
+    run_detection(db_session, checks=[_StubCheck([_finding("c", SEVERITY_CRITICAL)])])
+    f = db_session.query(CrossAppDriftFinding).one()
+    f.first_seen_at = now - timedelta(days=2)  # well past the 24h critical window
+    db_session.flush()
+
+    breached = cross_app_drift.sla_status(f, now)
+    assert breached["paged"] is True
+    assert breached["breached"] is True
+
+    # medium is tracked but never paged / breached
+    f.severity = SEVERITY_MEDIUM
+    tracked = cross_app_drift.sla_status(f, now)
+    assert tracked["paged"] is False
+    assert tracked["breached"] is False
+
+
+def test_sla_breach_escalates_the_alert_to_critical(db_session):
+    from app.models.admin_alert import AdminAlert, AlertSeverity
+
+    now = datetime.now(UTC)
+    run_detection(db_session, checks=[_StubCheck([_finding("h", SEVERITY_HIGH)])])
+    f = db_session.query(CrossAppDriftFinding).one()
+    f.first_seen_at = now - timedelta(days=3)  # past the 2-day high SLA
+    db_session.flush()
+
+    cross_app_drift.sync_drift_alerts(db_session)
+
+    alert = (
+        db_session.query(AdminAlert)
+        .filter(AdminAlert.category == "cross_app_drift")
+        .one()
+    )
+    # A breached HIGH re-pages as CRITICAL rather than sitting silent.
+    assert alert.severity == AlertSeverity.critical
+
+
+def test_drift_findings_context_filters_and_shape(db_session):
+    run_detection(
+        db_session,
+        checks=[
+            _StubCheck(
+                [_finding("a", SEVERITY_CRITICAL), _finding("b", SEVERITY_MEDIUM)]
+            )
+        ],
+    )
+    ctx = cross_app_drift.drift_findings_context(
+        db_session, status="open", severity="critical"
+    )
+
+    assert ctx["total"] == 1
+    row = ctx["findings"][0]
+    assert row["severity"] == "critical"
+    assert {"evidence", "sla", "suggested_owner", "occurrences"} <= set(row)
+    assert "stub_check" in ctx["checks"]
+    assert ctx["open_by_severity"].get("medium") == 1

@@ -40,6 +40,7 @@ from app.models.cross_app_drift import (
     RUN_RUNNING,
     SEVERITY_CRITICAL,
     SEVERITY_HIGH,
+    SEVERITY_LOW,
     SEVERITY_MEDIUM,
     SEVERITY_ORDER,
     STATUS_OPEN,
@@ -468,3 +469,241 @@ def open_findings_by_severity(db: Session) -> dict[str, int]:
         .group_by(CrossAppDriftFinding.severity)
     ).all()
     return {severity: int(count) for severity, count in rows}
+
+
+# Material drift (these severities) is mirrored into the admin alert console so
+# it pages and shows up in the operational surfaces; medium/low stay findings.
+_ALERTING_SEVERITIES = (SEVERITY_CRITICAL, SEVERITY_HIGH)
+_DRIFT_ALERT_PREFIX = "drift:"
+_DRIFT_ALERT_CATEGORY = "cross_app_drift"
+
+# Ageing SLA: how long an open finding may sit before it needs action. Paged
+# severities get a clock; medium/low are tracked on the dashboard, never paged.
+_SLA_WINDOWS = {
+    SEVERITY_CRITICAL: timedelta(hours=24),  # same day
+    SEVERITY_HIGH: timedelta(days=2),  # 1–2 business days
+}
+
+
+def sla_status(finding: CrossAppDriftFinding, now: datetime | None = None) -> dict:
+    """Ageing state for a finding: whether it pages, its due time, and whether
+    it has breached (open past its window). Medium/low are tracked, not paged."""
+    now = now or datetime.now(UTC)
+    window = _SLA_WINDOWS.get(finding.severity)
+    if window is None:
+        return {"paged": False, "due_at": None, "breached": False}
+    first = finding.first_seen_at
+    if first is not None and first.tzinfo is None:
+        first = first.replace(tzinfo=UTC)
+    due = first + window if first is not None else None
+    breached = bool(due and finding.status == STATUS_OPEN and now > due)
+    return {
+        "paged": True,
+        "due_at": due.isoformat() if due else None,
+        "breached": breached,
+    }
+
+
+def sync_drift_alerts(db: Session) -> dict[str, int]:
+    """Mirror open critical/high findings into the admin alert console and
+    resolve alerts whose finding cleared or dropped below material.
+
+    Reuses the same fingerprint-lifecycle sink as infrastructure alerts, so
+    drift findings page and render in the existing operational surfaces
+    (notification menu, dashboard summary) — the alert path + read view. The
+    coarse alert severity (info/warning/critical) carries the precise drift
+    severity in ``details``. Detect-only; commits its own alert writes.
+    """
+    from app.models.admin_alert import AlertSeverity
+    from app.services.admin_alerts import (
+        AlertFinding,
+        resolve_missing_alerts,
+        sync_alert,
+    )
+
+    findings = db.scalars(
+        select(CrossAppDriftFinding).where(
+            CrossAppDriftFinding.status == STATUS_OPEN,
+            CrossAppDriftFinding.severity.in_(_ALERTING_SEVERITIES),
+        )
+    ).all()
+
+    now = datetime.now(UTC)
+    active: set[str] = set()
+    opened_or_escalated = 0
+    for finding in findings:
+        alert_fp = f"{_DRIFT_ALERT_PREFIX}{finding.fingerprint}"
+        active.add(alert_fp)
+        remediation = finding.details or {}
+        sla = sla_status(finding, now)
+        # sync_alert only re-notifies on open/severity-escalation — never on a
+        # plain recurring run. An SLA breach forces the alert to critical so it
+        # re-pages (escalation), which is exactly "alert again when overdue".
+        alert_severity = (
+            AlertSeverity.critical
+            if (finding.severity == SEVERITY_CRITICAL or sla["breached"])
+            else AlertSeverity.warning
+        )
+        alert = AlertFinding(
+            fingerprint=alert_fp,
+            category=_DRIFT_ALERT_CATEGORY,
+            source=finding.check_name,
+            severity=alert_severity,
+            title=f"{finding.mismatch_type}: {finding.entity_type} "
+            f"{finding.canonical_entity_id}"[:180],
+            summary=(remediation.get("suggested_action") or finding.mismatch_type)[
+                :255
+            ],
+            details={
+                "check": finding.check_name,
+                "mismatch_type": finding.mismatch_type,
+                "entity_type": finding.entity_type,
+                "canonical_entity_id": finding.canonical_entity_id,
+                "drift_severity": finding.severity,
+                "occurrences": finding.occurrences,
+                "first_seen_at": finding.first_seen_at,
+                "sla": sla,
+                "evidence": finding.evidence,
+                **remediation,
+            },
+        )
+        if sync_alert(db, alert) in ("opened", "escalated"):
+            opened_or_escalated += 1
+
+    resolved = resolve_missing_alerts(
+        db, managed_prefix=_DRIFT_ALERT_PREFIX, active_fingerprints=active
+    )
+    db.commit()
+    return {
+        "alerted": len(active),
+        "opened_or_escalated": opened_or_escalated,
+        "resolved": resolved,
+    }
+
+
+def _finding_row(finding: CrossAppDriftFinding, now: datetime) -> dict:
+    remediation = finding.details or {}
+    return {
+        "id": str(finding.id),
+        "fingerprint": finding.fingerprint,
+        "check": finding.check_name,
+        "entity_type": finding.entity_type,
+        "canonical_entity_id": finding.canonical_entity_id,
+        "mismatch_type": finding.mismatch_type,
+        "severity": finding.severity,
+        "status": finding.status,
+        "occurrences": finding.occurrences,
+        "first_seen_at": (
+            finding.first_seen_at.isoformat() if finding.first_seen_at else None
+        ),
+        "last_seen_at": (
+            finding.last_seen_at.isoformat() if finding.last_seen_at else None
+        ),
+        "last_run_id": str(finding.last_run_id) if finding.last_run_id else None,
+        "suggested_owner": remediation.get("suggested_owner"),
+        "suggested_action": remediation.get("suggested_action"),
+        "evidence": finding.evidence or {},
+        "sla": sla_status(finding, now),
+    }
+
+
+def open_findings_report(db: Session) -> list[dict]:
+    """Read view: open findings (worst first) with owner, action, evidence, SLA.
+
+    Feeds a dashboard / read endpoint without exposing the ORM. Includes
+    medium/low too (which don't page) so nothing is invisible.
+    """
+    now = datetime.now(UTC)
+    findings = list(
+        db.scalars(
+            select(CrossAppDriftFinding).where(
+                CrossAppDriftFinding.status == STATUS_OPEN
+            )
+        ).all()
+    )
+    findings.sort(
+        key=lambda f: (
+            -SEVERITY_ORDER.get(f.severity, 0),
+            f.check_name,
+            f.canonical_entity_id,
+        )
+    )
+    return [_finding_row(f, now) for f in findings]
+
+
+def drift_findings_context(
+    db: Session,
+    *,
+    status: str | None = "open",
+    severity: str | None = None,
+    check: str | None = None,
+    entity_type: str | None = None,
+    owner: str | None = None,
+    page: int = 1,
+    per_page: int = 50,
+) -> dict:
+    """Filterable admin-table view: what's broken, how bad, who owns it, what to
+    do, and the evidence — with SLA ageing and recurrence. ``status`` accepts a
+    lifecycle value or ``"all"``; ``owner`` is a substring match on the
+    suggested owner. Read-only.
+    """
+    now = datetime.now(UTC)
+    query = select(CrossAppDriftFinding)
+    if status and status != "all":
+        query = query.where(CrossAppDriftFinding.status == status)
+    if severity:
+        query = query.where(CrossAppDriftFinding.severity == severity)
+    if check:
+        query = query.where(CrossAppDriftFinding.check_name == check)
+    if entity_type:
+        query = query.where(CrossAppDriftFinding.entity_type == entity_type)
+    findings = list(db.scalars(query).all())
+    if owner:
+        needle = owner.lower()
+        findings = [
+            f
+            for f in findings
+            if needle in str((f.details or {}).get("suggested_owner") or "").lower()
+        ]
+    findings.sort(
+        key=lambda f: (
+            0 if f.status == STATUS_OPEN else 1,
+            -SEVERITY_ORDER.get(f.severity, 0),
+            -f.occurrences,
+        )
+    )
+    rows = [_finding_row(f, now) for f in findings]
+    total = len(rows)
+    start = (page - 1) * per_page
+    page_rows = rows[start : start + per_page]
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    # Filter option lists + open-severity counts (over all findings).
+    all_findings = list(db.scalars(select(CrossAppDriftFinding)).all())
+    return {
+        "findings": page_rows,
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "total_pages": total_pages,
+        "has_previous_page": page > 1,
+        "has_next_page": page < total_pages,
+        "status": status or "",
+        "severity": severity or "",
+        "check": check or "",
+        "entity_type": entity_type or "",
+        "owner": owner or "",
+        "checks": sorted({f.check_name for f in all_findings}),
+        "entity_types": sorted({f.entity_type for f in all_findings}),
+        "severities": [
+            SEVERITY_CRITICAL,
+            SEVERITY_HIGH,
+            SEVERITY_MEDIUM,
+            SEVERITY_LOW,
+        ],
+        "statuses": [STATUS_OPEN, STATUS_WAIVED, STATUS_RESOLVED, "all"],
+        "open_by_severity": open_findings_by_severity(db),
+        "breached_count": sum(
+            1 for r in rows if r["status"] == STATUS_OPEN and r["sla"]["breached"]
+        ),
+    }

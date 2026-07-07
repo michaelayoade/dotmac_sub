@@ -19,6 +19,8 @@ def run_cross_app_drift_detection() -> dict:
 
         run = cross_app_drift.run_detection(db)
         by_severity = cross_app_drift.open_findings_by_severity(db)
+        # Mirror material findings into the admin alert console (the alert path).
+        alerts = cross_app_drift.sync_drift_alerts(db)
         material = by_severity.get("critical", 0) + by_severity.get("high", 0)
         if material:
             logger.warning(
@@ -45,6 +47,7 @@ def run_cross_app_drift_detection() -> dict:
             "findings_resolved": run.findings_resolved,
             "findings_open": run.findings_open,
             "open_by_severity": by_severity,
+            "alerts": alerts,
         }
     except Exception:
         db.rollback()
