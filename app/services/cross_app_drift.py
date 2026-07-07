@@ -729,6 +729,7 @@ def open_findings_by_severity(db: Session) -> dict[str, int]:
 _ALERTING_SEVERITIES = (SEVERITY_CRITICAL, SEVERITY_HIGH)
 _DRIFT_ALERT_PREFIX = "drift:"
 _DRIFT_ALERT_CATEGORY = "cross_app_drift"
+_DRIFT_ALERT_DETAIL_LIMIT = 500
 
 # Ageing SLA: how long an open finding may sit before it needs action. Paged
 # severities get a clock; medium/low are tracked on the dashboard, never paged.
@@ -757,7 +758,7 @@ def sla_status(finding: CrossAppDriftFinding, now: datetime | None = None) -> di
     }
 
 
-def sync_drift_alerts(db: Session) -> dict[str, int]:
+def sync_drift_alerts(db: Session) -> dict[str, int | str]:
     """Mirror open critical/high findings into the admin alert console and
     resolve alerts whose finding cleared or dropped below material.
 
@@ -784,6 +785,80 @@ def sync_drift_alerts(db: Session) -> dict[str, int]:
     now = datetime.now(UTC)
     active: set[str] = set()
     opened_or_escalated = 0
+    if len(findings) > _DRIFT_ALERT_DETAIL_LIMIT:
+        groups: dict[tuple[str, str, str, str], list[CrossAppDriftFinding]] = (
+            defaultdict(list)
+        )
+        for finding in findings:
+            groups[
+                (
+                    finding.severity,
+                    finding.check_name,
+                    finding.mismatch_type,
+                    finding.entity_type,
+                )
+            ].append(finding)
+
+        for (severity, check_name, mismatch_type, entity_type), items in groups.items():
+            alert_fp = (
+                f"{_DRIFT_ALERT_PREFIX}summary:{severity}:{check_name}:"
+                f"{mismatch_type}:{entity_type}"
+            )
+            active.add(alert_fp)
+            sample = items[:5]
+            breached = any(sla_status(finding, now)["breached"] for finding in items)
+            alert_severity = (
+                AlertSeverity.critical
+                if (severity == SEVERITY_CRITICAL or breached)
+                else AlertSeverity.warning
+            )
+            alert = AlertFinding(
+                fingerprint=alert_fp,
+                category=_DRIFT_ALERT_CATEGORY,
+                source=check_name,
+                severity=alert_severity,
+                title=f"{len(items)} {mismatch_type} drift finding(s)"[:180],
+                summary=(
+                    "Material cross-app drift exceeded per-finding alert volume; "
+                    "review the grouped findings in /admin/drift."
+                )[:255],
+                details={
+                    "check": check_name,
+                    "mismatch_type": mismatch_type,
+                    "entity_type": entity_type,
+                    "drift_severity": severity,
+                    "finding_count": len(items),
+                    "alert_mode": "grouped",
+                    "per_finding_alert_limit": _DRIFT_ALERT_DETAIL_LIMIT,
+                    "sample_finding_ids": [str(finding.id) for finding in sample],
+                    "sample_canonical_entity_ids": [
+                        finding.canonical_entity_id for finding in sample
+                    ],
+                    "sample_evidence": [finding.evidence for finding in sample],
+                },
+                target_url="/admin/drift?"
+                + urlencode(
+                    {
+                        "status": STATUS_OPEN,
+                        "check": check_name,
+                        "entity_type": entity_type,
+                    }
+                ),
+            )
+            if sync_alert(db, alert) in ("opened", "escalated"):
+                opened_or_escalated += 1
+
+        resolved = resolve_missing_alerts(
+            db, managed_prefix=_DRIFT_ALERT_PREFIX, active_fingerprints=active
+        )
+        db.commit()
+        return {
+            "alerted": len(active),
+            "opened_or_escalated": opened_or_escalated,
+            "resolved": resolved,
+            "mode": "grouped",
+        }
+
     for finding in findings:
         alert_fp = f"{_DRIFT_ALERT_PREFIX}{finding.fingerprint}"
         active.add(alert_fp)
@@ -839,6 +914,7 @@ def sync_drift_alerts(db: Session) -> dict[str, int]:
         "alerted": len(active),
         "opened_or_escalated": opened_or_escalated,
         "resolved": resolved,
+        "mode": "per_finding",
     }
 
 
