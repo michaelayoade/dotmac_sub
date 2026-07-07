@@ -13,7 +13,11 @@ from types import SimpleNamespace
 
 import pytest
 from billiard.exceptions import SoftTimeLimitExceeded
-from routeros_api.exceptions import RouterOsApiParsingError
+from routeros_api.exceptions import (
+    RouterOsApiCommunicationError,
+    RouterOsApiConnectionError,
+    RouterOsApiParsingError,
+)
 
 from app.models.network_monitoring import NetworkDevice, NetworkTopologyLink
 from app.models.router_management import Router
@@ -448,6 +452,170 @@ def test_poll_all_empty_table_not_counted_as_failure(db_session):
     assert r["neighbors_seen"] == 0
     assert r["created"] == 0
     assert len(_active_links(db_session)) == 0
+
+
+# --- REST (443) fallback for REST-only cores (8728 filtered) ------------------
+
+
+def _conn_error():
+    """A binary-API CONNECTION-class failure (8728 filtered/timeout/refused)."""
+    return RouterOsApiConnectionError("timed out")
+
+
+def _auth_error():
+    """A binary-API AUTH failure (bad creds / device-side RADIUS reject).
+
+    routeros_api surfaces a login trap as RouterOsApiCommunicationError, which is
+    deliberately NOT a connection-class error -> no REST fallback."""
+    return RouterOsApiCommunicationError("cannot log in", b"!trap")
+
+
+def test_dispatch_falls_back_to_rest_on_binary_connection_failure():
+    """8728 filtered (Garki Core / Abuja Medallion): binary connection failure
+    falls back to REST(443), which returns the parsed neighbors."""
+    rest_rows = [{"identity": "Abuja Medallion Peer", "interface": "sfp-sfpplus1"}]
+
+    def binary(router):
+        raise _conn_error()
+
+    def rest(router):
+        return rest_rows
+
+    out, transport = lldp_poller._read_neighbors(
+        _fake_router(), binary_reader=binary, rest_reader=rest
+    )
+    assert transport == "rest"
+    assert out == rest_rows
+
+
+def test_dispatch_does_not_fall_back_on_auth_failure():
+    """An AUTH failure (Kubwa-style RADIUS reject) must NOT retry over REST —
+    REST hits the same auth backend. The error propagates; REST is never called."""
+    rest_called = {"n": 0}
+
+    def binary(router):
+        raise _auth_error()
+
+    def rest(router):
+        rest_called["n"] += 1
+        return [{"identity": "should-not-happen"}]
+
+    with pytest.raises(RouterOsApiCommunicationError):
+        lldp_poller._read_neighbors(
+            _fake_router(), binary_reader=binary, rest_reader=rest
+        )
+    assert rest_called["n"] == 0
+
+
+def test_dispatch_binary_success_never_calls_rest():
+    """When 8728 answers, the REST path is never touched."""
+    rest_called = {"n": 0}
+
+    def binary(router):
+        return [{"identity": "GBB", "interface": "sfp1"}]
+
+    def rest(router):
+        rest_called["n"] += 1
+        return []
+
+    out, transport = lldp_poller._read_neighbors(
+        _fake_router(), binary_reader=binary, rest_reader=rest
+    )
+    assert transport == "binary"
+    assert out == [{"identity": "GBB", "interface": "sfp1"}]
+    assert rest_called["n"] == 0
+
+
+def test_rest_reader_parses_json_array_into_neighbor_dict_shape(monkeypatch):
+    """REST returns /ip/neighbor as a JSON array with the hyphenated fields; the
+    reader yields the SAME dict shape the binary reader does (address6/mac/
+    interface/board-name preserved) so downstream matching is unchanged."""
+    rest_json = [
+        {
+            "identity": "Garki Core",
+            "address": "160.119.127.252",
+            "address4": "160.119.127.252",
+            "address6": "fe80::baxa",
+            "mac-address": "48:8F:5A:11:22:33",
+            "interface": "sfp-sfpplus2",
+            "board-name": "CCR1072-1G-8S+",
+            "platform": "MikroTik",
+        }
+    ]
+    captured = {}
+
+    def fake_execute(router, method, path, **kwargs):
+        captured["method"] = method
+        captured["path"] = path
+        captured["kwargs"] = kwargs
+        return rest_json
+
+    import app.services.router_management.connection as conn
+
+    monkeypatch.setattr(conn.RouterConnectionService, "execute", fake_execute)
+
+    out = lldp_poller._read_neighbors_via_rest(_fake_router())
+
+    assert out == rest_json
+    assert out[0]["mac-address"] == "48:8F:5A:11:22:33"
+    assert out[0]["address6"] == "fe80::baxa"
+    assert out[0]["interface"] == "sfp-sfpplus2"
+    assert out[0]["board-name"] == "CCR1072-1G-8S+"
+    # Reused the established REST layer: GET /ip/neighbor with discovery-grade
+    # tunables (one attempt, ~12s read bound).
+    assert (captured["method"], captured["path"]) == ("GET", "/ip/neighbor")
+    assert captured["kwargs"]["max_retries"] == lldp_poller.ROUTER_REST_MAX_RETRIES
+    assert captured["kwargs"]["read_timeout"] == lldp_poller.ROUTER_REST_READ_TIMEOUT
+
+
+def test_poll_all_rest_fallback_end_to_end(db_session):
+    """poll_all via the real dispatcher: binary connection-fails, REST supplies
+    the neighbors, and the run counts the read as via_rest (not routers_failed)."""
+    _node, _r = _router_node(db_session, "Garki Core")
+    _plain(db_session, "GBB")
+
+    def binary(router):
+        raise _conn_error()
+
+    def rest(router):
+        return [{"identity": "GBB", "interface": "sfp-sfpplus1"}]
+
+    def read(router):
+        return lldp_poller._read_neighbors(
+            router, binary_reader=binary, rest_reader=rest
+        )
+
+    r = poll_all(db_session, read_neighbors=read, now=NOW)
+    assert r["via_rest"] == 1
+    assert r["via_binary_api"] == 0
+    assert r["routers_failed"] == 0
+    assert r["created"] == 1
+
+
+def test_poll_all_auth_failure_counts_as_failed_no_rest(db_session):
+    """An AUTH failure end-to-end: no REST fallback, counted as routers_failed."""
+    _node, _r = _router_node(db_session, "Kubwa Core")
+    _plain(db_session, "GBB")
+    rest_called = {"n": 0}
+
+    def binary(router):
+        raise _auth_error()
+
+    def rest(router):
+        rest_called["n"] += 1
+        return []
+
+    def read(router):
+        return lldp_poller._read_neighbors(
+            router, binary_reader=binary, rest_reader=rest
+        )
+
+    r = poll_all(db_session, read_neighbors=read, now=NOW)
+    assert r["routers_failed"] == 1
+    assert r["via_rest"] == 0
+    assert r["via_binary_api"] == 0
+    assert r["created"] == 0
+    assert rest_called["n"] == 0
 
 
 # --- Smarter matcher (identity aliases, mgmt_ip, fe80::, ambiguity) -----------
