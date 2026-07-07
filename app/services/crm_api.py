@@ -1928,20 +1928,40 @@ def _outage_incident_scope(session: Session, incident) -> dict[str, Any]:
 
 
 def outage_incident_row(session: Session, incident) -> dict[str, Any]:
-    """One incident, serialized for the CRM (list + detail header)."""
-    from app.services.topology.outage import detection_source
+    """One incident, serialized for the CRM (list + detail header).
+
+    ``detection_source`` is the legacy ``auto``/``manual`` field, left UNCHANGED
+    for backward compatibility (``auto`` = scanner-detected, ``manual`` =
+    hand-declared; classifier incidents report ``manual`` under this legacy
+    field). ``provenance`` is the NEW ``operator``/``classifier`` discriminator
+    (the model column) so agents can tell a debounced classifier outage from an
+    operator-declared one — added additively rather than repurposing the
+    existing field, so any external reader of ``detection_source`` keeps working.
+    ``state`` mirrors the lifecycle ``status`` (open/resolved for operator;
+    suspected/confirmed/clearing/resolved/discarded for classifier). ``mttr_seconds``
+    is ``resolved_at - confirmed_at`` once an incident is resolved.
+    """
+    from app.services.topology.outage import detection_source, mttr_seconds
 
     return {
         "id": str(incident.id),
         "status": incident.status,
+        "state": incident.status,
         "detection_source": detection_source(incident),
+        "provenance": incident.detection_source,
         "scope": _outage_incident_scope(session, incident),
         "severity": incident.severity,
         "affected_count": incident.affected_count,
+        "classification": incident.classification,
+        "confidence": incident.confidence,
         "note": incident.note,
         "declared_by": incident.declared_by,
         "started_at": utc_iso(incident.started_at),
+        "suspected_at": utc_iso(incident.suspected_at),
+        "confirmed_at": utc_iso(incident.confirmed_at),
+        "cleared_at": utc_iso(incident.cleared_at),
         "resolved_at": utc_iso(incident.resolved_at),
+        "mttr_seconds": mttr_seconds(incident),
     }
 
 
@@ -1955,23 +1975,37 @@ def list_outage_incidents(
     page: int = 1,
     per_page: int = 100,
 ) -> tuple[list[dict[str, Any]], int]:
-    """Open + recently-resolved incidents for the CRM, newest first.
+    """Active + recently-resolved incidents for the CRM, newest first.
 
-    Default view: everything ``open`` plus incidents resolved within
-    ``resolved_within_hours`` (so a just-cleared outage is still visible to
-    agents). ``status`` narrows to open/resolved; ``basestation_id`` /
+    Default "active" view (§7.6 finding 4): operator ``open`` PLUS the debounced
+    real classifier states ``confirmed``/``clearing`` (resolved_at NULL), PLUS
+    anything resolved within ``resolved_within_hours`` (so a just-cleared outage
+    is still visible). ``suspected`` (not yet debounced — noise) and ``discarded``
+    (false positive) are deliberately excluded from the default. ``status``
+    narrows to any single lifecycle state (open/resolved plus the classifier
+    states suspected/confirmed/clearing/discarded); ``basestation_id`` /
     ``node_id`` narrow the scope. Returns ``(rows, total)``.
     """
     from app.models.network_monitoring import OutageIncident
 
+    # The debounced-real active set: operator open + classifier confirmed/clearing.
+    _ACTIVE_STATUSES = ("open", "confirmed", "clearing")
+    _NARROWABLE_STATUSES = (
+        "open",
+        "resolved",
+        "suspected",
+        "confirmed",
+        "clearing",
+        "discarded",
+    )
     query = session.query(OutageIncident)
-    if status in ("open", "resolved"):
+    if status in _NARROWABLE_STATUSES:
         query = query.filter(OutageIncident.status == status)
     else:
         cutoff = datetime.now(UTC) - timedelta(hours=max(resolved_within_hours, 0))
         query = query.filter(
             or_(
-                OutageIncident.status == "open",
+                OutageIncident.status.in_(_ACTIVE_STATUSES),
                 OutageIncident.resolved_at >= cutoff,
             )
         )

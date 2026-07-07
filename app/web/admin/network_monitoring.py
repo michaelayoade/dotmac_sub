@@ -281,7 +281,10 @@ def outages_console(request: Request, db: Session = Depends(get_db)):
         list_fdh_cabinets,
         list_network_nodes,
     )
-    from app.services.topology.outage import is_stale_open, list_open_incidents
+    from app.services.topology.outage import (
+        is_stale_open,
+        list_operator_open_incidents,
+    )
     from app.services.topology.reachability import reachability_overview
 
     context = _base_context(request, db, active_page="monitoring")
@@ -292,7 +295,7 @@ def outages_console(request: Request, db: Session = Depends(get_db)):
     context["fdh_cabinets"] = list_fdh_cabinets(db)
     context["network_nodes"] = list_network_nodes(db)
     rows = []
-    for inc in list_open_incidents(db):
+    for inc in list_operator_open_incidents(db):
         if inc.basestation_id is not None:
             pop = db.get(PopSite, inc.basestation_id)
             target = f"BTS: {pop.name}" if pop else "BTS"
@@ -383,12 +386,21 @@ def detected_outages_console(
     node_id: str | None = None,
     db: Session = Depends(get_db),
 ):
-    """Classifier-driven outage console (design §P4): what is ACTUALLY down now,
-    from the P1/P2/P3 engines — no operator declaration. Optional ``node_id``
-    drills into one failure domain (per-customer P2 verdicts + P3 branch
-    alerts)."""
+    """Classifier-driven outage console (design §P4a).
+
+    PRIMARY source is the PERSISTED, debounced classifier incidents from the
+    §7.6 reconcile loop (suspected/confirmed/clearing) — the debounced truth,
+    not the raw live-computed verdict. The live P1/P2/P3 verdict is kept as a
+    clearly-separate SECONDARY "candidates" view (raw, un-debounced). Optional
+    ``node_id`` drills into one failure domain (per-customer P2 verdicts + P3
+    branch alerts). No operator declaration, no notification sending here."""
     import uuid as _uuid
 
+    from app.models.network_monitoring import NetworkDevice, PopSite
+    from app.services.topology.outage import (
+        list_classifier_incidents,
+        mttr_so_far_seconds,
+    )
     from app.services.topology.outage_console import (
         active_outages,
         network_health_summary,
@@ -396,6 +408,38 @@ def detected_outages_console(
     )
 
     context = _base_context(request, db, active_page="monitoring")
+
+    # Primary: persisted debounced classifier incidents (newest first).
+    incident_rows = []
+    for inc in list_classifier_incidents(db):
+        node = (
+            db.get(NetworkDevice, inc.root_node_id)
+            if inc.root_node_id is not None
+            else None
+        )
+        basestation = None
+        if inc.basestation_id is not None:
+            basestation = db.get(PopSite, inc.basestation_id)
+        elif node is not None and node.pop_site_id is not None:
+            basestation = db.get(PopSite, node.pop_site_id)
+        incident_rows.append(
+            {
+                "incident": inc,
+                "state": inc.status,
+                "detection_source": inc.detection_source,
+                "affected_count": inc.affected_count,
+                "confidence": inc.confidence,
+                "classification": inc.classification,
+                "node_name": getattr(node, "name", None),
+                "basestation_name": getattr(basestation, "name", None),
+                "suspected_at": inc.suspected_at,
+                "confirmed_at": inc.confirmed_at,
+                "mttr_so_far_seconds": mttr_so_far_seconds(inc),
+            }
+        )
+    context["classifier_incidents"] = incident_rows
+
+    # Secondary: raw live-computed candidates (un-debounced) + self-heal queue.
     context["summary"] = network_health_summary(db)
     context["active"] = active_outages(db)
     detail = None
