@@ -1868,7 +1868,10 @@ def test_topology_graph_builds_link_states_from_interface_metrics(db_session, po
     data = network_topology_service.list_nodes_and_edges(db_session)
     assert data["stats"]["node_count"] >= 2
     assert data["stats"]["edge_count"] >= 1
-    assert any(edge["util_state"] == "warning" for edge in data["edges"])
+    edge = next(edge for edge in data["edges"] if edge["id"] == str(link.id))
+    assert edge["utilization_pct"] == 60.0
+    assert edge["util_state"] == "moderate"
+    assert edge["utilization_basis"] == "max_direction"
 
 
 def test_core_device_validate_values_rejects_parent_cycle(db_session):

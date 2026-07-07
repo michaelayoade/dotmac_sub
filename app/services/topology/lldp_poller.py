@@ -290,7 +290,8 @@ def poll_all(
             )
             continue
         elapsed = time.monotonic() - started
-        if elapsed > time_budget_seconds:
+        attempted_reads = stats["routers_polled"] + stats["routers_failed"]
+        if attempted_reads > 0 and elapsed > time_budget_seconds:
             if not budget_logged:
                 logger.warning(
                     "lldp_poll_time_budget_exhausted after %.0fs; "

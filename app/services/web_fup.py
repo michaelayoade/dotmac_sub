@@ -489,10 +489,10 @@ def preview_rule_impact(
     the rule would immediately throttle/block/notify the moment it is saved. This
     surfaces the known footgun (a bad threshold that hits everyone) before save.
 
-    Reuses the evaluator's threshold conversion (``_threshold_gb``) and the FUP
-    usage reader (``get_fup_usage_gb_async``); the ``>=`` comparison mirrors
-    ``evaluate_rules``. Direction is echoed back but — like enforcement — does not
-    change the current reading (the window is period-based, not per-direction).
+    Reuses the evaluator's threshold conversion and the FUP usage reader; the
+    ``>=`` comparison mirrors ``evaluate_rules``. Direction is echoed back but
+    -- like enforcement -- does not change the current reading (the window is
+    period-based, not per-direction).
     """
     from app.models.catalog import Subscription, SubscriptionStatus
     from app.services.fup_usage import get_fup_usage_gb_async, period_value
@@ -537,17 +537,27 @@ def preview_rule_impact(
 
     now = datetime.now(UTC)
 
-    async def _resolve() -> list:
-        # Sequential (the sync Session is not concurrency-safe) but a single
-        # event loop for the whole scan rather than one per subscriber.
-        return [await get_fup_usage_gb_async(db, sub, period, now=now) for sub in subs]
+    if period == "monthly":
+        from app.services.usage_summary import _current_bucket_used_gb
 
-    windows = asyncio.run(_resolve())
+        used_values = [
+            float(_current_bucket_used_gb(db, sub.id) or 0.0) for sub in subs
+        ]
+    else:
+
+        async def _resolve() -> list:
+            # Sequential (the sync Session is not concurrency-safe) but a single
+            # event loop for the whole scan rather than one per subscriber.
+            return [
+                await get_fup_usage_gb_async(db, sub, period, now=now) for sub in subs
+            ]
+
+        windows = asyncio.run(_resolve())
+        used_values = [float(window.used_gb or 0.0) for window in windows]
 
     matched = 0
     sample: list[dict[str, object]] = []
-    for sub, window in zip(subs, windows, strict=True):
-        used = float(window.used_gb or 0.0)
+    for sub, used in zip(subs, used_values, strict=True):
         if used >= threshold_gb:
             matched += 1
             if len(sample) < sample_size:
