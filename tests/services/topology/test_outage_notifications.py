@@ -21,7 +21,11 @@ from app.models.network_monitoring import (
 )
 from app.models.subscriber import Subscriber
 from app.services.topology import outage_notifications
-from app.services.topology.outage import declare_outage
+from app.services.topology.outage import (
+    confirm_incident,
+    declare_outage,
+    open_classifier_incident,
+)
 from app.services.topology.outage_notifications import (
     dispatch_outage_notifications,
     plan_outage_notifications,
@@ -105,13 +109,35 @@ def _area_incident_with_customers(db, offer_id, n, *, opted_out_idx=()):
     return node, subs
 
 
+def _classifier_incident_with_customers(db, offer_id, n, *, opted_out_idx=()):
+    """N customers behind a confirmed classifier incident."""
+    olt, node = _olt_with_node(db)
+    subs = []
+    for i in range(n):
+        sub = _sub(db, offer_id, opted_out=(i in opted_out_idx))
+        _down_ont(db, sub.subscriber_id, olt.id)
+        subs.append(sub)
+    incident = open_classifier_incident(
+        db,
+        root_node=node,
+        affected_count=n,
+        confidence=0.9,
+        classification="node_outage",
+        now=NOW,
+    )
+    confirm_incident(db, incident, now=NOW)
+    return incident, node, subs
+
+
 # --- gating ----------------------------------------------------------------
 
 
 def test_disabled_dispatch_is_noop(db_session, catalog_offer):
-    _node, subs = _area_incident_with_customers(db_session, catalog_offer.id, 1)
+    inc, _node, subs = _classifier_incident_with_customers(
+        db_session, catalog_offer.id, 1
+    )
     out = dispatch_outage_notifications(
-        db_session, [s.id for s in subs], actor_id=ACTOR, now=NOW
+        db_session, [s.id for s in subs], actor_id=ACTOR, incident_id=inc.id, now=NOW
     )
     assert out["dispatched"] is False
     assert out["reason"] == "disabled"
@@ -120,9 +146,11 @@ def test_disabled_dispatch_is_noop(db_session, catalog_offer):
 
 def test_no_actor_is_noop(db_session, catalog_offer, monkeypatch):
     _enable(monkeypatch)
-    _node, subs = _area_incident_with_customers(db_session, catalog_offer.id, 1)
+    inc, _node, subs = _classifier_incident_with_customers(
+        db_session, catalog_offer.id, 1
+    )
     out = dispatch_outage_notifications(
-        db_session, [s.id for s in subs], actor_id=None, now=NOW
+        db_session, [s.id for s in subs], actor_id=None, incident_id=inc.id, now=NOW
     )
     assert out["dispatched"] is False
     assert out["reason"] == "no_actor"
@@ -140,9 +168,11 @@ def test_dispatch_emits_and_audits(db_session, catalog_offer, monkeypatch):
         "_emit",
         lambda s, t, tgt, subj, actor: calls.append((t, tgt.subscriber_id)) or True,
     )
-    _node, subs = _area_incident_with_customers(db_session, catalog_offer.id, 2)
+    inc, _node, subs = _classifier_incident_with_customers(
+        db_session, catalog_offer.id, 2
+    )
     out = dispatch_outage_notifications(
-        db_session, [s.id for s in subs], actor_id=ACTOR, now=NOW
+        db_session, [s.id for s in subs], actor_id=ACTOR, incident_id=inc.id, now=NOW
     )
     assert out["dispatched"] is True
     assert out["sent_total"] == 2
@@ -158,9 +188,11 @@ def test_delegates_to_notification_system(db_session, catalog_offer, monkeypatch
     import app.services.events as events_pkg
     from app.services.events.types import EventType
 
-    # Build the incident FIRST (declare_outage emits its own network.alert), then
+    # Build the incident FIRST (confirmation emits its own network.alert), then
     # start capturing so we only see the dispatch's emit.
-    _node, subs = _area_incident_with_customers(db_session, catalog_offer.id, 1)
+    inc, _node, subs = _classifier_incident_with_customers(
+        db_session, catalog_offer.id, 1
+    )
     seen = []
     monkeypatch.setattr(
         events_pkg,
@@ -168,7 +200,7 @@ def test_delegates_to_notification_system(db_session, catalog_offer, monkeypatch
         lambda db, et, payload, **kw: seen.append((et, payload, kw)),
     )
     dispatch_outage_notifications(
-        db_session, [s.id for s in subs], actor_id=ACTOR, now=NOW
+        db_session, [s.id for s in subs], actor_id=ACTOR, incident_id=inc.id, now=NOW
     )
     assert len(seen) == 1
     et, payload, kw = seen[0]
@@ -184,13 +216,21 @@ def test_delegates_to_notification_system(db_session, catalog_offer, monkeypatch
 def test_persisted_debounce_suppresses_repeat(db_session, catalog_offer, monkeypatch):
     _enable(monkeypatch)
     monkeypatch.setattr(outage_notifications, "_emit", lambda *a, **k: True)
-    _node, subs = _area_incident_with_customers(db_session, catalog_offer.id, 1)
+    inc, _node, subs = _classifier_incident_with_customers(
+        db_session, catalog_offer.id, 1
+    )
     ids = [s.id for s in subs]
-    first = dispatch_outage_notifications(db_session, ids, actor_id=ACTOR, now=NOW)
+    first = dispatch_outage_notifications(
+        db_session, ids, actor_id=ACTOR, incident_id=inc.id, now=NOW
+    )
     assert first["sent_total"] == 1
     # A minute later the persisted 'sent' row debounces the whole boundary.
     again = dispatch_outage_notifications(
-        db_session, ids, actor_id=ACTOR, now=NOW + timedelta(minutes=1)
+        db_session,
+        ids,
+        actor_id=ACTOR,
+        incident_id=inc.id,
+        now=NOW + timedelta(minutes=1),
     )
     assert again["sent_total"] == 0
     assert again["counts"]["skipped_debounce"] == 1
@@ -205,11 +245,11 @@ def test_optout_suppressed(db_session, catalog_offer, monkeypatch):
     monkeypatch.setattr(
         outage_notifications, "_emit", lambda *a, **k: calls.append(1) or True
     )
-    _node, subs = _area_incident_with_customers(
+    inc, _node, subs = _classifier_incident_with_customers(
         db_session, catalog_offer.id, 1, opted_out_idx=(0,)
     )
     out = dispatch_outage_notifications(
-        db_session, [s.id for s in subs], actor_id=ACTOR, now=NOW
+        db_session, [s.id for s in subs], actor_id=ACTOR, incident_id=inc.id, now=NOW
     )
     assert out["sent_total"] == 0
     assert out["counts"]["suppressed_optout"] == 1
@@ -227,6 +267,19 @@ def test_confidence_gate(db_session, catalog_offer):
     _olt, node = _olt_with_node(db_session)
     inc = _declare(db_session, node=node, declared_by="noc")
     assert _area_boundary_qualifies(db_session, inc.id, NOW) is True
+    clf, _clf_node, _subs = _classifier_incident_with_customers(
+        db_session, catalog_offer.id, 1
+    )
+    assert _area_boundary_qualifies(db_session, clf.id, NOW) is True
+    suspected = open_classifier_incident(
+        db_session,
+        root_node=_clf_node,
+        affected_count=1,
+        confidence=0.9,
+        classification="node_outage",
+        now=NOW,
+    )
+    assert _area_boundary_qualifies(db_session, suspected.id, NOW) is False
     # A healthy node id (not node_outage) -> does not qualify.
     _olt2, up_node = _olt_with_node(db_session, live_status="up")
     assert _area_boundary_qualifies(db_session, up_node.id, NOW) is False
@@ -239,9 +292,11 @@ def test_cap_enforced_with_audit(db_session, catalog_offer, monkeypatch):
     _enable(monkeypatch)
     monkeypatch.setattr(outage_notifications, "_max_per_run", lambda: 1)
     monkeypatch.setattr(outage_notifications, "_emit", lambda *a, **k: True)
-    _node, subs = _area_incident_with_customers(db_session, catalog_offer.id, 2)
+    inc, _node, subs = _classifier_incident_with_customers(
+        db_session, catalog_offer.id, 2
+    )
     out = dispatch_outage_notifications(
-        db_session, [s.id for s in subs], actor_id=ACTOR, now=NOW
+        db_session, [s.id for s in subs], actor_id=ACTOR, incident_id=inc.id, now=NOW
     )
     assert out["sent_total"] == 1
     assert out["counts"]["skipped_cap"] == 1  # remainder audited, not dropped
@@ -252,8 +307,12 @@ def test_cap_enforced_with_audit(db_session, catalog_offer, monkeypatch):
 
 def test_plan_preview_writes_nothing(db_session, catalog_offer, monkeypatch):
     _enable(monkeypatch)
-    _node, subs = _area_incident_with_customers(db_session, catalog_offer.id, 1)
-    plan = plan_outage_notifications(db_session, [s.id for s in subs], now=NOW)
+    inc, _node, subs = _classifier_incident_with_customers(
+        db_session, catalog_offer.id, 1
+    )
+    plan = plan_outage_notifications(
+        db_session, [s.id for s in subs], incident_id=inc.id, now=NOW
+    )
     assert plan["dispatched"] is False
     assert plan["would_send_total"] == 1
     assert plan["area_outages"][0]["qualifies"] is True
@@ -261,7 +320,27 @@ def test_plan_preview_writes_nothing(db_session, catalog_offer, monkeypatch):
 
 
 def test_plan_disabled_would_send_zero(db_session, catalog_offer):
-    _node, subs = _area_incident_with_customers(db_session, catalog_offer.id, 1)
-    plan = plan_outage_notifications(db_session, [s.id for s in subs], now=NOW)
+    inc, _node, subs = _classifier_incident_with_customers(
+        db_session, catalog_offer.id, 1
+    )
+    plan = plan_outage_notifications(
+        db_session, [s.id for s in subs], incident_id=inc.id, now=NOW
+    )
     assert plan["enabled"] is False
     assert plan["would_send_total"] == 0
+
+
+def test_enabled_dispatch_without_confirmed_classifier_incident_is_noop(
+    db_session, catalog_offer, monkeypatch
+):
+    _enable(monkeypatch)
+    monkeypatch.setattr(outage_notifications, "_emit", lambda *a, **k: True)
+    _node, subs = _area_incident_with_customers(db_session, catalog_offer.id, 1)
+
+    out = dispatch_outage_notifications(
+        db_session, [s.id for s in subs], actor_id=ACTOR, now=NOW
+    )
+
+    assert out["dispatched"] is False
+    assert out["reason"] == "invalid_incident"
+    assert _count(db_session) == 0

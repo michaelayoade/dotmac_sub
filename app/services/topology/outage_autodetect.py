@@ -418,7 +418,11 @@ def evaluate_outages(
                     )
             if (
                 open_incident_for_path(
-                    session, candidate, dist=dist, adjacency=adjacency
+                    session,
+                    candidate,
+                    dist=dist,
+                    adjacency=adjacency,
+                    include_suspected_classifier=True,
                 )
                 is not None
             ):

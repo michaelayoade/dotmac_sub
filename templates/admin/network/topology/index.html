@@ -200,12 +200,23 @@ document.addEventListener('DOMContentLoaded', function () {
     }
     try { if (typeof cytoscapeDagre !== 'undefined') { cytoscape.use(cytoscapeDagre); } } catch (e) {}
 
-    var STATUS = {online:'#10b981', up:'#10b981', degraded:'#f59e0b', maintenance:'#6366f1', offline:'#ef4444', down:'#ef4444', unknown:'#94a3b8'};
+    var STATUS = {online:'#10b981', up:'#10b981', degraded:'#f59e0b', maintenance:'#6366f1', problem:'#f59e0b', offline:'#ef4444', down:'#ef4444', unknown:'#94a3b8'};
     var TIER = {core:0, aggregation:1, distribution:2, access:3, edge:4, cpe:5};
     function tierOf(role) { var t = TIER[(role || '').toLowerCase()]; return (t === undefined) ? 3 : t; }
     function statusColor(s) { return STATUS[s] || STATUS.unknown; }
     function linkWidth(s) { return s === 'down' ? 5 : (s === 'degraded' ? 3 : 2.5); }
     function fmtCap(bps) { return bps ? Math.round(bps / 1e6) + ' Mbps' : '—'; }
+    function makeEl(tag, className, text) {
+        var el = document.createElement(tag);
+        if (className) el.className = className;
+        if (text !== undefined && text !== null) el.textContent = String(text);
+        return el;
+    }
+    function appendCell(row, className, text) {
+        var td = makeEl('td', className, text);
+        row.appendChild(td);
+        return td;
+    }
 
     var tierById = {};
     graphData.nodes.forEach(function (n) { tierById[n.id] = tierOf(n.role); });
@@ -264,15 +275,23 @@ document.addEventListener('DOMContentLoaded', function () {
         cy.elements().removeClass('sel hi'); e.addClass('hi');
         var panel = document.getElementById('nodeDetail');
         document.getElementById('nodeDetailTitle').textContent = d.sdev + ' ↔ ' + d.tdev;
-        document.getElementById('nodeDetailContent').innerHTML =
-            '<div class="flex flex-wrap items-center gap-3 text-sm">'
-            + '<span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold text-white" style="background:' + statusColor(d.status) + '">' + d.status + '</span>'
-            + '<span class="text-slate-600 dark:text-slate-300">' + (d.linkrole || 'link') + ' · ' + (d.medium || '—') + '</span>'
-            + '<span class="text-slate-600 dark:text-slate-300">Capacity: ' + fmtCap(d.capacity) + '</span>'
-            + '<span class="text-slate-600 dark:text-slate-300">Utilization: ' + (d.util === '' ? '—' : d.util + '%') + '</span>'
-            + (d.bundle ? '<span class="text-slate-500">bundle: ' + d.bundle + '</span>' : '')
-            + '</div><div class="mt-2 text-xs text-slate-400">Parallel / bonded links fan out; each carries its own status.</div>'
-            + '<div class="mt-3"><a href="/admin/network/topology/links/' + d.id + '/edit" class="text-blue-600 hover:underline text-sm dark:text-blue-400">Edit link</a></div>';
+        var content = document.getElementById('nodeDetailContent');
+        content.textContent = '';
+        var meta = makeEl('div', 'flex flex-wrap items-center gap-3 text-sm');
+        var badge = makeEl('span', 'inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold text-white', d.status);
+        badge.style.background = statusColor(d.status);
+        meta.appendChild(badge);
+        meta.appendChild(makeEl('span', 'text-slate-600 dark:text-slate-300', (d.linkrole || 'link') + ' · ' + (d.medium || '—')));
+        meta.appendChild(makeEl('span', 'text-slate-600 dark:text-slate-300', 'Capacity: ' + fmtCap(d.capacity)));
+        meta.appendChild(makeEl('span', 'text-slate-600 dark:text-slate-300', 'Utilization: ' + (d.util === '' ? '—' : d.util + '%')));
+        if (d.bundle) meta.appendChild(makeEl('span', 'text-slate-500', 'bundle: ' + d.bundle));
+        content.appendChild(meta);
+        content.appendChild(makeEl('div', 'mt-2 text-xs text-slate-400', 'Parallel / bonded links fan out; each carries its own status.'));
+        var editWrap = makeEl('div', 'mt-3');
+        var edit = makeEl('a', 'text-blue-600 hover:underline text-sm dark:text-blue-400', 'Edit link');
+        edit.href = '/admin/network/topology/links/' + encodeURIComponent(d.id) + '/edit';
+        editWrap.appendChild(edit);
+        content.appendChild(editWrap);
         panel.classList.remove('hidden');
     });
 
@@ -290,19 +309,22 @@ document.addEventListener('DOMContentLoaded', function () {
             .then(function (r) { return r.json(); })
             .then(function (data) {
                 var panel = document.getElementById('nodeDetail');
-                document.getElementById('nodeDetailTitle').textContent = data.device.name + ' (' + data.device.status + ')';
+                document.getElementById('nodeDetailTitle').textContent = data.device.name + ' (' + data.device.live_status + ')';
                 var content = document.getElementById('nodeDetailContent');
                 content.textContent = '';
                 var info = document.createElement('p');
                 info.className = 'text-sm text-slate-500 mb-3';
-                info.textContent = 'POP: ' + data.device.pop_site_name + ' | Location: ' + data.device.location_label + ' | IP: ' + data.device.ip + ' | Vendor: ' + data.device.vendor + ' | Links: ' + data.link_count + ' | Interfaces: ' + data.interface_count;
+                info.textContent = 'POP: ' + data.device.pop_site_name + ' | Location: ' + data.device.location_label + ' | IP: ' + data.device.ip + ' | Vendor: ' + data.device.vendor + ' | Inventory: ' + data.device.inventory_status + ' | Links: ' + data.link_count + ' | Interfaces: ' + data.interface_count;
                 content.appendChild(info);
 
                 var actions = document.createElement('div');
                 actions.className = 'mb-4 flex flex-wrap items-center gap-2';
-                actions.innerHTML =
-                    '<a href="/admin/network/core-devices/' + data.device.id + '" class="inline-flex items-center rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">Open Device</a>' +
-                    '<a href="/admin/network/core-devices/' + data.device.id + '/edit" class="inline-flex items-center rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">Edit Device</a>';
+                var openDevice = makeEl('a', 'inline-flex items-center rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700', 'Open Device');
+                openDevice.href = '/admin/network/core-devices/' + encodeURIComponent(data.device.id);
+                var editDevice = makeEl('a', 'inline-flex items-center rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700', 'Edit Device');
+                editDevice.href = '/admin/network/core-devices/' + encodeURIComponent(data.device.id) + '/edit';
+                actions.appendChild(openDevice);
+                actions.appendChild(editDevice);
                 content.appendChild(actions);
 
                 if (data.device.snmp_enabled === false) {
@@ -339,7 +361,10 @@ document.addEventListener('DOMContentLoaded', function () {
                         var tr = document.createElement('tr');
                         tr.className = 'border-t border-slate-100 dark:border-slate-700';
                         var utilText = l.utilization_pct !== null ? l.utilization_pct + '%' : '—';
-                        tr.innerHTML = '<td class="py-2 pr-4 font-medium">' + peer + '</td><td class="pr-4 font-mono text-xs">' + (iface || '—') + '</td><td class="pr-4 text-right">' + l.role + '</td><td class="text-right font-bold">' + utilText + '</td>';
+                        appendCell(tr, 'py-2 pr-4 font-medium', peer);
+                        appendCell(tr, 'pr-4 font-mono text-xs', iface || '—');
+                        appendCell(tr, 'pr-4 text-right', l.role);
+                        appendCell(tr, 'text-right font-bold', utilText);
                         tbody.appendChild(tr);
                     });
                     table.appendChild(tbody);
@@ -368,7 +393,10 @@ document.addEventListener('DOMContentLoaded', function () {
                         var tr = document.createElement('tr');
                         tr.className = 'border-t border-slate-100 dark:border-slate-700';
                         var speedText = i.speed_mbps ? i.speed_mbps + ' Mbps' : '—';
-                        tr.innerHTML = '<td class="py-2 pr-4 font-mono text-xs">' + i.name + '</td><td class="pr-4">' + (i.status || 'unknown') + '</td><td class="pr-4 text-right">' + speedText + '</td><td class="text-right">' + (i.monitored ? 'Yes' : 'No') + '</td>';
+                        appendCell(tr, 'py-2 pr-4 font-mono text-xs', i.name);
+                        appendCell(tr, 'pr-4', i.status || 'unknown');
+                        appendCell(tr, 'pr-4 text-right', speedText);
+                        appendCell(tr, 'text-right', i.monitored ? 'Yes' : 'No');
                         ifaceBody.appendChild(tr);
                     });
                     ifaceTable.appendChild(ifaceBody);

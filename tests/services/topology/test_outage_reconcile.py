@@ -193,6 +193,26 @@ def test_suspected_opens_on_node_outage(db_session, catalog_offer):
     assert counters["confirmed"] == 0
 
 
+def test_lifecycle_event_payload_carries_backward_compatible_provenance(
+    db_session, monkeypatch
+):
+    import app.services.events as events_pkg
+
+    payloads = []
+    monkeypatch.setattr(
+        events_pkg,
+        "emit_event",
+        lambda session, event_type, payload, **kw: payloads.append(payload),
+    )
+    node = _node(db_session, "event-node", live_status="down")
+
+    outage_svc.open_classifier_incident(db_session, root_node=node, now=NOW)
+
+    payload = payloads[-1]
+    assert payload["detection_source"] == "manual"  # legacy auto/manual field
+    assert payload["provenance"] == "classifier"
+
+
 # --- false-positive suppression: suspected -> discarded --------------------
 
 

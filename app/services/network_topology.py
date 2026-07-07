@@ -61,7 +61,7 @@ class TopologyLinks:
         topology_group: str | None = None,
         bundle_key: str | None = None,
         is_active: bool | None = True,
-        limit: int = 500,
+        limit: int | None = 500,
         offset: int = 0,
     ) -> list[NetworkTopologyLink]:
         stmt = select(NetworkTopologyLink).options(
@@ -88,11 +88,9 @@ class TopologyLinks:
             stmt = stmt.where(NetworkTopologyLink.bundle_key == bundle_key)
         if is_active is not None:
             stmt = stmt.where(NetworkTopologyLink.is_active.is_(is_active))
-        stmt = (
-            stmt.order_by(NetworkTopologyLink.created_at.desc())
-            .offset(offset)
-            .limit(limit)
-        )
+        stmt = stmt.order_by(NetworkTopologyLink.created_at.desc()).offset(offset)
+        if limit is not None:
+            stmt = stmt.limit(limit)
         return list(db.scalars(stmt).unique().all())
 
     @staticmethod
@@ -213,8 +211,10 @@ def list_nodes_and_edges(
         }
     """
     links = TopologyLinks.list(
-        db, topology_group=topology_group, is_active=True, limit=2000
+        db, topology_group=topology_group, is_active=True, limit=None
     )
+
+    selected_pop_id = coerce_uuid(pop_site_id) if pop_site_id else None
 
     # Collect unique device IDs
     device_ids: set[UUID] = set()
@@ -230,9 +230,26 @@ def list_nodes_and_edges(
             .options(joinedload(NetworkDevice.pop_site))
             .where(NetworkDevice.id.in_(device_ids))
         )
-        if pop_site_id:
-            stmt = stmt.where(NetworkDevice.pop_site_id == coerce_uuid(pop_site_id))
-        devices = list(db.scalars(stmt).all())
+        linked_devices = list(db.scalars(stmt).all())
+        if selected_pop_id:
+            selected_ids = {
+                dev.id for dev in linked_devices if dev.pop_site_id == selected_pop_id
+            }
+            visible_links = [
+                link
+                for link in links
+                if link.source_device_id in selected_ids
+                or link.target_device_id in selected_ids
+            ]
+            visible_device_ids = {
+                endpoint_id
+                for link in visible_links
+                for endpoint_id in (link.source_device_id, link.target_device_id)
+            }
+            devices = [dev for dev in linked_devices if dev.id in visible_device_ids]
+        else:
+            visible_links = links
+            devices = linked_devices
     else:
         stmt = (
             select(NetworkDevice)
@@ -252,8 +269,9 @@ def list_nodes_and_edges(
             .limit(500)
         )
         if pop_site_id:
-            stmt = stmt.where(NetworkDevice.pop_site_id == coerce_uuid(pop_site_id))
+            stmt = stmt.where(NetworkDevice.pop_site_id == selected_pop_id)
         devices = list(db.scalars(stmt).all())
+        visible_links = []
 
     allowed_device_ids = {dev.id for dev in devices}
     nodes = []
@@ -267,11 +285,19 @@ def list_nodes_and_edges(
             ]
             if part
         ]
+        inventory_status = dev.status.value if dev.status else "unknown"
+        live_status = (dev.live_status or "").strip().lower() or None
+        graph_status = live_status or inventory_status
         nodes.append(
             {
                 "id": str(dev.id),
                 "name": dev.name or str(dev.id)[:8],
-                "status": dev.status.value if dev.status else "unknown",
+                "status": graph_status,
+                "inventory_status": inventory_status,
+                "live_status": live_status or "unknown",
+                "live_status_at": dev.live_status_at.isoformat()
+                if dev.live_status_at
+                else None,
                 "role": dev.role.value if dev.role else "",
                 "device_type": str(dev.device_type or ""),
                 "vendor": str(dev.vendor or ""),
@@ -281,31 +307,44 @@ def list_nodes_and_edges(
                 "location_label": ", ".join(location_parts)
                 if location_parts
                 else pop_name,
+                "is_external": bool(
+                    selected_pop_id and dev.pop_site_id != selected_pop_id
+                ),
             }
         )
 
     # Build edge list
     edges = []
     bundles: dict[str, list[str]] = {}
-    for link in links:
+    metrics_by_interface = (
+        _latest_interface_metrics_for_links(db, visible_links)
+        if include_utilization
+        else {}
+    )
+    for link in visible_links:
         if allowed_device_ids and (
             link.source_device_id not in allowed_device_ids
             or link.target_device_id not in allowed_device_ids
         ):
             continue
-        edge = _link_to_edge(db, link, include_utilization=include_utilization)
+        edge = _link_to_edge(
+            db,
+            link,
+            include_utilization=include_utilization,
+            metrics_by_interface=metrics_by_interface,
+        )
         edges.append(edge)
         if link.bundle_key:
             bundles.setdefault(link.bundle_key, []).append(str(link.id))
 
     site_summaries: dict[str, dict] = {}
     for node in nodes:
-        site_key = node["pop_site_name"] or "Unassigned"
+        site_key = str(node["pop_site_name"] or "Unassigned")
         entry = site_summaries.setdefault(
             site_key,
             {
                 "pop_site_name": site_key,
-                "location_label": node["location_label"] or site_key,
+                "location_label": str(node["location_label"] or site_key),
                 "node_count": 0,
             },
         )
@@ -324,6 +363,7 @@ def list_nodes_and_edges(
             "edge_count": len(edges),
             "bundle_count": len(bundles),
             "site_count": len(site_summaries),
+            "boundary_node_count": sum(1 for node in nodes if node["is_external"]),
         },
     }
 
@@ -359,6 +399,7 @@ def _link_to_edge(
     link: NetworkTopologyLink,
     *,
     include_utilization: bool = True,
+    metrics_by_interface: dict | None = None,
 ) -> dict:
     """Convert a topology link to a graph edge dict."""
     src_iface_name = link.source_interface.name if link.source_interface else None
@@ -383,7 +424,9 @@ def _link_to_edge(
     }
 
     if include_utilization:
-        util = compute_link_utilization(db, link)
+        util = compute_link_utilization(
+            db, link, metrics_by_interface=metrics_by_interface
+        )
         edge.update(util)
 
     return edge
@@ -392,7 +435,50 @@ def _link_to_edge(
 # ── Utilization ──────────────────────────────────────────────────────
 
 
-def compute_link_utilization(db: Session, link: NetworkTopologyLink) -> dict:
+def _latest_interface_metrics_for_links(
+    db: Session, links: list[NetworkTopologyLink]
+) -> dict:
+    iface_ids = {
+        iface_id
+        for link in links
+        for iface_id in (link.source_interface_id, link.target_interface_id)
+        if iface_id is not None
+    }
+    if not iface_ids:
+        return {}
+
+    ranked = (
+        select(
+            DeviceMetric.interface_id.label("interface_id"),
+            DeviceMetric.metric_type.label("metric_type"),
+            DeviceMetric.value.label("value"),
+            func.row_number()
+            .over(
+                partition_by=(DeviceMetric.interface_id, DeviceMetric.metric_type),
+                order_by=DeviceMetric.recorded_at.desc(),
+            )
+            .label("rn"),
+        )
+        .where(
+            DeviceMetric.interface_id.in_(iface_ids),
+            DeviceMetric.metric_type.in_((MetricType.rx_bps, MetricType.tx_bps)),
+        )
+        .subquery()
+    )
+    rows = db.execute(
+        select(ranked.c.interface_id, ranked.c.metric_type, ranked.c.value).where(
+            ranked.c.rn == 1
+        )
+    ).all()
+    metrics: dict = {}
+    for interface_id, metric_type, value in rows:
+        metrics.setdefault(interface_id, {})[metric_type] = value
+    return metrics
+
+
+def compute_link_utilization(
+    db: Session, link: NetworkTopologyLink, *, metrics_by_interface: dict | None = None
+) -> dict:
     """Compute current link utilization from interface metrics.
 
     Returns dict with rx_bps, tx_bps, utilization_pct, util_state.
@@ -401,28 +487,16 @@ def compute_link_utilization(db: Session, link: NetworkTopologyLink) -> dict:
     rx_bps: float | None = None
     tx_bps: float | None = None
 
+    if metrics_by_interface is None:
+        metrics_by_interface = _latest_interface_metrics_for_links(db, [link])
+
     # Try source interface metrics first
     for iface_id in (link.source_interface_id, link.target_interface_id):
         if not iface_id:
             continue
-        rx_metric = db.scalars(
-            select(DeviceMetric.value)
-            .where(
-                DeviceMetric.interface_id == iface_id,
-                DeviceMetric.metric_type == MetricType.rx_bps,
-            )
-            .order_by(DeviceMetric.recorded_at.desc())
-            .limit(1)
-        ).first()
-        tx_metric = db.scalars(
-            select(DeviceMetric.value)
-            .where(
-                DeviceMetric.interface_id == iface_id,
-                DeviceMetric.metric_type == MetricType.tx_bps,
-            )
-            .order_by(DeviceMetric.recorded_at.desc())
-            .limit(1)
-        ).first()
+        iface_metrics = metrics_by_interface.get(iface_id, {})
+        rx_metric = iface_metrics.get(MetricType.rx_bps, iface_metrics.get("rx_bps"))
+        tx_metric = iface_metrics.get(MetricType.tx_bps, iface_metrics.get("tx_bps"))
         if rx_metric is not None:
             rx_bps = float(rx_metric)
         if tx_metric is not None:
@@ -438,13 +512,19 @@ def compute_link_utilization(db: Session, link: NetworkTopologyLink) -> dict:
             "util_state": "unknown",
         }
 
-    total_bps = (rx_bps or 0) + (tx_bps or 0)
+    dominant_bps = max(rx_bps or 0, tx_bps or 0)
     capacity = link.capacity_bps or 0
 
     if capacity > 0:
-        util_pct = round((total_bps / capacity) * 100, 1)
+        util_pct = round((dominant_bps / capacity) * 100, 1)
     else:
         util_pct = None
+    if rx_bps is not None and (tx_bps is None or rx_bps >= tx_bps):
+        dominant_direction = "rx"
+    elif tx_bps is not None:
+        dominant_direction = "tx"
+    else:
+        dominant_direction = None
 
     # Classify utilization state
     if util_pct is None:
@@ -462,6 +542,8 @@ def compute_link_utilization(db: Session, link: NetworkTopologyLink) -> dict:
         "rx_bps": rx_bps,
         "tx_bps": tx_bps,
         "utilization_pct": util_pct,
+        "utilization_basis": "max_direction",
+        "dominant_direction": dominant_direction,
         "util_state": util_state,
     }
 
@@ -534,6 +616,11 @@ def node_summary(db: Session, device_id: str) -> dict:
             "id": str(device.id),
             "name": device.name,
             "status": device.status.value if device.status else "unknown",
+            "inventory_status": device.status.value if device.status else "unknown",
+            "live_status": device.live_status or "unknown",
+            "live_status_at": device.live_status_at.isoformat()
+            if device.live_status_at
+            else None,
             "ip": str(device.mgmt_ip or device.hostname or ""),
             "vendor": str(device.vendor or ""),
             "snmp_enabled": bool(device.snmp_enabled),
@@ -574,7 +661,6 @@ def get_form_options(db: Session) -> dict:
             select(NetworkDevice)
             .where(NetworkDevice.is_active.is_(True))
             .order_by(NetworkDevice.name.asc())
-            .limit(200)
         ).all()
     )
     return {

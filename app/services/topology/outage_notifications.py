@@ -49,6 +49,11 @@ from app.services.topology import connection_status
 from app.services.topology.affected import affected_customers
 from app.services.topology.connection_status import STATE_CONNECTED, STATE_OUTAGE
 from app.services.topology.health_classifier import NODE_OUTAGE, localize_outage
+from app.services.topology.outage import (
+    CLASSIFIER_CUSTOMER_VISIBLE_STATUSES,
+    CLASSIFIER_SOURCE,
+    OPERATOR_SOURCE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +78,7 @@ _SKIPPED_DEBOUNCE = "skipped_debounce"
 _SKIPPED_LOW_CONFIDENCE = "skipped_low_confidence"
 _SKIPPED_CAP = "skipped_cap"
 _SKIPPED_NO_RECIPIENT = "skipped_no_recipient"
+_SKIPPED_INVALID_INCIDENT = "skipped_invalid_incident"
 
 
 def _enabled() -> bool:
@@ -200,17 +206,24 @@ def _area_boundary_qualifies(
 ) -> bool:
     """Confidence gate for a real area send (design §3).
 
-    Trusted if the boundary is an OPERATOR-declared open incident (a human
-    already confirmed it). Otherwise it must be an INFERRED, localized
-    ``node_outage`` boundary with **high** confidence (a live peer proves it's
-    localized, not a wider fault) and at least ``NOTIFY_AREA_MIN_AFFECTED``
-    customers — so a total blackout with no survivors needs an operator to
-    declare it before mass email goes out, while a localized branch fault with
-    clear survivors can qualify automatically.
+    Trusted if the boundary is an OPERATOR-declared open incident or a debounced
+    classifier incident (``confirmed``/``clearing``). Otherwise it must be an
+    INFERRED, localized ``node_outage`` boundary with **high** confidence.
     """
     incident = session.get(OutageIncident, boundary_id)
-    if incident is not None and getattr(incident, "status", None) == "open":
-        return True
+    if incident is not None:
+        if (
+            incident.detection_source == OPERATOR_SOURCE
+            and getattr(incident, "status", None) == "open"
+        ):
+            return True
+        if (
+            incident.detection_source == CLASSIFIER_SOURCE
+            and getattr(incident, "status", None)
+            in CLASSIFIER_CUSTOMER_VISIBLE_STATUSES
+        ):
+            return True
+        return False
     node = session.get(NetworkDevice, boundary_id)
     if node is None:
         return False
@@ -223,10 +236,31 @@ def _area_boundary_qualifies(
     return loc["affected_online_before"] >= _area_min_affected()
 
 
+def _notification_incident(
+    session: Session, incident_id: uuid.UUID | str | None
+) -> OutageIncident | None:
+    """Classifier incident allowed to send customer outage notifications."""
+    if incident_id is None:
+        return None
+    try:
+        iid = uuid.UUID(str(incident_id))
+    except (ValueError, TypeError):
+        return None
+    incident = session.get(OutageIncident, iid)
+    if incident is None:
+        return None
+    if incident.detection_source != CLASSIFIER_SOURCE:
+        return None
+    if incident.status not in CLASSIFIER_CUSTOMER_VISIBLE_STATUSES:
+        return None
+    return incident
+
+
 def plan_outage_notifications(
     session: Session,
     subscription_ids,
     *,
+    incident_id: uuid.UUID | str | None = None,
     now: datetime | None = None,
 ) -> dict:
     """Read-only preview of what a dispatch WOULD do (no emit, no audit write).
@@ -237,7 +271,11 @@ def plan_outage_notifications(
     """
     now = now or datetime.now(UTC)
     enabled = _enabled()
+    incident = _notification_incident(session, incident_id)
     area_map, per_map = _collect(session, subscription_ids, now)
+    if incident_id is not None:
+        area_map = {incident.id: area_map.get(incident.id, [])} if incident else {}
+        per_map = {}
 
     would = 0
     area_out = []
@@ -284,6 +322,8 @@ def plan_outage_notifications(
         "dry_run": True,
         "dispatched": False,
         "generated_at": now.isoformat(),
+        "incident_id": str(incident.id) if incident is not None else None,
+        "incident_valid": incident is not None if incident_id is not None else None,
         "area_outages": area_out,
         "per_customer": per_out,
         "would_send_total": would,
@@ -336,6 +376,7 @@ def dispatch_outage_notifications(
     subscription_ids,
     *,
     actor_id: uuid.UUID | None,
+    incident_id: uuid.UUID | str | None = None,
     now: datetime | None = None,
 ) -> dict:
     """Actually dispatch outage notifications — hard-gated, idempotent, audited.
@@ -349,12 +390,25 @@ def dispatch_outage_notifications(
     """
     now = now or datetime.now(UTC)
     if not _enabled() or actor_id is None:
-        plan = plan_outage_notifications(session, subscription_ids, now=now)
+        plan = plan_outage_notifications(
+            session, subscription_ids, incident_id=incident_id, now=now
+        )
         plan["dispatched"] = False
         plan["reason"] = "disabled" if not _enabled() else "no_actor"
         return plan
 
+    incident = _notification_incident(session, incident_id)
+    if incident is None:
+        plan = plan_outage_notifications(
+            session, subscription_ids, incident_id=incident_id, now=now
+        )
+        plan["dispatched"] = False
+        plan["reason"] = "invalid_incident"
+        return plan
+
     area_map, per_map = _collect(session, subscription_ids, now)
+    area_map = {incident.id: area_map.get(incident.id, [])}
+    per_map = {}
     cap = _max_per_run()
     batch = _batch_size()
     counts = {
@@ -365,6 +419,7 @@ def dispatch_outage_notifications(
         _SKIPPED_LOW_CONFIDENCE: 0,
         _SKIPPED_CAP: 0,
         _SKIPPED_NO_RECIPIENT: 0,
+        _SKIPPED_INVALID_INCIDENT: 0,
     }
     sent = 0
 
@@ -462,6 +517,7 @@ def dispatch_outage_notifications(
         "enabled": True,
         "dispatched": True,
         "generated_at": now.isoformat(),
+        "incident_id": str(incident.id),
         "sent_total": counts[_SENT],
         "counts": counts,
     }
