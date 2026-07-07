@@ -129,6 +129,57 @@ def test_overpayment_settles_invoice_and_keeps_surplus(db_session):
     assert get_account_credit_balance(db_session, str(sub.id)) == Decimal("10700.00")
 
 
+def test_splynx_imported_payment_credit_is_not_reused_for_settlement(db_session):
+    """Imported legacy payments must not fund later local invoices.
+
+    They are historical evidence for the migrated deposit position. Treating
+    their unallocated ledger credit as payment-backed room lets current
+    settlement paths allocate the same old receipt to later invoices.
+    """
+    sub = _native_subscriber(db_session, suffix="SplynxCredit")
+    payment = Payment(
+        account_id=sub.id,
+        amount=Decimal("20000.00"),
+        currency="NGN",
+        status=PaymentStatus.succeeded,
+        splynx_payment_id=123456,
+        paid_at=datetime(2024, 1, 10, tzinfo=UTC),
+    )
+    db_session.add(payment)
+    db_session.flush()
+    db_session.add(
+        LedgerEntry(
+            account_id=sub.id,
+            payment_id=payment.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.payment,
+            amount=Decimal("20000.00"),
+            currency="NGN",
+            memo="imported Splynx unallocated credit",
+        )
+    )
+    inv = _open_invoice(db_session, sub, Decimal("20000.00"))
+
+    projected = project_settlement(db_session, str(sub.id))
+    result = settle_open_invoices_from_credit(db_session, str(sub.id))
+    db_session.commit()
+
+    assert projected.applied == Decimal("0.00")
+    assert projected.unbacked_credit == Decimal("20000.00")
+    assert result.applied == Decimal("0.00")
+    assert result.unbacked_credit == Decimal("20000.00")
+    assert (
+        db_session.query(PaymentAllocation)
+        .filter(PaymentAllocation.payment_id == payment.id)
+        .count()
+        == 0
+    )
+    db_session.refresh(inv)
+    assert inv.status == InvoiceStatus.issued
+    assert inv.balance_due == Decimal("20000.00")
+    assert get_account_credit_balance(db_session, str(sub.id)) == Decimal("20000.00")
+
+
 def test_oldest_invoice_settled_first(db_session):
     sub = _native_subscriber(db_session, suffix="Order")
     _sitting_credit_payment(db_session, sub, Decimal("25000.00"))
