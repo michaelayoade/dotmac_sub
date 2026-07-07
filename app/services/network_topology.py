@@ -339,12 +339,12 @@ def list_nodes_and_edges(
 
     site_summaries: dict[str, dict] = {}
     for node in nodes:
-        site_key = node["pop_site_name"] or "Unassigned"
+        site_key = str(node["pop_site_name"] or "Unassigned")
         entry = site_summaries.setdefault(
             site_key,
             {
                 "pop_site_name": site_key,
-                "location_label": node["location_label"] or site_key,
+                "location_label": str(node["location_label"] or site_key),
                 "node_count": 0,
             },
         )

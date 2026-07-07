@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 from sqlalchemy.orm import Session
 
 from app.services import network_topology as topology_service
@@ -27,8 +29,8 @@ def topology_page_context(
 
 
 def _weather_summary(graph: dict[str, object]) -> dict[str, object]:
-    nodes = list(graph.get("nodes") or [])
-    edges = list(graph.get("edges") or [])
+    nodes = cast(list[dict[str, Any]], graph.get("nodes") or [])
+    edges = cast(list[dict[str, Any]], graph.get("edges") or [])
     node_counts = {"up": 0, "down": 0, "problem": 0, "unknown": 0}
     edge_counts = {"up": 0, "degraded": 0, "down": 0, "unknown": 0}
     for node in nodes:
