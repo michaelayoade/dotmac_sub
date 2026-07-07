@@ -1,7 +1,7 @@
 """Add saved network weathermap views.
 
 Revision ID: 220_add_network_weathermap_views
-Revises: 219_add_drift_finding_evidence
+Revises: 220_add_topology_node_positions
 Create Date: 2026-07-07
 """
 
@@ -12,7 +12,7 @@ from sqlalchemy.dialects import postgresql
 from alembic import op
 
 revision = "220_add_network_weathermap_views"
-down_revision = "219_add_drift_finding_evidence"
+down_revision = "220_add_topology_node_positions"
 branch_labels = None
 depends_on = None
 
