@@ -69,6 +69,10 @@ def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
 
 
+def _datetime_sort_key(value: datetime | None) -> datetime:
+    return _as_utc(value) or datetime.min.replace(tzinfo=UTC)
+
+
 def _invoice_status_value(status: InvoiceStatus | str | None) -> str | None:
     return status.value if isinstance(status, InvoiceStatus) else status
 
@@ -142,9 +146,9 @@ def _paid_prepaid_coverages_for_invoice(
     coverages: dict[UUID, tuple[Invoice, Subscription]] = {}
     for paid, subscription in rows:
         current = coverages.get(subscription.id)
-        if current is None or _as_utc(paid.billing_period_end) > _as_utc(
-            current[0].billing_period_end
-        ):
+        if current is None or _datetime_sort_key(
+            paid.billing_period_end
+        ) > _datetime_sort_key(current[0].billing_period_end):
             coverages[subscription.id] = (paid, subscription)
     return coverages
 
@@ -205,9 +209,7 @@ def invoice_paid_prepaid_overlap(
         return None
     return max(
         coverages.values(),
-        key=lambda value: (
-            _as_utc(value[0].billing_period_end) or datetime.min.replace(tzinfo=UTC)
-        ),
+        key=lambda value: _datetime_sort_key(value[0].billing_period_end),
     )
 
 
@@ -280,13 +282,13 @@ def find_prepaid_overlap_candidates(db: Session) -> list[PrepaidOverlapCandidate
         .all()
     )
 
-    by_key: dict[tuple[UUID, UUID], tuple[Any, ...]] = {}
+    by_key: dict[tuple[UUID, UUID], Any] = {}
     for row in rows:
         key = (row[0].id, row[3].id)
         current = by_key.get(key)
-        if current is None or _as_utc(row[2].billing_period_end) > _as_utc(
-            current[2].billing_period_end
-        ):
+        if current is None or _datetime_sort_key(
+            row[2].billing_period_end
+        ) > _datetime_sort_key(current[2].billing_period_end):
             by_key[key] = row
 
     candidates: list[PrepaidOverlapCandidate] = []
