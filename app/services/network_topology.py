@@ -246,9 +246,7 @@ def list_nodes_and_edges(
                 for link in visible_links
                 for endpoint_id in (link.source_device_id, link.target_device_id)
             }
-            devices = [
-                dev for dev in linked_devices if dev.id in visible_device_ids
-            ]
+            devices = [dev for dev in linked_devices if dev.id in visible_device_ids]
         else:
             visible_links = links
             devices = linked_devices
@@ -309,7 +307,9 @@ def list_nodes_and_edges(
                 "location_label": ", ".join(location_parts)
                 if location_parts
                 else pop_name,
-                "is_external": bool(selected_pop_id and dev.pop_site_id != selected_pop_id),
+                "is_external": bool(
+                    selected_pop_id and dev.pop_site_id != selected_pop_id
+                ),
             }
         )
 

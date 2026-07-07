@@ -400,7 +400,9 @@ def test_topology_graph_pop_filter_keeps_boundary_uplink(db_session):
         },
     )
 
-    graph = topology_service.list_nodes_and_edges(db_session, pop_site_id=str(site_a.id))
+    graph = topology_service.list_nodes_and_edges(
+        db_session, pop_site_id=str(site_a.id)
+    )
 
     assert {node["id"] for node in graph["nodes"]} == {str(local.id), str(upstream.id)}
     assert graph["stats"]["edge_count"] == 1
@@ -486,7 +488,7 @@ def test_topology_link_form_restores_selected_interfaces():
     assert 'id="sourceInterfaceSelected"' in template
     assert 'id="targetInterfaceSelected"' in template
     assert "if (deviceSelect.value)" in template
-    assert "formaction=\"/admin/network/topology/links/{{ link.id }}/delete\"" in template
+    assert 'formaction="/admin/network/topology/links/{{ link.id }}/delete"' in template
 
 
 def test_legacy_weathermap_assets_removed():
@@ -499,7 +501,9 @@ def test_admin_labels_switched_to_topology():
     network_hub = Path("templates/admin/network/index.html").read_text()
     design_system = Path("templates/admin/design_system/modules.html").read_text()
     assert "'weathermap': 'Network Weather Map'" in layout
-    assert '"label": "Topology Editor", "href": "/admin/network/topology"' in network_hub
+    assert (
+        '"label": "Topology Editor", "href": "/admin/network/topology"' in network_hub
+    )
     assert '"label": "Weather Map", "href": "/admin/network/weathermap"' in network_hub
     assert (
         '"label": "Network Topology", "url": "/admin/network/topology"' in design_system
