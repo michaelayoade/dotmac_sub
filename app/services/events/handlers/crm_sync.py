@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 # Events that should trigger CRM sync
 CRM_SYNC_EVENTS = {
     EventType.subscriber_created,
+    EventType.subscriber_updated,
     EventType.subscriber_suspended,
     EventType.subscriber_reactivated,
     EventType.subscription_activated,
@@ -57,7 +58,12 @@ class CrmSyncHandler:
             return
 
         # Resolve subscriber and external identity
-        subscriber_id = event.account_id or event.payload.get("account_id")
+        subscriber_id = (
+            event.account_id
+            or event.subscriber_id
+            or event.payload.get("account_id")
+            or event.payload.get("subscriber_id")
+        )
         if not subscriber_id:
             return
 
@@ -86,6 +92,15 @@ class CrmSyncHandler:
                     event,
                     external_system,
                 )
+            return
+
+        if event.event_type == EventType.subscriber_updated:
+            self._enqueue(
+                external_id,
+                native_subscriber_payload(subscriber),
+                event,
+                external_system,
+            )
             return
 
         if event.event_type in (

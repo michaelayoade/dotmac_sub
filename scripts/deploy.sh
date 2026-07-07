@@ -33,6 +33,27 @@ APP_SERVICES=(app celery-worker celery-worker-bandwidth celery-worker-billing \
 
 log() { printf '\n==> %s\n' "$*"; }
 
+# Deploy-integrity gate. The immutable image must not be shadowed by a host
+# source bind-mount: a `/app/app` mount means a dev overlay (docker-compose.dev.yml,
+# or a legacy auto-loaded docker-compose.override.yml) got layered on, so the
+# RUNNING code is the host working tree — not the tag we just deployed. This is
+# invisible to the health gate (host code can be perfectly healthy), so check it
+# explicitly. `/app/uploads` and other named volumes are fine; only `/app/app`
+# (the Python package) shadowing the image is the failure.
+assert_no_source_mount() {
+  local mounts
+  mounts="$(docker inspect "${APP_CONTAINER}" \
+    --format '{{range .Mounts}}{{println .Destination}}{{end}}' 2>/dev/null || true)"
+  if grep -qx '/app/app' <<<"${mounts}"; then
+    echo "DEPLOY INTEGRITY FAILURE: ${APP_CONTAINER} has a host bind-mount at /app/app —" >&2
+    echo "the working tree is shadowing the image, so '${TAG:-?}' is NOT the running code." >&2
+    echo "Cause: a dev overlay was loaded (stray docker-compose.override.yml, or a bare" >&2
+    echo "'docker compose up/restart' on the host). Fix on the host, then redeploy:" >&2
+    echo "  docker compose -f docker-compose.yml up -d --force-recreate ${APP_SERVICES[*]}" >&2
+    return 1
+  fi
+}
+
 cd "${DEPLOY_DIR}"
 COMPOSE=(docker compose -f docker-compose.yml)
 
@@ -93,6 +114,12 @@ log "Applying migrations (alembic upgrade heads)"
 
 log "Recreating services: ${APP_SERVICES[*]}"
 "${COMPOSE[@]}" up -d "${APP_SERVICES[@]}"
+
+log "Verifying deploy integrity (no host source bind-mount shadowing the image)"
+if ! assert_no_source_mount; then
+  trap - ERR
+  exit 1
+fi
 
 # The app service has no docker healthcheck, so gate on its HTTP /health endpoint.
 log "Waiting for app health at ${HEALTH_URL} (timeout ${HEALTH_TIMEOUT_SECONDS}s)"

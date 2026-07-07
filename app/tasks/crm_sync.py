@@ -10,6 +10,7 @@ change, cancel), and a transient CRM outage no longer silently drops the update
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 
 from celery import Task
 
@@ -127,9 +128,17 @@ def _persist_crm_link(subscriber_id: str, crm_subscriber_id: str) -> None:
         return
     with task_session() as db:
         subscriber = db.get(Subscriber, local_uuid)
-        if subscriber and not subscriber.crm_subscriber_id:
+        if not subscriber:
+            return
+        if not subscriber.crm_subscriber_id:
             subscriber.crm_subscriber_id = crm_uuid
-            db.commit()
+        metadata = dict(subscriber.metadata_ or {})
+        metadata["crm_sync"] = {
+            "last_success_at": datetime.now(UTC).isoformat(),
+            "crm_subscriber_id": str(crm_uuid),
+        }
+        subscriber.metadata_ = metadata
+        db.commit()
 
 
 def _stamp_billing_snapshot(subscriber_id: str, sent_payload: dict) -> None:

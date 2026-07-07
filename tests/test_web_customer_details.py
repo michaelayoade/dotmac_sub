@@ -1,4 +1,5 @@
 import json
+import uuid
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -26,6 +27,7 @@ def _bare_request(path: str = "/admin/customers/person/x/pppoe-password") -> Req
 
 
 from app.models.catalog import AccessCredential, ConnectionType, SubscriptionStatus
+from app.models.crm_sync_failure import CrmSyncFailure, CrmSyncFailureStatus
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.network import SubscriberAdditionalRoute
 from app.models.subscriber import Address, Subscriber, SubscriberCategory, UserType
@@ -160,6 +162,46 @@ def test_customer_detail_includes_active_additional_routes(db_session, subscribe
     assert [route.cidr for route in context["active_additional_routes"]] == [
         "102.220.189.10/32"
     ]
+
+
+def test_customer_detail_includes_crm_sync_link_status(db_session, subscriber):
+    subscriber.user_type = UserType.customer
+    crm_id = uuid.uuid4()
+    subscriber.crm_subscriber_id = crm_id
+    subscriber.metadata_ = {
+        "crm_sync": {"last_success_at": "2026-07-07T12:00:00+00:00"}
+    }
+    db_session.commit()
+
+    context = build_customer_detail_snapshot(db_session, str(subscriber.id))
+
+    assert context["crm_sync_status"]["status"] == "linked"
+    assert context["crm_sync_status"]["crm_subscriber_id"] == str(crm_id)
+    assert context["crm_sync_status"]["last_success_display"] == (
+        "2026-07-07T12:00:00+00:00"
+    )
+
+
+def test_customer_detail_includes_crm_sync_dead_letter(db_session, subscriber):
+    subscriber.user_type = UserType.customer
+    failure = CrmSyncFailure(
+        entity="subscriber",
+        external_id=str(subscriber.id),
+        external_system="selfcare",
+        payload={"status": "active"},
+        error="CRM unavailable",
+        attempts=9,
+        status=CrmSyncFailureStatus.unresolved,
+    )
+    db_session.add(failure)
+    db_session.commit()
+
+    context = build_customer_detail_snapshot(db_session, str(subscriber.id))
+
+    assert context["crm_sync_status"]["status"] == "failed"
+    assert context["crm_sync_status"]["dead_letter_id"] == str(failure.id)
+    assert context["crm_sync_status"]["error"] == "CRM unavailable"
+    assert context["crm_sync_status"]["attempts"] == 9
 
 
 def test_person_detail_exposes_pppoe_access_login(db_session, subscriber):
