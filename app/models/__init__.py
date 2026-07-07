@@ -324,6 +324,7 @@ from app.models.network_monitoring import (  # noqa: F401
     NetworkDeviceBandwidthGraphSource,
     NetworkDeviceSnmpOid,
     NetworkTopologyLink,
+    NetworkWeathermapView,
     PopSite,
     PopSiteContact,
     SpeedTestResult,

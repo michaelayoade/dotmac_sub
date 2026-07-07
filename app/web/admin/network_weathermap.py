@@ -1,6 +1,6 @@
 """Admin network topology routes (replaces legacy weathermap)."""
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -56,13 +56,20 @@ def network_weathermap(
     request: Request,
     group: str | None = None,
     site: str | None = None,
+    view: str | None = None,
+    noc: bool = False,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     """Read-only operational weather map."""
     context = _base_context(request, db, active_page="weathermap")
-    context.update(
-        web_topology_service.weathermap_page_context(db, group=group, site=site)
-    )
+    try:
+        context.update(
+            web_topology_service.weathermap_page_context(
+                db, group=group, site=site, view_slug=view, noc=noc
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return templates.TemplateResponse("admin/network/weathermap.html", context)
 
 
@@ -183,6 +190,22 @@ def topology_node_summary(device_id: str, db: Session = Depends(get_db)):
     return web_topology_service.node_summary(db, device_id)
 
 
+@router.post(
+    "/topology/api/node-positions",
+    response_class=JSONResponse,
+    dependencies=[Depends(require_permission("network:weathermap:write"))],
+)
+async def topology_save_node_positions(request: Request, db: Session = Depends(get_db)):
+    """Persist manually arranged topology node positions."""
+    try:
+        payload = await request.json()
+        positions = payload.get("positions", []) if isinstance(payload, dict) else []
+        result = web_topology_service.save_node_positions(db, positions)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return result
+
+
 @router.get(
     "/topology/api/graph",
     response_class=JSONResponse,
@@ -193,3 +216,64 @@ def topology_graph_data(
 ):
     """Return full graph data as JSON (for D3 refresh without full page reload)."""
     return web_topology_service.graph_data(db, group=group, site=site)
+
+
+@router.get(
+    "/weathermap/api/graph",
+    response_class=JSONResponse,
+    dependencies=[Depends(require_permission("network:weathermap:read"))],
+)
+def weathermap_graph_data(
+    group: str | None = None,
+    site: str | None = None,
+    view: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """Return weather-map graph data without reloading the full admin page."""
+    try:
+        return web_topology_service.weathermap_graph_data(
+            db, group=group, site=site, view_slug=view
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post(
+    "/weathermap/api/layout",
+    response_class=JSONResponse,
+    dependencies=[Depends(require_permission("network:weathermap:write"))],
+)
+async def weathermap_save_layout(
+    request: Request,
+    view: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """Persist the operator-arranged weather-map node positions."""
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Invalid layout payload")
+    try:
+        return web_topology_service.save_weathermap_layout(
+            db, view_slug=view, payload=payload
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post(
+    "/weathermap/api/layout/reset",
+    response_class=JSONResponse,
+    dependencies=[Depends(require_permission("network:weathermap:write"))],
+)
+def weathermap_reset_layout(
+    view: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """Clear saved weather-map coordinates so automatic layout can run again."""
+    try:
+        return web_topology_service.reset_weathermap_layout(db, view_slug=view)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc

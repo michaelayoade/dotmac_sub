@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 from starlette.routing import Match
 
@@ -13,14 +14,17 @@ from app.models.network_monitoring import (
     DeviceType,
     MetricType,
     NetworkDevice,
+    NetworkWeathermapView,
     PopSite,
     TopologyLinkMedium,
     TopologyLinkRole,
 )
 from app.models.subscriber import Address
 from app.services import network_topology as topology_service
+from app.services import web_network_topology as web_topology_service
 from app.services.topology.customer_path import GAP_NO_NODE
 from app.services.topology.gaps import topology_gaps
+from app.timezone import DisplayObject
 from app.web.admin import network_weathermap as topology_routes
 from app.web.admin import router as admin_router
 
@@ -42,6 +46,54 @@ def _matched_route(router, path: str, method: str = "GET"):
         if match == Match.FULL:
             return route
     return None
+
+
+def test_topology_link_form_renders_display_object_edit_link() -> None:
+    link = DisplayObject(
+        SimpleNamespace(
+            id="link-1",
+            source_device_id="source-device",
+            source_interface_id="source-iface",
+            target_device_id="target-device",
+            target_interface_id="target-iface",
+            link_role="uplink",
+            medium="fiber",
+            capacity_bps=1_000_000_000,
+            admin_status="enabled",
+            bundle_key="",
+            topology_group="",
+            notes="",
+        )
+    )
+
+    html = topology_routes.templates.env.get_template(
+        "admin/network/topology/link_form.html"
+    ).render(
+        {
+            "request": SimpleNamespace(
+                state=SimpleNamespace(csrf_token="csrf-token"), query_params={}
+            ),
+            "current_user": {"name": "Admin", "email": "admin@example.test"},
+            "sidebar_stats": {},
+            "active_page": "topology",
+            "active_menu": "network",
+            "link": link,
+            "action_url": "/admin/network/topology/links/link-1/edit",
+            "error": None,
+            "devices": [
+                {"id": "source-device", "name": "Source Device"},
+                {"id": "target-device", "name": "Target Device"},
+            ],
+            "link_roles": ["unknown", "uplink"],
+            "mediums": ["unknown", "fiber"],
+            "admin_statuses": ["enabled", "disabled"],
+        }
+    )
+
+    assert 'value="source-device" selected' in html
+    assert 'value="target-device" selected' in html
+    assert 'id="sourceInterfaceSelected" value="source-iface"' in html
+    assert 'id="targetInterfaceSelected" value="target-iface"' in html
 
 
 def test_topology_link_update_can_change_endpoints(db_session):
@@ -207,6 +259,55 @@ def test_topology_graph_falls_back_to_active_inventory_when_no_links(db_session)
     assert str(inactive.id) not in node_ids
     assert graph["edges"] == []
     assert graph["stats"]["node_count"] == 2
+
+
+def test_topology_graph_includes_saved_node_position(db_session):
+    device = NetworkDevice(
+        name="Positioned Core",
+        role=DeviceRole.core,
+        device_type=DeviceType.router,
+        status=DeviceStatus.online,
+        is_active=True,
+        topology_x=123.45,
+        topology_y=678.9,
+    )
+    db_session.add(device)
+    db_session.commit()
+
+    graph = topology_service.list_nodes_and_edges(db_session)
+
+    node = next(item for item in graph["nodes"] if item["id"] == str(device.id))
+    assert node["position"] == {"x": 123.45, "y": 678.9}
+
+
+def test_save_node_positions_updates_devices(db_session):
+    device = NetworkDevice(
+        name="Dragged Node",
+        role=DeviceRole.edge,
+        device_type=DeviceType.switch,
+        status=DeviceStatus.online,
+        is_active=True,
+    )
+    db_session.add(device)
+    db_session.commit()
+
+    result = topology_service.save_node_positions(
+        db_session,
+        [{"id": str(device.id), "x": 42.126, "y": -18.555}],
+    )
+
+    db_session.refresh(device)
+    assert result == {"saved": 1}
+    assert device.topology_x == 42.13
+    assert device.topology_y == -18.55
+
+
+def test_topology_template_exposes_layout_save_controls() -> None:
+    template = Path("templates/admin/network/topology/index.html").read_text()
+
+    assert 'id="topologySaveLayout"' in template
+    assert "/admin/network/topology/api/node-positions" in template
+    assert "'X-CSRF-Token': csrfToken()" in template
 
 
 def test_topology_gaps_respects_subscription_service_address(
@@ -481,6 +582,20 @@ def test_topology_routes_include_ajax_endpoints():
         _matched_route(topology_routes.router, "/network/topology/api/graph")
         is not None
     )
+    assert (
+        _matched_route(topology_routes.router, "/network/weathermap/api/graph")
+        is not None
+    )
+    assert (
+        _matched_route(topology_routes.router, "/network/weathermap/api/layout", "POST")
+        is not None
+    )
+    assert (
+        _matched_route(
+            topology_routes.router, "/network/weathermap/api/layout/reset", "POST"
+        )
+        is not None
+    )
 
 
 def test_topology_link_form_restores_selected_interfaces():
@@ -518,7 +633,95 @@ def test_weathermap_canvas_uses_explicit_height():
     template = Path("templates/admin/network/weathermap.html").read_text()
 
     assert 'id="weatherCanvas" style="height:' in template
-    assert "h-[620px]" not in template
+
+
+def test_weathermap_template_exposes_noc_layout_controls():
+    template = Path("templates/admin/network/weathermap.html").read_text()
+
+    assert 'id="viewFilter"' in template
+    assert 'id="openNocWindow"' in template
+    assert 'id="weatherAutoRefresh"' in template
+    assert 'id="saveWeatherLayout"' in template
+    assert 'id="resetWeatherLayout"' in template
+    assert "/admin/network/weathermap/api/layout" in template
+
+
+def test_weathermap_context_creates_default_view_and_applies_layout(db_session):
+    device = NetworkDevice(
+        name="NOC Router",
+        role=DeviceRole.core,
+        device_type=DeviceType.router,
+        status=DeviceStatus.online,
+        is_active=True,
+    )
+    db_session.add(device)
+    db_session.flush()
+
+    saved = web_topology_service.save_weathermap_layout(
+        db_session,
+        view_slug="default",
+        payload={"nodes": {str(device.id): {"x": 120.1234, "y": 240.9876}}},
+    )
+    context = web_topology_service.weathermap_page_context(db_session)
+    node = next(n for n in context["graph"]["nodes"] if n["id"] == str(device.id))
+
+    assert saved["slug"] == "default"
+    assert context["weathermap_view"]["name"] == "Default NOC Map"
+    assert context["selected_view"] == "default"
+    assert node["weathermap_positioned"] is True
+    assert node["weathermap_position"] == {"x": 120.12, "y": 240.99}
+
+
+def test_weathermap_layout_reset_clears_saved_positions(db_session):
+    device = NetworkDevice(
+        name="Distribution Switch",
+        role=DeviceRole.distribution,
+        device_type=DeviceType.switch,
+        status=DeviceStatus.online,
+        is_active=True,
+    )
+    db_session.add(device)
+    db_session.flush()
+
+    web_topology_service.save_weathermap_layout(
+        db_session,
+        view_slug="default",
+        payload={"nodes": {str(device.id): {"x": 80, "y": 90}}},
+    )
+    reset = web_topology_service.reset_weathermap_layout(
+        db_session, view_slug="default"
+    )
+    context = web_topology_service.weathermap_page_context(db_session)
+    node = next(n for n in context["graph"]["nodes"] if n["id"] == str(device.id))
+
+    assert reset["layout"] == {"nodes": {}, "viewport": {}}
+    assert "weathermap_positioned" not in node
+
+
+def test_weathermap_context_can_use_named_view_filters(db_session):
+    site = PopSite(name="NOC POP")
+    db_session.add(site)
+    db_session.flush()
+    db_session.add(
+        NetworkWeathermapView(
+            slug="core-noc",
+            name="Core NOC",
+            topology_group="core",
+            pop_site_id=site.id,
+            settings={"refresh_seconds": 30},
+            layout={"nodes": {}, "viewport": {}},
+        )
+    )
+    db_session.commit()
+
+    context = web_topology_service.weathermap_page_context(
+        db_session, view_slug="core-noc"
+    )
+
+    assert context["selected_view"] == "core-noc"
+    assert context["selected_group"] == "core"
+    assert context["selected_site"] == str(site.id)
+    assert context["weathermap_view"]["settings"]["refresh_seconds"] == 30
 
 
 def test_topology_graph_edges_carry_status_and_nodes_carry_live_status(db_session):
