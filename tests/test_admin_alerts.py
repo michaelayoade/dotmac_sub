@@ -159,3 +159,15 @@ def test_sync_alert_with_datetime_details_does_not_crash_on_flush(db_session):
 
     alert = db_session.query(AdminAlert).one()
     assert isinstance(alert.details["last_success"], str)
+
+
+def test_alert_categories_include_cross_app_drift(db_session):
+    ctx = admin_alerts.alerts_context(
+        db_session,
+        category=None,
+        status="open",
+        severity=None,
+        source=None,
+    )
+
+    assert "cross_app_drift" in ctx["categories"]

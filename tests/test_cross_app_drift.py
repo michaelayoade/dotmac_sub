@@ -347,6 +347,10 @@ def test_material_finding_raises_admin_alert(db_session):
     assert alert.status == AlertStatus.open
     assert alert.fingerprint.startswith("drift:")
     assert alert.details["drift_severity"] == "critical"
+    assert (
+        alert.target_url
+        == "/admin/drift?status=open&check=stub_check&entity_type=thing"
+    )
     assert result["alerted"] == 1
     assert result["opened_or_escalated"] == 1
 
@@ -459,3 +463,30 @@ def test_drift_findings_context_filters_and_shape(db_session):
     assert {"evidence", "sla", "suggested_owner", "occurrences"} <= set(row)
     assert "stub_check" in ctx["checks"]
     assert ctx["open_by_severity"].get("medium") == 1
+
+
+def test_drift_findings_context_breached_count_is_global(db_session):
+    now = datetime.now(UTC)
+    run_detection(
+        db_session,
+        checks=[
+            _StubCheck(
+                [_finding("a", SEVERITY_CRITICAL), _finding("b", SEVERITY_MEDIUM)]
+            )
+        ],
+    )
+    critical = (
+        db_session.query(CrossAppDriftFinding)
+        .filter_by(severity=SEVERITY_CRITICAL)
+        .one()
+    )
+    critical.first_seen_at = now - timedelta(days=2)
+    db_session.flush()
+
+    ctx = cross_app_drift.drift_findings_context(
+        db_session, status="open", severity=SEVERITY_MEDIUM
+    )
+
+    assert ctx["total"] == 1
+    assert ctx["findings"][0]["severity"] == SEVERITY_MEDIUM
+    assert ctx["breached_count"] == 1

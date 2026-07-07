@@ -237,7 +237,13 @@ def alerts_context(
         "severity": severity or "",
         "source": source or "",
         "counts": counts,
-        "categories": ["infrastructure", "network", "application", "billing"],
+        "categories": [
+            "infrastructure",
+            "network",
+            "application",
+            "billing",
+            "cross_app_drift",
+        ],
         "statuses": list(AlertStatus),
         "severities": list(AlertSeverity),
     }
