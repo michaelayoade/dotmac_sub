@@ -439,8 +439,12 @@ def test_money_check_marks_legacy_splynx_invoice_header_mismatch_for_review(
     assert f.details["suggested_owner"] == "finance migration review"
 
 
-def test_money_check_splits_legacy_splynx_missing_line_totals(db_session, subscriber):
-    inv = _invoice(
+def test_money_check_aggregates_legacy_splynx_missing_line_totals(
+    db_session, subscriber
+):
+    # Two legacy archive-completeness rows must collapse into ONE aggregated
+    # finding — emitting one row per invoice is what OOM'd the detector.
+    inv_a = _invoice(
         db_session,
         subscriber,
         subtotal=Decimal("0.00"),
@@ -448,6 +452,15 @@ def test_money_check_splits_legacy_splynx_missing_line_totals(db_session, subscr
         total=Decimal("107.50"),
         balance_due=Decimal("0.00"),
         splynx_invoice_id=12345,
+    )
+    _invoice(
+        db_session,
+        subscriber,
+        subtotal=Decimal("0.00"),
+        tax_total=Decimal("0.00"),
+        total=Decimal("42.50"),
+        balance_due=Decimal("0.00"),
+        splynx_invoice_id=12346,
     )
 
     run_detection(db_session, checks=[cross_app_drift.MoneySelfConsistencyCheck()])
@@ -458,10 +471,49 @@ def test_money_check_splits_legacy_splynx_missing_line_totals(db_session, subscr
         .one()
     )
     assert f.severity == "low"
-    assert f.canonical_entity_id == str(inv.id)
-    assert f.evidence["invoice_source"] == "legacy_splynx_import"
-    assert f.evidence["splynx_invoice_id"] == 12345
+    assert f.entity_type == "invoice_class"
+    assert f.canonical_entity_id == (
+        "legacy_splynx_import:legacy_invoice_line_totals_missing"
+    )
+    assert f.evidence["aggregated"] is True
+    assert f.evidence["count"] == 2
+    assert f.evidence["total_abs_delta"] == "150.00"
+    sample_ids = {s["invoice_id"] for s in f.evidence["sample_invoices"]}
+    assert str(inv_a.id) in sample_ids
     assert f.details["suggested_owner"] == "finance migration review"
+
+
+def test_aggregated_legacy_finding_recurs_then_resolves(db_session, subscriber):
+    # One aggregate across reruns (not a duplicate per run), and it resolves via
+    # the batched reconciliation path once the underlying rows no longer drift.
+    inv = _invoice(
+        db_session,
+        subscriber,
+        subtotal=Decimal("0.00"),
+        tax_total=Decimal("0.00"),
+        total=Decimal("107.50"),
+        balance_due=Decimal("0.00"),
+        splynx_invoice_id=999,
+    )
+    checks = [cross_app_drift.MoneySelfConsistencyCheck()]
+
+    run_detection(db_session, checks=checks)
+    run_detection(db_session, checks=checks)
+    f = (
+        db_session.query(CrossAppDriftFinding)
+        .filter_by(mismatch_type="legacy_invoice_line_totals_missing")
+        .one()  # still exactly one finding after two runs
+    )
+    assert f.status == "open"
+    assert f.occurrences == 2
+
+    # Correct the imported line totals — the class no longer drifts.
+    inv.subtotal = Decimal("107.50")
+    db_session.commit()
+    run_detection(db_session, checks=checks)
+    db_session.refresh(f)
+    assert f.status == "resolved"
+    assert f.resolved_at is not None
 
 
 def test_money_check_flags_invoice_balance_mismatch(db_session, subscriber):
@@ -529,7 +581,7 @@ def test_money_check_marks_legacy_splynx_invoice_balance_mismatch_for_review(
     assert f.details["suggested_owner"] == "finance migration review"
 
 
-def test_money_check_splits_legacy_paid_splynx_invoice_allocation_gap(
+def test_money_check_aggregates_legacy_paid_splynx_invoice_allocation_gap(
     db_session, subscriber
 ):
     inv = _invoice(
@@ -549,11 +601,13 @@ def test_money_check_splits_legacy_paid_splynx_invoice_allocation_gap(
         .one()
     )
     assert f.severity == "low"
-    assert f.canonical_entity_id == str(inv.id)
-    assert f.evidence["expected_balance_due"] == "100.00"
-    assert f.evidence["actual_balance_due"] == "0.00"
-    assert f.evidence["invoice_source"] == "legacy_splynx_import"
-    assert f.evidence["splynx_invoice_id"] == 12345
+    assert f.entity_type == "invoice_class"
+    assert f.canonical_entity_id == (
+        "legacy_splynx_import:legacy_paid_invoice_allocation_gap"
+    )
+    assert f.evidence["aggregated"] is True
+    assert f.evidence["count"] == 1
+    assert str(inv.id) in {s["invoice_id"] for s in f.evidence["sample_invoices"]}
     assert f.details["suggested_owner"] == "finance migration review"
 
 
