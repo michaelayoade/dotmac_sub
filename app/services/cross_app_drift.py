@@ -406,21 +406,49 @@ class MoneySelfConsistencyCheck:
                 Invoice.subtotal,
                 Invoice.tax_total,
                 Invoice.total,
+                Invoice.splynx_invoice_id,
             )
             .where(Invoice.is_active.is_(True))
             .where(Invoice.status.in_(_POSTED_INVOICE_STATUSES))
         ).all()
-        for invoice_id, invoice_number, status, subtotal, tax_total, total in rows:
+        for (
+            invoice_id,
+            invoice_number,
+            status,
+            subtotal,
+            tax_total,
+            total,
+            splynx_invoice_id,
+        ) in rows:
             expected = _money(subtotal) + _money(tax_total)
             actual = _money(total)
             if not _money_differs(actual, expected):
                 continue
+            is_legacy_splynx_import = splynx_invoice_id is not None
+            severity = SEVERITY_MEDIUM if is_legacy_splynx_import else SEVERITY_HIGH
+            source = "legacy_splynx_import" if is_legacy_splynx_import else "native"
+            suggested_owner = (
+                "finance migration review"
+                if is_legacy_splynx_import
+                else "billing invoice recalculation"
+            )
+            suggested_action = (
+                "Review the historical Splynx import header mapping; imported "
+                "invoice totals were preserved, but subtotal/tax_total may be "
+                "missing or net/gross split differently. Do not recalculate "
+                "paid historical invoices without finance sign-off."
+                if is_legacy_splynx_import
+                else (
+                    "Recalculate this invoice from active lines and verify "
+                    "subtotal + tax_total equals total before ERP sync."
+                )
+            )
             yield Finding(
                 check_name=self.name,
                 entity_type="invoice",
                 canonical_entity_id=str(invoice_id),
                 mismatch_type="invoice_total_mismatch",
-                severity=SEVERITY_HIGH,
+                severity=severity,
                 evidence={
                     "invoice_number": invoice_number,
                     "subtotal": str(_money(subtotal)),
@@ -429,13 +457,12 @@ class MoneySelfConsistencyCheck:
                     "actual_total": str(actual),
                     "delta": str(_money(actual - expected)),
                     "status": status.value if status else None,
+                    "invoice_source": source,
+                    "splynx_invoice_id": splynx_invoice_id,
                 },
                 details={
-                    "suggested_owner": "billing invoice recalculation",
-                    "suggested_action": (
-                        "Recalculate this invoice from active lines and verify "
-                        "subtotal + tax_total equals total before ERP sync."
-                    ),
+                    "suggested_owner": suggested_owner,
+                    "suggested_action": suggested_action,
                 },
             )
 
