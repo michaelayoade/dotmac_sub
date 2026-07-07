@@ -219,7 +219,8 @@ def _area_boundary_qualifies(
             return True
         if (
             incident.detection_source == CLASSIFIER_SOURCE
-            and getattr(incident, "status", None) in CLASSIFIER_CUSTOMER_VISIBLE_STATUSES
+            and getattr(incident, "status", None)
+            in CLASSIFIER_CUSTOMER_VISIBLE_STATUSES
         ):
             return True
         return False
