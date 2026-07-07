@@ -500,11 +500,19 @@ class MoneySelfConsistencyCheck:
                 Invoice.status,
                 Invoice.total,
                 Invoice.balance_due,
+                Invoice.splynx_invoice_id,
             )
             .where(Invoice.is_active.is_(True))
             .where(Invoice.status != InvoiceStatus.draft)
         ).all()
-        for invoice_id, invoice_number, status, total, balance_due in rows:
+        for (
+            invoice_id,
+            invoice_number,
+            status,
+            total,
+            balance_due,
+            splynx_invoice_id,
+        ) in rows:
             if status in (InvoiceStatus.void, InvoiceStatus.written_off):
                 expected_balance = Decimal("0.00")
             else:
@@ -519,12 +527,32 @@ class MoneySelfConsistencyCheck:
             actual_balance = _money(balance_due)
             if not _money_differs(actual_balance, expected_balance):
                 continue
+            is_legacy_splynx_import = splynx_invoice_id is not None
+            severity = SEVERITY_MEDIUM if is_legacy_splynx_import else SEVERITY_HIGH
+            source = "legacy_splynx_import" if is_legacy_splynx_import else "native"
+            suggested_owner = (
+                "finance migration review"
+                if is_legacy_splynx_import
+                else "billing invoice recalculation"
+            )
+            suggested_action = (
+                "Review the historical Splynx settlement import for this "
+                "invoice; imported balance_due/status may reflect Splynx-paid "
+                "state even when local allocations do not reconstruct it. Do "
+                "not reopen or recalculate paid historical invoices without "
+                "finance sign-off."
+                if is_legacy_splynx_import
+                else (
+                    "Run the invoice recalculation path for this invoice and "
+                    "review active allocations/credit applications."
+                )
+            )
             yield Finding(
                 check_name=self.name,
                 entity_type="invoice",
                 canonical_entity_id=str(invoice_id),
                 mismatch_type="invoice_balance_mismatch",
-                severity=SEVERITY_HIGH,
+                severity=severity,
                 evidence={
                     "invoice_number": invoice_number,
                     "status": status.value if status else None,
@@ -538,13 +566,12 @@ class MoneySelfConsistencyCheck:
                     "expected_balance_due": str(expected_balance),
                     "actual_balance_due": str(actual_balance),
                     "delta": str(_money(actual_balance - expected_balance)),
+                    "invoice_source": source,
+                    "splynx_invoice_id": splynx_invoice_id,
                 },
                 details={
-                    "suggested_owner": "billing invoice recalculation",
-                    "suggested_action": (
-                        "Run the invoice recalculation path for this invoice and "
-                        "review active allocations/credit applications."
-                    ),
+                    "suggested_owner": suggested_owner,
+                    "suggested_action": suggested_action,
                 },
             )
 
