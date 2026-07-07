@@ -15,14 +15,21 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.models.catalog import (
+    AccessCredential,
+    RadiusProfile,
+    Subscription,
+    SubscriptionStatus,
+)
 from app.models.cross_app_drift import (
     EVENT_CREATED,
     EVENT_RECURRING,
@@ -31,7 +38,9 @@ from app.models.cross_app_drift import (
     EVENT_WORSENED,
     RUN_COMPLETED,
     RUN_RUNNING,
+    SEVERITY_CRITICAL,
     SEVERITY_HIGH,
+    SEVERITY_MEDIUM,
     SEVERITY_ORDER,
     STATUS_OPEN,
     STATUS_RESOLVED,
@@ -41,9 +50,25 @@ from app.models.cross_app_drift import (
     CrossAppDriftRun,
     CrossAppDriftWaiver,
 )
+from app.models.radius_active_session import RadiusActiveSession
 from app.models.subscriber import Subscriber
 
 logger = logging.getLogger(__name__)
+
+# A subscriber holding any of these is legitimately entitled to service.
+_SERVICEABLE_STATUSES = {SubscriptionStatus.active, SubscriptionStatus.pending}
+# ...and any of these means the subscriber should NOT be able to use service.
+_NON_SERVICEABLE_STATUSES = {
+    SubscriptionStatus.suspended,
+    SubscriptionStatus.blocked,
+    SubscriptionStatus.stopped,
+    SubscriptionStatus.disabled,
+    SubscriptionStatus.canceled,
+    SubscriptionStatus.expired,
+    SubscriptionStatus.archived,
+}
+# Grace so normal async enforcement lag (suspend -> CoA kick) isn't flagged.
+_ENFORCEMENT_GRACE = timedelta(minutes=15)
 
 
 @dataclass
@@ -56,6 +81,7 @@ class Finding:
     mismatch_type: str
     severity: str
     details: dict = field(default_factory=dict)
+    evidence: dict = field(default_factory=dict)
 
     @property
     def fingerprint(self) -> str:
@@ -114,10 +140,12 @@ class IdentityCardinalityCheck:
                 canonical_entity_id=person_id,
                 mismatch_type="duplicate_sub_subscriber",
                 severity=SEVERITY_HIGH,
-                details={
+                evidence={
                     "crm_person_id": person_id,
                     "sub_subscriber_ids": sorted(sub_ids),
-                    "count": len(sub_ids),
+                    "sub_subscriber_count": len(sub_ids),
+                },
+                details={
                     "suggested_owner": "sub CRM customer create-path (dedup)",
                     "suggested_action": (
                         "Merge the duplicate subscribers for this CRM person and "
@@ -127,7 +155,171 @@ class IdentityCardinalityCheck:
             )
 
 
-DEFAULT_CHECKS: list[DriftCheck] = [IdentityCardinalityCheck()]
+class ServiceEnforcementCheck:
+    """Billing/subscription status ↔ RADIUS access state, self-contained in sub.
+
+    Three distinct mismatch fingerprints so ownership + remediation stay obvious:
+
+    * ``suspended_but_online`` (critical) — a subscriber with no serviceable
+      subscription still has a live RADIUS session. Live unauthorized service /
+      revenue leak; a grace window absorbs normal enforcement lag.
+    * ``active_but_blocked`` (high) — a subscriber walled-gardened at the BNG
+      (``status='blocked'``) while its subscriptions are all active. Paid but cut
+      off — the account_status reconciler's cohort.
+    * ``throttle_profile_mismatch`` (medium) — an active credential points at a
+      missing/inactive RADIUS profile, so the intended profile (a throttle
+      included) silently won't apply. Config drift, no immediate money impact.
+    """
+
+    name = "service_enforcement"
+
+    def run(self, db: Session) -> Iterable[Finding]:
+        now = datetime.now(UTC)
+        yield from self._suspended_but_online(db, now)
+        yield from self._active_but_blocked(db)
+        yield from self._throttle_profile_mismatch(db)
+
+    def _suspended_but_online(self, db: Session, now: datetime) -> Iterable[Finding]:
+        grace_cutoff = now - _ENFORCEMENT_GRACE
+        # Online subscribers (fresh RADIUS session) + their live-session counts.
+        from app.services.topology.health_classifier import _fresh
+
+        session_rows = db.execute(
+            select(RadiusActiveSession.subscriber_id, func.count())
+            .where(_fresh(now))
+            .group_by(RadiusActiveSession.subscriber_id)
+        ).all()
+        session_counts = {sid: int(cnt) for sid, cnt in session_rows if sid}
+        if not session_counts:
+            return
+
+        sub_rows = db.execute(
+            select(
+                Subscription.subscriber_id,
+                Subscription.status,
+                Subscription.updated_at,
+            ).where(Subscription.subscriber_id.in_(list(session_counts)))
+        ).all()
+        by_subscriber: dict = defaultdict(list)
+        for subscriber_id, status, updated_at in sub_rows:
+            by_subscriber[subscriber_id].append((status, updated_at))
+
+        for subscriber_id, items in by_subscriber.items():
+            statuses = [status for status, _ in items]
+            # Legitimately entitled if ANY subscription is serviceable.
+            if any(status in _SERVICEABLE_STATUSES for status in statuses):
+                continue
+            if not any(status in _NON_SERVICEABLE_STATUSES for status in statuses):
+                continue
+            changed = [u for _, u in items if u is not None]
+            latest_change = max(changed) if changed else None
+            if latest_change is not None and latest_change.tzinfo is None:
+                latest_change = latest_change.replace(tzinfo=UTC)  # SQLite naive
+            # Grace: skip if the status changed within the enforcement window.
+            if latest_change is not None and latest_change > grace_cutoff:
+                continue
+            yield Finding(
+                check_name=self.name,
+                entity_type="subscriber",
+                canonical_entity_id=str(subscriber_id),
+                mismatch_type="suspended_but_online",
+                severity=SEVERITY_CRITICAL,
+                evidence={
+                    "billing_status": sorted({s.value for s in statuses}),
+                    "radius_authorized": True,
+                    "active_sessions": session_counts[subscriber_id],
+                    "last_status_change": (
+                        latest_change.isoformat() if latest_change else None
+                    ),
+                },
+                details={
+                    "suggested_owner": (
+                        "enforcement reconciler "
+                        "(app.tasks.radius.run_enforcement_reconciler)"
+                    ),
+                    "suggested_action": (
+                        "CoA-kick the live session(s) and verify radcheck carries "
+                        "Auth-Type := Reject for this subscriber."
+                    ),
+                },
+            )
+
+    def _active_but_blocked(self, db: Session) -> Iterable[Finding]:
+        from app.services.account_status_reconcile import (
+            find_blocked_all_active_account_ids,
+        )
+
+        for account_id in find_blocked_all_active_account_ids(db):
+            yield Finding(
+                check_name=self.name,
+                entity_type="subscriber",
+                canonical_entity_id=str(account_id),
+                mismatch_type="active_but_blocked",
+                severity=SEVERITY_HIGH,
+                evidence={
+                    "billing_status": "active",
+                    "subscriber_status": "blocked",
+                    "radius_authorized": False,
+                    "note": "all subscriptions active but subscriber walled-gardened",
+                },
+                details={
+                    "suggested_owner": (
+                        "account-status reconciler "
+                        "(app.tasks.enforcement.reconcile_account_status_drift)"
+                    ),
+                    "suggested_action": (
+                        "Re-derive the subscriber status from its subscriptions "
+                        "and refresh RADIUS so the walled-garden tag drops."
+                    ),
+                },
+            )
+
+    def _throttle_profile_mismatch(self, db: Session) -> Iterable[Finding]:
+        active_profile_ids = set(
+            db.scalars(
+                select(RadiusProfile.id).where(RadiusProfile.is_active.is_(True))
+            ).all()
+        )
+        rows = db.execute(
+            select(
+                AccessCredential.subscriber_id,
+                AccessCredential.username,
+                AccessCredential.radius_profile_id,
+            ).where(
+                AccessCredential.is_active.is_(True),
+                AccessCredential.radius_profile_id.isnot(None),
+            )
+        ).all()
+        for subscriber_id, username, profile_id in rows:
+            if profile_id in active_profile_ids:
+                continue
+            yield Finding(
+                check_name=self.name,
+                entity_type="subscriber",
+                canonical_entity_id=str(subscriber_id),
+                mismatch_type="throttle_profile_mismatch",
+                severity=SEVERITY_MEDIUM,
+                evidence={
+                    "credential_username": username,
+                    "radius_profile_id": str(profile_id),
+                    "radius_profile": "missing_or_inactive",
+                    "expected_profile": "an active RadiusProfile",
+                },
+                details={
+                    "suggested_owner": "billing / enforcement config",
+                    "suggested_action": (
+                        "Point the credential at an active RadiusProfile (or clear "
+                        "the stale reference); as-is any intended profile — a "
+                        "throttle included — silently won't apply."
+                    ),
+                },
+            )
+
+
+DEFAULT_CHECKS: list[DriftCheck] = [
+    IdentityCardinalityCheck(),
+    ServiceEnforcementCheck(),
+]
 
 
 # --------------------------------------------------------------------------
@@ -213,6 +405,7 @@ def run_detection(
                 first_run_id=run.id,
                 last_run_id=run.id,
                 details=found.details,
+                evidence=found.evidence,
             )
             db.add(finding)
             db.flush()
@@ -227,6 +420,7 @@ def run_detection(
         finding.last_run_id = run.id
         finding.severity = found.severity
         finding.details = found.details
+        finding.evidence = found.evidence
         finding.resolved_at = None
 
         if fp in waived:
