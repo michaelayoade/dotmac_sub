@@ -514,6 +514,13 @@ def test_admin_labels_switched_to_topology():
     )
 
 
+def test_weathermap_canvas_uses_explicit_height():
+    template = Path("templates/admin/network/weathermap.html").read_text()
+
+    assert 'id="weatherCanvas" style="height:' in template
+    assert "h-[620px]" not in template
+
+
 def test_topology_graph_edges_carry_status_and_nodes_carry_live_status(db_session):
     src = NetworkDevice(
         name="Core X",
