@@ -6,8 +6,11 @@ import uuid
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from app.models.crm_sync_failure import CrmSyncFailure, CrmSyncFailureStatus
 from app.services import crm_sync_failures
+from app.tasks.crm_sync import CrmPushError, push_subscriber_change
 from app.web.admin import integrations as integrations_admin
 
 
@@ -28,6 +31,16 @@ def _failure(db, *, status=CrmSyncFailureStatus.unresolved):
 
 
 class TestRecordDeadLetter:
+    def test_push_failure_raises_for_retry(self):
+        with patch(
+            "app.services.crm_webhook.push_subscriber_change",
+            return_value=None,
+        ):
+            with pytest.raises(CrmPushError):
+                push_subscriber_change.run(
+                    "sub-1", {"status": "active"}, "selfcare"
+                )
+
     def test_on_failure_records_row(self, db_session):
         from app.tasks import crm_sync
 
