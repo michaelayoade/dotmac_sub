@@ -778,6 +778,25 @@ def build_beat_schedule() -> dict:
             enabled=stale_overdue_lock_detect_enabled,
             interval_seconds=86400,
         )
+        # Cross-app drift detector (R-3): daily read-only proof that CRM / sub /
+        # ERP still agree on the business facts that matter. Detect-only — it
+        # persists findings by fingerprint and WARNs on material drift, pointing
+        # at the reconciler that owns each fix; it never heals. Safe to run by
+        # default (no writes to business state).
+        cross_app_drift_enabled = _effective_bool(
+            session,
+            SettingDomain.audit,
+            "cross_app_drift_detection_enabled",
+            "CROSS_APP_DRIFT_DETECTION_ENABLED",
+            True,
+        )
+        _sync_scheduled_task(
+            session,
+            name="cross_app_drift_detection",
+            task_name="app.tasks.cross_app_drift.run_cross_app_drift_detection",
+            enabled=cross_app_drift_enabled,
+            interval_seconds=86400,
+        )
         # Roll imported RADIUS accounting into quota buckets (feeds FUP/overage).
         # Gated by the same usage flag. This follows the RADIUS accounting
         # cadence instead of the daily usage-rating cadence so FUP decisions

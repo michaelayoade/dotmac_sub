@@ -130,6 +130,12 @@ from app.models.crm_sync_failure import (  # noqa: F401
     CrmSyncFailureStatus,
 )
 from app.models.crm_webhook_delivery import CrmWebhookDelivery  # noqa: F401
+from app.models.cross_app_drift import (  # noqa: F401
+    CrossAppDriftFinding,
+    CrossAppDriftFindingEvent,
+    CrossAppDriftRun,
+    CrossAppDriftWaiver,
+)
 from app.models.customer_identity import CustomerIdentityIndex  # noqa: F401
 from app.models.cutover import CutoverBalanceVariance  # noqa: F401
 from app.models.device_token import DeviceToken  # noqa: F401
