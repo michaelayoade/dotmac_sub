@@ -696,6 +696,16 @@ def test_core_devices_list_page_data_includes_uptime_ping_history_and_backup(
     assert payload["backup_map"][key]["status"] == "success"
 
 
+def test_core_network_table_shows_ping_result_and_device_tooltip():
+    template = Path("templates/admin/network/network-devices/index.html").read_text()
+
+    assert "POP: {{ device_pop_name }}" in template
+    assert "latest_ping.label if latest_ping else '-'" in template
+    assert "latest_ping.recorded_at.strftime('%Y-%m-%d %H:%M')" in template
+    assert "bg-green-100 text-green-700" in template
+    assert "bg-red-100 text-red-700" in template
+
+
 def test_core_devices_list_page_data_prefers_zabbix_live_status(
     db_session, monkeypatch
 ):
