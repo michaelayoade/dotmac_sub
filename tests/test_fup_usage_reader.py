@@ -79,7 +79,7 @@ def test_daily_no_samples_is_no_data(db_session, subscription):
 def test_daily_integrates_recent_samples(db_session, subscription):
     now = datetime.now(UTC)
     if now.hour == 0 and now.minute < 10:
-        return  # skip the rare just-after-midnight window (samples → yesterday)
+        return  # avoid the rare just-after-UTC-midnight window edge
     for offset in (300, 240, 180):
         db_session.add(
             BandwidthSample(
@@ -91,7 +91,9 @@ def test_daily_integrates_recent_samples(db_session, subscription):
         )
     db_session.commit()
 
-    usage = _run(get_fup_usage_gb_async(db_session, subscription, "daily", now=now))
+    usage = _run(
+        get_fup_usage_gb_async(db_session, subscription, "daily", now=now, tz=UTC)
+    )
     assert usage.source == "samples"
     assert usage.is_authoritative is False
     assert usage.used_gb > 0
