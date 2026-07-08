@@ -55,7 +55,37 @@ jobs:
 
       - name: Apply version bump
         if: steps.impact.outputs.bump != 'none'
-        run: python3 scripts/bump_version.py ${{ steps.impact.outputs.bump }}
+        env:
+          BUMP: ${{ steps.impact.outputs.bump }}
+          BUMP_BRANCH: automation/version-bump-${{ github.event.pull_request.base.ref }}
+        run: |
+          # Seed from the rolling bump branch (if it has a newer pending
+          # version) so an unmerged bump isn't lost or downgraded when the
+          # branch is recreated from the base ref.
+          PENDING=""
+          if git fetch origin "$BUMP_BRANCH" 2>/dev/null; then
+            PENDING="$(git show FETCH_HEAD:VERSION 2>/dev/null | tr -d '[:space:]')" || PENDING=""
+          fi
+          python3 - "$BUMP" "$PENDING" <<'PY'
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          bump, pending = sys.argv[1], sys.argv[2]
+          version_file = Path("VERSION")
+          current = version_file.read_text(encoding="utf-8").strip()
+
+          def parts(version: str) -> tuple[int, ...]:
+              return tuple(int(piece) for piece in version.split("."))
+
+          try:
+              if pending and parts(pending) > parts(current):
+                  version_file.write_text(pending + "\n", encoding="utf-8")
+          except ValueError:
+              pass
+
+          subprocess.run([sys.executable, "scripts/bump_version.py", bump], check=True)
+          PY
 
       - name: Read bumped version
         if: steps.impact.outputs.bump != 'none'
@@ -70,14 +100,16 @@ jobs:
         with:
           token: ${{ secrets.VERSION_BUMP_TOKEN || secrets.GITHUB_TOKEN }}
           base: ${{ github.event.pull_request.base.ref }}
-          branch: automation/version-bump-${{ github.event.pull_request.base.ref }}-${{ github.event.pull_request.number }}
+          branch: automation/version-bump-${{ github.event.pull_request.base.ref }}
           delete-branch: true
           commit-message: "chore: bump version to ${{ steps.version.outputs.version }}"
           title: "chore: bump version to ${{ steps.version.outputs.version }}"
           body: |
-            Version impact: none because this PR only applies the generated version bump for #${{ github.event.pull_request.number }}.
+            Rolling version bump PR for `${{ github.event.pull_request.base.ref }}` — updated in place as source PRs merge, carrying any pending bump forward.
 
-            Source PR: #${{ github.event.pull_request.number }}
-            Source impact: ${{ steps.impact.outputs.impact }}
+            Version impact: none because this PR only applies generated version bumps.
+
+            Latest source PR: #${{ github.event.pull_request.number }}
+            Latest source impact: ${{ steps.impact.outputs.impact }}
             New version: ${{ steps.version.outputs.version }}
           labels: "version:none"
