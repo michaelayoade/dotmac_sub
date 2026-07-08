@@ -393,12 +393,14 @@ def _prepaid_monthly_enabled(db: Session) -> bool:
 def billing_path_coverage(db: Session) -> tuple[int, int]:
     """§6.1: (unbilled_no_path, active_subs_on_terminal_account).
 
-    Mirrors run_invoice_cycle's selection. A billable-account active sub is
-    covered iff it is postpaid, or (prepaid_monthly enabled AND its offer is a
-    monthly cycle). ``unbilled_no_path`` is the scalable revenue leak — a prepaid
-    cohort that no enabled path bills (flag off, or a non-monthly prepaid offer).
-    ``active_subs_on_terminal_account`` is an active sub whose account is
-    non-billable, so the cycle never touches it (lifecycle drift, low volume).
+    Mirrors run_invoice_cycle's invoice-row selection. A billable-account active
+    sub is covered iff it is postpaid, or (prepaid_monthly enabled AND its offer
+    is a monthly cycle). Prepaid coverage means draft-until-funded accounting
+    rows, not AR/dunning. ``unbilled_no_path`` is the scalable billing-visibility
+    gap — a prepaid cohort that no enabled path records (flag off, or a
+    non-monthly prepaid offer). ``active_subs_on_terminal_account`` is an active
+    sub whose account is non-billable, so the cycle never touches it (lifecycle
+    drift, low volume).
     """
     # Static SQL — the status set is a fixed constant from billing_statuses,
     # never user input, so this is not an injection surface.

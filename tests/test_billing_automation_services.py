@@ -2849,12 +2849,11 @@ class TestProratedInvoiceIdempotency:
 
 class TestPrepaidDraftUntilFunded:
     """Item 1 of PREPAID_INVOICE_DEPOSIT_ALIGNMENT: prepaid advance invoices stay
-    DRAFT (not AR) until the deposit funds them, gated by
-    ``prepaid_draft_until_funded`` (default OFF = legacy issue-on-create)."""
+    DRAFT (not AR) until the deposit funds them. This is now the only scheduled
+    runner behavior for prepaid monthly invoices; postpaid AR logic must not be
+    reused for prepaid renewals."""
 
-    def _setup_prepaid_monthly(
-        self, db_session, subscription, subscriber_account, *, draft_flag: bool
-    ):
+    def _setup_prepaid_monthly(self, db_session, subscription, subscriber_account):
         from app.models.catalog import (
             BillingCycle,
             BillingMode,
@@ -2886,14 +2885,6 @@ class TestPrepaidDraftUntilFunded:
                 is_active=True,
             ),
         ]
-        if draft_flag:
-            settings.append(
-                DomainSetting(
-                    domain=SettingDomain.billing,
-                    key="prepaid_draft_until_funded",
-                    value_text="true",
-                )
-            )
         db_session.add_all(settings)
         db_session.commit()
         return run_at
@@ -2939,26 +2930,25 @@ class TestPrepaidDraftUntilFunded:
             .one()
         )
 
-    def test_flag_off_is_legacy_issued(
+    def test_default_leaves_underfunded_prepaid_invoice_draft(
         self, db_session, subscription, subscriber_account
     ):
         from app.models.billing import InvoiceStatus
 
         run_at = self._setup_prepaid_monthly(
-            db_session, subscription, subscriber_account, draft_flag=False
+            db_session, subscription, subscriber_account
         )
         billing_automation.run_invoice_cycle(db_session, run_at=run_at)
         inv = self._invoice(db_session, subscriber_account)
-        # Legacy behavior: prepaid advance invoice issued, due on issue.
-        assert inv.status == InvoiceStatus.issued
-        assert inv.issued_at is not None
-        assert inv.due_at is not None
+        assert inv.status == InvoiceStatus.draft
+        assert inv.issued_at is None
+        assert inv.due_at is None
 
     def test_underfunded_left_draft(self, db_session, subscription, subscriber_account):
         from app.models.billing import InvoiceStatus
 
         run_at = self._setup_prepaid_monthly(
-            db_session, subscription, subscriber_account, draft_flag=True
+            db_session, subscription, subscriber_account
         )
         summary = billing_automation.run_invoice_cycle(db_session, run_at=run_at)
         inv = self._invoice(db_session, subscriber_account)
@@ -2976,7 +2966,7 @@ class TestPrepaidDraftUntilFunded:
         from app.services.billing._common import get_account_credit_balance
 
         run_at = self._setup_prepaid_monthly(
-            db_session, subscription, subscriber_account, draft_flag=True
+            db_session, subscription, subscriber_account
         )
         self._add_credit(db_session, subscriber_account, "100.00", run_at)
         assert get_account_credit_balance(
@@ -3002,7 +2992,7 @@ class TestPrepaidDraftUntilFunded:
         from app.services.billing._common import get_account_credit_balance
 
         run_at = self._setup_prepaid_monthly(
-            db_session, subscription, subscriber_account, draft_flag=True
+            db_session, subscription, subscriber_account
         )
         self._add_credit(db_session, subscriber_account, "40.00", run_at)
 
@@ -3032,7 +3022,7 @@ class TestPrepaidDraftUntilFunded:
         )
 
         run_at = self._setup_prepaid_monthly(
-            db_session, subscription, subscriber_account, draft_flag=True
+            db_session, subscription, subscriber_account
         )
         billing_automation.run_invoice_cycle(db_session, run_at=run_at)
         inv = self._invoice(db_session, subscriber_account)

@@ -11,9 +11,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.models.billing import Invoice, InvoiceStatus, LedgerEntry
 from app.models.catalog import (
     AccessCredential,
-    BillingCycle,
     BillingMode,
-    CatalogOffer,
     DunningAction,
     PolicyDunningStep,
     RadiusProfile,
@@ -35,6 +33,7 @@ from app.schemas.collections import (
     DunningRunResponse,
 )
 from app.services import enforcement_window, settings_spec
+from app.services.billing.invoice_classification import collectible_ar_invoice_filter
 from app.services.billing_prepaid_overlap_repair import (
     apply_prepaid_overlap_hold,
     invoice_paid_prepaid_overlap,
@@ -96,6 +95,7 @@ def _resolve_prepaid_available_balance(db: Session, account_id: str) -> Decimal:
         db.query(Invoice.currency, func.coalesce(func.sum(Invoice.balance_due), 0))
         .filter(Invoice.account_id == account_uuid)
         .filter(Invoice.is_active.is_(True))
+        .filter(collectible_ar_invoice_filter())
         .filter(
             Invoice.status.in_(
                 [
@@ -152,11 +152,12 @@ def has_overdue_balance(db: Session, account_id: str) -> bool:
     must not lift the suspension while overdue debt remains.
     """
     now = datetime.now(UTC)
-    row = (
+    invoices = (
         db.query(Invoice.id)
         .filter(Invoice.account_id == coerce_uuid(account_id))
         .filter(Invoice.is_active.is_(True))
         .filter(Invoice.balance_due > 0)
+        .filter(collectible_ar_invoice_filter())
         .filter(
             or_(
                 Invoice.status == InvoiceStatus.overdue,
@@ -169,9 +170,16 @@ def has_overdue_balance(db: Session, account_id: str) -> bool:
                 ),
             )
         )
-        .first()
+        .all()
     )
-    return row is not None
+    for (invoice_id,) in invoices:
+        invoice = db.get(Invoice, invoice_id)
+        if invoice is None:
+            continue
+        if (invoice.metadata_ or {}).get("reconciliation_hold"):
+            continue
+        return True
+    return False
 
 
 def _effective_billing_mode_for_account(
@@ -935,10 +943,9 @@ def _account_has_prepaid_service(db: Session, account: Subscriber) -> bool:
 def _prepaid_balance_gate_skip_reason(db: Session, account: Subscriber) -> str | None:
     """Return why prepaid enforcement should not cut service, or None.
 
-    Monthly prepaid creates invoices so AR aging, notifications and case
-    history use the normal dunning path. The service cut itself is guarded by
-    local available balance: ledger credit that covers the account prevents
-    suspension even if an invoice row is technically past due.
+    Prepaid service cuts are guarded by local available balance, not by prepaid
+    invoice rows. Ledger credit that covers the account prevents suspension
+    even if a legacy prepaid invoice row is still technically past due.
     """
     if not _account_has_prepaid_service(db, account):
         return None
@@ -1472,6 +1479,7 @@ class DunningWorkflow(ListResponseMixin):
             .filter(Invoice.due_at.is_not(None))
             .filter(Invoice.due_at <= run_at)
             .filter(Invoice.is_active.is_(True))
+            .filter(collectible_ar_invoice_filter())
             # Only collectible invoices drive dunning. draft/void/written_off
             # rows must never create a case even if they retain a positive
             # balance_due (a stale value elsewhere would otherwise dun a debt
@@ -1506,28 +1514,10 @@ class DunningWorkflow(ListResponseMixin):
                 InvoiceStatus.partially_paid,
             }:
                 invoice.status = InvoiceStatus.overdue
-        # Dunning enforces postpaid accounts, plus prepaid_monthly (prepaid on a
-        # MONTHLY-cycle offer, invoiced due-on-issue) once the cutover flag is on.
-        # Default OFF keeps dunning postpaid-only — no behaviour change. Genuine
-        # daily/balance prepaid has no invoices so is never in scope here.
-        _pm_flag = settings_spec.resolve_value(
-            db, SettingDomain.billing, "prepaid_monthly_invoicing_enabled"
-        )
-        include_prepaid_monthly = str(_pm_flag).strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
+        # Dunning is a postpaid collections workflow. Prepaid service cuts are
+        # owned by prepaid_balance_sweep using account available balance; legacy
+        # prepaid AR rows should be cleaned/reclassified, not dunned.
         enforce_mode_filter = Subscription.billing_mode == BillingMode.postpaid
-        if include_prepaid_monthly:
-            monthly_offer_ids = select(CatalogOffer.id).where(
-                CatalogOffer.billing_cycle == BillingCycle.monthly
-            )
-            enforce_mode_filter = or_(
-                Subscription.billing_mode == BillingMode.postpaid,
-                Subscription.offer_id.in_(monthly_offer_ids),
-            )
         postpaid_account_ids = {
             coerce_uuid(str(row[0]))
             for row in (

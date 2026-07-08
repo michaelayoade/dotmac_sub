@@ -898,30 +898,19 @@ def test_dunning_run_skips_account_with_active_arrangement(
     assert db_session.query(DunningActionLog).count() == 0
 
 
-def test_prepaid_balance_skip_does_not_advance_dunning_step(
+def test_prepaid_invoice_rows_do_not_create_dunning_case(
     db_session, subscriber, subscription, catalog_offer
 ):
-    """A covered prepaid account should be retried later if its balance runs
-    out; skipped enforcing actions must not consume the policy step."""
+    """Prepaid has its own balance-enforcement path, not dunning."""
     from datetime import timedelta
     from decimal import Decimal
 
-    from app.models.billing import (
-        Invoice,
-        InvoiceStatus,
-        LedgerEntry,
-        LedgerEntryType,
-        LedgerSource,
-    )
+    from app.models.billing import Invoice, InvoiceLine, InvoiceStatus
     from app.models.catalog import (
         BillingCycle,
         BillingMode,
-        PolicyDunningStep,
-        PolicySet,
         SubscriptionStatus,
     )
-    from app.models.catalog import DunningAction as CatalogDunningAction
-    from app.models.collections import DunningActionLog
     from app.models.domain_settings import DomainSetting, SettingDomain
     from app.schemas.collections import DunningRunRequest
 
@@ -943,30 +932,6 @@ def test_prepaid_balance_skip_does_not_advance_dunning_step(
             is_active=True,
         )
     )
-    db_session.add(
-        LedgerEntry(
-            account_id=subscriber.id,
-            entry_type=LedgerEntryType.credit,
-            source=LedgerSource.payment,
-            amount=Decimal("200.00"),
-            currency="NGN",
-            memo="prepaid test credit",
-        )
-    )
-    policy_set = PolicySet(name="Prepaid Suspend Policy")
-    db_session.add(policy_set)
-    db_session.flush()
-    db_session.add(
-        PolicyDunningStep(
-            policy_set_id=policy_set.id,
-            day_offset=1,
-            action=CatalogDunningAction.suspend,
-            note="prepaid suspend",
-        )
-    )
-    catalog_offer.policy_set_id = policy_set.id
-    if subscription.offer_version is not None:
-        subscription.offer_version.policy_set_id = policy_set.id
     invoice = Invoice(
         account_id=subscriber.id,
         invoice_number="INV-PREPAID-DUN-RUN-1",
@@ -977,41 +942,93 @@ def test_prepaid_balance_skip_does_not_advance_dunning_step(
         metadata_={},
     )
     db_session.add(invoice)
+    db_session.flush()
+    db_session.add(
+        InvoiceLine(
+            invoice_id=invoice.id,
+            subscription_id=subscription.id,
+            description="Prepaid renewal",
+            quantity=Decimal("1.000"),
+            unit_price=Decimal("100.00"),
+            amount=Decimal("100.00"),
+            metadata_={"kind": "base_subscription"},
+        )
+    )
     db_session.commit()
 
     response = collections_service.dunning_workflow.run(db_session, DunningRunRequest())
 
-    case = (
+    db_session.refresh(invoice)
+    assert response.accounts_scanned == 0
+    assert response.skipped == 0
+    assert response.cases_created == 0
+    assert response.actions_created == 0
+    assert invoice.status == InvoiceStatus.issued
+    assert (
         db_session.query(DunningCase)
         .filter(DunningCase.account_id == subscriber.id)
-        .one()
+        .count()
+        == 0
     )
-    log = (
-        db_session.query(DunningActionLog)
-        .filter(DunningActionLog.case_id == case.id)
-        .one()
-    )
-    assert response.actions_created == 1
-    assert case.current_step is None
-    assert log.action == DunningAction.suspend
-    assert log.outcome == "prepaid_balance_available"
 
 
-def test_prepaid_monthly_dunning_suspends_without_extra_notice_clock(
-    db_session, subscriber, subscription, catalog_offer
+def test_imported_line_less_prepaid_invoice_does_not_create_dunning_case(
+    db_session, subscriber, subscription
 ):
-    """Prepaid service cuts use policy + billing grace, not postpaid runway."""
+    """Imported prepaid AR without lines is legacy balance data, not dunning."""
+    from datetime import timedelta
     from decimal import Decimal
 
     from app.models.billing import Invoice, InvoiceStatus
+    from app.models.catalog import BillingMode, SubscriptionStatus
+    from app.schemas.collections import DunningRunRequest
+
+    subscriber.billing_mode = BillingMode.prepaid
+    subscription.billing_mode = BillingMode.prepaid
+    subscription.status = SubscriptionStatus.active
+    invoice = Invoice(
+        account_id=subscriber.id,
+        invoice_number="INV-IMPORTED-PREPAID-DUN-RUN",
+        status=InvoiceStatus.issued,
+        total=Decimal("100.00"),
+        balance_due=Decimal("100.00"),
+        due_at=datetime.now(UTC) - timedelta(days=5),
+        metadata_={"imported_via": "system_import_wizard"},
+    )
+    db_session.add(invoice)
+    db_session.commit()
+
+    assert (
+        collections_service.has_overdue_balance(db_session, str(subscriber.id)) is False
+    )
+
+    response = collections_service.dunning_workflow.run(db_session, DunningRunRequest())
+
+    db_session.refresh(invoice)
+    assert response.accounts_scanned == 0
+    assert response.cases_created == 0
+    assert response.actions_created == 0
+    assert invoice.status == InvoiceStatus.issued
+    assert (
+        db_session.query(DunningCase)
+        .filter(DunningCase.account_id == subscriber.id)
+        .count()
+        == 0
+    )
+
+
+def test_prepaid_monthly_dunning_does_not_suspend_service(
+    db_session, subscriber, subscription, catalog_offer
+):
+    """Prepaid service cuts are owned by prepaid_balance_sweep, not dunning."""
+    from decimal import Decimal
+
+    from app.models.billing import Invoice, InvoiceLine, InvoiceStatus
     from app.models.catalog import (
         BillingCycle,
         BillingMode,
-        PolicyDunningStep,
-        PolicySet,
         SubscriptionStatus,
     )
-    from app.models.catalog import DunningAction as CatalogDunningAction
     from app.models.domain_settings import DomainSetting, SettingDomain
     from app.schemas.collections import DunningRunRequest
     from app.services.account_lifecycle import get_active_locks
@@ -1039,20 +1056,6 @@ def test_prepaid_monthly_dunning_suspends_without_extra_notice_clock(
             ),
         ]
     )
-    policy_set = PolicySet(name="Prepaid Immediate Suspend Policy")
-    db_session.add(policy_set)
-    db_session.flush()
-    db_session.add(
-        PolicyDunningStep(
-            policy_set_id=policy_set.id,
-            day_offset=1,
-            action=CatalogDunningAction.suspend,
-            note="prepaid suspend",
-        )
-    )
-    catalog_offer.policy_set_id = policy_set.id
-    if subscription.offer_version is not None:
-        subscription.offer_version.policy_set_id = policy_set.id
     invoice = Invoice(
         account_id=subscriber.id,
         invoice_number="INV-PREPAID-DUN-RUN-2",
@@ -1063,14 +1066,30 @@ def test_prepaid_monthly_dunning_suspends_without_extra_notice_clock(
         metadata_={},
     )
     db_session.add(invoice)
+    db_session.flush()
+    db_session.add(
+        InvoiceLine(
+            invoice_id=invoice.id,
+            subscription_id=subscription.id,
+            description="Prepaid renewal",
+            quantity=Decimal("1.000"),
+            unit_price=Decimal("100.00"),
+            amount=Decimal("100.00"),
+            metadata_={"kind": "base_subscription"},
+        )
+    )
     db_session.commit()
 
     response = collections_service.dunning_workflow.run(db_session, DunningRunRequest())
 
     db_session.refresh(subscription)
-    assert response.actions_created == 1
-    assert subscription.status == SubscriptionStatus.suspended
-    assert get_active_locks(db_session, subscription_id=str(subscription.id))
+    db_session.refresh(invoice)
+    assert response.accounts_scanned == 0
+    assert response.skipped == 0
+    assert response.actions_created == 0
+    assert invoice.status == InvoiceStatus.issued
+    assert subscription.status == SubscriptionStatus.active
+    assert not get_active_locks(db_session, subscription_id=str(subscription.id))
 
 
 def test_dunning_run_executes_step_for_active_case(

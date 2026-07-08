@@ -38,6 +38,10 @@ from app.models.network import SubscriberAdditionalRoute
 from app.models.subscriber import Address, Subscriber, SubscriberStatus
 from app.services import enforcement_window, settings_spec
 from app.services.billing import _recalculate_invoice_totals
+from app.services.billing.invoice_classification import (
+    collectible_ar_invoice_filter,
+    prepaid_non_ar_invoice_ids,
+)
 from app.services.billing.invoices import next_invoice_number
 from app.services.billing.reconcile_unposted import settle_open_invoices_from_credit
 from app.services.billing_prepaid_overlap_repair import apply_prepaid_overlap_hold
@@ -774,6 +778,7 @@ def _emit_invoice_reminders(
     invoices = (
         db.query(Invoice)
         .filter(Invoice.is_active.is_(True))
+        .filter(collectible_ar_invoice_filter())
         .filter(
             Invoice.status.in_([InvoiceStatus.issued, InvoiceStatus.partially_paid])
         )
@@ -788,6 +793,10 @@ def _emit_invoice_reminders(
         if not invoice.due_at or (invoice.balance_due or Decimal("0.00")) <= Decimal(
             "0.00"
         ):
+            continue
+        if (invoice.metadata_ or {}).get("reconciliation_hold"):
+            continue
+        if apply_prepaid_overlap_hold(db, invoice):
             continue
         due_at = _as_utc(invoice.due_at)
         if due_at is None:
@@ -834,6 +843,7 @@ def _emit_dunning_escalations(
     invoices = (
         db.query(Invoice)
         .filter(Invoice.is_active.is_(True))
+        .filter(collectible_ar_invoice_filter())
         .filter(
             Invoice.status.in_(
                 [
@@ -854,6 +864,10 @@ def _emit_dunning_escalations(
         if not invoice.due_at or (invoice.balance_due or Decimal("0.00")) <= Decimal(
             "0.00"
         ):
+            continue
+        if (invoice.metadata_ or {}).get("reconciliation_hold"):
+            continue
+        if apply_prepaid_overlap_hold(db, invoice):
             continue
         due_at = _as_utc(invoice.due_at)
         if due_at is None:
@@ -1094,21 +1108,19 @@ def run_invoice_cycle(
     # like blocked/suspended must not suppress invoicing: those accounts still
     # owe for active service periods and may need the invoice to clear the block.
     # Postpaid subscriptions are always invoiced. ``prepaid_monthly`` accounts
-    # (prepaid billing_mode on a MONTHLY-cycle offer) are invoiced too — billed
-    # in advance, due on issue — but ONLY when the cutover flag is enabled;
-    # default OFF keeps the scheduled cycle postpaid-only (no behaviour change),
-    # so this is safe to deploy before the prepaid-monthly migration runs.
+    # (prepaid billing_mode on a MONTHLY-cycle offer) can create advance invoice
+    # rows only when the cutover flag is enabled; those rows stay non-collectible
+    # drafts until funded from the wallet. Default OFF keeps the scheduled cycle
+    # postpaid-only.
     # Genuine daily/balance prepaid stays off-invoice regardless.
     include_prepaid_monthly = _setting_truthy(
         db, "prepaid_monthly_invoicing_enabled", default=False
     )
-    # Deposit-is-truth: when enabled, a prepaid advance invoice is created DRAFT
-    # (not AR, never overdue, never dunned) and only issued+settled from the
-    # wallet when the deposit covers it — see docs/designs/
-    # PREPAID_INVOICE_DEPOSIT_ALIGNMENT.md. Default OFF = legacy issue-on-create.
-    prepaid_draft_until_funded = _setting_truthy(
-        db, "prepaid_draft_until_funded", default=False
-    )
+    # Deposit-is-truth: prepaid advance invoices created by the scheduled runner
+    # are DRAFT (not AR, never overdue, never dunned) until the wallet fully
+    # funds them. Prepaid service enforcement is owned by the balance sweep, so
+    # runner-created prepaid invoices must never behave like postpaid AR.
+    prepaid_runner_draft_until_funded = True
     mode_filter = Subscription.billing_mode != BillingMode.prepaid
     if include_prepaid_monthly:
         monthly_offer_ids = select(CatalogOffer.id).where(
@@ -1140,23 +1152,38 @@ def run_invoice_cycle(
             .all()
         )
 
-    prepaid_skipped = (
+    prepaid_skipped_query = (
         db.query(Subscription)
         .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
         .filter(Subscription.status == SubscriptionStatus.active)
         .filter(Subscriber.status.in_(BILLABLE_SUBSCRIBER_STATUSES))
         .filter(Subscription.billing_mode == BillingMode.prepaid)
-        .count()
     )
+    if include_prepaid_monthly:
+        prepaid_skipped_query = prepaid_skipped_query.outerjoin(
+            CatalogOffer, CatalogOffer.id == Subscription.offer_id
+        ).filter(
+            or_(
+                CatalogOffer.id.is_(None),
+                CatalogOffer.billing_cycle != BillingCycle.monthly,
+            )
+        )
+    prepaid_skipped = prepaid_skipped_query.count()
     if prepaid_skipped:
+        reason = (
+            "non-monthly prepaid offer"
+            if include_prepaid_monthly
+            else "prepaid opt-in disabled"
+        )
         logger.info(
-            "Invoice cycle skipped %d prepaid subscription(s) (prepaid opt-in disabled)",
+            "Invoice cycle skipped %d prepaid subscription(s) (%s)",
             prepaid_skipped,
+            reason,
         )
 
     subscriptions = active_subscriptions + pending_subscriptions
 
-    invoices: dict[str, Invoice] = {}
+    invoices: dict[tuple[str, datetime, datetime, BillingMode], Invoice] = {}
     newly_created_invoices: list[Invoice] = []
     summary: dict[str, Any] = {
         "run_at": run_at,
@@ -1318,16 +1345,30 @@ def run_invoice_cycle(
             summary["pending_activated"] += 1
 
         account_id = str(subscription.subscriber_id)
-        invoice = invoices.get(account_id)
+        invoice_key = (
+            account_id,
+            period_start,
+            period_end,
+            subscription.billing_mode,
+        )
+        invoice = invoices.get(invoice_key)
         if not invoice:
-            invoice = (
+            invoice_query = (
                 db.query(Invoice)
                 .filter(Invoice.account_id == subscription.subscriber_id)
                 .filter(Invoice.billing_period_start == period_start)
                 .filter(Invoice.billing_period_end == period_end)
                 .filter(Invoice.is_active.is_(True))
-                .first()
             )
+            if subscription.billing_mode == BillingMode.prepaid:
+                invoice_query = invoice_query.filter(
+                    Invoice.id.in_(prepaid_non_ar_invoice_ids())
+                )
+            else:
+                invoice_query = invoice_query.filter(collectible_ar_invoice_filter())
+            invoice = invoice_query.first()
+            if invoice:
+                invoices[invoice_key] = invoice
         if not invoice:
             # Use subscriber-level payment_due_days if set, else global
             account = db.get(Subscriber, subscription.subscriber_id)
@@ -1336,8 +1377,6 @@ def run_invoice_cycle(
                 if account
                 else global_due_days
             )
-            # prepaid_monthly is billed in advance: the invoice is due on issue
-            # (a short grace lives in dunning) so non-payment enforces promptly.
             if subscription.billing_mode == BillingMode.prepaid:
                 due_days = 0
             # Deposit-is-truth: a prepaid advance invoice starts DRAFT with no due
@@ -1346,7 +1385,7 @@ def run_invoice_cycle(
             # dunning / available-balance by contract, so an unfunded renewal
             # never becomes a phantom receivable.
             prepaid_draft = (
-                prepaid_draft_until_funded
+                prepaid_runner_draft_until_funded
                 and subscription.billing_mode == BillingMode.prepaid
             )
             invoice = Invoice(
@@ -1361,7 +1400,7 @@ def run_invoice_cycle(
             )
             db.add(invoice)
             db.flush()
-            invoices[account_id] = invoice
+            invoices[invoice_key] = invoice
             newly_created_invoices.append(invoice)
             summary["invoices_created"] += 1
         elif currency and invoice.currency != currency:
@@ -1419,6 +1458,7 @@ def run_invoice_cycle(
             billing_line_key=billing_line_key,
         )
         db.add(line)
+        db.flush()
         summary["subscriptions_billed"] += 1
         summary["lines_created"] += 1
         # Bill active recurring add-ons (e.g. extra IP blocks) on the same invoice.
@@ -1470,7 +1510,7 @@ def run_invoice_cycle(
         # settle_single_invoice_from_credit(only_if_full=True), which is targeted
         # to the one invoice (safe against migrated historical rows, unlike the
         # account-wide settle below). See PREPAID_INVOICE_DEPOSIT_ALIGNMENT.md.
-        if prepaid_draft_until_funded and newly_created_invoices:
+        if prepaid_runner_draft_until_funded and newly_created_invoices:
             from app.services.billing.reconcile_unposted import (
                 settle_single_invoice_from_credit,
             )
@@ -2034,6 +2074,7 @@ def mark_overdue_invoices(db: Session) -> dict[str, int]:
         .filter(Invoice.balance_due > Decimal("0.00"))
         .all()
     )
+    prepaid_non_ar_ids = set(db.scalars(prepaid_non_ar_invoice_ids()))
 
     grace_hours = _resolve_suspension_grace_hours(db)
 
@@ -2052,6 +2093,8 @@ def mark_overdue_invoices(db: Session) -> dict[str, int]:
             db, invoice
         ):
             skipped_on_hold += 1
+            continue
+        if invoice.id in prepaid_non_ar_ids:
             continue
         if metadata.get("overdue_event_sent"):
             # Already announced in a prior run — just ensure status is overdue
