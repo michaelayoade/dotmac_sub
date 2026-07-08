@@ -76,6 +76,7 @@ def _build_billing_activity(db: Session, account_id: str, limit: int = 25) -> li
         activity.append(
             SimpleNamespace(
                 kind="payment",
+                payment_id=str(payment.id),
                 direction="credit",
                 title=title,
                 description=payment.memo or status.replace("_", " ").title(),
@@ -101,6 +102,7 @@ def _build_billing_activity(db: Session, account_id: str, limit: int = 25) -> li
         activity.append(
             SimpleNamespace(
                 kind="credit_note",
+                payment_id=None,
                 direction="credit",
                 title="Credit added",
                 description=note.memo or status,
@@ -123,6 +125,7 @@ def _build_billing_activity(db: Session, account_id: str, limit: int = 25) -> li
         activity.append(
             SimpleNamespace(
                 kind=source or "ledger",
+                payment_id=None,
                 direction=entry_type,
                 title=entry.memo or category or source.replace("_", " ").title(),
                 description=category or source.replace("_", " ").title(),

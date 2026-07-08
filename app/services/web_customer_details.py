@@ -75,6 +75,7 @@ from app.services.audit_helpers import (
     resolve_actor_name,
 )
 from app.services.billing_settings import resolve_payment_due_days
+from app.services.collections import get_available_balance
 from app.services.credential_crypto import decrypt_credential
 from app.services.network._common import decode_huawei_hex_serial
 
@@ -686,6 +687,17 @@ def _build_common_financials(db: Session, account_ids):
         in (InvoiceStatus.issued, InvoiceStatus.partially_paid, InvoiceStatus.overdue)
     )
 
+    current_balance = Decimal("0.00")
+    for account_id in account_ids or []:
+        try:
+            current_balance += get_available_balance(db, str(account_id))
+        except Exception:
+            logger.warning(
+                "Failed to resolve current balance for customer account %s",
+                account_id,
+                exc_info=True,
+            )
+
     total_invoiced = 0
     total_paid = 0
     overdue_invoices = 0
@@ -736,6 +748,7 @@ def _build_common_financials(db: Session, account_ids):
         "payments": payments,
         "balance_due": balance_due,
         "financials": {
+            "current_balance": current_balance,
             "total_invoiced": total_invoiced,
             "total_paid": total_paid,
             "overdue_invoices": overdue_invoices,

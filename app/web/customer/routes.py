@@ -27,6 +27,7 @@ from sse_starlette.sse import EventSourceResponse
 from app.db import get_db
 from app.services import auth_flow as auth_flow_service
 from app.services import autopay as autopay_service
+from app.services import billing_payment_receipts as payment_receipts_service
 from app.services import chat_session as chat_session_service
 from app.services import crm_portal, customer_portal
 from app.services import customer_portal_bandwidth as customer_portal_bandwidth_service
@@ -675,6 +676,80 @@ def customer_invoice_pdf(
     return RedirectResponse(
         url=f"/portal/billing/invoices/{invoice_id}?pdf_notice=generating",
         status_code=303,
+    )
+
+
+@router.get("/billing/payments/{payment_id}/receipt", response_class=HTMLResponse)
+def customer_payment_receipt(
+    request: Request,
+    payment_id: UUID,
+    db: Session = Depends(get_db),
+) -> Response:
+    """View a customer payment receipt."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+    try:
+        detail = payment_receipts_service.get_customer_payment_receipt_context(
+            db, customer, str(payment_id)
+        )
+    except HTTPException:
+        return templates.TemplateResponse(
+            "customer/errors/404.html",
+            {"request": request, "message": "Receipt not found"},
+            status_code=404,
+        )
+
+    return templates.TemplateResponse(
+        "customer/billing/receipt.html",
+        {
+            "request": request,
+            "customer": customer,
+            **detail,
+            "active_page": "billing",
+        },
+    )
+
+
+@router.get("/billing/payments/{payment_id}/receipt/pdf")
+def customer_payment_receipt_pdf(
+    request: Request,
+    payment_id: UUID,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Download a customer payment receipt PDF."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+    try:
+        detail = payment_receipts_service.get_customer_payment_receipt_context(
+            db, customer, str(payment_id)
+        )
+        pdf_bytes = payment_receipts_service.build_receipt_pdf(detail)
+    except HTTPException:
+        return templates.TemplateResponse(
+            "customer/errors/404.html",
+            {"request": request, "message": "Receipt not found"},
+            status_code=404,
+        )
+    except Exception:
+        logger.warning("Failed to render payment receipt PDF", exc_info=True)
+        return templates.TemplateResponse(
+            "customer/errors/400.html",
+            {"request": request, "message": "Unable to generate receipt PDF"},
+            status_code=500,
+        )
+
+    from app.services.file_storage import build_content_disposition
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": build_content_disposition(
+                payment_receipts_service.download_filename(detail["payment"])
+            )
+        },
     )
 
 
