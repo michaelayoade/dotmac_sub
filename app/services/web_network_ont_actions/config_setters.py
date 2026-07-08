@@ -44,6 +44,11 @@ def _int_or_none(value: object) -> int | None:
         return None
 
 
+def _huawei_command_unsupported(message: object) -> bool:
+    text = str(message or "").lower()
+    return "unknown command" in text or "parameter error" in text
+
+
 def _pppoe_omci_ip_index(
     effective_values: dict[str, object],
     *,
@@ -211,20 +216,24 @@ def _set_pppoe_config_omci(
         }
     )
     if not inet_result.success:
-        return ActionResult(
-            success=False,
-            message=f"WAN PPPoE OMCI apply failed: {inet_result.message}",
-            data={
-                "delivery_transport": "olt_omci",
-                "delivery_pending": False,
-                "steps": steps,
-                "ip_index": ip_index,
-                "wan_vlan": wan_vlan,
-            },
-        )
+        if _huawei_command_unsupported(inet_result.message):
+            steps[-1]["success"] = True
+            steps[-1]["skipped"] = True
+        else:
+            return ActionResult(
+                success=False,
+                message=f"WAN PPPoE OMCI apply failed: {inet_result.message}",
+                data={
+                    "delivery_transport": "olt_omci",
+                    "delivery_pending": False,
+                    "steps": steps,
+                    "ip_index": ip_index,
+                    "wan_vlan": wan_vlan,
+                },
+            )
 
     wan_profile_id = _int_or_none(effective_values.get("wan_config_profile_id"))
-    if wan_profile_id is not None:
+    if wan_profile_id is not None and wan_profile_id > 0:
         wan_result = adapter.configure_wan_config(
             ctx.fsp,
             ctx.olt_ont_id,
