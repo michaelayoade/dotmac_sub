@@ -1,0 +1,97 @@
+{% extends "layouts/customer.html" %}
+
+{% block title %}Payment Receipt - My Account{% endblock %}
+
+{% block content %}
+{% set currency_symbol = '₦' if currency == 'NGN' else currency ~ ' ' %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="mb-3 flex items-center gap-2 text-sm text-stone-500 dark:text-stone-400">
+                <a href="/portal/billing" class="hover:text-brand-600 dark:hover:text-brand-400">Billing</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="font-medium text-stone-900 dark:text-white">{{ receipt_number }}</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-stone-900 dark:text-white">Payment Receipt</h1>
+        </div>
+        <a href="/portal/billing/payments/{{ payment.id }}/receipt/pdf" class="inline-flex items-center gap-2 rounded-xl border border-stone-300 bg-white px-5 py-2.5 text-sm font-semibold text-stone-700 shadow-sm transition hover:bg-stone-50 dark:border-stone-600 dark:bg-stone-700 dark:text-stone-200 dark:hover:bg-stone-600">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+            Download
+        </a>
+    </div>
+
+    <div class="mx-auto max-w-4xl overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-premium dark:border-stone-700 dark:bg-stone-800">
+        <div class="relative min-h-36 bg-[#176f37] px-7 py-6 text-white">
+            <div class="inline-flex bg-white px-3 py-2 text-2xl font-black tracking-wide text-[#176f37]">DOTMAC</div>
+            <p class="absolute bottom-5 left-7 text-lg font-extrabold">{{ received_from }}</p>
+            <div class="absolute right-6 top-6 w-48 rounded-xl bg-white p-4 text-stone-900 shadow-sm">
+                <p class="text-xs font-black text-[#176f37]">RECEIPT</p>
+                <p class="mt-2 text-lg font-black">{{ receipt_number }}</p>
+                <p class="mt-2 text-xs leading-6 text-stone-700">Date: {{ receipt_date.strftime('%Y-%m-%d') }}<br>Account: {{ account_number }}</p>
+            </div>
+        </div>
+
+        <div class="p-5 sm:p-7">
+            <div class="grid gap-3 md:grid-cols-3">
+                <div class="rounded-lg border border-stone-200 p-4 dark:border-stone-700">
+                    <p class="text-xs font-black text-[#176f37]">RECEIVED FROM</p>
+                    <p class="mt-3 text-sm font-bold text-stone-900 dark:text-white">{{ received_from }}</p>
+                    <p class="mt-1 text-xs text-stone-500 dark:text-stone-400">{{ received_email }}</p>
+                </div>
+                <div class="rounded-lg border border-emerald-300 bg-emerald-50 p-4 dark:border-emerald-800 dark:bg-emerald-950/30">
+                    <p class="text-xs font-black text-[#176f37]">AMOUNT RECEIVED</p>
+                    <p class="mt-3 text-xl font-black text-[#176f37]">{{ currency_symbol }}{{ "{:,.2f}".format(amount_received) }}</p>
+                    <p class="mt-1 text-xs text-stone-600 dark:text-stone-300">Status: {{ status }}</p>
+                </div>
+                <div class="rounded-lg border border-stone-200 p-4 dark:border-stone-700">
+                    <p class="text-xs font-black text-[#176f37]">TRANSACTION REF</p>
+                    <p class="mt-3 text-sm font-bold text-stone-900 dark:text-white">{{ transaction_ref }}</p>
+                    <p class="mt-1 text-xs text-stone-500 dark:text-stone-400">Method: {{ method }}</p>
+                </div>
+            </div>
+
+            <div class="mt-7 overflow-hidden rounded-lg border border-stone-200 dark:border-stone-700">
+                <table class="min-w-full">
+                    <thead class="bg-[#176f37] text-white">
+                        <tr>
+                            <th class="px-4 py-3 text-left text-xs font-black">INVOICE</th>
+                            <th class="px-4 py-3 text-left text-xs font-black">STATUS</th>
+                            <th class="px-4 py-3 text-right text-xs font-black">AMOUNT APPLIED</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-stone-100 dark:divide-stone-700">
+                        {% if allocations %}
+                        {% for allocation in allocations %}
+                        <tr>
+                            <td class="px-4 py-4 text-sm text-stone-900 dark:text-white">{{ allocation.invoice_number }}</td>
+                            <td class="px-4 py-4 text-sm text-stone-700 dark:text-stone-300">{{ allocation.status }}</td>
+                            <td class="px-4 py-4 text-right text-sm font-bold text-stone-900 dark:text-white">{{ currency_symbol }}{{ "{:,.2f}".format(allocation.amount) }}</td>
+                        </tr>
+                        {% endfor %}
+                        {% else %}
+                        <tr><td colspan="3" class="px-4 py-10 text-center text-sm text-stone-500 dark:text-stone-400">No invoice allocation recorded.</td></tr>
+                        {% endif %}
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="mt-7 ml-auto w-full max-w-xs rounded-lg border border-stone-200 p-4 dark:border-stone-700">
+                <div class="flex justify-between text-sm"><span>Amount Received</span><strong>{{ currency_symbol }}{{ "{:,.2f}".format(amount_received) }}</strong></div>
+                <div class="mt-2 flex justify-between text-sm"><span>Amount Applied</span><strong>{{ currency_symbol }}{{ "{:,.2f}".format(amount_applied) }}</strong></div>
+                <div class="mt-2 flex justify-between text-sm text-[#176f37]"><span>Unallocated Credit</span><strong>{{ currency_symbol }}{{ "{:,.2f}".format(unallocated_credit) }}</strong></div>
+            </div>
+
+            <div class="mt-7 border-l-4 border-emerald-500 bg-emerald-50 p-4 text-sm dark:bg-emerald-950/30">
+                <p class="font-black text-[#176f37]">PAYMENT DETAILS</p>
+                <p class="mt-2 text-stone-700 dark:text-stone-300">Payment Date: {{ receipt_date.strftime('%Y-%m-%d %H:%M UTC') }}</p>
+                <p class="text-stone-700 dark:text-stone-300">Payment ID: {{ payment.id }}</p>
+            </div>
+
+            <div class="mt-14 flex justify-between text-xs text-stone-500 dark:text-stone-400">
+                <span>Prepared by Dotmac Selfcare</span>
+                <span>Thank you for your business.</span>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
