@@ -710,6 +710,8 @@ def _service_recovery_context(
     ppp_ip = str(_tr069_value(ppp_data, "ExternalIPAddress") or "").strip()
     ppp_username = str(_tr069_value(ppp_data, "Username") or "").strip()
     ppp_vlan = str(_tr069_value(ppp_data, "X_HW_VLAN") or "").strip()
+    ppp_connected = ppp_status.lower() == "connected" and bool(ppp_ip)
+    ppp_object_present = bool(ppp_data)
     drift_rows = [
         _drift_row(
             "PPPoE username",
@@ -756,7 +758,7 @@ def _service_recovery_context(
             )
         )
 
-    if ppp_status.lower() == "connected" and ppp_ip:
+    if ppp_connected:
         rows.append(
             _recovery_row(
                 "PPP WAN",
@@ -832,7 +834,8 @@ def _service_recovery_context(
             _recovery_row(
                 "LAN/WiFi bind",
                 "pending",
-                "Cannot check binding until a PPP WAN exists.",
+                "Binding cannot be checked yet because the internet WAN is missing.",
+                detail="Create or apply the PPPoE WAN first. Bind Internet WAN cannot create it.",
             )
         )
     elif enabled_binds:
@@ -860,6 +863,88 @@ def _service_recovery_context(
         (str(row["status"]) for row in drift_rows),
         key=lambda s: severity_rank[s],
     )
+    bind_action_enabled = ppp_connected
+    bind_action_reason = "Select SSID/LAN ports, then bind the connected internet WAN."
+    recovery_stage = {
+        "title": "No recovery action needed",
+        "message": "The checklist does not see a service recovery blocker.",
+        "action_label": "",
+        "action_hint": "",
+        "tone": "ok",
+    }
+
+    if not ppp_object_present:
+        bind_action_enabled = False
+        bind_action_reason = (
+            "Disabled because the ONT does not show an internet WAN object yet."
+        )
+        recovery_stage = {
+            "title": "Internet WAN object is missing",
+            "message": (
+                "The ONT does not currently show a PPPoE internet WAN service. "
+                "There is nothing for the Bind button to attach to WiFi or LAN."
+            ),
+            "action_label": "Apply WAN",
+            "action_hint": (
+                "Use Apply WAN in the WAN section above, then wait for ACS to refresh "
+                "until the PPP WAN appears."
+            ),
+            "tone": "fail",
+        }
+    elif not ppp_connected:
+        bind_action_enabled = False
+        bind_action_reason = "Disabled because the PPP WAN exists but is not connected."
+        recovery_stage = {
+            "title": "Internet WAN exists but has not connected",
+            "message": (
+                "The ONT has a PPPoE WAN object, but it has not dialed successfully yet. "
+                "Binding ports now will not bring the customer online."
+            ),
+            "action_label": "Check PPPoE/RADIUS",
+            "action_hint": (
+                "Confirm PPPoE username, password, VLAN, RADIUS account, and ACS refresh state."
+            ),
+            "tone": "warn",
+        }
+    elif not enabled_binds:
+        recovery_stage = {
+            "title": "Internet WAN is connected but not attached to customer ports",
+            "message": (
+                "The ONT has an active internet WAN. Bind it to SSID1 and the required "
+                "LAN ports so customer devices can pass traffic."
+            ),
+            "action_label": "Bind Internet WAN",
+            "action_hint": "Select the customer-facing WiFi/LAN ports below, then click Bind Internet WAN.",
+            "tone": "warn",
+        }
+
+    common_issues = [
+        {
+            "label": "No ACS inform",
+            "meaning": "The ONT has not checked in, so TR-069 changes may not reach it yet.",
+        },
+        {
+            "label": "Missing service-port",
+            "meaning": "The OLT path for the internet VLAN is not present, so traffic cannot pass.",
+        },
+        {
+            "label": "WAN object missing",
+            "meaning": "The ONT has no PPPoE internet service object; Apply WAN must run first.",
+        },
+        {
+            "label": "PPP not connected",
+            "meaning": "The WAN exists, but PPPoE/RADIUS has not accepted the session.",
+        },
+        {
+            "label": "WAN not bound",
+            "meaning": "Internet is active on the ONT but not attached to WiFi or Ethernet ports.",
+        },
+        {
+            "label": "App/device drift",
+            "meaning": "The saved config differs from what ACS or the OLT last saw on the device.",
+        },
+    ]
+
     next_action = "No recovery action needed from this checklist."
     if worst == "fail":
         failed = next(row for row in rows if row["status"] == "fail")
@@ -882,6 +967,12 @@ def _service_recovery_context(
             "rows": rows,
             "status": worst,
             "next_action": next_action,
+            "recovery_stage": recovery_stage,
+            "common_issues": common_issues,
+            "bind_action_enabled": bind_action_enabled,
+            "bind_action_reason": bind_action_reason,
+            "ppp_object_present": ppp_object_present,
+            "ppp_connected": ppp_connected,
             "drift_rows": drift_rows,
             "drift_status": drift_worst,
             "pppoe_username": expected_username,
