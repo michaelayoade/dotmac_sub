@@ -31,10 +31,11 @@ from app.services.network.equipment_identity import normalize_ont_equipment_id
 from app.services.network.olt_inventory import get_olt_or_none
 from app.services.network.olt_web_audit import log_olt_audit_event
 from app.services.network.serial_utils import (
-    normalize as normalize_serial,
+    build_huawei_external_id,
+    normalized_serial_sql,
 )
 from app.services.network.serial_utils import (
-    normalized_serial_sql,
+    normalize as normalize_serial,
 )
 from app.services.network.serial_utils import (
     search_candidates as serial_search_candidates,
@@ -303,6 +304,7 @@ def create_or_find_ont_for_authorized_serial(
         if str(olt_run_state or "").strip().lower() == "online"
         else None
     )
+    scoped_external_id = build_huawei_external_id(fsp, ont_id_on_olt)
 
     existing = db.scalars(
         select(OntUnit).where(
@@ -317,7 +319,7 @@ def create_or_find_ont_for_authorized_serial(
                 existing, OntAuthorizationStatus.authorized, strict=False
             )
             if ont_id_on_olt is not None:
-                existing.external_id = str(ont_id_on_olt)
+                existing.external_id = scoped_external_id or str(ont_id_on_olt)
             parts = fsp.split("/")
             if len(parts) == 3:
                 existing.board = f"{parts[0]}/{parts[1]}"
@@ -368,7 +370,7 @@ def create_or_find_ont_for_authorized_serial(
     new_ont = OntUnit(
         id=uuid.uuid4(),
         serial_number=display_serial,
-        external_id=str(ont_id_on_olt) if ont_id_on_olt is not None else None,
+        external_id=scoped_external_id if ont_id_on_olt is not None else None,
         vendor=vendor,
         model=getattr(matched_candidate, "model", None),
         mac_address=normalize_mac_address(getattr(matched_candidate, "mac", None)),

@@ -13,7 +13,8 @@ Catalog correction on 2026-06-24 reclassified the four mislabelled daily-cycle
 prepaid offers as monthly. There is no genuine daily prepaid cohort in
 production. Therefore:
 
-- all active prepaid subscriptions should bill through monthly invoice-in-advance;
+- active prepaid subscriptions may create monthly invoice-in-advance accounting
+  rows, but those rows stay draft until funded from wallet credit;
 - invoice totals must apply VAT exclusively: `net + 7.5% VAT`.
 
 For the ₦17,500 plan, the customer-facing invoice total is:
@@ -24,7 +25,8 @@ For the ₦17,500 plan, the customer-facing invoice total is:
 
 ## 2. Revenue Recovery Path
 
-The immediate revenue fix is monthly prepaid invoicing.
+The immediate revenue fix is monthly prepaid accounting plus wallet settlement,
+not prepaid AR collection.
 
 1. Dry-run `run_invoice_cycle` with `prepaid_monthly_invoicing_enabled=true` and
    verify:
@@ -33,7 +35,8 @@ The immediate revenue fix is monthly prepaid invoicing.
    - proration behavior is understood before the first real run;
    - invoice count and totals match the reviewed export.
 2. Run the real invoice cycle only after explicit finance/ops approval because
-   it creates customer-visible invoices and AR.
+   it creates customer-visible accounting rows. Underfunded prepaid rows must
+   remain draft; they must not become AR.
 3. Enable scheduled monthly-prepaid invoicing only after the manual run is
    verified.
 
@@ -48,10 +51,9 @@ Postpaid overdue recovery can proceed independently:
 - consider tightening the postpaid dunning policy from day-60 suspension to an
   earlier finance-approved ladder.
 
-Prepaid enforcement remains gated until account balance truth is local-ledger
-only. Do not re-enable deposit-based prepaid enforcement. The day-0 prepaid
-policy is correct for pay-before semantics, but it is only safe once the
-available-balance calculation no longer falls back to imported deposits.
+Prepaid enforcement is not dunning. It remains a local-balance sweep: warn,
+then lapse/suspend service when wallet balance is insufficient. Do not use
+prepaid invoices as the suspension signal.
 
 ## 4. Ledger Cleanup Gates
 

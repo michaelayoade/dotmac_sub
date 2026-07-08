@@ -61,6 +61,7 @@ from app.models.notification import (
     NotificationStatus,
 )
 from app.models.radius import RadiusClient, RadiusServer
+from app.models.radius_active_session import RadiusActiveSession
 from app.models.router_management import Router, RouterStatus
 from app.models.subscriber import Address, AddressType, Subscriber
 from app.models.tr069 import (
@@ -694,6 +695,16 @@ def test_core_devices_list_page_data_includes_uptime_ping_history_and_backup(
     assert payload["uptime_map"][key] is not None
     assert payload["ping_history_map"][key][0]["ok"] is True
     assert payload["backup_map"][key]["status"] == "success"
+
+
+def test_core_network_table_shows_ping_result_and_device_tooltip():
+    template = Path("templates/admin/network/network-devices/index.html").read_text()
+
+    assert "POP: {{ device_pop_name }}" in template
+    assert "latest_ping.label if latest_ping else '-'" in template
+    assert "latest_ping.recorded_at.strftime('%Y-%m-%d %H:%M')" in template
+    assert "bg-green-100 text-green-700" in template
+    assert "bg-red-100 text-red-700" in template
 
 
 def test_core_devices_list_page_data_prefers_zabbix_live_status(
@@ -2917,6 +2928,83 @@ def test_ont_tr069_persists_observed_runtime_fields(db_session, monkeypatch):
     assert isinstance(refreshed.tr069_last_snapshot, dict)
     assert refreshed.tr069_last_snapshot["wan"]["WAN IP"] == "100.64.10.5"
     assert refreshed.tr069_last_snapshot["raw_device"] == {}
+
+
+def test_ont_tr069_keeps_radius_framed_ip_as_observed_wan(db_session, monkeypatch):
+    olt = OLTDevice(name="OLT-TR069-RADIUS-RUNTIME", mgmt_ip="198.51.100.131")
+    db_session.add(olt)
+    db_session.flush()
+    subscriber = Subscriber(
+        first_name="Radius",
+        last_name="Runtime",
+        email="radius-runtime@example.com",
+    )
+    db_session.add(subscriber)
+    db_session.flush()
+    ont = OntUnit(
+        serial_number="ONT-TR069-RADIUS-RUNTIME-001",
+        is_active=True,
+        olt_device_id=olt.id,
+    )
+    db_session.add(ont)
+    db_session.flush()
+    db_session.add(
+        OntAssignment(
+            ont_unit_id=ont.id,
+            subscriber_id=subscriber.id,
+            active=True,
+            pppoe_username="100016329",
+            assigned_at=datetime.now(UTC),
+        )
+    )
+    db_session.add(
+        RadiusActiveSession(
+            username="100016329",
+            acct_session_id="sess-radius-runtime",
+            subscriber_id=subscriber.id,
+            framed_ip_address="172.16.145.51",
+            session_start=datetime.now(UTC) - timedelta(minutes=5),
+            last_update=datetime.now(UTC),
+        )
+    )
+    db_session.commit()
+
+    class _FakeClient:
+        @staticmethod
+        def get_device(_device_id):
+            return {}
+
+        @staticmethod
+        def parse_device_id(_device_id):
+            return ("HWTC7D", "EG8145V5", "HWTC7D4806C3")
+
+        @staticmethod
+        def extract_parameter_value(_device, path):
+            values = {
+                "VirtualParameters.WAN_IP": "172.16.204.34",
+                "VirtualParameters.WAN_Status": "Up",
+            }
+            return values.get(path)
+
+    ont_tr069_module = importlib.import_module("app.services.network.ont_tr069")
+    monkeypatch.setattr(
+        ont_tr069_module,
+        "resolve_genieacs",
+        lambda _db, _ont: (_FakeClient(), "fake-device-id"),
+    )
+
+    summary = OntTR069.get_device_summary(
+        db_session,
+        str(ont.id),
+        persist_observed_runtime=True,
+    )
+
+    assert summary.available is True
+    refreshed = db_session.get(OntUnit, ont.id)
+    assert refreshed is not None
+    assert refreshed.observed_wan_ip == "172.16.145.51"
+    assert refreshed.observed_pppoe_status == "Connected"
+    assert refreshed.tr069_last_snapshot["wan"]["WAN IP"] == "172.16.204.34"
 
 
 def test_ont_tr069_prefers_device_mac_over_first_lan_port(db_session, monkeypatch):

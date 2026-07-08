@@ -28,11 +28,13 @@ from sqlalchemy import (
     DateTime,
     String,
     delete,
+    or_,
     select,
 )
 from sqlalchemy.orm import Session
 
 from app.models.catalog import NasDevice, Subscription, SubscriptionStatus
+from app.models.network import OntAssignment, OntUnit
 from app.models.radius_active_session import RadiusActiveSession
 from app.services.radius import (
     _active_external_sync_configs,
@@ -247,6 +249,57 @@ def _resolve_nas(db: Session, nas_ips: set[str]) -> dict[str, Any]:
     return out
 
 
+def _update_ont_runtime_from_radius(
+    db: Session,
+    *,
+    username: str,
+    subscriber_id: Any,
+    framed_ip_address: str | None,
+    observed_at: datetime,
+) -> int:
+    """Project the authoritative PPPoE framed IP onto assigned ONTs.
+
+    TR-069 can report the ONT management/TR-069 address as a WAN IP on some
+    devices. For active PPPoE subscribers, the RADIUS framed IP is the customer
+    WAN address we want to show in app runtime fields.
+    """
+    if not framed_ip_address or subscriber_id is None:
+        return 0
+
+    assignments = db.execute(
+        select(OntAssignment, OntUnit)
+        .join(OntUnit, OntUnit.id == OntAssignment.ont_unit_id)
+        .where(OntAssignment.active.is_(True))
+        .where(OntAssignment.subscriber_id == subscriber_id)
+        .where(
+            or_(
+                OntAssignment.pppoe_username == username,
+                OntAssignment.pppoe_username.is_(None),
+            )
+        )
+        .order_by(OntAssignment.assigned_at.desc(), OntAssignment.created_at.desc())
+    ).all()
+
+    changed = 0
+    for _assignment, ont in assignments:
+        before = (
+            ont.observed_wan_ip,
+            ont.observed_pppoe_status,
+            ont.observed_runtime_updated_at,
+        )
+        ont.observed_wan_ip = framed_ip_address
+        ont.observed_pppoe_status = "Connected"
+        ont.observed_runtime_updated_at = observed_at
+        after = (
+            ont.observed_wan_ip,
+            ont.observed_pppoe_status,
+            ont.observed_runtime_updated_at,
+        )
+        if after != before:
+            changed += 1
+    return changed
+
+
 def reconcile_active_sessions_from_radacct(
     db: Session, *, window_seconds: int | None = None
 ) -> dict[str, int]:
@@ -269,6 +322,7 @@ def reconcile_active_sessions_from_radacct(
         "pruned": 0,
         "unmatched_username": 0,
         "unresolved_nas": 0,
+        "ont_runtime_updated": 0,
         "skipped": 0,
         "errors": 0,
     }
@@ -341,6 +395,13 @@ def reconcile_active_sessions_from_radacct(
             row.nas_port_id = s["nas_port_id"]
             row.last_update = now
             result["upserted_updated"] += 1
+        result["ont_runtime_updated"] += _update_ont_runtime_from_radius(
+            db,
+            username=username,
+            subscriber_id=subscriber_id,
+            framed_ip_address=s["framed_ip_address"],
+            observed_at=s["acctupdatetime"] or now,
+        )
 
     db.flush()
 

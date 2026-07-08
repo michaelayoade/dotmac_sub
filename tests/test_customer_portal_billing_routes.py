@@ -44,6 +44,17 @@ class TestCustomerBillingRouteRegistration:
         }
         assert ("/portal/billing/pay/intent", "POST") in routes
 
+    def test_payment_receipt_routes_exist(self) -> None:
+        from app.web.customer.routes import router
+
+        routes = {
+            (getattr(route, "path", ""), method)
+            for route in router.routes
+            for method in getattr(route, "methods", set())
+        }
+        assert ("/portal/billing/payments/{payment_id}/receipt", "GET") in routes
+        assert ("/portal/billing/payments/{payment_id}/receipt/pdf", "GET") in routes
+
 
 class TestPaymentSuccessBanner:
     def test_payment_success_only_marks_service_restored_after_post_payment_check(

@@ -76,6 +76,7 @@ def _build_billing_activity(db: Session, account_id: str, limit: int = 25) -> li
         activity.append(
             SimpleNamespace(
                 kind="payment",
+                payment_id=str(payment.id),
                 direction="credit",
                 title=title,
                 description=payment.memo or status.replace("_", " ").title(),
@@ -101,6 +102,7 @@ def _build_billing_activity(db: Session, account_id: str, limit: int = 25) -> li
         activity.append(
             SimpleNamespace(
                 kind="credit_note",
+                payment_id=None,
                 direction="credit",
                 title="Credit added",
                 description=note.memo or status,
@@ -123,6 +125,7 @@ def _build_billing_activity(db: Session, account_id: str, limit: int = 25) -> li
         activity.append(
             SimpleNamespace(
                 kind=source or "ledger",
+                payment_id=None,
                 direction=entry_type,
                 title=entry.memo or category or source.replace("_", " ").title(),
                 description=category or source.replace("_", " ").title(),
@@ -378,17 +381,13 @@ def get_arrangement_error_context(
     account_id_str: str | None,
 ) -> dict:
     """Get context data for re-rendering the arrangement form after an error."""
-    invoices = billing_service.invoices.list(
-        db=db,
-        account_id=account_id_str,
-        status="overdue",
-        is_active=True,
-        order_by="due_at",
-        order_dir="asc",
-        limit=50,
-        offset=0,
+    balance_data = (
+        get_outstanding_balance(db, account_id_str)
+        if account_id_str
+        else {"invoices": [], "outstanding_balance": 0}
     )
-    outstanding_balance = sum(inv.balance_due or 0 for inv in invoices)
+    invoices = balance_data["invoices"]
+    outstanding_balance = balance_data["outstanding_balance"]
     # The form template needs the same eligibility fields as the GET page,
     # otherwise the error re-render falls into the "Not Eligible" branch.
     eligible = bool(account_id_str) and outstanding_balance and len(invoices) > 0

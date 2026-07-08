@@ -328,6 +328,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         LOG,
         "Best-effort on-view refresh; periodic reconcile backs it.",
     ),
+    "app.tasks.support_tickets.auto_confirm_resolved_tickets": _c(
+        "support",
+        SWEEP,
+        IDEMP,
+        STATUS,
+        "Closes pending-confirmation tickets only after their grace window; "
+        "closed/responded rows are skipped on re-run.",
+    ),
     "app.tasks.topology_lldp.run_lldp_topology_poll": _c(
         "network", SWEEP, IDEMP, HEALTH
     ),

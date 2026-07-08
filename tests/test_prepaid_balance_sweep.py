@@ -11,7 +11,14 @@ from decimal import Decimal
 
 import pytest
 
-from app.models.billing import LedgerEntry, LedgerEntryType, LedgerSource
+from app.models.billing import (
+    Invoice,
+    InvoiceLine,
+    InvoiceStatus,
+    LedgerEntry,
+    LedgerEntryType,
+    LedgerSource,
+)
 from app.models.catalog import BillingMode, SubscriptionStatus
 from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
@@ -155,6 +162,76 @@ def test_low_balance_first_run_arms_and_warns_without_suspend(
     assert notices[0].subject == "Low Balance Warning"
     # Body placeholders resolved (default template mentions the threshold).
     assert "100" in notices[0].body
+
+
+def test_prepaid_legacy_invoice_ar_does_not_reduce_wallet_balance(
+    db_session, subscriber_account, subscription
+):
+    _enable_control(db_session)
+    _make_prepaid(
+        db_session, subscriber_account, subscription, credit=Decimal("100.00")
+    )
+    invoice = Invoice(
+        account_id=subscriber_account.id,
+        invoice_number="INV-PREPAID-PHANTOM-AR",
+        status=InvoiceStatus.overdue,
+        total=Decimal("80.00"),
+        balance_due=Decimal("80.00"),
+        due_at=_MONDAY_NOON - timedelta(days=10),
+        metadata_={},
+    )
+    db_session.add(invoice)
+    db_session.flush()
+    db_session.add(
+        InvoiceLine(
+            invoice_id=invoice.id,
+            subscription_id=subscription.id,
+            description="Prepaid renewal",
+            quantity=Decimal("1.000"),
+            unit_price=Decimal("80.00"),
+            amount=Decimal("80.00"),
+            metadata_={"kind": "base_subscription"},
+        )
+    )
+    db_session.commit()
+
+    result = run_prepaid_balance_sweep(db_session, now=_MONDAY_NOON)
+
+    db_session.refresh(subscriber_account)
+    db_session.refresh(subscription)
+    assert result["ok"] == 1
+    assert result["warned"] == 0
+    assert subscriber_account.prepaid_low_balance_at is None
+    assert subscription.status == SubscriptionStatus.active
+
+
+def test_imported_line_less_prepaid_ar_does_not_reduce_wallet_balance(
+    db_session, subscriber_account, subscription
+):
+    _enable_control(db_session)
+    _make_prepaid(
+        db_session, subscriber_account, subscription, credit=Decimal("100.00")
+    )
+    invoice = Invoice(
+        account_id=subscriber_account.id,
+        invoice_number="INV-IMPORTED-PREPAID-PHANTOM-AR",
+        status=InvoiceStatus.overdue,
+        total=Decimal("80.00"),
+        balance_due=Decimal("80.00"),
+        due_at=_MONDAY_NOON - timedelta(days=10),
+        metadata_={"imported_via": "system_import_wizard"},
+    )
+    db_session.add(invoice)
+    db_session.commit()
+
+    result = run_prepaid_balance_sweep(db_session, now=_MONDAY_NOON)
+
+    db_session.refresh(subscriber_account)
+    db_session.refresh(subscription)
+    assert result["ok"] == 1
+    assert result["warned"] == 0
+    assert subscriber_account.prepaid_low_balance_at is None
+    assert subscription.status == SubscriptionStatus.active
 
 
 # ---------------------------------------------------------------------------

@@ -324,6 +324,27 @@ def _build_dashboard_billing_summary(db: Session) -> dict[str, float]:
         }
 
 
+def _build_online_customer_summary(db: Session) -> dict[str, int]:
+    """Return active-session counts focused on customers, not raw sessions."""
+    try:
+        from app.models.radius_active_session import RadiusActiveSession
+
+        row = db.query(
+            func.count(RadiusActiveSession.id).label("sessions"),
+            func.count(func.distinct(RadiusActiveSession.subscriber_id))
+            .filter(RadiusActiveSession.subscriber_id.is_not(None))
+            .label("customers"),
+        ).one()
+        return {
+            "sessions": int(row.sessions or 0),
+            "customers": int(row.customers or 0),
+        }
+    except Exception:
+        logger.debug("Failed to load online customer summary", exc_info=True)
+        _rollback_after_failed_query(db)
+        return {"sessions": 0, "customers": 0}
+
+
 def _build_recent_activities(
     recent_activity: list, subscribers_lookup: dict
 ) -> list[dict]:
@@ -541,13 +562,10 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
 
     recent_activities = _build_recent_activities(recent_activity, subscribers_lookup)
 
-    # --- Who's Online (RADIUS active sessions) ---
-    try:
-        from app.models.radius_active_session import RadiusActiveSession
-
-        online_count = db.query(func.count(RadiusActiveSession.id)).scalar() or 0
-    except Exception:
-        online_count = 0
+    # --- Who's Online (distinct customers with active RADIUS sessions) ---
+    online_summary = _build_online_customer_summary(db)
+    online_customers = online_summary["customers"]
+    online_sessions = online_summary["sessions"]
 
     # --- Sync status ---
     try:
@@ -783,6 +801,51 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
             }
         )
 
+    online_pct = (
+        round((online_customers / active_subscribers) * 100, 1)
+        if active_subscribers > 0
+        else 0
+    )
+    key_sections = {
+        "customers": {
+            "title": "Customers",
+            "href": "/admin/customers",
+            "primary": online_customers,
+            "primary_label": "online customers",
+            "secondary": f"{active_subscribers} active of {sub_stats['total_count']} total",
+            "detail": f"{online_pct}% of active customers online",
+            "status": "healthy"
+            if active_subscribers == 0 or online_pct >= 80
+            else "warning"
+            if online_pct >= 50
+            else "critical",
+        },
+        "network": {
+            "title": "Network",
+            "href": "/admin/network/monitoring",
+            "primary": f"{monitoring_summary['devices_online']} / {monitoring_summary['devices_total']}",
+            "primary_label": "devices online",
+            "secondary": f"{ont_service_summary.get('online', 0)} / {ont_service_summary.get('total', 0)} ONTs online",
+            "detail": f"{pon_interface_summary.get('down', 0)} PON ports down",
+            "status": "critical"
+            if monitoring_summary["devices_total"]
+            and monitoring_summary["devices_online"] == 0
+            else "warning"
+            if monitoring_summary["devices_offline"]
+            or pon_interface_summary.get("down", 0)
+            else "healthy",
+        },
+        "finance": {
+            "title": "Finance",
+            "href": "/admin/billing",
+            "primary": f"₦{payments_this_month:,.0f}",
+            "primary_label": "paid this month",
+            "secondary": f"₦{pending_amount:,.0f} receivables",
+            "detail": f"₦{overdue_amount:,.0f} overdue",
+            "status": "warning" if overdue_amount > 0 else "healthy",
+        },
+    }
+
     whats_new_items = admin_whats_new_service.serialize_for_dashboard(
         admin_whats_new_service.get_visible_items(db, limit=4)
     )
@@ -811,7 +874,11 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
         "sidebar_stats": web_admin_service.get_sidebar_stats(db),
         "server_health": server_health,
         "server_health_status": server_health_status,
-        "online_count": online_count,
+        "online_count": online_customers,
+        "online_customers": online_customers,
+        "online_sessions": online_sessions,
+        "online_customer_pct": online_pct,
+        "key_sections": key_sections,
         "sync_status": sync_status,
         "monitoring_summary": monitoring_summary,
         "ont_service_summary": ont_service_summary,

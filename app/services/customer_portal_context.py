@@ -11,7 +11,7 @@ from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.billing import Invoice
+from app.models.billing import Invoice, InvoiceStatus
 from app.models.catalog import (
     CatalogOffer,
     OfferStatus,
@@ -31,6 +31,7 @@ from app.services import billing as billing_service
 from app.services import catalog as catalog_service
 from app.services import subscriber as subscriber_service
 from app.services.bandwidth import bandwidth_samples
+from app.services.billing.invoice_classification import collectible_ar_invoice_filter
 from app.services.collections import get_available_balance
 from app.services.common import coerce_uuid
 
@@ -452,6 +453,7 @@ def get_total_outstanding_balance(db: Session, account_id: object) -> float:
         .filter(Invoice.account_id == coerce_uuid(account_id))
         .filter(Invoice.is_active.is_(True))
         .filter(Invoice.balance_due > 0)
+        .filter(collectible_ar_invoice_filter())
         .scalar()
     )
     from app.services.billing._common import get_account_credit_balance
@@ -892,15 +894,15 @@ def get_outstanding_balance(db: Session, account_id: str) -> dict:
     Returns:
         Dict with 'invoices' and 'outstanding_balance' keys
     """
-    invoices = billing_service.invoices.list(
-        db=db,
-        account_id=account_id,
-        status="overdue",
-        is_active=True,
-        order_by="due_at",
-        order_dir="asc",
-        limit=50,
-        offset=0,
+    invoices = (
+        db.query(Invoice)
+        .filter(Invoice.account_id == coerce_uuid(account_id))
+        .filter(Invoice.status == InvoiceStatus.overdue)
+        .filter(Invoice.is_active.is_(True))
+        .filter(collectible_ar_invoice_filter())
+        .order_by(Invoice.due_at.asc())
+        .limit(50)
+        .all()
     )
     gross = sum(inv.balance_due or 0 for inv in invoices)
     # Net against available credit — see get_total_outstanding_balance.

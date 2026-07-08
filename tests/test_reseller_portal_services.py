@@ -938,6 +938,129 @@ def test_get_dashboard_summary_with_data(db_session, reseller_account, reseller)
     assert result["totals"]["open_invoices"] == 1
 
 
+def test_list_customer_connection_statuses_is_reseller_scoped(
+    db_session, reseller_account, reseller, catalog_offer
+):
+    from app.models.catalog import Subscription, SubscriptionStatus
+    from app.models.subscriber import Reseller, Subscriber
+
+    other_reseller = Reseller(name="Other Reseller", code="OTHER")
+    other_account = Subscriber(
+        first_name="Other",
+        last_name="Customer",
+        email=f"other-{uuid.uuid4().hex}@example.com",
+        reseller=other_reseller,
+    )
+    db_session.add_all([other_reseller, other_account])
+    db_session.flush()
+
+    owned_subscription = Subscription(
+        subscriber_id=reseller_account.id,
+        offer_id=catalog_offer.id,
+        status=SubscriptionStatus.active,
+    )
+    other_subscription = Subscription(
+        subscriber_id=other_account.id,
+        offer_id=catalog_offer.id,
+        status=SubscriptionStatus.active,
+    )
+    db_session.add_all([owned_subscription, other_subscription])
+    db_session.commit()
+
+    with patch.object(
+        reseller_portal,
+        "connection_status",
+        return_value={
+            "state": "connected",
+            "headline": "You're connected",
+            "message": "Your connection looks healthy.",
+            "advice": None,
+            "medium": "fiber",
+            "area_outage": False,
+            "checked_at": "2026-07-07T07:00:00+00:00",
+        },
+    ) as status_mock:
+        result = reseller_portal.list_customer_connection_statuses(
+            db_session,
+            reseller_id=str(reseller.id),
+            limit=10,
+        )
+
+    assert result["total"] == 1
+    assert result["counts"]["connected"] == 1
+    assert [row["account_id"] for row in result["rows"]] == [str(reseller_account.id)]
+    assert result["rows"][0]["subscription_id"] == str(owned_subscription.id)
+    status_mock.assert_called_once()
+    assert status_mock.call_args.args[1].id == owned_subscription.id
+
+
+def test_list_customer_connection_statuses_handles_no_active_service(
+    db_session, reseller_account, reseller
+):
+    result = reseller_portal.list_customer_connection_statuses(
+        db_session,
+        reseller_id=str(reseller.id),
+        limit=10,
+    )
+
+    assert result["total"] == 1
+    assert result["counts"]["trouble"] == 1
+    assert result["rows"][0]["state"] == "trouble"
+    assert result["rows"][0]["headline"] == "No active service"
+
+
+def test_list_customer_connection_statuses_expands_multiple_active_connections(
+    db_session, reseller_account, reseller, catalog_offer
+):
+    from app.models.catalog import Subscription, SubscriptionStatus
+
+    fiber = Subscription(
+        subscriber_id=reseller_account.id,
+        offer_id=catalog_offer.id,
+        status=SubscriptionStatus.active,
+    )
+    radio = Subscription(
+        subscriber_id=reseller_account.id,
+        offer_id=catalog_offer.id,
+        status=SubscriptionStatus.active,
+    )
+    db_session.add_all([fiber, radio])
+    db_session.commit()
+
+    def status_for_subscription(_db, subscription):
+        state = "connected" if subscription.id == fiber.id else "trouble"
+        return {
+            "state": state,
+            "headline": "Connected" if state == "connected" else "Router offline",
+            "message": "Status message",
+            "advice": None,
+            "medium": "fiber" if subscription.id == fiber.id else "wireless",
+            "area_outage": False,
+            "checked_at": "2026-07-07T07:00:00+00:00",
+        }
+
+    with patch.object(
+        reseller_portal,
+        "connection_status",
+        side_effect=status_for_subscription,
+    ):
+        result = reseller_portal.list_customer_connection_statuses(
+            db_session,
+            reseller_id=str(reseller.id),
+            limit=10,
+        )
+
+    assert result["total"] == 1
+    assert len(result["rows"]) == 2
+    assert {row["subscription_id"] for row in result["rows"]} == {
+        str(fiber.id),
+        str(radio.id),
+    }
+    assert result["counts"]["connected"] == 1
+    assert result["counts"]["trouble"] == 1
+    assert {row["medium"] for row in result["rows"]} == {"fiber", "wireless"}
+
+
 def test_overdue_dashboard_alert_links_to_billing(
     db_session, reseller_account, reseller
 ):

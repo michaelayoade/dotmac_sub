@@ -8,11 +8,13 @@ from sqlalchemy import select
 from app.models.billing import (
     CreditNote,
     CreditNoteStatus,
+    Invoice,
     InvoiceStatus,
     LedgerEntry,
     LedgerEntryType,
     LedgerSource,
     Payment,
+    PaymentAllocation,
     PaymentProvider,
     PaymentProviderType,
     PaymentStatus,
@@ -21,6 +23,7 @@ from app.models.billing import (
 from app.models.subscriber import Subscriber
 from app.schemas.billing import InvoiceCreate, PaymentMethodCreate
 from app.services import billing as billing_service
+from app.services.billing_payment_receipts import get_customer_payment_receipt_context
 from app.services.customer_portal_flow_billing import get_billing_page
 from app.services.customer_portal_flow_payments import (
     create_invoice_payment_intent,
@@ -324,6 +327,9 @@ def test_get_billing_page_includes_payments_and_credit_notes_in_activity(
     assert Decimal("500.00") in amounts
     assert "Credit added" in titles
     assert "Duplicate payment ledger" not in titles
+    payment_items = [item for item in activity if item.kind == "payment"]
+    assert payment_items
+    assert payment_items[0].payment_id == str(payment.id)
 
 
 def test_get_billing_page_activity_excludes_failed_and_canceled_payments(
@@ -369,6 +375,51 @@ def test_get_billing_page_activity_excludes_failed_and_canceled_payments(
     assert Decimal("17500.00") in amounts
     assert Decimal("188125.00") not in amounts
     assert Decimal("99999.00") not in amounts
+
+
+def test_payment_receipt_context_includes_allocation_summary(db_session, subscriber):
+    invoice = Invoice(
+        account_id=subscriber.id,
+        invoice_number="INV-109578",
+        status=InvoiceStatus.paid,
+        currency="NGN",
+        subtotal=Decimal("18812.50"),
+        total=Decimal("18812.50"),
+        balance_due=Decimal("0.00"),
+        is_active=True,
+    )
+    payment = Payment(
+        account_id=subscriber.id,
+        amount=Decimal("19200.00"),
+        currency="NGN",
+        status=PaymentStatus.succeeded,
+        external_id="TRF-07E3375983AE",
+        receipt_number="RCP-FD912851",
+        is_active=True,
+    )
+    db_session.add_all([invoice, payment])
+    db_session.flush()
+    allocation = PaymentAllocation(
+        payment_id=payment.id,
+        invoice_id=invoice.id,
+        amount=Decimal("18812.50"),
+        is_active=True,
+    )
+    db_session.add(allocation)
+    db_session.commit()
+
+    context = get_customer_payment_receipt_context(
+        db_session,
+        {"account_id": str(subscriber.id), "subscriber_id": str(subscriber.id)},
+        str(payment.id),
+    )
+
+    assert context["receipt_number"] == "#RCP-FD912851"
+    assert context["transaction_ref"] == "TRF-07E3375983AE"
+    assert context["amount_received"] == Decimal("19200.00")
+    assert context["amount_applied"] == Decimal("18812.50")
+    assert context["unallocated_credit"] == Decimal("387.50")
+    assert context["allocations"][0].invoice_number == "INV-109578"
 
 
 def test_create_topup_intent_persists_server_owned_reference(

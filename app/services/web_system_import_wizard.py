@@ -21,7 +21,13 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy.orm import Session
 
 from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentStatus
-from app.models.catalog import NasDevice, NasVendor, Subscription, SubscriptionStatus
+from app.models.catalog import (
+    BillingMode,
+    NasDevice,
+    NasVendor,
+    Subscription,
+    SubscriptionStatus,
+)
 from app.models.domain_settings import SettingDomain
 from app.models.network import IPAssignment, IpPool, IPVersion
 from app.models.network_monitoring import (
@@ -60,12 +66,19 @@ class SubscriptionImportRow(BaseModel):
     subscriber_id: uuid.UUID
     offer_id: uuid.UUID
     status: SubscriptionStatus = SubscriptionStatus.pending
+    billing_mode: BillingMode | None = None
+    start_at: datetime | None = None
+    end_at: datetime | None = None
+    next_billing_at: datetime | None = None
+    canceled_at: datetime | None = None
+    cancel_reason: str | None = None
 
 
 class InvoiceImportRow(BaseModel):
     account_id: uuid.UUID
     invoice_number: str | None = None
     status: InvoiceStatus = InvoiceStatus.draft
+    billing_mode: BillingMode | None = None
     currency: str = "NGN"
     subtotal: Decimal = Decimal("0.00")
     tax_total: Decimal = Decimal("0.00")
@@ -128,7 +141,17 @@ ENTITY_CONFIG: dict[str, dict[str, Any]] = {
     "subscriptions": {
         "label": "Subscriptions",
         "model": SubscriptionImportRow,
-        "headers": ["subscriber_id", "offer_id", "status"],
+        "headers": [
+            "subscriber_id",
+            "offer_id",
+            "status",
+            "billing_mode",
+            "start_at",
+            "end_at",
+            "next_billing_at",
+            "canceled_at",
+            "cancel_reason",
+        ],
     },
     "invoices": {
         "label": "Invoices",
@@ -137,6 +160,7 @@ ENTITY_CONFIG: dict[str, dict[str, Any]] = {
             "account_id",
             "invoice_number",
             "status",
+            "billing_mode",
             "currency",
             "subtotal",
             "tax_total",
@@ -410,7 +434,9 @@ def _validate_rows(
     return valid_rows, errors
 
 
-def _persist_row(db: Session, module: str, parsed_row: Any) -> Any:
+def _persist_row(
+    db: Session, module: str, parsed_row: Any, *, source_name: str | None = None
+) -> Any:
     if module == "subscribers":
         obj = Subscriber(
             first_name=parsed_row.first_name,
@@ -427,6 +453,12 @@ def _persist_row(db: Session, module: str, parsed_row: Any) -> Any:
             subscriber_id=parsed_row.subscriber_id,
             offer_id=parsed_row.offer_id,
             status=parsed_row.status,
+            billing_mode=parsed_row.billing_mode or BillingMode.prepaid,
+            start_at=parsed_row.start_at,
+            end_at=parsed_row.end_at,
+            next_billing_at=parsed_row.next_billing_at,
+            canceled_at=parsed_row.canceled_at,
+            cancel_reason=parsed_row.cancel_reason,
         )
         db.add(obj)
         return obj
@@ -441,6 +473,15 @@ def _persist_row(db: Session, module: str, parsed_row: Any) -> Any:
             total=parsed_row.total,
             balance_due=parsed_row.balance_due,
             memo=parsed_row.memo,
+            metadata_={
+                "imported_via": "system_import_wizard",
+                "source_name": source_name or "import",
+                **(
+                    {"billing_mode": parsed_row.billing_mode.value}
+                    if parsed_row.billing_mode
+                    else {}
+                ),
+            },
         )
         db.add(obj)
         return obj
@@ -652,7 +693,9 @@ def execute_import(
         for idx, row in enumerate(valid_rows, start=1):
             nested = db.begin_nested()
             try:
-                persisted = _persist_row(db, module, row)
+                persisted = _persist_row(
+                    db, module, row, source_name=parsed.source_name
+                )
                 db.flush()
                 persisted_id = getattr(persisted, "id", None)
                 if persisted_id is not None:

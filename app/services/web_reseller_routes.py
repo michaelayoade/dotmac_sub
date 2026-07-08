@@ -117,6 +117,12 @@ def reseller_dashboard(
         limit=per_page,
         offset=offset,
     )
+    customer_statuses = reseller_portal.list_customer_connection_statuses(
+        db,
+        reseller_id=str(context["reseller"].id),
+        limit=per_page,
+        offset=offset,
+    )
 
     # Add open tickets count from CRM. None means the CRM was unavailable.
     open_tickets: int | None = None
@@ -139,6 +145,7 @@ def reseller_dashboard(
             "current_user": context["current_user"],
             "reseller": context["reseller"],
             "summary": summary,
+            "customer_statuses": customer_statuses,
             "open_tickets": open_tickets,
             "page": page,
             "per_page": per_page,
