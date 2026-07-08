@@ -281,7 +281,10 @@ class TestCustomerPortalUsagePage:
 
         expected_ids = {str(subscription.id), str(previous_subscription.id)}
         assert set(daily_records.call_args.kwargs["subscription_ids"]) == expected_ids
-        assert set(usage_summary_stats.call_args.kwargs["subscription_ids"]) == expected_ids
+        assert (
+            set(usage_summary_stats.call_args.kwargs["subscription_ids"])
+            == expected_ids
+        )
         get_engine.assert_not_called()
         assert page["usage_source"] == "postgres"
         assert page["chart_records"][0]["value"] == 5.0

@@ -271,8 +271,8 @@ def _resolve_usage_subscription_ids(db: Session, customer: dict) -> list[str]:
     every subscription attached to the resolved account so prior/canceled service
     records remain part of the customer's daily/monthly totals.
     """
-    account_id, session_subscription_id = customer_portal_context.resolve_customer_account(
-        customer, db
+    account_id, session_subscription_id = (
+        customer_portal_context.resolve_customer_account(customer, db)
     )
     account_id_str = str(account_id) if account_id else None
 
@@ -390,7 +390,9 @@ def _daily_bandwidth_averages(
             func.avg(BandwidthSample.tx_bps).label("tx_bps"),
         )
         .filter(
-            _subscription_filter(BandwidthSample.subscription_id, subscription_uuid_list),
+            _subscription_filter(
+                BandwidthSample.subscription_id, subscription_uuid_list
+            ),
             BandwidthSample.sample_at >= start_at,
             BandwidthSample.sample_at <= end_at,
         )
@@ -751,7 +753,9 @@ def _usage_summary_stats(
             func.avg(BandwidthSample.tx_bps).label("tx_bps"),
         )
         .filter(
-            _subscription_filter(BandwidthSample.subscription_id, subscription_uuid_list),
+            _subscription_filter(
+                BandwidthSample.subscription_id, subscription_uuid_list
+            ),
             BandwidthSample.sample_at >= start_at,
             BandwidthSample.sample_at <= end_at,
         )
@@ -770,7 +774,9 @@ def _usage_summary_stats(
             func.avg(BandwidthSample.tx_bps).label("tx_bps"),
         )
         .filter(
-            _subscription_filter(BandwidthSample.subscription_id, subscription_uuid_list),
+            _subscription_filter(
+                BandwidthSample.subscription_id, subscription_uuid_list
+            ),
             BandwidthSample.sample_at >= start_at,
             BandwidthSample.sample_at <= end_at,
         )
