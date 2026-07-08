@@ -237,29 +237,13 @@ def _coerce_count(value: object) -> int:
     return 0
 
 
-def _adjust_largest_matrix_leaf(value: object, amount: int) -> None:
+def _adjust_corporate_wired_matrix_bucket(value: object, amount: int) -> None:
     if amount <= 0 or not isinstance(value, dict):
         return
-
-    leaves: list[tuple[int, dict, object]] = []
-
-    def collect(node: object) -> None:
-        if not isinstance(node, dict):
-            return
-        for key, child in node.items():
-            if isinstance(child, dict):
-                collect(child)
-            else:
-                leaves.append((_coerce_count(child), node, key))
-
-    collect(value)
-    remaining = amount
-    for current, parent, key in sorted(leaves, reverse=True, key=lambda item: item[0]):
-        if remaining <= 0:
-            break
-        reduction = min(current, remaining)
-        parent[key] = current - reduction
-        remaining -= reduction
+    corporate = value.get("corporate")
+    if not isinstance(corporate, dict):
+        return
+    corporate["wired"] = max(_coerce_count(corporate.get("wired")) - amount, 0)
 
 
 def normalize_ncc_pack_subscriber_report(report: dict) -> dict:
@@ -299,7 +283,7 @@ def normalize_ncc_pack_subscriber_report(report: dict) -> dict:
 
     matrix = normalized.get("subscription_matrix")
     if matrix:
-        _adjust_largest_matrix_leaf(matrix, excluded_count)
+        _adjust_corporate_wired_matrix_bucket(matrix, excluded_count)
 
     network_capacity = normalized.get("network_capacity")
     if isinstance(network_capacity, dict) and "points_of_presence" in network_capacity:
