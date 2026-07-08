@@ -28,6 +28,7 @@ class TicketStatus(enum.Enum):
     lastmile_rerun = "lastmile_rerun"
     site_under_construction = "site_under_construction"
     on_hold = "on_hold"
+    pending_confirmation = "pending_confirmation"
     resolved = "resolved"
     closed = "closed"
     canceled = "canceled"
@@ -82,11 +83,10 @@ class Ticket(Base):
     customer_person_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id")
     )
-    created_by_person_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscribers.id")
-    )
-    # Assignment fields can reference internal system users. Legacy rows may still
-    # contain subscriber IDs, so keep them as plain UUIDs instead of subscriber FKs.
+    # Creator and assignment fields can reference internal system users or CRM
+    # staff. Legacy rows may still contain subscriber IDs, so keep them as plain
+    # UUIDs instead of subscriber FKs.
+    created_by_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     assigned_to_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     technician_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     ticket_manager_person_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -111,7 +111,8 @@ class Ticket(Base):
         default=TicketPriority.normal.value,
         nullable=False,
     )
-    ticket_type: Mapped[str | None] = mapped_column(String(80))
+    ticket_type: Mapped[str | None] = mapped_column(String(120))
+    erpnext_id: Mapped[str | None] = mapped_column(String(100))
     channel: Mapped[TicketChannel] = mapped_column(
         Enum(TicketChannel, values_callable=lambda x: [e.value for e in x]),
         default=TicketChannel.web,
@@ -258,9 +259,7 @@ class TicketMerge(Base):
         UUID(as_uuid=True), ForeignKey("support_tickets.id"), primary_key=True
     )
     reason: Mapped[str | None] = mapped_column(Text)
-    merged_by_person_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscribers.id")
-    )
+    merged_by_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -284,12 +283,48 @@ class TicketLink(Base):
         UUID(as_uuid=True), ForeignKey("support_tickets.id"), nullable=False
     )
     link_type: Mapped[str] = mapped_column(String(80), nullable=False)
-    created_by_person_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscribers.id")
-    )
+    created_by_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
+
+
+class TicketAccessToken(Base):
+    """Magic-link token letting a customer confirm (or dispute) a ticket's
+    resolution without logging in; the unguessable ``token`` is the
+    capability. One active token per ticket resolution cycle (the service
+    mints a fresh one on each resolve)."""
+
+    __tablename__ = "ticket_access_tokens"
+    __table_args__ = (
+        Index("ix_ticket_access_tokens_token", "token", unique=True),
+        Index("ix_ticket_access_tokens_ticket_id", "ticket_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    ticket_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("support_tickets.id"), nullable=False
+    )
+    token: Mapped[str] = mapped_column(String(64), nullable=False)
+    purpose: Mapped[str] = mapped_column(
+        String(40), default="resolution_confirm", nullable=False
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    accessed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    ticket = relationship("Ticket")
 
 
 class AutomationTrigger(enum.Enum):

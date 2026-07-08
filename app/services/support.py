@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
+import secrets
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -11,11 +13,13 @@ from fastapi import HTTPException
 from sqlalchemy import or_
 from sqlalchemy.orm import Session, selectinload
 
+from app.config import settings
 from app.models.domain_settings import SettingDomain
 from app.models.notification import NotificationChannel, NotificationStatus
 from app.models.provisioning import ServiceOrder
 from app.models.support import (
     Ticket,
+    TicketAccessToken,
     TicketAssignee,
     TicketChannel,
     TicketComment,
@@ -129,6 +133,14 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
 def _coerce_uuid(value: str) -> UUID | None:
     try:
         return UUID(str(value))
@@ -172,6 +184,29 @@ def _ensure_not_merged_source(ticket: Ticket) -> None:
         raise HTTPException(
             status_code=409, detail="Cannot modify a merged source ticket"
         )
+
+
+def is_crm_origin_ticket(ticket: Ticket) -> bool:
+    metadata = ticket.metadata_ if isinstance(ticket.metadata_, dict) else {}
+    return bool(metadata.get("crm_ticket_id"))
+
+
+def crm_ticket_user_writes_locked(ticket: Ticket) -> bool:
+    return (
+        is_crm_origin_ticket(ticket) and not settings.crm_ticket_native_writes_enabled
+    )
+
+
+def _assert_crm_ticket_user_writes_enabled(ticket: Ticket, action: str) -> None:
+    if not crm_ticket_user_writes_locked(ticket):
+        return
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            "This ticket is still owned by CRM. It is readable in sub, but "
+            f"{action} is disabled until the ticket cutover flips writes to sub."
+        ),
+    )
 
 
 def _merge_attachment_dicts(
@@ -457,6 +492,7 @@ class TicketComments:
         ticket = db.get(Ticket, comment.ticket_id)
         if not ticket:
             raise HTTPException(status_code=404, detail="Ticket not found")
+        _assert_crm_ticket_user_writes_enabled(ticket, "editing comments")
         _ensure_not_merged_source(ticket)
 
         data = payload.model_dump(exclude_unset=True)
@@ -487,6 +523,7 @@ class TicketComments:
         ticket = db.get(Ticket, comment.ticket_id)
         if not ticket:
             raise HTTPException(status_code=404, detail="Ticket not found")
+        _assert_crm_ticket_user_writes_enabled(ticket, "deleting comments")
         _ensure_not_merged_source(ticket)
         db.delete(comment)
         log_audit_event(
@@ -525,6 +562,7 @@ class TicketSlaEvents:
         ticket = db.get(Ticket, payload.ticket_id)
         if not ticket:
             raise HTTPException(status_code=404, detail="Ticket not found")
+        _assert_crm_ticket_user_writes_enabled(ticket, "editing SLA events")
         _ensure_not_merged_source(ticket)
         event = TicketSlaEvent(
             ticket_id=payload.ticket_id,
@@ -545,6 +583,7 @@ class TicketSlaEvents:
         ticket = db.get(Ticket, event.ticket_id)
         if not ticket:
             raise HTTPException(status_code=404, detail="Ticket not found")
+        _assert_crm_ticket_user_writes_enabled(ticket, "editing SLA events")
         _ensure_not_merged_source(ticket)
         for key, value in payload.model_dump(exclude_unset=True).items():
             setattr(event, key, value)
@@ -557,6 +596,7 @@ class TicketSlaEvents:
         ticket = db.get(Ticket, event.ticket_id)
         if not ticket:
             raise HTTPException(status_code=404, detail="Ticket not found")
+        _assert_crm_ticket_user_writes_enabled(ticket, "deleting SLA events")
         _ensure_not_merged_source(ticket)
         db.delete(event)
         db.commit()
@@ -1027,6 +1067,7 @@ class Tickets:
                 status_code=409,
                 detail="You can rate support once the ticket is resolved.",
             )
+        _assert_crm_ticket_user_writes_enabled(ticket, "rating")
         meta = dict(ticket.metadata_ or {})
         meta["csat"] = {
             "rating": int(rating),
@@ -1040,10 +1081,286 @@ class Tickets:
         return ticket
 
     @staticmethod
+    def _add_system_comment(
+        db: Session,
+        ticket: Ticket,
+        body: str,
+        *,
+        metadata: dict[str, Any] | None = None,
+    ) -> TicketComment:
+        comment = TicketComment(
+            ticket_id=ticket.id,
+            author_type=TicketCommentAuthorType.system.value,
+            body=body,
+            is_internal=True,
+            metadata_=metadata or None,
+        )
+        db.add(comment)
+        return comment
+
+    @staticmethod
+    def request_resolution_confirmation(
+        db: Session,
+        ticket_id: str,
+        *,
+        actor_id: str | None = None,
+        grace_hours: int = 24,
+        request=None,
+    ) -> tuple[Ticket, TicketAccessToken]:
+        ticket = Tickets.get(db, ticket_id)
+        _assert_crm_ticket_user_writes_enabled(
+            ticket, "requesting resolution confirmation"
+        )
+        _ensure_not_merged_source(ticket)
+        if ticket.status in _TICKET_TERMINAL_STATUSES:
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot request confirmation for a closed ticket.",
+            )
+
+        now = _now()
+        transition_ticket_status(
+            ticket,
+            TicketStatus.pending_confirmation,
+            source="resolution_confirmation_request",
+            allow_reopen=False,
+        )
+        ticket.resolved_at = now
+        ticket.closed_at = None
+        meta = dict(ticket.metadata_ or {})
+        confirmation = dict(meta.get("resolution_confirmation") or {})
+        confirmation.update(
+            {
+                "requested_at": now.isoformat(),
+                "requested_by": actor_id,
+                "grace_hours": int(grace_hours),
+                "customer_confirmed_at": None,
+                "customer_disputed_at": None,
+                "customer_dispute_reason": None,
+                "auto_confirmed_at": None,
+            }
+        )
+        meta["resolution_confirmation"] = confirmation
+        ticket.metadata_ = meta
+
+        token_row = ticket_access_tokens.mint(
+            db,
+            ticket,
+            purpose="resolution_confirm",
+            ttl_days=max(1, int(grace_hours // 24) or 1),
+        )
+        Tickets._add_system_comment(
+            db,
+            ticket,
+            "Resolution confirmation requested from the customer.",
+            metadata={"source": "resolution_confirmation_request"},
+        )
+        log_audit_event(
+            db=db,
+            request=request,
+            action="resolution_confirmation_request",
+            entity_type="support_ticket",
+            entity_id=str(ticket.id),
+            actor_id=actor_id,
+            metadata={"token_id": str(token_row.id), "grace_hours": int(grace_hours)},
+        )
+        db.commit()
+        db.refresh(ticket)
+        db.refresh(token_row)
+        return ticket, token_row
+
+    @staticmethod
+    def confirm_resolution(
+        db: Session,
+        token_row: TicketAccessToken,
+        *,
+        auto: bool = False,
+    ) -> Ticket:
+        ticket = token_row.ticket or db.get(Ticket, token_row.ticket_id)
+        if not ticket or not ticket.is_active:
+            raise HTTPException(status_code=404, detail="Ticket not found")
+        if ticket.status == TicketStatus.closed.value:
+            return ticket
+        _assert_crm_ticket_user_writes_enabled(ticket, "confirming resolution")
+        _ensure_not_merged_source(ticket)
+        if ticket.status in {TicketStatus.canceled.value, TicketStatus.merged.value}:
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot confirm a terminal ticket.",
+            )
+
+        now = _now()
+        meta = dict(ticket.metadata_ or {})
+        confirmation = dict(meta.get("resolution_confirmation") or {})
+        confirmation.update(
+            {
+                "customer_confirmed_at": None if auto else now.isoformat(),
+                "auto_confirmed_at": now.isoformat() if auto else None,
+                "auto_confirmed": bool(auto),
+            }
+        )
+        meta["resolution_confirmation"] = confirmation
+        ticket.metadata_ = meta
+        transition_ticket_status(
+            ticket,
+            TicketStatus.closed,
+            source="resolution_confirmation_auto" if auto else "resolution_confirmed",
+            allow_reopen=False,
+        )
+        if ticket.resolved_at is None:
+            ticket.resolved_at = now
+        ticket.closed_at = now
+        token_row.responded_at = now
+        token_row.is_active = False
+
+        Tickets._add_system_comment(
+            db,
+            ticket,
+            "Resolution auto-confirmed after the customer grace period."
+            if auto
+            else "Customer confirmed the ticket resolution.",
+            metadata={"source": "resolution_confirmation", "auto": bool(auto)},
+        )
+        log_audit_event(
+            db=db,
+            request=None,
+            action="resolution_confirmed",
+            entity_type="support_ticket",
+            entity_id=str(ticket.id),
+            actor_id=None,
+            metadata={"token_id": str(token_row.id), "auto": bool(auto)},
+        )
+        db.commit()
+        db.refresh(ticket)
+        return ticket
+
+    @staticmethod
+    def dispute_resolution(
+        db: Session,
+        token_row: TicketAccessToken,
+        *,
+        reason: str | None = None,
+    ) -> Ticket:
+        ticket = token_row.ticket or db.get(Ticket, token_row.ticket_id)
+        if not ticket or not ticket.is_active:
+            raise HTTPException(status_code=404, detail="Ticket not found")
+        _assert_crm_ticket_user_writes_enabled(ticket, "disputing resolution")
+        _ensure_not_merged_source(ticket)
+        if ticket.status in _TICKET_TERMINAL_STATUSES:
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot dispute a terminal ticket.",
+            )
+
+        now = _now()
+        clean_reason = (reason or "").strip() or None
+        meta = dict(ticket.metadata_ or {})
+        confirmation = dict(meta.get("resolution_confirmation") or {})
+        confirmation.update(
+            {
+                "customer_disputed_at": now.isoformat(),
+                "customer_dispute_reason": clean_reason,
+                "auto_confirmed": False,
+            }
+        )
+        meta["resolution_confirmation"] = confirmation
+        ticket.metadata_ = meta
+        transition_ticket_status(
+            ticket,
+            TicketStatus.open,
+            source="resolution_disputed",
+            allow_reopen=False,
+        )
+        ticket.resolved_at = None
+        ticket.closed_at = None
+        token_row.responded_at = now
+        token_row.is_active = False
+
+        body = "Customer disputed the ticket resolution."
+        if clean_reason:
+            body = f"{body}\n\nReason: {clean_reason}"
+        Tickets._add_system_comment(
+            db,
+            ticket,
+            body,
+            metadata={"source": "resolution_dispute"},
+        )
+        log_audit_event(
+            db=db,
+            request=None,
+            action="resolution_disputed",
+            entity_type="support_ticket",
+            entity_id=str(ticket.id),
+            actor_id=None,
+            metadata={"token_id": str(token_row.id), "has_reason": bool(clean_reason)},
+        )
+        db.commit()
+        db.refresh(ticket)
+        return ticket
+
+    @staticmethod
+    def auto_confirm_pending(
+        db: Session,
+        *,
+        default_grace_hours: int = 24,
+        now: datetime | None = None,
+    ) -> int:
+        clock = _as_utc(now) or _now()
+        candidates = (
+            db.query(Ticket)
+            .filter(Ticket.is_active.is_(True))
+            .filter(Ticket.status == TicketStatus.pending_confirmation.value)
+            .all()
+        )
+        confirmed = 0
+        for ticket in candidates:
+            meta = dict(ticket.metadata_ or {})
+            confirmation = dict(meta.get("resolution_confirmation") or {})
+            grace_hours = int(
+                confirmation.get("grace_hours") or default_grace_hours or 24
+            )
+            resolved_at = _as_utc(ticket.resolved_at)
+            if (
+                resolved_at is None
+                or resolved_at + timedelta(hours=grace_hours) > clock
+            ):
+                continue
+            token_row = (
+                db.query(TicketAccessToken)
+                .filter(TicketAccessToken.ticket_id == ticket.id)
+                .filter(TicketAccessToken.purpose == "resolution_confirm")
+                .filter(TicketAccessToken.is_active.is_(True))
+                .order_by(TicketAccessToken.created_at.desc())
+                .first()
+            )
+            if token_row is None:
+                token_row = ticket_access_tokens.mint(
+                    db,
+                    ticket,
+                    purpose="resolution_confirm",
+                    ttl_days=max(1, grace_hours // 24 or 1),
+                )
+                db.flush()
+            try:
+                Tickets.confirm_resolution(db, token_row, auto=True)
+                confirmed += 1
+            except HTTPException:
+                db.rollback()
+                logger.exception(
+                    "ticket_auto_confirm_failed",
+                    extra={
+                        "event": "ticket_auto_confirm_failed",
+                        "ticket_id": str(ticket.id),
+                    },
+                )
+        return confirmed
+
+    @staticmethod
     def add_attachments(
         db: Session, ticket_id: str, attachments: list[dict] | None
     ) -> Ticket:
         ticket = Tickets.get(db, ticket_id)
+        _assert_crm_ticket_user_writes_enabled(ticket, "adding attachments")
         ticket.attachments = _merge_attachment_dicts(ticket.attachments, attachments)
         db.add(ticket)
         db.commit()
@@ -1152,6 +1469,7 @@ class Tickets:
         request=None,
     ) -> Ticket:
         ticket = Tickets.get(db, ticket_id)
+        _assert_crm_ticket_user_writes_enabled(ticket, "editing")
         _ensure_not_merged_source(ticket)
 
         before = {
@@ -1283,6 +1601,7 @@ class Tickets:
         db: Session, ticket_id: str, actor_id: str | None = None, request=None
     ) -> None:
         ticket = Tickets.get(db, ticket_id)
+        _assert_crm_ticket_user_writes_enabled(ticket, "deleting")
         _ensure_not_merged_source(ticket)
         ticket.is_active = False
         log_audit_event(
@@ -1306,6 +1625,7 @@ class Tickets:
         updated: list[Ticket] = []
         for item in payload.items:
             ticket = Tickets.get(db, str(item.ticket_id))
+            _assert_crm_ticket_user_writes_enabled(ticket, "bulk editing")
             _ensure_not_merged_source(ticket)
             if item.status is not None:
                 transition_ticket_status(
@@ -1337,6 +1657,7 @@ class Tickets:
         db: Session, ticket_id: str, actor_id: str | None = None, request=None
     ) -> dict[str, Any]:
         ticket = Tickets.get(db, ticket_id)
+        _assert_crm_ticket_user_writes_enabled(ticket, "auto-assignment")
         _ensure_not_merged_source(ticket)
         result = Tickets._apply_region_auto_assignment(ticket, db)
         log_audit_event(
@@ -1361,6 +1682,7 @@ class Tickets:
         request=None,
     ) -> TicketComment:
         ticket = Tickets.get(db, ticket_id)
+        _assert_crm_ticket_user_writes_enabled(ticket, "commenting")
         comment = ticket_comments.create(
             db, ticket=ticket, payload=payload, actor_id=actor_id, request=request
         )
@@ -1378,6 +1700,7 @@ class Tickets:
         request=None,
     ) -> list[TicketComment]:
         ticket = Tickets.get(db, ticket_id)
+        _assert_crm_ticket_user_writes_enabled(ticket, "commenting")
         comments: list[TicketComment] = []
         for payload in payloads:
             comment = ticket_comments.create(
@@ -1402,6 +1725,8 @@ class Tickets:
     ) -> TicketLink:
         source = Tickets.get(db, from_ticket_id)
         target = Tickets.get(db, to_ticket_id)
+        _assert_crm_ticket_user_writes_enabled(source, "linking")
+        _assert_crm_ticket_user_writes_enabled(target, "linking")
         _ensure_not_merged_source(source)
         _ensure_not_merged_source(target)
 
@@ -1466,6 +1791,8 @@ class Tickets:
     ) -> Ticket:
         source = Tickets.get(db, source_ticket_id)
         target = Tickets.get(db, str(payload.target_ticket_id))
+        _assert_crm_ticket_user_writes_enabled(source, "merging")
+        _assert_crm_ticket_user_writes_enabled(target, "merging")
         if source.id == target.id:
             raise HTTPException(
                 status_code=400, detail="Cannot merge a ticket into itself"
@@ -1585,6 +1912,82 @@ class Tickets:
         db.commit()
         db.refresh(target)
         return target
+
+
+class TicketAccessTokens:
+    _TTL_DAYS = 14
+
+    @staticmethod
+    def mint(
+        db: Session,
+        ticket: Ticket,
+        *,
+        purpose: str = "resolution_confirm",
+        ttl_days: int | None = None,
+    ) -> TicketAccessToken:
+        db.query(TicketAccessToken).filter(
+            TicketAccessToken.ticket_id == ticket.id,
+            TicketAccessToken.purpose == purpose,
+            TicketAccessToken.is_active.is_(True),
+        ).update({"is_active": False, "responded_at": _now()})
+        token_row = TicketAccessToken(
+            ticket_id=ticket.id,
+            token=secrets.token_urlsafe(32),
+            purpose=purpose,
+            expires_at=_now()
+            + timedelta(days=ttl_days or TicketAccessTokens._TTL_DAYS),
+            is_active=True,
+        )
+        db.add(token_row)
+        db.flush()
+        return token_row
+
+    @staticmethod
+    def get_by_token(db: Session, token: str) -> TicketAccessToken | None:
+        cleaned = str(token or "").strip()
+        if not cleaned:
+            return None
+        return (
+            db.query(TicketAccessToken)
+            .options(selectinload(TicketAccessToken.ticket))
+            .filter(TicketAccessToken.token == cleaned)
+            .first()
+        )
+
+    @staticmethod
+    def token_state(token_row: TicketAccessToken | None) -> str:
+        if token_row is None:
+            return "not_found"
+        ticket = token_row.ticket
+        if not token_row.is_active or token_row.responded_at is not None:
+            return "closed"
+        if ticket and ticket.status in _TICKET_TERMINAL_STATUSES:
+            return "closed"
+        expires_at = _as_utc(token_row.expires_at)
+        if expires_at is not None and expires_at < _now():
+            return "expired"
+        return "ok"
+
+    @staticmethod
+    def mark_accessed(db: Session, token_row: TicketAccessToken) -> None:
+        token_row.accessed_at = _now()
+        db.add(token_row)
+        db.commit()
+
+    @staticmethod
+    def action_urls(token_row: TicketAccessToken) -> dict[str, str | None]:
+        base_url = (
+            (os.getenv("APP_URL") or os.getenv("PUBLIC_BASE_URL") or "")
+            .strip()
+            .rstrip("/")
+        )
+        if not base_url:
+            return {"confirm_url": None, "dispute_url": None}
+        token = token_row.token
+        return {
+            "confirm_url": f"{base_url}/api/v1/ticket-confirm/{token}/confirm",
+            "dispute_url": f"{base_url}/api/v1/ticket-confirm/{token}/dispute",
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -1788,5 +2191,6 @@ def regions(db: Session) -> list[str]:
 
 
 tickets = Tickets()
+ticket_access_tokens = TicketAccessTokens()
 ticket_comments = TicketComments()
 ticket_sla_events = TicketSlaEvents()

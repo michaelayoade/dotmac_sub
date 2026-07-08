@@ -270,6 +270,9 @@ def build_ticket_form_context(
         ]
     )
     staff = support_service.list_assignment_people(db, include_ids=assignment_ids)
+    crm_write_locked = (
+        support_service.crm_ticket_user_writes_locked(ticket) if ticket else False
+    )
     prefill = {
         "title": ticket.title if ticket else str(params.get("title", "") or ""),
         "description": ticket.description
@@ -362,6 +365,17 @@ def build_ticket_form_context(
         ),
         "selected_person": selected_person,
         "prefill": prefill,
+        "crm_origin": (
+            support_service.is_crm_origin_ticket(ticket) if ticket else False
+        ),
+        "crm_write_locked": crm_write_locked,
+        "crm_write_lock_message": (
+            "This ticket is currently owned by CRM. It is visible in sub for "
+            "cutover validation, but edits stay disabled until ticket writes move "
+            "to sub."
+            if crm_write_locked
+            else ""
+        ),
     }
 
 
@@ -816,6 +830,7 @@ def build_ticket_detail_context(db: Session, *, ticket_lookup: str) -> dict:
     status_options = support_ticket_settings_service.list_status_options(db)
     priority_options = support_ticket_settings_service.list_priority_options(db)
     ticket = support_service.tickets.get_by_lookup(db, ticket_lookup)
+    crm_write_locked = support_service.crm_ticket_user_writes_locked(ticket)
     comments = support_service.ticket_comments.list(
         db, str(ticket.id), limit=500, offset=0
     )
@@ -881,4 +896,13 @@ def build_ticket_detail_context(db: Session, *, ticket_lookup: str) -> dict:
             or support_ticket_settings_service.status_is_merged(ticket.status)
         ),
         "identity_resolution": _identity_resolution_summary(ticket),
+        "crm_origin": support_service.is_crm_origin_ticket(ticket),
+        "crm_write_locked": crm_write_locked,
+        "crm_write_lock_message": (
+            "This ticket is currently owned by CRM. It is visible in sub for "
+            "cutover validation, but edits stay disabled until ticket writes move "
+            "to sub."
+            if crm_write_locked
+            else ""
+        ),
     }
