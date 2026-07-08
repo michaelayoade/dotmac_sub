@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -11,11 +12,13 @@ from app.models.subscriber import Subscriber, SubscriberContact
 from app.models.support import (
     AutomationActionType,
     AutomationTrigger,
+    TicketAccessToken,
     TicketAssignee,
     TicketChannel,
     TicketComment,
     TicketCommentAuthorType,
     TicketSlaEvent,
+    TicketStatus,
 )
 from app.models.system_user import SystemUser
 from app.schemas.support import (
@@ -203,6 +206,124 @@ def test_crm_origin_ticket_writes_are_locked_until_cutover(db_session, subscribe
             actor_id=str(subscriber.id),
         )
     assert comment_exc.value.status_code == 409
+
+
+def test_resolution_confirmation_request_mints_token(db_session, subscriber):
+    ticket = support_service.tickets.create(
+        db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
+    )
+
+    updated, token_row = support_service.tickets.request_resolution_confirmation(
+        db_session,
+        str(ticket.id),
+        actor_id=str(subscriber.id),
+        grace_hours=24,
+    )
+
+    assert updated.status == TicketStatus.pending_confirmation.value
+    assert updated.resolved_at is not None
+    assert token_row.is_active is True
+    assert token_row.ticket_id == updated.id
+    assert (
+        db_session.query(TicketAccessToken)
+        .filter(TicketAccessToken.ticket_id == updated.id)
+        .count()
+        == 1
+    )
+
+
+def test_resolution_confirmation_confirm_closes_ticket(db_session, subscriber):
+    ticket = support_service.tickets.create(
+        db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
+    )
+    _, token_row = support_service.tickets.request_resolution_confirmation(
+        db_session, str(ticket.id), actor_id=str(subscriber.id)
+    )
+
+    confirmed = support_service.tickets.confirm_resolution(db_session, token_row)
+
+    assert confirmed.status == TicketStatus.closed.value
+    assert confirmed.closed_at is not None
+    db_session.refresh(token_row)
+    assert token_row.is_active is False
+    assert token_row.responded_at is not None
+
+
+def test_resolution_confirmation_dispute_reopens_ticket(db_session, subscriber):
+    ticket = support_service.tickets.create(
+        db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
+    )
+    _, token_row = support_service.tickets.request_resolution_confirmation(
+        db_session, str(ticket.id), actor_id=str(subscriber.id)
+    )
+
+    disputed = support_service.tickets.dispute_resolution(
+        db_session,
+        token_row,
+        reason="Still offline",
+    )
+
+    assert disputed.status == TicketStatus.open.value
+    assert disputed.resolved_at is None
+    confirmation = disputed.metadata_["resolution_confirmation"]
+    assert confirmation["customer_dispute_reason"] == "Still offline"
+
+
+def test_auto_confirm_pending_closes_after_grace_window(db_session, subscriber):
+    ticket = support_service.tickets.create(
+        db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
+    )
+    updated, _ = support_service.tickets.request_resolution_confirmation(
+        db_session,
+        str(ticket.id),
+        actor_id=str(subscriber.id),
+        grace_hours=24,
+    )
+    updated.resolved_at = datetime.now(UTC) - timedelta(hours=25)
+    db_session.add(updated)
+    db_session.commit()
+
+    count = support_service.tickets.auto_confirm_pending(db_session)
+
+    assert count == 1
+    db_session.refresh(updated)
+    assert updated.status == TicketStatus.closed.value
+
+
+def test_resolution_confirmation_rejects_closed_ticket(db_session, subscriber):
+    ticket = support_service.tickets.create(
+        db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
+    )
+    support_service.tickets.update(
+        db_session,
+        str(ticket.id),
+        TicketUpdate(status=TicketStatus.closed.value),
+        actor_id=str(subscriber.id),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        support_service.tickets.request_resolution_confirmation(
+            db_session, str(ticket.id), actor_id=str(subscriber.id)
+        )
+
+    assert exc.value.status_code == 409
+
+
+def test_resolution_confirmation_respects_crm_origin_write_lock(
+    db_session, subscriber
+):
+    ticket = support_service.tickets.create(
+        db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
+    )
+    ticket.metadata_ = {"crm_ticket_id": str(uuid4())}
+    token_row = support_service.ticket_access_tokens.mint(db_session, ticket)
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        support_service.tickets.confirm_resolution(db_session, token_row)
+
+    assert exc.value.status_code == 409
+    assert "still owned by CRM" in str(exc.value.detail)
 
 
 def test_native_ticket_writes_remain_enabled_before_crm_cutover(
