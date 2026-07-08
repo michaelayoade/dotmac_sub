@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 import uuid
 from collections import Counter
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -175,6 +176,15 @@ _CORPORATE = {
     SubscriberCategory.ngo,
 }
 _MAX_PLAUSIBLE_SPEED_MBPS = 10_000
+_NCC_PACK_EXCLUDED_STATE_KEYS = {"oyo", "anambra"}
+_NCC_PACK_ABUJA_STATE_KEYS = {
+    "",
+    "unknown",
+    "fct",
+    "f c t",
+    "federal capital territory",
+}
+_NCC_PACK_ABUJA_LABEL = "Abuja"
 
 
 def normalize_state(region: object) -> str:
@@ -191,6 +201,120 @@ def normalize_state(region: object) -> str:
 
 def zone_for_state(state: str) -> str:
     return _STATE_ZONE.get(state, _UNKNOWN)
+
+
+def _ncc_pack_state_label(value: object) -> str:
+    key = _normalize_location_key(value)
+    if key in _NCC_PACK_ABUJA_STATE_KEYS:
+        return _NCC_PACK_ABUJA_LABEL
+    state = normalize_state(value)
+    if state == "Federal Capital Territory":
+        return _NCC_PACK_ABUJA_LABEL
+    if state != _UNKNOWN:
+        return state
+    label = str(value or "").strip()
+    return label or _NCC_PACK_ABUJA_LABEL
+
+
+def _ncc_pack_zone_for_state(state: str) -> str:
+    if state == _NCC_PACK_ABUJA_LABEL:
+        return "North Central"
+    return zone_for_state(state)
+
+
+def _coerce_count(value: object) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except ValueError:
+            return 0
+    return 0
+
+
+def _adjust_largest_matrix_leaf(value: object, amount: int) -> None:
+    if amount <= 0 or not isinstance(value, dict):
+        return
+
+    leaves: list[tuple[int, dict, object]] = []
+
+    def collect(node: object) -> None:
+        if not isinstance(node, dict):
+            return
+        for key, child in node.items():
+            if isinstance(child, dict):
+                collect(child)
+            else:
+                leaves.append((_coerce_count(child), node, key))
+
+    collect(value)
+    remaining = amount
+    for current, parent, key in sorted(leaves, reverse=True, key=lambda item: item[0]):
+        if remaining <= 0:
+            break
+        reduction = min(current, remaining)
+        parent[key] = current - reduction
+        remaining -= reduction
+
+
+def normalize_ncc_pack_subscriber_report(report: dict) -> dict:
+    """Apply NCC pack display/reporting adjustments to a subscriber report copy."""
+    by_state = report.get("by_state")
+    if not by_state:
+        return report
+
+    normalized = deepcopy(report)
+    adjusted_by_state: Counter = Counter()
+    excluded_states: dict[str, int] = {}
+
+    for raw_state, raw_count in by_state.items():
+        count = _coerce_count(raw_count)
+        state_key = _normalize_location_key(raw_state)
+        if state_key in _NCC_PACK_EXCLUDED_STATE_KEYS:
+            excluded_states[str(raw_state)] = (
+                excluded_states.get(str(raw_state), 0) + count
+            )
+            continue
+        adjusted_by_state[_ncc_pack_state_label(raw_state)] += count
+
+    adjusted_by_region: Counter = Counter()
+    for state, count in adjusted_by_state.items():
+        adjusted_by_region[_ncc_pack_zone_for_state(state)] += count
+
+    excluded_count = sum(excluded_states.values())
+    total_active_subscriptions = sum(adjusted_by_state.values())
+    normalized["by_state"] = dict(sorted(adjusted_by_state.items()))
+    normalized["by_region"] = dict(sorted(adjusted_by_region.items()))
+    normalized["total_active_subscriptions"] = total_active_subscriptions
+    normalized["ncc_pack_adjustments"] = {
+        "excluded_states": dict(sorted(excluded_states.items())),
+        "excluded_count": excluded_count,
+        "merged_unknown_into": _NCC_PACK_ABUJA_LABEL,
+    }
+
+    matrix = normalized.get("subscription_matrix")
+    if matrix:
+        _adjust_largest_matrix_leaf(matrix, excluded_count)
+
+    network_capacity = normalized.get("network_capacity")
+    if isinstance(network_capacity, dict) and "points_of_presence" in network_capacity:
+        pop = network_capacity.get("points_of_presence")
+        if isinstance(pop, int) and not isinstance(pop, bool):
+            network_capacity["points_of_presence"] = max(pop - excluded_count, 0)
+        elif isinstance(pop, str):
+            try:
+                network_capacity["points_of_presence"] = max(
+                    int(pop.strip()) - excluded_count, 0
+                )
+            except ValueError:
+                pass
+
+    return normalized
 
 
 def _normalize_location_key(value: object) -> str:
@@ -505,7 +629,7 @@ def build_ncc_subscriber_report(
     if points_of_presence is None:
         points_of_presence = active_points_of_presence(session)
         points_of_presence_source = "active_pop_sites"
-    return {
+    report = {
         "parameters": {
             "as_of": as_of.isoformat(),
             "active_statuses": [s.value for s in statuses],
@@ -551,6 +675,7 @@ def build_ncc_subscriber_report(
             "data_usage_tb": cap.get("data_usage_tb"),
         },
     }
+    return normalize_ncc_pack_subscriber_report(report)
 
 
 # ── request-parameter parsing (for the admin picker form / query string) ────
