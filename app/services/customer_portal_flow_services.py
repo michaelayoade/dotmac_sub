@@ -2,6 +2,7 @@
 
 import logging
 from collections import defaultdict
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, TypedDict
@@ -235,13 +236,75 @@ def _usage_total_gb(
     return float(total or 0)
 
 
+def _subscription_uuid_list(
+    subscription_id: str | UUID | None = None,
+    subscription_ids: Sequence[str | UUID] | None = None,
+) -> list[UUID]:
+    raw_ids: list[str | UUID] = []
+    if subscription_ids is not None:
+        raw_ids.extend(subscription_ids)
+    elif subscription_id is not None:
+        raw_ids.append(subscription_id)
+
+    seen: set[UUID] = set()
+    result: list[UUID] = []
+    for raw_id in raw_ids:
+        uuid_value = coerce_uuid(raw_id)
+        if uuid_value in seen:
+            continue
+        seen.add(uuid_value)
+        result.append(uuid_value)
+    return result
+
+
+def _subscription_filter(column, subscription_ids: Sequence[UUID]):
+    if len(subscription_ids) == 1:
+        return column == subscription_ids[0]
+    return column.in_(subscription_ids)
+
+
+def _resolve_usage_subscription_ids(db: Session, customer: dict) -> list[str]:
+    """Resolve every subscription whose usage belongs to the customer account.
+
+    Usage is account-level in the portal/admin UI. A session may carry a specific
+    subscription for live service actions, but historical usage should include
+    every subscription attached to the resolved account so prior/canceled service
+    records remain part of the customer's daily/monthly totals.
+    """
+    account_id, session_subscription_id = (
+        customer_portal_context.resolve_customer_account(customer, db)
+    )
+    account_id_str = str(account_id) if account_id else None
+
+    if not account_id_str and session_subscription_id:
+        subscription = db.get(Subscription, coerce_uuid(session_subscription_id))
+        if subscription and subscription.subscriber_id:
+            account_id_str = str(subscription.subscriber_id)
+
+    if not account_id_str:
+        return [str(session_subscription_id)] if session_subscription_id else []
+
+    subscriptions = (
+        db.query(Subscription.id)
+        .filter(Subscription.subscriber_id == coerce_uuid(account_id_str))
+        .order_by(Subscription.created_at.desc())
+        .all()
+    )
+    return [str(row[0]) for row in subscriptions if row[0] is not None]
+
+
 def _daily_usage_records(
     db: Session,
     *,
-    subscription_id: str,
+    subscription_id: str | UUID | None = None,
+    subscription_ids: Sequence[str | UUID] | None = None,
     start_at: datetime,
     end_at: datetime,
 ) -> dict[Any, float]:
+    subscription_uuid_list = _subscription_uuid_list(subscription_id, subscription_ids)
+    if not subscription_uuid_list:
+        return {}
+
     bucket = func.date_trunc("day", UsageRecord.recorded_at)
     rows = (
         db.query(
@@ -249,7 +312,7 @@ def _daily_usage_records(
             func.coalesce(func.sum(UsageRecord.total_gb), 0).label("total_gb"),
         )
         .filter(
-            UsageRecord.subscription_id == coerce_uuid(subscription_id),
+            _subscription_filter(UsageRecord.subscription_id, subscription_uuid_list),
             UsageRecord.recorded_at >= start_at,
             UsageRecord.recorded_at <= end_at,
         )
@@ -268,10 +331,15 @@ def _daily_usage_records(
 def _daily_usage_breakdown_records(
     db: Session,
     *,
-    subscription_id: str,
+    subscription_id: str | UUID | None = None,
+    subscription_ids: Sequence[str | UUID] | None = None,
     start_at: datetime,
     end_at: datetime,
 ) -> dict[Any, tuple[float, float, float]]:
+    subscription_uuid_list = _subscription_uuid_list(subscription_id, subscription_ids)
+    if not subscription_uuid_list:
+        return {}
+
     bucket = func.date_trunc("day", UsageRecord.recorded_at)
     rows = (
         db.query(
@@ -281,7 +349,7 @@ def _daily_usage_breakdown_records(
             func.coalesce(func.sum(UsageRecord.total_gb), 0).label("total_gb"),
         )
         .filter(
-            UsageRecord.subscription_id == coerce_uuid(subscription_id),
+            _subscription_filter(UsageRecord.subscription_id, subscription_uuid_list),
             UsageRecord.recorded_at >= start_at,
             UsageRecord.recorded_at <= end_at,
         )
@@ -304,23 +372,31 @@ def _daily_usage_breakdown_records(
 def _daily_bandwidth_averages(
     db: Session,
     *,
-    subscription_id: str,
+    subscription_id: str | UUID | None = None,
+    subscription_ids: Sequence[str | UUID] | None = None,
     start_at: datetime,
     end_at: datetime,
 ) -> dict[Any, tuple[float, float]]:
+    subscription_uuid_list = _subscription_uuid_list(subscription_id, subscription_ids)
+    if not subscription_uuid_list:
+        return {}
+
     bucket = func.date_trunc("day", BandwidthSample.sample_at)
     rows = (
         db.query(
+            BandwidthSample.subscription_id,
             bucket.label("bucket_start"),
             func.avg(BandwidthSample.rx_bps).label("rx_bps"),
             func.avg(BandwidthSample.tx_bps).label("tx_bps"),
         )
         .filter(
-            BandwidthSample.subscription_id == coerce_uuid(subscription_id),
+            _subscription_filter(
+                BandwidthSample.subscription_id, subscription_uuid_list
+            ),
             BandwidthSample.sample_at >= start_at,
             BandwidthSample.sample_at <= end_at,
         )
-        .group_by(bucket)
+        .group_by(BandwidthSample.subscription_id, bucket)
         .all()
     )
     result: dict[Any, tuple[float, float]] = {}
@@ -328,9 +404,10 @@ def _daily_bandwidth_averages(
         bucket_start = _as_utc(row.bucket_start)
         if bucket_start is None:
             continue
+        existing_rx, existing_tx = result.get(bucket_start.date(), (0.0, 0.0))
         result[bucket_start.date()] = (
-            float(row.rx_bps or 0),
-            float(row.tx_bps or 0),
+            existing_rx + float(row.rx_bps or 0),
+            existing_tx + float(row.tx_bps or 0),
         )
     return result
 
@@ -387,6 +464,10 @@ def _usage_period_bounds(
 
 
 def _resolve_usage_subscription_id(db: Session, customer: dict) -> str | None:
+    subscription_ids = _resolve_usage_subscription_ids(db, customer)
+    if subscription_ids:
+        return subscription_ids[0]
+
     subscription_id = customer.get("subscription_id")
     if subscription_id:
         return str(subscription_id)
@@ -409,7 +490,8 @@ def _resolve_usage_subscription_id(db: Session, customer: dict) -> str | None:
 def _daily_bandwidth_usage(
     db: Session,
     *,
-    subscription_id: str,
+    subscription_id: str | UUID | None = None,
+    subscription_ids: Sequence[str | UUID] | None = None,
     start_at: datetime,
     end_at: datetime,
     page: int,
@@ -418,6 +500,7 @@ def _daily_bandwidth_usage(
     daily_records = _daily_bandwidth_usage_records(
         db,
         subscription_id=subscription_id,
+        subscription_ids=subscription_ids,
         start_at=start_at,
         end_at=end_at,
     )
@@ -432,13 +515,18 @@ def _daily_bandwidth_usage(
 def _daily_bandwidth_usage_records(
     db: Session,
     *,
-    subscription_id: str,
+    subscription_id: str | UUID | None = None,
+    subscription_ids: Sequence[str | UUID] | None = None,
     start_at: datetime,
     end_at: datetime,
 ) -> list[Any]:
+    subscription_uuid_list = _subscription_uuid_list(subscription_id, subscription_ids)
+    if not subscription_uuid_list:
+        return []
+
     by_day_usage = _daily_usage_breakdown_records(
         db,
-        subscription_id=subscription_id,
+        subscription_ids=subscription_uuid_list,
         start_at=start_at,
         end_at=end_at,
     )
@@ -451,7 +539,7 @@ def _daily_bandwidth_usage_records(
     radius_by_day = (
         _daily_radius_accounting_usage(
             db,
-            subscription_id=subscription_id,
+            subscription_ids=subscription_uuid_list,
             start_at=start_at,
             end_at=end_at,
         )
@@ -461,7 +549,7 @@ def _daily_bandwidth_usage_records(
     bandwidth_by_day = (
         _daily_bandwidth_averages(
             db,
-            subscription_id=subscription_id,
+            subscription_ids=subscription_uuid_list,
             start_at=start_at,
             end_at=end_at,
         )
@@ -517,10 +605,15 @@ def _daily_bandwidth_usage_records(
 def _daily_radius_accounting_usage(
     db: Session,
     *,
-    subscription_id: str,
+    subscription_id: str | UUID | None = None,
+    subscription_ids: Sequence[str | UUID] | None = None,
     start_at: datetime,
     end_at: datetime,
 ) -> dict[Any, tuple[float, float, float]]:
+    subscription_uuid_list = _subscription_uuid_list(subscription_id, subscription_ids)
+    if not subscription_uuid_list:
+        return {}
+
     accounting_day = func.date_trunc(
         "day",
         func.coalesce(
@@ -543,7 +636,12 @@ def _daily_radius_accounting_usage(
                 "upload_octets"
             ),
         )
-        .filter(RadiusAccountingSession.subscription_id == coerce_uuid(subscription_id))
+        .filter(
+            _subscription_filter(
+                RadiusAccountingSession.subscription_id,
+                subscription_uuid_list,
+            )
+        )
         .filter(accounting_time >= start_at)
         .filter(accounting_time <= end_at)
         .group_by(accounting_day)
@@ -634,33 +732,55 @@ def _serialize_usage_chart_records(records: list[Any]) -> list[dict[str, Any]]:
 def _usage_summary_stats(
     db: Session,
     *,
-    subscription_id: str,
+    subscription_id: str | UUID | None = None,
+    subscription_ids: Sequence[str | UUID] | None = None,
     start_at: datetime,
     end_at: datetime,
 ) -> dict[str, float]:
-    subscription_uuid = coerce_uuid(subscription_id)
-    avg_rx_bps, avg_tx_bps = db.query(
-        func.avg(BandwidthSample.rx_bps),
-        func.avg(BandwidthSample.tx_bps),
-    ).filter(
-        BandwidthSample.subscription_id == subscription_uuid,
-        BandwidthSample.sample_at >= start_at,
-        BandwidthSample.sample_at <= end_at,
-    ).first() or (0, 0)
+    subscription_uuid_list = _subscription_uuid_list(subscription_id, subscription_ids)
+    if not subscription_uuid_list:
+        return {
+            "average_daily_usage_gb": 0.0,
+            "average_speed_mbps": 0.0,
+            "average_download_mbps": 0.0,
+            "average_upload_mbps": 0.0,
+        }
+
+    avg_rows = (
+        db.query(
+            BandwidthSample.subscription_id,
+            func.avg(BandwidthSample.rx_bps).label("rx_bps"),
+            func.avg(BandwidthSample.tx_bps).label("tx_bps"),
+        )
+        .filter(
+            _subscription_filter(
+                BandwidthSample.subscription_id, subscription_uuid_list
+            ),
+            BandwidthSample.sample_at >= start_at,
+            BandwidthSample.sample_at <= end_at,
+        )
+        .group_by(BandwidthSample.subscription_id)
+        .all()
+    )
+    avg_rx_bps = sum(float(row.rx_bps or 0) for row in avg_rows)
+    avg_tx_bps = sum(float(row.tx_bps or 0) for row in avg_rows)
 
     bucket = func.date_trunc("day", BandwidthSample.sample_at)
     rows = (
         db.query(
+            BandwidthSample.subscription_id,
             bucket.label("bucket_start"),
             func.avg(BandwidthSample.rx_bps).label("rx_bps"),
             func.avg(BandwidthSample.tx_bps).label("tx_bps"),
         )
         .filter(
-            BandwidthSample.subscription_id == subscription_uuid,
+            _subscription_filter(
+                BandwidthSample.subscription_id, subscription_uuid_list
+            ),
             BandwidthSample.sample_at >= start_at,
             BandwidthSample.sample_at <= end_at,
         )
-        .group_by(bucket)
+        .group_by(BandwidthSample.subscription_id, bucket)
         .all()
     )
 
@@ -669,7 +789,11 @@ def _usage_summary_stats(
         bucket_start = _as_utc(row.bucket_start)
         if bucket_start is None:
             continue
-        by_day[bucket_start.date()] = (float(row.rx_bps or 0), float(row.tx_bps or 0))
+        existing_rx, existing_tx = by_day.get(bucket_start.date(), (0.0, 0.0))
+        by_day[bucket_start.date()] = (
+            existing_rx + float(row.rx_bps or 0),
+            existing_tx + float(row.tx_bps or 0),
+        )
 
     start_day_dt = _as_utc(start_at) or start_at
     end_day_dt = _as_utc(end_at) or end_at
@@ -713,7 +837,8 @@ def get_usage_page(
     allow_postgres_fallback: bool = True,
 ) -> dict:
     """Get usage page data for the customer portal."""
-    subscription_id_str = _resolve_usage_subscription_id(db, customer)
+    subscription_ids = _resolve_usage_subscription_ids(db, customer)
+    subscription_id_str = subscription_ids[0] if subscription_ids else None
 
     empty_result: dict[str, Any] = {
         "usage_records": [],
@@ -736,18 +861,33 @@ def get_usage_page(
     if not subscription_id_str:
         return empty_result
 
-    subscription = db.get(Subscription, coerce_uuid(subscription_id_str))
+    subscription_uuid_list = _subscription_uuid_list(subscription_ids=subscription_ids)
+    subscriptions = (
+        db.query(Subscription)
+        .filter(_subscription_filter(Subscription.id, subscription_uuid_list))
+        .all()
+    )
+    subscription = customer_portal_context.resolve_customer_subscription(db, customer)
+    if not subscription:
+        subscription = db.get(Subscription, coerce_uuid(subscription_id_str))
     activated_at = None
-    if subscription:
-        activated_at = _as_utc(getattr(subscription, "start_at", None)) or _as_utc(
-            getattr(subscription, "created_at", None)
+    activation_candidates = [
+        candidate
+        for candidate in (
+            _as_utc(getattr(item, "start_at", None))
+            or _as_utc(getattr(item, "created_at", None))
+            for item in subscriptions
         )
+        if candidate is not None
+    ]
+    if activation_candidates:
+        activated_at = min(activation_candidates)
     start_at, end_at = _usage_period_bounds(period, activated_at=activated_at)
 
     usage_source = "postgres"
     zabbix_usage = None
     chart_source_records: list[Any] = []
-    if subscription:
+    if len(subscription_ids) == 1:
         try:
             from app.services.zabbix_engine import get_zabbix_engine
 
@@ -782,7 +922,7 @@ def get_usage_page(
     else:
         chart_source_records = _daily_bandwidth_usage_records(
             db,
-            subscription_id=subscription_id_str,
+            subscription_ids=subscription_ids,
             start_at=start_at,
             end_at=end_at,
         )
@@ -792,7 +932,7 @@ def get_usage_page(
         usage_records = chart_source_records[page_start:page_end]
         usage_summary = _usage_summary_stats(
             db,
-            subscription_id=subscription_id_str,
+            subscription_ids=subscription_ids,
             start_at=start_at,
             end_at=end_at,
         )
@@ -803,7 +943,7 @@ def get_usage_page(
         fup_status = _get_fup_status(
             db,
             str(subscription.offer_id) if subscription.offer_id else None,
-            subscription_id_str,
+            str(subscription.id),
         )
 
     return {
@@ -839,8 +979,9 @@ def get_usage_history(db: Session, customer: dict, months: int = 12) -> dict:
         "since": None,
         "months_shown": 0,
     }
-    subscription_id_str = _resolve_usage_subscription_id(db, customer)
-    if not subscription_id_str:
+    subscription_ids = _resolve_usage_subscription_ids(db, customer)
+    subscription_uuid_list = _subscription_uuid_list(subscription_ids=subscription_ids)
+    if not subscription_uuid_list:
         return empty
 
     from app.models.usage import SubscriberDailyUsage
@@ -852,7 +993,10 @@ def get_usage_history(db: Session, customer: dict, months: int = 12) -> dict:
             SubscriberDailyUsage.download_bytes,
         )
         .filter(
-            SubscriberDailyUsage.subscription_id == coerce_uuid(subscription_id_str)
+            _subscription_filter(
+                SubscriberDailyUsage.subscription_id,
+                subscription_uuid_list,
+            )
         )
         .order_by(SubscriberDailyUsage.usage_date)
         .all()

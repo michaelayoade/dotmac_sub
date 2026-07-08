@@ -508,14 +508,14 @@
 
     {# ═══════════════════════ SUBMIT ALL ═══════════════════════ #}
     <input type="hidden" name="push_to_device" value="true">
-    <div class="flex flex-wrap items-center justify-end gap-2 pt-1">
-        <p class="mr-auto text-xs text-slate-500 dark:text-slate-400">Save and apply device changes</p>
+    <div class="mb-4 grid gap-3 border-t border-slate-100 pt-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center dark:border-slate-700">
+        <p class="text-xs text-slate-500 dark:text-slate-400">Save and apply device changes</p>
         <button type="submit"
                 name="push_scope"
                 value="all"
                 hx-indicator="#config-spinner-all"
                 hx-disabled-elt="this"
-                class="inline-flex items-center gap-2 rounded-lg bg-cyan-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-cyan-700 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-2 disabled:opacity-50 dark:focus:ring-offset-slate-900">
+                class="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-cyan-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-cyan-700 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-2 disabled:opacity-50 sm:w-auto dark:focus:ring-offset-slate-900">
             <svg id="config-spinner-all" x-show="activeConfigScope === 'all'" x-cloak class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
             Apply All
         </button>

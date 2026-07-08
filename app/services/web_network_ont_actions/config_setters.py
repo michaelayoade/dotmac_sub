@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from ipaddress import ip_address
 
 from sqlalchemy.orm import Session
 from starlette.requests import Request
@@ -47,6 +48,96 @@ def _int_or_none(value: object) -> int | None:
 def _huawei_command_unsupported(message: object) -> bool:
     text = str(message or "").lower()
     return "unknown command" in text or "parameter error" in text
+
+
+def _tr069_value(node: object, *path: str) -> object | None:
+    current = node
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    if isinstance(current, dict) and "_value" in current:
+        return current.get("_value")
+    return current
+
+
+def _has_usable_ip_address(value: str) -> bool:
+    try:
+        return not ip_address(value).is_unspecified
+    except ValueError:
+        return False
+
+
+def _find_internet_wan_ppp(
+    raw_device: dict[str, object],
+) -> tuple[int, int, dict[str, object]] | None:
+    wcd_root = _tr069_value(
+        raw_device,
+        "InternetGatewayDevice",
+        "WANDevice",
+        "1",
+        "WANConnectionDevice",
+    )
+    if not isinstance(wcd_root, dict):
+        return None
+
+    candidates: list[tuple[int, int, dict[str, object], int]] = []
+    for wcd_key in sorted(str(key) for key in wcd_root if str(key).isdigit()):
+        wcd = wcd_root.get(wcd_key)
+        if not isinstance(wcd, dict):
+            continue
+        ppp_root = wcd.get("WANPPPConnection")
+        if not isinstance(ppp_root, dict):
+            continue
+        for ppp_key in sorted(str(key) for key in ppp_root if str(key).isdigit()):
+            ppp = ppp_root.get(ppp_key)
+            if not isinstance(ppp, dict):
+                continue
+            status = str(_tr069_value(ppp, "ConnectionStatus") or "").lower()
+            service = str(_tr069_value(ppp, "X_HW_SERVICELIST") or "").upper()
+            ip_address = str(_tr069_value(ppp, "ExternalIPAddress") or "").strip()
+            score = 0
+            if status == "connected":
+                score += 4
+            if _has_usable_ip_address(ip_address):
+                score += 3
+            if "INTERNET" in service:
+                score += 2
+            candidates.append((int(wcd_key), int(ppp_key), ppp, score))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[3], reverse=True)
+    wcd_index, ppp_index, ppp_data, _score = candidates[0]
+    return wcd_index, ppp_index, ppp_data
+
+
+def _plain_acs_bind_error(exc: Exception) -> str:
+    raw = str(exc or "").strip()
+    lowered = raw.lower()
+    if "pending" in lowered and "task" in lowered:
+        return (
+            "The ONT already has pending ACS work. Wait for the next inform, "
+            "or clear stale ACS tasks, then retry Bind Internet WAN."
+        )
+    if "401" in lowered or "unauthorized" in lowered:
+        return (
+            "ACS cannot log in to the ONT right now. Wait for the next inform "
+            "to refresh the connection request credentials, then retry."
+        )
+    if "connection request" in lowered or "cr failed" in lowered:
+        return (
+            "ACS cannot reach the ONT from the management side right now. "
+            "Wait for the ONT to inform, then retry."
+        )
+    if "timeout" in lowered or "timed out" in lowered:
+        return (
+            "The ONT did not confirm the change in time. Check that it is "
+            "still informing ACS, then retry."
+        )
+    return (
+        "The WAN bind could not be sent through ACS. Check ACS device status "
+        "and retry after the device informs."
+    )
 
 
 def _pppoe_omci_ip_index(
@@ -1227,6 +1318,148 @@ def set_web_credentials(
         metadata={"success": result.success, "username": username},
     )
     return result
+
+
+def bind_internet_wan(
+    db: Session,
+    ont_id: str,
+    *,
+    ssid1: bool = True,
+    lan1: bool = True,
+    lan2: bool = False,
+    lan3: bool = False,
+    lan4: bool = False,
+    request: Request | None = None,
+) -> ActionResult:
+    """Bind the active Huawei PPP internet WAN to customer-facing interfaces."""
+    from app.services.genieacs_client import GenieACSError
+    from app.services.network.ont_action_common import (
+        get_ont_client_or_error,
+        set_and_verify,
+    )
+
+    resolved, error = get_ont_client_or_error(db, ont_id)
+    if error:
+        return error
+    if resolved is None:
+        return ActionResult(success=False, message="No ACS device resolved for ONT.")
+    ont, client, device_id = resolved
+    try:
+        device = client.get_device(device_id)
+    except GenieACSError as exc:
+        return ActionResult(
+            success=False,
+            message=_plain_acs_bind_error(exc),
+            data={"raw_error": str(exc)},
+        )
+
+    found = _find_internet_wan_ppp(device if isinstance(device, dict) else {})
+    if found is None:
+        return ActionResult(
+            success=False,
+            message=(
+                "Bind Internet WAN cannot run because the ONT does not show an "
+                "internet WAN object yet. Apply PPPoE WAN first, wait for ACS "
+                "to refresh, then retry the bind."
+            ),
+            data={"required_step": "create_or_refresh_ppp_wan"},
+        )
+    wcd_index, ppp_index, ppp_data = found
+    status = str(_tr069_value(ppp_data, "ConnectionStatus") or "").strip()
+    if status.lower() != "connected":
+        return ActionResult(
+            success=False,
+            message=f"PPP WAN is not connected yet (status: {status or 'unknown'}).",
+            data={
+                "wan_connection_device_index": wcd_index,
+                "wan_ppp_index": ppp_index,
+            },
+        )
+
+    base_path = (
+        "InternetGatewayDevice.WANDevice.1."
+        f"WANConnectionDevice.{wcd_index}.WANPPPConnection.{ppp_index}."
+        "X_HW_LANBIND"
+    )
+    requested_binds = {
+        "Lan1Enable": lan1,
+        "Lan2Enable": lan2,
+        "Lan3Enable": lan3,
+        "Lan4Enable": lan4,
+        "SSID1Enable": ssid1,
+    }
+    params = {
+        f"{base_path}.{field}": 1
+        for field, enabled in requested_binds.items()
+        if enabled
+    }
+    if not params:
+        return ActionResult(
+            success=False,
+            message="Select at least one LAN port or SSID to bind.",
+        )
+
+    try:
+        task = set_and_verify(
+            client,
+            device_id,
+            params,
+            expected=params,
+            timeout_sec=45,
+        )
+    except GenieACSError as exc:
+        return ActionResult(
+            success=False,
+            message=_plain_acs_bind_error(exc),
+            data={
+                "raw_error": str(exc),
+                "wan_connection_device_index": wcd_index,
+                "wan_ppp_index": ppp_index,
+                "bound_interfaces": [
+                    field.removesuffix("Enable")
+                    for field, enabled in requested_binds.items()
+                    if enabled
+                ],
+            },
+        )
+
+    bound_interfaces = [
+        field.removesuffix("Enable")
+        for field, enabled in requested_binds.items()
+        if enabled
+    ]
+    _persist_ont_plan_step(
+        db,
+        ont_id,
+        "bind_internet_wan",
+        {
+            "wan_connection_device_index": wcd_index,
+            "wan_ppp_index": ppp_index,
+            "bound_interfaces": bound_interfaces,
+        },
+    )
+    _log_action_audit(
+        db,
+        request=request,
+        action="bind_internet_wan",
+        ont_id=ont_id,
+        metadata={
+            "success": True,
+            "wan_connection_device_index": wcd_index,
+            "wan_ppp_index": ppp_index,
+            "bound_interfaces": bound_interfaces,
+            "task_id": task.get("_id") if isinstance(task, dict) else None,
+        },
+    )
+    return ActionResult(
+        success=True,
+        message="Internet WAN bound to " + ", ".join(bound_interfaces) + ".",
+        data={
+            "wan_connection_device_index": wcd_index,
+            "wan_ppp_index": ppp_index,
+            "bound_interfaces": bound_interfaces,
+        },
+    )
 
 
 def set_wan_remote_access(

@@ -195,10 +195,59 @@ def test_report_aggregates_active_subscriptions(db_session):
     assert r["average_speed"]["excluded_download_count"] == 0
     assert r["subscription_matrix"]["corporate"]["wired"] == 1
     assert r["subscription_matrix"]["individual"]["wireless"] == 1
-    assert r["by_state"] == {"Federal Capital Territory": 1, "Lagos": 1}
+    assert r["by_state"] == {"Abuja": 1, "Lagos": 1}
     assert r["by_region"] == {"North Central": 1, "South West": 1}
     assert r["network_capacity"]["points_of_presence"] == 28
     assert r["network_capacity"]["points_of_presence_source"] == "manual"
+
+
+def test_report_normalizes_ncc_pack_state_region_matrix_and_pop_totals():
+    raw_report = {
+        "total_active_subscriptions": 2868,
+        "by_state": {
+            "Anambra": 1,
+            "Federal Capital Territory": 2414,
+            "Lagos": 114,
+            "Oyo": 5,
+            "Unknown": 334,
+        },
+        "by_region": {
+            "North Central": 2414,
+            "South East": 1,
+            "South West": 119,
+            "Unknown": 334,
+        },
+        "subscription_matrix": {
+            "corporate": {"wired": 552, "wireless": 0},
+            "individual": {"wired": 2316, "wireless": 0},
+        },
+        "network_capacity": {
+            "points_of_presence": 36,
+            "points_of_presence_source": "active_pop_sites",
+        },
+    }
+
+    report = ncc.normalize_ncc_pack_subscriber_report(raw_report)
+
+    matrix_total = sum(
+        count
+        for customer_type in report["subscription_matrix"].values()
+        for count in customer_type.values()
+    )
+    assert report is not raw_report
+    assert raw_report["by_state"]["Oyo"] == 5
+    assert report["by_state"] == {"Abuja": 2748, "Lagos": 114}
+    assert report["by_region"] == {"North Central": 2748, "South West": 114}
+    assert report["total_active_subscriptions"] == 2862
+    assert sum(report["by_state"].values()) == report["total_active_subscriptions"]
+    assert sum(report["by_region"].values()) == report["total_active_subscriptions"]
+    assert matrix_total == report["total_active_subscriptions"]
+    assert report["subscription_matrix"] == {
+        "corporate": {"wired": 546, "wireless": 0},
+        "individual": {"wired": 2316, "wireless": 0},
+    }
+    assert report["network_capacity"]["points_of_presence"] == 30
+    assert report["ncc_pack_adjustments"]["excluded_count"] == 6
 
 
 def test_report_populates_points_of_presence_from_active_pop_sites(db_session):
@@ -283,14 +332,12 @@ def test_report_reduces_unknowns_with_city_and_service_address_fallback(db_sessi
 
     assert r["total_active_subscriptions"] == 3
     assert r["by_state"] == {
-        "Federal Capital Territory": 1,
+        "Abuja": 2,
         "Lagos": 1,
-        "Unknown": 1,
     }
     assert r["by_region"] == {
-        "North Central": 1,
+        "North Central": 2,
         "South West": 1,
-        "Unknown": 1,
     }
 
 

@@ -476,6 +476,511 @@ def _service_port_value(port: object, field: str) -> object | None:
     return getattr(port, field, None)
 
 
+def _tr069_value(node: object, *path: str) -> object | None:
+    current = node
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    if isinstance(current, dict) and "_value" in current:
+        return current.get("_value")
+    return current
+
+
+def _first_wan_ppp(raw_device: dict[str, object]) -> dict[str, object] | None:
+    wcd_root = _tr069_value(
+        raw_device,
+        "InternetGatewayDevice",
+        "WANDevice",
+        "1",
+        "WANConnectionDevice",
+    )
+    if not isinstance(wcd_root, dict):
+        return None
+    for wcd_key in sorted(str(key) for key in wcd_root if str(key).isdigit()):
+        wcd = wcd_root.get(wcd_key)
+        if not isinstance(wcd, dict):
+            continue
+        ppp_root = wcd.get("WANPPPConnection")
+        if not isinstance(ppp_root, dict):
+            continue
+        for ppp_key in sorted(str(key) for key in ppp_root if str(key).isdigit()):
+            ppp = ppp_root.get(ppp_key)
+            if isinstance(ppp, dict):
+                return {"wcd_index": wcd_key, "ppp_index": ppp_key, "data": ppp}
+    return None
+
+
+def _truthy_acs_int(value: object) -> bool:
+    try:
+        return int(str(value or "0")) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _values_match(left: object, right: object) -> bool:
+    return str(left or "").strip() == str(right or "").strip()
+
+
+def _recovery_row(
+    label: str,
+    status: str,
+    message: str,
+    *,
+    detail: str | None = None,
+) -> dict[str, str | None]:
+    classes = {
+        "ok": {
+            "dot": "bg-emerald-500",
+            "badge": "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300",
+        },
+        "warn": {
+            "dot": "bg-amber-500",
+            "badge": "bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
+        },
+        "fail": {
+            "dot": "bg-rose-500",
+            "badge": "bg-rose-50 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300",
+        },
+        "pending": {
+            "dot": "bg-slate-400",
+            "badge": "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300",
+        },
+    }
+    style = classes.get(status, classes["pending"])
+    return {
+        "label": label,
+        "status": status,
+        "status_label": status.title(),
+        "message": message,
+        "detail": detail,
+        "dot_class": style["dot"],
+        "badge_class": style["badge"],
+    }
+
+
+def _drift_row(
+    label: str,
+    saved_value: object,
+    device_value: object,
+    *,
+    pending_message: str,
+) -> dict[str, object]:
+    saved = str(saved_value or "").strip()
+    device = str(device_value or "").strip()
+    if saved and device and _values_match(saved, device):
+        status = "ok"
+        message = "Saved value matches the device."
+    elif saved and device:
+        status = "warn"
+        message = "Saved value does not match the device."
+    elif saved and not device:
+        status = "pending"
+        message = pending_message
+    elif device:
+        status = "warn"
+        message = "Device has a value, but the app has no saved value."
+    else:
+        status = "pending"
+        message = "No saved value or device value is available yet."
+    return {
+        **_recovery_row(label, status, message),
+        "saved_value": saved or "-",
+        "device_value": device or "-",
+    }
+
+
+def _drift_state_row(
+    label: str,
+    status: str,
+    message: str,
+    *,
+    saved_value: str,
+    device_value: str,
+    detail: str | None = None,
+) -> dict[str, object]:
+    return {
+        **_recovery_row(label, status, message, detail=detail),
+        "saved_value": saved_value,
+        "device_value": device_value,
+    }
+
+
+def _service_recovery_context(
+    db: Session,
+    ont: object,
+    *,
+    desired_wan: dict[str, object],
+    service_ports_context: dict[str, object],
+    olt_status: dict[str, object],
+    has_tr069_device: bool,
+) -> dict[str, object]:
+    """Build a compact operator checklist for ONT internet recovery."""
+    from app.models.radius_active_session import RadiusActiveSession
+
+    expected_username = str(desired_wan.get("pppoe_username") or "").strip()
+    expected_wan_vlan = str(desired_wan.get("wan_vlan") or "").strip()
+    rows: list[dict[str, str | None]] = []
+
+    entry = olt_status.get("entry") or {}
+    run_state = str(entry.get("run_state") or entry.get("olt_status") or "").lower()
+    config_state = str(entry.get("config_state") or "").lower()
+    match_state = str(entry.get("match_state") or "").lower()
+    if bool(olt_status.get("deferred")):
+        rows.append(
+            _recovery_row(
+                "OLT registration",
+                "pending",
+                "Live OLT state has not been loaded on this view.",
+                detail="Open OLT Status if the customer is still down.",
+            )
+        )
+    elif run_state == "online" and config_state == "normal" and match_state == "match":
+        rows.append(
+            _recovery_row(
+                "OLT registration",
+                "ok",
+                "ONT is online, config normal, and profile matched.",
+            )
+        )
+    else:
+        rows.append(
+            _recovery_row(
+                "OLT registration",
+                "fail" if run_state and run_state != "online" else "warn",
+                "OLT registration is not fully healthy.",
+                detail=f"run={run_state or 'unknown'}, config={config_state or 'unknown'}, match={match_state or 'unknown'}",
+            )
+        )
+
+    ports = list(service_ports_context.get("service_ports") or [])
+    ports_deferred = bool(service_ports_context.get("deferred"))
+    port_error = str(service_ports_context.get("error") or "").strip()
+    observed_vlans = {
+        str(_service_port_value(port, "vlan_id") or "")
+        for port in ports
+        if _service_port_value(port, "vlan_id") not in (None, "")
+    }
+    if ports_deferred:
+        rows.append(
+            _recovery_row(
+                "Internet service-port",
+                "pending",
+                "Service-port read is deferred on this view.",
+                detail="Open Service Ports to verify VLAN/GEM state.",
+            )
+        )
+    elif port_error:
+        rows.append(_recovery_row("Internet service-port", "fail", port_error))
+    elif expected_wan_vlan and expected_wan_vlan in observed_vlans:
+        rows.append(
+            _recovery_row(
+                "Internet service-port",
+                "ok",
+                f"Expected internet VLAN {expected_wan_vlan} is present.",
+            )
+        )
+    else:
+        rows.append(
+            _recovery_row(
+                "Internet service-port",
+                "fail",
+                "Expected internet VLAN is missing from observed service-ports.",
+                detail=f"Expected VLAN {expected_wan_vlan or 'not set'}.",
+            )
+        )
+
+    rows.append(
+        _recovery_row(
+            "ACS inform",
+            "ok" if has_tr069_device else "warn",
+            "TR-069 device has informed."
+            if has_tr069_device
+            else "No ACS device has informed yet.",
+        )
+    )
+
+    snapshot = getattr(ont, "tr069_last_snapshot", None)
+    raw_device = snapshot.get("raw_device") if isinstance(snapshot, dict) else None
+    raw_device = raw_device if isinstance(raw_device, dict) else {}
+    ppp = _first_wan_ppp(raw_device)
+    ppp_data = ppp.get("data") if isinstance(ppp, dict) else None
+    ppp_data = ppp_data if isinstance(ppp_data, dict) else {}
+    ppp_status = str(_tr069_value(ppp_data, "ConnectionStatus") or "").strip()
+    ppp_ip = str(_tr069_value(ppp_data, "ExternalIPAddress") or "").strip()
+    ppp_username = str(_tr069_value(ppp_data, "Username") or "").strip()
+    ppp_vlan = str(_tr069_value(ppp_data, "X_HW_VLAN") or "").strip()
+    ppp_connected = ppp_status.lower() == "connected" and bool(ppp_ip)
+    ppp_object_present = bool(ppp_data)
+    drift_rows = [
+        _drift_row(
+            "PPPoE username",
+            expected_username,
+            ppp_username,
+            pending_message="ACS has not shown the PPPoE username yet.",
+        ),
+        _drift_row(
+            "Internet VLAN",
+            expected_wan_vlan,
+            ppp_vlan,
+            pending_message="ACS has not shown the WAN VLAN yet.",
+        ),
+    ]
+    if bool(olt_status.get("deferred")):
+        drift_rows.append(
+            _drift_state_row(
+                "Live OLT state",
+                "pending",
+                "This page is using cached OLT data until you open the live OLT view.",
+                saved_value="Cached",
+                device_value="Not loaded",
+            )
+        )
+    elif match_state and match_state != "match":
+        drift_rows.append(
+            _drift_state_row(
+                "Live OLT state",
+                "warn",
+                "OLT says the ONT config does not match the expected profile.",
+                saved_value="Expected match",
+                device_value=match_state or "Mismatch",
+                detail="Resolve the OLT mismatch before replacing the ONT.",
+            )
+        )
+    else:
+        drift_rows.append(
+            _drift_state_row(
+                "Live OLT state",
+                "ok",
+                "OLT state matches the app view.",
+                saved_value="Expected match",
+                device_value="Match",
+            )
+        )
+
+    if ppp_connected:
+        rows.append(
+            _recovery_row(
+                "PPP WAN",
+                "ok",
+                f"PPPoE is connected with IP {ppp_ip}.",
+                detail=f"user={ppp_username or 'unknown'}, vlan={ppp_vlan or 'unknown'}",
+            )
+        )
+    elif ppp_data:
+        rows.append(
+            _recovery_row(
+                "PPP WAN",
+                "warn",
+                "PPP WAN exists but is not connected.",
+                detail=f"status={ppp_status or 'unknown'}, ip={ppp_ip or '-'}",
+            )
+        )
+    else:
+        rows.append(
+            _recovery_row(
+                "PPP WAN",
+                "fail",
+                "No WANPPPConnection is visible from ACS.",
+                detail="Create or activate the PPPoE internet WAN before replacing hardware.",
+            )
+        )
+
+    radius_stmt = select(RadiusActiveSession).where(False)
+    if expected_username:
+        radius_stmt = select(RadiusActiveSession).where(
+            RadiusActiveSession.username == expected_username
+        )
+    active_radius = db.scalars(
+        radius_stmt.order_by(
+            RadiusActiveSession.last_update.desc().nullslast(),
+            RadiusActiveSession.session_start.desc(),
+        )
+    ).first()
+    if active_radius:
+        counters = int(active_radius.bytes_in or 0) + int(active_radius.bytes_out or 0)
+        rows.append(
+            _recovery_row(
+                "RADIUS session",
+                "ok" if counters > 0 else "warn",
+                f"Active session on {active_radius.framed_ip_address or 'unknown IP'}.",
+                detail=(
+                    "No traffic counters yet; check LAN/WiFi bind and customer device."
+                    if counters == 0
+                    else f"{counters} bytes counted."
+                ),
+            )
+        )
+    else:
+        rows.append(
+            _recovery_row(
+                "RADIUS session",
+                "fail",
+                "No active PPPoE/RADIUS session for the expected username.",
+                detail=f"Expected username {expected_username or 'not set'}.",
+            )
+        )
+
+    lanbind = ppp_data.get("X_HW_LANBIND") if isinstance(ppp_data, dict) else None
+    lanbind = lanbind if isinstance(lanbind, dict) else {}
+    bind_labels = ["Lan1", "Lan2", "Lan3", "Lan4", "SSID1", "SSID2", "SSID3", "SSID4"]
+    enabled_binds = [
+        label
+        for label in bind_labels
+        if _truthy_acs_int(_tr069_value(lanbind, f"{label}Enable"))
+    ]
+    if not ppp_data:
+        rows.append(
+            _recovery_row(
+                "LAN/WiFi bind",
+                "pending",
+                "Binding cannot be checked yet because the internet WAN is missing.",
+                detail="Create or apply the PPPoE WAN first. Bind Internet WAN cannot create it.",
+            )
+        )
+    elif enabled_binds:
+        rows.append(
+            _recovery_row(
+                "LAN/WiFi bind",
+                "ok",
+                "PPP WAN is bound to customer-facing interfaces.",
+                detail=", ".join(enabled_binds),
+            )
+        )
+    else:
+        rows.append(
+            _recovery_row(
+                "LAN/WiFi bind",
+                "warn",
+                "PPP WAN is not bound to LAN ports or SSIDs.",
+                detail="Bind the internet WAN to SSID1 and required LAN ports.",
+            )
+        )
+
+    severity_rank = {"fail": 3, "warn": 2, "pending": 1, "ok": 0}
+    worst = max((str(row["status"]) for row in rows), key=lambda s: severity_rank[s])
+    drift_worst = max(
+        (str(row["status"]) for row in drift_rows),
+        key=lambda s: severity_rank[s],
+    )
+    bind_action_enabled = ppp_connected
+    bind_action_reason = "Select SSID/LAN ports, then bind the connected internet WAN."
+    recovery_stage = {
+        "title": "No recovery action needed",
+        "message": "The checklist does not see a service recovery blocker.",
+        "action_label": "",
+        "action_hint": "",
+        "tone": "ok",
+    }
+
+    if not ppp_object_present:
+        bind_action_enabled = False
+        bind_action_reason = (
+            "Disabled because the ONT does not show an internet WAN object yet."
+        )
+        recovery_stage = {
+            "title": "Internet WAN object is missing",
+            "message": (
+                "The ONT does not currently show a PPPoE internet WAN service. "
+                "There is nothing for the Bind button to attach to WiFi or LAN."
+            ),
+            "action_label": "Apply WAN",
+            "action_hint": (
+                "Use Apply WAN in the WAN section above, then wait for ACS to refresh "
+                "until the PPP WAN appears."
+            ),
+            "tone": "fail",
+        }
+    elif not ppp_connected:
+        bind_action_enabled = False
+        bind_action_reason = "Disabled because the PPP WAN exists but is not connected."
+        recovery_stage = {
+            "title": "Internet WAN exists but has not connected",
+            "message": (
+                "The ONT has a PPPoE WAN object, but it has not dialed successfully yet. "
+                "Binding ports now will not bring the customer online."
+            ),
+            "action_label": "Check PPPoE/RADIUS",
+            "action_hint": (
+                "Confirm PPPoE username, password, VLAN, RADIUS account, and ACS refresh state."
+            ),
+            "tone": "warn",
+        }
+    elif not enabled_binds:
+        recovery_stage = {
+            "title": "Internet WAN is connected but not attached to customer ports",
+            "message": (
+                "The ONT has an active internet WAN. Bind it to SSID1 and the required "
+                "LAN ports so customer devices can pass traffic."
+            ),
+            "action_label": "Bind Internet WAN",
+            "action_hint": "Select the customer-facing WiFi/LAN ports below, then click Bind Internet WAN.",
+            "tone": "warn",
+        }
+
+    common_issues = [
+        {
+            "label": "No ACS inform",
+            "meaning": "The ONT has not checked in, so TR-069 changes may not reach it yet.",
+        },
+        {
+            "label": "Missing service-port",
+            "meaning": "The OLT path for the internet VLAN is not present, so traffic cannot pass.",
+        },
+        {
+            "label": "WAN object missing",
+            "meaning": "The ONT has no PPPoE internet service object; Apply WAN must run first.",
+        },
+        {
+            "label": "PPP not connected",
+            "meaning": "The WAN exists, but PPPoE/RADIUS has not accepted the session.",
+        },
+        {
+            "label": "WAN not bound",
+            "meaning": "Internet is active on the ONT but not attached to WiFi or Ethernet ports.",
+        },
+        {
+            "label": "App/device drift",
+            "meaning": "The saved config differs from what ACS or the OLT last saw on the device.",
+        },
+    ]
+
+    next_action = "No recovery action needed from this checklist."
+    if worst == "fail":
+        failed = next(row for row in rows if row["status"] == "fail")
+        next_action = str(failed["message"])
+    elif worst == "warn":
+        warning = next(
+            (
+                row
+                for row in rows
+                if row["status"] == "warn" and row["label"] == "LAN/WiFi bind"
+            ),
+            None,
+        ) or next(row for row in rows if row["status"] == "warn")
+        next_action = str(warning["message"])
+    elif worst == "pending":
+        next_action = "Load deferred OLT/ACS reads before deciding on replacement."
+
+    return {
+        "service_recovery": {
+            "rows": rows,
+            "status": worst,
+            "next_action": next_action,
+            "recovery_stage": recovery_stage,
+            "common_issues": common_issues,
+            "bind_action_enabled": bind_action_enabled,
+            "bind_action_reason": bind_action_reason,
+            "ppp_object_present": ppp_object_present,
+            "ppp_connected": ppp_connected,
+            "drift_rows": drift_rows,
+            "drift_status": drift_worst,
+            "pppoe_username": expected_username,
+            "wan_vlan": expected_wan_vlan,
+        }
+    }
+
+
 def _operator_summary_context(
     *,
     desired_mgmt: dict[str, object],
@@ -763,6 +1268,16 @@ def unified_config_context(
             olt_status=olt_status,
             has_tr069_device=context["has_tr069"],
             current_tr069_profile=current_profile_name,
+        )
+    )
+    context.update(
+        _service_recovery_context(
+            db,
+            ont,
+            desired_wan=context["desired_wan_config"],
+            service_ports_context=service_ports_context,
+            olt_status=olt_status,
+            has_tr069_device=context["has_tr069"],
         )
     )
     desired_wan = context["desired_wan_config"]
