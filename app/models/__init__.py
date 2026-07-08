@@ -476,6 +476,12 @@ from app.models.service_request import (  # noqa: F401
     Serviceability,
     ServiceRequestStatus,
 )
+from app.models.service_team import (  # noqa: F401
+    ServiceTeam,
+    ServiceTeamMember,
+    ServiceTeamMemberRole,
+    ServiceTeamType,
+)
 from app.models.snmp import (  # noqa: F401
     SnmpAuthProtocol,
     SnmpCredential,
@@ -522,6 +528,7 @@ from app.models.subscription_engine import (  # noqa: F401
 )
 from app.models.support import (  # noqa: F401
     Ticket,
+    TicketAccessToken,
     TicketAssignee,
     TicketChannel,
     TicketComment,
@@ -540,6 +547,18 @@ from app.models.table_column_default_config import (  # noqa: F401
 from app.models.task_execution import (  # noqa: F401
     TaskExecution,
     TaskExecutionStatus,
+)
+from app.models.ticket_workflow import (  # noqa: F401
+    SlaBreach,
+    SlaBreachStatus,
+    SlaClock,
+    SlaClockStatus,
+    SlaPolicy,
+    SlaTarget,
+    TicketAssignmentCounter,
+    TicketAssignmentRule,
+    TicketAssignmentStrategy,
+    WorkflowEntityType,
 )
 from app.models.tr069 import (  # noqa: F401
     Tr069AcsServer,
