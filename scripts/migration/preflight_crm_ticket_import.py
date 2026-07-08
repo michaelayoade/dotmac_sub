@@ -15,6 +15,7 @@ import argparse
 import csv
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,10 @@ VALID_STATUSES = {
 }
 VALID_PRIORITIES = {"lower", "low", "medium", "normal", "high", "urgent"}
 VALID_CHANNELS = {"web", "email", "phone", "chat", "api"}
+CLOSED_STATUSES = {"closed", "resolved", "canceled", "merged"}
+DEFAULT_EXCLUDE_TITLE_REGEX = (
+    r"(?i)\b(codex\b.*\bprobe\b|webhook\b.*\bprobe\b|test\b.*\bticket\b)"
+)
 
 SUB_CRM_ID_SQL = """
 SELECT crm_subscriber_id::text AS crm_subscriber_id
@@ -121,6 +126,8 @@ def collect_findings(
     sub: Connection,
     crm: Connection,
     sample_limit: int,
+    exclude_title_re: re.Pattern[str] | None,
+    allow_unmapped_closed: bool,
 ) -> tuple[dict[str, int], list[Finding]]:
     summary = {
         "crm_tickets": _scalar(crm, "SELECT count(*) FROM tickets"),
@@ -329,14 +336,16 @@ def collect_findings(
             name="crm_unmapped_ticket_subscribers",
             severity="blocker",
             description=(
-                "CRM tickets with subscriber_id that cannot map to "
-                "sub.subscribers.crm_subscriber_id."
+                "CRM tickets with subscriber_id that cannot map to sub and are "
+                "not handled by the importer's skip/unlinked-history policy."
             ),
             rows=_rows(
                 crm,
                 """
                     SELECT t.id::text AS crm_ticket_id,
                            t.number,
+                           t.title,
+                           t.status::text AS status,
                            t.subscriber_id::text AS crm_subscriber_id,
                            s.external_system,
                            s.external_id,
@@ -373,6 +382,56 @@ def collect_findings(
                 if str(row.get("crm_subscriber_id")) not in mapped
             ],
         )
+    unmapped_ticket_rows = findings[-1].rows
+    policy_excluded_rows = [
+        row
+        for row in unmapped_ticket_rows
+        if exclude_title_re and exclude_title_re.search(str(row.get("title") or ""))
+    ]
+    policy_excluded_ids = {
+        str(row["crm_ticket_id"]) for row in policy_excluded_rows
+    }
+    policy_unlinked_rows = [
+        row
+        for row in unmapped_ticket_rows
+        if str(row["crm_ticket_id"]) not in policy_excluded_ids
+        and allow_unmapped_closed
+        and str(row.get("status") or "") in CLOSED_STATUSES
+    ]
+    policy_unlinked_ids = {str(row["crm_ticket_id"]) for row in policy_unlinked_rows}
+    findings[-1] = Finding(
+        findings[-1].name,
+        findings[-1].severity,
+        findings[-1].description,
+        [
+            row
+            for row in unmapped_ticket_rows
+            if str(row["crm_ticket_id"]) not in policy_excluded_ids
+            and str(row["crm_ticket_id"]) not in policy_unlinked_ids
+        ],
+    )
+    findings.append(
+        Finding(
+            name="crm_policy_excluded_tickets",
+            severity="info",
+            description=(
+                "Unmapped CRM tickets that the importer will skip by "
+                "--exclude-title-regex."
+            ),
+            rows=policy_excluded_rows,
+        )
+    )
+    findings.append(
+        Finding(
+            name="crm_policy_unlinked_closed_tickets",
+            severity="info",
+            description=(
+                "Unmapped closed/resolved/canceled/merged CRM tickets that the "
+                "importer will preserve with subscriber_id=NULL."
+            ),
+            rows=policy_unlinked_rows,
+        )
+    )
 
     customer_person_rows = _rows(
         crm,
@@ -565,10 +624,27 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", default="ticket-import-preflight")
     parser.add_argument("--sample-limit", type=int, default=500)
+    parser.add_argument(
+        "--exclude-title-regex",
+        default=DEFAULT_EXCLUDE_TITLE_REGEX,
+        help="Regex for unmapped CRM tickets the importer will skip.",
+    )
+    parser.add_argument(
+        "--allow-unmapped-closed",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Treat unmapped closed/resolved/canceled/merged CRM tickets as "
+            "policy-handled unlinked history instead of blockers."
+        ),
+    )
     args = parser.parse_args()
 
     out = Path(args.out)
     sample_limit = max(1, args.sample_limit)
+    exclude_title_re = (
+        re.compile(args.exclude_title_regex) if args.exclude_title_regex else None
+    )
 
     sub_engine = _engine_from_env("SUB_DATABASE_URL")
     crm_engine = _engine_from_env("CRM_DATABASE_URL")
@@ -580,6 +656,8 @@ def main() -> None:
                 sub=sub,
                 crm=crm,
                 sample_limit=sample_limit,
+                exclude_title_re=exclude_title_re,
+                allow_unmapped_closed=args.allow_unmapped_closed,
             )
         finally:
             sub.rollback()
@@ -605,6 +683,10 @@ def main() -> None:
         "finding_counts": finding_counts,
         "blocker_rows": blockers,
         "output_dir": str(out),
+        "policy": {
+            "allow_unmapped_closed": args.allow_unmapped_closed,
+            "exclude_title_regex": args.exclude_title_regex,
+        },
     }
     out.mkdir(parents=True, exist_ok=True)
     (out / "summary.json").write_text(json.dumps(report, indent=2, default=str) + "\n")

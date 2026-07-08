@@ -1,0 +1,845 @@
+#!/usr/bin/env python3
+"""One-time Phase 1 CRM ticket import into native sub support tables.
+
+Inputs:
+  SUB_DATABASE_URL=postgresql://...
+  CRM_DATABASE_URL=postgresql://...
+
+The importer is dry-run by default. Pass ``--apply`` to write to sub.
+
+Unmapped subscriber policy is intentionally conservative:
+  * explicit override CSV rows win;
+  * test/probe tickets matching ``--exclude-title-regex`` are skipped;
+  * closed/resolved/canceled/merged history can be imported unlinked when
+    ``--allow-unmapped-closed`` is set;
+  * all other unmapped subscriber rows block the run.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import os
+import re
+import uuid
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Connection, Engine
+
+
+CLOSED_STATUSES = {"closed", "resolved", "canceled", "merged"}
+DEFAULT_EXCLUDE_TITLE_REGEX = (
+    r"(?i)\b(codex\b.*\bprobe\b|webhook\b.*\bprobe\b|test\b.*\bticket\b)"
+)
+
+
+@dataclass(frozen=True)
+class UnmappedDecision:
+    action: str
+    reason: str
+    subscriber_id: str | None = None
+
+
+@dataclass
+class ImportStats:
+    fetched: int = 0
+    created: int = 0
+    updated: int = 0
+    skipped: int = 0
+    imported_unlinked: int = 0
+    blocked_unmapped: int = 0
+    comments_inserted: int = 0
+    assignees_inserted: int = 0
+    merges_inserted: int = 0
+    links_inserted: int = 0
+    access_tokens_upserted: int = 0
+    service_teams_upserted: int = 0
+    blockers: list[dict[str, Any]] = field(default_factory=list)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "fetched": self.fetched,
+            "created": self.created,
+            "updated": self.updated,
+            "skipped": self.skipped,
+            "imported_unlinked": self.imported_unlinked,
+            "blocked_unmapped": self.blocked_unmapped,
+            "comments_inserted": self.comments_inserted,
+            "assignees_inserted": self.assignees_inserted,
+            "merges_inserted": self.merges_inserted,
+            "links_inserted": self.links_inserted,
+            "access_tokens_upserted": self.access_tokens_upserted,
+            "service_teams_upserted": self.service_teams_upserted,
+            "blockers": self.blockers,
+        }
+
+
+def _engine_from_env(name: str) -> Engine:
+    url = os.environ.get(name)
+    if not url:
+        raise SystemExit(f"{name} is required")
+    return create_engine(url, pool_pre_ping=True)
+
+
+def _rows(
+    conn: Connection, sql: str, params: dict[str, Any] | None = None
+) -> list[dict[str, Any]]:
+    result = conn.execute(text(sql), params or {})
+    return [dict(row._mapping) for row in result]
+
+
+def _json(value: Any, default: Any) -> Any:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return default
+    return value
+
+
+def _uuid_or_none(value: Any) -> str | None:
+    if value is None:
+        return None
+    value = str(value).strip()
+    if not value:
+        return None
+    return value
+
+
+def _load_overrides(path: str | None) -> dict[str, UnmappedDecision]:
+    if not path:
+        return {}
+    overrides: dict[str, UnmappedDecision] = {}
+    with Path(path).open(newline="", encoding="utf-8") as handle:
+        for row in csv.DictReader(handle):
+            ticket_id = str(row.get("crm_ticket_id") or row.get("ticket_id") or "")
+            ticket_id = ticket_id.strip()
+            if not ticket_id:
+                continue
+            action = str(row.get("action") or "").strip().lower()
+            subscriber_id = str(row.get("subscriber_id") or "").strip() or None
+            reason = str(row.get("reason") or "override_csv").strip()
+            if subscriber_id and not action:
+                action = "map"
+            if action not in {"map", "skip", "unlink"}:
+                raise SystemExit(f"Invalid override action for {ticket_id}: {action}")
+            overrides[ticket_id] = UnmappedDecision(action, reason, subscriber_id)
+    return overrides
+
+
+def decide_unmapped_ticket(
+    ticket: dict[str, Any],
+    *,
+    overrides: dict[str, UnmappedDecision],
+    exclude_title_re: re.Pattern[str] | None,
+    allow_unmapped_closed: bool,
+) -> UnmappedDecision:
+    ticket_id = str(ticket["id"])
+    if ticket_id in overrides:
+        return overrides[ticket_id]
+
+    title = str(ticket.get("title") or "")
+    if exclude_title_re and exclude_title_re.search(title):
+        return UnmappedDecision("skip", "exclude_title_regex")
+
+    status = str(ticket.get("status") or "")
+    if allow_unmapped_closed and status in CLOSED_STATUSES:
+        return UnmappedDecision("unlink", "unmapped_closed_history")
+
+    return UnmappedDecision("block", "unmapped_subscriber")
+
+
+def _load_subscriber_map(sub: Connection) -> dict[str, str]:
+    rows = _rows(
+        sub,
+        """
+        SELECT id::text AS subscriber_id,
+               crm_subscriber_id::text AS crm_subscriber_id
+        FROM subscribers
+        WHERE crm_subscriber_id IS NOT NULL
+        UNION ALL
+        SELECT s.id::text AS subscriber_id,
+               alias.crm_subscriber_id
+        FROM subscribers s
+        CROSS JOIN LATERAL json_array_elements_text(
+            CASE
+                WHEN json_typeof(s.metadata->'crm_alias_ids') = 'array'
+                THEN s.metadata->'crm_alias_ids'
+                ELSE '[]'::json
+            END
+        ) AS alias(crm_subscriber_id)
+        """,
+    )
+    mapping: dict[str, str] = {}
+    conflicts: list[dict[str, str]] = []
+    for row in rows:
+        crm_id = str(row["crm_subscriber_id"])
+        sub_id = str(row["subscriber_id"])
+        existing = mapping.get(crm_id)
+        if existing and existing != sub_id:
+            conflicts.append(
+                {
+                    "crm_subscriber_id": crm_id,
+                    "subscriber_id": sub_id,
+                    "existing_subscriber_id": existing,
+                }
+            )
+        mapping[crm_id] = sub_id
+    if conflicts:
+        raise SystemExit(
+            "CRM subscriber alias conflicts found:\n"
+            + json.dumps(conflicts[:25], indent=2)
+        )
+    return mapping
+
+
+def _load_existing_tickets(sub: Connection) -> dict[str, str]:
+    return {
+        str(row["crm_ticket_id"]): str(row["support_ticket_id"])
+        for row in _rows(
+            sub,
+            """
+            SELECT id::text AS support_ticket_id,
+                   metadata->>'crm_ticket_id' AS crm_ticket_id
+            FROM support_tickets
+            WHERE metadata->>'crm_ticket_id' IS NOT NULL
+            """,
+        )
+        if row.get("crm_ticket_id")
+    }
+
+
+def _crm_tickets(crm: Connection, limit: int | None) -> list[dict[str, Any]]:
+    sql = """
+        SELECT id::text,
+               subscriber_id::text,
+               created_by_person_id::text,
+               assigned_to_person_id::text,
+               ticket_manager_person_id::text,
+               assistant_manager_person_id::text,
+               service_team_id::text,
+               title,
+               description,
+               status::text,
+               priority::text,
+               channel::text,
+               tags::text,
+               metadata::text,
+               due_at,
+               resolved_at,
+               closed_at,
+               is_active,
+               created_at,
+               updated_at,
+               ticket_type,
+               lead_id::text,
+               customer_person_id::text,
+               number,
+               region,
+               erpnext_id,
+               merged_into_ticket_id::text
+        FROM tickets
+        ORDER BY created_at, id
+    """
+    if limit:
+        sql += "\nLIMIT :limit"
+        return _rows(crm, sql, {"limit": limit})
+    return _rows(crm, sql)
+
+
+def _ticket_payload(
+    ticket: dict[str, Any],
+    *,
+    local_ticket_id: str,
+    subscriber_id: str | None,
+    policy_reason: str | None,
+) -> dict[str, Any]:
+    crm_metadata = _json(ticket.get("metadata"), {}) or {}
+    attachments = []
+    if isinstance(crm_metadata, dict):
+        raw_attachments = crm_metadata.pop("attachments", [])
+        attachments = raw_attachments if isinstance(raw_attachments, list) else []
+    else:
+        crm_metadata = {"crm_metadata_raw": crm_metadata}
+
+    metadata = dict(crm_metadata)
+    metadata.update(
+        {
+            "crm_ticket_id": ticket["id"],
+            "crm_subscriber_id": ticket.get("subscriber_id"),
+            "crm_customer_person_id": ticket.get("customer_person_id"),
+            "crm_import_source": "dotmac_crm_phase1",
+        }
+    )
+    if policy_reason:
+        metadata["crm_unmapped_subscriber_policy"] = policy_reason
+
+    tags = _json(ticket.get("tags"), []) or []
+    if not isinstance(tags, list):
+        tags = []
+
+    return {
+        "id": local_ticket_id,
+        "subscriber_id": subscriber_id,
+        "customer_account_id": subscriber_id,
+        "customer_person_id": subscriber_id,
+        "created_by_person_id": _uuid_or_none(ticket.get("created_by_person_id")),
+        "assigned_to_person_id": _uuid_or_none(ticket.get("assigned_to_person_id")),
+        "ticket_manager_person_id": _uuid_or_none(
+            ticket.get("ticket_manager_person_id")
+        ),
+        "site_coordinator_person_id": _uuid_or_none(
+            ticket.get("assistant_manager_person_id")
+        ),
+        "service_team_id": _uuid_or_none(ticket.get("service_team_id")),
+        "number": ticket.get("number"),
+        "title": ticket.get("title") or "Untitled CRM ticket",
+        "description": ticket.get("description"),
+        "region": ticket.get("region"),
+        "status": ticket.get("status") or "open",
+        "priority": ticket.get("priority") or "normal",
+        "ticket_type": ticket.get("ticket_type"),
+        "erpnext_id": ticket.get("erpnext_id"),
+        "channel": ticket.get("channel") or "web",
+        "tags": json.dumps(tags),
+        "metadata": json.dumps(metadata),
+        "attachments": json.dumps(attachments),
+        "due_at": ticket.get("due_at"),
+        "resolved_at": ticket.get("resolved_at"),
+        "closed_at": ticket.get("closed_at"),
+        "merged_into_ticket_id": None,
+        "is_active": ticket.get("is_active", True),
+        "created_at": ticket.get("created_at"),
+        "updated_at": ticket.get("updated_at"),
+    }
+
+
+UPSERT_TICKET_SQL = """
+INSERT INTO support_tickets (
+    id, subscriber_id, customer_account_id, customer_person_id,
+    created_by_person_id, assigned_to_person_id, ticket_manager_person_id,
+    site_coordinator_person_id, service_team_id, number, title, description,
+    region, status, priority, ticket_type, erpnext_id, channel, tags, metadata,
+    attachments, due_at, resolved_at, closed_at, merged_into_ticket_id, is_active,
+    created_at, updated_at
+) VALUES (
+    CAST(:id AS uuid), CAST(:subscriber_id AS uuid), CAST(:customer_account_id AS uuid),
+    CAST(:customer_person_id AS uuid), CAST(:created_by_person_id AS uuid),
+    CAST(:assigned_to_person_id AS uuid), CAST(:ticket_manager_person_id AS uuid),
+    CAST(:site_coordinator_person_id AS uuid), CAST(:service_team_id AS uuid),
+    :number, :title, :description, :region, :status, :priority, :ticket_type,
+    :erpnext_id, :channel, CAST(:tags AS json), CAST(:metadata AS json),
+    CAST(:attachments AS json), :due_at, :resolved_at, :closed_at,
+    CAST(:merged_into_ticket_id AS uuid), :is_active, :created_at, :updated_at
+)
+ON CONFLICT (id) DO UPDATE SET
+    subscriber_id = EXCLUDED.subscriber_id,
+    customer_account_id = EXCLUDED.customer_account_id,
+    customer_person_id = EXCLUDED.customer_person_id,
+    created_by_person_id = EXCLUDED.created_by_person_id,
+    assigned_to_person_id = EXCLUDED.assigned_to_person_id,
+    ticket_manager_person_id = EXCLUDED.ticket_manager_person_id,
+    site_coordinator_person_id = EXCLUDED.site_coordinator_person_id,
+    service_team_id = EXCLUDED.service_team_id,
+    number = EXCLUDED.number,
+    title = EXCLUDED.title,
+    description = EXCLUDED.description,
+    region = EXCLUDED.region,
+    status = EXCLUDED.status,
+    priority = EXCLUDED.priority,
+    ticket_type = EXCLUDED.ticket_type,
+    erpnext_id = EXCLUDED.erpnext_id,
+    channel = EXCLUDED.channel,
+    tags = EXCLUDED.tags,
+    metadata = EXCLUDED.metadata,
+    attachments = EXCLUDED.attachments,
+    due_at = EXCLUDED.due_at,
+    resolved_at = EXCLUDED.resolved_at,
+    closed_at = EXCLUDED.closed_at,
+    is_active = EXCLUDED.is_active,
+    created_at = EXCLUDED.created_at,
+    updated_at = EXCLUDED.updated_at
+"""
+
+
+def _upsert_service_teams(sub: Connection, crm: Connection) -> int:
+    teams = _rows(
+        crm,
+        """
+        SELECT id::text, name, team_type::text, region, manager_person_id::text,
+               erp_department, is_active, metadata::text, created_at, updated_at
+        FROM service_teams
+        ORDER BY created_at, id
+        """,
+    )
+    for team in teams:
+        sub.execute(
+            text(
+                """
+                INSERT INTO service_teams (
+                    id, name, team_type, region, manager_person_id, erp_department,
+                    is_active, metadata, created_at, updated_at
+                ) VALUES (
+                    CAST(:id AS uuid), :name, :team_type, :region,
+                    CAST(:manager_person_id AS uuid), :erp_department, :is_active,
+                    CAST(:metadata AS json), :created_at, :updated_at
+                )
+                ON CONFLICT (id) DO UPDATE SET
+                    name = EXCLUDED.name,
+                    team_type = EXCLUDED.team_type,
+                    region = EXCLUDED.region,
+                    manager_person_id = EXCLUDED.manager_person_id,
+                    erp_department = EXCLUDED.erp_department,
+                    is_active = EXCLUDED.is_active,
+                    metadata = EXCLUDED.metadata,
+                    updated_at = EXCLUDED.updated_at
+                """
+            ),
+            {
+                **team,
+                "metadata": json.dumps(_json(team.get("metadata"), {}) or {}),
+            },
+        )
+    return len(teams)
+
+
+def _sync_ticket_comments(
+    sub: Connection, crm: Connection, crm_to_local_ticket: dict[str, str]
+) -> int:
+    sub.execute(
+        text(
+            """
+            DELETE FROM support_ticket_comments
+            WHERE ticket_id = ANY(CAST(:ticket_ids AS uuid[]))
+              AND metadata->>'crm_comment_id' IS NOT NULL
+            """
+        ),
+        {"ticket_ids": list(crm_to_local_ticket.values())},
+    )
+    comments = _rows(
+        crm,
+        """
+        SELECT id::text, ticket_id::text, author_person_id::text, body, is_internal,
+               attachments::text, created_at
+        FROM ticket_comments
+        WHERE ticket_id::text = ANY(:ticket_ids)
+        ORDER BY created_at, id
+        """,
+        {"ticket_ids": list(crm_to_local_ticket)},
+    )
+    inserted = 0
+    for comment in comments:
+        ticket_id = crm_to_local_ticket.get(str(comment["ticket_id"]))
+        if not ticket_id:
+            continue
+        metadata = {
+            "crm_comment_id": comment["id"],
+            "crm_author_person_id": comment.get("author_person_id"),
+            "crm_import_source": "dotmac_crm_phase1",
+        }
+        sub.execute(
+            text(
+                """
+                INSERT INTO support_ticket_comments (
+                    id, ticket_id, author_person_id, author_type,
+                    author_system_user_id, body, is_internal, attachments, metadata,
+                    created_at
+                ) VALUES (
+                    CAST(:id AS uuid), CAST(:ticket_id AS uuid), NULL,
+                    :author_type, NULL, :body, :is_internal,
+                    CAST(:attachments AS json), CAST(:metadata AS json), :created_at
+                )
+                """
+            ),
+            {
+                "id": comment["id"],
+                "ticket_id": ticket_id,
+                "author_type": "staff" if comment.get("author_person_id") else "system",
+                "body": comment.get("body") or "",
+                "is_internal": bool(comment.get("is_internal")),
+                "attachments": json.dumps(_json(comment.get("attachments"), []) or []),
+                "metadata": json.dumps(metadata),
+                "created_at": comment.get("created_at"),
+            },
+        )
+        inserted += 1
+    return inserted
+
+
+def _sync_ticket_assignees(
+    sub: Connection, crm: Connection, crm_to_local_ticket: dict[str, str]
+) -> int:
+    sub.execute(
+        text(
+            """
+            DELETE FROM support_ticket_assignees
+            WHERE ticket_id = ANY(CAST(:ticket_ids AS uuid[]))
+            """
+        ),
+        {"ticket_ids": list(crm_to_local_ticket.values())},
+    )
+    assignees = _rows(
+        crm,
+        """
+        SELECT ticket_id::text, person_id::text, created_at
+        FROM ticket_assignees
+        WHERE ticket_id::text = ANY(:ticket_ids)
+        ORDER BY created_at, ticket_id, person_id
+        """,
+        {"ticket_ids": list(crm_to_local_ticket)},
+    )
+    inserted = 0
+    for assignee in assignees:
+        ticket_id = crm_to_local_ticket.get(str(assignee["ticket_id"]))
+        if not ticket_id:
+            continue
+        sub.execute(
+            text(
+                """
+                INSERT INTO support_ticket_assignees (ticket_id, person_id, created_at)
+                VALUES (
+                    CAST(:ticket_id AS uuid), CAST(:person_id AS uuid), :created_at
+                )
+                ON CONFLICT (ticket_id, person_id) DO NOTHING
+                """
+            ),
+            {
+                "ticket_id": ticket_id,
+                "person_id": assignee["person_id"],
+                "created_at": assignee.get("created_at"),
+            },
+        )
+        inserted += 1
+    return inserted
+
+
+def _sync_ticket_merges(
+    sub: Connection, crm: Connection, crm_to_local_ticket: dict[str, str]
+) -> int:
+    sub.execute(
+        text(
+            """
+            DELETE FROM support_ticket_merges
+            WHERE source_ticket_id = ANY(CAST(:ticket_ids AS uuid[]))
+               OR target_ticket_id = ANY(CAST(:ticket_ids AS uuid[]))
+            """
+        ),
+        {"ticket_ids": list(crm_to_local_ticket.values())},
+    )
+    merges = _rows(
+        crm,
+        """
+        SELECT source_ticket_id::text, target_ticket_id::text, reason,
+               merged_by_person_id::text, created_at
+        FROM ticket_merges
+        ORDER BY created_at, source_ticket_id, target_ticket_id
+        """,
+    )
+    inserted = 0
+    for merge in merges:
+        source_id = crm_to_local_ticket.get(str(merge["source_ticket_id"]))
+        target_id = crm_to_local_ticket.get(str(merge["target_ticket_id"]))
+        if not source_id or not target_id:
+            continue
+        sub.execute(
+            text(
+                """
+                INSERT INTO support_ticket_merges (
+                    source_ticket_id, target_ticket_id, reason,
+                    merged_by_person_id, created_at
+                ) VALUES (
+                    CAST(:source_ticket_id AS uuid), CAST(:target_ticket_id AS uuid),
+                    :reason, CAST(:merged_by_person_id AS uuid), :created_at
+                )
+                ON CONFLICT (source_ticket_id, target_ticket_id) DO UPDATE SET
+                    reason = EXCLUDED.reason,
+                    merged_by_person_id = EXCLUDED.merged_by_person_id,
+                    created_at = EXCLUDED.created_at
+                """
+            ),
+            {
+                "source_ticket_id": source_id,
+                "target_ticket_id": target_id,
+                "reason": merge.get("reason"),
+                "merged_by_person_id": merge.get("merged_by_person_id"),
+                "created_at": merge.get("created_at"),
+            },
+        )
+        inserted += 1
+    return inserted
+
+
+def _sync_ticket_links(
+    sub: Connection, crm: Connection, crm_to_local_ticket: dict[str, str]
+) -> int:
+    sub.execute(
+        text(
+            """
+            DELETE FROM support_ticket_links
+            WHERE from_ticket_id = ANY(CAST(:ticket_ids AS uuid[]))
+               OR to_ticket_id = ANY(CAST(:ticket_ids AS uuid[]))
+            """
+        ),
+        {"ticket_ids": list(crm_to_local_ticket.values())},
+    )
+    links = _rows(
+        crm,
+        """
+        SELECT id::text, from_ticket_id::text, to_ticket_id::text, link_type,
+               created_by_person_id::text, created_at
+        FROM ticket_links
+        ORDER BY created_at, id
+        """,
+    )
+    inserted = 0
+    for link in links:
+        from_id = crm_to_local_ticket.get(str(link["from_ticket_id"]))
+        to_id = crm_to_local_ticket.get(str(link["to_ticket_id"]))
+        if not from_id or not to_id:
+            continue
+        sub.execute(
+            text(
+                """
+                INSERT INTO support_ticket_links (
+                    id, from_ticket_id, to_ticket_id, link_type,
+                    created_by_person_id, created_at
+                ) VALUES (
+                    CAST(:id AS uuid), CAST(:from_ticket_id AS uuid),
+                    CAST(:to_ticket_id AS uuid), :link_type,
+                    CAST(:created_by_person_id AS uuid), :created_at
+                )
+                ON CONFLICT (from_ticket_id, to_ticket_id, link_type) DO NOTHING
+                """
+            ),
+            {
+                "id": link["id"],
+                "from_ticket_id": from_id,
+                "to_ticket_id": to_id,
+                "link_type": link["link_type"],
+                "created_by_person_id": link.get("created_by_person_id"),
+                "created_at": link.get("created_at"),
+            },
+        )
+        inserted += 1
+    return inserted
+
+
+def _sync_access_tokens(
+    sub: Connection, crm: Connection, crm_to_local_ticket: dict[str, str]
+) -> int:
+    tokens = _rows(
+        crm,
+        """
+        SELECT id::text, ticket_id::text, token, purpose, expires_at, accessed_at,
+               responded_at, is_active, created_at, updated_at
+        FROM ticket_access_tokens
+        ORDER BY created_at, id
+        """,
+    )
+    upserted = 0
+    for token in tokens:
+        ticket_id = crm_to_local_ticket.get(str(token["ticket_id"]))
+        if not ticket_id:
+            continue
+        sub.execute(
+            text(
+                """
+                INSERT INTO ticket_access_tokens (
+                    id, ticket_id, token, purpose, expires_at, accessed_at,
+                    responded_at, is_active, created_at, updated_at
+                ) VALUES (
+                    CAST(:id AS uuid), CAST(:ticket_id AS uuid), :token, :purpose,
+                    :expires_at, :accessed_at, :responded_at, :is_active,
+                    :created_at, :updated_at
+                )
+                ON CONFLICT (token) DO UPDATE SET
+                    ticket_id = EXCLUDED.ticket_id,
+                    purpose = EXCLUDED.purpose,
+                    expires_at = EXCLUDED.expires_at,
+                    accessed_at = EXCLUDED.accessed_at,
+                    responded_at = EXCLUDED.responded_at,
+                    is_active = EXCLUDED.is_active,
+                    updated_at = EXCLUDED.updated_at
+                """
+            ),
+            {**token, "ticket_id": ticket_id},
+        )
+        upserted += 1
+    return upserted
+
+
+def import_tickets(
+    *,
+    sub: Connection,
+    crm: Connection,
+    apply: bool,
+    limit: int | None,
+    overrides: dict[str, UnmappedDecision],
+    exclude_title_re: re.Pattern[str] | None,
+    allow_unmapped_closed: bool,
+    sync_comments: bool,
+) -> ImportStats:
+    stats = ImportStats()
+    subscriber_map = _load_subscriber_map(sub)
+    existing_by_crm_ticket = _load_existing_tickets(sub)
+    tickets = _crm_tickets(crm, limit)
+    stats.fetched = len(tickets)
+
+    crm_to_local_ticket: dict[str, str] = {}
+    planned_rows: list[tuple[dict[str, Any], dict[str, Any], bool]] = []
+
+    for ticket in tickets:
+        crm_ticket_id = str(ticket["id"])
+        local_ticket_id = existing_by_crm_ticket.get(crm_ticket_id) or str(uuid.uuid4())
+        subscriber_id = None
+        policy_reason = None
+
+        crm_subscriber_id = _uuid_or_none(ticket.get("subscriber_id"))
+        if crm_subscriber_id:
+            subscriber_id = subscriber_map.get(crm_subscriber_id)
+            if not subscriber_id:
+                decision = decide_unmapped_ticket(
+                    ticket,
+                    overrides=overrides,
+                    exclude_title_re=exclude_title_re,
+                    allow_unmapped_closed=allow_unmapped_closed,
+                )
+                if decision.action == "map":
+                    subscriber_id = decision.subscriber_id
+                    policy_reason = decision.reason
+                elif decision.action == "skip":
+                    stats.skipped += 1
+                    continue
+                elif decision.action == "unlink":
+                    stats.imported_unlinked += 1
+                    policy_reason = decision.reason
+                else:
+                    stats.blocked_unmapped += 1
+                    stats.blockers.append(
+                        {
+                            "crm_ticket_id": crm_ticket_id,
+                            "number": ticket.get("number"),
+                            "title": ticket.get("title"),
+                            "status": ticket.get("status"),
+                            "crm_subscriber_id": crm_subscriber_id,
+                            "reason": decision.reason,
+                        }
+                    )
+                    continue
+
+        payload = _ticket_payload(
+            ticket,
+            local_ticket_id=local_ticket_id,
+            subscriber_id=subscriber_id,
+            policy_reason=policy_reason,
+        )
+        planned_rows.append((ticket, payload, crm_ticket_id in existing_by_crm_ticket))
+        crm_to_local_ticket[crm_ticket_id] = local_ticket_id
+
+    if stats.blockers:
+        return stats
+
+    if not apply:
+        for _ticket, _payload, existed in planned_rows:
+            if existed:
+                stats.updated += 1
+            else:
+                stats.created += 1
+        return stats
+
+    stats.service_teams_upserted = _upsert_service_teams(sub, crm)
+    for _ticket, payload, existed in planned_rows:
+        sub.execute(text(UPSERT_TICKET_SQL), payload)
+        if existed:
+            stats.updated += 1
+        else:
+            stats.created += 1
+
+    if sync_comments and crm_to_local_ticket:
+        stats.comments_inserted = _sync_ticket_comments(sub, crm, crm_to_local_ticket)
+        stats.assignees_inserted = _sync_ticket_assignees(sub, crm, crm_to_local_ticket)
+        stats.merges_inserted = _sync_ticket_merges(sub, crm, crm_to_local_ticket)
+        stats.links_inserted = _sync_ticket_links(sub, crm, crm_to_local_ticket)
+        stats.access_tokens_upserted = _sync_access_tokens(
+            sub, crm, crm_to_local_ticket
+        )
+
+    return stats
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--limit", type=int)
+    parser.add_argument("--overrides-csv")
+    parser.add_argument(
+        "--exclude-title-regex",
+        default=DEFAULT_EXCLUDE_TITLE_REGEX,
+        help="Regex for CRM tickets to skip before unmapped-subscriber blocking.",
+    )
+    parser.add_argument(
+        "--allow-unmapped-closed",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Import closed/resolved/canceled/merged unmapped tickets as unlinked.",
+    )
+    parser.add_argument(
+        "--sync-comments",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Import comments, assignees, merges, links, and access tokens.",
+    )
+    args = parser.parse_args()
+
+    overrides = _load_overrides(args.overrides_csv)
+    exclude_title_re = (
+        re.compile(args.exclude_title_regex) if args.exclude_title_regex else None
+    )
+
+    sub_engine = _engine_from_env("SUB_DATABASE_URL")
+    crm_engine = _engine_from_env("CRM_DATABASE_URL")
+    with sub_engine.connect() as sub, crm_engine.connect() as crm:
+        sub_trans = sub.begin()
+        crm.execute(text("SET TRANSACTION READ ONLY"))
+        if not args.apply:
+            sub.execute(text("SET TRANSACTION READ ONLY"))
+        try:
+            stats = import_tickets(
+                sub=sub,
+                crm=crm,
+                apply=args.apply,
+                limit=args.limit,
+                overrides=overrides,
+                exclude_title_re=exclude_title_re,
+                allow_unmapped_closed=args.allow_unmapped_closed,
+                sync_comments=args.sync_comments,
+            )
+        except Exception:
+            sub_trans.rollback()
+            crm.rollback()
+            raise
+        if args.apply and not stats.blockers:
+            sub_trans.commit()
+        else:
+            sub_trans.rollback()
+        crm.rollback()
+
+    report = {
+        "apply": args.apply,
+        "allow_unmapped_closed": args.allow_unmapped_closed,
+        "exclude_title_regex": args.exclude_title_regex,
+        "stats": stats.as_dict(),
+    }
+    print(json.dumps(report, indent=2, default=str))
+    if stats.blockers:
+        raise SystemExit(2)
+
+
+if __name__ == "__main__":
+    main()
