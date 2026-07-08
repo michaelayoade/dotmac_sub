@@ -48,6 +48,7 @@ from app.services.session_store import (
     store_session,
 )
 from app.services.settings_spec import resolve_value
+from app.services.topology.connection_status import connection_status
 
 logger = logging.getLogger(__name__)
 
@@ -1052,6 +1053,149 @@ def list_accounts(
             }
         )
     return results
+
+
+def _subscription_label(subscription: Subscription | None) -> str:
+    if subscription is None:
+        return "No service"
+    offer = getattr(subscription, "offer", None)
+    if offer is not None and getattr(offer, "name", None):
+        return str(offer.name)
+    return "Internet service"
+
+
+def _subscriptions_for_connection_status(
+    db: Session, account_id
+) -> list[Subscription | None]:
+    """Return every active connection, falling back to latest inactive service."""
+    active = (
+        db.query(Subscription)
+        .outerjoin(CatalogOffer, Subscription.offer_id == CatalogOffer.id)
+        .filter(Subscription.subscriber_id == account_id)
+        .filter(Subscription.status == SubscriptionStatus.active)
+        .order_by(Subscription.created_at.desc())
+        .all()
+    )
+    if active:
+        return active
+
+    latest = (
+        db.query(Subscription)
+        .outerjoin(CatalogOffer, Subscription.offer_id == CatalogOffer.id)
+        .filter(Subscription.subscriber_id == account_id)
+        .order_by(Subscription.created_at.desc())
+        .first()
+    )
+    return [latest]
+
+
+def _inactive_connection_status(subscription: Subscription | None) -> dict:
+    if subscription is None:
+        return {
+            "state": "trouble",
+            "headline": "No active service",
+            "message": "No active service is available for this customer.",
+            "advice": None,
+            "medium": None,
+            "area_outage": False,
+            "checked_at": None,
+        }
+    status_value = subscription.status.value if subscription.status else "unknown"
+    return {
+        "state": "trouble",
+        "headline": f"Service {status_value.replace('_', ' ')}",
+        "message": "The customer's service is not currently active.",
+        "advice": None,
+        "medium": None,
+        "area_outage": False,
+        "checked_at": None,
+    }
+
+
+def list_customer_connection_statuses(
+    db: Session,
+    reseller_id: str,
+    limit: int,
+    offset: int = 0,
+) -> dict:
+    """Customer-safe connection statuses for accounts owned by one reseller."""
+    accounts = (
+        _customer_accounts_query(db, reseller_id)
+        .order_by(
+            func.lower(func.coalesce(Subscriber.display_name, Subscriber.first_name)),
+            Subscriber.id,
+        )
+        .limit(limit)
+        .offset(offset)
+        .all()
+    )
+    rows = []
+    counts = {"connected": 0, "trouble": 0, "outage": 0, "unknown": 0}
+    for account in accounts:
+        for subscription in _subscriptions_for_connection_status(db, account.id):
+            if (
+                subscription is not None
+                and subscription.status == SubscriptionStatus.active
+            ):
+                try:
+                    status_payload = connection_status(db, subscription)
+                except Exception:
+                    logger.warning(
+                        "Could not resolve reseller customer connection status",
+                        extra={
+                            "account_id": str(account.id),
+                            "subscription_id": str(subscription.id),
+                        },
+                        exc_info=True,
+                    )
+                    status_payload = {
+                        "state": "unknown",
+                        "headline": "Status unavailable",
+                        "message": "We couldn't check this customer's connection.",
+                        "advice": None,
+                        "medium": None,
+                        "area_outage": False,
+                        "checked_at": None,
+                    }
+            else:
+                status_payload = _inactive_connection_status(subscription)
+
+            state = str(status_payload.get("state") or "unknown")
+            counts[state if state in counts else "unknown"] += 1
+            rows.append(
+                {
+                    "account_id": str(account.id),
+                    "account_number": account.account_number,
+                    "subscriber_name": _subscriber_label(account),
+                    "account_status": (
+                        account.status.value if account.status else "active"
+                    ),
+                    "subscription_id": str(subscription.id) if subscription else None,
+                    "subscription_name": _subscription_label(subscription),
+                    "subscription_status": (
+                        subscription.status.value
+                        if subscription is not None and subscription.status
+                        else None
+                    ),
+                    "state": state,
+                    "headline": status_payload.get("headline"),
+                    "message": status_payload.get("message"),
+                    "medium": status_payload.get("medium"),
+                    "area_outage": bool(status_payload.get("area_outage")),
+                    "checked_at": status_payload.get("checked_at"),
+                }
+            )
+
+    return {
+        "rows": rows,
+        "counts": counts,
+        "total": (
+            _customer_accounts_query(db, reseller_id)
+            .with_entities(func.count(Subscriber.id))
+            .scalar()
+            or 0
+        ),
+    }
 
 
 def count_accounts(

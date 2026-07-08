@@ -11,10 +11,11 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.models.network import OntUnit
+from app.models.network import OntAssignment, OntUnit
+from app.models.radius_active_session import RadiusActiveSession
 from app.services.genieacs_client import GenieACSClient, GenieACSError
 from app.services.network._common import normalize_mac_address
 from app.services.network._resolve import resolve_genieacs
@@ -330,6 +331,40 @@ def _apply_display_model(summary: TR069Summary) -> None:
 
 class OntTR069:
     """Fetch and structure TR-069 parameters for ONT display."""
+
+    @staticmethod
+    def _active_radius_runtime_for_ont(
+        db: Session, ont: OntUnit
+    ) -> tuple[str, datetime | None] | None:
+        """Return active PPPoE runtime for an assigned ONT, if present."""
+        row = db.execute(
+            select(
+                RadiusActiveSession.framed_ip_address,
+                RadiusActiveSession.last_update,
+                RadiusActiveSession.session_start,
+            )
+            .join(
+                OntAssignment,
+                OntAssignment.subscriber_id == RadiusActiveSession.subscriber_id,
+            )
+            .where(OntAssignment.ont_unit_id == ont.id)
+            .where(OntAssignment.active.is_(True))
+            .where(RadiusActiveSession.framed_ip_address.isnot(None))
+            .where(
+                or_(
+                    OntAssignment.pppoe_username == RadiusActiveSession.username,
+                    OntAssignment.pppoe_username.is_(None),
+                )
+            )
+            .order_by(
+                RadiusActiveSession.last_update.desc(),
+                RadiusActiveSession.session_start.desc(),
+            )
+            .limit(1)
+        ).first()
+        if not row or not row.framed_ip_address:
+            return None
+        return str(row.framed_ip_address), row.last_update or row.session_start
 
     @staticmethod
     def get_device_summary(
@@ -725,6 +760,8 @@ class OntTR069:
         pppoe_status = (
             str(summary.wan.get("Status") or "").strip() if summary.wan else ""
         )
+        radius_runtime = OntTR069._active_radius_runtime_for_ont(db, ont)
+        radius_wan_ip = radius_runtime[0] if radius_runtime else ""
 
         wifi_clients = OntTR069._to_int(
             summary.wireless.get("Connected Clients") if summary.wireless else None
@@ -764,9 +801,12 @@ class OntTR069:
             ont.model = model
         if manufacturer:
             ont.vendor = manufacturer
-        if wan_ip:
+        if radius_wan_ip:
+            ont.observed_wan_ip = radius_wan_ip
+            ont.observed_pppoe_status = "Connected"
+        elif wan_ip:
             ont.observed_wan_ip = wan_ip
-        if pppoe_status:
+        if pppoe_status and not radius_wan_ip:
             ont.observed_pppoe_status = pppoe_status
         if lan_mode:
             ont.observed_lan_mode = lan_mode

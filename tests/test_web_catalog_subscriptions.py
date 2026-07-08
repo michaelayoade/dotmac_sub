@@ -1183,6 +1183,12 @@ def test_create_subscription_with_audit_persists_additional_routes(
     assert route.metric == 2
     assert route.is_active is True
     assert route.source == "admin_subscription_form"
+    assert (
+        db_session.query(SubscriptionAddOn)
+        .filter(SubscriptionAddOn.subscription_id == created.id)
+        .count()
+        == 0
+    )
 
 
 def test_create_subscription_with_audit_persists_public_ip_addon(
@@ -2054,6 +2060,53 @@ def test_additional_route_update_creates_matching_public_ip_addon(
         .one()
     )
     assert sub_addon.quantity == 1
+
+
+def test_additional_route_update_without_addon_does_not_create_billing_addon(
+    db_session,
+    subscriber,
+    catalog_offer,
+):
+    _public_ip_addon(
+        db_session,
+        name="/30 IP",
+        ip_prefix_length=30,
+    )
+    subscription = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=subscriber.id,
+            offer_id=catalog_offer.id,
+        ),
+    )
+
+    web_catalog_subscriptions_service.update_subscription_with_audit(
+        db_session,
+        str(subscription.id),
+        {"login": "10004167"},
+        "",
+        [],
+        [],
+        None,
+        None,
+        additional_route_cidrs=["160.119.125.24/30"],
+        additional_route_metrics=["1"],
+        ip_addon_id="",
+        ip_addon_quantity="1",
+    )
+
+    route = (
+        db_session.query(SubscriberAdditionalRoute)
+        .filter(SubscriberAdditionalRoute.subscriber_id == subscriber.id)
+        .one()
+    )
+    assert route.cidr == "160.119.125.24/30"
+    assert (
+        db_session.query(SubscriptionAddOn)
+        .filter(SubscriptionAddOn.subscription_id == subscription.id)
+        .count()
+        == 0
+    )
 
 
 def test_additional_route_update_sets_public_ip_addon_quantity_by_prefix(

@@ -80,6 +80,71 @@
     {# ═══════════ Section 3: KPI Grid (single row, 4 cols on desktop) ═══════════ #}
     {% include "admin/dashboard/_stats.html" %}
 
+    {# ═══════════ Section 3b: Key Operational Sections ═══════════ #}
+    {% if key_sections %}
+    <section data-tour-id="dashboard-key-sections" class="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        {% if show_subscribers %}
+        {% set customer_section = key_sections.customers %}
+        <a href="{{ customer_section.href }}" class="group rounded-2xl border border-emerald-200/70 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-emerald-300 hover:shadow-md dark:border-emerald-900/40 dark:bg-slate-800 dark:hover:border-emerald-700">
+            <div class="flex items-start justify-between gap-4">
+                <div>
+                    <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-emerald-700 dark:text-emerald-300">{{ customer_section.title }}</p>
+                    <p class="mt-3 text-3xl font-bold tabular-nums text-slate-900 dark:text-white">{{ customer_section.primary }}</p>
+                    <p class="mt-1 text-sm font-semibold text-slate-700 dark:text-slate-200">{{ customer_section.primary_label }}</p>
+                </div>
+                <span class="rounded-full px-2.5 py-1 text-xs font-semibold {% if customer_section.status == 'healthy' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300{% elif customer_section.status == 'warning' %}bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300{% else %}bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300{% endif %}">
+                    {{ customer_section.status | title }}
+                </span>
+            </div>
+            <div class="mt-4 space-y-1 text-sm text-slate-600 dark:text-slate-300">
+                <p>{{ customer_section.secondary }}</p>
+                <p>{{ customer_section.detail }}</p>
+            </div>
+        </a>
+        {% endif %}
+
+        {% if show_network %}
+        {% set network_section = key_sections.network %}
+        <a href="{{ network_section.href }}" class="group rounded-2xl border border-blue-200/70 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-blue-300 hover:shadow-md dark:border-blue-900/40 dark:bg-slate-800 dark:hover:border-blue-700">
+            <div class="flex items-start justify-between gap-4">
+                <div>
+                    <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-blue-700 dark:text-blue-300">{{ network_section.title }}</p>
+                    <p class="mt-3 text-3xl font-bold tabular-nums text-slate-900 dark:text-white">{{ network_section.primary }}</p>
+                    <p class="mt-1 text-sm font-semibold text-slate-700 dark:text-slate-200">{{ network_section.primary_label }}</p>
+                </div>
+                <span class="rounded-full px-2.5 py-1 text-xs font-semibold {% if network_section.status == 'healthy' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300{% elif network_section.status == 'warning' %}bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300{% else %}bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300{% endif %}">
+                    {{ network_section.status | title }}
+                </span>
+            </div>
+            <div class="mt-4 space-y-1 text-sm text-slate-600 dark:text-slate-300">
+                <p>{{ network_section.secondary }}</p>
+                <p>{{ network_section.detail }}</p>
+            </div>
+        </a>
+        {% endif %}
+
+        {% if show_financials %}
+        {% set finance_section = key_sections.finance %}
+        <a href="{{ finance_section.href }}" class="group rounded-2xl border border-amber-200/70 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-amber-300 hover:shadow-md dark:border-amber-900/40 dark:bg-slate-800 dark:hover:border-amber-700">
+            <div class="flex items-start justify-between gap-4">
+                <div>
+                    <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-700 dark:text-amber-300">{{ finance_section.title }}</p>
+                    <p class="mt-3 text-3xl font-bold tabular-nums text-slate-900 dark:text-white">{{ finance_section.primary }}</p>
+                    <p class="mt-1 text-sm font-semibold text-slate-700 dark:text-slate-200">{{ finance_section.primary_label }}</p>
+                </div>
+                <span class="rounded-full px-2.5 py-1 text-xs font-semibold {% if finance_section.status == 'healthy' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300{% elif finance_section.status == 'warning' %}bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300{% else %}bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300{% endif %}">
+                    {{ finance_section.status | title }}
+                </span>
+            </div>
+            <div class="mt-4 space-y-1 text-sm text-slate-600 dark:text-slate-300">
+                <p>{{ finance_section.secondary }}</p>
+                <p>{{ finance_section.detail }}</p>
+            </div>
+        </a>
+        {% endif %}
+    </section>
+    {% endif %}
+
     {# ═══════════ Section 4: Infrastructure State (ops roles only) ═══════════ #}
     {% if show_network %}
     <section data-tour-id="dashboard-infrastructure"

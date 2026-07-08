@@ -30,6 +30,7 @@ from app.services.network.ont_olt_context import (
 from app.services.network.provisioning_events import (
     current_provisioning_correlation_key,
 )
+from app.services.network.serial_utils import build_huawei_external_id
 from app.services.network.service_classification import service_type_for_vlan
 
 logger = logging.getLogger(__name__)
@@ -797,7 +798,9 @@ class OntWriteService:
                     # Update external_id with new ONT-ID for SNMP correlation
                     vendor_lower = (ctx.olt.vendor or "").lower()
                     if "huawei" in vendor_lower:
-                        ont.external_id = f"huawei:{target_fsp}.{new_ont_id_on_olt}"
+                        ont.external_id = build_huawei_external_id(
+                            target_fsp, new_ont_id_on_olt
+                        )
                 _set_sync_meta(ont, "device")
                 db.flush()
             db.commit()

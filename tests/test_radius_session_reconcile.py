@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 from app.models.catalog import NasDevice, Subscription, SubscriptionStatus
+from app.models.network import OLTDevice, OntAssignment, OntUnit
 from app.models.radius_active_session import RadiusActiveSession
 from app.models.subscriber import Subscriber
 from app.services.radius_session_reconcile import (
@@ -101,6 +102,41 @@ def _seed_nas(db_session, *, name, nas_ip):
     return nas
 
 
+def _seed_assigned_ont(
+    db_session,
+    subscriber,
+    *,
+    username,
+    serial="ONT-RADIUS-RUNTIME-001",
+    observed_wan_ip=None,
+):
+    olt = OLTDevice(
+        name=f"OLT-{serial}",
+        hostname=f"olt-{serial.lower()}",
+    )
+    db_session.add(olt)
+    db_session.flush()
+    ont = OntUnit(
+        serial_number=serial,
+        olt_device_id=olt.id,
+        is_active=True,
+        observed_wan_ip=observed_wan_ip,
+    )
+    db_session.add(ont)
+    db_session.flush()
+    db_session.add(
+        OntAssignment(
+            ont_unit_id=ont.id,
+            subscriber_id=subscriber.id,
+            active=True,
+            pppoe_username=username,
+            assigned_at=datetime.now(UTC),
+        )
+    )
+    db_session.commit()
+    return ont
+
+
 def _run(db_session, db_path):
     with patch(
         "app.services.radius_session_reconcile._active_external_sync_configs",
@@ -140,6 +176,76 @@ class TestActiveSessionReconcile:
         assert row.nas_device_id == nas.id
         assert row.framed_ip_address == "100.64.0.1"
         assert row.calling_station_id == "AA:BB:CC:DD:EE:FF"
+
+    def test_open_session_updates_assigned_ont_runtime_from_radius(
+        self, db_session, tmp_path, catalog_offer
+    ):
+        db_path = tmp_path / "radacct.db"
+        subscriber, _sub = _seed_subscriber_with_login(
+            db_session,
+            login="100017271",
+            offer=catalog_offer,
+            status=SubscriptionStatus.active,
+        )
+        ont = _seed_assigned_ont(
+            db_session,
+            subscriber,
+            username="100017271",
+            observed_wan_ip="172.16.204.34",
+        )
+        _seed_radacct_sqlite(
+            db_path,
+            rows=[
+                _open_row(
+                    username="100017271",
+                    sid="sess-runtime",
+                    framed="172.16.145.51",
+                )
+            ],
+        )
+
+        result = _run(db_session, db_path)
+
+        db_session.refresh(ont)
+        assert result["ont_runtime_updated"] == 1
+        assert ont.observed_wan_ip == "172.16.145.51"
+        assert ont.observed_pppoe_status == "Connected"
+        assert ont.observed_runtime_updated_at is not None
+
+    def test_session_without_framed_ip_leaves_ont_runtime_unchanged(
+        self, db_session, tmp_path, catalog_offer
+    ):
+        db_path = tmp_path / "radacct.db"
+        subscriber, _sub = _seed_subscriber_with_login(
+            db_session,
+            login="100017272",
+            offer=catalog_offer,
+            status=SubscriptionStatus.active,
+        )
+        ont = _seed_assigned_ont(
+            db_session,
+            subscriber,
+            username="100017272",
+            serial="ONT-RADIUS-RUNTIME-002",
+            observed_wan_ip="172.16.204.34",
+        )
+        _seed_radacct_sqlite(
+            db_path,
+            rows=[
+                _open_row(
+                    username="100017272",
+                    sid="sess-no-framed-ip",
+                    framed=None,
+                )
+            ],
+        )
+
+        result = _run(db_session, db_path)
+
+        db_session.refresh(ont)
+        assert result["ont_runtime_updated"] == 0
+        assert ont.observed_wan_ip == "172.16.204.34"
+        assert ont.observed_pppoe_status is None
 
     def test_inet_mask_stripped_so_nas_resolves(
         self, db_session, tmp_path, catalog_offer

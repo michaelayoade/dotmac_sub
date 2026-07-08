@@ -50,11 +50,11 @@
     {% endif %}
     {% if show_subscribers or show_network %}
     {{ kpi_tile(
-        "Online Sessions",
+        "Online Customers",
         online_count,
         "/admin/network/sessions",
         "emerald",
-        "Authenticated RADIUS sessions"
+        "%d active RADIUS session%s" | format(online_sessions | default(online_count), 's' if (online_sessions | default(online_count)) != 1 else '')
     ) }}
     {% endif %}
     {% if show_network %}
