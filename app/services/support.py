@@ -800,6 +800,26 @@ class Tickets:
         )
 
     @staticmethod
+    def _apply_rule_auto_assignment(
+        db: Session, ticket: Ticket
+    ) -> dict[str, Any] | None:
+        if crm_ticket_user_writes_locked(ticket):
+            return {"matched": False, "reason": "crm_origin_write_locked"}
+        from app.services.ticket_assignment import engine as assignment_engine
+
+        result = assignment_engine.auto_assign_ticket(db, str(ticket.id))
+        if result.reason == "no_matching_rule":
+            return None
+        return result.as_dict()
+
+    @staticmethod
+    def _apply_auto_assignment(ticket: Ticket, db: Session) -> dict[str, Any]:
+        rule_result = Tickets._apply_rule_auto_assignment(db, ticket)
+        if rule_result is not None:
+            return rule_result
+        return Tickets._apply_region_auto_assignment(ticket, db)
+
+    @staticmethod
     def _ensure_field_visit_work_order(db: Session, ticket: Ticket) -> None:
         from app.models.catalog import Subscription, SubscriptionStatus
 
@@ -1014,11 +1034,15 @@ class Tickets:
             db.add(link)
 
         if Tickets._auto_assignment_enabled(db):
-            Tickets._apply_region_auto_assignment(ticket, db)
+            Tickets._apply_auto_assignment(ticket, db)
 
         Tickets._apply_sla_policy(
             db, ticket, explicit_due_at=payload.due_at is not None
         )
+        if not crm_ticket_user_writes_locked(ticket):
+            from app.services import sla_assignment
+
+            sla_assignment.create_sla_clock_for_ticket(db, ticket)
         Tickets._apply_status_timestamp_rules(ticket, data)
         Tickets._ensure_field_visit_work_order(db, ticket)
 
@@ -1512,9 +1536,17 @@ class Tickets:
             Tickets._replace_assignees(db, ticket, assignee_person_ids)
 
         if Tickets._auto_assignment_enabled(db):
-            Tickets._apply_region_auto_assignment(ticket, db)
+            Tickets._apply_auto_assignment(ticket, db)
 
         Tickets._apply_sla_policy(db, ticket, explicit_due_at="due_at" in data)
+        if not crm_ticket_user_writes_locked(ticket):
+            from app.services import sla_assignment
+
+            sla_assignment.create_sla_clock_for_ticket(db, ticket)
+            if before["status"] != ticket.status:
+                sla_assignment.update_sla_clocks_for_status_change(
+                    db, ticket, before["status"], ticket.status
+                )
         Tickets._ensure_field_visit_work_order(db, ticket)
         Tickets._queue_notifications_for_assignments(db, ticket, actor_id)
 
@@ -1659,7 +1691,7 @@ class Tickets:
         ticket = Tickets.get(db, ticket_id)
         _assert_crm_ticket_user_writes_enabled(ticket, "auto-assignment")
         _ensure_not_merged_source(ticket)
-        result = Tickets._apply_region_auto_assignment(ticket, db)
+        result = Tickets._apply_auto_assignment(ticket, db)
         log_audit_event(
             db=db,
             request=request,
