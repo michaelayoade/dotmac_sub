@@ -170,6 +170,61 @@ def test_ticket_resolved_and_closed_set_timestamps(db_session, subscriber):
     assert closed.closed_at is not None
 
 
+def test_crm_origin_ticket_writes_are_locked_until_cutover(db_session, subscriber):
+    ticket = support_service.tickets.create(
+        db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
+    )
+    ticket.metadata_ = {"crm_ticket_id": str(uuid4())}
+    db_session.add(ticket)
+    db_session.commit()
+
+    assert support_service.is_crm_origin_ticket(ticket) is True
+    assert support_service.crm_ticket_user_writes_locked(ticket) is True
+
+    with pytest.raises(HTTPException) as update_exc:
+        support_service.tickets.update(
+            db_session,
+            str(ticket.id),
+            TicketUpdate(status="closed"),
+            actor_id=str(subscriber.id),
+        )
+    assert update_exc.value.status_code == 409
+    assert "still owned by CRM" in str(update_exc.value.detail)
+
+    with pytest.raises(HTTPException) as comment_exc:
+        support_service.tickets.create_comment(
+            db_session,
+            str(ticket.id),
+            TicketCommentCreate(
+                body="Should stay in CRM",
+                is_internal=False,
+                author_person_id=subscriber.id,
+            ),
+            actor_id=str(subscriber.id),
+        )
+    assert comment_exc.value.status_code == 409
+
+
+def test_native_ticket_writes_remain_enabled_before_crm_cutover(
+    db_session, subscriber
+):
+    ticket = support_service.tickets.create(
+        db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
+    )
+
+    assert support_service.is_crm_origin_ticket(ticket) is False
+    assert support_service.crm_ticket_user_writes_locked(ticket) is False
+
+    updated = support_service.tickets.update(
+        db_session,
+        str(ticket.id),
+        TicketUpdate(status="closed"),
+        actor_id=str(subscriber.id),
+    )
+
+    assert updated.status == "closed"
+
+
 def test_field_visit_tag_creates_work_order_once(db_session, subscriber):
     ticket = support_service.tickets.create(
         db_session,

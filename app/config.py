@@ -85,6 +85,12 @@ class Settings:
     # This is intentionally separate from CRM_WEBHOOK_SECRET, which protects
     # inbound HMAC-signed webhook deliveries.
     selfcare_api_token: str = os.getenv("SELFCARE_API_TOKEN", "")
+    # During CRM absorption, sub can read/import CRM tickets natively before it
+    # owns writes. Keep user/admin mutations blocked for CRM-origin tickets until
+    # the ticket vertical cutover flips writes to sub.
+    crm_ticket_native_writes_enabled: bool = os.getenv(
+        "CRM_TICKET_NATIVE_WRITES_ENABLED", "false"
+    ).lower() in ("1", "true", "yes", "on")
 
     # Live chat (bridges to the CRM chat_widget channel). Default OFF: the
     # broker endpoints return 503 until a deploy flips this on deliberately.

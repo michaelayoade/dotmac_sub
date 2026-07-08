@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from sqlalchemy import or_
 from sqlalchemy.orm import Session, selectinload
 
+from app.config import settings
 from app.models.domain_settings import SettingDomain
 from app.models.notification import NotificationChannel, NotificationStatus
 from app.models.provisioning import ServiceOrder
@@ -172,6 +173,27 @@ def _ensure_not_merged_source(ticket: Ticket) -> None:
         raise HTTPException(
             status_code=409, detail="Cannot modify a merged source ticket"
         )
+
+
+def is_crm_origin_ticket(ticket: Ticket) -> bool:
+    metadata = ticket.metadata_ if isinstance(ticket.metadata_, dict) else {}
+    return bool(metadata.get("crm_ticket_id"))
+
+
+def crm_ticket_user_writes_locked(ticket: Ticket) -> bool:
+    return is_crm_origin_ticket(ticket) and not settings.crm_ticket_native_writes_enabled
+
+
+def _assert_crm_ticket_user_writes_enabled(ticket: Ticket, action: str) -> None:
+    if not crm_ticket_user_writes_locked(ticket):
+        return
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            "This ticket is still owned by CRM. It is readable in sub, but "
+            f"{action} is disabled until the ticket cutover flips writes to sub."
+        ),
+    )
 
 
 def _merge_attachment_dicts(
@@ -457,6 +479,7 @@ class TicketComments:
         ticket = db.get(Ticket, comment.ticket_id)
         if not ticket:
             raise HTTPException(status_code=404, detail="Ticket not found")
+        _assert_crm_ticket_user_writes_enabled(ticket, "editing comments")
         _ensure_not_merged_source(ticket)
 
         data = payload.model_dump(exclude_unset=True)
@@ -487,6 +510,7 @@ class TicketComments:
         ticket = db.get(Ticket, comment.ticket_id)
         if not ticket:
             raise HTTPException(status_code=404, detail="Ticket not found")
+        _assert_crm_ticket_user_writes_enabled(ticket, "deleting comments")
         _ensure_not_merged_source(ticket)
         db.delete(comment)
         log_audit_event(
@@ -525,6 +549,7 @@ class TicketSlaEvents:
         ticket = db.get(Ticket, payload.ticket_id)
         if not ticket:
             raise HTTPException(status_code=404, detail="Ticket not found")
+        _assert_crm_ticket_user_writes_enabled(ticket, "editing SLA events")
         _ensure_not_merged_source(ticket)
         event = TicketSlaEvent(
             ticket_id=payload.ticket_id,
@@ -545,6 +570,7 @@ class TicketSlaEvents:
         ticket = db.get(Ticket, event.ticket_id)
         if not ticket:
             raise HTTPException(status_code=404, detail="Ticket not found")
+        _assert_crm_ticket_user_writes_enabled(ticket, "editing SLA events")
         _ensure_not_merged_source(ticket)
         for key, value in payload.model_dump(exclude_unset=True).items():
             setattr(event, key, value)
@@ -557,6 +583,7 @@ class TicketSlaEvents:
         ticket = db.get(Ticket, event.ticket_id)
         if not ticket:
             raise HTTPException(status_code=404, detail="Ticket not found")
+        _assert_crm_ticket_user_writes_enabled(ticket, "deleting SLA events")
         _ensure_not_merged_source(ticket)
         db.delete(event)
         db.commit()
@@ -1027,6 +1054,7 @@ class Tickets:
                 status_code=409,
                 detail="You can rate support once the ticket is resolved.",
             )
+        _assert_crm_ticket_user_writes_enabled(ticket, "rating")
         meta = dict(ticket.metadata_ or {})
         meta["csat"] = {
             "rating": int(rating),
@@ -1044,6 +1072,7 @@ class Tickets:
         db: Session, ticket_id: str, attachments: list[dict] | None
     ) -> Ticket:
         ticket = Tickets.get(db, ticket_id)
+        _assert_crm_ticket_user_writes_enabled(ticket, "adding attachments")
         ticket.attachments = _merge_attachment_dicts(ticket.attachments, attachments)
         db.add(ticket)
         db.commit()
@@ -1152,6 +1181,7 @@ class Tickets:
         request=None,
     ) -> Ticket:
         ticket = Tickets.get(db, ticket_id)
+        _assert_crm_ticket_user_writes_enabled(ticket, "editing")
         _ensure_not_merged_source(ticket)
 
         before = {
@@ -1283,6 +1313,7 @@ class Tickets:
         db: Session, ticket_id: str, actor_id: str | None = None, request=None
     ) -> None:
         ticket = Tickets.get(db, ticket_id)
+        _assert_crm_ticket_user_writes_enabled(ticket, "deleting")
         _ensure_not_merged_source(ticket)
         ticket.is_active = False
         log_audit_event(
@@ -1306,6 +1337,7 @@ class Tickets:
         updated: list[Ticket] = []
         for item in payload.items:
             ticket = Tickets.get(db, str(item.ticket_id))
+            _assert_crm_ticket_user_writes_enabled(ticket, "bulk editing")
             _ensure_not_merged_source(ticket)
             if item.status is not None:
                 transition_ticket_status(
@@ -1337,6 +1369,7 @@ class Tickets:
         db: Session, ticket_id: str, actor_id: str | None = None, request=None
     ) -> dict[str, Any]:
         ticket = Tickets.get(db, ticket_id)
+        _assert_crm_ticket_user_writes_enabled(ticket, "auto-assignment")
         _ensure_not_merged_source(ticket)
         result = Tickets._apply_region_auto_assignment(ticket, db)
         log_audit_event(
@@ -1361,6 +1394,7 @@ class Tickets:
         request=None,
     ) -> TicketComment:
         ticket = Tickets.get(db, ticket_id)
+        _assert_crm_ticket_user_writes_enabled(ticket, "commenting")
         comment = ticket_comments.create(
             db, ticket=ticket, payload=payload, actor_id=actor_id, request=request
         )
@@ -1378,6 +1412,7 @@ class Tickets:
         request=None,
     ) -> list[TicketComment]:
         ticket = Tickets.get(db, ticket_id)
+        _assert_crm_ticket_user_writes_enabled(ticket, "commenting")
         comments: list[TicketComment] = []
         for payload in payloads:
             comment = ticket_comments.create(
@@ -1402,6 +1437,8 @@ class Tickets:
     ) -> TicketLink:
         source = Tickets.get(db, from_ticket_id)
         target = Tickets.get(db, to_ticket_id)
+        _assert_crm_ticket_user_writes_enabled(source, "linking")
+        _assert_crm_ticket_user_writes_enabled(target, "linking")
         _ensure_not_merged_source(source)
         _ensure_not_merged_source(target)
 
@@ -1466,6 +1503,8 @@ class Tickets:
     ) -> Ticket:
         source = Tickets.get(db, source_ticket_id)
         target = Tickets.get(db, str(payload.target_ticket_id))
+        _assert_crm_ticket_user_writes_enabled(source, "merging")
+        _assert_crm_ticket_user_writes_enabled(target, "merging")
         if source.id == target.id:
             raise HTTPException(
                 status_code=400, detail="Cannot merge a ticket into itself"
