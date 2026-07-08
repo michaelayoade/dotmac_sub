@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 POETRY_BIN="${POETRY_BIN:-poetry}"
+PYTHON_BIN="${CRM_TICKET_IMPORT_PYTHON_BIN:-}"
 STATE_FILE="${CRM_TICKET_IMPORT_STATE_FILE:-${ROOT_DIR}/var/phase1-ticket-import-state.json}"
 OVERRIDES_CSV="${CRM_TICKET_IMPORT_OVERRIDES_CSV:-}"
 OVERLAP_SECONDS="${CRM_TICKET_IMPORT_OVERLAP_SECONDS:-600}"
@@ -37,4 +38,8 @@ if [[ -n "${EXCLUDE_TITLE_REGEX}" ]]; then
 fi
 
 cd "${ROOT_DIR}"
+if [[ -n "${PYTHON_BIN}" ]]; then
+  exec "${PYTHON_BIN}" "${args[@]}"
+fi
+
 exec "${POETRY_BIN}" run python "${args[@]}"
