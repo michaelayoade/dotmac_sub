@@ -226,12 +226,43 @@ def test_execute_import_subscriptions_json(db_session, subscriber, catalog_offer
     )
 
 
+def test_execute_import_subscriptions_preserves_next_billing_date(
+    db_session, subscriber, catalog_offer
+):
+    payload = (
+        "subscriber_id,offer_id,status,billing_mode,next_billing_at\n"
+        f"{subscriber.id},{catalog_offer.id},active,postpaid,2026-08-15T00:00:00+00:00\n"
+    )
+
+    result = import_wizard_service.execute_import(
+        db_session,
+        module="subscriptions",
+        data_format="csv",
+        raw_text=payload,
+        source_name="splynx_subscriptions.csv",
+        dry_run=False,
+    )
+
+    assert result["status"] == "success"
+    imported = (
+        db_session.query(Subscription)
+        .filter(Subscription.subscriber_id == subscriber.id)
+        .filter(Subscription.offer_id == catalog_offer.id)
+        .order_by(Subscription.created_at.desc())
+        .first()
+    )
+    assert imported is not None
+    assert imported.billing_mode.value == "postpaid"
+    assert imported.next_billing_at is not None
+    assert imported.next_billing_at.isoformat().startswith("2026-08-15T00:00:00")
+
+
 def test_execute_import_invoices_payments_ip_pools_and_network_equipment(
     db_session, subscriber
 ):
     invoice_payload = (
-        "account_id,invoice_number,status,currency,subtotal,tax_total,total,balance_due,memo\n"
-        f"{subscriber.id},INV-1,draft,NGN,100,0,100,100,Imported\n"
+        "account_id,invoice_number,status,billing_mode,currency,subtotal,tax_total,total,balance_due,memo\n"
+        f"{subscriber.id},INV-1,draft,prepaid,NGN,100,0,100,100,Imported\n"
     )
     payment_payload = (
         "account_id,amount,currency,status,memo,external_id\n"
@@ -277,6 +308,16 @@ def test_execute_import_invoices_payments_ip_pools_and_network_equipment(
     assert payment_result["imported_rows"] == 1
     assert pool_result["imported_rows"] == 1
     assert device_result["imported_rows"] == 1
+    imported_invoice = (
+        db_session.query(Invoice)
+        .filter(Invoice.account_id == subscriber.id)
+        .order_by(Invoice.created_at.desc())
+        .first()
+    )
+    assert imported_invoice is not None
+    assert imported_invoice.metadata_["imported_via"] == "system_import_wizard"
+    assert imported_invoice.metadata_["source_name"] == "inv.csv"
+    assert imported_invoice.metadata_["billing_mode"] == "prepaid"
 
     assert (
         db_session.query(Invoice).filter(Invoice.invoice_number == "INV-1").count() == 1

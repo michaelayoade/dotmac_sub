@@ -1,23 +1,24 @@
 # Prepaid invoicing → deposit-is-truth alignment
 
 **Status:** Option A chosen (align prepaid to deposit-is-truth), per product
-direction. Item 1 done (#734, flag OFF), Item 2 done (#738, control OFF), Items 3 & 4
-done (this PR). Item 5 (data cleanup) + the coordinated flag flip remain.
+direction. The scheduled runner now treats prepaid renewal invoices as
+draft-until-funded, prepaid service cuts are owned by the balance sweep, and the
+phantom-AR cleanup is a data repair path rather than an enforcement input.
 
 ## Problem
 
-For prepaid (deposit-is-truth) accounts the monthly runner
-(`billing_automation.run_invoice_cycle`) creates the advance/renewal invoice as
-`status=issued` with `due_days=0` (due on issue) — the status is hardcoded, not
-conditioned on billing mode (`billing_automation.py:~1327-1338`). Consequences:
+Historically, for prepaid (deposit-is-truth) accounts the monthly runner
+(`billing_automation.run_invoice_cycle`) created the advance/renewal invoice as
+`status=issued` with `due_days=0` (due on issue). Consequences:
 
 - The hourly `mark_overdue_invoices` (mode-agnostic) flips it to **overdue** almost
   immediately.
 - It counts as **AR** in aging/overview/dashboard (`billing/reporting.py`, no mode
   filter) and **suppresses the customer's available balance** (`_resolve_prepaid_
   available_balance` = credit − open AR, `collections/_core.py:80-131`).
-- It **opens a dunning case** (prepaid-monthly is in dunning scope while
-  `prepaid_monthly_invoicing_enabled` is on — it is, in prod).
+- It historically **opened a dunning case** when prepaid-monthly was treated as
+  dunning scope. That is now explicitly forbidden: prepaid service cuts belong
+  to the balance sweep, not postpaid collections.
 - It is never settled from the deposit (`settle_credit_on_invoice_enabled=False`,
   disabled because account-wide settle is unsafe on migrated data), so the same
   charge is **both** an implicit wallet drawdown **and** an aged debt (double-count;
@@ -37,7 +38,7 @@ a prepaid renewal invoice must not exist as AR until it is actually funded.
 
 ## Plan (Option A)
 
-### Item 1 — draft-until-funded (this PR)
+### Item 1 — draft-until-funded
 At the billing boundary, for a prepaid subscription:
 1. Create the invoice **`draft`** with its line items + computed total (never
    `issued`, no `due_at`). Draft is already excluded from AR, overdue-marking,
@@ -53,20 +54,16 @@ At the billing boundary, for a prepaid subscription:
 3. If **underfunded**: leave the invoice `draft`. No AR, no overdue, no dunning. The
    customer has not renewed; service lapse is handled by balance/expiry enforcement
    (Item 2).
-4. **Flag-gated** behind `billing.prepaid_draft_until_funded` (default **OFF**) so prod
-   behavior is unchanged until enabled deliberately after review — matching how this
-   codebase ships risky billing changes (prepaid engine deployed inert, etc.). The
-   flag is read by the create path (satisfies the no-orphan-settings lint).
+4. This is now the scheduled runner invariant. Runner-created prepaid invoices
+   no longer support legacy issue-on-create behavior, so there is no runtime
+   flag for reverting to postpaid-style prepaid AR.
 
-### Item 2 — revive balance/expiry prepaid enforcement (next)
-Drafting removes today's only prepaid enforcement (day-0 suspend on the issued
-invoice). Prepaid must instead be enforced on **balance/expiry**: a sweep that arms
-`prepaid_low_balance_at` / `prepaid_deactivation_at` (currently only ever *cleared* —
-`_core.py:1958-1972`; the balance engine was retired in #376), wired to the 8 orphan
-`prepaid_*` settings (low-balance warning subject/body, deactivation days/subject/body,
-skip weekends/holidays, blocking time) as its config → resolves the earlier
-wire-vs-delete question to **WIRE**. Emits the prepaid-native low-balance warning that
-`service_status.py:121-137` already renders but never receives.
+### Item 2 — prepaid balance/expiry enforcement
+Drafting removes prepaid AR as an enforcement input. Prepaid is instead enforced
+on **balance/expiry** through `prepaid_balance_sweep`, which arms
+`prepaid_low_balance_at` / `prepaid_deactivation_at`, sends prepaid-native
+low-balance notices, and applies prepaid locks only when the local available
+balance is insufficient. This path is independent of postpaid dunning.
 
 ### Item 3 — admin/API prepaid plan-change should draw down, not invoice ✅ DONE (this PR)
 `catalog/subscriptions.py:1004-1075 _generate_proration_invoice` mints an issued
@@ -96,16 +93,16 @@ phantom-ledger cleanups). Separate one-off script, run after Item 1 lands.
 
 ## Rollout
 
-1. Ship Item 1 flag-OFF; verify in the test stack (draft-when-unfunded, issue+paid
-   when funded, no double-charge, idempotent, balance draws down once).
-2. Ship Item 2 (balance/expiry enforcement) so prepaid is still enforced once
-   invoices stop being the enforcement trigger.
-3. Enable `prepaid_draft_until_funded` in prod **only after** Item 2 is live and the
-   Item 5 cleanup of the existing 938 is done — otherwise drafting new invoices while
-   old ones remain overdue leaves a mixed state, and enabling without Item 2 removes
-   prepaid enforcement entirely.
-4. Items 3 & 4 are independent hardening; ship anytime.
-5. **Post-flip smoke test (top-up → draft settlement).** The #751 follow-ups
+1. Keep `prepaid_monthly_invoicing_enabled` off unless prepaid advance invoice
+   rows are required. If enabled, runner-created prepaid rows stay draft until
+   funded.
+2. Keep `collections.prepaid_balance_enforcement` as the customer-impacting
+   suspension gate; cleanup scripts must not be used as the suspension signal.
+3. Run the phantom-AR cleanup in dry-run first, review the plan, then apply.
+   Runtime guards exclude prepaid subscription invoices and imported/provenance
+   line-less prepaid invoices from AR/dunning/balance enforcement; ambiguous
+   line-less invoices remain visible and require cleanup review.
+4. **Post-change smoke test (top-up → draft settlement).** The #751 follow-ups
    (`settle_prepaid_draft_invoices_from_credit`, wired into portal top-up verify /
    webhook settlement / pending top-up reconciliation) are part of the go-live
    baseline, not optional. Immediately after the flip, exercise the path
@@ -115,6 +112,6 @@ phantom-ledger cleanups). Separate one-off script, run after Item 1 lands.
    prepaid-suspended, service restore runs. This is the one behaviour the offline
    tests can't fully prove against real payment/webhook plumbing.
 
-**LANDMINE:** do NOT flip `prepaid_monthly_invoicing_enabled` off/on or enable
-`settle_credit_on_invoice_enabled` (account-wide settle) as a shortcut — the latter is
-disabled for migrated-data safety. Item 1's settle is single-invoice and targeted.
+**LANDMINE:** do NOT enable `settle_credit_on_invoice_enabled` (account-wide settle)
+as a shortcut — it is disabled for migrated-data safety. Item 1's settle is
+single-invoice and targeted.
