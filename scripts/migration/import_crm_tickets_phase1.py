@@ -24,6 +24,7 @@ import os
 import re
 import uuid
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +59,7 @@ class ImportStats:
     links_inserted: int = 0
     access_tokens_upserted: int = 0
     service_teams_upserted: int = 0
+    max_crm_updated_at: str | None = None
     blockers: list[dict[str, Any]] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
@@ -74,6 +76,7 @@ class ImportStats:
             "links_inserted": self.links_inserted,
             "access_tokens_upserted": self.access_tokens_upserted,
             "service_teams_upserted": self.service_teams_upserted,
+            "max_crm_updated_at": self.max_crm_updated_at,
             "blockers": self.blockers,
         }
 
@@ -110,6 +113,61 @@ def _uuid_or_none(value: Any) -> str | None:
     if not value:
         return None
     return value
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        text_value = str(value).strip()
+        if not text_value:
+            return None
+        if text_value.endswith("Z"):
+            text_value = text_value[:-1] + "+00:00"
+        parsed = datetime.fromisoformat(text_value)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _format_datetime(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return value.astimezone(UTC).isoformat()
+
+
+def _state_since(path: str | None, overlap_seconds: int) -> datetime | None:
+    if not path:
+        return None
+    state_path = Path(path)
+    if not state_path.exists():
+        return None
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    parsed = _parse_datetime(payload.get("last_crm_ticket_updated_at"))
+    if not parsed:
+        return None
+    overlap = max(overlap_seconds, 0)
+    return parsed - timedelta(seconds=overlap)
+
+
+def _write_state(path: str | None, updated_at: str | None) -> None:
+    if not path or not updated_at:
+        return
+    state_path = Path(path)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "last_crm_ticket_updated_at": updated_at,
+                "updated_at": datetime.now(UTC).isoformat(),
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def _load_overrides(path: str | None) -> dict[str, UnmappedDecision]:
@@ -215,7 +273,9 @@ def _load_existing_tickets(sub: Connection) -> dict[str, str]:
     }
 
 
-def _crm_tickets(crm: Connection, limit: int | None) -> list[dict[str, Any]]:
+def _crm_tickets(
+    crm: Connection, *, limit: int | None, updated_since: datetime | None
+) -> list[dict[str, Any]]:
     sql = """
         SELECT id::text,
                subscriber_id::text,
@@ -245,12 +305,16 @@ def _crm_tickets(crm: Connection, limit: int | None) -> list[dict[str, Any]]:
                erpnext_id,
                merged_into_ticket_id::text
         FROM tickets
-        ORDER BY created_at, id
     """
+    params: dict[str, Any] = {}
+    if updated_since is not None:
+        sql += "\nWHERE updated_at >= :updated_since"
+        params["updated_since"] = updated_since
+    sql += "\nORDER BY updated_at, id"
     if limit:
         sql += "\nLIMIT :limit"
-        return _rows(crm, sql, {"limit": limit})
-    return _rows(crm, sql)
+        params["limit"] = limit
+    return _rows(crm, sql, params)
 
 
 def _ticket_payload(
@@ -680,6 +744,7 @@ def import_tickets(
     crm: Connection,
     apply: bool,
     limit: int | None,
+    updated_since: datetime | None,
     overrides: dict[str, UnmappedDecision],
     exclude_title_re: re.Pattern[str] | None,
     allow_unmapped_closed: bool,
@@ -688,13 +753,19 @@ def import_tickets(
     stats = ImportStats()
     subscriber_map = _load_subscriber_map(sub)
     existing_by_crm_ticket = _load_existing_tickets(sub)
-    tickets = _crm_tickets(crm, limit)
+    tickets = _crm_tickets(crm, limit=limit, updated_since=updated_since)
     stats.fetched = len(tickets)
+    max_updated_at: datetime | None = None
 
     crm_to_local_ticket: dict[str, str] = {}
     planned_rows: list[tuple[dict[str, Any], dict[str, Any], bool]] = []
 
     for ticket in tickets:
+        ticket_updated_at = _parse_datetime(ticket.get("updated_at"))
+        if ticket_updated_at and (
+            max_updated_at is None or ticket_updated_at > max_updated_at
+        ):
+            max_updated_at = ticket_updated_at
         crm_ticket_id = str(ticket["id"])
         local_ticket_id = existing_by_crm_ticket.get(crm_ticket_id) or str(uuid.uuid4())
         subscriber_id = None
@@ -742,6 +813,8 @@ def import_tickets(
         planned_rows.append((ticket, payload, crm_ticket_id in existing_by_crm_ticket))
         crm_to_local_ticket[crm_ticket_id] = local_ticket_id
 
+    stats.max_crm_updated_at = _format_datetime(max_updated_at)
+
     if stats.blockers:
         return stats
 
@@ -777,6 +850,26 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--limit", type=int)
+    parser.add_argument(
+        "--updated-since",
+        help=(
+            "Only import CRM tickets with tickets.updated_at at or after this "
+            "ISO timestamp. Overrides --state-file when both are provided."
+        ),
+    )
+    parser.add_argument(
+        "--state-file",
+        help=(
+            "JSON state file storing last_crm_ticket_updated_at for scheduled "
+            "incremental runs."
+        ),
+    )
+    parser.add_argument(
+        "--state-overlap-seconds",
+        type=int,
+        default=600,
+        help="Subtract this overlap from the state-file watermark.",
+    )
     parser.add_argument("--overrides-csv")
     parser.add_argument(
         "--exclude-title-regex",
@@ -801,6 +894,11 @@ def main() -> None:
     exclude_title_re = (
         re.compile(args.exclude_title_regex) if args.exclude_title_regex else None
     )
+    updated_since = (
+        _parse_datetime(args.updated_since)
+        if args.updated_since
+        else _state_since(args.state_file, args.state_overlap_seconds)
+    )
 
     sub_engine = _engine_from_env("SUB_DATABASE_URL")
     crm_engine = _engine_from_env("CRM_DATABASE_URL")
@@ -815,6 +913,7 @@ def main() -> None:
                 crm=crm,
                 apply=args.apply,
                 limit=args.limit,
+                updated_since=updated_since,
                 overrides=overrides,
                 exclude_title_re=exclude_title_re,
                 allow_unmapped_closed=args.allow_unmapped_closed,
@@ -826,12 +925,16 @@ def main() -> None:
             raise
         if args.apply and not stats.blockers:
             sub_trans.commit()
+            _write_state(args.state_file, stats.max_crm_updated_at)
         else:
             sub_trans.rollback()
         crm.rollback()
 
     report = {
         "apply": args.apply,
+        "updated_since": _format_datetime(updated_since),
+        "state_file": args.state_file,
+        "state_overlap_seconds": args.state_overlap_seconds,
         "allow_unmapped_closed": args.allow_unmapped_closed,
         "exclude_title_regex": args.exclude_title_regex,
         "stats": stats.as_dict(),

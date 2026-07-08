@@ -1,9 +1,12 @@
 import re
+from datetime import UTC, datetime
 
 from scripts.migration.import_crm_tickets_phase1 import (
     DEFAULT_EXCLUDE_TITLE_REGEX,
     UnmappedDecision,
     decide_unmapped_ticket,
+    _format_datetime,
+    _parse_datetime,
 )
 
 
@@ -68,3 +71,10 @@ def test_unmapped_open_real_ticket_blocks() -> None:
     )
 
     assert decision == UnmappedDecision("block", "unmapped_subscriber")
+
+
+def test_parse_datetime_normalizes_zulu_to_utc() -> None:
+    parsed = _parse_datetime("2026-07-08T12:34:56Z")
+
+    assert parsed == datetime(2026, 7, 8, 12, 34, 56, tzinfo=UTC)
+    assert _format_datetime(parsed) == "2026-07-08T12:34:56+00:00"
