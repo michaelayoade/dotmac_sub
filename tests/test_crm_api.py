@@ -497,6 +497,6 @@ def test_ncc_subscriber_report_endpoint_returns_aggregate(db_session, crm_auth):
     report = body["data"]
     assert report["total_active_subscriptions"] == 1
     assert report["parameters"]["active_statuses"] == ["active"]
-    assert report["network_capacity"]["points_of_presence"] == "28"
+    assert report["network_capacity"]["points_of_presence"] == 28
     # picker params flow through untouched
     assert report["parameters"]["as_of"].startswith("2026-06-30")
