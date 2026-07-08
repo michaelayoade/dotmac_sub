@@ -1349,8 +1349,9 @@ def bind_internet_wan(
         return ActionResult(
             success=False,
             message=(
-                "No WANPPPConnection is visible from ACS. Apply PPPoE WAN or "
-                "refresh ACS before binding customer interfaces."
+                "Bind Internet WAN cannot run because the ONT does not show an "
+                "internet WAN object yet. Apply PPPoE WAN first, wait for ACS "
+                "to refresh, then retry the bind."
             ),
             data={"required_step": "create_or_refresh_ppp_wan"},
         )

@@ -1,6 +1,9 @@
 {% set recovery = service_recovery or {} %}
 {% set recovery_rows = recovery.rows or [] %}
 {% set drift_rows = recovery.drift_rows or [] %}
+{% set recovery_stage = recovery.recovery_stage or {} %}
+{% set common_issues = recovery.common_issues or [] %}
+{% set can_bind = recovery.bind_action_enabled %}
 {% if recovery_rows %}
 <div class="mb-4 rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
     <div class="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 px-3 py-2 dark:border-slate-700">
@@ -16,6 +19,28 @@
             {{ recovery.status | default('pending') | title }}
         </span>
     </div>
+    {% if recovery_stage %}
+    <div class="border-b border-slate-100 px-3 py-3 dark:border-slate-700">
+        <div class="rounded border px-3 py-2
+            {% if recovery_stage.tone == 'ok' %}border-emerald-100 bg-emerald-50/60 dark:border-emerald-900/50 dark:bg-emerald-900/20
+            {% elif recovery_stage.tone == 'fail' %}border-rose-100 bg-rose-50/70 dark:border-rose-900/50 dark:bg-rose-900/20
+            {% else %}border-amber-100 bg-amber-50/70 dark:border-amber-900/50 dark:bg-amber-900/20{% endif %}">
+            <div class="text-sm font-semibold
+                {% if recovery_stage.tone == 'ok' %}text-emerald-800 dark:text-emerald-200
+                {% elif recovery_stage.tone == 'fail' %}text-rose-800 dark:text-rose-200
+                {% else %}text-amber-800 dark:text-amber-200{% endif %}">
+                {{ recovery_stage.title }}
+            </div>
+            <div class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ recovery_stage.message }}</div>
+            {% if recovery_stage.action_hint %}
+            <div class="mt-1 text-xs text-slate-600 dark:text-slate-400">
+                {% if recovery_stage.action_label %}<span class="font-semibold">{{ recovery_stage.action_label }}:</span>{% endif %}
+                {{ recovery_stage.action_hint }}
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
     <div class="grid gap-2 p-3 lg:grid-cols-2">
         {% for row in recovery_rows %}
         <div class="rounded border border-slate-100 bg-slate-50/70 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/30">
@@ -81,9 +106,25 @@
         </div>
     </div>
     {% endif %}
+    {% if common_issues %}
+    <div class="border-t border-slate-100 px-3 py-3 dark:border-slate-700">
+        <div class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Other Issues This Check Can Catch</div>
+        <div class="grid gap-2 md:grid-cols-2">
+            {% for issue in common_issues %}
+            <div class="rounded border border-slate-100 bg-slate-50/70 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/30">
+                <div class="text-xs font-semibold text-slate-800 dark:text-slate-200">{{ issue.label }}</div>
+                <div class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{{ issue.meaning }}</div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
     <div class="flex flex-wrap items-center gap-3 border-t border-slate-100 px-3 py-2 dark:border-slate-700">
         <div class="min-w-0 flex-1 text-xs text-slate-500 dark:text-slate-400">
             Expected PPPoE{% if recovery.pppoe_username %}: <span class="font-mono">{{ recovery.pppoe_username }}</span>{% endif %}{% if recovery.wan_vlan %} · VLAN <span class="font-mono">{{ recovery.wan_vlan }}</span>{% endif %}
+            {% if recovery.bind_action_reason %}
+            <div class="mt-1">{{ recovery.bind_action_reason }}</div>
+            {% endif %}
         </div>
         <form hx-post="/admin/network/onts/{{ ont_id }}/bind-internet-wan"
               hx-swap="none"
@@ -91,26 +132,26 @@
               class="flex flex-wrap items-center justify-end gap-2">
             {% include "components/forms/csrf_input.html" %}
             <label class="inline-flex items-center gap-1 text-xs text-slate-600 dark:text-slate-300">
-                <input type="checkbox" name="ssid1" checked class="h-3.5 w-3.5 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500">
+                <input type="checkbox" name="ssid1" checked {% if not can_bind %}disabled{% endif %} class="h-3.5 w-3.5 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500 disabled:opacity-50">
                 SSID1
             </label>
             <label class="inline-flex items-center gap-1 text-xs text-slate-600 dark:text-slate-300">
-                <input type="checkbox" name="lan1" checked class="h-3.5 w-3.5 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500">
+                <input type="checkbox" name="lan1" checked {% if not can_bind %}disabled{% endif %} class="h-3.5 w-3.5 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500 disabled:opacity-50">
                 LAN1
             </label>
             <label class="inline-flex items-center gap-1 text-xs text-slate-600 dark:text-slate-300">
-                <input type="checkbox" name="lan2" class="h-3.5 w-3.5 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500">
+                <input type="checkbox" name="lan2" {% if not can_bind %}disabled{% endif %} class="h-3.5 w-3.5 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500 disabled:opacity-50">
                 LAN2
             </label>
             <label class="inline-flex items-center gap-1 text-xs text-slate-600 dark:text-slate-300">
-                <input type="checkbox" name="lan3" class="h-3.5 w-3.5 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500">
+                <input type="checkbox" name="lan3" {% if not can_bind %}disabled{% endif %} class="h-3.5 w-3.5 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500 disabled:opacity-50">
                 LAN3
             </label>
             <label class="inline-flex items-center gap-1 text-xs text-slate-600 dark:text-slate-300">
-                <input type="checkbox" name="lan4" class="h-3.5 w-3.5 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500">
+                <input type="checkbox" name="lan4" {% if not can_bind %}disabled{% endif %} class="h-3.5 w-3.5 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500 disabled:opacity-50">
                 LAN4
             </label>
-            <button class="inline-flex items-center justify-center rounded bg-cyan-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-cyan-700 disabled:opacity-50">
+            <button {% if not can_bind %}disabled title="{{ recovery.bind_action_reason }}"{% endif %} class="inline-flex items-center justify-center rounded bg-cyan-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-cyan-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600 dark:disabled:bg-slate-700 dark:disabled:text-slate-400">
                 <svg class="htmx-indicator mr-1 h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
                 Bind Internet WAN
             </button>
