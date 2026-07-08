@@ -28,6 +28,7 @@ from app.services.web_network_ont_actions._common import (
 
 # Configuration setters
 from app.services.web_network_ont_actions.config_setters import (
+    bind_internet_wan,
     bind_tr069_profile,
     configure_management_ip,
     force_push_wifi_password,
@@ -157,6 +158,7 @@ __all__ = [
     "fetch_olt_running_config",
     # Configuration setters
     "bind_tr069_profile",
+    "bind_internet_wan",
     "configure_management_ip",
     "force_push_wifi_password",
     "force_resync_ont",

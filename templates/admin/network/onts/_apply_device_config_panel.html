@@ -8,6 +8,8 @@
     {% set advanced_wan_mode = 'bridge' %}
 {% endif %}
 
+{% include "admin/network/onts/_service_recovery_checklist.html" %}
+
 <details id="advanced-device-actions" class="mt-4 rounded-lg border border-slate-200 dark:border-slate-700">
     <summary class="cursor-pointer px-3 py-2 text-xs font-medium text-slate-500 dark:text-slate-400">
         Advanced

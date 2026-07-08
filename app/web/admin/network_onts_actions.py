@@ -882,6 +882,45 @@ def ont_set_wan_remote_access(
 
 
 @router.post(
+    "/onts/{ont_id}/bind-internet-wan",
+    dependencies=[Depends(require_permission("network:ont:write"))],
+)
+def ont_bind_internet_wan(
+    request: Request, ont_id: str, db: Session = Depends(get_db)
+) -> JSONResponse:
+    """Bind active PPP internet WAN to customer-facing LAN/WiFi interfaces."""
+    denied = _ensure_ont_write_scope(request, db, ont_id)
+    if denied is not None:
+        return denied  # type: ignore[return-value]
+    form = parse_form_data_sync(request)
+
+    def enabled(key: str, default: bool = False) -> bool:
+        raw = _form_str(form, key, "true" if default else "").strip().lower()
+        return raw in {"true", "1", "yes", "on", "enabled"}
+
+    result = web_network_ont_actions_service.bind_internet_wan(
+        db,
+        ont_id,
+        ssid1=enabled("ssid1"),
+        lan1=enabled("lan1"),
+        lan2=enabled("lan2"),
+        lan3=enabled("lan3"),
+        lan4=enabled("lan4"),
+        request=request,
+    )
+    success = bool(getattr(result, "success", False))
+    return _action_json_response(
+        success=success,
+        message=str(getattr(result, "message", "Internet WAN bind failed")),
+        action="Bind Internet WAN",
+        request=request,
+        ont_id=ont_id,
+        waiting=bool(getattr(result, "waiting", False)),
+        hx_refresh=success,
+    )
+
+
+@router.post(
     "/onts/{ont_id}/mgmt-remote-access",
     dependencies=[Depends(require_permission("network:ont:write"))],
 )
