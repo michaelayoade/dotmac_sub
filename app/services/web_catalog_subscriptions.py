@@ -2073,6 +2073,23 @@ def _priced_public_ip_addons_for_routes(
     return addons
 
 
+def _public_ip_addon_has_recurring_price(db: Session, add_on_id: str | None) -> bool:
+    if not add_on_id:
+        return False
+    try:
+        selected_uuid = UUID(str(add_on_id))
+    except ValueError:
+        return False
+    return (
+        db.query(AddOnPrice.id)
+        .filter(AddOnPrice.add_on_id == selected_uuid)
+        .filter(AddOnPrice.is_active.is_(True))
+        .filter(AddOnPrice.price_type == PriceType.recurring)
+        .first()
+        is not None
+    )
+
+
 def sync_additional_routes_for_subscription(
     db: Session,
     *,
@@ -2114,16 +2131,21 @@ def sync_additional_routes_for_subscription(
         .all()
     )
     existing_by_cidr = {str(route.cidr): route for route in existing}
-    # Only NEW routes require a priced /30 public IP add-on. Existing routes
-    # (already provisioned, possibly migrated/legacy reserved guard rows) are
-    # grandfathered so an admin can re-save the subscription form without an
-    # add-on being required for a route that already exists.
-    new_desired = [
-        (cidr, prefix_length, metric)
-        for cidr, prefix_length, metric in desired
-        if cidr not in existing_by_cidr
-    ]
-    _priced_public_ip_addons_for_routes(db, new_desired)
+    # Routed blocks are provisioning state. A recurring public-IP charge is
+    # created only when an explicit public-IP billing add-on is selected.
+    # Existing routes are otherwise preserved/grandfathered.
+    if str(add_on_id or "").strip():
+        new_desired = [
+            (cidr, prefix_length, metric)
+            for cidr, prefix_length, metric in desired
+            if cidr not in existing_by_cidr
+        ]
+        if new_desired and not _public_ip_addon_has_recurring_price(db, add_on_id):
+            _cidr, prefix_length, _metric = new_desired[0]
+            raise ValueError(
+                f"Additional routed IP block {_cidr} requires an active "
+                f"/{prefix_length} public IP add-on with a recurring price."
+            )
 
     for cidr, (prefix_length, metric) in desired_map.items():
         route = existing_by_cidr.get(cidr)
@@ -4167,6 +4189,8 @@ def create_subscription_with_audit(
     additional_route_metrics = [
         str(value).strip() for value in form.getlist("additional_route_metrics")
     ]
+    selected_ip_addon_id = str(form.get("ip_addon_id") or "").strip()
+    selected_ip_addon_quantity = str(form.get("ip_addon_quantity") or "1")
     desired_additional_routes = normalize_additional_routes(
         additional_route_cidrs,
         additional_route_metrics,
@@ -4190,23 +4214,23 @@ def create_subscription_with_audit(
         subscription_obj=created,
         cidrs=additional_route_cidrs,
         metrics=additional_route_metrics,
-        add_on_id=str(form.get("ip_addon_id") or ""),
-        quantity=str(form.get("ip_addon_quantity") or "1"),
+        add_on_id=selected_ip_addon_id,
+        quantity=selected_ip_addon_quantity,
     )
     route_fields_supplied = bool(additional_route_cidrs)
     if desired_additional_routes or route_fields_supplied:
-        public_ip_addon_ids = sync_public_ip_addons_for_routes(
+        public_ip_addon_id = sync_public_ip_addon_for_subscription(
             db,
             subscription_obj=created,
-            routes=desired_additional_routes,
+            add_on_id=selected_ip_addon_id if desired_additional_routes else "",
+            quantity=selected_ip_addon_quantity,
         )
-        public_ip_addon_id = next(iter(public_ip_addon_ids.values()), None)
     else:
         public_ip_addon_id = sync_public_ip_addon_for_subscription(
             db,
             subscription_obj=created,
-            add_on_id=str(form.get("ip_addon_id") or ""),
-            quantity=str(form.get("ip_addon_quantity") or "1"),
+            add_on_id=selected_ip_addon_id,
+            quantity=selected_ip_addon_quantity,
         )
 
     if subscriber:
@@ -4327,12 +4351,12 @@ def update_subscription_with_audit(
     public_ip_addon_id: str | None = None
     public_ip_addon_supplied = ip_addon_id is not None
     if additional_routes_supplied:
-        public_ip_addon_ids = sync_public_ip_addons_for_routes(
+        public_ip_addon_id = sync_public_ip_addon_for_subscription(
             db,
             subscription_obj=after,
-            routes=desired_additional_routes,
+            add_on_id=ip_addon_id if desired_additional_routes else "",
+            quantity=ip_addon_quantity,
         )
-        public_ip_addon_id = next(iter(public_ip_addon_ids.values()), None)
     elif ip_addon_id is not None:
         public_ip_addon_id = sync_public_ip_addon_for_subscription(
             db,
