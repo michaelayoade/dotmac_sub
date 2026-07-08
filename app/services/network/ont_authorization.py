@@ -32,10 +32,10 @@ from app.services.network.olt_inventory import get_olt_or_none
 from app.services.network.olt_web_audit import log_olt_audit_event
 from app.services.network.serial_utils import (
     build_huawei_external_id,
-    normalize as normalize_serial,
+    normalized_serial_sql,
 )
 from app.services.network.serial_utils import (
-    normalized_serial_sql,
+    normalize as normalize_serial,
 )
 from app.services.network.serial_utils import (
     search_candidates as serial_search_candidates,
@@ -370,9 +370,7 @@ def create_or_find_ont_for_authorized_serial(
     new_ont = OntUnit(
         id=uuid.uuid4(),
         serial_number=display_serial,
-        external_id=scoped_external_id
-        if ont_id_on_olt is not None
-        else None,
+        external_id=scoped_external_id if ont_id_on_olt is not None else None,
         vendor=vendor,
         model=getattr(matched_candidate, "model", None),
         mac_address=normalize_mac_address(getattr(matched_candidate, "mac", None)),
