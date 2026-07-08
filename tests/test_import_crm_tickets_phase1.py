@@ -4,20 +4,16 @@ from datetime import UTC, datetime
 from scripts.migration.import_crm_tickets_phase1 import (
     DEFAULT_EXCLUDE_TITLE_REGEX,
     UnmappedDecision,
-    decide_unmapped_ticket,
     _format_datetime,
     _parse_datetime,
+    decide_unmapped_ticket,
 )
 
 
 def test_unmapped_override_map_wins() -> None:
     decision = decide_unmapped_ticket(
         {"id": "ticket-1", "title": "Anything", "status": "open"},
-        overrides={
-            "ticket-1": UnmappedDecision(
-                "map", "manual_override", "sub-1"
-            )
-        },
+        overrides={"ticket-1": UnmappedDecision("map", "manual_override", "sub-1")},
         exclude_title_re=re.compile(DEFAULT_EXCLUDE_TITLE_REGEX),
         allow_unmapped_closed=True,
     )

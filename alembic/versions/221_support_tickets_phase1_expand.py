@@ -56,9 +56,7 @@ def upgrade() -> None:
     )
 
     if not _has_column("support_tickets", "erpnext_id"):
-        op.add_column(
-            "support_tickets", sa.Column("erpnext_id", sa.String(length=100))
-        )
+        op.add_column("support_tickets", sa.Column("erpnext_id", sa.String(length=100)))
     if not _has_index("support_tickets", "ix_support_tickets_erpnext_id"):
         op.create_index(
             "ix_support_tickets_erpnext_id",
@@ -123,9 +121,7 @@ def upgrade() -> None:
             ),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
             sa.ForeignKeyConstraint(["team_id"], ["service_teams.id"]),
-            sa.UniqueConstraint(
-                "team_id", "person_id", name="uq_service_team_member"
-            ),
+            sa.UniqueConstraint("team_id", "person_id", name="uq_service_team_member"),
         )
         op.create_index(
             "ix_service_team_members_person_id",
@@ -339,15 +335,11 @@ def downgrade() -> None:
     )
 
     if _has_index("support_tickets", "ix_support_tickets_service_team"):
-        op.drop_index(
-            "ix_support_tickets_service_team", table_name="support_tickets"
-        )
+        op.drop_index("ix_support_tickets_service_team", table_name="support_tickets")
     if _has_index("support_tickets", "ix_support_tickets_region"):
         op.drop_index("ix_support_tickets_region", table_name="support_tickets")
     if _has_index("support_tickets", "ix_support_tickets_erpnext_id"):
-        op.drop_index(
-            "ix_support_tickets_erpnext_id", table_name="support_tickets"
-        )
+        op.drop_index("ix_support_tickets_erpnext_id", table_name="support_tickets")
     if _has_column("support_tickets", "erpnext_id"):
         op.drop_column("support_tickets", "erpnext_id")
     op.alter_column(

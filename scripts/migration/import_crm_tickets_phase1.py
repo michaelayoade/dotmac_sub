@@ -31,7 +31,6 @@ from typing import Any
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Connection, Engine
 
-
 CLOSED_STATUSES = {"closed", "resolved", "canceled", "merged"}
 DEFAULT_EXCLUDE_TITLE_REGEX = (
     r"(?i)\b(codex\b.*\bprobe\b|webhook\b.*\bprobe\b|test\b.*\bticket\b)"

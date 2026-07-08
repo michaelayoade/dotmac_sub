@@ -23,7 +23,6 @@ from typing import Any
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Connection, Engine
 
-
 VALID_STATUSES = {
     "new",
     "open",
@@ -388,9 +387,7 @@ def collect_findings(
         for row in unmapped_ticket_rows
         if exclude_title_re and exclude_title_re.search(str(row.get("title") or ""))
     ]
-    policy_excluded_ids = {
-        str(row["crm_ticket_id"]) for row in policy_excluded_rows
-    }
+    policy_excluded_ids = {str(row["crm_ticket_id"]) for row in policy_excluded_rows}
     policy_unlinked_rows = [
         row
         for row in unmapped_ticket_rows

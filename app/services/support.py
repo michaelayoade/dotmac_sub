@@ -192,7 +192,9 @@ def is_crm_origin_ticket(ticket: Ticket) -> bool:
 
 
 def crm_ticket_user_writes_locked(ticket: Ticket) -> bool:
-    return is_crm_origin_ticket(ticket) and not settings.crm_ticket_native_writes_enabled
+    return (
+        is_crm_origin_ticket(ticket) and not settings.crm_ticket_native_writes_enabled
+    )
 
 
 def _assert_crm_ticket_user_writes_enabled(ticket: Ticket, action: str) -> None:
@@ -1318,7 +1320,10 @@ class Tickets:
                 confirmation.get("grace_hours") or default_grace_hours or 24
             )
             resolved_at = _as_utc(ticket.resolved_at)
-            if resolved_at is None or resolved_at + timedelta(hours=grace_hours) > clock:
+            if (
+                resolved_at is None
+                or resolved_at + timedelta(hours=grace_hours) > clock
+            ):
                 continue
             token_row = (
                 db.query(TicketAccessToken)
@@ -1343,7 +1348,10 @@ class Tickets:
                 db.rollback()
                 logger.exception(
                     "ticket_auto_confirm_failed",
-                    extra={"event": "ticket_auto_confirm_failed", "ticket_id": str(ticket.id)},
+                    extra={
+                        "event": "ticket_auto_confirm_failed",
+                        "ticket_id": str(ticket.id),
+                    },
                 )
         return confirmed
 
@@ -1926,7 +1934,8 @@ class TicketAccessTokens:
             ticket_id=ticket.id,
             token=secrets.token_urlsafe(32),
             purpose=purpose,
-            expires_at=_now() + timedelta(days=ttl_days or TicketAccessTokens._TTL_DAYS),
+            expires_at=_now()
+            + timedelta(days=ttl_days or TicketAccessTokens._TTL_DAYS),
             is_active=True,
         )
         db.add(token_row)
@@ -1968,8 +1977,10 @@ class TicketAccessTokens:
     @staticmethod
     def action_urls(token_row: TicketAccessToken) -> dict[str, str | None]:
         base_url = (
-            os.getenv("APP_URL") or os.getenv("PUBLIC_BASE_URL") or ""
-        ).strip().rstrip("/")
+            (os.getenv("APP_URL") or os.getenv("PUBLIC_BASE_URL") or "")
+            .strip()
+            .rstrip("/")
+        )
         if not base_url:
             return {"confirm_url": None, "dispute_url": None}
         token = token_row.token

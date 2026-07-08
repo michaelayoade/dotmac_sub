@@ -309,9 +309,7 @@ def test_resolution_confirmation_rejects_closed_ticket(db_session, subscriber):
     assert exc.value.status_code == 409
 
 
-def test_resolution_confirmation_respects_crm_origin_write_lock(
-    db_session, subscriber
-):
+def test_resolution_confirmation_respects_crm_origin_write_lock(db_session, subscriber):
     ticket = support_service.tickets.create(
         db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
     )
@@ -326,9 +324,7 @@ def test_resolution_confirmation_respects_crm_origin_write_lock(
     assert "still owned by CRM" in str(exc.value.detail)
 
 
-def test_native_ticket_writes_remain_enabled_before_crm_cutover(
-    db_session, subscriber
-):
+def test_native_ticket_writes_remain_enabled_before_crm_cutover(db_session, subscriber):
     ticket = support_service.tickets.create(
         db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
     )
