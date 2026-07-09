@@ -2016,9 +2016,10 @@ class TicketAccessTokens:
         if not base_url:
             return {"confirm_url": None, "dispute_url": None}
         token = token_row.token
+        page_url = f"{base_url}/ticket-confirm/{token}"
         return {
-            "confirm_url": f"{base_url}/api/v1/ticket-confirm/{token}/confirm",
-            "dispute_url": f"{base_url}/api/v1/ticket-confirm/{token}/dispute",
+            "confirm_url": page_url,
+            "dispute_url": page_url,
         }
 
 
