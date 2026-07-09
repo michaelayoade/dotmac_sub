@@ -174,6 +174,7 @@ from app.models.field_location import (  # noqa: F401
     FieldTechLocationPing,
     FieldTechPresence,
 )
+from app.models.field_note import FieldWorkOrderNote  # noqa: F401
 from app.models.fup import (  # noqa: F401
     FupAction,
     FupConsumptionPeriod,
