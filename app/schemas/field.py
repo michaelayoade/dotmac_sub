@@ -115,6 +115,29 @@ class FieldOpenTicketItem(BaseModel):
     status: str | None = None
 
 
+class FieldAttachmentRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    crm_work_order_id: str
+    note_id: UUID | None = None
+    kind: str
+    file_name: str
+    mime_type: str
+    size_bytes: int
+    latitude: float | None = None
+    longitude: float | None = None
+    captured_at: datetime | None = None
+    signer_name: str | None = None
+    uploaded_by_person_id: UUID
+    uploaded_by_system_user_id: UUID | None = None
+    client_ref: UUID | None = None
+    asset_type: str | None = None
+    asset_id: UUID | None = None
+    created_at: datetime
+    download_path: str
+
+
 class FieldNoteCreate(BaseModel):
     body: str = Field(min_length=1, max_length=10000)
     is_internal: bool = True
@@ -130,7 +153,7 @@ class FieldNoteRead(BaseModel):
     author_person_id: UUID | None = None
     author_name: str | None = None
     created_at: datetime
-    attachments: list[dict[str, Any]] = Field(default_factory=list)
+    attachments: list[FieldAttachmentRead] = Field(default_factory=list)
 
 
 class FieldWorkLogRead(BaseModel):
@@ -188,7 +211,7 @@ class FieldJobDetail(BaseModel):
     recent_visits: list[FieldVisitHistoryItem] = Field(default_factory=list)
     open_tickets: list[FieldOpenTicketItem] = Field(default_factory=list)
     notes: list[FieldNoteRead] = Field(default_factory=list)
-    attachments: list[dict[str, Any]] = Field(default_factory=list)
+    attachments: list[FieldAttachmentRead] = Field(default_factory=list)
     materials: list[dict[str, Any]] = Field(default_factory=list)
     material_requests: list[dict[str, Any]] = Field(default_factory=list)
     worklogs: list[FieldWorkLogRead] = Field(default_factory=list)

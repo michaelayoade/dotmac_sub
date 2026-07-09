@@ -22,6 +22,7 @@ from app.models.subscriber import Subscriber
 from app.models.system_user import SystemUser
 from app.models.work_order_mirror import WorkOrderMirror
 from app.schemas.field import (
+    FieldAttachmentRead,
     FieldCustomer,
     FieldJobDetail,
     FieldJobLocation,
@@ -278,12 +279,19 @@ class FieldJobs:
         if row is None:
             raise HTTPException(status_code=404, detail="Job not found")
         subscriber = db.get(Subscriber, row.subscriber_id)
+        from app.services.field.attachments import field_attachments
         from app.services.field.notes import field_notes
         from app.services.field.worklogs import field_worklogs
 
         notes = [
             FieldNoteRead(**note)
             for note in field_notes.list_for_job(db, principal, crm_work_order_id)
+        ]
+        attachments = [
+            FieldAttachmentRead(**attachment)
+            for attachment in field_attachments.list(
+                db, principal, crm_work_order_id=crm_work_order_id
+            )
         ]
         worklogs = [
             FieldWorkLogRead(**worklog)
@@ -297,6 +305,7 @@ class FieldJobs:
             project_id=row.crm_project_id,
             access_notes=row.access_notes,
             notes=notes,
+            attachments=attachments,
             worklogs=worklogs,
             history=[],
         )
