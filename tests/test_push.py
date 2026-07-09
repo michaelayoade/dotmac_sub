@@ -4,6 +4,8 @@ import uuid
 
 from app.api import me as me_api
 from app.models.device_token import DeviceToken
+from app.models.subscriber import UserType
+from app.models.system_user import SystemUser
 from app.schemas.notification import PushTokenRegister
 from app.services import push as push_service
 
@@ -24,6 +26,36 @@ def test_register_upserts_and_lists_active(db_session, subscriber):
     rows = db_session.query(DeviceToken).filter(DeviceToken.token == "tok-1").all()
     assert len(rows) == 1
     assert rows[0].platform == "ios"
+    assert rows[0].system_user_id is None
+
+
+def test_system_user_token_moves_existing_token_from_subscriber(db_session, subscriber):
+    user = SystemUser(
+        first_name="Ade",
+        last_name="Tech",
+        email=f"ade-{uuid.uuid4().hex[:8]}@example.com",
+        user_type=UserType.system_user,
+    )
+    db_session.add(user)
+    db_session.commit()
+    push_service.register_token(db_session, str(subscriber.id), "tok-shared", "android")
+
+    row = push_service.register_system_user_token(
+        db_session,
+        str(user.id),
+        "tok-shared",
+        platform="ios",
+        app_version="1.2.0",
+    )
+
+    assert row.subscriber_id is None
+    assert row.system_user_id == user.id
+    assert row.platform == "ios"
+    assert row.app_version == "1.2.0"
+    assert push_service.active_tokens(db_session, str(subscriber.id)) == []
+    assert push_service.active_system_user_tokens(db_session, str(user.id)) == [
+        "tok-shared"
+    ]
 
 
 def test_unregister_deactivates_and_is_idempotent(db_session, subscriber):

@@ -40,12 +40,45 @@ def register_token(
     existing = db.query(DeviceToken).filter(DeviceToken.token == token).first()
     if existing:
         existing.subscriber_id = sid
+        existing.system_user_id = None
         existing.platform = platform or existing.platform
         existing.is_active = True
         existing.last_seen_at = datetime.now(UTC)
         db.commit()
         return existing
     row = DeviceToken(subscriber_id=sid, token=token, platform=platform, is_active=True)
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def register_system_user_token(
+    db: Session,
+    system_user_id: str,
+    token: str,
+    platform: str | None = None,
+    app_version: str | None = None,
+) -> DeviceToken:
+    """Upsert a field/staff device token and bind it to a SystemUser."""
+    uid = coerce_uuid(system_user_id)
+    existing = db.query(DeviceToken).filter(DeviceToken.token == token).first()
+    if existing:
+        existing.subscriber_id = None
+        existing.system_user_id = uid
+        existing.platform = platform or existing.platform
+        existing.app_version = app_version or existing.app_version
+        existing.is_active = True
+        existing.last_seen_at = datetime.now(UTC)
+        db.commit()
+        return existing
+    row = DeviceToken(
+        system_user_id=uid,
+        token=token,
+        platform=platform,
+        app_version=app_version,
+        is_active=True,
+    )
     db.add(row)
     db.commit()
     db.refresh(row)
@@ -67,6 +100,23 @@ def unregister_token(db: Session, subscriber_id: str, token: str) -> bool:
     return True
 
 
+def unregister_system_user_token(
+    db: Session, system_user_id: str, device_id: str
+) -> bool:
+    """Deactivate one staff device owned by the given SystemUser."""
+    row = (
+        db.query(DeviceToken)
+        .filter(DeviceToken.id == coerce_uuid(device_id))
+        .filter(DeviceToken.system_user_id == coerce_uuid(system_user_id))
+        .first()
+    )
+    if not row:
+        return False
+    row.is_active = False
+    db.commit()
+    return True
+
+
 def active_tokens(db: Session, subscriber_id: str) -> list[str]:
     rows = (
         db.query(DeviceToken.token)
@@ -75,6 +125,26 @@ def active_tokens(db: Session, subscriber_id: str) -> list[str]:
         .all()
     )
     return [r[0] for r in rows]
+
+
+def active_system_user_tokens(db: Session, system_user_id: str) -> list[str]:
+    rows = (
+        db.query(DeviceToken.token)
+        .filter(DeviceToken.system_user_id == coerce_uuid(system_user_id))
+        .filter(DeviceToken.is_active.is_(True))
+        .all()
+    )
+    return [r[0] for r in rows]
+
+
+def list_system_user_devices(db: Session, system_user_id: str) -> list[DeviceToken]:
+    return (
+        db.query(DeviceToken)
+        .filter(DeviceToken.system_user_id == coerce_uuid(system_user_id))
+        .filter(DeviceToken.is_active.is_(True))
+        .order_by(DeviceToken.last_seen_at.desc())
+        .all()
+    )
 
 
 # --- FCM transport (config-gated) ------------------------------------------

@@ -27,16 +27,23 @@ class DeviceToken(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    subscriber_id: Mapped[uuid.UUID] = mapped_column(
+    subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("subscribers.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
+        index=True,
+    )
+    system_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("system_users.id", ondelete="CASCADE"),
+        nullable=True,
         index=True,
     )
     # The opaque FCM/APNs registration token. Unique so re-registration from the
     # same device upserts rather than duplicating.
     token: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
     platform: Mapped[str | None] = mapped_column(String(16))  # ios | android | web
+    app_version: Mapped[str | None] = mapped_column(String(40))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, nullable=False

@@ -4,7 +4,26 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class DeviceTokenRegister(BaseModel):
+    platform: str = Field(min_length=1, max_length=20)
+    fcm_token: str = Field(min_length=1, max_length=512)
+    app_version: str | None = Field(default=None, max_length=40)
+
+
+class DeviceTokenRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    subscriber_id: UUID | None = None
+    system_user_id: UUID | None = None
+    platform: str | None = None
+    app_version: str | None = None
+    is_active: bool
+    created_at: datetime
+    last_seen_at: datetime
 
 
 class FieldMeResponse(BaseModel):
