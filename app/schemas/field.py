@@ -153,6 +153,22 @@ class FieldScheduleEntry(BaseModel):
     reference_id: str
 
 
+class FieldRouteStop(BaseModel):
+    sequence: int
+    work_order_id: str
+    work_order_mirror_id: UUID
+    title: str
+    distance_km: float | None = None
+    leg_km: float | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    address_text: str | None = None
+
+
+class FieldRouteResponse(BaseModel):
+    route: list[FieldRouteStop]
+
+
 class FieldMapAsset(BaseModel):
     id: UUID
     type: str
