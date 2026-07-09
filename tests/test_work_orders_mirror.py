@@ -38,6 +38,13 @@ def _crm_resp():
                 "scheduled_start": "2026-06-30T09:00:00+00:00",
                 "estimated_arrival_at": "2026-06-30T09:30:00+00:00",
                 "estimated_duration_minutes": 60,
+                "started_at": "2026-06-30T09:32:00+00:00",
+                "total_active_seconds": 120,
+                "ticket_id": "ticket-1",
+                "project_id": "project-1",
+                "required_skills": ["fiber"],
+                "tags": ["customer-facing"],
+                "access_notes": "Call on arrival",
                 "created_at": "2026-06-29T10:00:00+00:00",
             }
         ],
@@ -62,6 +69,13 @@ def test_reconcile_upserts_and_marks_synced(db_session):
     assert row.status == "dispatched"
     assert row.technician_name == "Ade Tech"
     assert row.estimated_duration_minutes == 60
+    assert row.started_at is not None
+    assert row.total_active_seconds == 120
+    assert row.crm_ticket_id == "ticket-1"
+    assert row.crm_project_id == "project-1"
+    assert row.required_skills == ["fiber"]
+    assert row.tags == ["customer-facing"]
+    assert row.access_notes == "Call on arrival"
     assert db_session.get(WorkOrderSyncState, sub.id) is not None
 
 
@@ -80,6 +94,8 @@ def test_read_counts_upcoming_and_excludes_terminal(db_session):
     assert out["total"] == 1
     assert out["upcoming"] == 1
     assert out["work_orders"][0]["technician_name"] == "Ade Tech"
+    assert out["work_orders"][0]["started_at"] is not None
+    assert out["work_orders"][0]["total_active_seconds"] == 120
 
 
 def test_read_serves_mirror_when_crm_unreachable(db_session):
@@ -106,6 +122,9 @@ def test_webhook_dispatched_upserts_and_pushes(db_session):
                 "title": "Install",
                 "status": "dispatched",
                 "technician_name": "Ade Tech",
+                "address": "12 Test St",
+                "started_at": "2026-06-30T09:32:00+00:00",
+                "ticket_id": "ticket-1",
             },
         )
     assert out["status"] == "ok"
@@ -113,6 +132,9 @@ def test_webhook_dispatched_upserts_and_pushes(db_session):
     row = db_session.query(WorkOrderMirror).filter_by(crm_work_order_id="wo9").one()
     assert row.status == "dispatched"
     assert row.technician_name == "Ade Tech"
+    assert row.address == "12 Test St"
+    assert row.started_at is not None
+    assert row.crm_ticket_id == "ticket-1"
 
 
 def test_webhook_completed_sets_completed_at(db_session):
