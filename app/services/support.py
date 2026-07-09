@@ -47,6 +47,7 @@ from app.services import notification as notification_service
 from app.services import numbering as numbering_service
 from app.services import provisioning as provisioning_service
 from app.services import support_ticket_settings as support_ticket_settings_service
+from app.services import ticket_validation
 from app.services.audit_helpers import log_audit_event
 from app.services.common import apply_ordering, apply_pagination
 from app.services.customer_identity_resolution import (
@@ -1053,6 +1054,7 @@ class Tickets:
     def create(
         db: Session, payload: TicketCreate, actor_id: str | None = None, request=None
     ) -> Ticket:
+        ticket_validation.validate_ticket_creation(db, payload)
         data = payload.model_dump()
         data["status"] = data.get(
             "status"
