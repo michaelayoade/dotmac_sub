@@ -77,9 +77,7 @@ def delete_skill(skill_id: str, db: Session = Depends(get_db)):
     response_model=TechnicianProfileRead,
     status_code=status.HTTP_201_CREATED,
 )
-def create_technician(
-    payload: TechnicianProfileCreate, db: Session = Depends(get_db)
-):
+def create_technician(payload: TechnicianProfileCreate, db: Session = Depends(get_db)):
     return dispatch_service.technician_profiles.create(db, payload)
 
 
@@ -234,9 +232,7 @@ def update_availability_block(
     response_model=DispatchRuleRead,
     status_code=status.HTTP_201_CREATED,
 )
-def create_dispatch_rule(
-    payload: DispatchRuleCreate, db: Session = Depends(get_db)
-):
+def create_dispatch_rule(payload: DispatchRuleCreate, db: Session = Depends(get_db)):
     return dispatch_service.dispatch_rules.create(db, payload)
 
 
