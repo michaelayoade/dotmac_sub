@@ -137,3 +137,15 @@ class FieldScheduleEntry(BaseModel):
     end_at: datetime | None = None
     title: str
     reference_id: str
+
+
+class FieldMapAsset(BaseModel):
+    id: UUID
+    type: str
+    title: str
+    subtitle: str | None = None
+    latitude: float
+    longitude: float
+    status: str | None = None
+    updated_at: datetime | None = None
+    distance_m: float | None = None
