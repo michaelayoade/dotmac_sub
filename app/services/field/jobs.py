@@ -276,6 +276,7 @@ class FieldJobs:
         subscriber = db.get(Subscriber, row.subscriber_id)
         from app.services.field.attachments import field_attachments
         from app.services.field.equipment import field_equipment
+        from app.services.field.expense_requests import field_expense_requests
         from app.services.field.material_requests import field_material_requests
         from app.services.field.materials import field_materials
         from app.services.field.notes import field_notes
@@ -291,6 +292,13 @@ class FieldJobs:
             access_notes=row.access_notes,
             materials=field_materials.list_for_job(db, principal, crm_work_order_id),
             material_requests=field_material_requests.list_mine(
+                db,
+                principal,
+                crm_work_order_id=crm_work_order_id,
+                limit=50,
+                offset=0,
+            ),
+            expense_requests=field_expense_requests.list_mine(
                 db,
                 principal,
                 crm_work_order_id=crm_work_order_id,
