@@ -129,7 +129,9 @@ def test_skill_technician_skill_and_rule_lifecycle(db_session):
     assert tech_skill.is_primary is True
     assert rule.skill_ids == [str(skill.id)]
     assert dispatch.skills.list(db_session)[0].name == "fiber_splicing"
-    assert dispatch.dispatch_rules.list(db_session, work_type="install")[0].id == rule.id
+    assert (
+        dispatch.dispatch_rules.list(db_session, work_type="install")[0].id == rule.id
+    )
 
 
 def test_shift_and_availability_validate_time_windows(db_session):
@@ -189,7 +191,9 @@ def test_assignment_queue_resolves_crm_work_order_and_updates_status(db_session)
         WorkOrderAssignmentQueueUpdate(status="assigned"),
     )
     assert updated.status == "assigned"
-    assert dispatch.assignment_queue.list(db_session, status="assigned")[0].id == queued.id
+    assert (
+        dispatch.assignment_queue.list(db_session, status="assigned")[0].id == queued.id
+    )
 
 
 def test_assignment_queue_rejects_unknown_work_order(db_session):
