@@ -297,6 +297,7 @@ def ticket_add_comment(
     ticket_id: UUID,
     body: str = Form(...),
     is_internal: bool = Form(False),
+    mentions: str | None = Form(default=None),
     attachments: list[UploadFile] = File(default=[]),
     db: Session = Depends(get_db),
 ):
@@ -308,6 +309,7 @@ def ticket_add_comment(
         actor_id=actor_id,
         body=body,
         is_internal=is_internal,
+        mentions=mentions,
         attachments=attachments,
     )
     return RedirectResponse(url=f"/admin/support/tickets/{ticket_id}", status_code=303)

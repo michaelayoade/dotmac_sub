@@ -22,6 +22,7 @@ from app.schemas.support import (
 )
 from app.services import support as support_service
 from app.services import support_ticket_settings as support_ticket_settings_service
+from app.services import ticket_mentions
 from app.services.file_storage import file_uploads
 
 logger = logging.getLogger(__name__)
@@ -580,6 +581,7 @@ def add_ticket_comment_from_form(
     body: str,
     is_internal: bool,
     attachments: list,
+    mentions: str | None = None,
 ):
     uploaded = upload_ticket_attachments(
         db,
@@ -594,13 +596,51 @@ def add_ticket_comment_from_form(
         actor_id=actor_id,
         uploaded=uploaded,
     )
-    return support_service.tickets.create_comment(
+    comment = support_service.tickets.create_comment(
         db,
         ticket_id,
         payload,
         actor_id=actor_id,
         request=request,
     )
+    mentioned_agent_ids = _parse_mentions_payload(mentions)
+    if mentioned_agent_ids:
+        try:
+            ticket = support_service.tickets.get(db, ticket_id)
+            ticket_mentions.notify_ticket_comment_mentions(
+                db,
+                ticket_id=str(ticket.id),
+                ticket_number=ticket.number,
+                ticket_title=ticket.title,
+                comment_preview=body[:300],
+                mentioned_agent_ids=mentioned_agent_ids,
+                actor_person_id=actor_id,
+            )
+        except Exception:
+            logger.debug("ticket_comment_staff_mention_failed", exc_info=True)
+    return comment
+
+
+def _parse_mentions_payload(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    mentions: list[str] = []
+    for item in parsed:
+        if isinstance(item, str):
+            token = item.strip()
+        elif isinstance(item, Mapping):
+            token = str(item.get("id") or "").strip()
+        else:
+            token = ""
+        if token and token not in mentions:
+            mentions.append(token)
+    return mentions
 
 
 def auto_assign_ticket(
@@ -884,6 +924,7 @@ def build_ticket_detail_context(db: Session, *, ticket_lookup: str) -> dict:
         "all_priorities": priority_options,
         "all_channels": [item.value for item in TicketChannel],
         "people_options": subscribers,
+        "mention_agents": ticket_mentions.list_ticket_mention_users(db),
         "staff_options": staff,
         "staff_lookup": _label_lookup(staff),
         "subscriber_lookup": _label_lookup(subscribers),
