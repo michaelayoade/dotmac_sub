@@ -182,6 +182,19 @@ def test_customer_detail_includes_crm_sync_link_status(db_session, subscriber):
     )
 
 
+def test_customer_detail_includes_masked_identity_profile(db_session, subscriber):
+    subscriber.user_type = UserType.customer
+    subscriber.nin = "12345678901"
+    subscriber.metadata_ = {"nin_verified": True}
+    db_session.commit()
+
+    context = build_customer_detail_snapshot(db_session, str(subscriber.id))
+
+    assert context["identity_profile"]["nin_masked"] == "123456*****"
+    assert context["identity_profile"]["nin_verified"] is True
+    assert "date_of_birth" in context["identity_profile"]["missing"]
+
+
 def test_customer_detail_includes_crm_sync_dead_letter(db_session, subscriber):
     subscriber.user_type = UserType.customer
     failure = CrmSyncFailure(

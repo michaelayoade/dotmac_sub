@@ -219,8 +219,8 @@ def test_delete_marks_skill_and_profile_inactive(db_session):
     dispatch.skills.delete(db_session, str(skill.id))
     dispatch.technician_profiles.delete(db_session, str(profile.id))
 
-    assert all(row.id != skill.id for row in dispatch.skills.list(db_session))
-    assert all(
-        row.id != profile.id for row in dispatch.technician_profiles.list(db_session)
-    )
+    assert skill.id not in {row.id for row in dispatch.skills.list(db_session)}
+    assert profile.id not in {
+        row.id for row in dispatch.technician_profiles.list(db_session)
+    }
     assert db_session.get(TechnicianProfile, profile.id).is_active is False

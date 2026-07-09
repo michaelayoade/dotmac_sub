@@ -1,7 +1,7 @@
 """Add native field attachments.
 
-Revision ID: 229_field_attachments
-Revises: 228_field_worklogs
+Revision ID: 230_field_attachments
+Revises: 229_field_worklogs
 Create Date: 2026-07-09
 """
 
@@ -13,8 +13,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "229_field_attachments"
-down_revision = "228_field_worklogs"
+revision = "230_field_attachments"
+down_revision = "229_field_worklogs"
 branch_labels = None
 depends_on = None
 

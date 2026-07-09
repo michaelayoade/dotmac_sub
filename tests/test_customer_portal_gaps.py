@@ -363,20 +363,53 @@ class TestRestrictedContextHelpers:
         result = get_restricted_since(subscriber)
         assert result == datetime(2026, 3, 10, 12, 0, tzinfo=UTC)
 
-    def test_total_outstanding_balance_queries_positive_active_balances(self) -> None:
+    def test_total_outstanding_balance_uses_negative_available_balance(self) -> None:
         from app.services.customer_portal_context import get_total_outstanding_balance
 
-        scalar_query = MagicMock()
-        scalar_query.filter.return_value = scalar_query
-        scalar_query.scalar.return_value = 125.5
         db = MagicMock()
-        db.query.return_value = scalar_query
-
-        total = get_total_outstanding_balance(
-            db, "00000000-0000-0000-0000-000000000001"
-        )
+        with patch(
+            "app.services.customer_portal_context.get_available_balance",
+            return_value=-125.5,
+        ):
+            total = get_total_outstanding_balance(
+                db, "00000000-0000-0000-0000-000000000001"
+            )
 
         assert total == 125.5
+
+    def test_total_outstanding_balance_excludes_reconciliation_hold(
+        self, db_session, subscriber
+    ) -> None:
+        from decimal import Decimal
+
+        from app.models.billing import Invoice, InvoiceStatus
+        from app.services.customer_portal_context import get_total_outstanding_balance
+
+        db_session.add_all(
+            [
+                Invoice(
+                    account_id=subscriber.id,
+                    status=InvoiceStatus.overdue,
+                    total=Decimal("100.00"),
+                    balance_due=Decimal("100.00"),
+                    is_active=True,
+                    metadata_={},
+                ),
+                Invoice(
+                    account_id=subscriber.id,
+                    status=InvoiceStatus.overdue,
+                    total=Decimal("75.00"),
+                    balance_due=Decimal("75.00"),
+                    is_active=True,
+                    metadata_={"reconciliation_hold": True},
+                ),
+            ]
+        )
+        db_session.commit()
+
+        total = get_total_outstanding_balance(db_session, str(subscriber.id))
+
+        assert total == 100.0
 
 
 class TestPlanChangeUiHelpers:
