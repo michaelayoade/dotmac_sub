@@ -4290,6 +4290,9 @@ def ticket_settings_page(request: Request, db: Session = Depends(get_db)):
         "region_options": support_ticket_settings_service.list_region_options(db),
         "service_team_options": support_ticket_settings_service.list_service_teams(db),
         "auto_assign_enabled": support_ticket_settings_service.auto_assign_enabled(db),
+        "auto_assign_max_open_tickets": support_ticket_settings_service.auto_assign_max_open_tickets(
+            db
+        ),
         "routing_rules": support_ticket_settings_service.region_assignment_rules(db),
         "service_team_members": support_ticket_settings_service.service_team_members(
             db
@@ -4298,7 +4301,16 @@ def ticket_settings_page(request: Request, db: Session = Depends(get_db)):
         "status_colors": support_ticket_settings_service.status_color_options(db),
         "status_color_variants": support_ticket_settings_service.STATUS_COLOR_VARIANTS,
         "staff_options": staff_options,
+        "assignment_rules": support_ticket_settings_service.list_assignment_rules(db),
+        "assignment_strategies": ["round_robin", "least_loaded"],
+        "assignment_targets": [
+            "technician",
+            "technical_supervisor",
+            "site_coordinator",
+        ],
         "saved": request.query_params.get("saved") == "1",
+        "rule_saved": request.query_params.get("rule_saved") == "1",
+        "rule_deleted": request.query_params.get("rule_deleted") == "1",
         "errors": [],
     }
     return templates.TemplateResponse(
@@ -4352,6 +4364,7 @@ def ticket_settings_update(
             service_team_ids=service_team_ids,
             service_team_labels=service_team_labels,
             auto_assign=form.get("auto_assign_enabled") == "1",
+            auto_assign_max_open_tickets=form.get("auto_assign_max_open_tickets"),
             routing_regions=routing_regions,
             routing_ticket_manager_person_ids=routing_ticket_manager_person_ids,
             routing_site_coordinator_person_ids=routing_site_coordinator_person_ids,
@@ -4398,6 +4411,9 @@ def ticket_settings_update(
                 "auto_assign_enabled": support_ticket_settings_service.auto_assign_enabled(
                     db
                 ),
+                "auto_assign_max_open_tickets": support_ticket_settings_service.auto_assign_max_open_tickets(
+                    db
+                ),
                 "routing_rules": support_ticket_settings_service.region_assignment_rules(
                     db
                 ),
@@ -4410,11 +4426,82 @@ def ticket_settings_update(
                 ),
                 "status_color_variants": support_ticket_settings_service.STATUS_COLOR_VARIANTS,
                 "staff_options": support_service.list_assignment_people(db),
+                "assignment_rules": support_ticket_settings_service.list_assignment_rules(
+                    db
+                ),
+                "assignment_strategies": ["round_robin", "least_loaded"],
+                "assignment_targets": [
+                    "technician",
+                    "technical_supervisor",
+                    "site_coordinator",
+                ],
                 "saved": False,
+                "rule_saved": False,
+                "rule_deleted": False,
                 "errors": errors,
             },
         ),
         status_code=400,
+    )
+
+
+def _split_form_values(values: list[str]) -> list[str]:
+    parsed: list[str] = []
+    for value in values:
+        for item in str(value or "").split(","):
+            text = item.strip()
+            if text and text not in parsed:
+                parsed.append(text)
+    return parsed
+
+
+@router.post(
+    "/ticket-settings/assignment-rules",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def ticket_assignment_rule_create(
+    name: str = Form(...),
+    priority: str = Form("0"),
+    strategy: str = Form("round_robin"),
+    team_id: str | None = Form(default=None),
+    ticket_types: list[str] = Form(default=[]),
+    regions: list[str] = Form(default=[]),
+    assignee_person_id: str | None = Form(default=None),
+    assignment_target: str = Form("technician"),
+    is_active: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+):
+    try:
+        support_ticket_settings_service.create_assignment_rule(
+            db,
+            name=name,
+            priority=priority,
+            strategy=strategy,
+            team_id=team_id,
+            ticket_types=_split_form_values(ticket_types),
+            regions=_split_form_values(regions),
+            assignee_person_id=assignee_person_id,
+            assignment_target=assignment_target,
+            is_active=is_active == "1",
+        )
+    except Exception:
+        db.rollback()
+        raise
+    return RedirectResponse(
+        url="/admin/system/ticket-settings?rule_saved=1", status_code=303
+    )
+
+
+@router.post(
+    "/ticket-settings/assignment-rules/{rule_id}/delete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def ticket_assignment_rule_delete(rule_id: str, db: Session = Depends(get_db)):
+    support_ticket_settings_service.delete_assignment_rule(db, rule_id)
+    return RedirectResponse(
+        url="/admin/system/ticket-settings?rule_deleted=1", status_code=303
     )
 
 

@@ -332,6 +332,47 @@ def test_get_billing_page_includes_payments_and_credit_notes_in_activity(
     assert payment_items[0].payment_id == str(payment.id)
 
 
+def test_get_billing_page_activity_excludes_internal_cutover_corrections(
+    monkeypatch, db_session, subscriber
+):
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_billing.get_available_balance",
+        lambda *_args, **_kwargs: Decimal("2500.00"),
+    )
+    db_session.add(
+        LedgerEntry(
+            account_id=subscriber.id,
+            entry_type=LedgerEntryType.debit,
+            source=LedgerSource.adjustment,
+            amount=Decimal("100.00"),
+            currency="NGN",
+            memo="Correction: cutover reconstructed balance true-up",
+            is_active=True,
+        )
+    )
+    db_session.add(
+        LedgerEntry(
+            account_id=subscriber.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.adjustment,
+            amount=Decimal("500.00"),
+            currency="NGN",
+            memo="Manual customer credit",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    page = get_billing_page(
+        db_session,
+        {"account_id": str(subscriber.id), "username": "customer@example.com"},
+    )
+
+    titles = [item.title for item in page["billing_activity"]]
+    assert "Correction: cutover reconstructed balance true-up" not in titles
+    assert "Manual customer credit" in titles
+
+
 def test_get_billing_page_activity_excludes_failed_and_canceled_payments(
     monkeypatch, db_session, subscriber
 ):

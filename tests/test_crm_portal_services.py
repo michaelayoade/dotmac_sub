@@ -19,6 +19,9 @@ def _ticket(
     priority="normal",
     created="2026-01-01T00:00:00+00:00",
     updated="2026-01-02T00:00:00+00:00",
+    due="2026-01-03T00:00:00+00:00",
+    resolved=None,
+    closed=None,
 ) -> Mock:
     """A stand-in for a local support Ticket ORM row."""
     t = Mock()
@@ -31,6 +34,9 @@ def _ticket(
     t.priority = priority
     t.created_at = datetime.fromisoformat(created)
     t.updated_at = datetime.fromisoformat(updated)
+    t.due_at = datetime.fromisoformat(due) if due else None
+    t.resolved_at = datetime.fromisoformat(resolved) if resolved else None
+    t.closed_at = datetime.fromisoformat(closed) if closed else None
     return t
 
 
@@ -194,6 +200,43 @@ def test_reseller_open_tickets_count_returns_none_when_crm_unavailable(
 
 
 # ── Customer Portal: Tickets (sourced from the local support module) ──────
+
+
+def test_ticket_display_maps_cover_native_sub_statuses_and_priorities() -> None:
+    for status in [
+        "new",
+        "open",
+        "pending",
+        "waiting_on_customer",
+        "lastmile_rerun",
+        "site_under_construction",
+        "on_hold",
+        "pending_confirmation",
+        "resolved",
+        "closed",
+        "canceled",
+        "merged",
+    ]:
+        assert status in crm_portal.TICKET_STATUS_DISPLAY
+        assert status in crm_portal.TICKET_STATUS_COLORS
+
+    for priority in ["lower", "low", "medium", "normal", "high", "urgent"]:
+        assert priority in crm_portal.TICKET_PRIORITY_DISPLAY
+        assert priority in crm_portal.TICKET_PRIORITY_COLORS
+
+
+def test_ticket_to_dict_includes_native_sla_resolution_timestamps() -> None:
+    ticket = _ticket(
+        due="2026-01-03T00:00:00+00:00",
+        resolved="2026-01-04T00:00:00+00:00",
+        closed="2026-01-05T00:00:00+00:00",
+    )
+
+    payload = crm_portal._ticket_to_dict(ticket)
+
+    assert payload["due_at"] == "2026-01-03T00:00:00+00:00"
+    assert payload["resolved_at"] == "2026-01-04T00:00:00+00:00"
+    assert payload["closed_at"] == "2026-01-05T00:00:00+00:00"
 
 
 def test_tickets_list_context_skips_blank_subscriber_ids(monkeypatch) -> None:
