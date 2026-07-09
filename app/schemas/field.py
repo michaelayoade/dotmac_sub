@@ -500,6 +500,23 @@ class LocationIngestResponse(BaseModel):
     transitions: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class VoiceExtractRequest(BaseModel):
+    transcript: str = Field(min_length=1, max_length=4000)
+    context: str | None = Field(default=None, max_length=120)
+    asr_confidence: float | None = Field(default=None, ge=0, le=1)
+
+
+class VoiceExtractResponse(BaseModel):
+    work_status: str | None = None
+    equipment_serial: str | None = None
+    signal_readings: dict[str, str] = Field(default_factory=dict)
+    materials_used: list[dict[str, str | None]] = Field(default_factory=list)
+    notes: str
+    confidence: float | None = None
+    requires_review: bool
+    review_reasons: list[str] = Field(default_factory=list)
+
+
 class FieldMapAsset(BaseModel):
     id: UUID
     type: str
