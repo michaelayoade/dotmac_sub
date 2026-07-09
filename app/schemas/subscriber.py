@@ -4,7 +4,14 @@ from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from app.models.catalog import BillingMode
 from app.models.subscriber import (
@@ -15,6 +22,7 @@ from app.models.subscriber import (
     SubscriberCategory,
     SubscriberStatus,
 )
+from app.services.nin_matching import normalize_nin
 
 
 class OrganizationBase(BaseModel):
@@ -111,6 +119,7 @@ class SubscriberBase(BaseModel):
     email: EmailStr
     email_verified: bool = False
     phone: str | None = Field(default=None, max_length=40)
+    nin: str | None = Field(default=None, max_length=11)
     date_of_birth: date | None = None
     gender: Gender = Gender.unknown
     preferred_contact_method: ContactMethod | None = None
@@ -164,6 +173,18 @@ class SubscriberBase(BaseModel):
     notes: str | None = None
     metadata_: dict | None = Field(default=None, serialization_alias="metadata")
 
+    @field_validator("nin", mode="before")
+    @classmethod
+    def _validate_nin(cls, value):
+        if value is None:
+            return None
+        normalized = normalize_nin(str(value))
+        if not normalized:
+            return None
+        if len(normalized) != 11:
+            raise ValueError("NIN must be exactly 11 digits")
+        return normalized
+
 
 class SubscriberCreate(SubscriberBase):
     # Backwards-compat: allow "create" to target an existing person/subscriber row.
@@ -199,6 +220,7 @@ class SubscriberUpdate(BaseModel):
     email: EmailStr | None = None
     email_verified: bool | None = None
     phone: str | None = Field(default=None, max_length=40)
+    nin: str | None = Field(default=None, max_length=11)
     date_of_birth: date | None = None
     gender: Gender | None = None
     preferred_contact_method: ContactMethod | None = None
@@ -251,6 +273,18 @@ class SubscriberUpdate(BaseModel):
 
     notes: str | None = None
     metadata_: dict | None = Field(default=None, serialization_alias="metadata")
+
+    @field_validator("nin", mode="before")
+    @classmethod
+    def _validate_nin(cls, value):
+        if value is None:
+            return None
+        normalized = normalize_nin(str(value))
+        if not normalized:
+            return None
+        if len(normalized) != 11:
+            raise ValueError("NIN must be exactly 11 digits")
+        return normalized
 
 
 class SubscriberRead(SubscriberBase):
