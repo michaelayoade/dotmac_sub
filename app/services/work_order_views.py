@@ -50,7 +50,9 @@ def _subscriber_name(subscriber: Subscriber | None) -> str | None:
     full = " ".join(
         part for part in [subscriber.first_name, subscriber.last_name] if part
     ).strip()
-    return subscriber.company_name or full or subscriber.email or subscriber.account_number
+    return (
+        subscriber.company_name or full or subscriber.email or subscriber.account_number
+    )
 
 
 def _subscriber_snapshot(row: WorkOrderMirror, subscriber: Subscriber | None) -> dict:
@@ -110,9 +112,8 @@ def row_to_item(
 
 
 def _base_query(db: Session):
-    return (
-        db.query(WorkOrderMirror, Subscriber)
-        .join(Subscriber, Subscriber.id == WorkOrderMirror.subscriber_id)
+    return db.query(WorkOrderMirror, Subscriber).join(
+        Subscriber, Subscriber.id == WorkOrderMirror.subscriber_id
     )
 
 
@@ -166,9 +167,7 @@ def list_work_orders(db: Session, filters: WorkOrderListFilters | None = None) -
     offset = max(int(filters.offset or 0), 0)
 
     filtered = _apply_filters(_base_query(db), filters)
-    total = int(
-        filtered.with_entities(func.count(WorkOrderMirror.id)).scalar() or 0
-    )
+    total = int(filtered.with_entities(func.count(WorkOrderMirror.id)).scalar() or 0)
     rows = (
         filtered.order_by(
             WorkOrderMirror.scheduled_start.asc().nullslast(),
@@ -206,12 +205,14 @@ def get_work_order(db: Session, crm_work_order_id: str) -> dict | None:
 def summary(db: Session, filters: WorkOrderListFilters | None = None) -> dict:
     filters = filters or WorkOrderListFilters()
     query = _apply_filters(_base_query(db), filters)
-    rows = query.with_entities(WorkOrderMirror.status, func.count(WorkOrderMirror.id)).group_by(
-        WorkOrderMirror.status
-    )
+    rows = query.with_entities(
+        WorkOrderMirror.status, func.count(WorkOrderMirror.id)
+    ).group_by(WorkOrderMirror.status)
     by_status = {str(status): int(count) for status, count in rows}
     total = sum(by_status.values())
-    terminal = sum(count for status, count in by_status.items() if status in TERMINAL_STATUSES)
+    terminal = sum(
+        count for status, count in by_status.items() if status in TERMINAL_STATUSES
+    )
     open_count = total - terminal
     now = datetime.now(UTC)
     overdue = int(

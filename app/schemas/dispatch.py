@@ -130,7 +130,11 @@ class ShiftUpdate(BaseModel):
 
     @model_validator(mode="after")
     def _valid_window(self) -> ShiftUpdate:
-        if self.start_at is not None and self.end_at is not None and self.end_at <= self.start_at:
+        if (
+            self.start_at is not None
+            and self.end_at is not None
+            and self.end_at <= self.start_at
+        ):
             raise ValueError("end_at must be after start_at")
         return self
 
@@ -163,7 +167,11 @@ class AvailabilityBlockUpdate(BaseModel):
 
     @model_validator(mode="after")
     def _valid_window(self) -> AvailabilityBlockUpdate:
-        if self.start_at is not None and self.end_at is not None and self.end_at <= self.start_at:
+        if (
+            self.start_at is not None
+            and self.end_at is not None
+            and self.end_at <= self.start_at
+        ):
             raise ValueError("end_at must be after start_at")
         return self
 
