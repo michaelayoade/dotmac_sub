@@ -13,11 +13,13 @@ from app.models.notification import (
     NotificationStatus,
 )
 from app.models.provisioning import ServiceOrder
+from app.models.service_team import ServiceTeam, ServiceTeamMember, ServiceTeamType
 from app.models.subscriber import Subscriber, SubscriberContact
 from app.models.subscription_engine import SettingValueType
 from app.models.support import (
     AutomationActionType,
     AutomationTrigger,
+    Ticket,
     TicketAccessToken,
     TicketAssignee,
     TicketChannel,
@@ -27,6 +29,7 @@ from app.models.support import (
     TicketStatus,
 )
 from app.models.system_user import SystemUser
+from app.models.ticket_workflow import TicketAssignmentRule, TicketAssignmentStrategy
 from app.schemas.support import (
     TicketCommentCreate,
     TicketCreate,
@@ -146,6 +149,60 @@ def test_ticket_create_uses_configured_routing_and_sla_policy(db_session, subscr
         .count()
         == 1
     )
+
+
+def test_ticket_auto_assignment_respects_configured_open_limit(db_session, subscriber):
+    team = ServiceTeam(name="Support queue", team_type=ServiceTeamType.support.value)
+    db_session.add(team)
+    db_session.flush()
+    loaded_person_id = uuid4()
+    free_person_id = uuid4()
+    db_session.add_all(
+        [
+            ServiceTeamMember(
+                team_id=team.id, person_id=loaded_person_id, is_active=True
+            ),
+            ServiceTeamMember(
+                team_id=team.id, person_id=free_person_id, is_active=True
+            ),
+            TicketAssignmentRule(
+                name="Support default",
+                priority=100,
+                is_active=True,
+                strategy=TicketAssignmentStrategy.least_loaded.value,
+                team_id=team.id,
+            ),
+            Ticket(
+                title="Existing open ticket",
+                assigned_to_person_id=loaded_person_id,
+                status=TicketStatus.open.value,
+            ),
+        ]
+    )
+    support_ticket_settings_service.update_options(
+        db_session,
+        statuses=["open", "closed", "merged"],
+        priorities=["normal"],
+        ticket_types=["incident"],
+        auto_assign=True,
+        auto_assign_max_open_tickets=0,
+    )
+    db_session.commit()
+
+    ticket = support_service.tickets.create(
+        db_session,
+        TicketCreate(
+            title="New support ticket",
+            description="Needs dispatch",
+            subscriber_id=subscriber.id,
+            customer_account_id=subscriber.id,
+            priority="normal",
+        ),
+        actor_id=str(subscriber.id),
+    )
+
+    assert ticket.assigned_to_person_id == free_person_id
+    assert ticket.assigned_to_person_id != loaded_person_id
 
 
 def test_link_and_merge_form_reject_invalid_target_uuid(db_session):

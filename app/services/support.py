@@ -816,7 +816,13 @@ class Tickets:
             return {"matched": False, "reason": "crm_origin_write_locked"}
         from app.services.ticket_assignment import engine as assignment_engine
 
-        result = assignment_engine.auto_assign_ticket(db, str(ticket.id))
+        result = assignment_engine.auto_assign_ticket(
+            db,
+            str(ticket.id),
+            max_open_tickets=support_ticket_settings_service.auto_assign_max_open_tickets(
+                db
+            ),
+        )
         if result.reason == "no_matching_rule":
             return None
         return result.as_dict()

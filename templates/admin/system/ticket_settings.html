@@ -138,6 +138,10 @@
                         <input type="checkbox" name="auto_assign_enabled" value="1" x-model="autoAssignEnabled" class="rounded border-slate-300 text-amber-600">
                         Auto-assign enabled
                     </label>
+                    <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
+                        <span>Max open</span>
+                        <input type="number" name="auto_assign_max_open_tickets" min="0" x-model="autoAssignMaxOpenTickets" class="w-20 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </label>
                     <button type="button" @click="routingRules.push({region: '', ticket_manager_person_id: '', site_coordinator_person_id: '', technician_person_id: '', service_team_id: '', assignee_person_ids: ''})" class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Add</button>
                 </div>
             </div>
@@ -264,6 +268,7 @@ function ticketSettingsPage() {
         regionValues: {{ region_options|tojson }},
         serviceTeams: {{ service_team_options|tojson }},
         autoAssignEnabled: {{ auto_assign_enabled|tojson }},
+        autoAssignMaxOpenTickets: {{ auto_assign_max_open_tickets|tojson }},
         routingRules: Object.entries(routingConfig).map(([region, rule]) => ({
             region,
             ticket_manager_person_id: rule.ticket_manager_person_id || '',

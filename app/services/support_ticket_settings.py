@@ -18,6 +18,7 @@ STATUS_COLORS_KEY = "support_ticket_status_colors"
 SERVICE_TEAMS_KEY = "support_service_teams"
 REGION_OPTIONS_KEY = "support_ticket_region_options"
 AUTO_ASSIGN_ENABLED_KEY = "support_ticket_auto_assign_enabled"
+AUTO_ASSIGN_MAX_OPEN_TICKETS_KEY = "support_ticket_auto_assign_max_open_tickets"
 REGION_ASSIGNMENT_RULES_KEY = "support_region_assignment_rules"
 SERVICE_TEAM_MEMBERS_KEY = "support_service_team_members"
 SLA_POLICY_KEY = "support_ticket_sla_policy"
@@ -216,6 +217,24 @@ def _write_bool(db: Session, *, key: str, value: bool) -> None:
     domain_settings_service.settings.upsert_by_key(db, key, payload)
 
 
+def _write_optional_int(db: Session, *, key: str, value: int | None) -> None:
+    payload = DomainSettingUpdate(
+        domain=SETTINGS_DOMAIN,
+        value_type=SettingValueType.integer
+        if value is not None
+        else SettingValueType.string,
+        value_text=str(value) if value is not None else "",
+        value_json=value,
+        is_secret=False,
+        is_active=True,
+    )
+    service = _settings_service()
+    if getattr(service, "domain", None) is not None:
+        service.upsert_by_key(db, key, payload)
+        return
+    domain_settings_service.settings.upsert_by_key(db, key, payload)
+
+
 def _normalize_uuid(
     value: object | None, *, allow_generate: bool = False
 ) -> str | None:
@@ -239,6 +258,13 @@ def _normalize_non_negative_int(value: object | None) -> int:
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{text!r} must be a whole number") from exc
     return max(parsed, 0)
+
+
+def _normalize_optional_non_negative_int(value: object | None) -> int | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    return _normalize_non_negative_int(value)
 
 
 def list_status_options(db: Session) -> list[str]:
@@ -360,6 +386,15 @@ def service_team_members(db: Session) -> dict[str, list[str]]:
     return normalized
 
 
+def auto_assign_max_open_tickets(db: Session) -> int | None:
+    raw = _read_raw_setting(db, AUTO_ASSIGN_MAX_OPEN_TICKETS_KEY)
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    return value if value >= 0 else None
+
+
 def sla_policy(db: Session) -> dict[str, dict[str, int]]:
     raw = _read_raw_setting(db, SLA_POLICY_KEY)
     configured = raw if isinstance(raw, dict) else {}
@@ -389,6 +424,7 @@ def update_options(
     service_team_ids: list[str] | None = None,
     service_team_labels: list[str] | None = None,
     auto_assign: bool | None = None,
+    auto_assign_max_open_tickets: str | int | None = None,
     routing_regions: list[str] | None = None,
     routing_ticket_manager_person_ids: list[str] | None = None,
     routing_site_coordinator_person_ids: list[str] | None = None,
@@ -450,6 +486,9 @@ def update_options(
         _write_json(db, key=SERVICE_TEAMS_KEY, value=teams)
     if auto_assign is not None:
         _write_bool(db, key=AUTO_ASSIGN_ENABLED_KEY, value=auto_assign)
+    if auto_assign_max_open_tickets is not None:
+        value = _normalize_optional_non_negative_int(auto_assign_max_open_tickets)
+        _write_optional_int(db, key=AUTO_ASSIGN_MAX_OPEN_TICKETS_KEY, value=value)
     if routing_regions is not None:
 
         def indexed(values: list[str] | None, index: int) -> str | None:
