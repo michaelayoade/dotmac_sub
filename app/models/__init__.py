@@ -175,6 +175,7 @@ from app.models.field_expense import (  # noqa: F401
     FieldExpenseRequest,
     FieldExpenseRequestItem,
 )
+from app.models.field_fiber import FieldFiberTestResult  # noqa: F401
 from app.models.field_job_event import FieldJobEvent  # noqa: F401
 from app.models.field_location import (  # noqa: F401
     FieldTechLocationPing,

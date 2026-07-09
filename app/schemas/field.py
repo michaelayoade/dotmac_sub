@@ -546,3 +546,62 @@ class FieldMapSearchResponse(BaseModel):
     count: int
     limit: int
     offset: int = 0
+
+
+class FieldSpliceCreate(BaseModel):
+    closure_id: UUID
+    from_strand_id: UUID
+    to_strand_id: UUID
+    tray_id: UUID | None = None
+    position: int | None = Field(default=None, ge=1)
+    splice_type: str | None = Field(default=None, max_length=80)
+    loss_db: float | None = Field(default=None, ge=0, le=5)
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class FieldSpliceProposalResponse(BaseModel):
+    change_request_id: UUID
+    status: str
+    replayed: bool
+    closure_id: UUID
+    from_strand_id: UUID
+    to_strand_id: UUID
+
+
+class FieldFiberTestCreate(BaseModel):
+    crm_work_order_id: str = Field(min_length=1, max_length=64)
+    asset_type: str = Field(min_length=1, max_length=80)
+    asset_id: UUID
+    test_type: str = Field(min_length=1, max_length=40)
+    wavelength_nm: int | None = Field(default=None, ge=0)
+    value_db: float | None = None
+    unit: str | None = Field(default=None, max_length=16)
+    passed: bool | None = None
+    instrument: str | None = Field(default=None, max_length=120)
+    measured_at: datetime | None = None
+    notes: str | None = Field(default=None, max_length=2000)
+    attachment_id: UUID | None = None
+    client_ref: UUID | None = None
+
+
+class FieldFiberTestRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    work_order_mirror_id: UUID
+    crm_work_order_id: str
+    asset_type: str
+    asset_id: UUID
+    test_type: str
+    wavelength_nm: int | None = None
+    value_db: float | None = None
+    unit: str | None = None
+    passed: bool | None = None
+    instrument: str | None = None
+    attachment_id: UUID | None = None
+    measured_by_person_id: UUID
+    measured_by_system_user_id: UUID | None = None
+    measured_at: datetime | None = None
+    notes: str | None = None
+    client_ref: UUID | None = None
+    created_at: datetime
