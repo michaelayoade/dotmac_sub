@@ -34,6 +34,7 @@ from app.services import customer_portal_bandwidth as customer_portal_bandwidth_
 from app.services import customer_portal_contacts as customer_portal_contacts_service
 from app.services import customer_portal_flow_payment_methods as customer_cards
 from app.services import customer_portal_notifications as customer_notifications_service
+from app.services.nin_matching import mask_nin
 from app.services import payment_proofs as payment_proofs_service
 from app.services import web_customer_auth as web_customer_auth_service
 from app.services import web_network_speedtests as web_network_speedtests_service
@@ -207,6 +208,7 @@ def _profile_audit_snapshot(subscriber) -> dict[str, object]:
         "display_name": subscriber.display_name,
         "email": subscriber.email,
         "phone": subscriber.phone,
+        "nin": mask_nin(subscriber.nin or "") if getattr(subscriber, "nin", None) else None,
         "date_of_birth": _profile_value(subscriber.date_of_birth),
         "gender": _profile_value(subscriber.gender),
         "preferred_contact_method": _profile_value(subscriber.preferred_contact_method),
@@ -225,6 +227,24 @@ def _profile_audit_snapshot(subscriber) -> dict[str, object]:
         "general_notifications": bool(metadata.get("general_notifications", True)),
         "locale": subscriber.locale,
         "email_verified": subscriber.email_verified,
+    }
+
+
+def _profile_completion(subscriber) -> dict[str, object]:
+    required = {
+        "date_of_birth": bool(getattr(subscriber, "date_of_birth", None)),
+        "gender": getattr(getattr(subscriber, "gender", None), "value", "unknown")
+        not in {"", "unknown"},
+        "nin": bool(getattr(subscriber, "nin", None)),
+    }
+    missing = [key for key, complete in required.items() if not complete]
+    return {
+        "required": required,
+        "missing": missing,
+        "missing_labels": ", ".join(item.replace("_", " ") for item in missing),
+        "complete": not missing,
+        "completed_count": sum(1 for value in required.values() if value),
+        "total_count": len(required),
     }
 
 
@@ -1460,6 +1480,7 @@ def _profile_context(
         success = "Other portal sessions signed out."
     elif saved:
         success = "Profile updated successfully"
+    profile_completion = _profile_completion(subscriber) if subscriber else None
     return {
         "request": request,
         "customer": customer,
@@ -1476,6 +1497,7 @@ def _profile_context(
         "success": success,
         "error": error,
         "verify_sent": verify_sent,
+        "profile_completion": profile_completion,
     }
 
 
@@ -1536,6 +1558,7 @@ def customer_update_profile(
     email: str = Form(...),
     display_name: str = Form(None),
     phone: str = Form(None),
+    nin: str = Form(None),
     date_of_birth: str = Form(None),
     gender: str = Form(None),
     preferred_contact_method: str = Form(None),
@@ -1590,6 +1613,7 @@ def customer_update_profile(
                 display_name=display_name,
                 email=email,
                 phone=phone,
+                nin=nin,
                 date_of_birth=date_of_birth,
                 gender=gender,
                 preferred_contact_method=preferred_contact_method,

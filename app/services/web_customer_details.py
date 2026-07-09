@@ -77,6 +77,7 @@ from app.services.audit_helpers import (
 from app.services.billing_settings import resolve_payment_due_days
 from app.services.collections import get_available_balance
 from app.services.credential_crypto import decrypt_credential
+from app.services.nin_matching import mask_nin
 from app.services.network._common import decode_huawei_hex_serial
 
 logger = logging.getLogger(__name__)
@@ -1481,6 +1482,31 @@ def _build_crm_sync_status(db: Session, customer: Subscriber) -> dict[str, Any]:
     }
 
 
+def _build_identity_profile(customer: Subscriber) -> dict[str, Any]:
+    gender_value = getattr(customer.gender, "value", "unknown")
+    nin_value = customer.nin or ""
+    required = {
+        "date_of_birth": bool(customer.date_of_birth),
+        "gender": gender_value not in {"", "unknown"},
+        "nin": bool(nin_value),
+    }
+    missing = [key for key, complete in required.items() if not complete]
+    return {
+        "nin_masked": mask_nin(nin_value) if nin_value else None,
+        "nin_verified": bool((customer.metadata_ or {}).get("nin_verified")),
+        "nin_last_checked_at": (customer.metadata_ or {}).get("nin_last_checked_at"),
+        "date_of_birth": customer.date_of_birth.isoformat()
+        if customer.date_of_birth
+        else None,
+        "gender": None if gender_value == "unknown" else gender_value,
+        "complete": not missing,
+        "missing": missing,
+        "missing_labels": ", ".join(item.replace("_", " ") for item in missing),
+        "completed_count": sum(1 for value in required.values() if value),
+        "total_count": len(required),
+    }
+
+
 def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, Any]:
     """Build unified customer detail snapshot.
 
@@ -1701,6 +1727,7 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
         "activity_items": activity_items,
         "customer_user_access": customer_user_access,
         "crm_sync_status": _build_crm_sync_status(db, customer),
+        "identity_profile": _build_identity_profile(customer),
         "pppoe_access": pppoe_access,
         "billing_policy": _billing_policy_snapshot(db, accounts),
         "billing_workspace": billing_workspace,
