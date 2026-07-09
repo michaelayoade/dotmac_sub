@@ -2,11 +2,54 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
-from app.schemas.field import FieldRouteResponse
+from app.schemas.field import (
+    FieldPresenceRead,
+    FieldRouteResponse,
+    LocationIngestResponse,
+    LocationPingBatch,
+    LocationSharingUpdate,
+)
 from app.services.auth_dependencies import require_user_auth
+from app.services.field.location_tracking import field_location_tracking
 from app.services.field.routing import field_routing
 
 router = APIRouter(prefix="/locations", tags=["field-locations"])
+
+
+@router.post("", response_model=LocationIngestResponse)
+def ingest_locations(
+    payload: LocationPingBatch,
+    auth: dict = Depends(require_user_auth),
+    db: Session = Depends(get_db),
+):
+    result = field_location_tracking.record_batch(
+        db,
+        auth,
+        [ping.model_dump() for ping in payload.pings],
+    )
+    return result
+
+
+@router.put("/sharing", response_model=FieldPresenceRead)
+def update_sharing(
+    payload: LocationSharingUpdate,
+    auth: dict = Depends(require_user_auth),
+    db: Session = Depends(get_db),
+):
+    return field_location_tracking.set_sharing(
+        db,
+        auth,
+        enabled=payload.enabled,
+        status=payload.status,
+    )
+
+
+@router.get("/me", response_model=FieldPresenceRead)
+def get_my_presence(
+    auth: dict = Depends(require_user_auth),
+    db: Session = Depends(get_db),
+):
+    return field_location_tracking.get_or_create_presence(db, auth)
 
 
 @router.get("/route", response_model=FieldRouteResponse)
