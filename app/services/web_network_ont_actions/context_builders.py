@@ -631,8 +631,8 @@ def _service_recovery_context(
             _recovery_row(
                 "OLT registration",
                 "pending",
-                "Live OLT state has not been loaded on this view.",
-                detail="Open OLT Status if the customer is still down.",
+                "Live OLT registration was not checked on this page.",
+                detail="Open OLT Status to run the live OLT check; this pending state does not mean the OLT is down.",
             )
         )
     elif run_state == "online" and config_state == "normal" and match_state == "match":
@@ -666,8 +666,8 @@ def _service_recovery_context(
             _recovery_row(
                 "Internet service-port",
                 "pending",
-                "Service-port read is deferred on this view.",
-                detail="Open Service Ports to verify VLAN/GEM state.",
+                "Live service-port data was not checked on this page.",
+                detail="Open Service Ports to read VLAN/GEM state from the OLT; this pending state does not mean the path is missing.",
             )
         )
     elif port_error:
