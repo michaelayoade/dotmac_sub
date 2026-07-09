@@ -133,6 +133,38 @@ class FieldNoteRead(BaseModel):
     attachments: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class FieldWorkLogRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    person_id: UUID
+    start_at: datetime
+    end_at: datetime | None = None
+    minutes: int
+    notes: str | None = None
+
+
+class FieldWorkLogEntry(BaseModel):
+    start_at: datetime
+    end_at: datetime | None = None
+    notes: str | None = Field(default=None, max_length=2000)
+    client_ref: UUID | None = None
+
+
+class FieldWorkLogSubmit(BaseModel):
+    entries: list[FieldWorkLogEntry] = Field(min_length=1, max_length=50)
+
+
+class FieldWorkLogResult(BaseModel):
+    worklog: FieldWorkLogRead
+    duplicate: bool
+    backdated: bool
+
+
+class FieldWorkLogSubmitResponse(BaseModel):
+    results: list[FieldWorkLogResult]
+
+
 class FieldJobHistoryItem(BaseModel):
     id: str
     type: str
@@ -159,7 +191,7 @@ class FieldJobDetail(BaseModel):
     attachments: list[dict[str, Any]] = Field(default_factory=list)
     materials: list[dict[str, Any]] = Field(default_factory=list)
     material_requests: list[dict[str, Any]] = Field(default_factory=list)
-    worklogs: list[dict[str, Any]] = Field(default_factory=list)
+    worklogs: list[FieldWorkLogRead] = Field(default_factory=list)
     history: list[FieldJobHistoryItem] = Field(default_factory=list)
 
 

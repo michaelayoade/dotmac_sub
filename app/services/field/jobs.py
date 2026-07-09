@@ -275,6 +275,7 @@ class FieldJobs:
             raise HTTPException(status_code=404, detail="Job not found")
         subscriber = db.get(Subscriber, row.subscriber_id)
         from app.services.field.notes import field_notes
+        from app.services.field.worklogs import field_worklogs
 
         return FieldJobDetail(
             job=_summary(row),
@@ -284,6 +285,7 @@ class FieldJobs:
             project_id=row.crm_project_id,
             access_notes=row.access_notes,
             notes=field_notes.list_for_job(db, principal, crm_work_order_id),
+            worklogs=field_worklogs.list_for_job(db, principal, crm_work_order_id),
             history=[],
         )
 

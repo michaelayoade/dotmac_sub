@@ -9,6 +9,7 @@ from app.api.field.locations import router as locations_router
 from app.api.field.map_assets import router as map_assets_router
 from app.api.field.notes import router as notes_router
 from app.api.field.schedule import router as schedule_router
+from app.api.field.worklogs import router as worklogs_router
 from app.schemas.common import ListResponse
 from app.schemas.field import (
     FieldJobDestination,
@@ -26,6 +27,7 @@ router.include_router(locations_router)
 router.include_router(map_assets_router)
 router.include_router(notes_router)
 router.include_router(schedule_router)
+router.include_router(worklogs_router)
 
 
 @router.get("/me", response_model=FieldMeResponse)
