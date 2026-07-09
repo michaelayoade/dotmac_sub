@@ -395,6 +395,29 @@ def test_auto_confirm_pending_closes_after_grace_window(db_session, subscriber):
     assert updated.status == TicketStatus.closed.value
 
 
+def test_auto_confirm_pending_skips_crm_origin_ticket(db_session, subscriber):
+    ticket = support_service.tickets.create(
+        db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
+    )
+    ticket.status = TicketStatus.pending_confirmation.value
+    ticket.resolved_at = datetime.now(UTC) - timedelta(hours=25)
+    ticket.metadata_ = {
+        "crm_ticket_id": str(uuid4()),
+        "resolution_confirmation": {"grace_hours": 24},
+    }
+    token_row = support_service.ticket_access_tokens.mint(db_session, ticket)
+    db_session.commit()
+
+    count = support_service.tickets.auto_confirm_pending(db_session)
+
+    assert count == 0
+    db_session.refresh(ticket)
+    db_session.refresh(token_row)
+    assert ticket.status == TicketStatus.pending_confirmation.value
+    assert token_row.is_active is True
+    assert token_row.responded_at is None
+
+
 def test_resolution_confirmation_rejects_closed_ticket(db_session, subscriber):
     ticket = support_service.tickets.create(
         db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)

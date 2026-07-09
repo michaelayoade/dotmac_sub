@@ -1402,6 +1402,15 @@ class Tickets:
         )
         confirmed = 0
         for ticket in candidates:
+            if crm_ticket_user_writes_locked(ticket):
+                logger.info(
+                    "ticket_auto_confirm_skipped_crm_origin",
+                    extra={
+                        "event": "ticket_auto_confirm_skipped_crm_origin",
+                        "ticket_id": str(ticket.id),
+                    },
+                )
+                continue
             meta = dict(ticket.metadata_ or {})
             confirmation = dict(meta.get("resolution_confirmation") or {})
             grace_hours = int(
