@@ -80,6 +80,11 @@ class FieldJobLocation(BaseModel):
     source: str
 
 
+class FieldJobLocationUpdate(BaseModel):
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+
+
 class FieldJobDestination(BaseModel):
     destination_type: str = Field(min_length=1, max_length=40)
     destination_id: str | None = Field(default=None, max_length=120)

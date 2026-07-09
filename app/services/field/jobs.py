@@ -37,6 +37,7 @@ from app.schemas.field import (
 )
 from app.services.common import apply_pagination, coerce_uuid
 from app.services.field.map_assets import field_map_assets
+from app.services.field.source import mark_sub_authoritative
 
 TERMINAL_STATUSES = frozenset({"completed", "canceled", "cancelled"})
 OPEN_STATUSES = frozenset({"scheduled", "dispatched", "in_progress", "paused"})
@@ -155,22 +156,40 @@ def _customer(
 
 def _location(row: WorkOrderMirror) -> FieldJobLocation:
     metadata = row.metadata_ or {}
-    latitude = metadata.get("latitude") or metadata.get("lat")
-    longitude = metadata.get("longitude") or metadata.get("lng")
+    latitude = _first_present(metadata, "latitude", "lat")
+    longitude = _first_present(metadata, "longitude", "lng")
+    source = "cached"
     if isinstance(metadata.get("location"), dict):
         location = metadata["location"]
-        latitude = latitude or location.get("latitude") or location.get("lat")
-        longitude = longitude or location.get("longitude") or location.get("lng")
+        latitude = (
+            latitude
+            if latitude is not None
+            else _first_present(location, "latitude", "lat")
+        )
+        longitude = (
+            longitude
+            if longitude is not None
+            else _first_present(location, "longitude", "lng")
+        )
+        source = str(location.get("source") or source)
     parsed_latitude = latitude if isinstance(latitude, int | float) else None
     parsed_longitude = longitude if isinstance(longitude, int | float) else None
     return FieldJobLocation(
         latitude=parsed_latitude,
         longitude=parsed_longitude,
         address_text=row.address,
-        source="cached"
+        source=source
         if parsed_latitude is not None and parsed_longitude is not None
         else "address_only",
     )
+
+
+def _first_present(mapping: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = mapping.get(key)
+        if value is not None:
+            return value
+    return None
 
 
 _ASSET_DESTINATION_TYPES = {
@@ -408,6 +427,44 @@ class FieldJobs:
             }
         )
         return items
+
+    @staticmethod
+    def update_location(
+        db: Session,
+        principal: dict[str, Any],
+        crm_work_order_id: str,
+        *,
+        latitude: float,
+        longitude: float,
+    ) -> FieldJobLocation:
+        profile = _profile_from_principal(db, principal)
+        row = (
+            _scoped_query(db, profile)
+            .filter(WorkOrderMirror.crm_work_order_id == crm_work_order_id)
+            .with_for_update()
+            .one_or_none()
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        metadata = dict(row.metadata_ or {})
+        metadata["location"] = {
+            "lat": float(latitude),
+            "lng": float(longitude),
+            "latitude": float(latitude),
+            "longitude": float(longitude),
+            "address_text": row.address,
+            "source": "manual",
+        }
+        row.metadata_ = metadata
+        mark_sub_authoritative(
+            row,
+            "location",
+            details={"latitude": float(latitude), "longitude": float(longitude)},
+        )
+        db.commit()
+        db.refresh(row)
+        return _location(row)
 
 
 field_jobs = FieldJobs()
