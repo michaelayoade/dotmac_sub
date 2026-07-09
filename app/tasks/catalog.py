@@ -2,6 +2,7 @@
 
 import logging
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from app.celery_app import celery_app
 from app.services.billing_settings import billing_enabled
@@ -9,6 +10,37 @@ from app.services.catalog import subscriptions as subscriptions_service
 from app.services.db_session_adapter import db_session_adapter
 
 logger = logging.getLogger(__name__)
+
+OPEN_INFRASTRUCTURE_TICKET_STATUSES = {
+    "new",
+    "open",
+    "pending",
+    "waiting_on_customer",
+    "lastmile_rerun",
+    "site_under_construction",
+    "on_hold",
+    "pending_confirmation",
+}
+
+INFRASTRUCTURE_DOWN_TICKET_MARKERS = (
+    "infrastructure down",
+    "service down",
+    "internet down",
+    "no internet",
+    "outage",
+    "link down",
+    "fiber cut",
+    "link disconnection",
+    "customer link disconnection",
+    "multiple customer link disconnection",
+    "core link disconnection",
+    "multiple core link disconnection",
+    "cabinet disconnection",
+    "multiple cabinet disconnection",
+    "multiple cabinet link disconnection",
+    "access point outage",
+    "bts outage",
+)
 
 
 @celery_app.task(name="app.tasks.catalog.expire_subscriptions")
@@ -93,17 +125,25 @@ def send_expiry_reminders(days_before: int | None = None) -> dict:
         expiring = session.scalars(stmt).unique().all()
 
         reminded = 0
+        suppressed = 0
         for sub in expiring:
             try:
-                days_left = max(0, (sub.end_at - now).days) if sub.end_at else 0
+                if _has_open_infrastructure_down_ticket(session, sub.subscriber_id):
+                    suppressed += 1
+                    logger.info(
+                        "Suppressed expiry reminder for subscription %s: "
+                        "open infrastructure-down ticket exists",
+                        sub.id,
+                    )
+                    continue
+                end_at = _as_utc(sub.end_at)
+                days_left = max(0, (end_at - now).days) if end_at else 0
                 emit_event(
                     session,
                     EventType.subscription_expiring,
                     {
                         "days_remaining": str(days_left),
-                        "end_date": sub.end_at.strftime("%b %d, %Y")
-                        if sub.end_at
-                        else "",
+                        "end_date": end_at.strftime("%b %d, %Y") if end_at else "",
                         "plan_name": sub.offer.name if sub.offer else "your plan",
                     },
                     subscription_id=sub.id,
@@ -114,5 +154,60 @@ def send_expiry_reminders(days_before: int | None = None) -> dict:
                 logger.warning("Failed to send expiry reminder for %s: %s", sub.id, exc)
 
         session.commit()
-        logger.info("Sent %d expiry reminders", reminded)
-        return {"reminded": reminded, "total_expiring": len(expiring)}
+        logger.info(
+            "Sent %d expiry reminders; suppressed %d for infrastructure-down tickets",
+            reminded,
+            suppressed,
+        )
+    return {
+        "reminded": reminded,
+        "suppressed_infrastructure_down": suppressed,
+        "total_expiring": len(expiring),
+    }
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _has_open_infrastructure_down_ticket(session, subscriber_id: object) -> bool:
+    from sqlalchemy import or_
+
+    from app.models.support import Ticket
+
+    tickets = (
+        session.query(Ticket)
+        .filter(Ticket.is_active.is_(True))
+        .filter(Ticket.status.in_(OPEN_INFRASTRUCTURE_TICKET_STATUSES))
+        .filter(
+            or_(
+                Ticket.subscriber_id == subscriber_id,
+                Ticket.customer_account_id == subscriber_id,
+                Ticket.customer_person_id == subscriber_id,
+            )
+        )
+        .all()
+    )
+    return any(_is_infrastructure_down_ticket(ticket) for ticket in tickets)
+
+
+def _is_infrastructure_down_ticket(ticket: Any) -> bool:
+    parts: list[str] = [
+        str(getattr(ticket, "ticket_type", "") or ""),
+        str(getattr(ticket, "title", "") or ""),
+        str(getattr(ticket, "description", "") or ""),
+    ]
+    tags = getattr(ticket, "tags", None)
+    if isinstance(tags, list):
+        parts.extend(str(tag or "") for tag in tags)
+    metadata = getattr(ticket, "metadata_", None)
+    if isinstance(metadata, dict):
+        for key in ("ticket_type", "category", "issue", "reason", "source"):
+            parts.append(str(metadata.get(key) or ""))
+    text = " ".join(parts).strip().lower()
+    text = " ".join(text.split())
+    return any(marker in text for marker in INFRASTRUCTURE_DOWN_TICKET_MARKERS)

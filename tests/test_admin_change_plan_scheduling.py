@@ -11,6 +11,7 @@ from decimal import Decimal
 
 import pytest
 
+from app.models.catalog import SubscriptionStatus
 from app.models.subscription_change import (
     SubscriptionChangeRequest,
     SubscriptionChangeStatus,
@@ -178,6 +179,42 @@ def test_applier_swaps_offer_when_due(db_session, subscriber, monkeypatch):
     db_session.refresh(scheduled)
     assert scheduled.status == SubscriptionChangeStatus.applied
     assert scheduled.applied_at is not None
+
+
+def test_applier_auto_cancels_due_change_when_target_subscription_canceled(
+    db_session, subscriber, monkeypatch
+):
+    """Stale scheduled changes on terminal subscriptions stop retrying."""
+    _stub_plan_change_side_effects(monkeypatch)
+    current, target = _same_family_offers(db_session)
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current,
+        next_billing_at=datetime.now(UTC) + timedelta(days=5),
+        start_at=datetime.now(UTC) - timedelta(days=25),
+    )
+    scheduled = subscription_change_requests.schedule(
+        db_session,
+        subscription_id=str(subscription.id),
+        new_offer_id=str(target.id),
+        effective_date=(datetime.now(UTC) - timedelta(days=1)).date(),
+    )
+    subscription.status = SubscriptionStatus.canceled
+    subscription.canceled_at = datetime.now(UTC)
+    db_session.commit()
+
+    result = subscription_change_requests.apply_due_changes(db_session)
+
+    assert result["applied"] == 0
+    assert result["canceled_ids"] == [str(scheduled.id)]
+    assert result["failed_ids"] == []
+    db_session.refresh(subscription)
+    assert str(subscription.offer_id) == str(current.id)
+    db_session.refresh(scheduled)
+    assert scheduled.status == SubscriptionChangeStatus.canceled
+    assert scheduled.applied_at is None
+    assert "target subscription is canceled" in (scheduled.notes or "")
 
 
 def test_applier_ignores_future_dated_change(db_session, subscriber, monkeypatch):
