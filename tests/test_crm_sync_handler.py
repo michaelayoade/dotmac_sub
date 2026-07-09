@@ -48,6 +48,9 @@ def _subscriber(splynx_id=4242, first="Jane", last="Doe"):
     sub.last_name = last
     sub.display_name = None
     sub.email = "jane@example.com"
+    sub.date_of_birth = None
+    sub.gender = MagicMock(value="unknown")
+    sub.nin = None
     sub.subscriber_number = "SUB-1001"
     sub.account_number = None
     sub.status = "active"
@@ -96,6 +99,9 @@ class TestPayloadBuilders:
         assert set(payload) <= {
             "status",
             "notes",
+            "date_of_birth",
+            "gender",
+            "nin",
             "subscriber_number",
             "account_number",
             "service_name",

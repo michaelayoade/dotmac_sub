@@ -8,7 +8,7 @@ from fastapi import HTTPException
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.billing import Invoice, InvoiceStatus, LedgerEntry
+from app.models.billing import Invoice, InvoiceStatus
 from app.models.catalog import (
     AccessCredential,
     BillingMode,
@@ -81,57 +81,22 @@ def _suspension_notification_dedupe_hours(db: Session) -> int:
 
 
 def _resolve_prepaid_available_balance(db: Session, account_id: str) -> Decimal:
-    """Authoritative prepaid available balance from the local ledger.
+    """Authoritative prepaid available balance from customer financial events.
 
-    The retired imported-deposit fallback is deliberately gone. Available
-    balance is now local credit minus active open AR, so enforcement and portal
-    views share the same post-cutover truth source. Currency is evaluated
-    independently; credit in one currency must not cover debt in another.
+    Enforcement uses the same canonical credits and debits that statements show:
+    real payments, real service charges, real credit notes/refunds, real approved
+    adjustments, and legacy mirrored transactions. Internal repair artifacts are
+    excluded before this balance is calculated.
     """
-    from app.services.billing._common import get_account_credit_balance
+    from app.services.customer_financial_ledger import list_customer_financial_events
 
-    account_uuid = coerce_uuid(account_id)
-    open_rows = (
-        db.query(Invoice.currency, func.coalesce(func.sum(Invoice.balance_due), 0))
-        .filter(Invoice.account_id == account_uuid)
-        .filter(Invoice.is_active.is_(True))
-        .filter(collectible_ar_invoice_filter())
-        .filter(
-            Invoice.status.in_(
-                [
-                    InvoiceStatus.issued,
-                    InvoiceStatus.partially_paid,
-                    InvoiceStatus.overdue,
-                ]
-            )
+    balances_by_currency: dict[str, Decimal] = {}
+    for event in list_customer_financial_events(db, account_id, currency=None):
+        currency = event.currency or "NGN"
+        balances_by_currency[currency] = (
+            balances_by_currency.get(currency, Decimal("0.00")) + event.signed_amount
         )
-        .group_by(Invoice.currency)
-        .all()
-    )
-    credit_currencies = {
-        row[0] or "NGN"
-        for row in (
-            db.query(LedgerEntry.currency)
-            .filter(LedgerEntry.account_id == account_uuid)
-            .filter(LedgerEntry.invoice_id.is_(None))
-            .filter(LedgerEntry.is_active.is_(True))
-            .distinct()
-            .all()
-        )
-    }
-    credit_currencies.update((currency or "NGN") for currency, _amount in open_rows)
-    if not credit_currencies:
-        credit_currencies.add("NGN")
-
-    balances: list[Decimal] = []
-    open_by_currency = {
-        currency or "NGN": Decimal(str(amount or "0.00"))
-        for currency, amount in open_rows
-    }
-    for currency in sorted(credit_currencies):
-        credit_balance = get_account_credit_balance(db, account_id, currency=currency)
-        open_balance = open_by_currency.get(currency, Decimal("0.00"))
-        balances.append(Decimal(str(credit_balance)) - open_balance)
+    balances = list(balances_by_currency.values())
     return min(balances) if balances else Decimal("0.00")
 
 

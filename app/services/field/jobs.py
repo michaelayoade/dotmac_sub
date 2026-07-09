@@ -7,6 +7,7 @@ pipeline continues to hydrate ``work_order_mirror``.
 
 from __future__ import annotations
 
+import builtins
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -14,6 +15,7 @@ from uuid import UUID
 from fastapi import HTTPException
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.models.dispatch import TechnicianProfile, WorkOrderAssignmentQueue
 from app.models.subscriber import Subscriber
@@ -106,7 +108,7 @@ def _scoped_query(db: Session, profile: TechnicianProfile):
         WorkOrderAssignmentQueue.assigned_technician_id == profile.id
     )
     query = db.query(WorkOrderMirror).filter(WorkOrderMirror.is_active.is_(True))
-    clauses = [WorkOrderMirror.id.in_(assignment_ids)]
+    clauses: list[ColumnElement[bool]] = [WorkOrderMirror.id.in_(assignment_ids)]
     if profile.crm_person_id:
         clauses.append(
             WorkOrderMirror.assigned_to_crm_person_id == profile.crm_person_id
@@ -289,7 +291,7 @@ class FieldJobs:
         db: Session,
         principal: dict[str, Any],
         crm_work_order_id: str,
-    ) -> list[dict]:
+    ) -> builtins.list[dict[str, Any]]:
         profile = _profile_from_principal(db, principal)
         row = (
             _scoped_query(db, profile)
@@ -300,7 +302,7 @@ class FieldJobs:
             raise HTTPException(status_code=404, detail="Job not found")
 
         location = _location(row)
-        items: list[dict] = [
+        items: builtins.list[dict[str, Any]] = [
             {
                 "destination_type": "customer",
                 "destination_id": str(row.subscriber_id) if row.subscriber_id else None,
@@ -317,7 +319,7 @@ class FieldJobs:
                 latitude=location.latitude,
                 longitude=location.longitude,
                 radius_m=750,
-                asset_types=list(_ASSET_DESTINATION_TYPES),
+                asset_types=builtins.list(_ASSET_DESTINATION_TYPES),
                 limit=20,
             )
             for asset in assets:
