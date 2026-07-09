@@ -129,3 +129,11 @@ class FieldJobDetail(BaseModel):
     material_requests: list[dict[str, Any]] = Field(default_factory=list)
     worklogs: list[dict[str, Any]] = Field(default_factory=list)
     history: list[FieldJobHistoryItem] = Field(default_factory=list)
+
+
+class FieldScheduleEntry(BaseModel):
+    type: str
+    start_at: datetime
+    end_at: datetime | None = None
+    title: str
+    reference_id: str
