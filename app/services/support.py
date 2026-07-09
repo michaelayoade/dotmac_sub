@@ -15,7 +15,11 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.config import settings
 from app.models.domain_settings import SettingDomain
-from app.models.notification import NotificationChannel, NotificationStatus
+from app.models.notification import (
+    Notification,
+    NotificationChannel,
+    NotificationStatus,
+)
 from app.models.provisioning import ServiceOrder
 from app.models.subscriber import Subscriber, SubscriberContact
 from app.models.support import (
@@ -55,6 +59,9 @@ from app.services.customer_identity_resolution import (
     identity_resolution_allows_sensitive_automation,
     identity_resolution_requires_manual_review,
     resolve_customer_identity,
+)
+from app.services.customer_notification_policy import (
+    is_notification_enabled_for_subscriber,
 )
 from app.services.events import emit_event
 from app.services.events.types import EventType
@@ -1008,9 +1015,19 @@ class Tickets:
         for channel, recipient in sorted(recipients, key=lambda item: item[1]):
             if not recipient:
                 continue
-            notification_service.notifications.create(
+            status = NotificationStatus.queued
+            last_error = None
+            if not is_notification_enabled_for_subscriber(
                 db,
-                NotificationCreate(
+                subscriber_id=subscriber.id,
+                channel=channel,
+                category="support",
+                recipient=recipient,
+            ):
+                status = NotificationStatus.canceled
+                last_error = "Suppressed by customer notification preferences"
+            db.add(
+                Notification(
                     subscriber_id=subscriber.id,
                     channel=channel,
                     recipient=recipient,
@@ -1018,7 +1035,8 @@ class Tickets:
                     category="support",
                     subject=subject if channel == NotificationChannel.email else None,
                     body=body,
-                    status=NotificationStatus.queued,
+                    status=status,
+                    last_error=last_error,
                 ),
             )
 

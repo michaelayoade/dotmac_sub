@@ -101,7 +101,7 @@ def validate_ticket_creation(db: Session, payload: TicketCreate) -> None:
 
     context = build_pre_create_context(db, payload)
     duplicate_ticket_id = context.get("duplicate_ticket_id")
-    if duplicate_ticket_id:
+    if duplicate_ticket_id and metadata.get("duplicate_block") is True:
         raise HTTPException(
             status_code=409,
             detail=f"Duplicate open ticket already exists (blocking ticket: {duplicate_ticket_id})",

@@ -64,7 +64,42 @@ def test_base_station_required_ticket_type_accepts_metadata_details(db_session):
     )
 
 
-def test_duplicate_open_ticket_is_rejected(db_session, subscriber):
+def test_duplicate_open_ticket_context_allows_by_default(db_session, subscriber):
+    first = support_service.tickets.create(
+        db_session,
+        _payload(
+            subscriber_id=subscriber.id,
+            customer_account_id=subscriber.id,
+            ticket_type="Router Troubleshooting",
+        ),
+        actor_id=str(subscriber.id),
+    )
+
+    context = ticket_validation.build_pre_create_context(
+        db_session,
+        _payload(
+            subscriber_id=subscriber.id,
+            customer_account_id=subscriber.id,
+            ticket_type="Router Troubleshooting",
+        ),
+    )
+    second = support_service.tickets.create(
+        db_session,
+        _payload(
+            subscriber_id=subscriber.id,
+            customer_account_id=subscriber.id,
+            ticket_type="Router Troubleshooting",
+        ),
+        actor_id=str(subscriber.id),
+    )
+
+    assert context["duplicate_ticket_id"] == str(first.id)
+    assert second.id is not None
+
+
+def test_duplicate_open_ticket_can_be_blocked_by_metadata_policy(
+    db_session, subscriber
+):
     support_service.tickets.create(
         db_session,
         _payload(
@@ -82,6 +117,7 @@ def test_duplicate_open_ticket_is_rejected(db_session, subscriber):
                 subscriber_id=subscriber.id,
                 customer_account_id=subscriber.id,
                 ticket_type="Router Troubleshooting",
+                metadata={"duplicate_block": True},
             ),
             actor_id=str(subscriber.id),
         )

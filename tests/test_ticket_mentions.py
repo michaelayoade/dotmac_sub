@@ -77,6 +77,7 @@ def test_notify_ticket_comment_mentions_queues_push_and_email(db_session):
         mentioned_agent_ids=[f"person:{recipient.id}", f"person:{actor.id}"],
         actor_person_id=str(actor.id),
     )
+    db_session.flush()
 
     rows = db_session.query(Notification).all()
     assert {row.channel for row in rows} == {

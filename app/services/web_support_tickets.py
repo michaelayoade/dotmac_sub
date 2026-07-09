@@ -616,7 +616,9 @@ def add_ticket_comment_from_form(
                 mentioned_agent_ids=mentioned_agent_ids,
                 actor_person_id=actor_id,
             )
+            db.commit()
         except Exception:
+            db.rollback()
             logger.debug("ticket_comment_staff_mention_failed", exc_info=True)
     return comment
 
