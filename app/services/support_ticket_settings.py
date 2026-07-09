@@ -7,7 +7,9 @@ from uuid import UUID, uuid4
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import SettingDomain
+from app.models.service_team import ServiceTeam, ServiceTeamMember, ServiceTeamType
 from app.models.subscription_engine import SettingValueType
+from app.models.ticket_workflow import TicketAssignmentRule, TicketAssignmentStrategy
 from app.schemas.settings import DomainSettingUpdate
 from app.services import domain_settings as domain_settings_service
 
@@ -267,6 +269,177 @@ def _normalize_optional_non_negative_int(value: object | None) -> int | None:
     return _normalize_non_negative_int(value)
 
 
+def _team_type_for_label(label: str) -> str:
+    normalized = normalize_system_value(label)
+    if "field" in normalized:
+        return ServiceTeamType.field_service.value
+    if "operation" in normalized or "ops" in normalized:
+        return ServiceTeamType.operations.value
+    return ServiceTeamType.support.value
+
+
+def _sync_service_team_tables(
+    db: Session,
+    *,
+    teams: list[dict[str, str]],
+    members: dict[str, list[str]] | None = None,
+) -> None:
+    """Mirror settings-page teams into the native assignment tables.
+
+    The old settings payload remains the display/config source for the existing
+    support UI, while the CRM-style assignment engine reads the real
+    ``service_teams`` and ``service_team_members`` tables. Keeping both in sync
+    lets admins configure rules before ticket write cutover.
+    """
+    member_map = members or {}
+    for item in teams:
+        team_id = _normalize_uuid(item.get("id"))
+        label = str(item.get("label") or "").strip()
+        if not team_id or not label:
+            continue
+        team = db.get(ServiceTeam, UUID(team_id))
+        if team is None:
+            team = ServiceTeam(
+                id=UUID(team_id),
+                name=label,
+                team_type=_team_type_for_label(label),
+                is_active=True,
+            )
+            db.add(team)
+        else:
+            team.name = label
+            team.team_type = team.team_type or _team_type_for_label(label)
+            team.is_active = True
+
+        configured_members = {
+            UUID(member_id)
+            for member_id in member_map.get(team_id, [])
+            if _normalize_uuid(member_id)
+        }
+        existing_members = (
+            db.query(ServiceTeamMember)
+            .filter(ServiceTeamMember.team_id == UUID(team_id))
+            .all()
+        )
+        by_person = {row.person_id: row for row in existing_members}
+        for row in existing_members:
+            row.is_active = row.person_id in configured_members
+        for person_id in configured_members:
+            member_row = by_person.get(person_id)
+            if member_row is None:
+                db.add(
+                    ServiceTeamMember(
+                        team_id=UUID(team_id),
+                        person_id=person_id,
+                        is_active=True,
+                    )
+                )
+            else:
+                member_row.is_active = True
+
+
+def list_assignment_rules(db: Session) -> list[dict[str, Any]]:
+    team_lookup = {str(team.id): team.name for team in db.query(ServiceTeam).all()}
+    rows = (
+        db.query(TicketAssignmentRule)
+        .order_by(
+            TicketAssignmentRule.priority.desc(), TicketAssignmentRule.created_at.asc()
+        )
+        .all()
+    )
+    rules: list[dict[str, Any]] = []
+    for rule in rows:
+        config = rule.match_config if isinstance(rule.match_config, dict) else {}
+        team_id = str(rule.team_id) if rule.team_id else ""
+        rules.append(
+            {
+                "id": str(rule.id),
+                "name": rule.name,
+                "priority": int(rule.priority or 0),
+                "is_active": bool(rule.is_active),
+                "strategy": str(
+                    rule.strategy or TicketAssignmentStrategy.round_robin.value
+                ),
+                "team_id": team_id,
+                "team_label": team_lookup.get(team_id, team_id),
+                "assignment_target": str(
+                    config.get("assignment_target") or "technician"
+                ),
+                "assignee_person_id": str(config.get("assignee_person_id") or ""),
+                "ticket_types": config.get("ticket_types")
+                if isinstance(config.get("ticket_types"), list)
+                else [],
+                "regions": config.get("regions")
+                if isinstance(config.get("regions"), list)
+                else [],
+            }
+        )
+    return rules
+
+
+def create_assignment_rule(
+    db: Session,
+    *,
+    name: str,
+    priority: object,
+    strategy: str,
+    team_id: str | None,
+    ticket_types: list[str],
+    regions: list[str],
+    assignee_person_id: str | None,
+    assignment_target: str,
+    is_active: bool,
+) -> TicketAssignmentRule:
+    clean_name = str(name or "").strip()
+    if not clean_name:
+        raise ValueError("Assignment rule name is required.")
+    clean_strategy = str(strategy or TicketAssignmentStrategy.round_robin.value).strip()
+    if clean_strategy not in {item.value for item in TicketAssignmentStrategy}:
+        raise ValueError("Assignment strategy is invalid.")
+    clean_team_id = _normalize_uuid(team_id)
+    clean_assignee_id = _normalize_uuid(assignee_person_id)
+    config: dict[str, Any] = {"entity_types": ["ticket"]}
+    normalized_ticket_types = [
+        str(item).strip() for item in ticket_types if str(item).strip()
+    ]
+    normalized_regions = [
+        normalize_system_value(str(item)) for item in regions if str(item).strip()
+    ]
+    if normalized_ticket_types:
+        config["ticket_types"] = normalized_ticket_types
+    if normalized_regions:
+        config["regions"] = normalized_regions
+    if clean_assignee_id:
+        config["assignee_person_id"] = clean_assignee_id
+        config["assignment_target"] = (
+            str(assignment_target or "technician").strip() or "technician"
+        )
+
+    rule = TicketAssignmentRule(
+        name=clean_name,
+        priority=_normalize_non_negative_int(priority),
+        is_active=is_active,
+        match_config=config,
+        strategy=clean_strategy,
+        team_id=UUID(clean_team_id) if clean_team_id else None,
+    )
+    db.add(rule)
+    db.commit()
+    db.refresh(rule)
+    return rule
+
+
+def delete_assignment_rule(db: Session, rule_id: str) -> None:
+    clean_id = _normalize_uuid(rule_id)
+    if not clean_id:
+        raise ValueError("Assignment rule ID is invalid.")
+    rule = db.get(TicketAssignmentRule, UUID(clean_id))
+    if rule is None:
+        raise ValueError("Assignment rule not found.")
+    db.delete(rule)
+    db.commit()
+
+
 def list_status_options(db: Session) -> list[str]:
     return _read_list(
         db,
@@ -484,6 +657,8 @@ def update_options(
             seen.add(team_id)
             teams.append({"id": team_id, "label": label})
         _write_json(db, key=SERVICE_TEAMS_KEY, value=teams)
+    else:
+        teams = list_service_teams(db)
     if auto_assign is not None:
         _write_bool(db, key=AUTO_ASSIGN_ENABLED_KEY, value=auto_assign)
     if auto_assign_max_open_tickets is not None:
@@ -539,6 +714,10 @@ def update_options(
             if person_id not in members[team_id]:
                 members[team_id].append(person_id)
         _write_json(db, key=SERVICE_TEAM_MEMBERS_KEY, value=members)
+    else:
+        members = service_team_members(db)
+    _sync_service_team_tables(db, teams=teams, members=members)
+    db.commit()
     if sla_priorities is not None:
         policy: dict[str, dict[str, int]] = {}
         for index, priority_raw in enumerate(sla_priorities):

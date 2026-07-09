@@ -21,13 +21,17 @@
     </div>
 
     <div class="mx-auto max-w-4xl overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-premium dark:border-stone-700 dark:bg-stone-800">
-        <div class="relative min-h-36 bg-[#176f37] px-7 py-6 text-white">
-            <div class="inline-flex bg-white px-3 py-2 text-2xl font-black tracking-wide text-[#176f37]">DOTMAC</div>
-            <p class="absolute bottom-5 left-7 text-lg font-extrabold">{{ received_from }}</p>
-            <div class="absolute right-6 top-6 w-48 rounded-xl bg-white p-4 text-stone-900 shadow-sm">
-                <p class="text-xs font-black text-[#176f37]">RECEIPT</p>
-                <p class="mt-2 text-lg font-black">{{ receipt_number }}</p>
-                <p class="mt-2 text-xs leading-6 text-stone-700">Date: {{ receipt_date.strftime('%Y-%m-%d') }}<br>Account: {{ account_number }}</p>
+        <div class="bg-[#176f37] px-5 py-6 text-white sm:px-7">
+            <div class="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
+                <div class="min-w-0">
+                    <div class="inline-flex rounded-md bg-white px-3 py-2 text-2xl font-black tracking-wide text-[#176f37]">DOTMAC</div>
+                    <p class="mt-8 break-words text-lg font-extrabold sm:mt-10">{{ received_from }}</p>
+                </div>
+                <div class="w-full rounded-xl bg-white p-4 text-stone-900 shadow-sm sm:w-56">
+                    <p class="text-xs font-black text-[#176f37]">RECEIPT</p>
+                    <p class="mt-2 break-words text-lg font-black">{{ receipt_number }}</p>
+                    <p class="mt-2 text-xs leading-6 text-stone-700">Date: {{ receipt_date.strftime('%Y-%m-%d') }}<br>Account: {{ account_number }}</p>
+                </div>
             </div>
         </div>
 
