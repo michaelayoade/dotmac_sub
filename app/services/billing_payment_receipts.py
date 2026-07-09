@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import html
+import io
 import logging
 import re
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -16,7 +18,11 @@ from sqlalchemy.orm import Session, selectinload
 from app.models.billing import Payment, PaymentAllocation, PaymentStatus
 from app.models.subscriber import Subscriber
 from app.services import email as email_service
-from app.services.billing_invoice_pdf import _ensure_weasyprint_pydyf_compat
+from app.services.billing_invoice_pdf import (
+    _build_simple_pdf,
+    _ensure_weasyprint_pydyf_compat,
+    _truncate_text,
+)
 from app.services.common import coerce_uuid
 from app.services.customer_portal_context import get_allowed_account_ids
 
@@ -269,11 +275,316 @@ td {{ padding: 14px; font-size: 13px; height: 38px; border-top: 1px solid #f3f4f
 </html>"""
 
 
-def build_receipt_pdf(context: dict[str, Any]) -> bytes:
+def _build_weasyprint_receipt_pdf(context: dict[str, Any]) -> bytes:
     _ensure_weasyprint_pydyf_compat()
     from weasyprint import HTML
 
     return HTML(string=render_receipt_document_html(context)).write_pdf()
+
+
+def _receipt_text_lines(context: dict[str, Any]) -> list[str]:
+    lines = [
+        f"Payment Receipt {context['receipt_number']}",
+        f"Received From: {context['received_from']}",
+        f"Email: {context['received_email'] or '-'}",
+        f"Account: {context['account_number']}",
+        f"Date: {context['receipt_date'].strftime('%Y-%m-%d %H:%M UTC')}",
+        f"Amount Received: {_format_amount(context['currency'], context['amount_received'])}",
+        f"Amount Applied: {_format_amount(context['currency'], context['amount_applied'])}",
+        f"Unallocated Credit: {_format_amount(context['currency'], context['unallocated_credit'])}",
+        f"Status: {context['status']}",
+        f"Transaction Ref: {context['transaction_ref']}",
+        f"Method: {context['method']}",
+        "",
+        "Allocations:",
+    ]
+    allocations = context.get("allocations") or []
+    if not allocations:
+        lines.append("- No invoice allocation recorded.")
+    else:
+        for allocation in allocations:
+            lines.append(
+                "- "
+                f"{allocation.invoice_number} | {allocation.status} | "
+                f"{_format_amount(context['currency'], allocation.amount)}"
+            )
+    lines.extend(["", f"Payment ID: {context['payment'].id}", "Thank you for your business."])
+    return lines
+
+
+def _build_receipt_fallback_pdf(context: dict[str, Any]) -> bytes:
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except Exception:
+        return _build_simple_pdf(_receipt_text_lines(context))
+
+    def _font_path(bold: bool) -> str | None:
+        candidates = [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+            if bold
+            else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf"
+            if bold
+            else "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+        ]
+        for path in candidates:
+            if Path(path).exists():
+                return path
+        return None
+
+    def _font(size: int, bold: bool = False):
+        path = _font_path(bold)
+        if path:
+            return ImageFont.truetype(path, size=size)
+        return ImageFont.load_default()
+
+    def _display_amount(currency: str, amount: Decimal) -> str:
+        if currency == "NGN" and not _font_path(False):
+            return f"NGN {amount:,.2f}"
+        return _format_amount(currency, amount)
+
+    width, height = 1240, 1754
+    margin_x = 72
+    page = Image.new("RGB", (width, height), "#ffffff")
+    draw = ImageDraw.Draw(page)
+
+    green_900 = "#166534"
+    green_700 = "#15803d"
+    green_50 = "#f0fdf4"
+    slate_900 = "#0f172a"
+    slate_700 = "#334155"
+    slate_500 = "#64748b"
+    slate_200 = "#e2e8f0"
+
+    title_font = _font(42, bold=True)
+    heading_font = _font(28, bold=True)
+    body_font = _font(22)
+    small_font = _font(18)
+    label_font = _font(18, bold=True)
+    value_font = _font(24, bold=True)
+
+    draw.rounded_rectangle(
+        (36, 36, width - 36, height - 36),
+        radius=28,
+        outline=slate_200,
+        width=2,
+        fill="#ffffff",
+    )
+    draw.rounded_rectangle((36, 36, width - 36, 350), radius=28, fill=green_900)
+    draw.rectangle((36, 220, width - 36, 350), fill=green_900)
+
+    draw.rounded_rectangle((margin_x, 78, margin_x + 220, 150), radius=14, fill="#ffffff")
+    draw.text((margin_x + 26, 94), "DOTMAC", font=title_font, fill=green_900)
+
+    panel_x = width - 420
+    draw.rounded_rectangle((panel_x, 82, width - 84, 258), radius=22, fill="#ffffff")
+    draw.text((panel_x + 28, 106), "RECEIPT", font=label_font, fill=green_900)
+    draw.text(
+        (panel_x + 28, 138),
+        _truncate_text(str(context["receipt_number"]), 18),
+        font=heading_font,
+        fill=slate_900,
+    )
+    draw.text(
+        (panel_x + 28, 190),
+        f"Date: {context['receipt_date'].strftime('%Y-%m-%d')}",
+        font=small_font,
+        fill=slate_700,
+    )
+    draw.text(
+        (panel_x + 28, 218),
+        f"Account: {_truncate_text(str(context['account_number']), 24)}",
+        font=small_font,
+        fill=slate_700,
+    )
+    draw.text(
+        (margin_x, 292),
+        _truncate_text(str(context["received_from"]), 42),
+        font=heading_font,
+        fill="#ffffff",
+    )
+
+    y = 390
+    card_height = 138
+    card_gap = 22
+    card_width = (width - (margin_x * 2) - card_gap * 2) // 3
+    cards = [
+        (
+            "Received From",
+            _truncate_text(str(context["received_from"]), 28),
+            _truncate_text(str(context["received_email"] or "-"), 34),
+            "#ffffff",
+            slate_900,
+        ),
+        (
+            "Amount Received",
+            _display_amount(context["currency"], context["amount_received"]),
+            f"Status: {context['status']}",
+            green_50,
+            green_900,
+        ),
+        (
+            "Reference",
+            _truncate_text(str(context["transaction_ref"]), 28),
+            _truncate_text(str(context["method"]), 34),
+            "#ffffff",
+            slate_900,
+        ),
+    ]
+    for index, (title, line1, line2, fill, accent) in enumerate(cards):
+        left = margin_x + index * (card_width + card_gap)
+        draw.rounded_rectangle(
+            (left, y, left + card_width, y + card_height),
+            radius=20,
+            fill=fill,
+            outline=slate_200,
+        )
+        draw.text((left + 20, y + 18), title.upper(), font=label_font, fill=green_700)
+        draw.text(
+            (left + 20, y + 54),
+            line1,
+            font=value_font if index == 1 else body_font,
+            fill=accent,
+        )
+        draw.text((left + 20, y + 94), line2, font=small_font, fill=slate_700)
+
+    table_top = 572
+    table_left = margin_x
+    table_right = width - margin_x
+    draw.rounded_rectangle(
+        (table_left, table_top, table_right, table_top + 490),
+        radius=22,
+        fill="#ffffff",
+        outline=slate_200,
+    )
+    draw.rounded_rectangle(
+        (table_left, table_top, table_right, table_top + 66), radius=22, fill=green_900
+    )
+    columns = [table_left + 24, table_left + 620, table_left + 880]
+    headers = ["Invoice", "Status", "Amount Applied"]
+    for header, col in zip(headers, columns):
+        draw.text((col, table_top + 20), header.upper(), font=label_font, fill="#ffffff")
+
+    allocations = context.get("allocations") or []
+    row_y = table_top + 88
+    row_height = 62
+    if not allocations:
+        draw.text(
+            (columns[0], row_y),
+            "No invoice allocation recorded.",
+            font=body_font,
+            fill=slate_500,
+        )
+    else:
+        for index, allocation in enumerate(allocations[:6]):
+            if index % 2 == 1:
+                draw.rounded_rectangle(
+                    (table_left + 6, row_y - 8, table_right - 6, row_y + row_height - 10),
+                    radius=12,
+                    fill=green_50,
+                )
+            draw.text(
+                (columns[0], row_y),
+                _truncate_text(str(allocation.invoice_number), 36),
+                font=body_font,
+                fill=slate_900,
+            )
+            draw.text(
+                (columns[1], row_y),
+                _truncate_text(str(allocation.status), 20),
+                font=body_font,
+                fill=slate_700,
+            )
+            draw.text(
+                (columns[2], row_y),
+                _display_amount(context["currency"], allocation.amount),
+                font=body_font,
+                fill=slate_900,
+            )
+            row_y += row_height
+        if len(allocations) > 6:
+            draw.text(
+                (columns[0], row_y),
+                f"... and {len(allocations) - 6} more allocations",
+                font=small_font,
+                fill=slate_500,
+            )
+
+    totals_left = width - 460
+    totals_top = 1118
+    draw.rounded_rectangle(
+        (totals_left, totals_top, width - margin_x, totals_top + 174),
+        radius=20,
+        fill="#ffffff",
+        outline=slate_200,
+    )
+    totals = [
+        (
+            "Amount Received",
+            _display_amount(context["currency"], context["amount_received"]),
+        ),
+        ("Amount Applied", _display_amount(context["currency"], context["amount_applied"])),
+        (
+            "Unallocated Credit",
+            _display_amount(context["currency"], context["unallocated_credit"]),
+        ),
+    ]
+    for index, (label, value) in enumerate(totals):
+        ty = totals_top + 22 + (index * 44)
+        draw.text(
+            (totals_left + 22, ty),
+            label,
+            font=body_font,
+            fill=green_900 if index == 2 else slate_700,
+        )
+        draw.text(
+            (totals_left + 242, ty),
+            value,
+            font=value_font if index == 2 else body_font,
+            fill=green_900 if index == 2 else slate_900,
+        )
+
+    details_top = 1370
+    draw.rounded_rectangle(
+        (margin_x, details_top, width - margin_x, details_top + 142),
+        radius=18,
+        fill=green_50,
+        outline="#bbf7d0",
+    )
+    draw.rectangle((margin_x, details_top, margin_x + 12, details_top + 142), fill=green_700)
+    draw.text((margin_x + 28, details_top + 20), "PAYMENT DETAILS", font=label_font, fill=green_900)
+    draw.text(
+        (margin_x + 28, details_top + 58),
+        f"Payment Date: {context['receipt_date'].strftime('%Y-%m-%d %H:%M UTC')}",
+        font=body_font,
+        fill=slate_900,
+    )
+    draw.text(
+        (margin_x + 28, details_top + 94),
+        f"Payment ID: {context['payment'].id}",
+        font=body_font,
+        fill=slate_700,
+    )
+
+    footer_y = 1612
+    draw.text((margin_x, footer_y), "Prepared by Dotmac Selfcare", font=small_font, fill=slate_500)
+    draw.text((width - 360, footer_y), "Thank you for your business.", font=small_font, fill=slate_500)
+
+    output = io.BytesIO()
+    page.save(output, format="PDF", resolution=144.0)
+    return output.getvalue()
+
+
+def build_receipt_pdf(context: dict[str, Any]) -> bytes:
+    try:
+        return _build_weasyprint_receipt_pdf(context)
+    except Exception as exc:
+        logger.info(
+            "WeasyPrint export failed for payment receipt %s; using branded PDF fallback: %s",
+            getattr(context.get("payment"), "id", "unknown"),
+            exc,
+        )
+        return _build_receipt_fallback_pdf(context)
 
 
 def download_filename(payment: Payment) -> str:
