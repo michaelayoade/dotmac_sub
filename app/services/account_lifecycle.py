@@ -630,13 +630,12 @@ def _credit_covers_open_ar(db: Session, subscriber_id: str) -> bool:
     from diverging from enforcement — the "has balance but shows outstanding"
     class of bug. Deferred import avoids a collections<->lifecycle cycle.
     """
-    from app.services.billing._common import get_account_credit_balance
     from app.services.collections._core import get_available_balance
+    from app.services.customer_financial_ledger import list_customer_financial_events
 
     try:
-        # Only real, positive credit can cover dues. With no credit, ordinary
-        # delinquency applies (an open case alone still means past-due).
-        if get_account_credit_balance(db, subscriber_id) <= 0:
+        events = list_customer_financial_events(db, subscriber_id, currency=None)
+        if not any(event.signed_amount > 0 for event in events):
             return False
         return get_available_balance(db, subscriber_id) >= 0
     except Exception:  # never let a balance-calc hiccup wedge status derivation

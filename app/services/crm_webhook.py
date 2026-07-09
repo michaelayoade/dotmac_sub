@@ -122,6 +122,11 @@ def native_subscriber_payload(
     payload = {
         "status": status or native_status(subscriber.status),
         "notes": f"DotMac Sub native subscriber: {name} <{subscriber.email}>",
+        "date_of_birth": subscriber.date_of_birth.isoformat()
+        if subscriber.date_of_birth
+        else None,
+        "gender": getattr(subscriber.gender, "value", None),
+        "nin": subscriber.nin,
     }
     if subscriber.subscriber_number:
         payload["subscriber_number"] = subscriber.subscriber_number
