@@ -563,6 +563,16 @@ class FieldMapAssetNearbyResponse(BaseModel):
     server_time: datetime
 
 
+class FieldMapAssetLocationUpdate(BaseModel):
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    expected_updated_at: datetime | None = None
+    source: str | None = Field(default=None, max_length=32)
+    accuracy_m: float | None = Field(default=None, ge=0)
+    client_ref: UUID | None = None
+    force: bool = False
+
+
 class FieldMapSearchResult(BaseModel):
     kind: Literal["job", "asset"]
     id: str

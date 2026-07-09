@@ -181,6 +181,7 @@ from app.models.field_location import (  # noqa: F401
     FieldTechLocationPing,
     FieldTechPresence,
 )
+from app.models.field_map import FieldMapAssetLocationProvenance  # noqa: F401
 from app.models.field_material import (  # noqa: F401
     FieldInventoryItem,
     FieldMaterialRequest,
