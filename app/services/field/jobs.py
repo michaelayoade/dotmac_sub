@@ -7,6 +7,7 @@ pipeline continues to hydrate ``work_order_mirror``.
 
 from __future__ import annotations
 
+import builtins
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -290,7 +291,7 @@ class FieldJobs:
         db: Session,
         principal: dict[str, Any],
         crm_work_order_id: str,
-    ) -> list[dict]:
+    ) -> builtins.list[dict[str, Any]]:
         profile = _profile_from_principal(db, principal)
         row = (
             _scoped_query(db, profile)
@@ -301,7 +302,7 @@ class FieldJobs:
             raise HTTPException(status_code=404, detail="Job not found")
 
         location = _location(row)
-        items: list[dict] = [
+        items: builtins.list[dict[str, Any]] = [
             {
                 "destination_type": "customer",
                 "destination_id": str(row.subscriber_id) if row.subscriber_id else None,
@@ -318,7 +319,7 @@ class FieldJobs:
                 latitude=location.latitude,
                 longitude=location.longitude,
                 radius_m=750,
-                asset_types=list(_ASSET_DESTINATION_TYPES),
+                asset_types=builtins.list(_ASSET_DESTINATION_TYPES),
                 limit=20,
             )
             for asset in assets:
