@@ -98,10 +98,13 @@ def _customer_visible_ledger_entry(
 
 
 def _splynx_row_as_statement_entry(txn: SplynxBillingTransaction) -> SimpleNamespace:
+    transaction_date = txn.transaction_date
+    if transaction_date is None:
+        raise ValueError("legacy statement transaction requires transaction_date")
     when = datetime(
-        txn.transaction_date.year,
-        txn.transaction_date.month,
-        txn.transaction_date.day,
+        transaction_date.year,
+        transaction_date.month,
+        transaction_date.day,
         tzinfo=UTC,
     )
     if txn.entry_type == "credit":
