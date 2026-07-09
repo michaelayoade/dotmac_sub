@@ -38,7 +38,7 @@ class FieldMeResponse(BaseModel):
 
 
 class FieldJobSummary(BaseModel):
-    """Technician job-list item sourced from the CRM work-order mirror."""
+    """Technician job-list item from the imported work-order view."""
 
     id: str
     work_order_mirror_id: UUID

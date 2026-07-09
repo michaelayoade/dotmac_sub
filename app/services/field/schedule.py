@@ -1,8 +1,8 @@
-"""Merged read-only field schedule timeline.
+"""Merged field schedule timeline.
 
-CRM remains the source of truth for work-order lifecycle data in Phase 2, so
-job entries are sourced from ``work_order_mirror`` while shifts and availability
-come from the native dispatch foundation.
+Work-order job headers can be imported into ``work_order_mirror`` during
+migration, while native field execution events, shifts, and availability are
+authored in sub.
 """
 
 from __future__ import annotations

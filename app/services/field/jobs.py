@@ -1,8 +1,8 @@
-"""Technician-scoped field job reads over CRM-sourced work-order mirrors.
+"""Technician-scoped field job reads over imported work-order mirrors.
 
-Phase 2 keeps CRM as the source of truth for work-order mutations. This module
-gives the field app a native sub read surface while the CRM webhook/reconcile
-pipeline continues to hydrate ``work_order_mirror``.
+CRM can hydrate legacy work-order headers during migration. Native field
+execution activity is authored in sub and recorded on ``work_order_mirror`` as
+sub-authoritative metadata.
 """
 
 from __future__ import annotations

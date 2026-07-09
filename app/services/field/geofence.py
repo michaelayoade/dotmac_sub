@@ -1,10 +1,10 @@
-"""Geofence auto-status for CRM-sourced field jobs.
+"""Geofence auto-status for imported field jobs.
 
 When enabled, a fresh technician location ping can auto-start an assigned
 scheduled/dispatched work order once the technician is inside the configured
 arrival radius. The transition still goes through the native field transition
-engine, so idempotency, status guards, timers, and CRM pending-sync flags stay in
-one place.
+engine, so idempotency, status guards, timers, and sub-authoritative activity
+metadata stay in one place.
 """
 
 from __future__ import annotations

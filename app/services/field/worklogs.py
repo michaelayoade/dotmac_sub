@@ -1,4 +1,4 @@
-"""Native field worklogs for CRM-synced work-order mirrors."""
+"""Native field worklogs for imported work-order mirrors."""
 
 from __future__ import annotations
 

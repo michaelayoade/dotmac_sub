@@ -1,4 +1,4 @@
-"""Native field job transition events for CRM-synced work-order mirrors."""
+"""Native field job transition events for imported work-order mirrors."""
 
 from __future__ import annotations
 
