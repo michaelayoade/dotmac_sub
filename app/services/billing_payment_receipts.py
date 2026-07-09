@@ -308,7 +308,9 @@ def _receipt_text_lines(context: dict[str, Any]) -> list[str]:
                 f"{allocation.invoice_number} | {allocation.status} | "
                 f"{_format_amount(context['currency'], allocation.amount)}"
             )
-    lines.extend(["", f"Payment ID: {context['payment'].id}", "Thank you for your business."])
+    lines.extend(
+        ["", f"Payment ID: {context['payment'].id}", "Thank you for your business."]
+    )
     return lines
 
 
@@ -373,7 +375,9 @@ def _build_receipt_fallback_pdf(context: dict[str, Any]) -> bytes:
     draw.rounded_rectangle((36, 36, width - 36, 350), radius=28, fill=green_900)
     draw.rectangle((36, 220, width - 36, 350), fill=green_900)
 
-    draw.rounded_rectangle((margin_x, 78, margin_x + 220, 150), radius=14, fill="#ffffff")
+    draw.rounded_rectangle(
+        (margin_x, 78, margin_x + 220, 150), radius=14, fill="#ffffff"
+    )
     draw.text((margin_x + 26, 94), "DOTMAC", font=title_font, fill=green_900)
 
     panel_x = width - 420
@@ -463,7 +467,9 @@ def _build_receipt_fallback_pdf(context: dict[str, Any]) -> bytes:
     columns = [table_left + 24, table_left + 620, table_left + 880]
     headers = ["Invoice", "Status", "Amount Applied"]
     for header, col in zip(headers, columns):
-        draw.text((col, table_top + 20), header.upper(), font=label_font, fill="#ffffff")
+        draw.text(
+            (col, table_top + 20), header.upper(), font=label_font, fill="#ffffff"
+        )
 
     allocations = context.get("allocations") or []
     row_y = table_top + 88
@@ -479,7 +485,12 @@ def _build_receipt_fallback_pdf(context: dict[str, Any]) -> bytes:
         for index, allocation in enumerate(allocations[:6]):
             if index % 2 == 1:
                 draw.rounded_rectangle(
-                    (table_left + 6, row_y - 8, table_right - 6, row_y + row_height - 10),
+                    (
+                        table_left + 6,
+                        row_y - 8,
+                        table_right - 6,
+                        row_y + row_height - 10,
+                    ),
                     radius=12,
                     fill=green_50,
                 )
@@ -523,7 +534,10 @@ def _build_receipt_fallback_pdf(context: dict[str, Any]) -> bytes:
             "Amount Received",
             _display_amount(context["currency"], context["amount_received"]),
         ),
-        ("Amount Applied", _display_amount(context["currency"], context["amount_applied"])),
+        (
+            "Amount Applied",
+            _display_amount(context["currency"], context["amount_applied"]),
+        ),
         (
             "Unallocated Credit",
             _display_amount(context["currency"], context["unallocated_credit"]),
@@ -551,8 +565,15 @@ def _build_receipt_fallback_pdf(context: dict[str, Any]) -> bytes:
         fill=green_50,
         outline="#bbf7d0",
     )
-    draw.rectangle((margin_x, details_top, margin_x + 12, details_top + 142), fill=green_700)
-    draw.text((margin_x + 28, details_top + 20), "PAYMENT DETAILS", font=label_font, fill=green_900)
+    draw.rectangle(
+        (margin_x, details_top, margin_x + 12, details_top + 142), fill=green_700
+    )
+    draw.text(
+        (margin_x + 28, details_top + 20),
+        "PAYMENT DETAILS",
+        font=label_font,
+        fill=green_900,
+    )
     draw.text(
         (margin_x + 28, details_top + 58),
         f"Payment Date: {context['receipt_date'].strftime('%Y-%m-%d %H:%M UTC')}",
@@ -567,8 +588,18 @@ def _build_receipt_fallback_pdf(context: dict[str, Any]) -> bytes:
     )
 
     footer_y = 1612
-    draw.text((margin_x, footer_y), "Prepared by Dotmac Selfcare", font=small_font, fill=slate_500)
-    draw.text((width - 360, footer_y), "Thank you for your business.", font=small_font, fill=slate_500)
+    draw.text(
+        (margin_x, footer_y),
+        "Prepared by Dotmac Selfcare",
+        font=small_font,
+        fill=slate_500,
+    )
+    draw.text(
+        (width - 360, footer_y),
+        "Thank you for your business.",
+        font=small_font,
+        fill=slate_500,
+    )
 
     output = io.BytesIO()
     page.save(output, format="PDF", resolution=144.0)
