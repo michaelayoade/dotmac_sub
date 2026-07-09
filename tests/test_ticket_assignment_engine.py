@@ -6,6 +6,7 @@ from app.models.service_team import ServiceTeam, ServiceTeamMember, ServiceTeamT
 from app.models.support import Ticket, TicketAssignee, TicketStatus
 from app.models.ticket_workflow import TicketAssignmentRule, TicketAssignmentStrategy
 from app.services.ticket_assignment.engine import auto_assign_ticket
+from app.services.ticket_assignment.selectors import list_team_candidate_person_ids
 
 
 def _team(db_session, name: str = "Dispatch") -> ServiceTeam:
@@ -141,3 +142,26 @@ def test_ticket_auto_assign_direct_technician_adds_assignee_row(db_session):
         .count()
         == 1
     )
+
+
+def test_ticket_assignment_candidates_ignore_inactive_team(db_session):
+    team = _team(db_session, "Retired support")
+    _member(db_session, team)
+    team.is_active = False
+    db_session.commit()
+
+    assert list_team_candidate_person_ids(db_session, str(team.id)) == []
+
+
+def test_ticket_assignment_candidates_ignore_inactive_members(db_session):
+    team = _team(db_session, "Partial support")
+    inactive_person_id = _member(db_session, team)
+    active_person_id = _member(db_session, team)
+    for member in team.members:
+        if member.person_id == inactive_person_id:
+            member.is_active = False
+    db_session.commit()
+
+    assert list_team_candidate_person_ids(db_session, str(team.id)) == [
+        str(active_person_id)
+    ]
