@@ -169,6 +169,45 @@ class FieldRouteResponse(BaseModel):
     route: list[FieldRouteStop]
 
 
+class LocationPingInput(BaseModel):
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    accuracy_m: float | None = Field(default=None, ge=0)
+    captured_at: datetime | None = None
+    crm_work_order_id: str | None = Field(default=None, max_length=64)
+    source: str = Field(default="mobile", max_length=32)
+    status: str | None = Field(default=None, max_length=20)
+
+
+class LocationPingBatch(BaseModel):
+    pings: list[LocationPingInput] = Field(min_length=1, max_length=200)
+
+
+class LocationSharingUpdate(BaseModel):
+    enabled: bool
+    status: str | None = Field(default=None, max_length=20)
+
+
+class FieldPresenceRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    person_id: UUID
+    status: str
+    location_sharing_enabled: bool
+    last_latitude: float | None = None
+    last_longitude: float | None = None
+    last_location_accuracy_m: float | None = None
+    last_location_at: datetime | None = None
+    last_seen_at: datetime | None = None
+
+
+class LocationIngestResponse(BaseModel):
+    accepted: int
+    errors: list[dict[str, Any]] = Field(default_factory=list)
+    presence: FieldPresenceRead
+    transitions: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class FieldMapAsset(BaseModel):
     id: UUID
     type: str
