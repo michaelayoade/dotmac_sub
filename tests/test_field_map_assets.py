@@ -9,13 +9,16 @@ from fastapi.testclient import TestClient
 
 from app.api.field import router
 from app.db import get_db
+from app.models.dispatch import TechnicianProfile
 from app.models.gis import ServiceBuilding
 from app.models.network import FdhCabinet, FiberAccessPoint, FiberSpliceClosure
-from app.models.subscriber import UserType
+from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.models.wireless_mast import WirelessMast
+from app.models.work_order_mirror import WorkOrderMirror
 from app.services.auth_dependencies import require_user_auth
 from app.services.field.map_assets import field_map_assets
+from app.services.field.map_search import field_map_search
 
 
 def _user(db_session) -> SystemUser:
@@ -173,3 +176,61 @@ def test_map_assets_api(db_session):
 
     assert nearby.status_code == 200
     assert nearby.json()[0]["distance_m"] >= 0
+
+
+def test_map_search_finds_scoped_jobs_then_assets(db_session):
+    user = _user(db_session)
+    subscriber = Subscriber(
+        first_name="Fiber",
+        last_name="Customer",
+        email=f"fiber-{uuid4().hex[:8]}@example.com",
+    )
+    other_subscriber = Subscriber(
+        first_name="Other",
+        last_name="Customer",
+        email=f"other-{uuid4().hex[:8]}@example.com",
+    )
+    db_session.add_all([subscriber, other_subscriber])
+    db_session.flush()
+    _seed_assets(db_session)
+    db_session.add_all(
+        [
+            WorkOrderMirror(
+                crm_work_order_id="wo-search-visible",
+                subscriber_id=subscriber.id,
+                title="Fiber Street install",
+                status="dispatched",
+                assigned_to_crm_person_id="crm-map-tech",
+                address="Fiber Street",
+                metadata_={"location": {"lat": 9.071, "lng": 7.451}},
+            ),
+            WorkOrderMirror(
+                crm_work_order_id="wo-search-hidden",
+                subscriber_id=other_subscriber.id,
+                title="Fiber Street hidden",
+                status="dispatched",
+                assigned_to_crm_person_id="other-tech",
+                address="Fiber Street",
+                metadata_={"location": {"lat": 9.071, "lng": 7.451}},
+            ),
+        ]
+    )
+
+    db_session.add(
+        TechnicianProfile(
+            person_id=user.id,
+            system_user_id=user.id,
+            crm_person_id="crm-map-tech",
+        )
+    )
+    db_session.commit()
+
+    items = field_map_search.search(db_session, _auth(user), "Fiber Street")
+
+    assert items[0]["kind"] == "job"
+    assert items[0]["id"] == "wo-search-visible"
+    assert {item["id"] for item in items} == {"wo-search-visible"}
+
+    asset_items = field_map_search.search(db_session, _auth(user), "FDH Jabi")
+    assert asset_items[0]["kind"] == "asset"
+    assert asset_items[0]["asset_type"] == "fdh_cabinet"
