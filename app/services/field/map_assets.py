@@ -28,7 +28,7 @@ class _AssetConfig:
 
 
 def _compact(parts: list[str | None]) -> str | None:
-    text = " · ".join(part for part in parts if part)
+    text = " - ".join(part for part in parts if part)
     return text or None
 
 
