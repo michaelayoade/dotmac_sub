@@ -33,7 +33,9 @@ def upgrade() -> None:
             sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
             sa.Column("name", sa.String(length=120), nullable=False),
             sa.Column("description", sa.Text()),
-            sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
+            sa.Column(
+                "is_active", sa.Boolean(), nullable=False, server_default=sa.true()
+            ),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
             sa.UniqueConstraint("name", name="uq_skills_name"),
@@ -50,13 +52,21 @@ def upgrade() -> None:
             sa.Column("region", sa.String(length=120)),
             sa.Column("erp_employee_id", sa.String(length=100)),
             sa.Column("metadata", sa.JSON()),
-            sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
+            sa.Column(
+                "is_active", sa.Boolean(), nullable=False, server_default=sa.true()
+            ),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
             sa.ForeignKeyConstraint(["system_user_id"], ["system_users.id"]),
-            sa.UniqueConstraint("system_user_id", name="uq_technician_profiles_system_user_id"),
-            sa.UniqueConstraint("crm_person_id", name="uq_technician_profiles_crm_person_id"),
-            sa.UniqueConstraint("erp_employee_id", name="uq_technician_profiles_erp_employee_id"),
+            sa.UniqueConstraint(
+                "system_user_id", name="uq_technician_profiles_system_user_id"
+            ),
+            sa.UniqueConstraint(
+                "crm_person_id", name="uq_technician_profiles_crm_person_id"
+            ),
+            sa.UniqueConstraint(
+                "erp_employee_id", name="uq_technician_profiles_erp_employee_id"
+            ),
         )
         op.create_index(
             "ix_technician_profiles_system_user_id",
@@ -73,7 +83,9 @@ def upgrade() -> None:
             "technician_profiles",
             ["erp_employee_id"],
         )
-        op.create_index("ix_technician_profiles_region", "technician_profiles", ["region"])
+        op.create_index(
+            "ix_technician_profiles_region", "technician_profiles", ["region"]
+        )
 
     if not _has_table("technician_skills"):
         op.create_table(
@@ -82,12 +94,18 @@ def upgrade() -> None:
             sa.Column("technician_id", postgresql.UUID(as_uuid=True), nullable=False),
             sa.Column("skill_id", postgresql.UUID(as_uuid=True), nullable=False),
             sa.Column("proficiency", sa.Integer()),
-            sa.Column("is_primary", sa.Boolean(), nullable=False, server_default=sa.false()),
-            sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
+            sa.Column(
+                "is_primary", sa.Boolean(), nullable=False, server_default=sa.false()
+            ),
+            sa.Column(
+                "is_active", sa.Boolean(), nullable=False, server_default=sa.true()
+            ),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
             sa.ForeignKeyConstraint(["technician_id"], ["technician_profiles.id"]),
             sa.ForeignKeyConstraint(["skill_id"], ["skills.id"]),
-            sa.UniqueConstraint("technician_id", "skill_id", name="uq_technician_skill"),
+            sa.UniqueConstraint(
+                "technician_id", "skill_id", name="uq_technician_skill"
+            ),
         )
 
     if not _has_table("shifts"):
@@ -100,7 +118,9 @@ def upgrade() -> None:
             sa.Column("timezone", sa.String(length=64)),
             sa.Column("shift_type", sa.String(length=60)),
             sa.Column("erp_id", sa.String(length=100)),
-            sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
+            sa.Column(
+                "is_active", sa.Boolean(), nullable=False, server_default=sa.true()
+            ),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
             sa.ForeignKeyConstraint(["technician_id"], ["technician_profiles.id"]),
@@ -117,15 +137,21 @@ def upgrade() -> None:
             sa.Column("end_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("reason", sa.String(length=160)),
             sa.Column("block_type", sa.String(length=60)),
-            sa.Column("is_available", sa.Boolean(), nullable=False, server_default=sa.false()),
+            sa.Column(
+                "is_available", sa.Boolean(), nullable=False, server_default=sa.false()
+            ),
             sa.Column("erp_id", sa.String(length=100)),
-            sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
+            sa.Column(
+                "is_active", sa.Boolean(), nullable=False, server_default=sa.true()
+            ),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
             sa.ForeignKeyConstraint(["technician_id"], ["technician_profiles.id"]),
             sa.UniqueConstraint("erp_id", name="uq_availability_blocks_erp_id"),
         )
-        op.create_index("ix_availability_blocks_erp_id", "availability_blocks", ["erp_id"])
+        op.create_index(
+            "ix_availability_blocks_erp_id", "availability_blocks", ["erp_id"]
+        )
 
     if not _has_table("dispatch_rules"):
         op.create_table(
@@ -138,8 +164,12 @@ def upgrade() -> None:
             sa.Column("region", sa.String(length=120)),
             sa.Column("service_team_id", postgresql.UUID(as_uuid=True)),
             sa.Column("skill_ids", sa.JSON()),
-            sa.Column("auto_assign", sa.Boolean(), nullable=False, server_default=sa.false()),
-            sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
+            sa.Column(
+                "auto_assign", sa.Boolean(), nullable=False, server_default=sa.false()
+            ),
+            sa.Column(
+                "is_active", sa.Boolean(), nullable=False, server_default=sa.true()
+            ),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
             sa.ForeignKeyConstraint(["service_team_id"], ["service_teams.id"]),
@@ -154,9 +184,13 @@ def upgrade() -> None:
         op.create_table(
             "work_order_assignment_queue",
             sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
-            sa.Column("work_order_mirror_id", postgresql.UUID(as_uuid=True), nullable=False),
+            sa.Column(
+                "work_order_mirror_id", postgresql.UUID(as_uuid=True), nullable=False
+            ),
             sa.Column("crm_work_order_id", sa.String(length=64), nullable=False),
-            sa.Column("status", sa.String(length=20), nullable=False, server_default="queued"),
+            sa.Column(
+                "status", sa.String(length=20), nullable=False, server_default="queued"
+            ),
             sa.Column("reason", sa.Text()),
             sa.Column("dispatch_rule_id", postgresql.UUID(as_uuid=True)),
             sa.Column("assigned_technician_id", postgresql.UUID(as_uuid=True)),
@@ -164,7 +198,9 @@ def upgrade() -> None:
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
             sa.ForeignKeyConstraint(["work_order_mirror_id"], ["work_order_mirror.id"]),
             sa.ForeignKeyConstraint(["dispatch_rule_id"], ["dispatch_rules.id"]),
-            sa.ForeignKeyConstraint(["assigned_technician_id"], ["technician_profiles.id"]),
+            sa.ForeignKeyConstraint(
+                ["assigned_technician_id"], ["technician_profiles.id"]
+            ),
         )
         op.create_index(
             "ix_work_order_assignment_queue_crm_work_order_id",
