@@ -157,6 +157,10 @@ class FieldTransitions:
 
         if event_value == "complete":
             _check_completion_gate(db, row, event_payload)
+        if event_value in {"en_route", "arrived"}:
+            from app.services.field.movements import validate_destination_payload
+
+            validate_destination_payload(row, event_payload)
 
         previous_status = row.status
         new_status = _target_status(event_value, previous_status)
@@ -184,6 +188,17 @@ class FieldTransitions:
         )
         db.add(event_row)
         _sync_timer(db, row, profile, event_value, occurred)
+        _sync_movement(
+            db,
+            row,
+            profile,
+            event_value,
+            client_uuid,
+            occurred,
+            latitude,
+            longitude,
+            event_payload,
+        )
         try:
             db.commit()
         except IntegrityError:
@@ -362,6 +377,45 @@ def _open_timer(db: Session, person_id) -> FieldWorkLog | None:
         .order_by(FieldWorkLog.start_at.desc())
         .first()
     )
+
+
+def _sync_movement(
+    db: Session,
+    row: WorkOrderMirror,
+    profile,
+    event: str,
+    client_ref: UUID,
+    occurred_at: datetime,
+    latitude: float | None,
+    longitude: float | None,
+    payload: dict[str, Any],
+) -> None:
+    if event == "en_route":
+        from app.services.field.movements import start_movement
+
+        start_movement(
+            db,
+            row,
+            profile,
+            client_ref=client_ref,
+            occurred_at=occurred_at,
+            latitude=latitude,
+            longitude=longitude,
+            payload=payload,
+        )
+    elif event == "arrived":
+        from app.services.field.movements import arrive_movement
+
+        arrive_movement(
+            db,
+            row,
+            profile,
+            client_ref=client_ref,
+            occurred_at=occurred_at,
+            latitude=latitude,
+            longitude=longitude,
+            payload=payload,
+        )
 
 
 field_transitions = FieldTransitions()

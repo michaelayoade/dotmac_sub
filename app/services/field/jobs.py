@@ -279,6 +279,7 @@ class FieldJobs:
         from app.services.field.expense_requests import field_expense_requests
         from app.services.field.material_requests import field_material_requests
         from app.services.field.materials import field_materials
+        from app.services.field.movements import list_for_job as list_movements
         from app.services.field.notes import field_notes
         from app.services.field.transitions import field_transitions
         from app.services.field.worklogs import field_worklogs
@@ -311,6 +312,7 @@ class FieldJobs:
             ),
             worklogs=field_worklogs.list_for_job(db, principal, crm_work_order_id),
             events=field_transitions.list_for_job(db, principal, crm_work_order_id),
+            movements=list_movements(db, row),
             equipment=field_equipment.current_for_job(db, principal, crm_work_order_id),
             history=[],
         )
