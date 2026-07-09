@@ -1,9 +1,9 @@
-"""Local mirror of CRM work-order data (Field Service tracker).
+"""Local work-order data for the Field Service tracker.
 
-All DB + CRM access for the customer-facing field-service tracker lives here so
-the API/web wrappers stay thin. The CRM owns work orders; this keeps a
-read-optimised local copy hydrated by CRM ``work_order.*`` webhooks + a periodic
-reconcile pull + lazy on-view refresh. Read-only for the customer.
+All DB access for the customer-facing field-service tracker lives here so the
+API/web wrappers stay thin. CRM can still import legacy work-order headers
+during migration, while native field activity, live location, and customer
+ratings are recorded in sub.
 """
 
 from __future__ import annotations
@@ -15,7 +15,12 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.dispatch import TechnicianProfile
+from app.models.dispatch import (
+    DispatchQueueStatus,
+    TechnicianProfile,
+    WorkOrderAssignmentQueue,
+)
+from app.models.field_location import FieldTechPresence
 from app.models.subscriber import Subscriber
 from app.models.work_order_mirror import WorkOrderMirror, WorkOrderSyncState
 from app.services.common import coerce_uuid
@@ -27,6 +32,8 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_REFRESH_TTL_SECONDS = 180  # "where's my technician" — refresh often
 _CRM_TECHNICIAN_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_DNS, "dotmac.io.crm.technician")
+_TRACKABLE_STATUSES = frozenset({"in_progress"})
+_RATABLE_STATUSES = frozenset({"completed"})
 
 
 def _to_dt(value: object) -> datetime | None:
@@ -69,6 +76,52 @@ def _to_dict(value: object) -> dict | None:
 
 def _crm_person_uuid(crm_person_id: str) -> uuid.UUID:
     return uuid.uuid5(_CRM_TECHNICIAN_NAMESPACE, crm_person_id)
+
+
+def _owned_work_order(
+    db: Session, subscriber_id: str, work_order_id: str
+) -> WorkOrderMirror | None:
+    try:
+        sub_uuid = coerce_uuid(str(subscriber_id))
+    except (TypeError, ValueError):
+        return None
+    return db.scalar(
+        select(WorkOrderMirror).where(
+            WorkOrderMirror.subscriber_id == sub_uuid,
+            WorkOrderMirror.crm_work_order_id == str(work_order_id),
+        )
+    )
+
+
+def _assigned_profile(db: Session, row: WorkOrderMirror) -> TechnicianProfile | None:
+    assignment = db.scalar(
+        select(WorkOrderAssignmentQueue)
+        .where(
+            WorkOrderAssignmentQueue.work_order_mirror_id == row.id,
+            WorkOrderAssignmentQueue.status == DispatchQueueStatus.assigned,
+            WorkOrderAssignmentQueue.assigned_technician_id.is_not(None),
+        )
+        .order_by(WorkOrderAssignmentQueue.updated_at.desc())
+    )
+    if assignment and assignment.assigned_technician_id:
+        profile = db.get(TechnicianProfile, assignment.assigned_technician_id)
+        if profile is not None:
+            return profile
+
+    crm_person_id = str(row.assigned_to_crm_person_id or "").strip()
+    if crm_person_id:
+        return db.scalar(
+            select(TechnicianProfile).where(
+                TechnicianProfile.crm_person_id == crm_person_id
+            )
+        )
+    return None
+
+
+def _rating_metadata(row: WorkOrderMirror) -> dict | None:
+    metadata = row.metadata_ if isinstance(row.metadata_, dict) else {}
+    rating = metadata.get("technician_rating")
+    return rating if isinstance(rating, dict) else None
 
 
 def _ensure_technician_profile(
@@ -380,6 +433,103 @@ def read_for_subscriber(
         1 for r in rows if r.status not in ("completed", "canceled", "draft")
     )
     return {"work_orders": items, "total": len(items), "upcoming": upcoming}
+
+
+def technician_location(db: Session, subscriber_id: str, work_order_id: str) -> dict:
+    """Return the current native technician location for a subscriber work order."""
+    row = _owned_work_order(db, subscriber_id, work_order_id)
+    if row is None:
+        return {"available": False, "reason": "not_found"}
+
+    status = (row.status or "").strip().lower()
+    if status not in _TRACKABLE_STATUSES or row.completed_at is not None:
+        return {
+            "available": False,
+            "reason": "not_active",
+            "work_order_id": row.crm_work_order_id,
+        }
+
+    profile = _assigned_profile(db, row)
+    if profile is None:
+        return {
+            "available": False,
+            "reason": "not_assigned",
+            "work_order_id": row.crm_work_order_id,
+        }
+
+    presence = db.scalar(
+        select(FieldTechPresence).where(FieldTechPresence.technician_id == profile.id)
+    )
+    if presence is None or not presence.location_sharing_enabled:
+        return {
+            "available": False,
+            "reason": "sharing_off",
+            "work_order_id": row.crm_work_order_id,
+        }
+    if presence.last_latitude is None or presence.last_longitude is None:
+        return {
+            "available": False,
+            "reason": "no_fix",
+            "work_order_id": row.crm_work_order_id,
+        }
+
+    return {
+        "available": True,
+        "work_order_id": row.crm_work_order_id,
+        "latitude": presence.last_latitude,
+        "longitude": presence.last_longitude,
+        "accuracy_m": presence.last_location_accuracy_m,
+        "updated_at": _as_utc(presence.last_location_at).isoformat()
+        if presence.last_location_at
+        else None,
+        "estimated_arrival_at": _as_utc(row.estimated_arrival_at).isoformat()
+        if row.estimated_arrival_at
+        else None,
+    }
+
+
+def rate_technician(
+    db: Session,
+    subscriber_id: str,
+    work_order_id: str,
+    *,
+    rating: int,
+    comment: str | None = None,
+) -> dict:
+    """Record a customer/reseller technician rating locally in sub."""
+    row = _owned_work_order(db, subscriber_id, work_order_id)
+    if row is None:
+        raise LookupError("work_order_not_found")
+
+    existing = _rating_metadata(row)
+    if existing is not None:
+        return {
+            "ok": True,
+            "already_rated": True,
+            "rating": existing.get("rating"),
+            "work_order_id": row.crm_work_order_id,
+        }
+
+    status = (row.status or "").strip().lower()
+    if status not in _RATABLE_STATUSES:
+        raise ValueError("work_order_not_completed")
+
+    normalized_rating = max(1, min(5, int(rating)))
+    metadata = dict(row.metadata_ or {})
+    metadata["technician_rating"] = {
+        "rating": normalized_rating,
+        "comment": (comment or "").strip()[:2000] or None,
+        "rated_at": datetime.now(UTC).isoformat(),
+        "source": "sub_portal",
+    }
+    row.metadata_ = metadata
+    db.commit()
+    return {
+        "ok": True,
+        "already_rated": False,
+        "rating": normalized_rating,
+        "work_order_id": row.crm_work_order_id,
+    }
 
 
 _STATUS_EVENTS = {

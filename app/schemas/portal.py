@@ -226,13 +226,15 @@ class QuoteDepositVerifyResponse(BaseModel):
     quote: QuoteItem | None = None
 
 
-# ── Technician live map + rating (proxied from the CRM portal API) ───────────
+# ── Technician live map + rating ─────────────────────────────────────────────
 
 
 class TechnicianLocation(BaseModel):
-    """Live technician position for an in-progress work order, proxied from the
-    CRM. ``available`` is False (with a ``reason``) when the map should be hidden
-    — outside the Start work → End work window, sharing off, or no fix yet."""
+    """Live technician position for an in-progress work order.
+
+    ``available`` is False (with a ``reason``) when the map should be hidden:
+    outside the Start work to End work window, sharing off, or no fix yet.
+    """
 
     available: bool = False
     reason: str | None = None
