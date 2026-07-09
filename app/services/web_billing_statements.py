@@ -8,35 +8,21 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
-from types import SimpleNamespace
 from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
-from app.models.billing import Invoice, InvoiceStatus, LedgerEntry, LedgerEntryType
 from app.models.notification import NotificationChannel, NotificationStatus
-from app.models.splynx_transaction import SplynxBillingTransaction
 from app.schemas.notification import NotificationCreate
 from app.services import notification as notification_service
+from app.services.customer_financial_ledger import (
+    CustomerFinancialEvent,
+    list_customer_financial_events,
+)
 
 logger = logging.getLogger(__name__)
-
-LEGACY_LEDGER_CUTOVER = datetime(2026, 3, 15, 23, 59, 59, tzinfo=UTC)
-POST_CUTOVER_SERVICE_ACTIVITY_AT = datetime(2026, 6, 16, 9, 8, tzinfo=UTC)
-INTERNAL_MEMO_EXACT = {
-    "Prepaid opening balance @ cutover",
-}
-INTERNAL_MEMO_PREFIXES = (
-    "Correction:",
-    "Partial cutover opening balance construction adjustment",
-    "Reversal of phantom",
-    "Reversal of prepaid opening",
-    "Data repair 2026-06-29:",
-    "Validated account credit consumed",
-)
 
 
 @dataclass(frozen=True)
@@ -77,89 +63,8 @@ def parse_statement_range(
     )
 
 
-def _signed_amount(entry: LedgerEntry) -> Decimal:
-    amount = Decimal(str(entry.amount or 0))
-    return amount if entry.entry_type == LedgerEntryType.credit else -amount
-
-
-def _entry_date(entry: Any) -> datetime:
-    return getattr(entry, "effective_date", None) or entry.created_at
-
-
-def _customer_visible_ledger_entry(
-    entry: LedgerEntry, *, has_legacy_mirror: bool
-) -> bool:
-    memo = str(entry.memo or "")
-    if memo in INTERNAL_MEMO_EXACT or memo.startswith(INTERNAL_MEMO_PREFIXES):
-        return False
-    if has_legacy_mirror and _entry_date(entry) <= LEGACY_LEDGER_CUTOVER:
-        return False
-    return True
-
-
-def _splynx_row_as_statement_entry(txn: SplynxBillingTransaction) -> SimpleNamespace:
-    transaction_date = txn.transaction_date
-    if transaction_date is None:
-        raise ValueError("legacy statement transaction requires transaction_date")
-    when = datetime(
-        transaction_date.year,
-        transaction_date.month,
-        transaction_date.day,
-        tzinfo=UTC,
-    )
-    if txn.entry_type == "credit":
-        entry_type = LedgerEntryType.credit
-    else:
-        entry_type = LedgerEntryType.debit
-    if txn.splynx_payment_id is not None:
-        source = SimpleNamespace(value="payment")
-    elif txn.splynx_credit_note_id is not None:
-        source = SimpleNamespace(value="credit_note")
-    elif txn.splynx_invoice_id is not None or entry_type == LedgerEntryType.debit:
-        source = SimpleNamespace(value="invoice")
-    else:
-        source = SimpleNamespace(value="other")
-    return SimpleNamespace(
-        id=txn.id,
-        account_id=txn.subscriber_id,
-        entry_type=entry_type,
-        source=source,
-        amount=txn.amount,
-        currency="NGN",
-        memo=txn.description or txn.category_name or "Legacy transaction",
-        effective_date=when,
-        created_at=when,
-        is_active=True,
-    )
-
-
-def _invoice_as_statement_entry(invoice: Invoice) -> SimpleNamespace:
-    when = invoice.issued_at or invoice.created_at
-    return SimpleNamespace(
-        id=invoice.id,
-        account_id=invoice.account_id,
-        entry_type=LedgerEntryType.debit,
-        source=SimpleNamespace(value="invoice"),
-        amount=invoice.total,
-        currency=invoice.currency or "NGN",
-        memo=invoice.memo
-        or (
-            f"Invoice {invoice.invoice_number}"
-            if invoice.invoice_number
-            else "Service invoice"
-        ),
-        effective_date=when,
-        created_at=invoice.created_at,
-        is_active=True,
-    )
-
-
-def _base_ledger_query(db: Session, account_id: UUID):
-    return (
-        db.query(LedgerEntry)
-        .filter(LedgerEntry.account_id == account_id)
-        .filter(LedgerEntry.is_active.is_(True))
-    )
+def _signed_amount(entry: CustomerFinancialEvent) -> Decimal:
+    return entry.signed_amount
 
 
 def _statement_entries(
@@ -167,77 +72,14 @@ def _statement_entries(
     *,
     account_id: UUID,
     date_range: StatementRange,
-) -> list[Any]:
-    has_legacy_mirror = (
-        db.query(SplynxBillingTransaction.id)
-        .filter(SplynxBillingTransaction.subscriber_id == account_id)
-        .filter(SplynxBillingTransaction.deleted.is_(False))
-        .first()
-        is not None
+) -> list[CustomerFinancialEvent]:
+    return list_customer_financial_events(
+        db,
+        account_id,
+        start=date_range.start,
+        end=date_range.end,
+        currency=None,
     )
-    entries: list[Any] = []
-
-    if has_legacy_mirror:
-        legacy_query = (
-            db.query(SplynxBillingTransaction)
-            .filter(SplynxBillingTransaction.subscriber_id == account_id)
-            .filter(SplynxBillingTransaction.deleted.is_(False))
-            .filter(SplynxBillingTransaction.transaction_date.isnot(None))
-        )
-        if date_range.start_date:
-            legacy_query = legacy_query.filter(
-                SplynxBillingTransaction.transaction_date >= date_range.start_date
-            )
-        if date_range.end_date:
-            legacy_query = legacy_query.filter(
-                SplynxBillingTransaction.transaction_date <= date_range.end_date
-            )
-        entries.extend(
-            _splynx_row_as_statement_entry(txn) for txn in legacy_query.all()
-        )
-
-    local_entries = (
-        _base_ledger_query(db, account_id)
-        .filter(
-            and_(
-                LedgerEntry.created_at >= date_range.start,
-                LedgerEntry.created_at < date_range.end,
-            )
-        )
-        .order_by(LedgerEntry.created_at.asc())
-        .all()
-    )
-    entries.extend(
-        entry
-        for entry in local_entries
-        if _customer_visible_ledger_entry(entry, has_legacy_mirror=has_legacy_mirror)
-    )
-
-    post_cutover_invoices = (
-        db.query(Invoice)
-        .filter(Invoice.account_id == account_id)
-        .filter(Invoice.is_active.is_(True))
-        .filter(
-            Invoice.status.in_(
-                [
-                    InvoiceStatus.issued,
-                    InvoiceStatus.partially_paid,
-                    InvoiceStatus.overdue,
-                    InvoiceStatus.paid,
-                ]
-            )
-        )
-        .filter(Invoice.is_proforma.is_(False))
-        .filter(Invoice.created_at >= POST_CUTOVER_SERVICE_ACTIVITY_AT)
-        .filter(Invoice.created_at >= date_range.start)
-        .filter(Invoice.created_at < date_range.end)
-        .order_by(Invoice.created_at.asc())
-        .all()
-    )
-    entries.extend(
-        _invoice_as_statement_entry(invoice) for invoice in post_cutover_invoices
-    )
-    return sorted(entries, key=lambda entry: (_entry_date(entry), str(entry.id)))
 
 
 def _opening_balance(
@@ -246,19 +88,14 @@ def _opening_balance(
     account_id: UUID,
     date_range: StatementRange,
 ) -> Decimal:
-    opening_range = StatementRange(
-        start=datetime.min.replace(tzinfo=UTC),
+    opening_entries = list_customer_financial_events(
+        db,
+        account_id,
         end=date_range.start,
-        start_date=date.min,
-        end_date=(date_range.start - timedelta(days=1)).date(),
+        currency=None,
     )
     return sum(
-        (
-            _signed_amount(entry)
-            for entry in _statement_entries(
-                db, account_id=account_id, date_range=opening_range
-            )
-        ),
+        (_signed_amount(entry) for entry in opening_entries),
         Decimal("0.00"),
     )
 

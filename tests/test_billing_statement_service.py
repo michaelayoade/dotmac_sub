@@ -183,3 +183,36 @@ def test_statement_uses_legacy_mirror_and_excludes_internal_rows(
     assert "Monthly service" in csv_text
     assert "Prepaid opening balance" not in csv_text
     assert "cutover reconstructed" not in csv_text
+
+
+def test_build_account_statement_excludes_internal_repair_entries(
+    db_session, subscriber
+):
+    _create_entry(
+        db_session,
+        subscriber.id,
+        entry_type=LedgerEntryType.credit,
+        amount="100.00",
+        created_at=datetime(2026, 2, 1, tzinfo=UTC),
+    )
+    internal = _create_entry(
+        db_session,
+        subscriber.id,
+        entry_type=LedgerEntryType.debit,
+        amount="75.00",
+        created_at=datetime(2026, 2, 2, tzinfo=UTC),
+    )
+    internal.memo = "Correction: remove system overcredit"
+    db_session.add(internal)
+    db_session.commit()
+
+    date_range = statements_service.parse_statement_range("2026-02-01", "2026-02-28")
+    statement = statements_service.build_account_statement(
+        db_session,
+        account_id=subscriber.id,
+        date_range=date_range,
+    )
+
+    assert statement["period_delta"] == Decimal("100.00")
+    assert len(statement["rows"]) == 1
+    assert statement["rows"][0]["entry"].memo == "test"
