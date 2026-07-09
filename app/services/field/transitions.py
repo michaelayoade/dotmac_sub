@@ -17,6 +17,7 @@ from app.models.field_worklog import FieldWorkLog
 from app.models.work_order_mirror import WorkOrderMirror
 from app.services.common import coerce_uuid
 from app.services.field.jobs import _profile_from_principal, _scoped_query
+from app.services.field.source import mark_sub_authoritative
 
 _CLOCK_SKEW_FLAG_SECONDS = 15 * 60
 _UNABLE_REASONS = {
@@ -168,7 +169,7 @@ class FieldTransitions:
             row.status = new_status
             _apply_status_timestamps(row, event_value, occurred)
 
-        _mark_pending_sync(row, event_value, client_uuid, occurred)
+        _mark_sub_authoritative(row, event_value, client_uuid, occurred)
         event_row = FieldJobEvent(
             work_order_mirror_id=row.id,
             crm_work_order_id=row.crm_work_order_id,
@@ -315,20 +316,18 @@ def _check_completion_gate(
         )
 
 
-def _mark_pending_sync(
+def _mark_sub_authoritative(
     row: WorkOrderMirror,
     event: str,
     client_event_id: UUID,
     occurred_at: datetime,
 ) -> None:
-    metadata = dict(row.metadata_ or {})
-    metadata["native_transition_pending_sync"] = True
-    metadata["last_native_transition"] = {
-        "event": event,
-        "client_event_id": str(client_event_id),
-        "occurred_at": occurred_at.isoformat(),
-    }
-    row.metadata_ = metadata
+    mark_sub_authoritative(
+        row,
+        "transition",
+        details={"event": event, "client_event_id": str(client_event_id)},
+        occurred_at=occurred_at,
+    )
 
 
 def _sync_timer(

@@ -12,6 +12,9 @@ from sqlalchemy.orm import Session
 from app.models.network import OntAssignment, OntUnit
 from app.models.work_order_mirror import WorkOrderMirror
 from app.services.field.jobs import _profile_from_principal, _scoped_query
+from app.services.field.source import (
+    mark_sub_authoritative as _mark_source_authoritative,
+)
 
 
 def serialize_equipment(assignment: OntAssignment) -> dict:
@@ -82,7 +85,7 @@ class FieldEquipment:
             active=True,
             notes=(notes or "").strip() or None,
         )
-        _mark_pending_sync(row, serial)
+        _mark_sub_authoritative(row, serial)
         db.add(assignment)
         db.commit()
         db.refresh(assignment)
@@ -158,14 +161,13 @@ def _get_or_create_unit(
     return unit
 
 
-def _mark_pending_sync(row: WorkOrderMirror, serial: str) -> None:
-    metadata = dict(row.metadata_ or {})
-    metadata["native_equipment_pending_sync"] = True
-    metadata["last_native_equipment"] = {
-        "serial_number": serial,
-        "captured_at": datetime.now(UTC).isoformat(),
-    }
-    row.metadata_ = metadata
+def _mark_sub_authoritative(row: WorkOrderMirror, serial: str) -> None:
+    _mark_source_authoritative(
+        row,
+        "equipment",
+        details={"serial_number": serial},
+        occurred_at=datetime.now(UTC),
+    )
 
 
 field_equipment = FieldEquipment()

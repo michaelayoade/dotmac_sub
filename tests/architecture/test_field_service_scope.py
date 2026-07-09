@@ -24,6 +24,12 @@ FORBIDDEN_PATTERNS = (
     "project_quotes",
     "InstallationProject",
 )
+FORBIDDEN_WRITEBACK_PATTERNS = (
+    "pending_sync",
+    "crm_sync",
+    "writeback",
+    "write-back",
+)
 
 
 def test_field_service_does_not_expose_sales_or_project_entry_modules():
@@ -47,4 +53,18 @@ def test_field_modules_do_not_depend_on_sales_or_project_entry_domains():
         "Field modules should process work orders only. Create a sales/CRM "
         "workflow, vendor-project workflow, or work-order follow-up instead of "
         "adding sales/project entry behavior here:\n  " + "\n  ".join(offenders)
+    )
+
+
+def test_field_modules_do_not_reintroduce_crm_writeback():
+    offenders: list[str] = []
+    for root in FIELD_ROOTS:
+        for path in root.rglob("*.py"):
+            text = path.read_text().casefold()
+            for pattern in FORBIDDEN_WRITEBACK_PATTERNS:
+                if pattern in text:
+                    offenders.append(f"{path}: contains {pattern!r}")
+    assert not offenders, (
+        "Native field writes are authoritative in sub. Do not add CRM write-back "
+        "or pending-sync machinery under field service:\n  " + "\n  ".join(offenders)
     )
