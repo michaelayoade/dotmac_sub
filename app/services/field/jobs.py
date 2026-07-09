@@ -20,17 +20,29 @@ from app.models.subscriber import Subscriber
 from app.models.system_user import SystemUser
 from app.models.work_order_mirror import WorkOrderMirror
 from app.schemas.field import (
+    FieldAttachmentRead,
     FieldCustomer,
+    FieldEquipmentRead,
+    FieldExpenseRequestRead,
     FieldJobDetail,
+    FieldJobEventRead,
     FieldJobLocation,
     FieldJobSummary,
+    FieldMaterialRead,
+    FieldMaterialRequestRead,
     FieldMeResponse,
+    FieldMovementRead,
+    FieldNoteRead,
+    FieldWorkLogRead,
 )
 from app.services.common import apply_pagination, coerce_uuid
 from app.services.field.map_assets import field_map_assets
 
 TERMINAL_STATUSES = frozenset({"completed", "canceled", "cancelled"})
 OPEN_STATUSES = frozenset({"scheduled", "dispatched", "in_progress", "paused"})
+FieldJobSummaries = list[FieldJobSummary]
+FieldJobDestinationPayload = dict[str, Any]
+FieldJobDestinationPayloads = list[FieldJobDestinationPayload]
 
 
 def _string_list(value: Any) -> list[str]:
@@ -106,7 +118,7 @@ def _scoped_query(db: Session, profile: TechnicianProfile):
         WorkOrderAssignmentQueue.assigned_technician_id == profile.id
     )
     query = db.query(WorkOrderMirror).filter(WorkOrderMirror.is_active.is_(True))
-    clauses = [WorkOrderMirror.id.in_(assignment_ids)]
+    clauses: list[Any] = [WorkOrderMirror.id.in_(assignment_ids)]
     if profile.crm_person_id:
         clauses.append(
             WorkOrderMirror.assigned_to_crm_person_id == profile.crm_person_id
@@ -234,7 +246,7 @@ class FieldJobs:
         date_to: datetime | None = None,
         limit: int = 50,
         offset: int = 0,
-    ) -> list[FieldJobSummary]:
+    ) -> FieldJobSummaries:
         profile = _profile_from_principal(db, principal)
         query = _scoped_query(db, profile)
         if status:
@@ -284,6 +296,30 @@ class FieldJobs:
         from app.services.field.transitions import field_transitions
         from app.services.field.worklogs import field_worklogs
 
+        materials = field_materials.list_for_job(db, principal, crm_work_order_id)
+        material_requests = field_material_requests.list_mine(
+            db,
+            principal,
+            crm_work_order_id=crm_work_order_id,
+            limit=50,
+            offset=0,
+        )
+        expense_requests = field_expense_requests.list_mine(
+            db,
+            principal,
+            crm_work_order_id=crm_work_order_id,
+            limit=50,
+            offset=0,
+        )
+        notes = field_notes.list_for_job(db, principal, crm_work_order_id)
+        attachments = field_attachments.list(
+            db, principal, crm_work_order_id=crm_work_order_id
+        )
+        worklogs = field_worklogs.list_for_job(db, principal, crm_work_order_id)
+        events = field_transitions.list_for_job(db, principal, crm_work_order_id)
+        movements = list_movements(db, row)
+        equipment = field_equipment.current_for_job(db, principal, crm_work_order_id)
+
         return FieldJobDetail(
             job=_summary(row),
             customer=_customer(row, subscriber),
@@ -291,29 +327,25 @@ class FieldJobs:
             ticket_ref=row.crm_ticket_id,
             project_id=row.crm_project_id,
             access_notes=row.access_notes,
-            materials=field_materials.list_for_job(db, principal, crm_work_order_id),
-            material_requests=field_material_requests.list_mine(
-                db,
-                principal,
-                crm_work_order_id=crm_work_order_id,
-                limit=50,
-                offset=0,
-            ),
-            expense_requests=field_expense_requests.list_mine(
-                db,
-                principal,
-                crm_work_order_id=crm_work_order_id,
-                limit=50,
-                offset=0,
-            ),
-            notes=field_notes.list_for_job(db, principal, crm_work_order_id),
-            attachments=field_attachments.list(
-                db, principal, crm_work_order_id=crm_work_order_id
-            ),
-            worklogs=field_worklogs.list_for_job(db, principal, crm_work_order_id),
-            events=field_transitions.list_for_job(db, principal, crm_work_order_id),
-            movements=list_movements(db, row),
-            equipment=field_equipment.current_for_job(db, principal, crm_work_order_id),
+            materials=[FieldMaterialRead.model_validate(item) for item in materials],
+            material_requests=[
+                FieldMaterialRequestRead.model_validate(item)
+                for item in material_requests
+            ],
+            expense_requests=[
+                FieldExpenseRequestRead.model_validate(item)
+                for item in expense_requests
+            ],
+            notes=[FieldNoteRead.model_validate(item) for item in notes],
+            attachments=[
+                FieldAttachmentRead.model_validate(item) for item in attachments
+            ],
+            worklogs=[FieldWorkLogRead.model_validate(item) for item in worklogs],
+            events=[FieldJobEventRead.model_validate(item) for item in events],
+            movements=[FieldMovementRead.model_validate(item) for item in movements],
+            equipment=FieldEquipmentRead.model_validate(equipment)
+            if equipment is not None
+            else None,
             history=[],
         )
 
@@ -322,7 +354,7 @@ class FieldJobs:
         db: Session,
         principal: dict[str, Any],
         crm_work_order_id: str,
-    ) -> list[dict]:
+    ) -> FieldJobDestinationPayloads:
         profile = _profile_from_principal(db, principal)
         row = (
             _scoped_query(db, profile)
@@ -333,7 +365,7 @@ class FieldJobs:
             raise HTTPException(status_code=404, detail="Job not found")
 
         location = _location(row)
-        items: list[dict] = [
+        items: FieldJobDestinationPayloads = [
             {
                 "destination_type": "customer",
                 "destination_id": str(row.subscriber_id) if row.subscriber_id else None,

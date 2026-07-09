@@ -17,12 +17,15 @@ from app.models.wireless_mast import WirelessMast
 
 _EARTH_RADIUS_M = 6_371_000.0
 _METERS_PER_DEGREE = 111_320.0
+AssetPayload = dict[str, Any]
+AssetPayloads = list[AssetPayload]
+AssetTypeFilter = list[str] | None
 
 
 @dataclass(frozen=True)
 class _AssetConfig:
     asset_type: str
-    model: type
+    model: Any
     title: str
     subtitle: Callable[[Any], str | None]
 
@@ -107,7 +110,7 @@ _ASSETS: dict[str, _AssetConfig] = {
 }
 
 
-def _configs(asset_types: list[str] | None) -> list[_AssetConfig]:
+def _configs(asset_types: AssetTypeFilter) -> list[_AssetConfig]:
     if not asset_types:
         return list(_ASSETS.values())
     unknown = sorted(set(asset_types) - set(_ASSETS))
@@ -134,7 +137,7 @@ def _serialize(
     config: _AssetConfig,
     *,
     distance_m: float | None = None,
-) -> dict:
+) -> AssetPayload:
     return {
         "id": row.id,
         "type": config.asset_type,
@@ -153,12 +156,12 @@ class FieldMapAssets:
     def list(
         db: Session,
         *,
-        asset_types: list[str] | None = None,
+        asset_types: AssetTypeFilter = None,
         updated_since: datetime | None = None,
         limit: int = 1000,
         offset: int = 0,
-    ) -> list[dict]:
-        items: list[dict] = []
+    ) -> AssetPayloads:
+        items: AssetPayloads = []
         for config in _configs(asset_types):
             model = config.model
             query = _base_query(db, config)
@@ -177,11 +180,11 @@ class FieldMapAssets:
         latitude: float,
         longitude: float,
         radius_m: float = 500.0,
-        asset_types: list[str] | None = None,
+        asset_types: AssetTypeFilter = None,
         limit: int = 50,
-    ) -> list[dict]:
+    ) -> AssetPayloads:
         min_lat, max_lat, min_lng, max_lng = _bounds(latitude, longitude, radius_m)
-        items: list[dict] = []
+        items: AssetPayloads = []
         for config in _configs(asset_types):
             model = config.model
             rows = (
@@ -208,14 +211,14 @@ class FieldMapAssets:
         db: Session,
         query: str,
         *,
-        asset_types: list[str] | None = None,
+        asset_types: AssetTypeFilter = None,
         limit: int = 20,
-    ) -> list[dict]:
+    ) -> AssetPayloads:
         term = query.strip().casefold()
         if not term:
             return []
 
-        items: list[dict] = []
+        items: AssetPayloads = []
         for config in _configs(asset_types):
             for row in _base_query(db, config).all():
                 payload = _serialize(row, config)
