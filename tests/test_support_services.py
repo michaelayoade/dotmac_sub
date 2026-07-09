@@ -6,9 +6,15 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
-from app.models.notification import Notification
+from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.notification import (
+    Notification,
+    NotificationChannel,
+    NotificationStatus,
+)
 from app.models.provisioning import ServiceOrder
 from app.models.subscriber import Subscriber, SubscriberContact
+from app.models.subscription_engine import SettingValueType
 from app.models.support import (
     AutomationActionType,
     AutomationTrigger,
@@ -56,6 +62,19 @@ def _system_user(**overrides) -> SystemUser:
         phone=overrides.pop("phone", "+15550000000"),
         **overrides,
     )
+
+
+def _enable_support_ticket_notifications(db_session) -> None:
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.notification,
+            key=support_service.SUPPORT_NOTIFICATION_TOGGLE_KEY,
+            value_type=SettingValueType.boolean,
+            value_text="true",
+            is_active=True,
+        )
+    )
+    db_session.commit()
 
 
 def test_ticket_create_defaults_to_open_and_generates_number(db_session, subscriber):
@@ -230,6 +249,92 @@ def test_resolution_confirmation_request_mints_token(db_session, subscriber):
         .count()
         == 1
     )
+
+
+def test_resolution_confirmation_notifications_disabled_by_default(
+    db_session, subscriber, monkeypatch
+):
+    monkeypatch.setenv("APP_URL", "https://selfcare.example.test")
+    subscriber.phone = "+2348012345678"
+    db_session.add(subscriber)
+    db_session.commit()
+    ticket = support_service.tickets.create(
+        db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
+    )
+
+    support_service.tickets.request_resolution_confirmation(
+        db_session,
+        str(ticket.id),
+        actor_id=str(subscriber.id),
+        grace_hours=24,
+    )
+
+    assert db_session.query(Notification).count() == 0
+
+
+def test_resolution_confirmation_queues_customer_notifications(
+    db_session, subscriber, monkeypatch
+):
+    monkeypatch.setenv("APP_URL", "https://selfcare.example.test")
+    _enable_support_ticket_notifications(db_session)
+    subscriber.phone = "+2348012345678"
+    db_session.add(
+        SubscriberContact(
+            subscriber_id=subscriber.id,
+            full_name="Authorized Contact",
+            email="authorized@example.com",
+            whatsapp="+2348099999999",
+            receives_notifications=True,
+        )
+    )
+    db_session.add(
+        SubscriberContact(
+            subscriber_id=subscriber.id,
+            full_name="Silent Contact",
+            email="silent@example.com",
+            phone="+2348077777777",
+            receives_notifications=False,
+        )
+    )
+    db_session.add(subscriber)
+    db_session.commit()
+    ticket = support_service.tickets.create(
+        db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
+    )
+
+    support_service.tickets.request_resolution_confirmation(
+        db_session,
+        str(ticket.id),
+        actor_id=str(subscriber.id),
+        grace_hours=24,
+    )
+
+    rows = (
+        db_session.query(Notification)
+        .filter(
+            Notification.event_type == "support_ticket_resolution_confirmation",
+        )
+        .all()
+    )
+    recipients = {row.recipient for row in rows}
+    assert recipients == {
+        subscriber.email,
+        "+2348012345678",
+        "authorized@example.com",
+        "+2348099999999",
+    }
+    assert all(row.status == NotificationStatus.queued for row in rows)
+    assert all("/ticket-confirm/" in (row.body or "") for row in rows)
+    assert {
+        row.channel
+        for row in rows
+        if row.recipient in {subscriber.email, "authorized@example.com"}
+    } == {NotificationChannel.email}
+    assert {
+        row.channel
+        for row in rows
+        if row.recipient in {"+2348012345678", "+2348099999999"}
+    } == {NotificationChannel.sms}
 
 
 def test_resolution_confirmation_confirm_closes_ticket(db_session, subscriber):

@@ -17,6 +17,7 @@ from app.config import settings
 from app.models.domain_settings import SettingDomain
 from app.models.notification import NotificationChannel, NotificationStatus
 from app.models.provisioning import ServiceOrder
+from app.models.subscriber import Subscriber, SubscriberContact
 from app.models.support import (
     Ticket,
     TicketAccessToken,
@@ -959,6 +960,68 @@ class Tickets:
             )
 
     @staticmethod
+    def _queue_resolution_confirmation_notifications(
+        db: Session, ticket: Ticket, token_row: TicketAccessToken
+    ) -> None:
+        if not Tickets._notifications_enabled(db):
+            return
+
+        action_url = ticket_access_tokens.action_urls(token_row).get("confirm_url")
+        if not action_url:
+            return
+
+        subscriber_id = ticket.subscriber_id or ticket.customer_account_id
+        if not subscriber_id:
+            return
+
+        subscriber = db.get(Subscriber, subscriber_id)
+        if not subscriber:
+            return
+
+        ticket_ref = ticket.number or str(ticket.id)[:8]
+        subject = f"Confirm support ticket {ticket_ref}"
+        body = (
+            f"We marked ticket {ticket_ref} as resolved. "
+            f"Confirm or dispute it here: {action_url}"
+        )
+
+        recipients: set[tuple[NotificationChannel, str]] = set()
+        if subscriber.email:
+            recipients.add((NotificationChannel.email, subscriber.email.strip()))
+        if subscriber.phone:
+            recipients.add((NotificationChannel.sms, subscriber.phone.strip()))
+
+        contact_rows = (
+            db.query(SubscriberContact)
+            .filter(SubscriberContact.subscriber_id == subscriber.id)
+            .filter(SubscriberContact.receives_notifications.is_(True))
+            .all()
+        )
+        for contact in contact_rows:
+            if contact.email:
+                recipients.add((NotificationChannel.email, contact.email.strip()))
+            phone = contact.whatsapp or contact.phone
+            if phone:
+                recipients.add((NotificationChannel.sms, phone.strip()))
+
+        for channel, recipient in sorted(recipients, key=lambda item: item[1]):
+            if not recipient:
+                continue
+            notification_service.notifications.create(
+                db,
+                NotificationCreate(
+                    subscriber_id=subscriber.id,
+                    channel=channel,
+                    recipient=recipient,
+                    event_type="support_ticket_resolution_confirmation",
+                    category="support",
+                    subject=subject if channel == NotificationChannel.email else None,
+                    body=body,
+                    status=NotificationStatus.queued,
+                ),
+            )
+
+    @staticmethod
     def _emit_ticket_event(
         db: Session, event_name: str, ticket: Ticket, actor_id: str | None = None
     ) -> None:
@@ -1188,6 +1251,7 @@ class Tickets:
             actor_id=actor_id,
             metadata={"token_id": str(token_row.id), "grace_hours": int(grace_hours)},
         )
+        Tickets._queue_resolution_confirmation_notifications(db, ticket, token_row)
         db.commit()
         db.refresh(ticket)
         db.refresh(token_row)
