@@ -233,6 +233,26 @@ class FieldTransitionResponse(BaseModel):
     replayed: bool
 
 
+class FieldEquipmentRecord(BaseModel):
+    serial_number: str = Field(min_length=1, max_length=120)
+    vendor: str | None = Field(default=None, max_length=120)
+    model: str | None = Field(default=None, max_length=120)
+    notes: str | None = Field(default=None, max_length=2000)
+
+
+class FieldEquipmentRead(BaseModel):
+    id: UUID
+    ont_unit_id: UUID
+    serial_number: str
+    vendor: str | None = None
+    model: str | None = None
+    subscriber_id: UUID
+    crm_work_order_id: str | None = None
+    assigned_at: datetime | None = None
+    active: bool
+    notes: str | None = None
+
+
 class FieldJobHistoryItem(BaseModel):
     id: str
     type: str
@@ -261,6 +281,7 @@ class FieldJobDetail(BaseModel):
     material_requests: list[dict[str, Any]] = Field(default_factory=list)
     worklogs: list[FieldWorkLogRead] = Field(default_factory=list)
     events: list[FieldJobEventRead] = Field(default_factory=list)
+    equipment: FieldEquipmentRead | None = None
     history: list[FieldJobHistoryItem] = Field(default_factory=list)
 
 
