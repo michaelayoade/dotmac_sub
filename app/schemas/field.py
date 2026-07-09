@@ -188,6 +188,51 @@ class FieldWorkLogSubmitResponse(BaseModel):
     results: list[FieldWorkLogResult]
 
 
+class FieldJobEventRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    crm_work_order_id: str
+    event: str
+    previous_status: str | None = None
+    new_status: str | None = None
+    person_id: UUID
+    system_user_id: UUID | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    note: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+    occurred_at: datetime
+    received_at: datetime
+    client_event_id: UUID
+
+
+class FieldTransitionRequest(BaseModel):
+    event: Literal[
+        "accept",
+        "en_route",
+        "arrived",
+        "start",
+        "pause",
+        "hold",
+        "resume",
+        "complete",
+        "unable_to_complete",
+    ]
+    client_event_id: UUID
+    occurred_at: datetime | None = None
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    note: str | None = Field(default=None, max_length=2000)
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class FieldTransitionResponse(BaseModel):
+    job: FieldJobSummary
+    event: FieldJobEventRead
+    replayed: bool
+
+
 class FieldJobHistoryItem(BaseModel):
     id: str
     type: str
@@ -215,6 +260,7 @@ class FieldJobDetail(BaseModel):
     materials: list[dict[str, Any]] = Field(default_factory=list)
     material_requests: list[dict[str, Any]] = Field(default_factory=list)
     worklogs: list[FieldWorkLogRead] = Field(default_factory=list)
+    events: list[FieldJobEventRead] = Field(default_factory=list)
     history: list[FieldJobHistoryItem] = Field(default_factory=list)
 
 

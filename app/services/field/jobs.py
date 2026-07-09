@@ -25,6 +25,7 @@ from app.schemas.field import (
     FieldAttachmentRead,
     FieldCustomer,
     FieldJobDetail,
+    FieldJobEventRead,
     FieldJobLocation,
     FieldJobSummary,
     FieldMeResponse,
@@ -281,6 +282,7 @@ class FieldJobs:
         subscriber = db.get(Subscriber, row.subscriber_id)
         from app.services.field.attachments import field_attachments
         from app.services.field.notes import field_notes
+        from app.services.field.transitions import field_transitions
         from app.services.field.worklogs import field_worklogs
 
         notes = [
@@ -297,6 +299,12 @@ class FieldJobs:
             FieldWorkLogRead(**worklog)
             for worklog in field_worklogs.list_for_job(db, principal, crm_work_order_id)
         ]
+        events = [
+            FieldJobEventRead(**event)
+            for event in field_transitions.list_for_job(
+                db, principal, crm_work_order_id
+            )
+        ]
         return FieldJobDetail(
             job=_summary(row),
             customer=_customer(row, subscriber),
@@ -307,6 +315,7 @@ class FieldJobs:
             notes=notes,
             attachments=attachments,
             worklogs=worklogs,
+            events=events,
             history=[],
         )
 

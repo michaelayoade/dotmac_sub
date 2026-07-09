@@ -1,0 +1,367 @@
+"""Native field job transition events for CRM-synced work-order mirrors."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from typing import Any
+from uuid import UUID
+
+from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.field_attachment import FieldAttachment
+from app.models.field_job_event import FIELD_JOB_EVENTS, FieldJobEvent
+from app.models.field_worklog import FieldWorkLog
+from app.models.work_order_mirror import WorkOrderMirror
+from app.services.common import coerce_uuid
+from app.services.field.jobs import _profile_from_principal, _scoped_query
+
+_CLOCK_SKEW_FLAG_SECONDS = 15 * 60
+_UNABLE_REASONS = {
+    "customer_absent",
+    "no_access",
+    "site_not_ready",
+    "needs_parts",
+    "unsafe",
+    "other",
+}
+
+_EVENT_TO_STATUS: dict[str, str | None] = {
+    "accept": None,
+    "en_route": "dispatched",
+    "arrived": None,
+    "start": "in_progress",
+    "pause": "paused",
+    "hold": "paused",
+    "resume": "in_progress",
+    "complete": "completed",
+    "unable_to_complete": "canceled",
+}
+
+_TRANSITION_ALLOWED_FROM: dict[str, set[str]] = {
+    "accept": {"scheduled", "dispatched"},
+    "en_route": {"scheduled", "dispatched", "paused"},
+    "arrived": {"scheduled", "dispatched", "in_progress", "paused"},
+    "start": {"scheduled", "dispatched"},
+    "pause": {"in_progress"},
+    "hold": {"in_progress"},
+    "resume": {"paused"},
+    "complete": {"in_progress"},
+    "unable_to_complete": {"scheduled", "dispatched", "in_progress", "paused"},
+}
+
+
+def serialize_event(event: FieldJobEvent) -> dict:
+    return {
+        "id": event.id,
+        "crm_work_order_id": event.crm_work_order_id,
+        "event": event.event,
+        "previous_status": event.previous_status,
+        "new_status": event.new_status,
+        "person_id": event.person_id,
+        "system_user_id": event.system_user_id,
+        "latitude": event.latitude,
+        "longitude": event.longitude,
+        "note": event.note,
+        "payload": event.payload or {},
+        "occurred_at": event.occurred_at,
+        "received_at": event.received_at,
+        "client_event_id": event.client_event_id,
+    }
+
+
+class FieldTransitions:
+    @staticmethod
+    def list_for_job(
+        db: Session,
+        principal: dict[str, Any],
+        crm_work_order_id: str,
+    ) -> list[dict]:
+        row = _scoped_work_order(db, principal, crm_work_order_id)
+        events = (
+            db.query(FieldJobEvent)
+            .filter(FieldJobEvent.work_order_mirror_id == row.id)
+            .order_by(FieldJobEvent.occurred_at.asc(), FieldJobEvent.received_at.asc())
+            .all()
+        )
+        return [serialize_event(event) for event in events]
+
+    @staticmethod
+    def apply(
+        db: Session,
+        principal: dict[str, Any],
+        crm_work_order_id: str,
+        *,
+        event: str,
+        client_event_id: UUID,
+        occurred_at: datetime | None = None,
+        latitude: float | None = None,
+        longitude: float | None = None,
+        note: str | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> dict:
+        event_value = _normalize_event(event)
+        client_uuid = coerce_uuid(client_event_id)
+        existing = (
+            db.query(FieldJobEvent)
+            .filter(FieldJobEvent.client_event_id == client_uuid)
+            .one_or_none()
+        )
+        if existing is not None:
+            _scoped_work_order(db, principal, existing.crm_work_order_id)
+            row = db.get(WorkOrderMirror, existing.work_order_mirror_id)
+            return {
+                "job": row,
+                "event": serialize_event(existing),
+                "replayed": True,
+            }
+
+        profile = _profile_from_principal(db, principal)
+        row = (
+            _scoped_query(db, profile)
+            .filter(WorkOrderMirror.crm_work_order_id == crm_work_order_id)
+            .with_for_update()
+            .one_or_none()
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if row.status not in _TRANSITION_ALLOWED_FROM[event_value]:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Cannot {event_value} a job in status {row.status}",
+            )
+
+        now = datetime.now(UTC)
+        occurred = _as_utc(occurred_at) if occurred_at else now
+        event_payload = dict(payload or {})
+        skew = abs((now - occurred).total_seconds())
+        if skew > _CLOCK_SKEW_FLAG_SECONDS:
+            event_payload["clock_skew_seconds"] = int(skew)
+
+        if event_value == "unable_to_complete":
+            reason = event_payload.get("reason")
+            reason = reason.strip() if isinstance(reason, str) else reason
+            if not reason:
+                raise HTTPException(
+                    status_code=422,
+                    detail="unable_to_complete requires a reason",
+                )
+            if reason not in _UNABLE_REASONS:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Invalid reason '{reason}'",
+                )
+            event_payload["reason"] = reason
+
+        if event_value == "complete":
+            _check_completion_gate(db, row, event_payload)
+
+        previous_status = row.status
+        new_status = _target_status(event_value, previous_status)
+        if new_status is not None and new_status != previous_status:
+            row.status = new_status
+            _apply_status_timestamps(row, event_value, occurred)
+
+        _mark_pending_sync(row, event_value, client_uuid, occurred)
+        event_row = FieldJobEvent(
+            work_order_mirror_id=row.id,
+            crm_work_order_id=row.crm_work_order_id,
+            author_technician_id=profile.id,
+            person_id=profile.person_id,
+            system_user_id=profile.system_user_id,
+            event=event_value,
+            previous_status=previous_status,
+            new_status=row.status,
+            latitude=latitude,
+            longitude=longitude,
+            note=(note or "").strip() or None,
+            payload=event_payload or None,
+            occurred_at=occurred,
+            received_at=now,
+            client_event_id=client_uuid,
+        )
+        db.add(event_row)
+        _sync_timer(db, row, profile, event_value, occurred)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            replay = (
+                db.query(FieldJobEvent)
+                .filter(FieldJobEvent.client_event_id == client_uuid)
+                .one_or_none()
+            )
+            if replay is not None:
+                replay_row = db.get(WorkOrderMirror, replay.work_order_mirror_id)
+                return {
+                    "job": replay_row,
+                    "event": serialize_event(replay),
+                    "replayed": True,
+                }
+            raise
+        db.refresh(row)
+        db.refresh(event_row)
+        return {
+            "job": row,
+            "event": serialize_event(event_row),
+            "replayed": False,
+        }
+
+
+def _scoped_work_order(
+    db: Session,
+    principal: dict[str, Any],
+    crm_work_order_id: str,
+) -> WorkOrderMirror:
+    profile = _profile_from_principal(db, principal)
+    row = (
+        _scoped_query(db, profile)
+        .filter(WorkOrderMirror.crm_work_order_id == crm_work_order_id)
+        .one_or_none()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return row
+
+
+def _normalize_event(event: str) -> str:
+    value = (event or "").strip().lower()
+    if value not in FIELD_JOB_EVENTS:
+        raise HTTPException(status_code=422, detail=f"Unsupported field event: {event}")
+    return value
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
+
+
+def _target_status(event: str, previous_status: str) -> str | None:
+    if event == "en_route" and previous_status == "paused":
+        return None
+    return _EVENT_TO_STATUS[event]
+
+
+def _apply_status_timestamps(
+    row: WorkOrderMirror, event: str, occurred: datetime
+) -> None:
+    if event == "start":
+        row.started_at = row.started_at or occurred
+        row.paused_at = None
+        row.resumed_at = None
+    elif event in {"pause", "hold"}:
+        row.paused_at = occurred
+    elif event == "resume":
+        row.resumed_at = occurred
+        row.paused_at = None
+    elif event == "complete":
+        row.completed_at = occurred
+        row.paused_at = None
+    elif event == "unable_to_complete":
+        row.paused_at = None
+
+
+def _completion_gate_enabled(db: Session) -> bool:
+    setting = (
+        db.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.field)
+        .filter(DomainSetting.key == "completion_requires_evidence")
+        .filter(DomainSetting.is_active.is_(True))
+        .first()
+    )
+    if setting is None:
+        return True
+    value = setting.value_json if setting.value_json is not None else setting.value_text
+    return str(value).lower() not in {"false", "0", "no"}
+
+
+def _check_completion_gate(
+    db: Session, row: WorkOrderMirror, payload: dict[str, Any]
+) -> None:
+    if not _completion_gate_enabled(db):
+        return
+    attachments = (
+        db.query(FieldAttachment)
+        .filter(FieldAttachment.work_order_mirror_id == row.id)
+        .filter(FieldAttachment.is_active.is_(True))
+        .all()
+    )
+    has_photo = any(attachment.kind == "photo" for attachment in attachments)
+    has_signature = any(attachment.kind == "signature" for attachment in attachments)
+    if not has_photo:
+        raise HTTPException(
+            status_code=422, detail="Completion requires at least one photo"
+        )
+    if not has_signature and not payload.get("signature_unavailable_reason"):
+        raise HTTPException(
+            status_code=422,
+            detail="Completion requires a customer signature or a signature_unavailable_reason",
+        )
+
+
+def _mark_pending_sync(
+    row: WorkOrderMirror,
+    event: str,
+    client_event_id: UUID,
+    occurred_at: datetime,
+) -> None:
+    metadata = dict(row.metadata_ or {})
+    metadata["native_transition_pending_sync"] = True
+    metadata["last_native_transition"] = {
+        "event": event,
+        "client_event_id": str(client_event_id),
+        "occurred_at": occurred_at.isoformat(),
+    }
+    row.metadata_ = metadata
+
+
+def _sync_timer(
+    db: Session,
+    row: WorkOrderMirror,
+    profile,
+    event: str,
+    occurred_at: datetime,
+) -> None:
+    if event in {"start", "resume"}:
+        open_log = _open_timer(db, profile.person_id)
+        if open_log is None:
+            db.add(
+                FieldWorkLog(
+                    work_order_mirror_id=row.id,
+                    crm_work_order_id=row.crm_work_order_id,
+                    author_technician_id=profile.id,
+                    person_id=profile.person_id,
+                    system_user_id=profile.system_user_id,
+                    start_at=occurred_at,
+                    notes=f"Auto-started by {event}",
+                )
+            )
+        return
+    if event in {"pause", "hold", "complete", "unable_to_complete"}:
+        open_log = _open_timer(db, profile.person_id)
+        if open_log is not None:
+            open_log.end_at = occurred_at
+            open_log.minutes = max(
+                0,
+                int(
+                    (
+                        _as_utc(open_log.end_at) - _as_utc(open_log.start_at)
+                    ).total_seconds()
+                    // 60
+                ),
+            )
+
+
+def _open_timer(db: Session, person_id) -> FieldWorkLog | None:
+    return (
+        db.query(FieldWorkLog)
+        .filter(FieldWorkLog.person_id == person_id)
+        .filter(FieldWorkLog.end_at.is_(None))
+        .filter(FieldWorkLog.is_active.is_(True))
+        .order_by(FieldWorkLog.start_at.desc())
+        .first()
+    )
+
+
+field_transitions = FieldTransitions()
