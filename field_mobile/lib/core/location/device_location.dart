@@ -1,4 +1,5 @@
-import 'package:flutter/foundation.dart' show TargetPlatform, defaultTargetPlatform;
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform;
 import 'package:geolocator/geolocator.dart';
 
 import 'location_source.dart';
@@ -7,14 +8,19 @@ import 'location_source.dart';
 /// without the plugin.
 enum LocationDecision { proceed, request, unavailable }
 
-LocationDecision decideForPermission(LocationPermission permission, {required bool serviceEnabled}) {
+LocationDecision decideForPermission(
+  LocationPermission permission, {
+  required bool serviceEnabled,
+}) {
   if (!serviceEnabled) return LocationDecision.unavailable;
   return switch (permission) {
-    LocationPermission.always || LocationPermission.whileInUse => LocationDecision.proceed,
+    LocationPermission.always ||
+    LocationPermission.whileInUse => LocationDecision.proceed,
     LocationPermission.denied => LocationDecision.request,
     // Re-prompting after deniedForever just irritates: the OS won't show
     // the dialog again. The app keeps working without GPS.
-    LocationPermission.deniedForever || LocationPermission.unableToDetermine => LocationDecision.unavailable,
+    LocationPermission.deniedForever ||
+    LocationPermission.unableToDetermine => LocationDecision.unavailable,
   };
 }
 
@@ -29,18 +35,27 @@ class GeolocatorLocationSource implements LocationSource {
     try {
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
       var permission = await Geolocator.checkPermission();
-      var decision = decideForPermission(permission, serviceEnabled: serviceEnabled);
+      var decision = decideForPermission(
+        permission,
+        serviceEnabled: serviceEnabled,
+      );
       if (decision == LocationDecision.request) {
         permission = await Geolocator.requestPermission();
-        decision = decideForPermission(permission, serviceEnabled: serviceEnabled);
+        decision = decideForPermission(
+          permission,
+          serviceEnabled: serviceEnabled,
+        );
       }
       if (decision != LocationDecision.proceed) {
-        if (permission == LocationPermission.deniedForever) _permanentlyDenied = true;
+        if (permission == LocationPermission.deniedForever) {
+          _permanentlyDenied = true;
+        }
         return null;
       }
 
       final lastKnown = await Geolocator.getLastKnownPosition();
-      if (lastKnown != null && DateTime.now().difference(lastKnown.timestamp).inMinutes < 2) {
+      if (lastKnown != null &&
+          DateTime.now().difference(lastKnown.timestamp).inMinutes < 2) {
         return (latitude: lastKnown.latitude, longitude: lastKnown.longitude);
       }
       final position = await Geolocator.getCurrentPosition(
@@ -61,17 +76,26 @@ class GeolocatorLocationSource implements LocationSource {
     if (_permanentlyDenied) return;
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
     var permission = await Geolocator.checkPermission();
-    var decision = decideForPermission(permission, serviceEnabled: serviceEnabled);
+    var decision = decideForPermission(
+      permission,
+      serviceEnabled: serviceEnabled,
+    );
     if (decision == LocationDecision.request) {
       permission = await Geolocator.requestPermission();
-      decision = decideForPermission(permission, serviceEnabled: serviceEnabled);
+      decision = decideForPermission(
+        permission,
+        serviceEnabled: serviceEnabled,
+      );
     }
     if (decision != LocationDecision.proceed) {
-      if (permission == LocationPermission.deniedForever) _permanentlyDenied = true;
+      if (permission == LocationPermission.deniedForever) {
+        _permanentlyDenied = true;
+      }
       return;
     }
-    yield* Geolocator.getPositionStream(locationSettings: _backgroundSettings())
-        .map((p) => (latitude: p.latitude, longitude: p.longitude));
+    yield* Geolocator.getPositionStream(
+      locationSettings: _backgroundSettings(),
+    ).map((p) => (latitude: p.latitude, longitude: p.longitude));
   }
 
   /// Platform settings that keep fixes flowing while backgrounded: an Android
@@ -88,7 +112,8 @@ class GeolocatorLocationSource implements LocationSource {
         intervalDuration: const Duration(seconds: 30),
         foregroundNotificationConfig: const ForegroundNotificationConfig(
           notificationTitle: 'DotMac Field',
-          notificationText: 'Sharing your location with dispatch while on shift.',
+          notificationText:
+              'Sharing your location with dispatch while on shift.',
           enableWakeLock: true,
         ),
       );
@@ -102,6 +127,9 @@ class GeolocatorLocationSource implements LocationSource {
         showBackgroundLocationIndicator: true,
       );
     }
-    return const LocationSettings(accuracy: accuracy, distanceFilter: distanceFilter);
+    return const LocationSettings(
+      accuracy: accuracy,
+      distanceFilter: distanceFilter,
+    );
   }
 }

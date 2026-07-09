@@ -32,10 +32,10 @@ class ApiClient {
     Dio? dio,
     Dio? refreshDio,
     this.onSessionExpired,
-  })  : dio = dio ?? Dio(),
-        // Separate transport for token refresh so it never recurses through
-        // our own auth interceptor; injectable for tests.
-        _refreshDio = refreshDio ?? Dio(BaseOptions(baseUrl: baseUrl)) {
+  }) : dio = dio ?? Dio(),
+       // Separate transport for token refresh so it never recurses through
+       // our own auth interceptor; injectable for tests.
+       _refreshDio = refreshDio ?? Dio(BaseOptions(baseUrl: baseUrl)) {
     this.dio.options.baseUrl = baseUrl;
     this.dio.options.connectTimeout = const Duration(seconds: 10);
     this.dio.options.receiveTimeout = const Duration(seconds: 20);
@@ -62,7 +62,8 @@ class ApiClient {
     final access = await tokenStore.accessToken;
     if (access == null) return null;
     final expiry = jwtExpiry(access);
-    if (expiry == null || expiry.isAfter(DateTime.now().toUtc().add(_refreshSkew))) {
+    if (expiry == null ||
+        expiry.isAfter(DateTime.now().toUtc().add(_refreshSkew))) {
       return access;
     }
     return refresh();
@@ -80,8 +81,13 @@ class ApiClient {
         return null;
       }
       final mode = await tokenStore.loginMode ?? LoginMode.staff;
-      final path = mode == LoginMode.vendor ? '/api/v1/vendor/auth/refresh' : '/api/v1/auth/refresh';
-      final response = await _refreshDio.post(path, data: {'refresh_token': refreshToken});
+      final path = mode == LoginMode.vendor
+          ? '/api/v1/vendor/auth/refresh'
+          : '/api/v1/auth/refresh';
+      final response = await _refreshDio.post(
+        path,
+        data: {'refresh_token': refreshToken},
+      );
       final data = response.data as Map;
       final access = data['access_token'] as String?;
       if (access == null) {
@@ -105,12 +111,20 @@ class _AuthInterceptor extends Interceptor {
 
   final ApiClient client;
 
-  static const _public = ['/auth/login', '/auth/mfa', '/auth/refresh', '/field/config'];
+  static const _public = [
+    '/auth/login',
+    '/auth/mfa',
+    '/auth/refresh',
+    '/field/config',
+  ];
 
   bool _isPublic(String path) => _public.any(path.contains);
 
   @override
-  Future<void> onRequest(RequestOptions options, RequestInterceptorHandler handler) async {
+  Future<void> onRequest(
+    RequestOptions options,
+    RequestInterceptorHandler handler,
+  ) async {
     if (!_isPublic(options.path)) {
       final token = await client.ensureFreshToken();
       if (token != null) {
@@ -121,10 +135,15 @@ class _AuthInterceptor extends Interceptor {
   }
 
   @override
-  Future<void> onError(DioException err, ErrorInterceptorHandler handler) async {
+  Future<void> onError(
+    DioException err,
+    ErrorInterceptorHandler handler,
+  ) async {
     final response = err.response;
     final alreadyRetried = err.requestOptions.extra['retried'] == true;
-    if (response?.statusCode == 401 && !alreadyRetried && !_isPublic(err.requestOptions.path)) {
+    if (response?.statusCode == 401 &&
+        !alreadyRetried &&
+        !_isPublic(err.requestOptions.path)) {
       // A multipart body is a one-shot stream — already consumed by the failed
       // attempt, so we can't refetch it. The photo/attachment outbox retries
       // these uploads itself, so don't auto-retry them here.

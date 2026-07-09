@@ -7,26 +7,46 @@ void main() {
   group('pingInterval cadence', () {
     test('no pinging off shift or on break', () {
       expect(
-        pingInterval(shift: ShiftState.offShift, hasActiveJob: true, moving: true),
+        pingInterval(
+          shift: ShiftState.offShift,
+          hasActiveJob: true,
+          moving: true,
+        ),
         isNull,
       );
       expect(
-        pingInterval(shift: ShiftState.onBreak, hasActiveJob: true, moving: true),
+        pingInterval(
+          shift: ShiftState.onBreak,
+          hasActiveJob: true,
+          moving: true,
+        ),
         isNull,
       );
     });
 
     test('tight cadence for active job or movement, relaxed when idle', () {
       expect(
-        pingInterval(shift: ShiftState.onShift, hasActiveJob: true, moving: false),
+        pingInterval(
+          shift: ShiftState.onShift,
+          hasActiveJob: true,
+          moving: false,
+        ),
         activePingInterval,
       );
       expect(
-        pingInterval(shift: ShiftState.onShift, hasActiveJob: false, moving: true),
+        pingInterval(
+          shift: ShiftState.onShift,
+          hasActiveJob: false,
+          moving: true,
+        ),
         activePingInterval,
       );
       expect(
-        pingInterval(shift: ShiftState.onShift, hasActiveJob: false, moving: false),
+        pingInterval(
+          shift: ShiftState.onShift,
+          hasActiveJob: false,
+          moving: false,
+        ),
         idlePingInterval,
       );
     });
@@ -57,8 +77,7 @@ void main() {
       final svc = LocationPingService(
         location: FakeLocation(null),
         poster: (_) async => true,
-      )
-        ..setShift(ShiftState.onShift);
+      )..setShift(ShiftState.onShift);
       await svc.captureOnce();
       expect(svc.bufferedCount, 0);
     });
@@ -167,7 +186,10 @@ void main() {
 
     test('streamed fixes are ignored off shift', () async {
       final fake = FakeLocation(null);
-      final svc = LocationPingService(location: fake, poster: (_) async => true);
+      final svc = LocationPingService(
+        location: fake,
+        poster: (_) async => true,
+      );
       svc.startBackgroundTracking();
       fake.emit((latitude: 1, longitude: 1));
       await Future<void>.delayed(const Duration(milliseconds: 20));
@@ -176,7 +198,10 @@ void main() {
     });
 
     test('startBackgroundTracking is idempotent', () async {
-      final svc = LocationPingService(location: FakeLocation(null), poster: (_) async => true);
+      final svc = LocationPingService(
+        location: FakeLocation(null),
+        poster: (_) async => true,
+      );
       svc.startBackgroundTracking();
       svc.startBackgroundTracking();
       expect(svc.isBackgroundTracking, isTrue);

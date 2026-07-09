@@ -30,7 +30,10 @@ class FieldExtractionResult {
   final bool requiresReview;
   final List<String> reviewReasons;
 
-  factory FieldExtractionResult.fromJson(Map<String, dynamic> json, {required String transcript}) {
+  factory FieldExtractionResult.fromJson(
+    Map<String, dynamic> json, {
+    required String transcript,
+  }) {
     final readings = <String, String>{};
     final rawReadings = json['signal_readings'];
     if (rawReadings is Map) {
@@ -57,17 +60,20 @@ class FieldExtractionResult {
       notes: json['notes'] as String? ?? '',
       confidence: (json['confidence'] as num?)?.toDouble(),
       requiresReview: json['requires_review'] as bool? ?? true,
-      reviewReasons: ((json['review_reasons'] as List?) ?? const []).map((e) => e.toString()).toList(),
+      reviewReasons: ((json['review_reasons'] as List?) ?? const [])
+          .map((e) => e.toString())
+          .toList(),
     );
   }
 }
 
 /// Posts a transcript to the extraction endpoint; returns the parsed JSON body.
-typedef ExtractPoster = Future<Map<String, dynamic>> Function(
-  String transcript, {
-  String? context,
-  double? asrConfidence,
-});
+typedef ExtractPoster =
+    Future<Map<String, dynamic>> Function(
+      String transcript, {
+      String? context,
+      double? asrConfidence,
+    });
 
 /// Orchestrates: capture speech → server extraction → pre-fill model the UI
 /// presents for confirmation. Fails safe — anything unavailable returns null so
@@ -85,7 +91,11 @@ class VoiceCaptureController {
     final text = (heard?.text ?? '').trim();
     if (text.isEmpty) return null;
     try {
-      final body = await poster(text, context: context, asrConfidence: heard?.confidence);
+      final body = await poster(
+        text,
+        context: context,
+        asrConfidence: heard?.confidence,
+      );
       return FieldExtractionResult.fromJson(body, transcript: text);
     } catch (_) {
       // Server/network failure: hand back the raw transcript so the tech can

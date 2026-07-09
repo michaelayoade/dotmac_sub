@@ -22,7 +22,9 @@ class _MfaScreenState extends ConsumerState<MfaScreen> {
 
   Future<void> _submit() async {
     setState(() => _busy = true);
-    await ref.read(authControllerProvider.notifier).verifyMfa(_code.text.trim());
+    await ref
+        .read(authControllerProvider.notifier)
+        .verifyMfa(_code.text.trim());
     if (mounted) setState(() => _busy = false);
   }
 
@@ -42,7 +44,9 @@ class _MfaScreenState extends ConsumerState<MfaScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Text('Enter the 6-digit code from your authenticator app.'),
+                  const Text(
+                    'Enter the 6-digit code from your authenticator app.',
+                  ),
                   const SizedBox(height: 24),
                   TextField(
                     controller: _code,
@@ -55,7 +59,9 @@ class _MfaScreenState extends ConsumerState<MfaScreen> {
                   if (error != null) ...[
                     Text(
                       error,
-                      style: TextStyle(color: Theme.of(context).colorScheme.error),
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
                       textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 16),
@@ -89,7 +95,10 @@ class UpgradeRequiredScreen extends StatelessWidget {
               children: [
                 const Icon(Icons.system_update, size: 56),
                 const SizedBox(height: 16),
-                Text('Update required', style: Theme.of(context).textTheme.headlineSmall),
+                Text(
+                  'Update required',
+                  style: Theme.of(context).textTheme.headlineSmall,
+                ),
                 const SizedBox(height: 8),
                 const Text(
                   'This version of the app is no longer supported. '

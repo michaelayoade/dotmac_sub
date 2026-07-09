@@ -25,7 +25,10 @@ Uint8List _testImage({int width = 2400, int height = 600}) {
 
 void main() {
   if (Platform.isLinux) {
-    open.overrideFor(OperatingSystem.linux, () => DynamicLibrary.open('libsqlite3.so.0'));
+    open.overrideFor(
+      OperatingSystem.linux,
+      () => DynamicLibrary.open('libsqlite3.so.0'),
+    );
   }
 
   late AppDatabase db;
@@ -63,17 +66,20 @@ void main() {
     expect(decoded.width, 800);
   });
 
-  test('captureForJob writes the file and a queued row with metadata', () async {
-    final captured = await queue.captureForJob(workOrderId: 'wo-1');
-    expect(captured, isTrue);
+  test(
+    'captureForJob writes the file and a queued row with metadata',
+    () async {
+      final captured = await queue.captureForJob(workOrderId: 'wo-1');
+      expect(captured, isTrue);
 
-    final row = (await db.select(db.pendingPhotos).get()).single;
-    expect(row.workOrderId, 'wo-1');
-    expect(row.latitude, 6.43);
-    expect(row.uploaded, isFalse);
-    expect(File(row.localPath).existsSync(), isTrue);
-    expect(await queue.pendingCount(), 1);
-  });
+      final row = (await db.select(db.pendingPhotos).get()).single;
+      expect(row.workOrderId, 'wo-1');
+      expect(row.latitude, 6.43);
+      expect(row.uploaded, isFalse);
+      expect(File(row.localPath).existsSync(), isTrue);
+      expect(await queue.pendingCount(), 1);
+    },
+  );
 
   test('cancelled capture is a no-op', () async {
     source.bytes = null;
@@ -91,7 +97,9 @@ void main() {
       connectivity = FakeConnectivity();
       final store = InMemoryTokenStore();
       await store.save(
-        accessToken: fakeJwt(expiry: DateTime.now().toUtc().add(const Duration(minutes: 15))),
+        accessToken: fakeJwt(
+          expiry: DateTime.now().toUtc().add(const Duration(minutes: 15)),
+        ),
         refreshToken: 'r',
         loginMode: LoginMode.staff,
       );
@@ -99,7 +107,11 @@ void main() {
       dio.httpClientAdapter = adapter;
       sync = SyncService(
         db: db,
-        api: ApiClient(baseUrl: 'https://test.local', tokenStore: store, dio: dio),
+        api: ApiClient(
+          baseUrl: 'https://test.local',
+          tokenStore: store,
+          dio: dio,
+        ),
         connectivity: connectivity,
         delay: (_) async {},
       );
@@ -109,7 +121,8 @@ void main() {
 
     test('uploads multipart, marks uploaded, deletes the file', () async {
       await queue.captureForJob(workOrderId: 'wo-1');
-      final localPath = (await db.select(db.pendingPhotos).get()).single.localPath;
+      final localPath =
+          (await db.select(db.pendingPhotos).get()).single.localPath;
 
       late FormData sent;
       adapter.on('POST', '/api/v1/field/attachments', (options) {
@@ -132,7 +145,11 @@ void main() {
 
     test('4xx keeps the file and records the error', () async {
       await queue.captureForJob(workOrderId: 'wo-1');
-      adapter.on('POST', '/api/v1/field/attachments', (_) => (422, {'detail': 'Unsupported file type'}));
+      adapter.on(
+        'POST',
+        '/api/v1/field/attachments',
+        (_) => (422, {'detail': 'Unsupported file type'}),
+      );
 
       expect(await sync.flushPhotos(), 0);
       final row = (await db.select(db.pendingPhotos).get()).single;
@@ -150,7 +167,11 @@ void main() {
 
   group('enqueueImageBytes (signatures)', () {
     test('queues a kind=signature pending photo from raw bytes', () async {
-      await queue.enqueueImageBytes(_testImage(width: 600, height: 220), kind: 'signature', workOrderId: 'wo-1');
+      await queue.enqueueImageBytes(
+        _testImage(width: 600, height: 220),
+        kind: 'signature',
+        workOrderId: 'wo-1',
+      );
       final row = (await db.select(db.pendingPhotos).get()).single;
       expect(row.kind, 'signature');
       expect(row.workOrderId, 'wo-1');

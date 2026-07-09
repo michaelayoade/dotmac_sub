@@ -5,21 +5,18 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   group('FieldExtractionResult.fromJson', () {
     test('parses structured fields', () {
-      final result = FieldExtractionResult.fromJson(
-        {
-          'work_status': 'completed',
-          'equipment_serial': 'HG8546',
-          'signal_readings': {'Downstream': '-21 dB'},
-          'materials_used': [
-            {'name': 'drop cable', 'quantity': '40 m'},
-          ],
-          'notes': 'customer happy',
-          'confidence': 0.82,
-          'requires_review': false,
-          'review_reasons': [],
-        },
-        transcript: 'installed the ont',
-      );
+      final result = FieldExtractionResult.fromJson({
+        'work_status': 'completed',
+        'equipment_serial': 'HG8546',
+        'signal_readings': {'Downstream': '-21 dB'},
+        'materials_used': [
+          {'name': 'drop cable', 'quantity': '40 m'},
+        ],
+        'notes': 'customer happy',
+        'confidence': 0.82,
+        'requires_review': false,
+        'review_reasons': [],
+      }, transcript: 'installed the ont');
       expect(result.workStatus, 'completed');
       expect(result.equipmentSerial, 'HG8546');
       expect(result.signalReadings['Downstream'], '-21 dB');
@@ -28,7 +25,9 @@ void main() {
     });
 
     test('defaults requires_review to true when absent', () {
-      final result = FieldExtractionResult.fromJson({'work_status': 'completed'}, transcript: 't');
+      final result = FieldExtractionResult.fromJson({
+        'work_status': 'completed',
+      }, transcript: 't');
       expect(result.requiresReview, isTrue);
     });
   });
@@ -54,7 +53,9 @@ void main() {
       double? sentConfidence;
       String? sentContext;
       final controller = VoiceCaptureController(
-        transcription: FakeTranscription(const TranscriptResult(text: 'installed the ont', confidence: 0.9)),
+        transcription: FakeTranscription(
+          const TranscriptResult(text: 'installed the ont', confidence: 0.9),
+        ),
         poster: (transcript, {context, asrConfidence}) async {
           sentConfidence = asrConfidence;
           sentContext = context;
@@ -74,16 +75,22 @@ void main() {
       expect(result.transcript, 'installed the ont');
     });
 
-    test('falls back to raw transcript flagged for review on server failure', () async {
-      final controller = VoiceCaptureController(
-        transcription: FakeTranscription(const TranscriptResult(text: 'installed the ont')),
-        poster: (_, {context, asrConfidence}) async => throw Exception('network down'),
-      );
-      final result = await controller.capture();
-      expect(result, isNotNull);
-      expect(result!.requiresReview, isTrue);
-      expect(result.reviewReasons, contains('extraction_unavailable'));
-      expect(result.notes, 'installed the ont');
-    });
+    test(
+      'falls back to raw transcript flagged for review on server failure',
+      () async {
+        final controller = VoiceCaptureController(
+          transcription: FakeTranscription(
+            const TranscriptResult(text: 'installed the ont'),
+          ),
+          poster: (_, {context, asrConfidence}) async =>
+              throw Exception('network down'),
+        );
+        final result = await controller.capture();
+        expect(result, isNotNull);
+        expect(result!.requiresReview, isTrue);
+        expect(result.reviewReasons, contains('extraction_unavailable'));
+        expect(result.notes, 'installed the ont');
+      },
+    );
   });
 }

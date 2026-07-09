@@ -30,7 +30,8 @@ class FakeLocation implements LocationSource {
   FakeLocation(this.point);
 
   GeoPoint? point;
-  final StreamController<GeoPoint> _positions = StreamController<GeoPoint>.broadcast();
+  final StreamController<GeoPoint> _positions =
+      StreamController<GeoPoint>.broadcast();
 
   /// Push a fix to subscribers of [positions]; lets tests drive background flow.
   void emit(GeoPoint fix) => _positions.add(fix);

@@ -15,7 +15,8 @@ class DeviceConnectivity implements ConnectivitySource {
       results.any((r) => r != ConnectivityResult.none);
 
   @override
-  Stream<bool> get onlineChanges => _plugin.onConnectivityChanged.map(_has).distinct();
+  Stream<bool> get onlineChanges =>
+      _plugin.onConnectivityChanged.map(_has).distinct();
 
   @override
   Future<bool> get isOnline async => _has(await _plugin.checkConnectivity());

@@ -11,10 +11,8 @@ import 'location_cadence.dart';
 /// service is testable without dio, and so the production wiring can route
 /// through the offline-tolerant API client.
 typedef PingPoster = Future<bool> Function(List<Map<String, dynamic>> pings);
-typedef SharingUpdater = Future<bool> Function({
-  required bool enabled,
-  required ShiftState shift,
-});
+typedef SharingUpdater =
+    Future<bool> Function({required bool enabled, required ShiftState shift});
 
 /// Captures GPS fixes on a shift-scoped adaptive cadence and flushes them to
 /// the backend in batches. Buffers across failures so a dropped network never
@@ -51,7 +49,10 @@ class LocationPingService {
   Future<bool> updateShift(ShiftState shift) async {
     final updater = sharingUpdater;
     if (updater != null) {
-      final ok = await updater(enabled: shift != ShiftState.offShift, shift: shift);
+      final ok = await updater(
+        enabled: shift != ShiftState.offShift,
+        shift: shift,
+      );
       if (!ok) return false;
     }
     setShift(shift);
@@ -60,7 +61,10 @@ class LocationPingService {
 
   /// Capture a single fix into the buffer. No-op off shift, on break, or when
   /// the device gives no fix — GPS trouble never throws.
-  Future<void> captureOnce({bool hasActiveJob = false, String? workOrderId}) async {
+  Future<void> captureOnce({
+    bool hasActiveJob = false,
+    String? workOrderId,
+  }) async {
     if (_shift != ShiftState.onShift) return;
     final point = await location.current();
     if (point == null) return;
@@ -81,7 +85,8 @@ class LocationPingService {
   }
 
   /// The work order pings should be tagged with while background tracking runs.
-  void setActiveWorkOrder(String? workOrderId) => _activeWorkOrderId = workOrderId;
+  void setActiveWorkOrder(String? workOrderId) =>
+      _activeWorkOrderId = workOrderId;
 
   /// Subscribe to the platform's background-capable position stream so fixes
   /// keep arriving while the app is backgrounded or the screen is locked. Each

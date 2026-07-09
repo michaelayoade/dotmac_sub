@@ -91,8 +91,7 @@ class PendingPhotos extends Table {
 /// directly; the relevant form reloads them and submits through the normal API.
 class DraftEntries extends Table {
   TextColumn get id => text()();
-  TextColumn get type =>
-      text()(); // material_request|expense_request
+  TextColumn get type => text()(); // material_request|expense_request
   TextColumn get payloadJson => text()();
   DateTimeColumn get updatedAt => dateTime()();
 

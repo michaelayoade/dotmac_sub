@@ -49,8 +49,12 @@ class AppConfig {
 
 /// Compare dotted versions: negative when [a] < [b].
 int compareSemver(String a, String b) {
-  List<int> parse(String v) =>
-      v.split('.').map((part) => int.tryParse(part.replaceAll(RegExp(r'[^0-9].*$'), '')) ?? 0).toList();
+  List<int> parse(String v) => v
+      .split('.')
+      .map(
+        (part) => int.tryParse(part.replaceAll(RegExp(r'[^0-9].*$'), '')) ?? 0,
+      )
+      .toList();
   final left = parse(a);
   final right = parse(b);
   for (var i = 0; i < 3; i++) {
@@ -84,12 +88,14 @@ class AuthRepository {
     required String password,
     required LoginMode mode,
   }) async {
-    final path = mode == LoginMode.vendor ? '/api/v1/vendor/auth/login' : '/api/v1/auth/login';
+    final path = mode == LoginMode.vendor
+        ? '/api/v1/vendor/auth/login'
+        : '/api/v1/auth/login';
     try {
-      final response = await client.dio.post(path, data: {
-        'username': username,
-        'password': password,
-      });
+      final response = await client.dio.post(
+        path,
+        data: {'username': username, 'password': password},
+      );
       return _handleTokens(response.data as Map, mode);
     } on DioException catch (error) {
       return LoginFailure(_message(error));
@@ -101,12 +107,14 @@ class AuthRepository {
     required String code,
     required LoginMode mode,
   }) async {
-    final path = mode == LoginMode.vendor ? '/api/v1/vendor/auth/mfa' : '/api/v1/auth/mfa/verify';
+    final path = mode == LoginMode.vendor
+        ? '/api/v1/vendor/auth/mfa'
+        : '/api/v1/auth/mfa/verify';
     try {
-      final response = await client.dio.post(path, data: {
-        'mfa_token': mfaToken,
-        'code': code,
-      });
+      final response = await client.dio.post(
+        path,
+        data: {'mfa_token': mfaToken, 'code': code},
+      );
       return _handleTokens(response.data as Map, mode);
     } on DioException catch (error) {
       return LoginFailure(_message(error));
@@ -133,7 +141,9 @@ class AuthRepository {
 
   String _message(DioException error) {
     final data = error.response?.data;
-    if (data is Map && data['detail'] is String) return data['detail'] as String;
+    if (data is Map && data['detail'] is String) {
+      return data['detail'] as String;
+    }
     if (error.response?.statusCode == 401) return 'Invalid credentials';
     if (error.response?.statusCode == 403) return 'Access denied';
     return 'Connection problem — try again';

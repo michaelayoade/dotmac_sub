@@ -19,7 +19,10 @@ import 'helpers/fake_http.dart';
 
 void main() {
   if (Platform.isLinux) {
-    open.overrideFor(OperatingSystem.linux, () => DynamicLibrary.open('libsqlite3.so.0'));
+    open.overrideFor(
+      OperatingSystem.linux,
+      () => DynamicLibrary.open('libsqlite3.so.0'),
+    );
   }
 
   late AppDatabase db;
@@ -32,18 +35,31 @@ void main() {
     adapter = FakeHttpAdapter();
     final store = InMemoryTokenStore();
     await store.save(
-      accessToken: fakeJwt(expiry: DateTime.now().toUtc().add(const Duration(minutes: 15))),
+      accessToken: fakeJwt(
+        expiry: DateTime.now().toUtc().add(const Duration(minutes: 15)),
+      ),
       refreshToken: 'r',
       loginMode: LoginMode.staff,
     );
     final dio = Dio(BaseOptions(baseUrl: 'https://test.local'));
     dio.httpClientAdapter = adapter;
-    final api = ApiClient(baseUrl: 'https://test.local', tokenStore: store, dio: dio);
-    sync = SyncService(db: db, api: api, connectivity: FakeConnectivity(), delay: (_) async {});
-    container = ProviderContainer(overrides: [
-      apiClientProvider.overrideWithValue(api),
-      syncServiceProvider.overrideWithValue(sync),
-    ]);
+    final api = ApiClient(
+      baseUrl: 'https://test.local',
+      tokenStore: store,
+      dio: dio,
+    );
+    sync = SyncService(
+      db: db,
+      api: api,
+      connectivity: FakeConnectivity(),
+      delay: (_) async {},
+    );
+    container = ProviderContainer(
+      overrides: [
+        apiClientProvider.overrideWithValue(api),
+        syncServiceProvider.overrideWithValue(sync),
+      ],
+    );
   });
 
   tearDown(() async {
@@ -55,12 +71,25 @@ void main() {
   JobsRepository repo() => container.read(jobsRepositoryProvider);
 
   test('jobs list serves the network and warms the cache', () async {
-    adapter.on('GET', '/api/v1/field/jobs', (_) => (200, {
+    adapter.on(
+      'GET',
+      '/api/v1/field/jobs',
+      (_) => (
+        200,
+        {
           'items': [
-            {'id': 'wo-1', 'title': 'Install', 'status': 'dispatched', 'work_type': 'install', 'priority': 'normal'},
+            {
+              'id': 'wo-1',
+              'title': 'Install',
+              'status': 'dispatched',
+              'work_type': 'install',
+              'priority': 'normal',
+            },
           ],
           'count': 1,
-        }));
+        },
+      ),
+    );
     final list = await repo().fetchJobs();
     expect(list.fromCache, isFalse);
     expect(list.jobs.single.id, 'wo-1');
@@ -70,7 +99,13 @@ void main() {
 
   test('jobs list falls back to cache when the network fails', () async {
     await sync.cacheJobs([
-      {'id': 'wo-9', 'title': 'Cached job', 'status': 'in_progress', 'work_type': 'repair', 'priority': 'high'},
+      {
+        'id': 'wo-9',
+        'title': 'Cached job',
+        'status': 'in_progress',
+        'work_type': 'repair',
+        'priority': 'high',
+      },
     ]);
     adapter.on('GET', '/api/v1/field/jobs', (_) => (503, {'detail': 'down'}));
 
@@ -82,18 +117,44 @@ void main() {
 
   test('detail falls back to cached detail json when offline', () async {
     await sync.cacheJobs([
-      {'id': 'wo-1', 'title': 'Install', 'status': 'dispatched', 'work_type': 'install', 'priority': 'normal'},
+      {
+        'id': 'wo-1',
+        'title': 'Install',
+        'status': 'dispatched',
+        'work_type': 'install',
+        'priority': 'normal',
+      },
     ]);
     await sync.cacheJobDetail('wo-1', {
       'job': {
-        'id': 'wo-1', 'title': 'Install', 'status': 'dispatched', 'work_type': 'install', 'priority': 'normal',
-        'scheduled_start': null, 'scheduled_end': null, 'estimated_duration_minutes': null,
-        'started_at': null, 'completed_at': null, 'description': null,
+        'id': 'wo-1',
+        'title': 'Install',
+        'status': 'dispatched',
+        'work_type': 'install',
+        'priority': 'normal',
+        'scheduled_start': null,
+        'scheduled_end': null,
+        'estimated_duration_minutes': null,
+        'started_at': null,
+        'completed_at': null,
+        'description': null,
       },
-      'location': {'latitude': null, 'longitude': null, 'address_text': '12 Road', 'source': 'address_only'},
-      'customer': null, 'ticket_ref': null, 'notes': [], 'materials': [],
+      'location': {
+        'latitude': null,
+        'longitude': null,
+        'address_text': '12 Road',
+        'source': 'address_only',
+      },
+      'customer': null,
+      'ticket_ref': null,
+      'notes': [],
+      'materials': [],
     });
-    adapter.on('GET', '/api/v1/field/jobs/wo-1', (_) => (503, {'detail': 'down'}));
+    adapter.on(
+      'GET',
+      '/api/v1/field/jobs/wo-1',
+      (_) => (503, {'detail': 'down'}),
+    );
 
     final detail = await repo().fetchDetail('wo-1');
     expect(detail.job.id, 'wo-1');

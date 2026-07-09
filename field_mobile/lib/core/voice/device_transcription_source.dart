@@ -51,7 +51,9 @@ class DeviceTranscriptionSource implements TranscriptionSource {
             ? null
             : TranscriptResult(
                 text: text,
-                confidence: result.hasConfidenceRating ? result.confidence : null,
+                confidence: result.hasConfidenceRating
+                    ? result.confidence
+                    : null,
               ),
       );
     }

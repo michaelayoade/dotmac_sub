@@ -21,12 +21,14 @@ class ScheduleEntry {
   final String referenceId;
 
   factory ScheduleEntry.fromJson(Map<String, dynamic> json) => ScheduleEntry(
-        type: json['type'] as String,
-        startAt: DateTime.parse(json['start_at'] as String),
-        endAt: json['end_at'] != null ? DateTime.parse(json['end_at'] as String) : null,
-        title: json['title'] as String? ?? '',
-        referenceId: json['reference_id'] as String,
-      );
+    type: json['type'] as String,
+    startAt: DateTime.parse(json['start_at'] as String),
+    endAt: json['end_at'] != null
+        ? DateTime.parse(json['end_at'] as String)
+        : null,
+    title: json['title'] as String? ?? '',
+    referenceId: json['reference_id'] as String,
+  );
 }
 
 /// Entries grouped by local calendar day, days sorted ascending.
@@ -51,21 +53,26 @@ class ScheduleData {
 }
 
 ScheduleEntry _entryFromCache(CachedScheduleEntry row) => ScheduleEntry(
-      type: row.type,
-      startAt: row.startAt,
-      endAt: row.endAt,
-      title: row.title,
-      referenceId: row.referenceId,
-    );
+  type: row.type,
+  startAt: row.startAt,
+  endAt: row.endAt,
+  title: row.title,
+  referenceId: row.referenceId,
+);
 
 final scheduleProvider = FutureProvider<ScheduleData>((ref) async {
   final sync = ref.read(syncServiceProvider);
   try {
-    final response = await ref.watch(apiClientProvider).dio.get('/api/v1/field/schedule');
+    final response = await ref
+        .watch(apiClientProvider)
+        .dio
+        .get('/api/v1/field/schedule');
     final items = (response.data as List).cast<Map>();
     await sync.cacheSchedule(items); // keep the offline cache warm
     return ScheduleData(
-      items.map((item) => ScheduleEntry.fromJson(item.cast<String, dynamic>())).toList(),
+      items
+          .map((item) => ScheduleEntry.fromJson(item.cast<String, dynamic>()))
+          .toList(),
     );
   } on DioException {
     // Offline / server unreachable: serve the cache so the tech still works.

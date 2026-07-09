@@ -19,7 +19,10 @@ class CameraImageSource implements ImageSourceAdapter {
 
   @override
   Future<Uint8List?> pick() async {
-    final file = await _picker.pickImage(source: ImageSource.camera, imageQuality: 90);
+    final file = await _picker.pickImage(
+      source: ImageSource.camera,
+      imageQuality: 90,
+    );
     return file?.readAsBytes();
   }
 }
@@ -103,7 +106,9 @@ class PhotoQueue {
     final file = File('${storageDir.path}/$clientRef.jpg');
     await file.writeAsBytes(processed, flush: true);
     try {
-      await db.into(db.pendingPhotos).insert(
+      await db
+          .into(db.pendingPhotos)
+          .insert(
             PendingPhotosCompanion.insert(
               clientRef: clientRef,
               localPath: file.path,
@@ -127,7 +132,9 @@ class PhotoQueue {
   }
 
   Future<int> pendingCount() async {
-    final rows = await (db.select(db.pendingPhotos)..where((row) => row.uploaded.equals(false))).get();
+    final rows = await (db.select(
+      db.pendingPhotos,
+    )..where((row) => row.uploaded.equals(false))).get();
     return rows.length;
   }
 }

@@ -17,7 +17,10 @@ void main() {
       LocationDecision.request,
     );
     expect(
-      decideForPermission(LocationPermission.deniedForever, serviceEnabled: true),
+      decideForPermission(
+        LocationPermission.deniedForever,
+        serviceEnabled: true,
+      ),
       LocationDecision.unavailable,
     );
     // Location services off trumps everything.

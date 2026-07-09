@@ -14,7 +14,10 @@ class SignaturePadController {
   Future<Uint8List> toPng(Size size) async {
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
-    canvas.drawRect(Offset.zero & size, Paint()..color = const Color(0xFFFFFFFF));
+    canvas.drawRect(
+      Offset.zero & size,
+      Paint()..color = const Color(0xFFFFFFFF),
+    );
     final paint = Paint()
       ..color = const Color(0xFF0F172A)
       ..strokeWidth = 3
@@ -24,7 +27,10 @@ class SignaturePadController {
         canvas.drawLine(stroke[i], stroke[i + 1], paint);
       }
     }
-    final image = await recorder.endRecording().toImage(size.width.toInt(), size.height.toInt());
+    final image = await recorder.endRecording().toImage(
+      size.width.toInt(),
+      size.height.toInt(),
+    );
     final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
     return bytes!.buffer.asUint8List();
   }

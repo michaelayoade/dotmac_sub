@@ -12,10 +12,10 @@ enum ShiftState { offShift, onBreak, onShift }
 extension ShiftStateApi on ShiftState {
   /// The presence status string the backend expects (matches FieldPresenceStatus).
   String get apiValue => switch (this) {
-        ShiftState.offShift => 'off_shift',
-        ShiftState.onBreak => 'on_break',
-        ShiftState.onShift => 'on_shift',
-      };
+    ShiftState.offShift => 'off_shift',
+    ShiftState.onBreak => 'on_break',
+    ShiftState.onShift => 'on_shift',
+  };
 }
 
 const Duration activePingInterval = Duration(seconds: 30);
@@ -27,7 +27,9 @@ Duration? pingInterval({
   required bool hasActiveJob,
   required bool moving,
 }) {
-  if (shift != ShiftState.onShift) return null; // off shift / on break → no location
+  if (shift != ShiftState.onShift) {
+    return null; // off shift / on break → no location
+  }
   if (hasActiveJob || moving) return activePingInterval;
   return idlePingInterval;
 }

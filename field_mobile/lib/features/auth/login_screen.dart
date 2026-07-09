@@ -101,7 +101,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                             onSelectionChanged: _busy
                                 ? null
                                 : (selection) =>
-                                    setState(() => _mode = selection.first),
+                                      setState(() => _mode = selection.first),
                           ),
                           const SizedBox(height: 20),
                           TextFormField(
@@ -138,8 +138,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                                 onPressed: _busy
                                     ? null
                                     : () => setState(
-                                          () => _showPassword = !_showPassword,
-                                        ),
+                                        () => _showPassword = !_showPassword,
+                                      ),
                                 icon: Icon(
                                   _showPassword
                                       ? Icons.visibility_off_outlined

@@ -19,18 +19,24 @@ class VendorMapData {
 
 /// Fiber plant near the crew, from the vendor-scoped endpoint (no
 /// require_technician). Proximity-scoped: the crew sees the plant around them.
-final vendorNearbyPlantProvider = FutureProvider.autoDispose<VendorMapData>((ref) async {
+final vendorNearbyPlantProvider = FutureProvider.autoDispose<VendorMapData>((
+  ref,
+) async {
   final here = await ref.read(locationSourceProvider).current();
-  final center = safeLatLng(here?.latitude, here?.longitude) ?? defaultMapCenter;
-  final response = await ref.read(apiClientProvider).dio.get(
-    '/api/v1/field/vendor/map-assets/nearby',
-    queryParameters: {
-      'lat': center.latitude,
-      'lng': center.longitude,
-      'radius_m': 2000,
-      'limit': 300,
-    },
-  );
+  final center =
+      safeLatLng(here?.latitude, here?.longitude) ?? defaultMapCenter;
+  final response = await ref
+      .read(apiClientProvider)
+      .dio
+      .get(
+        '/api/v1/field/vendor/map-assets/nearby',
+        queryParameters: {
+          'lat': center.latitude,
+          'lng': center.longitude,
+          'radius_m': 2000,
+          'limit': 300,
+        },
+      );
   final items = (response.data['items'] as List).cast<Map>();
   final assets = items
       .map((item) => MapAsset.fromJson(item.cast<String, dynamic>()))
@@ -40,13 +46,13 @@ final vendorNearbyPlantProvider = FutureProvider.autoDispose<VendorMapData>((ref
 });
 
 IconData _assetIcon(String type) => switch (type) {
-      'olt' => Icons.dns_outlined,
-      'fdh_cabinet' => Icons.inbox_outlined,
-      'splice_closure' => Icons.hub_outlined,
-      'access_point' => Icons.wifi_tethering,
-      'termination_point' => Icons.settings_input_hdmi_outlined,
-      _ => Icons.circle,
-    };
+  'olt' => Icons.dns_outlined,
+  'fdh_cabinet' => Icons.inbox_outlined,
+  'splice_closure' => Icons.hub_outlined,
+  'access_point' => Icons.wifi_tethering,
+  'termination_point' => Icons.settings_input_hdmi_outlined,
+  _ => Icons.circle,
+};
 
 /// Vendor-scoped map: the fiber plant around the crew's current location, so a
 /// contractor building a route has the same situational context the web portal
@@ -93,7 +99,11 @@ class VendorMapScreen extends ConsumerWidget {
                     child: GestureDetector(
                       key: Key('vendor-asset-${asset.type}-${asset.id}'),
                       onTap: () => _showAssetSheet(context, asset),
-                      child: Icon(_assetIcon(asset.type), size: 28, color: AppColors.primary),
+                      child: Icon(
+                        _assetIcon(asset.type),
+                        size: 28,
+                        color: AppColors.primary,
+                      ),
                     ),
                   ),
               ],
@@ -103,7 +113,10 @@ class VendorMapScreen extends ConsumerWidget {
                 alignment: Alignment.bottomLeft,
                 child: Padding(
                   padding: EdgeInsets.all(4),
-                  child: Text('© OpenStreetMap contributors', style: TextStyle(fontSize: 10)),
+                  child: Text(
+                    '© OpenStreetMap contributors',
+                    style: TextStyle(fontSize: 10),
+                  ),
                 ),
               ),
           ],
@@ -121,10 +134,12 @@ class VendorMapScreen extends ConsumerWidget {
         child: ListTile(
           leading: Icon(_assetIcon(asset.type)),
           title: Text(asset.title),
-          subtitle: Text([
-            asset.type.replaceAll('_', ' '),
-            if (asset.subtitle != null) asset.subtitle!,
-          ].join(' · ')),
+          subtitle: Text(
+            [
+              asset.type.replaceAll('_', ' '),
+              if (asset.subtitle != null) asset.subtitle!,
+            ].join(' · '),
+          ),
         ),
       ),
     );
