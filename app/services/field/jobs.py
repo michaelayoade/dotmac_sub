@@ -7,6 +7,7 @@ pipeline continues to hydrate ``work_order_mirror``.
 
 from __future__ import annotations
 
+import builtins
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -28,6 +29,7 @@ from app.schemas.field import (
     FieldMeResponse,
 )
 from app.services.common import apply_pagination, coerce_uuid
+from app.services.field.map_assets import field_map_assets
 
 TERMINAL_STATUSES = frozenset({"completed", "canceled", "cancelled"})
 OPEN_STATUSES = frozenset({"scheduled", "dispatched", "in_progress", "paused"})
@@ -161,6 +163,15 @@ def _location(row: WorkOrderMirror) -> FieldJobLocation:
     )
 
 
+_ASSET_DESTINATION_TYPES = {
+    "fdh_cabinet": "cabinet",
+    "splice_closure": "closure",
+    "fiber_access_point": "fiber_access_point",
+    "service_building": "service_building",
+    "wireless_mast": "wireless_mast",
+}
+
+
 def _summary(row: WorkOrderMirror) -> FieldJobSummary:
     return FieldJobSummary(
         id=row.crm_work_order_id,
@@ -274,6 +285,66 @@ class FieldJobs:
             access_notes=row.access_notes,
             history=[],
         )
+
+    @staticmethod
+    def list_destinations(
+        db: Session,
+        principal: dict[str, Any],
+        crm_work_order_id: str,
+    ) -> builtins.list[dict[str, Any]]:
+        profile = _profile_from_principal(db, principal)
+        row = (
+            _scoped_query(db, profile)
+            .filter(WorkOrderMirror.crm_work_order_id == crm_work_order_id)
+            .one_or_none()
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        location = _location(row)
+        items: builtins.list[dict[str, Any]] = [
+            {
+                "destination_type": "customer",
+                "destination_id": str(row.subscriber_id) if row.subscriber_id else None,
+                "label": "Customer site",
+                "latitude": location.latitude,
+                "longitude": location.longitude,
+                "address_text": location.address_text,
+            }
+        ]
+
+        if location.latitude is not None and location.longitude is not None:
+            assets = field_map_assets.nearby(
+                db,
+                latitude=location.latitude,
+                longitude=location.longitude,
+                radius_m=750,
+                asset_types=builtins.list(_ASSET_DESTINATION_TYPES),
+                limit=20,
+            )
+            for asset in assets:
+                items.append(
+                    {
+                        "destination_type": _ASSET_DESTINATION_TYPES[asset["type"]],
+                        "destination_id": str(asset["id"]),
+                        "label": asset["title"],
+                        "latitude": asset["latitude"],
+                        "longitude": asset["longitude"],
+                        "address_text": asset.get("subtitle"),
+                    }
+                )
+
+        items.append(
+            {
+                "destination_type": "other",
+                "destination_id": None,
+                "label": "Other location",
+                "latitude": None,
+                "longitude": None,
+                "address_text": None,
+            }
+        )
+        return items
 
 
 field_jobs = FieldJobs()

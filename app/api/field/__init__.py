@@ -8,7 +8,13 @@ from app.api.field.devices import router as devices_router
 from app.api.field.map_assets import router as map_assets_router
 from app.api.field.schedule import router as schedule_router
 from app.schemas.common import ListResponse
-from app.schemas.field import FieldJobDetail, FieldJobSummary, FieldMeResponse
+from app.schemas.field import (
+    FieldJobDestination,
+    FieldJobDestinationsResponse,
+    FieldJobDetail,
+    FieldJobSummary,
+    FieldMeResponse,
+)
 from app.services.auth_dependencies import require_user_auth
 from app.services.field.jobs import field_jobs
 
@@ -55,3 +61,19 @@ def get_field_job(
     db: Session = Depends(get_db),
 ):
     return field_jobs.get_detail(db, auth, crm_work_order_id)
+
+
+@router.get(
+    "/jobs/{crm_work_order_id}/destinations",
+    response_model=FieldJobDestinationsResponse,
+)
+def list_field_job_destinations(
+    crm_work_order_id: str,
+    auth: dict = Depends(require_user_auth),
+    db: Session = Depends(get_db),
+):
+    items = field_jobs.list_destinations(db, auth, crm_work_order_id)
+    return {
+        "items": [FieldJobDestination(**item) for item in items],
+        "count": len(items),
+    }

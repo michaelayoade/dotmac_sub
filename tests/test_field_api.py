@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from app.api.field import router
 from app.db import get_db
 from app.models.dispatch import TechnicianProfile
+from app.models.network import FdhCabinet
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.models.work_order_mirror import WorkOrderMirror
@@ -58,6 +59,15 @@ def _seed(db_session):
             assigned_to_crm_person_id="crm-tech-1",
             address="Plot 14, Jabi District",
             scheduled_start=datetime.now(UTC),
+            metadata_={"location": {"lat": 9.071, "lng": 7.451}},
+        )
+    )
+    db_session.add(
+        FdhCabinet(
+            name="FDH API",
+            code="FDH-API",
+            latitude=9.0711,
+            longitude=7.4511,
         )
     )
     db_session.commit()
@@ -90,6 +100,14 @@ def test_field_api_me_jobs_and_detail(db_session):
     assert detail.status_code == 200
     assert detail.json()["job"]["title"] == "Fibre install"
     assert detail.json()["customer"]["name"] == "Adaeze Nwosu"
+
+    destinations = client.get("/api/v1/field/jobs/wo-field-api/destinations")
+    assert destinations.status_code == 200
+    assert [item["destination_type"] for item in destinations.json()["items"]] == [
+        "customer",
+        "cabinet",
+        "other",
+    ]
 
 
 def test_field_router_registered_as_self_scoped_surface():
