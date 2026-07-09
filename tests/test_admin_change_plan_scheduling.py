@@ -16,6 +16,7 @@ from app.models.subscription_change import (
     SubscriptionChangeRequest,
     SubscriptionChangeStatus,
 )
+from app.services import catalog as catalog_service
 from app.services import web_catalog_subscriptions as core
 from app.services.subscription_changes import subscription_change_requests
 
@@ -215,6 +216,44 @@ def test_applier_auto_cancels_due_change_when_target_subscription_canceled(
     assert scheduled.status == SubscriptionChangeStatus.canceled
     assert scheduled.applied_at is None
     assert "target subscription is canceled" in (scheduled.notes or "")
+
+
+def test_applier_marks_due_change_applied_when_subscription_already_on_target_offer(
+    db_session, subscriber, monkeypatch
+):
+    """A retry after a prior partial apply is treated as idempotent."""
+    _stub_plan_change_side_effects(monkeypatch)
+    current, target = _same_family_offers(db_session)
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current,
+        next_billing_at=datetime.now(UTC) + timedelta(days=5),
+        start_at=datetime.now(UTC) - timedelta(days=25),
+    )
+    scheduled = subscription_change_requests.schedule(
+        db_session,
+        subscription_id=str(subscription.id),
+        new_offer_id=str(target.id),
+        effective_date=(datetime.now(UTC) - timedelta(days=1)).date(),
+    )
+    subscription.offer_id = target.id
+    db_session.commit()
+
+    def _fail_update(*args, **kwargs):
+        raise AssertionError("already-applied retry should not update subscription")
+
+    monkeypatch.setattr(catalog_service.subscriptions, "update", _fail_update)
+
+    result = subscription_change_requests.apply_due_changes(db_session)
+
+    assert result["applied"] == 1
+    assert result["canceled_ids"] == []
+    assert result["failed_ids"] == []
+    db_session.refresh(scheduled)
+    assert scheduled.status == SubscriptionChangeStatus.applied
+    assert scheduled.applied_at is not None
+    assert "already on the requested offer" in (scheduled.notes or "")
 
 
 def test_applier_ignores_future_dated_change(db_session, subscriber, monkeypatch):

@@ -402,6 +402,25 @@ class SubscriptionChangeRequests(ListResponseMixin):
         if not subscription:
             raise HTTPException(status_code=404, detail="Subscription not found")
 
+        if str(subscription.offer_id) == str(request.requested_offer_id):
+            request.status = SubscriptionChangeStatus.applied
+            request.applied_at = datetime.now(UTC)
+            request.notes = _append_note(
+                request.notes,
+                "Idempotently marked applied: subscription is already on the "
+                "requested offer.",
+            )
+            db.commit()
+            db.refresh(request)
+            logger.info(
+                "Idempotently marked subscription change %s applied: "
+                "subscription %s is already on offer %s",
+                request_id,
+                subscription.id,
+                request.requested_offer_id,
+            )
+            return request
+
         # Route all plan changes through the shared subscription update path so
         # validation, RADIUS refresh, events, and proration stay consistent.
         from app.schemas.catalog import SubscriptionUpdate

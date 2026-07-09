@@ -123,12 +123,16 @@ def send_expiry_reminders(days_before: int | None = None) -> dict:
             )
         )
         expiring = session.scalars(stmt).unique().all()
+        suppressed_subscriber_ids = _subscribers_with_open_infrastructure_down_tickets(
+            session,
+            {sub.subscriber_id for sub in expiring},
+        )
 
         reminded = 0
         suppressed = 0
         for sub in expiring:
             try:
-                if _has_open_infrastructure_down_ticket(session, sub.subscriber_id):
+                if sub.subscriber_id in suppressed_subscriber_ids:
                     suppressed += 1
                     logger.info(
                         "Suppressed expiry reminder for subscription %s: "
@@ -175,9 +179,25 @@ def _as_utc(value: datetime | None) -> datetime | None:
 
 
 def _has_open_infrastructure_down_ticket(session, subscriber_id: object) -> bool:
+    return subscriber_id in _subscribers_with_open_infrastructure_down_tickets(
+        session,
+        {subscriber_id},
+    )
+
+
+def _subscribers_with_open_infrastructure_down_tickets(
+    session,
+    subscriber_ids: set[object],
+) -> set[object]:
     from sqlalchemy import or_
 
     from app.models.support import Ticket
+
+    subscriber_ids = {
+        subscriber_id for subscriber_id in subscriber_ids if subscriber_id
+    }
+    if not subscriber_ids:
+        return set()
 
     tickets = (
         session.query(Ticket)
@@ -185,14 +205,22 @@ def _has_open_infrastructure_down_ticket(session, subscriber_id: object) -> bool
         .filter(Ticket.status.in_(OPEN_INFRASTRUCTURE_TICKET_STATUSES))
         .filter(
             or_(
-                Ticket.subscriber_id == subscriber_id,
-                Ticket.customer_account_id == subscriber_id,
-                Ticket.customer_person_id == subscriber_id,
+                Ticket.subscriber_id.in_(subscriber_ids),
+                Ticket.customer_account_id.in_(subscriber_ids),
+                Ticket.customer_person_id.in_(subscriber_ids),
             )
         )
         .all()
     )
-    return any(_is_infrastructure_down_ticket(ticket) for ticket in tickets)
+    suppressed: set[object] = set()
+    for ticket in tickets:
+        if not _is_infrastructure_down_ticket(ticket):
+            continue
+        for field in ("subscriber_id", "customer_account_id", "customer_person_id"):
+            ticket_subscriber_id = getattr(ticket, field, None)
+            if ticket_subscriber_id in subscriber_ids:
+                suppressed.add(ticket_subscriber_id)
+    return suppressed
 
 
 def _is_infrastructure_down_ticket(ticket: Any) -> bool:
