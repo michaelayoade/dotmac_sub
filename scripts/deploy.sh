@@ -27,6 +27,7 @@ IMAGE_REPO="ghcr.io/michaelayoade/dotmac_sub"
 APP_CONTAINER="dotmac_sub_app"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8001/health}"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-180}"
+IMAGE_RETAIN_COUNT="${IMAGE_RETAIN_COUNT:-5}"
 # Every service that runs the app image and must be recreated on a new build.
 APP_SERVICES=(app celery-worker celery-worker-bandwidth celery-worker-billing \
   celery-worker-tr069 celery-beat bandwidth-poller syslog-listener)
@@ -149,3 +150,8 @@ fi
 
 trap - ERR
 log "Deployed ${TAG} successfully (was ${PREV_IMAGE:-none})"
+
+log "Pruning old ${IMAGE_REPO} images (keeping ${IMAGE_RETAIN_COUNT} rollback images)"
+IMAGE_REPO="${IMAGE_REPO}" RETAIN_IMAGES="${IMAGE_RETAIN_COUNT}" \
+  bash "${REPO_DIR}/scripts/docker_image_retention.sh" || \
+  log "Image retention failed; deploy is healthy, but old image cleanup needs attention"

@@ -13,7 +13,7 @@ ROOT_DIR="${ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 DB_CONTAINER="${DB_CONTAINER:-dotmac_pg_local}"
 BACKUP_DIR="${DB_BACKUP_DIR:-/var/backups/dotmac_sub}"
 BACKUP_BASENAME="${DB_BACKUP_BASENAME:-dotmac_sub}"
-BACKUP_RETENTION_COUNT="${DB_BACKUP_RETENTION_COUNT:-5}"
+BACKUP_RETENTION_COUNT="${DB_BACKUP_RETENTION_COUNT:-3}"
 BACKUP_DB_USER="${DB_BACKUP_DB_USER:-postgres}"
 
 if [[ ! -f "${ROOT_DIR}/.env" ]]; then
@@ -68,7 +68,8 @@ fi
 echo "Backup complete: ${OUT_FILE} ($(du -h "${OUT_FILE}" | cut -f1))"
 
 mapfile -t EXISTING_BACKUPS < <(
-  find "${BACKUP_DIR}" -maxdepth 1 -type f -name "${BACKUP_BASENAME}_*.sql.gz" | sort
+  find "${BACKUP_DIR}" -maxdepth 1 -type f -name "${BACKUP_BASENAME}_*.sql.gz" \
+    -printf '%T@ %p\n' | sort -n | cut -d' ' -f2-
 )
 DELETE_COUNT=$((${#EXISTING_BACKUPS[@]} - BACKUP_RETENTION_COUNT))
 if [[ "${DELETE_COUNT}" -gt 0 ]]; then

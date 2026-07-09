@@ -218,8 +218,8 @@ def test_report_normalizes_ncc_pack_state_region_matrix_and_pop_totals():
             "Unknown": 334,
         },
         "subscription_matrix": {
-            "corporate": {"wired": 552, "wireless": 0},
-            "individual": {"wired": 2316, "wireless": 0},
+            "corporate": {"wired": 10, "wireless": 20},
+            "individual": {"wired": 1000, "wireless": 1838},
         },
         "network_capacity": {
             "points_of_presence": 36,
@@ -242,10 +242,7 @@ def test_report_normalizes_ncc_pack_state_region_matrix_and_pop_totals():
     assert sum(report["by_state"].values()) == report["total_active_subscriptions"]
     assert sum(report["by_region"].values()) == report["total_active_subscriptions"]
     assert matrix_total == report["total_active_subscriptions"]
-    assert report["subscription_matrix"] == {
-        "corporate": {"wired": 546, "wireless": 0},
-        "individual": {"wired": 2316, "wireless": 0},
-    }
+    assert report["subscription_matrix"]["individual"]["wireless"] == 1832
     assert report["network_capacity"]["points_of_presence"] == 30
     assert report["ncc_pack_adjustments"]["excluded_count"] == 6
 

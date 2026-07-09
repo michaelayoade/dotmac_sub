@@ -4,7 +4,7 @@ set -euo pipefail
 
 REMOTE_NAME="${REMOTE_NAME:-Backup}"
 REMOTE_BASE_PATH="${REMOTE_BASE_PATH:-db.backup/dotmac_sub}"
-KEEP_LAST="${KEEP_LAST:-5}"
+KEEP_LAST="${KEEP_LAST:-3}"
 TMP_DIR="${TMP_DIR:-/root/rclone-backups/dotmac_sub}"
 
 timestamp="$(date -u +%Y-%m-%dT%H-%M-%SZ)"
