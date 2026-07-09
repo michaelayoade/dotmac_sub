@@ -68,6 +68,7 @@ class TestRecordDeadLetter:
 
     def test_on_failure_redacts_nin_from_payload(self, db_session):
         from contextlib import contextmanager
+
         from app.tasks import crm_sync
 
         @contextmanager

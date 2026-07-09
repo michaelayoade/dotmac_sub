@@ -22,7 +22,9 @@ def _inspector():
 
 
 def _has_column(table_name: str, column_name: str) -> bool:
-    return any(column["name"] == column_name for column in _inspector().get_columns(table_name))
+    return any(
+        column["name"] == column_name for column in _inspector().get_columns(table_name)
+    )
 
 
 def upgrade() -> None:
