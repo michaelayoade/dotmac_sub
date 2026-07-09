@@ -53,18 +53,18 @@ def _work_order(db_session) -> WorkOrderMirror:
 
 def test_dispatch_api_skill_crud_and_listing(db_session):
     client = _client(db_session)
+    skill_name = f"fiber_splicing_{uuid4().hex[:8]}"
 
     created = client.post(
         "/api/v1/dispatch/skills",
-        json={"name": "fiber_splicing", "description": "Fiber splicing"},
+        json={"name": skill_name, "description": "Fiber splicing"},
     )
     assert created.status_code == 201
     skill_id = created.json()["id"]
 
     listed = client.get("/api/v1/dispatch/skills")
     assert listed.status_code == 200
-    assert listed.json()["count"] == 1
-    assert listed.json()["items"][0]["name"] == "fiber_splicing"
+    assert any(item["name"] == skill_name for item in listed.json()["items"])
 
     patched = client.patch(
         f"/api/v1/dispatch/skills/{skill_id}",
@@ -75,7 +75,8 @@ def test_dispatch_api_skill_crud_and_listing(db_session):
 
     deleted = client.delete(f"/api/v1/dispatch/skills/{skill_id}")
     assert deleted.status_code == 204
-    assert client.get("/api/v1/dispatch/skills").json()["count"] == 0
+    remaining = client.get("/api/v1/dispatch/skills").json()["items"]
+    assert all(item["id"] != skill_id for item in remaining)
 
 
 def test_dispatch_api_technician_shift_and_assignment_queue(db_session):
