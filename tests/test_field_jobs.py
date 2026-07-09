@@ -7,6 +7,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.models.dispatch import TechnicianProfile, WorkOrderAssignmentQueue
+from app.models.network import FdhCabinet, FiberAccessPoint, FiberSpliceClosure
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.models.work_order_mirror import WorkOrderMirror
@@ -178,6 +179,88 @@ def test_field_job_detail_returns_customer_and_location(db_session):
     assert detail.ticket_ref == "ticket-1"
     assert detail.project_id == "project-1"
     assert detail.access_notes == "Call on arrival"
+
+
+def test_field_job_destinations_include_customer_nearby_assets_and_other(db_session):
+    user = _user(db_session)
+    _profile(db_session, user, crm_person_id="crm-tech-1")
+    subscriber = _subscriber(db_session)
+    _work_order(
+        db_session,
+        subscriber,
+        crm_work_order_id="wo-destinations",
+        assigned_to_crm_person_id="crm-tech-1",
+        metadata_={"location": {"lat": 9.071, "lng": 7.451}},
+    )
+    db_session.add_all(
+        [
+            FdhCabinet(
+                name="FDH Jabi",
+                code="FDH-JB",
+                latitude=9.0711,
+                longitude=7.4511,
+            ),
+            FiberSpliceClosure(
+                name="Closure 14",
+                latitude=9.0712,
+                longitude=7.4512,
+            ),
+            FiberAccessPoint(
+                name="NAP 4",
+                code="NAP-4",
+                latitude=9.0713,
+                longitude=7.4513,
+            ),
+            FdhCabinet(
+                name="Far FDH",
+                latitude=9.2,
+                longitude=7.6,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    destinations = field_jobs.list_destinations(
+        db_session, _auth(user), "wo-destinations"
+    )
+
+    assert destinations[0] == {
+        "destination_type": "customer",
+        "destination_id": str(subscriber.id),
+        "label": "Customer site",
+        "latitude": 9.071,
+        "longitude": 7.451,
+        "address_text": "Plot 14, Jabi District",
+    }
+    assert [item["destination_type"] for item in destinations[1:-1]] == [
+        "cabinet",
+        "closure",
+        "fiber_access_point",
+    ]
+    assert destinations[-1]["destination_type"] == "other"
+    assert "Far FDH" not in {item["label"] for item in destinations}
+
+
+def test_field_job_destinations_work_without_coordinates(db_session):
+    user = _user(db_session)
+    _profile(db_session, user, crm_person_id="crm-tech-1")
+    subscriber = _subscriber(db_session)
+    _work_order(
+        db_session,
+        subscriber,
+        crm_work_order_id="wo-address-only",
+        assigned_to_crm_person_id="crm-tech-1",
+        metadata_={},
+    )
+    db_session.commit()
+
+    destinations = field_jobs.list_destinations(
+        db_session, _auth(user), "wo-address-only"
+    )
+
+    assert [item["destination_type"] for item in destinations] == ["customer", "other"]
+    assert destinations[0]["latitude"] is None
+    assert destinations[0]["address_text"] == "Plot 14, Jabi District"
 
 
 def test_field_me_counts_open_jobs_and_completed_today(db_session):
