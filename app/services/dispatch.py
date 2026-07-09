@@ -83,7 +83,9 @@ def _normalize_skill_ids(db: Session, data: dict[str, Any]) -> None:
     data["skill_ids"] = normalized
 
 
-def _resolve_work_order(db: Session, payload: WorkOrderAssignmentQueueCreate) -> WorkOrderMirror:
+def _resolve_work_order(
+    db: Session, payload: WorkOrderAssignmentQueueCreate
+) -> WorkOrderMirror:
     if payload.work_order_mirror_id is not None:
         return _get_or_404(
             db,
@@ -128,7 +130,10 @@ class Skills(ListResponseMixin):
         if is_active is not None:
             query = query.filter(Skill.is_active.is_(is_active))
         query = apply_ordering(
-            query, order_by, order_dir, {"name": Skill.name, "created_at": Skill.created_at}
+            query,
+            order_by,
+            order_dir,
+            {"name": Skill.name, "created_at": Skill.created_at},
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -236,7 +241,9 @@ class TechnicianSkills(ListResponseMixin):
     ) -> list[TechnicianSkill]:
         query = db.query(TechnicianSkill)
         if technician_id:
-            query = query.filter(TechnicianSkill.technician_id == coerce_uuid(technician_id))
+            query = query.filter(
+                TechnicianSkill.technician_id == coerce_uuid(technician_id)
+            )
         if skill_id:
             query = query.filter(TechnicianSkill.skill_id == coerce_uuid(skill_id))
         if is_active is not None:
@@ -245,7 +252,9 @@ class TechnicianSkills(ListResponseMixin):
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
-    def update(db: Session, row_id: str, payload: TechnicianSkillUpdate) -> TechnicianSkill:
+    def update(
+        db: Session, row_id: str, payload: TechnicianSkillUpdate
+    ) -> TechnicianSkill:
         row = _get_or_404(db, TechnicianSkill, row_id, "Technician skill not found")
         for key, value in _data(payload, exclude_unset=True).items():
             setattr(row, key, value)
@@ -317,7 +326,9 @@ class AvailabilityBlocks(ListResponseMixin):
     ) -> list[AvailabilityBlock]:
         query = db.query(AvailabilityBlock)
         if technician_id:
-            query = query.filter(AvailabilityBlock.technician_id == coerce_uuid(technician_id))
+            query = query.filter(
+                AvailabilityBlock.technician_id == coerce_uuid(technician_id)
+            )
         if is_active is not None:
             query = query.filter(AvailabilityBlock.is_active.is_(is_active))
         query = query.order_by(AvailabilityBlock.start_at.asc())
@@ -327,7 +338,9 @@ class AvailabilityBlocks(ListResponseMixin):
     def update(
         db: Session, block_id: str, payload: AvailabilityBlockUpdate
     ) -> AvailabilityBlock:
-        row = _get_or_404(db, AvailabilityBlock, block_id, "Availability block not found")
+        row = _get_or_404(
+            db, AvailabilityBlock, block_id, "Availability block not found"
+        )
         data = _data(payload, exclude_unset=True)
         start_at = data.get("start_at", row.start_at)
         end_at = data.get("end_at", row.end_at)
@@ -369,7 +382,9 @@ class DispatchRules(ListResponseMixin):
             query = query.filter(DispatchRule.region == region)
         if is_active is not None:
             query = query.filter(DispatchRule.is_active.is_(is_active))
-        query = query.order_by(DispatchRule.priority.desc(), DispatchRule.created_at.desc())
+        query = query.order_by(
+            DispatchRule.priority.desc(), DispatchRule.created_at.desc()
+        )
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
@@ -417,7 +432,9 @@ class AssignmentQueue(ListResponseMixin):
         if status:
             query = query.filter(WorkOrderAssignmentQueue.status == status)
         if crm_work_order_id:
-            query = query.filter(WorkOrderAssignmentQueue.crm_work_order_id == crm_work_order_id)
+            query = query.filter(
+                WorkOrderAssignmentQueue.crm_work_order_id == crm_work_order_id
+            )
         if assigned_technician_id:
             query = query.filter(
                 WorkOrderAssignmentQueue.assigned_technician_id
@@ -430,7 +447,9 @@ class AssignmentQueue(ListResponseMixin):
     def update(
         db: Session, queue_id: str, payload: WorkOrderAssignmentQueueUpdate
     ) -> WorkOrderAssignmentQueue:
-        row = _get_or_404(db, WorkOrderAssignmentQueue, queue_id, "Queue item not found")
+        row = _get_or_404(
+            db, WorkOrderAssignmentQueue, queue_id, "Queue item not found"
+        )
         data = _data(payload, exclude_unset=True)
         _ensure_rule(db, data.get("dispatch_rule_id"))
         if data.get("assigned_technician_id") is not None:
