@@ -46,6 +46,7 @@ _ALLOWLIST_PREFIXES = (
     "/api/v1/payment-proofs/me",
     "/api/v1/payment-proofs/reseller",
     "/api/v1/service-requests",
+    "/api/v1/field",
     "/api/v1/auth",
     "/api/v1/health",
     "/api/v1/tables",
