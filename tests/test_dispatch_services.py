@@ -21,6 +21,8 @@ from app.schemas.dispatch import (
     TechnicianSkillCreate,
     WorkOrderAssignmentQueueCreate,
     WorkOrderAssignmentQueueUpdate,
+    WorkOrderHeaderCreate,
+    WorkOrderHeaderUpdate,
 )
 from app.services import dispatch
 
@@ -195,6 +197,64 @@ def test_assignment_queue_resolves_crm_work_order_and_updates_status(db_session)
     assert (
         dispatch.assignment_queue.list(db_session, status="assigned")[0].id == queued.id
     )
+
+
+def test_native_work_order_header_create_update_and_queue(db_session):
+    user = _system_user(db_session)
+    sub = _subscriber(db_session)
+    profile = dispatch.technician_profiles.create(
+        db_session, TechnicianProfileCreate(system_user_id=user.id)
+    )
+
+    work_order = dispatch.work_order_headers.create(
+        db_session,
+        WorkOrderHeaderCreate(
+            public_id="sub-wo-service-1",
+            subscriber_id=sub.id,
+            title="Fibre install",
+            status="scheduled",
+            work_type="install",
+            priority="high",
+            required_skills=["fiber"],
+            tags=["native"],
+            metadata={"source_ref": "manual"},
+        ),
+    )
+
+    assert work_order.crm_work_order_id == "sub-wo-service-1"
+    assert work_order.metadata_["native_source"] == "sub"
+    assert work_order.metadata_["source_ref"] == "manual"
+    assert work_order.required_skills == ["fiber"]
+
+    updated = dispatch.work_order_headers.update(
+        db_session,
+        "sub-wo-service-1",
+        WorkOrderHeaderUpdate(
+            status="dispatched",
+            assigned_to_name="Ade Tech",
+            metadata={"dispatch_batch": "morning"},
+        ),
+    )
+
+    assert updated.status == "dispatched"
+    assert updated.assigned_to_name == "Ade Tech"
+    assert updated.metadata_["native_source"] == "sub"
+    assert updated.metadata_["dispatch_batch"] == "morning"
+    assert (
+        dispatch.work_order_headers.list(
+            db_session, subscriber_id=str(sub.id), status="dispatched"
+        )[0].id
+        == work_order.id
+    )
+
+    queued = dispatch.assignment_queue.create(
+        db_session,
+        WorkOrderAssignmentQueueCreate(
+            crm_work_order_id="sub-wo-service-1",
+            assigned_technician_id=profile.id,
+        ),
+    )
+    assert queued.work_order_mirror_id == work_order.id
 
 
 def test_assignment_queue_rejects_unknown_work_order(db_session):
