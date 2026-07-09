@@ -27,6 +27,14 @@
     <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-200">
         Ticket settings saved.
     </div>
+    {% elif rule_saved %}
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-200">
+        Assignment rule saved.
+    </div>
+    {% elif rule_deleted %}
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-200">
+        Assignment rule deleted.
+    </div>
     {% endif %}
 
     <form method="post" action="/admin/system/ticket-settings" class="space-y-6">
@@ -249,6 +257,87 @@
             <button type="submit" class="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700">Save Ticket Settings</button>
         </div>
     </form>
+
+    <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+            <div>
+                <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Assignment Rules</h2>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Rules are evaluated before legacy region routing and use the native CRM-style assignment engine.</p>
+            </div>
+        </div>
+
+        <div class="mt-4 overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700">
+            <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
+                <thead class="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:bg-slate-900/40 dark:text-slate-400">
+                    <tr>
+                        <th class="px-3 py-2">Rule</th>
+                        <th class="px-3 py-2">Match</th>
+                        <th class="px-3 py-2">Target</th>
+                        <th class="px-3 py-2">Strategy</th>
+                        <th class="px-3 py-2 text-right">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-700/70">
+                    {% for rule in assignment_rules %}
+                    <tr>
+                        <td class="px-3 py-2">
+                            <div class="font-medium text-slate-900 dark:text-white">{{ rule.name }}</div>
+                            <div class="text-xs text-slate-500 dark:text-slate-400">Priority {{ rule.priority }} · {{ "Active" if rule.is_active else "Inactive" }}</div>
+                        </td>
+                        <td class="px-3 py-2 text-slate-600 dark:text-slate-300">
+                            {% if rule.ticket_types %}<div>Types: {{ rule.ticket_types|join(", ") }}</div>{% endif %}
+                            {% if rule.regions %}<div>Regions: {{ rule.regions|join(", ") }}</div>{% endif %}
+                            {% if not rule.ticket_types and not rule.regions %}<span class="text-slate-400">All tickets</span>{% endif %}
+                        </td>
+                        <td class="px-3 py-2 text-slate-600 dark:text-slate-300">
+                            <div>{{ rule.assignment_target|replace("_", " ")|title }}</div>
+                            {% if rule.team_label %}<div class="text-xs text-slate-500 dark:text-slate-400">Team: {{ rule.team_label }}</div>{% endif %}
+                            {% if rule.assignee_person_id %}<div class="text-xs text-slate-500 dark:text-slate-400">Direct: {{ rule.assignee_person_id }}</div>{% endif %}
+                        </td>
+                        <td class="px-3 py-2 text-slate-600 dark:text-slate-300">{{ rule.strategy|replace("_", " ")|title }}</td>
+                        <td class="px-3 py-2 text-right">
+                            <form method="post" action="/admin/system/ticket-settings/assignment-rules/{{ rule.id }}/delete" onsubmit="return confirm('Delete this assignment rule?')">
+                                {% include "components/forms/csrf_input.html" %}
+                                <button type="submit" class="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-900/30">Delete</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="5" class="px-3 py-5 text-center text-sm text-slate-500 dark:text-slate-400">No assignment rules configured.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <form method="post" action="/admin/system/ticket-settings/assignment-rules" class="mt-5 grid gap-3 rounded-lg border border-slate-200 p-4 dark:border-slate-700 lg:grid-cols-6">
+            {% include "components/forms/csrf_input.html" %}
+            <input type="text" name="name" required placeholder="Rule name" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white lg:col-span-2">
+            <input type="number" min="0" name="priority" value="100" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            <select name="strategy" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                {% for strategy in assignment_strategies %}<option value="{{ strategy }}">{{ strategy|replace("_", " ")|title }}</option>{% endfor %}
+            </select>
+            <select name="team_id" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="">No team</option>
+                {% for team in service_team_options %}<option value="{{ team.id }}">{{ team.label }}</option>{% endfor %}
+            </select>
+            <label class="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 dark:border-slate-700 dark:text-slate-200">
+                <input type="checkbox" name="is_active" value="1" checked class="rounded border-slate-300 text-amber-600">
+                Active
+            </label>
+            <select name="assignment_target" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white lg:col-span-2">
+                {% for target in assignment_targets %}<option value="{{ target }}">{{ target|replace("_", " ")|title }}</option>{% endfor %}
+            </select>
+            <select name="assignee_person_id" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white lg:col-span-2">
+                <option value="">Use team strategy</option>
+                {% for person in staff_options %}<option value="{{ person.id }}">{{ person.label }}</option>{% endfor %}
+            </select>
+            <input type="text" name="ticket_types" placeholder="Ticket types, comma-separated" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white lg:col-span-2">
+            <input type="text" name="regions" placeholder="Regions, comma-separated" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white lg:col-span-2">
+            <button type="submit" class="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 lg:col-span-2">Create Assignment Rule</button>
+        </form>
+    </section>
 </div>
 
 <script>
