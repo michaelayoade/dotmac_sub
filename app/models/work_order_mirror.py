@@ -42,7 +42,9 @@ class WorkOrderMirror(Base):
     priority: Mapped[str | None] = mapped_column(String(20))
     crm_ticket_id: Mapped[str | None] = mapped_column(String(64), index=True)
     crm_project_id: Mapped[str | None] = mapped_column(String(64), index=True)
-    assigned_to_crm_person_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    assigned_to_crm_person_id: Mapped[str | None] = mapped_column(
+        String(64), index=True
+    )
     assigned_to_name: Mapped[str | None] = mapped_column(String(160))
     technician_name: Mapped[str | None] = mapped_column(String(160))
     technician_phone: Mapped[str | None] = mapped_column(String(40))
