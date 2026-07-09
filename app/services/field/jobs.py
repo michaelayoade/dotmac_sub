@@ -27,6 +27,7 @@ from app.schemas.field import (
     FieldJobLocation,
     FieldJobSummary,
     FieldMeResponse,
+    FieldNoteRead,
 )
 from app.services.common import apply_pagination, coerce_uuid
 from app.services.field.map_assets import field_map_assets
@@ -278,6 +279,10 @@ class FieldJobs:
         subscriber = db.get(Subscriber, row.subscriber_id)
         from app.services.field.notes import field_notes
 
+        notes = [
+            FieldNoteRead(**note)
+            for note in field_notes.list_for_job(db, principal, crm_work_order_id)
+        ]
         return FieldJobDetail(
             job=_summary(row),
             customer=_customer(row, subscriber),
@@ -285,7 +290,7 @@ class FieldJobs:
             ticket_ref=row.crm_ticket_id,
             project_id=row.crm_project_id,
             access_notes=row.access_notes,
-            notes=field_notes.list_for_job(db, principal, crm_work_order_id),
+            notes=notes,
             history=[],
         )
 
