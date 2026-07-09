@@ -342,6 +342,26 @@ class FieldMaterialRequestRead(BaseModel):
     items: list[FieldMaterialRequestItemRead] = Field(default_factory=list)
 
 
+class FieldInventoryItemRead(BaseModel):
+    id: UUID
+    crm_item_id: str | None = None
+    sku: str | None = None
+    name: str
+    unit: str | None = None
+    description: str | None = None
+    category: str | None = None
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class FieldInventoryLocationRead(BaseModel):
+    id: UUID
+    name: str
+    code: str | None = None
+    is_active: bool = True
+
+
 class FieldExpenseRequestItemCreate(BaseModel):
     category_code: str = Field(min_length=1, max_length=30)
     category_name: str | None = Field(default=None, max_length=120)
