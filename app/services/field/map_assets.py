@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -22,13 +23,13 @@ _METERS_PER_DEGREE = 111_320.0
 @dataclass(frozen=True)
 class _AssetConfig:
     asset_type: str
-    model: type
+    model: Any
     title: str
     subtitle: Callable[[Any], str | None]
 
 
 def _compact(parts: list[str | None]) -> str | None:
-    text = " · ".join(part for part in parts if part)
+    text = " - ".join(part for part in parts if part)
     return text or None
 
 
@@ -134,7 +135,7 @@ def _serialize(
     config: _AssetConfig,
     *,
     distance_m: float | None = None,
-) -> dict:
+) -> dict[str, Any]:
     return {
         "id": row.id,
         "type": config.asset_type,
@@ -157,8 +158,8 @@ class FieldMapAssets:
         updated_since: datetime | None = None,
         limit: int = 1000,
         offset: int = 0,
-    ) -> list[dict]:
-        items: list[dict] = []
+    ) -> builtins.list[dict[str, Any]]:
+        items: builtins.list[dict[str, Any]] = []
         for config in _configs(asset_types):
             model = config.model
             query = _base_query(db, config)
@@ -177,11 +178,11 @@ class FieldMapAssets:
         latitude: float,
         longitude: float,
         radius_m: float = 500.0,
-        asset_types: list[str] | None = None,
+        asset_types: builtins.list[str] | None = None,
         limit: int = 50,
-    ) -> list[dict]:
+    ) -> builtins.list[dict[str, Any]]:
         min_lat, max_lat, min_lng, max_lng = _bounds(latitude, longitude, radius_m)
-        items: list[dict] = []
+        items: builtins.list[dict[str, Any]] = []
         for config in _configs(asset_types):
             model = config.model
             rows = (
