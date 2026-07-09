@@ -143,6 +143,8 @@ def plan_anchor_row(db: Session, row: dict[str, str]) -> dict[str, Any]:
         return _refuse(action, row, "account_id_changed")
     current = _as_utc(subscription.next_billing_at)
     target = _as_utc(paid_through)
+    if target is None:
+        return _refuse(action, row, "bad_paid_through")
     if current is not None and current >= target:
         return {
             "action": action,
@@ -280,6 +282,8 @@ def apply_cleanup_remediation(
 def _execute_item(db: Session, item: dict[str, Any]) -> dict[str, Any]:
     if item["action"] == "resolve_stale_overdue_lock":
         subscription = db.get(Subscription, coerce_uuid(item["subscription_id"]))
+        if subscription is None:
+            raise ValueError(f"subscription missing: {item['subscription_id']}")
         if item["before"]["subscription_status"] in {
             status.value for status in SUSPENDED_EQUIVALENT
         }:
@@ -312,11 +316,18 @@ def _execute_item(db: Session, item: dict[str, Any]) -> dict[str, Any]:
         }
     if item["action"] == "advance_prepaid_next_billing_at":
         subscription = db.get(Subscription, coerce_uuid(item["subscription_id"]))
-        subscription.next_billing_at = _parse_datetime(item["target_next_billing_at"])
+        if subscription is None:
+            raise ValueError(f"subscription missing: {item['subscription_id']}")
+        target = _parse_datetime(item["target_next_billing_at"])
+        if target is None:
+            raise ValueError(f"bad target_next_billing_at: {item['subscription_id']}")
+        subscription.next_billing_at = target
         db.flush()
         return {"next_billing_at": _iso(subscription.next_billing_at)}
     if item["action"] == "align_account_billing_mode":
         account = db.get(Subscriber, coerce_uuid(item["subscriber_id"]))
+        if account is None:
+            raise ValueError(f"subscriber missing: {item['subscriber_id']}")
         account.billing_mode = BillingMode(item["target_billing_mode"])
         db.flush()
         return {"account_billing_mode": account.billing_mode.value}

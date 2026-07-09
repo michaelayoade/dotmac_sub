@@ -257,8 +257,13 @@ def find_next_billing_anchor_drift(db: Session) -> list[dict[str, Any]]:
         if paid_through is None:
             continue
         next_billing_at = subscription.next_billing_at
-        if next_billing_at is not None and _as_utc(next_billing_at) >= _as_utc(
-            paid_through
+        paid_through_utc = _as_utc(paid_through)
+        current_next_billing_at = _as_utc(next_billing_at)
+        if paid_through_utc is None:
+            continue
+        if (
+            current_next_billing_at is not None
+            and current_next_billing_at >= paid_through_utc
         ):
             continue
         result.append(
