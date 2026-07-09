@@ -170,6 +170,7 @@ from app.models.fiber_change_request import (  # noqa: F401
     FiberChangeRequestOperation,
     FiberChangeRequestStatus,
 )
+from app.models.field_attachment import FieldAttachment  # noqa: F401
 from app.models.field_location import (  # noqa: F401
     FieldTechLocationPing,
     FieldTechPresence,

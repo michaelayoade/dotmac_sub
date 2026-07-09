@@ -138,7 +138,7 @@ def test_field_note_does_not_leak_unassigned_jobs(db_session):
     assert exc.value.status_code == 404
 
 
-def test_note_attachments_rejected_until_attachment_foundation_lands(db_session):
+def test_note_rejects_unknown_attachment_ids(db_session):
     user = _user(db_session)
     _profile(db_session, user)
     subscriber = _subscriber(db_session)
@@ -154,7 +154,8 @@ def test_note_attachments_rejected_until_attachment_foundation_lands(db_session)
             attachment_ids=[str(uuid4())],
         )
 
-    assert exc.value.status_code == 422
+    assert exc.value.status_code == 404
+    assert exc.value.detail == "Attachment not found"
 
 
 def test_field_note_api(db_session):

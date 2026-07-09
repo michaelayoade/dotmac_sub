@@ -52,3 +52,4 @@ class FieldWorkOrderNote(Base):
     work_order_mirror = relationship("WorkOrderMirror")
     author_technician = relationship("TechnicianProfile")
     author_system_user = relationship("SystemUser")
+    attachments_ = relationship("FieldAttachment", back_populates="note")

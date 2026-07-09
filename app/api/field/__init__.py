@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
+from app.api.field.attachments import router as attachments_router
 from app.api.field.devices import router as devices_router
 from app.api.field.locations import router as locations_router
 from app.api.field.map_assets import router as map_assets_router
@@ -22,6 +23,7 @@ from app.services.auth_dependencies import require_user_auth
 from app.services.field.jobs import field_jobs
 
 router = APIRouter(prefix="/field", tags=["field"])
+router.include_router(attachments_router)
 router.include_router(devices_router)
 router.include_router(locations_router)
 router.include_router(map_assets_router)
