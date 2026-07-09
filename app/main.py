@@ -109,6 +109,7 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.customers", "router", "api", "user"),
     ("app.api.subscribers", "router", "api", "user"),
     ("app.api.support", "router", "api", "user"),
+    ("app.api.dispatch", "router", "api", "perm:operations:dispatch"),
     ("app.api.tables", "router", "api", "user"),
     ("app.api.domains_provisioning", "router", "api", "user"),
     ("app.api.domains_monitoring", "router", "api", "user"),
