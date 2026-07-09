@@ -211,12 +211,12 @@ class FieldMapAssets:
         *,
         asset_types: list[str] | None = None,
         limit: int = 20,
-    ) -> list[dict]:
+    ) -> builtins.list[dict[str, Any]]:
         term = query.strip().casefold()
         if not term:
             return []
 
-        items: list[dict] = []
+        items: builtins.list[dict[str, Any]] = []
         for config in _configs(asset_types):
             for row in _base_query(db, config).all():
                 payload = _serialize(row, config)
