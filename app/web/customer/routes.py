@@ -34,7 +34,6 @@ from app.services import customer_portal_bandwidth as customer_portal_bandwidth_
 from app.services import customer_portal_contacts as customer_portal_contacts_service
 from app.services import customer_portal_flow_payment_methods as customer_cards
 from app.services import customer_portal_notifications as customer_notifications_service
-from app.services.nin_matching import mask_nin
 from app.services import payment_proofs as payment_proofs_service
 from app.services import web_customer_auth as web_customer_auth_service
 from app.services import web_network_speedtests as web_network_speedtests_service
@@ -47,6 +46,7 @@ from app.services.customer_portal_context import (
     resolve_allowed_subscriber_ids,
     resolve_customer_subscription,
 )
+from app.services.nin_matching import mask_nin
 from app.web.customer.auth import get_current_customer_from_request
 from app.web.customer.branding import get_customer_templates
 
@@ -193,8 +193,9 @@ def _format_bps(value: float | int | None) -> str:
 
 
 def _profile_value(value):
-    if hasattr(value, "value"):
-        return value.value
+    enum_value = getattr(value, "value", None)
+    if isinstance(enum_value, str):
+        return enum_value
     if hasattr(value, "isoformat"):
         return value.isoformat()
     return value
@@ -231,10 +232,12 @@ def _profile_audit_snapshot(subscriber) -> dict[str, object]:
 
 
 def _profile_completion(subscriber) -> dict[str, object]:
+    gender_value = _profile_value(getattr(subscriber, "gender", None))
+    if not isinstance(gender_value, str):
+        gender_value = ""
     required = {
         "date_of_birth": bool(getattr(subscriber, "date_of_birth", None)),
-        "gender": getattr(getattr(subscriber, "gender", None), "value", "unknown")
-        not in {"", "unknown"},
+        "gender": gender_value not in {"", "unknown"},
         "nin": bool(getattr(subscriber, "nin", None)),
     }
     missing = [key for key, complete in required.items() if not complete]

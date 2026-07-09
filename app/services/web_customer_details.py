@@ -77,8 +77,8 @@ from app.services.audit_helpers import (
 from app.services.billing_settings import resolve_payment_due_days
 from app.services.collections import get_available_balance
 from app.services.credential_crypto import decrypt_credential
-from app.services.nin_matching import mask_nin
 from app.services.network._common import decode_huawei_hex_serial
+from app.services.nin_matching import mask_nin
 
 logger = logging.getLogger(__name__)
 
