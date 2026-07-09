@@ -56,7 +56,9 @@ class TechnicianProfile(Base):
     system_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("system_users.id"), unique=True, index=True
     )
-    crm_person_id: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)
+    crm_person_id: Mapped[str | None] = mapped_column(
+        String(64), unique=True, index=True
+    )
     title: Mapped[str | None] = mapped_column(String(120))
     region: Mapped[str | None] = mapped_column(String(120), index=True)
     erp_employee_id: Mapped[str | None] = mapped_column(
@@ -78,9 +80,7 @@ class TechnicianProfile(Base):
         "TechnicianSkill", back_populates="technician", cascade="all, delete-orphan"
     )
     shifts = relationship("Shift", back_populates="technician")
-    availability_blocks = relationship(
-        "AvailabilityBlock", back_populates="technician"
-    )
+    availability_blocks = relationship("AvailabilityBlock", back_populates="technician")
 
 
 class TechnicianSkill(Base):
@@ -166,7 +166,9 @@ class AvailabilityBlock(Base):
 
 class DispatchRule(Base):
     __tablename__ = "dispatch_rules"
-    __table_args__ = (Index("ix_dispatch_rules_active_priority", "is_active", "priority"),)
+    __table_args__ = (
+        Index("ix_dispatch_rules_active_priority", "is_active", "priority"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -210,7 +212,9 @@ class WorkOrderAssignmentQueue(Base):
     work_order_mirror_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("work_order_mirror.id"), nullable=False
     )
-    crm_work_order_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    crm_work_order_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, index=True
+    )
     status: Mapped[str] = mapped_column(
         String(20), default=DispatchQueueStatus.queued, nullable=False
     )
