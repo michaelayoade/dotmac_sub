@@ -47,6 +47,7 @@ class SettingDomain(enum.Enum):
     gis = "gis"
     scheduler = "scheduler"
     vas = "vas"
+    field = "field"
 
 
 class DomainSetting(Base):
