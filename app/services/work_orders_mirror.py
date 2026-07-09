@@ -218,7 +218,9 @@ def _apply_item(db: Session, sub_uuid, item: dict) -> None:
         required_skills=_to_list(item.get("required_skills")),
         tags=_to_list(item.get("tags")),
         access_notes=item.get("access_notes"),
-        is_active=item.get("is_active") if isinstance(item.get("is_active"), bool) else None,
+        is_active=item.get("is_active")
+        if isinstance(item.get("is_active"), bool)
+        else None,
         metadata_=_to_dict(item.get("metadata")),
         work_order_created_at=_to_dt(item.get("created_at")),
     )
@@ -394,7 +396,9 @@ def apply_webhook(db: Session, event_type: str, body: dict) -> dict:
         required_skills=_to_list(body.get("required_skills")),
         tags=_to_list(body.get("tags")),
         access_notes=body.get("access_notes"),
-        is_active=body.get("is_active") if isinstance(body.get("is_active"), bool) else None,
+        is_active=body.get("is_active")
+        if isinstance(body.get("is_active"), bool)
+        else None,
         metadata_=_to_dict(body.get("metadata")),
     )
     # Mark stale so the next read pulls full detail.
