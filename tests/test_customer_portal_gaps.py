@@ -378,6 +378,40 @@ class TestRestrictedContextHelpers:
 
         assert total == 125.5
 
+    def test_total_outstanding_balance_excludes_reconciliation_hold(
+        self, db_session, subscriber
+    ) -> None:
+        from decimal import Decimal
+
+        from app.models.billing import Invoice, InvoiceStatus
+        from app.services.customer_portal_context import get_total_outstanding_balance
+
+        db_session.add_all(
+            [
+                Invoice(
+                    account_id=subscriber.id,
+                    status=InvoiceStatus.overdue,
+                    total=Decimal("100.00"),
+                    balance_due=Decimal("100.00"),
+                    is_active=True,
+                    metadata_={},
+                ),
+                Invoice(
+                    account_id=subscriber.id,
+                    status=InvoiceStatus.overdue,
+                    total=Decimal("75.00"),
+                    balance_due=Decimal("75.00"),
+                    is_active=True,
+                    metadata_={"reconciliation_hold": True},
+                ),
+            ]
+        )
+        db_session.commit()
+
+        total = get_total_outstanding_balance(db_session, str(subscriber.id))
+
+        assert total == 100.0
+
 
 class TestPlanChangeUiHelpers:
     def test_offer_price_summary_uses_recurring_price_cycle(self) -> None:
