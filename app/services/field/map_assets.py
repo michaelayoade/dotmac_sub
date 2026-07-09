@@ -204,5 +204,38 @@ class FieldMapAssets:
         items.sort(key=lambda item: (item["distance_m"] or 0.0, item["title"]))
         return items[:limit]
 
+    @staticmethod
+    def search(
+        db: Session,
+        query: str,
+        *,
+        asset_types: builtins.list[str] | None = None,
+        limit: int = 20,
+    ) -> builtins.list[dict[str, Any]]:
+        term = query.strip().casefold()
+        if not term:
+            return []
+
+        items: builtins.list[dict[str, Any]] = []
+        for config in _configs(asset_types):
+            for row in _base_query(db, config).all():
+                payload = _serialize(row, config)
+                searchable = " ".join(
+                    part
+                    for part in [
+                        payload["title"],
+                        payload["subtitle"],
+                        payload["status"],
+                    ]
+                    if part
+                ).casefold()
+                if term in searchable:
+                    items.append(payload)
+                    if len(items) >= limit:
+                        return items
+
+        items.sort(key=lambda item: (item["type"], item["title"]))
+        return items[:limit]
+
 
 field_map_assets = FieldMapAssets()

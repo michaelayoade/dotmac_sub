@@ -5,11 +5,23 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.schemas.common import ListResponse
-from app.schemas.field import FieldMapAsset
+from app.schemas.field import FieldMapAsset, FieldMapSearchResponse
 from app.services.auth_dependencies import require_user_auth
 from app.services.field.map_assets import field_map_assets
+from app.services.field.map_search import field_map_search
 
 router = APIRouter(tags=["field-map-assets"])
+
+
+@router.get("/map-assets/search", response_model=FieldMapSearchResponse)
+def search_field_map_places(
+    q: str = Query(min_length=1),
+    limit: int = Query(default=20, ge=1, le=50),
+    auth: dict = Depends(require_user_auth),
+    db: Session = Depends(get_db),
+):
+    items = field_map_search.search(db, auth, q, limit=limit)
+    return {"items": items, "count": len(items), "limit": limit, "offset": 0}
 
 
 @router.get("/map-assets", response_model=ListResponse[FieldMapAsset])

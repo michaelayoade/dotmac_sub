@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -179,3 +179,22 @@ class FieldMapAsset(BaseModel):
     status: str | None = None
     updated_at: datetime | None = None
     distance_m: float | None = None
+
+
+class FieldMapSearchResult(BaseModel):
+    kind: Literal["job", "asset"]
+    id: str
+    asset_type: str | None = None
+    title: str
+    subtitle: str | None = None
+    latitude: float
+    longitude: float
+    status: str | None = None
+    address_text: str | None = None
+
+
+class FieldMapSearchResponse(BaseModel):
+    items: list[FieldMapSearchResult]
+    count: int
+    limit: int
+    offset: int = 0
