@@ -1,5 +1,7 @@
 """Admin reporting web routes."""
 
+from datetime import UTC, datetime, time
+
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, Response
 from fastapi.templating import Jinja2Templates
@@ -8,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models.catalog import SubscriptionStatus
 from app.services import ncc_subscriber_report as ncc_report_service
+from app.services import ticket_sla_reports as ticket_sla_reports_service
 from app.services import web_reports as web_reports_service
 from app.services import web_reports_extended as web_reports_ext_service
 from app.services.audit_helpers import recent_activity_for_paths
@@ -47,6 +50,11 @@ REPORT_HUB_SECTIONS: list[dict] = [
                 "name": "Technician",
                 "url": "/admin/reports/technician",
                 "description": "Technician performance and jobs",
+            },
+            {
+                "name": "Ticket SLA",
+                "url": "/admin/reports/ticket-sla",
+                "description": "Support ticket SLA breaches and operational cleanup",
             },
         ],
     },
@@ -159,6 +167,24 @@ def _base_context(
         "empty_title": "No reports yet",
         "empty_message": "Report data will appear once analytics are configured.",
     }
+
+
+def _parse_date_start(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.combine(datetime.fromisoformat(value).date(), time.min, UTC)
+    except ValueError:
+        return None
+
+
+def _parse_date_end(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.combine(datetime.fromisoformat(value).date(), time.max, UTC)
+    except ValueError:
+        return None
 
 
 @router.get("/hub", response_class=HTMLResponse)
@@ -404,6 +430,45 @@ def reports_technician_export(days: int | None = None, db: Session = Depends(get
             "Content-Disposition": "attachment; filename=technician-performance.csv"
         },
     )
+
+
+@router.get(
+    "/ticket-sla",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("provisioning:read"))],
+)
+def reports_ticket_sla(
+    request: Request,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    open_only: bool = False,
+    db: Session = Depends(get_db),
+):
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    start_at = _parse_date_start(date_from)
+    end_at = _parse_date_end(date_to)
+    context = {
+        "request": request,
+        "active_page": "reports-ticket-sla",
+        "active_menu": "reports",
+        "current_user": get_current_user(request),
+        "sidebar_stats": get_sidebar_stats(db),
+        "date_from": date_from or "",
+        "date_to": date_to or "",
+        "open_only": open_only,
+        "summary": ticket_sla_reports_service.summary(db, start_at, end_at),
+        "trend": ticket_sla_reports_service.trend_daily(db, start_at, end_at),
+        "violations": ticket_sla_reports_service.violation_records(
+            db,
+            start_at=start_at,
+            end_at=end_at,
+            open_only=open_only,
+            limit=100,
+        ),
+        "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
+    }
+    return templates.TemplateResponse("admin/reports/ticket_sla.html", context)
 
 
 # ===================================================================

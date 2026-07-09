@@ -19,6 +19,7 @@ from app.models.work_order_mirror import WorkOrderMirror, WorkOrderSyncState
 from app.services.common import coerce_uuid
 from app.services.crm_client import CRMClientError, get_crm_client
 from app.services.crm_portal import resolve_crm_subscriber_id
+from app.services.work_order_views import row_to_item
 
 logger = logging.getLogger(__name__)
 
@@ -49,15 +50,34 @@ def _to_int(value: object) -> int | None:
         return None
 
 
+def _to_list(value: object) -> list | None:
+    if value is None:
+        return None
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    return None
+
+
+def _to_dict(value: object) -> dict | None:
+    return value if isinstance(value, dict) else None
+
+
 def _upsert_row(
     db: Session,
     *,
     subscriber_id,
     crm_work_order_id: str,
     title: str | None = None,
+    description: str | None = None,
     status: str | None = None,
     work_type: str | None = None,
     priority: str | None = None,
+    crm_ticket_id: str | None = None,
+    crm_project_id: str | None = None,
+    assigned_to_crm_person_id: str | None = None,
+    assigned_to_name: str | None = None,
     technician_name: str | None = None,
     technician_phone: str | None = None,
     address: str | None = None,
@@ -65,7 +85,16 @@ def _upsert_row(
     scheduled_end: datetime | None = None,
     estimated_arrival_at: datetime | None = None,
     estimated_duration_minutes: int | None = None,
+    started_at: datetime | None = None,
+    paused_at: datetime | None = None,
+    resumed_at: datetime | None = None,
     completed_at: datetime | None = None,
+    total_active_seconds: int | None = None,
+    required_skills: list | None = None,
+    tags: list | None = None,
+    access_notes: str | None = None,
+    is_active: bool | None = None,
+    metadata_: dict | None = None,
     work_order_created_at: datetime | None = None,
 ) -> WorkOrderMirror:
     row = db.scalar(
@@ -81,12 +110,22 @@ def _upsert_row(
     row.subscriber_id = subscriber_id
     if title is not None:
         row.title = title
+    if description is not None:
+        row.description = description
     if status:
         row.status = status
     if work_type is not None:
         row.work_type = work_type
     if priority is not None:
         row.priority = priority
+    if crm_ticket_id is not None:
+        row.crm_ticket_id = crm_ticket_id
+    if crm_project_id is not None:
+        row.crm_project_id = crm_project_id
+    if assigned_to_crm_person_id is not None:
+        row.assigned_to_crm_person_id = assigned_to_crm_person_id
+    if assigned_to_name is not None:
+        row.assigned_to_name = assigned_to_name
     if technician_name is not None:
         row.technician_name = technician_name
     if technician_phone is not None:
@@ -101,8 +140,26 @@ def _upsert_row(
         row.estimated_arrival_at = estimated_arrival_at
     if estimated_duration_minutes is not None:
         row.estimated_duration_minutes = estimated_duration_minutes
+    if started_at is not None:
+        row.started_at = started_at
+    if paused_at is not None:
+        row.paused_at = paused_at
+    if resumed_at is not None:
+        row.resumed_at = resumed_at
     if completed_at is not None:
         row.completed_at = completed_at
+    if total_active_seconds is not None:
+        row.total_active_seconds = total_active_seconds
+    if required_skills is not None:
+        row.required_skills = required_skills
+    if tags is not None:
+        row.tags = tags
+    if access_notes is not None:
+        row.access_notes = access_notes
+    if is_active is not None:
+        row.is_active = is_active
+    if metadata_ is not None:
+        row.metadata_ = metadata_
     if work_order_created_at is not None:
         row.work_order_created_at = work_order_created_at
     return row
@@ -138,9 +195,14 @@ def _apply_item(db: Session, sub_uuid, item: dict) -> None:
         subscriber_id=sub_uuid,
         crm_work_order_id=crm_work_order_id,
         title=item.get("title"),
+        description=item.get("description"),
         status=item.get("status"),
         work_type=item.get("work_type"),
         priority=item.get("priority"),
+        crm_ticket_id=item.get("ticket_id") or item.get("crm_ticket_id"),
+        crm_project_id=item.get("project_id") or item.get("crm_project_id"),
+        assigned_to_crm_person_id=item.get("assigned_to_person_id"),
+        assigned_to_name=item.get("assigned_to_name"),
         technician_name=item.get("technician_name"),
         technician_phone=item.get("technician_phone"),
         address=item.get("address"),
@@ -148,7 +210,18 @@ def _apply_item(db: Session, sub_uuid, item: dict) -> None:
         scheduled_end=_to_dt(item.get("scheduled_end")),
         estimated_arrival_at=_to_dt(item.get("estimated_arrival_at")),
         estimated_duration_minutes=_to_int(item.get("estimated_duration_minutes")),
+        started_at=_to_dt(item.get("started_at")),
+        paused_at=_to_dt(item.get("paused_at")),
+        resumed_at=_to_dt(item.get("resumed_at")),
         completed_at=_to_dt(item.get("completed_at")),
+        total_active_seconds=_to_int(item.get("total_active_seconds")),
+        required_skills=_to_list(item.get("required_skills")),
+        tags=_to_list(item.get("tags")),
+        access_notes=item.get("access_notes"),
+        is_active=item.get("is_active")
+        if isinstance(item.get("is_active"), bool)
+        else None,
+        metadata_=_to_dict(item.get("metadata")),
         work_order_created_at=_to_dt(item.get("created_at")),
     )
 
@@ -250,31 +323,7 @@ def read_for_subscriber(
         .order_by(WorkOrderMirror.created_at.desc())
     ).all()
 
-    items = [
-        {
-            "id": r.crm_work_order_id,
-            "title": r.title,
-            "status": r.status,
-            "work_type": r.work_type,
-            "priority": r.priority,
-            "technician_name": r.technician_name,
-            "technician_phone": r.technician_phone,
-            "address": r.address,
-            "scheduled_start": r.scheduled_start.isoformat()
-            if r.scheduled_start
-            else None,
-            "scheduled_end": r.scheduled_end.isoformat() if r.scheduled_end else None,
-            "estimated_arrival_at": r.estimated_arrival_at.isoformat()
-            if r.estimated_arrival_at
-            else None,
-            "estimated_duration_minutes": r.estimated_duration_minutes,
-            "completed_at": r.completed_at.isoformat() if r.completed_at else None,
-            "created_at": r.work_order_created_at.isoformat()
-            if r.work_order_created_at
-            else None,
-        }
-        for r in rows
-    ]
+    items = [row_to_item(r, include_internal=False) for r in rows]
     upcoming = sum(
         1 for r in rows if r.status not in ("completed", "canceled", "draft")
     )
@@ -325,15 +374,32 @@ def apply_webhook(db: Session, event_type: str, body: dict) -> dict:
         subscriber_id=subscriber.id,
         crm_work_order_id=crm_work_order_id,
         title=body.get("title"),
+        description=body.get("description"),
         status=body.get("status") or body.get("to_status"),
         work_type=body.get("work_type"),
         priority=body.get("priority"),
+        crm_ticket_id=body.get("ticket_id") or body.get("crm_ticket_id"),
+        crm_project_id=body.get("project_id") or body.get("crm_project_id"),
+        assigned_to_crm_person_id=body.get("assigned_to_person_id"),
+        assigned_to_name=body.get("assigned_to_name"),
         technician_name=body.get("technician_name"),
         technician_phone=body.get("technician_phone"),
+        address=body.get("address"),
         scheduled_start=_to_dt(body.get("scheduled_start")),
         scheduled_end=_to_dt(body.get("scheduled_end")),
         estimated_arrival_at=_to_dt(body.get("estimated_arrival_at")),
+        started_at=_to_dt(body.get("started_at")),
+        paused_at=_to_dt(body.get("paused_at")),
+        resumed_at=_to_dt(body.get("resumed_at")),
         completed_at=completed_at,
+        total_active_seconds=_to_int(body.get("total_active_seconds")),
+        required_skills=_to_list(body.get("required_skills")),
+        tags=_to_list(body.get("tags")),
+        access_notes=body.get("access_notes"),
+        is_active=body.get("is_active")
+        if isinstance(body.get("is_active"), bool)
+        else None,
+        metadata_=_to_dict(body.get("metadata")),
     )
     # Mark stale so the next read pulls full detail.
     sync = db.get(WorkOrderSyncState, subscriber.id)

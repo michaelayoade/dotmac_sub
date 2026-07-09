@@ -32,32 +32,48 @@ _CACHE_DETAIL = 30  # 30s — detail pages
 # ── Status display dicts (no Tailwind interpolation) ─────────────────────
 
 TICKET_STATUS_DISPLAY: dict[str, str] = {
+    "new": "New",
     "open": "Open",
-    "in_progress": "In Progress",
+    "pending": "Pending",
     "waiting_on_customer": "Waiting on Customer",
-    "waiting_on_agent": "Waiting on Agent",
+    "lastmile_rerun": "Last-mile Rerun",
+    "site_under_construction": "Site Under Construction",
+    "on_hold": "On Hold",
+    "pending_confirmation": "Pending Confirmation",
     "resolved": "Resolved",
     "closed": "Closed",
+    "canceled": "Canceled",
+    "merged": "Merged",
 }
 
 TICKET_STATUS_COLORS: dict[str, str] = {
+    "new": "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
     "open": "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
-    "in_progress": "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200",
-    "waiting_on_customer": "bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-200",
-    "waiting_on_agent": "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200",
+    "pending": "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200",
+    "waiting_on_customer": "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200",
+    "lastmile_rerun": "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200",
+    "site_under_construction": "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200",
+    "on_hold": "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200",
+    "pending_confirmation": "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200",
     "resolved": "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200",
     "closed": "bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-200",
+    "canceled": "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200",
+    "merged": "bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-200",
 }
 
 TICKET_PRIORITY_DISPLAY: dict[str, str] = {
+    "lower": "Lower",
     "low": "Low",
+    "medium": "Medium",
     "normal": "Normal",
     "high": "High",
     "urgent": "Urgent",
 }
 
 TICKET_PRIORITY_COLORS: dict[str, str] = {
+    "lower": "bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300",
     "low": "bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300",
+    "medium": "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300",
     "normal": "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300",
     "high": "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300",
     "urgent": "bg-rose-100 text-rose-700 dark:bg-rose-900 dark:text-rose-300",
@@ -173,6 +189,9 @@ def _ticket_to_dict(ticket: Any) -> dict[str, Any]:
     """Map a local support Ticket to the dict shape the portal templates expect."""
     meta = ticket.metadata_ if isinstance(ticket.metadata_, dict) else {}
     csat = meta.get("csat") if isinstance(meta.get("csat"), dict) else {}
+    due_at = getattr(ticket, "due_at", None)
+    resolved_at = getattr(ticket, "resolved_at", None)
+    closed_at = getattr(ticket, "closed_at", None)
     return {
         "id": str(ticket.id),
         "ticket_number": ticket.number,
@@ -181,6 +200,9 @@ def _ticket_to_dict(ticket: Any) -> dict[str, Any]:
         "status": ticket.status,
         "priority": ticket.priority,
         "subscriber_id": str(ticket.subscriber_id) if ticket.subscriber_id else None,
+        "due_at": due_at.isoformat() if due_at else None,
+        "resolved_at": resolved_at.isoformat() if resolved_at else None,
+        "closed_at": closed_at.isoformat() if closed_at else None,
         "created_at": ticket.created_at.isoformat() if ticket.created_at else None,
         "updated_at": ticket.updated_at.isoformat() if ticket.updated_at else None,
         "csat_rating": csat.get("rating"),

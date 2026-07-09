@@ -9,10 +9,10 @@ Mirrors the project-mirror design.
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import ForeignKey, Integer, String
+from sqlalchemy import Boolean, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy.types import DateTime
+from sqlalchemy.types import JSON, DateTime
 
 from app.db import Base
 
@@ -35,10 +35,17 @@ class WorkOrderMirror(Base):
         index=True,
     )
     title: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    description: Mapped[str | None] = mapped_column(Text)
     # draft|scheduled|dispatched|in_progress|completed|canceled (WorkOrderStatus)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="scheduled")
     work_type: Mapped[str | None] = mapped_column(String(20))
     priority: Mapped[str | None] = mapped_column(String(20))
+    crm_ticket_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    crm_project_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    assigned_to_crm_person_id: Mapped[str | None] = mapped_column(
+        String(64), index=True
+    )
+    assigned_to_name: Mapped[str | None] = mapped_column(String(160))
     technician_name: Mapped[str | None] = mapped_column(String(160))
     technician_phone: Mapped[str | None] = mapped_column(String(40))
     address: Mapped[str | None] = mapped_column(String(255))
@@ -48,7 +55,16 @@ class WorkOrderMirror(Base):
         DateTime(timezone=True)
     )
     estimated_duration_minutes: Mapped[int | None] = mapped_column(Integer)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    total_active_seconds: Mapped[int | None] = mapped_column(Integer)
+    required_skills: Mapped[list | None] = mapped_column(JSON)
+    tags: Mapped[list | None] = mapped_column(JSON)
+    access_notes: Mapped[str | None] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
     work_order_created_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )
