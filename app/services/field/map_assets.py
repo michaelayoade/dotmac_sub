@@ -209,7 +209,7 @@ class FieldMapAssets:
         db: Session,
         query: str,
         *,
-        asset_types: list[str] | None = None,
+        asset_types: builtins.list[str] | None = None,
         limit: int = 20,
     ) -> builtins.list[dict[str, Any]]:
         term = query.strip().casefold()
