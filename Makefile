@@ -133,6 +133,7 @@ prod-deploy: ## Full deploy: build image, pin it in .env, migrate, recreate app+
 	$(MAKE) prod-pin
 	$(MAKE) prod-migrate
 	$(MAKE) prod-restart
+	IMAGE_REPO=dotmac_sub RETAIN_IMAGES=5 TAG_REGEX='^[0-9a-f]+$$' bash scripts/docker_image_retention.sh || true
 
 prod-pin: ## Point .env APP_IMAGE at the freshly-built HEAD image (compose's source of truth)
 	@sha=$$(git rev-parse --short HEAD); \
@@ -190,6 +191,7 @@ prod-ghcr-deploy: ## Deploy from the CI-built GHCR image (pull + migrate + resta
 	$(PROD_COMPOSE) pull app
 	$(MAKE) prod-migrate
 	$(MAKE) prod-restart
+	IMAGE_REPO=$(GHCR_IMAGE) RETAIN_IMAGES=5 bash scripts/docker_image_retention.sh || true
 
 prod-check: ## Run deployment reconciliation checks in the production stack
 	$(PROD_COMPOSE) run --rm app python scripts/setup/deploy_reconcile.py
