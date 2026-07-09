@@ -1,9 +1,11 @@
-"""CRM-style SLA clock service for support tickets."""
+"""SLA clock service for support tickets."""
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
+from uuid import UUID
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -17,6 +19,7 @@ from app.models.ticket_workflow import (
     SlaPolicy,
     WorkflowEntityType,
 )
+from app.services import support_ticket_settings as support_ticket_settings_service
 from app.services.common import coerce_uuid
 
 logger = logging.getLogger(__name__)
@@ -43,6 +46,8 @@ CORE_LINK_TICKET_TYPES_48H = frozenset(
 
 SLA_COMPLETE_STATUSES = frozenset(
     {
+        TicketStatus.resolved.value,
+        TicketStatus.pending_confirmation.value,
         TicketStatus.closed.value,
         TicketStatus.canceled.value,
         TicketStatus.merged.value,
@@ -59,6 +64,14 @@ SLA_APPLICABLE_STATUSES = frozenset(
         TicketStatus.site_under_construction.value,
     }
 )
+
+
+def _as_aware_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def resolve_sla_policy(db: Session, ticket: Ticket) -> SlaPolicy | None:
@@ -91,15 +104,42 @@ def ticket_type_sla_target_minutes(ticket_type: str | None) -> int | None:
     return None
 
 
+def priority_sla_target_minutes(db: Session, priority: str | None) -> int | None:
+    """Return configured support resolution target minutes for a priority."""
+    normalized = str(priority or "").strip().lower()
+    if not normalized:
+        return None
+    policy = support_ticket_settings_service.sla_policy(db).get(normalized, {})
+    resolution_hours = int(policy.get("resolution_hours") or 0)
+    if resolution_hours <= 0:
+        return None
+    return resolution_hours * 60
+
+
+def resolve_ticket_sla_target_minutes(
+    db: Session,
+    *,
+    priority: str | None,
+    ticket_type: str | None,
+) -> int | None:
+    """Resolve a ticket SLA target, preferring explicit operational windows."""
+    return ticket_type_sla_target_minutes(ticket_type) or priority_sla_target_minutes(
+        db, priority
+    )
+
+
 def create_sla_clock_for_ticket(db: Session, ticket: Ticket) -> SlaClock | None:
-    """Create an SLA clock for a newly created ticket when a CRM policy applies."""
+    """Create an SLA clock for a ticket when a support SLA policy applies."""
     policy = resolve_sla_policy(db, ticket)
     if not policy:
         return None
     if str(ticket.status or "") not in SLA_APPLICABLE_STATUSES:
         return None
 
-    target_minutes = ticket_type_sla_target_minutes(ticket.ticket_type)
+    explicit_type_target = ticket_type_sla_target_minutes(ticket.ticket_type)
+    target_minutes = explicit_type_target or priority_sla_target_minutes(
+        db, ticket.priority
+    )
     if target_minutes is None:
         return None
 
@@ -113,8 +153,14 @@ def create_sla_clock_for_ticket(db: Session, ticket: Ticket) -> SlaClock | None:
     if existing:
         return existing
 
-    started_at = ticket.created_at or datetime.now(UTC)
-    due_at = started_at + timedelta(minutes=target_minutes)
+    started_at = _as_aware_utc(ticket.created_at) or datetime.now(UTC)
+    due_at = (
+        started_at + timedelta(minutes=target_minutes)
+        if explicit_type_target is not None or ticket.due_at is None
+        else _as_aware_utc(ticket.due_at)
+    )
+    if due_at is None:
+        due_at = started_at + timedelta(minutes=target_minutes)
     clock = SlaClock(
         policy_id=policy.id,
         entity_type=WorkflowEntityType.ticket.value,
@@ -126,6 +172,64 @@ def create_sla_clock_for_ticket(db: Session, ticket: Ticket) -> SlaClock | None:
     )
     db.add(clock)
     return clock
+
+
+def latest_ticket_sla_clocks(
+    db: Session, ticket_ids: Iterable[UUID | str]
+) -> dict[str, SlaClock]:
+    """Return the newest SLA clock per ticket id."""
+    ids = [coerce_uuid(str(ticket_id)) for ticket_id in ticket_ids if ticket_id]
+    ids = [ticket_id for ticket_id in ids if ticket_id is not None]
+    if not ids:
+        return {}
+    clocks = (
+        db.query(SlaClock)
+        .filter(SlaClock.entity_type == WorkflowEntityType.ticket.value)
+        .filter(SlaClock.entity_id.in_(ids))
+        .order_by(SlaClock.entity_id.asc(), SlaClock.created_at.desc())
+        .all()
+    )
+    latest: dict[str, SlaClock] = {}
+    for clock in clocks:
+        latest.setdefault(str(clock.entity_id), clock)
+    return latest
+
+
+def ticket_sla_status(
+    ticket: Ticket,
+    *,
+    clock: SlaClock | None = None,
+    now: datetime | None = None,
+) -> dict[str, object]:
+    """Build the read model used by support ticket UI/reporting."""
+    current = _as_aware_utc(now) or datetime.now(UTC)
+    due_at = _as_aware_utc(clock.due_at if clock else ticket.due_at)
+    created_at = _as_aware_utc(ticket.created_at)
+    terminal = str(ticket.status or "") in SLA_COMPLETE_STATUSES
+    clock_breached = bool(
+        clock
+        and (
+            clock.status == SlaClockStatus.breached.value
+            or clock.breached_at is not None
+        )
+    )
+    overdue = bool(due_at and due_at < current and not terminal)
+    minutes_remaining = (
+        int((due_at - current).total_seconds() // 60) if due_at is not None else None
+    )
+    return {
+        "status": clock.status if clock else None,
+        "priority": clock.priority if clock else ticket.priority,
+        "started_at": clock.started_at if clock else created_at,
+        "due_at": due_at,
+        "breached": clock_breached or overdue,
+        "breached_at": clock.breached_at if clock else None,
+        "minutes_remaining": minutes_remaining,
+        "age_hours": int((current - created_at).total_seconds() // 3600)
+        if created_at
+        else 0,
+        "terminal": terminal,
+    }
 
 
 def update_sla_clocks_for_status_change(
