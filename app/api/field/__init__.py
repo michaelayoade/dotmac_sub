@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.api.field.devices import router as devices_router
+from app.api.field.map_assets import router as map_assets_router
 from app.api.field.schedule import router as schedule_router
 from app.schemas.common import ListResponse
 from app.schemas.field import FieldJobDetail, FieldJobSummary, FieldMeResponse
@@ -13,6 +14,7 @@ from app.services.field.jobs import field_jobs
 
 router = APIRouter(prefix="/field", tags=["field"])
 router.include_router(devices_router)
+router.include_router(map_assets_router)
 router.include_router(schedule_router)
 
 

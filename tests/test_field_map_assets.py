@@ -1,0 +1,175 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+from uuid import uuid4
+
+import pytest
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
+
+from app.api.field import router
+from app.db import get_db
+from app.models.gis import ServiceBuilding
+from app.models.network import FdhCabinet, FiberAccessPoint, FiberSpliceClosure
+from app.models.subscriber import UserType
+from app.models.system_user import SystemUser
+from app.models.wireless_mast import WirelessMast
+from app.services.auth_dependencies import require_user_auth
+from app.services.field.map_assets import field_map_assets
+
+
+def _user(db_session) -> SystemUser:
+    user = SystemUser(
+        first_name="Map",
+        last_name="Tech",
+        display_name="Map Tech",
+        email=f"map-{uuid4().hex[:8]}@example.com",
+        user_type=UserType.system_user,
+    )
+    db_session.add(user)
+    db_session.flush()
+    return user
+
+
+def _auth(user: SystemUser) -> dict:
+    return {
+        "principal_id": str(user.id),
+        "person_id": str(user.id),
+        "subscriber_id": str(user.id),
+        "principal_type": "system_user",
+        "roles": [],
+        "scopes": [],
+    }
+
+
+def _seed_assets(db_session):
+    fdh = FdhCabinet(
+        name="FDH Jabi",
+        code="FDH-JB",
+        latitude=9.0710,
+        longitude=7.4510,
+    )
+    closure = FiberSpliceClosure(
+        name="Closure 14",
+        latitude=9.0718,
+        longitude=7.4512,
+    )
+    access_point = FiberAccessPoint(
+        name="NAP 4",
+        code="NAP-4",
+        access_point_type="pole",
+        placement="aerial",
+        latitude=9.0711,
+        longitude=7.4511,
+    )
+    building = ServiceBuilding(
+        name="Jabi Plaza",
+        code="BLD-JB",
+        clli="JABI01",
+        latitude=9.0712,
+        longitude=7.4512,
+    )
+    mast = WirelessMast(
+        name="Mast Jabi",
+        latitude=9.09,
+        longitude=7.49,
+        structure_type="monopole",
+    )
+    inactive = FdhCabinet(
+        name="Inactive FDH",
+        latitude=9.0710,
+        longitude=7.4510,
+        is_active=False,
+    )
+    no_location = FdhCabinet(name="No Location")
+    db_session.add_all(
+        [fdh, closure, access_point, building, mast, inactive, no_location]
+    )
+    db_session.commit()
+    return fdh, closure, access_point, building, mast
+
+
+def test_list_map_assets_filters_active_geocoded_rows(db_session):
+    _seed_assets(db_session)
+
+    rows = field_map_assets.list(db_session)
+
+    assert {row["type"] for row in rows} == {
+        "fdh_cabinet",
+        "fiber_access_point",
+        "service_building",
+        "splice_closure",
+        "wireless_mast",
+    }
+    assert {row["title"] for row in rows} == {
+        "FDH Jabi",
+        "NAP 4",
+        "Jabi Plaza",
+        "Closure 14",
+        "Mast Jabi",
+    }
+    assert all(row["status"] == "active" for row in rows)
+
+
+def test_list_map_assets_supports_type_and_updated_since(db_session):
+    fdh, *_ = _seed_assets(db_session)
+    db_session.query(FdhCabinet).filter(FdhCabinet.id == fdh.id).update(
+        {"updated_at": datetime.now(UTC) - timedelta(days=2)}
+    )
+    db_session.commit()
+
+    rows = field_map_assets.list(
+        db_session,
+        asset_types=["fdh_cabinet", "fiber_access_point"],
+        updated_since=datetime.now(UTC) - timedelta(days=1),
+    )
+
+    assert [row["type"] for row in rows] == ["fiber_access_point"]
+
+
+def test_nearby_map_assets_are_sorted_by_distance(db_session):
+    _seed_assets(db_session)
+
+    rows = field_map_assets.nearby(
+        db_session,
+        latitude=9.07105,
+        longitude=7.45105,
+        radius_m=250,
+    )
+
+    assert [row["title"] for row in rows][:3] == ["FDH Jabi", "NAP 4", "Jabi Plaza"]
+    assert all(row["distance_m"] is not None for row in rows)
+    assert "Mast Jabi" not in {row["title"] for row in rows}
+
+
+def test_unknown_asset_type_is_rejected(db_session):
+    with pytest.raises(HTTPException) as exc:
+        field_map_assets.list(db_session, asset_types=["olt_device"])
+
+    assert exc.value.status_code == 400
+
+
+def test_map_assets_api(db_session):
+    user = _user(db_session)
+    _seed_assets(db_session)
+
+    app = FastAPI()
+    app.include_router(router, prefix="/api/v1")
+    app.dependency_overrides[get_db] = lambda: db_session
+    app.dependency_overrides[require_user_auth] = lambda: _auth(user)
+
+    resp = TestClient(app).get(
+        "/api/v1/field/map-assets",
+        params={"asset_type": "fdh_cabinet"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["items"][0]["title"] == "FDH Jabi"
+
+    nearby = TestClient(app).get(
+        "/api/v1/field/map-assets/nearby",
+        params={"latitude": 9.07105, "longitude": 7.45105, "radius_m": 250},
+    )
+
+    assert nearby.status_code == 200
+    assert nearby.json()[0]["distance_m"] >= 0
