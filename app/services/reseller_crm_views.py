@@ -19,6 +19,7 @@ from app.models.project_mirror import ProjectMirror
 from app.models.quote_mirror import QuoteMirror
 from app.models.work_order_mirror import WorkOrderMirror
 from app.services import quotes_mirror, reseller_portal
+from app.services.work_order_views import row_to_item
 
 logger = logging.getLogger(__name__)
 
@@ -97,24 +98,12 @@ def work_orders_for_reseller(db: Session, reseller_id: str) -> dict:
         .where(WorkOrderMirror.subscriber_id.in_(list(names)))
         .order_by(WorkOrderMirror.created_at.desc())
     ).all()
-    items = [
-        {
-            "account_id": str(r.subscriber_id),
-            "account_name": names.get(r.subscriber_id),
-            "id": r.crm_work_order_id,
-            "title": r.title,
-            "status": r.status,
-            "work_type": r.work_type,
-            "priority": r.priority,
-            "technician_name": r.technician_name,
-            "technician_phone": r.technician_phone,
-            "address": r.address,
-            "scheduled_start": _dt(r.scheduled_start),
-            "estimated_arrival_at": _dt(r.estimated_arrival_at),
-            "completed_at": _dt(r.completed_at),
-        }
-        for r in rows
-    ]
+    items = []
+    for r in rows:
+        item = row_to_item(r, include_internal=False)
+        item["account_id"] = str(r.subscriber_id)
+        item["account_name"] = names.get(r.subscriber_id)
+        items.append(item)
     upcoming = sum(
         1 for r in rows if r.status not in ("completed", "canceled", "draft")
     )
