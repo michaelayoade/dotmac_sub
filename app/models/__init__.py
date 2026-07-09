@@ -139,6 +139,16 @@ from app.models.cross_app_drift import (  # noqa: F401
 from app.models.customer_identity import CustomerIdentityIndex  # noqa: F401
 from app.models.cutover import CutoverBalanceVariance  # noqa: F401
 from app.models.device_token import DeviceToken  # noqa: F401
+from app.models.dispatch import (  # noqa: F401
+    AvailabilityBlock,
+    DispatchQueueStatus,
+    DispatchRule,
+    Shift,
+    Skill,
+    TechnicianProfile,
+    TechnicianSkill,
+    WorkOrderAssignmentQueue,
+)
 from app.models.domain_settings import (  # noqa: F401
     DomainSetting,
     SettingDomain,
