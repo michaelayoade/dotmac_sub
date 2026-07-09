@@ -98,12 +98,13 @@ def test_skill_technician_skill_and_rule_lifecycle(db_session):
     team = ServiceTeam(name="Field Ops", team_type=ServiceTeamType.field_service.value)
     db_session.add(team)
     db_session.commit()
+    skill_name = f"fiber_splicing_{uuid4().hex[:8]}"
 
     profile = dispatch.technician_profiles.create(
         db_session, TechnicianProfileCreate(system_user_id=user.id)
     )
     skill = dispatch.skills.create(
-        db_session, SkillCreate(name="fiber_splicing", description="Fiber splicing")
+        db_session, SkillCreate(name=skill_name, description="Fiber splicing")
     )
     tech_skill = dispatch.technician_skills.create(
         db_session,
@@ -128,7 +129,7 @@ def test_skill_technician_skill_and_rule_lifecycle(db_session):
 
     assert tech_skill.is_primary is True
     assert rule.skill_ids == [str(skill.id)]
-    assert dispatch.skills.list(db_session)[0].name == "fiber_splicing"
+    assert any(row.id == skill.id for row in dispatch.skills.list(db_session))
     assert (
         dispatch.dispatch_rules.list(db_session, work_type="install")[0].id == rule.id
     )
@@ -211,11 +212,15 @@ def test_delete_marks_skill_and_profile_inactive(db_session):
     profile = dispatch.technician_profiles.create(
         db_session, TechnicianProfileCreate(system_user_id=user.id)
     )
-    skill = dispatch.skills.create(db_session, SkillCreate(name="activation"))
+    skill = dispatch.skills.create(
+        db_session, SkillCreate(name=f"activation_{uuid4().hex[:8]}")
+    )
 
     dispatch.skills.delete(db_session, str(skill.id))
     dispatch.technician_profiles.delete(db_session, str(profile.id))
 
-    assert dispatch.skills.list(db_session) == []
-    assert dispatch.technician_profiles.list(db_session) == []
+    assert all(row.id != skill.id for row in dispatch.skills.list(db_session))
+    assert all(
+        row.id != profile.id for row in dispatch.technician_profiles.list(db_session)
+    )
     assert db_session.get(TechnicianProfile, profile.id).is_active is False
