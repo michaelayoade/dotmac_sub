@@ -24,6 +24,7 @@ from app.services.customer_financial_ledger import (
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass(frozen=True)
 class StatementRange:
     start: datetime
