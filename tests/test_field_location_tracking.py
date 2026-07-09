@@ -10,9 +10,13 @@ from fastapi.testclient import TestClient
 from app.api.field import router
 from app.db import get_db
 from app.models.dispatch import TechnicianProfile
+from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.field_job_event import FieldJobEvent
 from app.models.field_location import FieldTechLocationPing
-from app.models.subscriber import UserType
+from app.models.subscriber import Subscriber, UserType
+from app.models.subscription_engine import SettingValueType
 from app.models.system_user import SystemUser
+from app.models.work_order_mirror import WorkOrderMirror
 from app.services.auth_dependencies import require_user_auth
 from app.services.field.location_tracking import field_location_tracking
 
@@ -50,6 +54,50 @@ def _profile(db_session, user: SystemUser) -> TechnicianProfile:
     db_session.add(profile)
     db_session.flush()
     return profile
+
+
+def _subscriber(db_session) -> Subscriber:
+    subscriber = Subscriber(
+        first_name="Live",
+        last_name="Customer",
+        email=f"live-customer-{uuid4().hex[:8]}@example.com",
+    )
+    db_session.add(subscriber)
+    db_session.flush()
+    return subscriber
+
+
+def _work_order(
+    db_session,
+    subscriber: Subscriber,
+    *,
+    crm_work_order_id: str = "wo-geofence",
+    status: str = "dispatched",
+) -> WorkOrderMirror:
+    row = WorkOrderMirror(
+        crm_work_order_id=crm_work_order_id,
+        subscriber_id=subscriber.id,
+        title="Geofence install",
+        status=status,
+        assigned_to_crm_person_id="crm-live-tech",
+        address="Plot 14, Jabi",
+        scheduled_start=datetime.now(UTC),
+        metadata_={"location": {"lat": 9.071, "lng": 7.451}},
+    )
+    db_session.add(row)
+    db_session.flush()
+    return row
+
+
+def _field_setting(db_session, key: str, value: str) -> None:
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.field,
+            key=key,
+            value_type=SettingValueType.boolean,
+            value_text=value,
+        )
+    )
 
 
 def test_record_batch_persists_pings_and_updates_presence(db_session):
@@ -130,6 +178,59 @@ def test_location_batch_collects_per_ping_errors(db_session):
 
     assert result["accepted"] == 1
     assert result["errors"][0]["index"] == 1
+
+
+def test_geofence_is_disabled_by_default(db_session):
+    user = _user(db_session)
+    _profile(db_session, user)
+    subscriber = _subscriber(db_session)
+    row = _work_order(db_session, subscriber, crm_work_order_id="wo-geofence-off")
+    db_session.commit()
+
+    result = field_location_tracking.record_batch(
+        db_session,
+        _auth(user),
+        [{"latitude": 9.071, "longitude": 7.451}],
+    )
+
+    db_session.refresh(row)
+    assert result["transitions"] == []
+    assert row.status == "dispatched"
+    assert db_session.query(FieldJobEvent).count() == 0
+
+
+def test_geofence_auto_starts_arrived_job_once(db_session):
+    user = _user(db_session)
+    _profile(db_session, user)
+    subscriber = _subscriber(db_session)
+    row = _work_order(db_session, subscriber, crm_work_order_id="wo-geofence-on")
+    _field_setting(db_session, "geofence_auto_status_enabled", "true")
+    db_session.commit()
+
+    result = field_location_tracking.record_batch(
+        db_session,
+        _auth(user),
+        [{"latitude": 9.0711, "longitude": 7.4511}],
+    )
+
+    db_session.refresh(row)
+    assert len(result["transitions"]) == 1
+    assert result["transitions"][0]["crm_work_order_id"] == "wo-geofence-on"
+    assert result["transitions"][0]["event"] == "start"
+    assert result["transitions"][0]["distance_m"] < 25
+    assert row.status == "in_progress"
+    event = db_session.query(FieldJobEvent).one()
+    assert event.event == "start"
+    assert event.payload["source"] == "geofence"
+    assert row.metadata_["native_transition_pending_sync"] is True
+
+    replay = field_location_tracking.record_batch(
+        db_session,
+        _auth(user),
+        [{"latitude": 9.0711, "longitude": 7.4511}],
+    )
+    assert replay["transitions"] == []
+    assert db_session.query(FieldJobEvent).count() == 1
 
 
 def test_set_sharing_updates_presence_status(db_session):
