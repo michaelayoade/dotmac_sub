@@ -67,9 +67,8 @@ class TestRecordDeadLetter:
         assert rows[0].attempts == 9
 
     def test_on_failure_redacts_nin_from_payload(self, db_session):
-        from app.tasks import crm_sync
-
         from contextlib import contextmanager
+        from app.tasks import crm_sync
 
         @contextmanager
         def _fake_session():

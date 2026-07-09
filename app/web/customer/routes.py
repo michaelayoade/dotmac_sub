@@ -203,13 +203,15 @@ def _profile_value(value):
 
 def _profile_audit_snapshot(subscriber) -> dict[str, object]:
     metadata = dict(getattr(subscriber, "metadata_", None) or {})
+    nin_value = getattr(subscriber, "nin", None)
+    masked_nin = mask_nin(nin_value) if isinstance(nin_value, str) and nin_value else None
     return {
         "first_name": subscriber.first_name,
         "last_name": subscriber.last_name,
         "display_name": subscriber.display_name,
         "email": subscriber.email,
         "phone": subscriber.phone,
-        "nin": mask_nin(subscriber.nin or "") if getattr(subscriber, "nin", None) else None,
+        "nin": masked_nin,
         "date_of_birth": _profile_value(subscriber.date_of_birth),
         "gender": _profile_value(subscriber.gender),
         "preferred_contact_method": _profile_value(subscriber.preferred_contact_method),
