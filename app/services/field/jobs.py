@@ -276,6 +276,7 @@ class FieldJobs:
         subscriber = db.get(Subscriber, row.subscriber_id)
         from app.services.field.attachments import field_attachments
         from app.services.field.equipment import field_equipment
+        from app.services.field.material_requests import field_material_requests
         from app.services.field.materials import field_materials
         from app.services.field.notes import field_notes
         from app.services.field.transitions import field_transitions
@@ -289,6 +290,13 @@ class FieldJobs:
             project_id=row.crm_project_id,
             access_notes=row.access_notes,
             materials=field_materials.list_for_job(db, principal, crm_work_order_id),
+            material_requests=field_material_requests.list_mine(
+                db,
+                principal,
+                crm_work_order_id=crm_work_order_id,
+                limit=50,
+                offset=0,
+            ),
             notes=field_notes.list_for_job(db, principal, crm_work_order_id),
             attachments=field_attachments.list(
                 db, principal, crm_work_order_id=crm_work_order_id
