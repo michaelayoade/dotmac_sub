@@ -115,6 +115,24 @@ class FieldOpenTicketItem(BaseModel):
     status: str | None = None
 
 
+class FieldNoteCreate(BaseModel):
+    body: str = Field(min_length=1, max_length=10000)
+    is_internal: bool = True
+    attachment_ids: list[UUID] = Field(default_factory=list, max_length=20)
+
+
+class FieldNoteRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    body: str
+    is_internal: bool
+    author_person_id: UUID | None = None
+    author_name: str | None = None
+    created_at: datetime
+    attachments: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class FieldJobHistoryItem(BaseModel):
     id: str
     type: str
@@ -137,7 +155,7 @@ class FieldJobDetail(BaseModel):
     additional_contacts: list[FieldSiteContact] = Field(default_factory=list)
     recent_visits: list[FieldVisitHistoryItem] = Field(default_factory=list)
     open_tickets: list[FieldOpenTicketItem] = Field(default_factory=list)
-    notes: list[dict[str, Any]] = Field(default_factory=list)
+    notes: list[FieldNoteRead] = Field(default_factory=list)
     attachments: list[dict[str, Any]] = Field(default_factory=list)
     materials: list[dict[str, Any]] = Field(default_factory=list)
     material_requests: list[dict[str, Any]] = Field(default_factory=list)

@@ -7,6 +7,7 @@ from app.api.deps import get_db
 from app.api.field.devices import router as devices_router
 from app.api.field.locations import router as locations_router
 from app.api.field.map_assets import router as map_assets_router
+from app.api.field.notes import router as notes_router
 from app.api.field.schedule import router as schedule_router
 from app.schemas.common import ListResponse
 from app.schemas.field import (
@@ -23,6 +24,7 @@ router = APIRouter(prefix="/field", tags=["field"])
 router.include_router(devices_router)
 router.include_router(locations_router)
 router.include_router(map_assets_router)
+router.include_router(notes_router)
 router.include_router(schedule_router)
 
 
