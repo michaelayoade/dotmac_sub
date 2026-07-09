@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from unittest.mock import MagicMock, patch
 
+from app.models.dispatch import TechnicianProfile
 from app.models.subscriber import Subscriber
 from app.models.work_order_mirror import WorkOrderMirror, WorkOrderSyncState
 from app.services import work_orders_mirror
@@ -42,6 +43,7 @@ def _crm_resp():
                 "total_active_seconds": 120,
                 "ticket_id": "ticket-1",
                 "project_id": "project-1",
+                "assigned_to_person_id": "crm-tech-1",
                 "required_skills": ["fiber"],
                 "tags": ["customer-facing"],
                 "access_notes": "Call on arrival",
@@ -73,10 +75,17 @@ def test_reconcile_upserts_and_marks_synced(db_session):
     assert row.total_active_seconds == 120
     assert row.crm_ticket_id == "ticket-1"
     assert row.crm_project_id == "project-1"
+    assert row.assigned_to_crm_person_id == "crm-tech-1"
     assert row.required_skills == ["fiber"]
     assert row.tags == ["customer-facing"]
     assert row.access_notes == "Call on arrival"
     assert db_session.get(WorkOrderSyncState, sub.id) is not None
+    profile = (
+        db_session.query(TechnicianProfile).filter_by(crm_person_id="crm-tech-1").one()
+    )
+    assert profile.system_user_id is None
+    assert profile.metadata_["name"] == "Ade Tech"
+    assert profile.metadata_["phone"] == "+2348000000000"
 
 
 def test_read_counts_upcoming_and_excludes_terminal(db_session):
@@ -121,6 +130,7 @@ def test_webhook_dispatched_upserts_and_pushes(db_session):
                 "work_order_id": "wo9",
                 "title": "Install",
                 "status": "dispatched",
+                "assigned_to_person_id": "crm-tech-9",
                 "technician_name": "Ade Tech",
                 "address": "12 Test St",
                 "started_at": "2026-06-30T09:32:00+00:00",
@@ -132,9 +142,15 @@ def test_webhook_dispatched_upserts_and_pushes(db_session):
     row = db_session.query(WorkOrderMirror).filter_by(crm_work_order_id="wo9").one()
     assert row.status == "dispatched"
     assert row.technician_name == "Ade Tech"
+    assert row.assigned_to_crm_person_id == "crm-tech-9"
     assert row.address == "12 Test St"
     assert row.started_at is not None
     assert row.crm_ticket_id == "ticket-1"
+    profile = (
+        db_session.query(TechnicianProfile).filter_by(crm_person_id="crm-tech-9").one()
+    )
+    assert profile.person_id is not None
+    assert profile.metadata_["source"] == "crm_work_order_sync"
 
 
 def test_webhook_completed_sets_completed_at(db_session):

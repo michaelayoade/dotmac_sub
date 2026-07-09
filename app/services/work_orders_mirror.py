@@ -9,11 +9,13 @@ reconcile pull + lazy on-view refresh. Read-only for the customer.
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.dispatch import TechnicianProfile
 from app.models.subscriber import Subscriber
 from app.models.work_order_mirror import WorkOrderMirror, WorkOrderSyncState
 from app.services.common import coerce_uuid
@@ -24,6 +26,7 @@ from app.services.work_order_views import row_to_item
 logger = logging.getLogger(__name__)
 
 _DEFAULT_REFRESH_TTL_SECONDS = 180  # "where's my technician" — refresh often
+_CRM_TECHNICIAN_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_DNS, "dotmac.io.crm.technician")
 
 
 def _to_dt(value: object) -> datetime | None:
@@ -64,6 +67,49 @@ def _to_dict(value: object) -> dict | None:
     return value if isinstance(value, dict) else None
 
 
+def _crm_person_uuid(crm_person_id: str) -> uuid.UUID:
+    return uuid.uuid5(_CRM_TECHNICIAN_NAMESPACE, crm_person_id)
+
+
+def _ensure_technician_profile(
+    db: Session,
+    *,
+    crm_person_id: str | None,
+    name: str | None = None,
+    phone: str | None = None,
+) -> None:
+    crm_person_id = str(crm_person_id or "").strip()
+    if not crm_person_id:
+        return
+    profile = db.scalar(
+        select(TechnicianProfile).where(
+            TechnicianProfile.crm_person_id == crm_person_id
+        )
+    )
+    metadata = {
+        "source": "crm_work_order_sync",
+        "crm_person_id": crm_person_id,
+    }
+    if name:
+        metadata["name"] = name
+    if phone:
+        metadata["phone"] = phone
+
+    if profile is None:
+        profile = TechnicianProfile(
+            person_id=_crm_person_uuid(crm_person_id),
+            crm_person_id=crm_person_id,
+            title="Field technician",
+            metadata_=metadata,
+        )
+        db.add(profile)
+        return
+
+    profile.metadata_ = {**(profile.metadata_ or {}), **metadata}
+    if not profile.title:
+        profile.title = "Field technician"
+
+
 def _upsert_row(
     db: Session,
     *,
@@ -97,6 +143,12 @@ def _upsert_row(
     metadata_: dict | None = None,
     work_order_created_at: datetime | None = None,
 ) -> WorkOrderMirror:
+    _ensure_technician_profile(
+        db,
+        crm_person_id=assigned_to_crm_person_id,
+        name=technician_name or assigned_to_name,
+        phone=technician_phone,
+    )
     row = db.scalar(
         select(WorkOrderMirror).where(
             WorkOrderMirror.crm_work_order_id == crm_work_order_id
