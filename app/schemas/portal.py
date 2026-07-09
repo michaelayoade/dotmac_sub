@@ -117,7 +117,11 @@ class WorkOrderItem(BaseModel):
     scheduled_end: str | None = None
     estimated_arrival_at: str | None = None
     estimated_duration_minutes: int | None = None
+    started_at: str | None = None
+    paused_at: str | None = None
+    resumed_at: str | None = None
     completed_at: str | None = None
+    total_active_seconds: int | None = None
     created_at: str | None = None
 
 
