@@ -14,6 +14,7 @@ from uuid import UUID
 from fastapi import HTTPException
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.models.dispatch import TechnicianProfile, WorkOrderAssignmentQueue
 from app.models.subscriber import Subscriber
@@ -106,7 +107,7 @@ def _scoped_query(db: Session, profile: TechnicianProfile):
         WorkOrderAssignmentQueue.assigned_technician_id == profile.id
     )
     query = db.query(WorkOrderMirror).filter(WorkOrderMirror.is_active.is_(True))
-    clauses = [WorkOrderMirror.id.in_(assignment_ids)]
+    clauses: list[ColumnElement[bool]] = [WorkOrderMirror.id.in_(assignment_ids)]
     if profile.crm_person_id:
         clauses.append(
             WorkOrderMirror.assigned_to_crm_person_id == profile.crm_person_id
