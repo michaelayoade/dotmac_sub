@@ -93,6 +93,7 @@
             {% if not crm_write_locked %}
             <form method="post" action="/admin/support/tickets/{{ ticket.id }}/comment" enctype="multipart/form-data" class="mt-5 space-y-3 rounded-xl border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-600 dark:bg-slate-700/30">
                 <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+                <input type="hidden" name="mentions" :value="JSON.stringify(selectedMentions)">
                 <div class="relative">
                     <textarea name="body" rows="4" required x-model="commentText" @input="onInput" placeholder="Add a comment... Use @name or @email to mention." class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></textarea>
                     <div x-show="showSuggestions" x-cloak class="absolute left-0 right-0 top-full z-20 mt-1 max-h-40 overflow-auto rounded-xl border border-slate-200 bg-white p-2 shadow-lg dark:border-slate-600 dark:bg-slate-800">
@@ -251,23 +252,34 @@
 function commentMentions() {
     return {
         people: {{ people_options|tojson }},
+        mentionAgents: {{ (mention_agents or [])|tojson }},
         commentText: '',
+        selectedMentions: [],
         showSuggestions: false,
         suggestions: [],
         onInput() {
+            this.selectedMentions = this.selectedMentions.filter((mention) => {
+                const label = mention && mention.label ? mention.label : '';
+                return label && this.commentText.includes(`@${label}`);
+            });
             const match = this.commentText.match(/@([^\s@]{1,40})$/);
             if (!match) {
                 this.showSuggestions = false;
                 return;
             }
             const q = match[1].toLowerCase();
-            this.suggestions = this.people
+            const options = this.mentionAgents.length ? this.mentionAgents : this.people;
+            this.suggestions = options
                 .filter((p) => (p.label || '').toLowerCase().includes(q) || (p.email || '').toLowerCase().includes(q))
                 .slice(0, 6);
             this.showSuggestions = this.suggestions.length > 0;
         },
         applyMention(person) {
-            this.commentText = this.commentText.replace(/@([^\s@]{1,40})$/, `@${person.email} `);
+            const label = person.label || person.email || 'user';
+            this.commentText = this.commentText.replace(/@([^\s@]{1,40})$/, `@${label} `);
+            if (person.id && !this.selectedMentions.some((item) => item.id === person.id)) {
+                this.selectedMentions.push({id: person.id, label});
+            }
             this.showSuggestions = false;
         },
     };

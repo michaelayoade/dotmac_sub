@@ -15,8 +15,13 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.config import settings
 from app.models.domain_settings import SettingDomain
-from app.models.notification import NotificationChannel, NotificationStatus
+from app.models.notification import (
+    Notification,
+    NotificationChannel,
+    NotificationStatus,
+)
 from app.models.provisioning import ServiceOrder
+from app.models.subscriber import Subscriber, SubscriberContact
 from app.models.support import (
     Ticket,
     TicketAccessToken,
@@ -46,6 +51,7 @@ from app.services import notification as notification_service
 from app.services import numbering as numbering_service
 from app.services import provisioning as provisioning_service
 from app.services import support_ticket_settings as support_ticket_settings_service
+from app.services import ticket_validation
 from app.services.audit_helpers import log_audit_event
 from app.services.common import apply_ordering, apply_pagination
 from app.services.customer_identity_resolution import (
@@ -53,6 +59,9 @@ from app.services.customer_identity_resolution import (
     identity_resolution_allows_sensitive_automation,
     identity_resolution_requires_manual_review,
     resolve_customer_identity,
+)
+from app.services.customer_notification_policy import (
+    is_notification_enabled_for_subscriber,
 )
 from app.services.events import emit_event
 from app.services.events.types import EventType
@@ -807,7 +816,13 @@ class Tickets:
             return {"matched": False, "reason": "crm_origin_write_locked"}
         from app.services.ticket_assignment import engine as assignment_engine
 
-        result = assignment_engine.auto_assign_ticket(db, str(ticket.id))
+        result = assignment_engine.auto_assign_ticket(
+            db,
+            str(ticket.id),
+            max_open_tickets=support_ticket_settings_service.auto_assign_max_open_tickets(
+                db
+            ),
+        )
         if result.reason == "no_matching_rule":
             return None
         return result.as_dict()
@@ -959,6 +974,79 @@ class Tickets:
             )
 
     @staticmethod
+    def _queue_resolution_confirmation_notifications(
+        db: Session, ticket: Ticket, token_row: TicketAccessToken
+    ) -> None:
+        if not Tickets._notifications_enabled(db):
+            return
+
+        action_url = ticket_access_tokens.action_urls(token_row).get("confirm_url")
+        if not action_url:
+            return
+
+        subscriber_id = ticket.subscriber_id or ticket.customer_account_id
+        if not subscriber_id:
+            return
+
+        subscriber = db.get(Subscriber, subscriber_id)
+        if not subscriber:
+            return
+
+        ticket_ref = ticket.number or str(ticket.id)[:8]
+        subject = f"Confirm support ticket {ticket_ref}"
+        body = (
+            f"We marked ticket {ticket_ref} as resolved. "
+            f"Confirm or dispute it here: {action_url}"
+        )
+
+        recipients: set[tuple[NotificationChannel, str]] = set()
+        if subscriber.email:
+            recipients.add((NotificationChannel.email, subscriber.email.strip()))
+        if subscriber.phone:
+            recipients.add((NotificationChannel.sms, subscriber.phone.strip()))
+
+        contact_rows = (
+            db.query(SubscriberContact)
+            .filter(SubscriberContact.subscriber_id == subscriber.id)
+            .filter(SubscriberContact.receives_notifications.is_(True))
+            .all()
+        )
+        for contact in contact_rows:
+            if contact.email:
+                recipients.add((NotificationChannel.email, contact.email.strip()))
+            phone = contact.whatsapp or contact.phone
+            if phone:
+                recipients.add((NotificationChannel.sms, phone.strip()))
+
+        for channel, recipient in sorted(recipients, key=lambda item: item[1]):
+            if not recipient:
+                continue
+            status = NotificationStatus.queued
+            last_error = None
+            if not is_notification_enabled_for_subscriber(
+                db,
+                subscriber_id=subscriber.id,
+                channel=channel,
+                category="support",
+                recipient=recipient,
+            ):
+                status = NotificationStatus.canceled
+                last_error = "Suppressed by customer notification preferences"
+            db.add(
+                Notification(
+                    subscriber_id=subscriber.id,
+                    channel=channel,
+                    recipient=recipient,
+                    event_type="support_ticket_resolution_confirmation",
+                    category="support",
+                    subject=subject if channel == NotificationChannel.email else None,
+                    body=body,
+                    status=status,
+                    last_error=last_error,
+                ),
+            )
+
+    @staticmethod
     def _emit_ticket_event(
         db: Session, event_name: str, ticket: Ticket, actor_id: str | None = None
     ) -> None:
@@ -990,6 +1078,7 @@ class Tickets:
     def create(
         db: Session, payload: TicketCreate, actor_id: str | None = None, request=None
     ) -> Ticket:
+        ticket_validation.validate_ticket_creation(db, payload)
         data = payload.model_dump()
         data["status"] = data.get(
             "status"
@@ -1188,6 +1277,7 @@ class Tickets:
             actor_id=actor_id,
             metadata={"token_id": str(token_row.id), "grace_hours": int(grace_hours)},
         )
+        Tickets._queue_resolution_confirmation_notifications(db, ticket, token_row)
         db.commit()
         db.refresh(ticket)
         db.refresh(token_row)
@@ -1338,6 +1428,15 @@ class Tickets:
         )
         confirmed = 0
         for ticket in candidates:
+            if crm_ticket_user_writes_locked(ticket):
+                logger.info(
+                    "ticket_auto_confirm_skipped_crm_origin",
+                    extra={
+                        "event": "ticket_auto_confirm_skipped_crm_origin",
+                        "ticket_id": str(ticket.id),
+                    },
+                )
+                continue
             meta = dict(ticket.metadata_ or {})
             confirmation = dict(meta.get("resolution_confirmation") or {})
             grace_hours = int(
@@ -2016,9 +2115,10 @@ class TicketAccessTokens:
         if not base_url:
             return {"confirm_url": None, "dispute_url": None}
         token = token_row.token
+        page_url = f"{base_url}/ticket-confirm/{token}"
         return {
-            "confirm_url": f"{base_url}/api/v1/ticket-confirm/{token}/confirm",
-            "dispute_url": f"{base_url}/api/v1/ticket-confirm/{token}/dispute",
+            "confirm_url": page_url,
+            "dispute_url": page_url,
         }
 
 

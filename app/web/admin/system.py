@@ -4290,6 +4290,9 @@ def ticket_settings_page(request: Request, db: Session = Depends(get_db)):
         "region_options": support_ticket_settings_service.list_region_options(db),
         "service_team_options": support_ticket_settings_service.list_service_teams(db),
         "auto_assign_enabled": support_ticket_settings_service.auto_assign_enabled(db),
+        "auto_assign_max_open_tickets": support_ticket_settings_service.auto_assign_max_open_tickets(
+            db
+        ),
         "routing_rules": support_ticket_settings_service.region_assignment_rules(db),
         "service_team_members": support_ticket_settings_service.service_team_members(
             db
@@ -4361,6 +4364,7 @@ def ticket_settings_update(
             service_team_ids=service_team_ids,
             service_team_labels=service_team_labels,
             auto_assign=form.get("auto_assign_enabled") == "1",
+            auto_assign_max_open_tickets=form.get("auto_assign_max_open_tickets"),
             routing_regions=routing_regions,
             routing_ticket_manager_person_ids=routing_ticket_manager_person_ids,
             routing_site_coordinator_person_ids=routing_site_coordinator_person_ids,
@@ -4405,6 +4409,9 @@ def ticket_settings_update(
                     db
                 ),
                 "auto_assign_enabled": support_ticket_settings_service.auto_assign_enabled(
+                    db
+                ),
+                "auto_assign_max_open_tickets": support_ticket_settings_service.auto_assign_max_open_tickets(
                     db
                 ),
                 "routing_rules": support_ticket_settings_service.region_assignment_rules(

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -20,6 +20,7 @@ from app.schemas.support import (
     TicketMergeRequest,
     TicketUpdate,
 )
+from app.services import sla_assignment, ticket_mentions
 from app.services import support as support_service
 from app.services import support_ticket_settings as support_ticket_settings_service
 from app.services.file_storage import file_uploads
@@ -123,23 +124,16 @@ def _append_missing_option(options: list[str], value: str | None) -> list[str]:
 
 
 def _ticket_sla_state(
-    ticket: Ticket, *, now: datetime | None = None
+    ticket: Ticket, *, clock=None, now: datetime | None = None
 ) -> dict[str, object]:
-    current = now or datetime.now(UTC)
-    due_at = ticket.due_at
-    if due_at and due_at.tzinfo is None:
-        due_at = due_at.replace(tzinfo=UTC)
-    created_at = ticket.created_at
-    if created_at and created_at.tzinfo is None:
-        created_at = created_at.replace(tzinfo=UTC)
-    terminal = support_ticket_settings_service.status_is_terminal(ticket.status)
-    return {
-        "breached": bool(due_at and due_at < current and not terminal),
-        "age_hours": int((current - created_at).total_seconds() // 3600)
-        if created_at
-        else 0,
-        "terminal": terminal,
-    }
+    state = sla_assignment.ticket_sla_status(ticket, clock=clock, now=now)
+    settings_terminal = support_ticket_settings_service.status_is_terminal(
+        ticket.status
+    )
+    state["terminal"] = state["terminal"] or settings_terminal
+    if settings_terminal:
+        state["breached"] = False
+    return state
 
 
 def _status_summary_cards(db: Session) -> list[dict[str, str | int]]:
@@ -580,6 +574,7 @@ def add_ticket_comment_from_form(
     body: str,
     is_internal: bool,
     attachments: list,
+    mentions: str | None = None,
 ):
     uploaded = upload_ticket_attachments(
         db,
@@ -594,13 +589,53 @@ def add_ticket_comment_from_form(
         actor_id=actor_id,
         uploaded=uploaded,
     )
-    return support_service.tickets.create_comment(
+    comment = support_service.tickets.create_comment(
         db,
         ticket_id,
         payload,
         actor_id=actor_id,
         request=request,
     )
+    mentioned_agent_ids = _parse_mentions_payload(mentions)
+    if mentioned_agent_ids:
+        try:
+            ticket = support_service.tickets.get(db, ticket_id)
+            ticket_mentions.notify_ticket_comment_mentions(
+                db,
+                ticket_id=str(ticket.id),
+                ticket_number=ticket.number,
+                ticket_title=ticket.title,
+                comment_preview=body[:300],
+                mentioned_agent_ids=mentioned_agent_ids,
+                actor_person_id=actor_id,
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.debug("ticket_comment_staff_mention_failed", exc_info=True)
+    return comment
+
+
+def _parse_mentions_payload(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    mentions: list[str] = []
+    for item in parsed:
+        if isinstance(item, str):
+            token = item.strip()
+        elif isinstance(item, Mapping):
+            token = str(item.get("id") or "").strip()
+        else:
+            token = ""
+        if token and token not in mentions:
+            mentions.append(token)
+    return mentions
 
 
 def auto_assign_ticket(
@@ -795,6 +830,9 @@ def build_tickets_list_context(
         db,
         include_ids=_non_empty_ids(subscriber_ids),
     )
+    sla_clocks = sla_assignment.latest_ticket_sla_clocks(
+        db, [ticket.id for ticket in rows]
+    )
     return {
         "tickets": rows,
         "search": search or "",
@@ -819,7 +857,12 @@ def build_tickets_list_context(
         "staff_lookup": _label_lookup(staff),
         "subscriber_options": subscribers,
         "subscriber_lookup": _label_lookup(subscribers),
-        "sla_states": {str(ticket.id): _ticket_sla_state(ticket) for ticket in rows},
+        "sla_states": {
+            str(ticket.id): _ticket_sla_state(
+                ticket, clock=sla_clocks.get(str(ticket.id))
+            )
+            for ticket in rows
+        },
         "status_colors": support_ticket_settings_service.status_color_options(db),
     }
 
@@ -884,12 +927,18 @@ def build_ticket_detail_context(db: Session, *, ticket_lookup: str) -> dict:
         "all_priorities": priority_options,
         "all_channels": [item.value for item in TicketChannel],
         "people_options": subscribers,
+        "mention_agents": ticket_mentions.list_ticket_mention_users(db),
         "staff_options": staff,
         "staff_lookup": _label_lookup(staff),
         "subscriber_lookup": _label_lookup(subscribers),
         "service_team_options": service_team_options(db),
         "service_team_lookup": _service_team_lookup(db),
-        "sla_state": _ticket_sla_state(ticket),
+        "sla_state": _ticket_sla_state(
+            ticket,
+            clock=sla_assignment.latest_ticket_sla_clocks(db, [ticket.id]).get(
+                str(ticket.id)
+            ),
+        ),
         "status_colors": support_ticket_settings_service.status_color_options(db),
         "is_merged_source": bool(
             ticket.merged_into_ticket_id

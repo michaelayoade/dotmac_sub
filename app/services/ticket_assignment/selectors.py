@@ -5,7 +5,7 @@ from __future__ import annotations
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models.service_team import ServiceTeamMember
+from app.models.service_team import ServiceTeam, ServiceTeamMember
 from app.models.support import Ticket, TicketStatus
 from app.models.ticket_workflow import TicketAssignmentCounter
 from app.services.common import coerce_uuid
@@ -22,7 +22,9 @@ def list_team_candidate_person_ids(
         return []
     rows = (
         db.query(ServiceTeamMember.person_id)
+        .join(ServiceTeam, ServiceTeam.id == ServiceTeamMember.team_id)
         .filter(ServiceTeamMember.team_id == coerce_uuid(team_id))
+        .filter(ServiceTeam.is_active.is_(True))
         .filter(ServiceTeamMember.is_active.is_(True))
         .all()
     )

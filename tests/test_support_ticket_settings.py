@@ -12,6 +12,9 @@ def test_ticket_settings_defaults_loaded_without_db_rows(db_session):
     assert support_ticket_settings_service.list_status_options(db_session)
     assert support_ticket_settings_service.list_priority_options(db_session)
     assert support_ticket_settings_service.list_ticket_type_options(db_session)
+    assert (
+        support_ticket_settings_service.auto_assign_max_open_tickets(db_session) is None
+    )
 
 
 def test_ticket_settings_drive_support_ticket_form_context(db_session):
@@ -51,6 +54,7 @@ def test_ticket_settings_persist_routing_sla_and_status_colors(db_session):
         service_team_ids=[team_id],
         service_team_labels=["Core Network"],
         auto_assign=True,
+        auto_assign_max_open_tickets="3",
         routing_regions=["north"],
         routing_technician_person_ids=[tech_id],
         routing_service_team_ids=[team_id],
@@ -63,6 +67,7 @@ def test_ticket_settings_persist_routing_sla_and_status_colors(db_session):
     )
 
     assert support_ticket_settings_service.auto_assign_enabled(db_session) is True
+    assert support_ticket_settings_service.auto_assign_max_open_tickets(db_session) == 3
     assert support_ticket_settings_service.region_assignment_rules(db_session) == {
         "north": {
             "ticket_manager_person_id": None,
@@ -81,6 +86,17 @@ def test_ticket_settings_persist_routing_sla_and_status_colors(db_session):
         "open": "emerald",
         "blocked": "red",
     }
+
+    support_ticket_settings_service.update_options(
+        db_session,
+        statuses=["open", "blocked"],
+        priorities=["normal"],
+        ticket_types=["incident"],
+        auto_assign_max_open_tickets="",
+    )
+    assert (
+        support_ticket_settings_service.auto_assign_max_open_tickets(db_session) is None
+    )
 
 
 def test_ticket_settings_sync_service_teams_to_assignment_tables(db_session):

@@ -6,12 +6,20 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
-from app.models.notification import Notification
+from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.notification import (
+    Notification,
+    NotificationChannel,
+    NotificationStatus,
+)
 from app.models.provisioning import ServiceOrder
+from app.models.service_team import ServiceTeam, ServiceTeamMember, ServiceTeamType
 from app.models.subscriber import Subscriber, SubscriberContact
+from app.models.subscription_engine import SettingValueType
 from app.models.support import (
     AutomationActionType,
     AutomationTrigger,
+    Ticket,
     TicketAccessToken,
     TicketAssignee,
     TicketChannel,
@@ -21,6 +29,7 @@ from app.models.support import (
     TicketStatus,
 )
 from app.models.system_user import SystemUser
+from app.models.ticket_workflow import TicketAssignmentRule, TicketAssignmentStrategy
 from app.schemas.support import (
     TicketCommentCreate,
     TicketCreate,
@@ -56,6 +65,19 @@ def _system_user(**overrides) -> SystemUser:
         phone=overrides.pop("phone", "+15550000000"),
         **overrides,
     )
+
+
+def _enable_support_ticket_notifications(db_session) -> None:
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.notification,
+            key=support_service.SUPPORT_NOTIFICATION_TOGGLE_KEY,
+            value_type=SettingValueType.boolean,
+            value_text="true",
+            is_active=True,
+        )
+    )
+    db_session.commit()
 
 
 def test_ticket_create_defaults_to_open_and_generates_number(db_session, subscriber):
@@ -127,6 +149,60 @@ def test_ticket_create_uses_configured_routing_and_sla_policy(db_session, subscr
         .count()
         == 1
     )
+
+
+def test_ticket_auto_assignment_respects_configured_open_limit(db_session, subscriber):
+    team = ServiceTeam(name="Support queue", team_type=ServiceTeamType.support.value)
+    db_session.add(team)
+    db_session.flush()
+    loaded_person_id = uuid4()
+    free_person_id = uuid4()
+    db_session.add_all(
+        [
+            ServiceTeamMember(
+                team_id=team.id, person_id=loaded_person_id, is_active=True
+            ),
+            ServiceTeamMember(
+                team_id=team.id, person_id=free_person_id, is_active=True
+            ),
+            TicketAssignmentRule(
+                name="Support default",
+                priority=100,
+                is_active=True,
+                strategy=TicketAssignmentStrategy.least_loaded.value,
+                team_id=team.id,
+            ),
+            Ticket(
+                title="Existing open ticket",
+                assigned_to_person_id=loaded_person_id,
+                status=TicketStatus.open.value,
+            ),
+        ]
+    )
+    support_ticket_settings_service.update_options(
+        db_session,
+        statuses=["open", "closed", "merged"],
+        priorities=["normal"],
+        ticket_types=["incident"],
+        auto_assign=True,
+        auto_assign_max_open_tickets=0,
+    )
+    db_session.commit()
+
+    ticket = support_service.tickets.create(
+        db_session,
+        TicketCreate(
+            title="New support ticket",
+            description="Needs dispatch",
+            subscriber_id=subscriber.id,
+            customer_account_id=subscriber.id,
+            priority="normal",
+        ),
+        actor_id=str(subscriber.id),
+    )
+
+    assert ticket.assigned_to_person_id == free_person_id
+    assert ticket.assigned_to_person_id != loaded_person_id
 
 
 def test_link_and_merge_form_reject_invalid_target_uuid(db_session):
@@ -232,6 +308,92 @@ def test_resolution_confirmation_request_mints_token(db_session, subscriber):
     )
 
 
+def test_resolution_confirmation_notifications_disabled_by_default(
+    db_session, subscriber, monkeypatch
+):
+    monkeypatch.setenv("APP_URL", "https://selfcare.example.test")
+    subscriber.phone = "+2348012345678"
+    db_session.add(subscriber)
+    db_session.commit()
+    ticket = support_service.tickets.create(
+        db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
+    )
+
+    support_service.tickets.request_resolution_confirmation(
+        db_session,
+        str(ticket.id),
+        actor_id=str(subscriber.id),
+        grace_hours=24,
+    )
+
+    assert db_session.query(Notification).count() == 0
+
+
+def test_resolution_confirmation_queues_customer_notifications(
+    db_session, subscriber, monkeypatch
+):
+    monkeypatch.setenv("APP_URL", "https://selfcare.example.test")
+    _enable_support_ticket_notifications(db_session)
+    subscriber.phone = "+2348012345678"
+    db_session.add(
+        SubscriberContact(
+            subscriber_id=subscriber.id,
+            full_name="Authorized Contact",
+            email="authorized@example.com",
+            whatsapp="+2348099999999",
+            receives_notifications=True,
+        )
+    )
+    db_session.add(
+        SubscriberContact(
+            subscriber_id=subscriber.id,
+            full_name="Silent Contact",
+            email="silent@example.com",
+            phone="+2348077777777",
+            receives_notifications=False,
+        )
+    )
+    db_session.add(subscriber)
+    db_session.commit()
+    ticket = support_service.tickets.create(
+        db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
+    )
+
+    support_service.tickets.request_resolution_confirmation(
+        db_session,
+        str(ticket.id),
+        actor_id=str(subscriber.id),
+        grace_hours=24,
+    )
+
+    rows = (
+        db_session.query(Notification)
+        .filter(
+            Notification.event_type == "support_ticket_resolution_confirmation",
+        )
+        .all()
+    )
+    recipients = {row.recipient for row in rows}
+    assert recipients == {
+        subscriber.email,
+        "+2348012345678",
+        "authorized@example.com",
+        "+2348099999999",
+    }
+    assert all(row.status == NotificationStatus.queued for row in rows)
+    assert all("/ticket-confirm/" in (row.body or "") for row in rows)
+    assert {
+        row.channel
+        for row in rows
+        if row.recipient in {subscriber.email, "authorized@example.com"}
+    } == {NotificationChannel.email}
+    assert {
+        row.channel
+        for row in rows
+        if row.recipient in {"+2348012345678", "+2348099999999"}
+    } == {NotificationChannel.sms}
+
+
 def test_resolution_confirmation_confirm_closes_ticket(db_session, subscriber):
     ticket = support_service.tickets.create(
         db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
@@ -288,6 +450,29 @@ def test_auto_confirm_pending_closes_after_grace_window(db_session, subscriber):
     assert count == 1
     db_session.refresh(updated)
     assert updated.status == TicketStatus.closed.value
+
+
+def test_auto_confirm_pending_skips_crm_origin_ticket(db_session, subscriber):
+    ticket = support_service.tickets.create(
+        db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
+    )
+    ticket.status = TicketStatus.pending_confirmation.value
+    ticket.resolved_at = datetime.now(UTC) - timedelta(hours=25)
+    ticket.metadata_ = {
+        "crm_ticket_id": str(uuid4()),
+        "resolution_confirmation": {"grace_hours": 24},
+    }
+    token_row = support_service.ticket_access_tokens.mint(db_session, ticket)
+    db_session.commit()
+
+    count = support_service.tickets.auto_confirm_pending(db_session)
+
+    assert count == 0
+    db_session.refresh(ticket)
+    db_session.refresh(token_row)
+    assert ticket.status == TicketStatus.pending_confirmation.value
+    assert token_row.is_active is True
+    assert token_row.responded_at is None
 
 
 def test_resolution_confirmation_rejects_closed_ticket(db_session, subscriber):
