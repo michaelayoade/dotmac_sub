@@ -549,6 +549,15 @@ class FieldMapAsset(BaseModel):
     distance_m: float | None = None
 
 
+class FieldMapAssetNearbyResponse(BaseModel):
+    items: list[FieldMapAsset]
+    count: int
+    latitude: float
+    longitude: float
+    radius_m: float
+    server_time: datetime
+
+
 class FieldMapSearchResult(BaseModel):
     kind: Literal["job", "asset"]
     id: str

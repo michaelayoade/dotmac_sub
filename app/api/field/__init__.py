@@ -17,6 +17,8 @@ from app.api.field.materials import router as materials_router
 from app.api.field.notes import router as notes_router
 from app.api.field.schedule import router as schedule_router
 from app.api.field.transitions import router as transitions_router
+from app.api.field.vendor_devices import router as vendor_devices_router
+from app.api.field.vendor_map import router as vendor_map_router
 from app.api.field.voice import router as voice_router
 from app.api.field.worklogs import router as worklogs_router
 from app.schemas.common import ListResponse
@@ -44,6 +46,8 @@ router.include_router(materials_router)
 router.include_router(notes_router)
 router.include_router(schedule_router)
 router.include_router(transitions_router)
+router.include_router(vendor_devices_router)
+router.include_router(vendor_map_router)
 router.include_router(voice_router)
 router.include_router(worklogs_router)
 
