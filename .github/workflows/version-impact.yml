@@ -3,7 +3,6 @@ name: Version Impact
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled, edited]
-    branches: [main, dev]
 
 permissions:
   contents: read
