@@ -253,6 +253,33 @@ class FieldEquipmentRead(BaseModel):
     notes: str | None = None
 
 
+class FieldMaterialRead(BaseModel):
+    id: UUID
+    crm_work_order_id: str
+    crm_material_id: str | None = None
+    item_id: UUID
+    sku: str | None = None
+    name: str
+    unit: str | None = None
+    allocated_quantity: int
+    consumed_quantity: int
+    remaining_quantity: int
+    status: str
+    notes: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class FieldMaterialConsumeItem(BaseModel):
+    material_id: UUID
+    consumed_quantity: int = Field(ge=0)
+    leftover_note: str | None = Field(default=None, max_length=1000)
+
+
+class FieldMaterialConsumeRequest(BaseModel):
+    items: list[FieldMaterialConsumeItem] = Field(min_length=1, max_length=50)
+
+
 class FieldJobHistoryItem(BaseModel):
     id: str
     type: str
@@ -277,7 +304,7 @@ class FieldJobDetail(BaseModel):
     open_tickets: list[FieldOpenTicketItem] = Field(default_factory=list)
     notes: list[FieldNoteRead] = Field(default_factory=list)
     attachments: list[FieldAttachmentRead] = Field(default_factory=list)
-    materials: list[dict[str, Any]] = Field(default_factory=list)
+    materials: list[FieldMaterialRead] = Field(default_factory=list)
     material_requests: list[dict[str, Any]] = Field(default_factory=list)
     worklogs: list[FieldWorkLogRead] = Field(default_factory=list)
     events: list[FieldJobEventRead] = Field(default_factory=list)
