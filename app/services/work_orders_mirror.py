@@ -19,6 +19,7 @@ from app.models.work_order_mirror import WorkOrderMirror, WorkOrderSyncState
 from app.services.common import coerce_uuid
 from app.services.crm_client import CRMClientError, get_crm_client
 from app.services.crm_portal import resolve_crm_subscriber_id
+from app.services.work_order_views import row_to_item
 
 logger = logging.getLogger(__name__)
 
@@ -320,35 +321,7 @@ def read_for_subscriber(
         .order_by(WorkOrderMirror.created_at.desc())
     ).all()
 
-    items = [
-        {
-            "id": r.crm_work_order_id,
-            "title": r.title,
-            "status": r.status,
-            "work_type": r.work_type,
-            "priority": r.priority,
-            "technician_name": r.technician_name,
-            "technician_phone": r.technician_phone,
-            "address": r.address,
-            "scheduled_start": r.scheduled_start.isoformat()
-            if r.scheduled_start
-            else None,
-            "scheduled_end": r.scheduled_end.isoformat() if r.scheduled_end else None,
-            "estimated_arrival_at": r.estimated_arrival_at.isoformat()
-            if r.estimated_arrival_at
-            else None,
-            "estimated_duration_minutes": r.estimated_duration_minutes,
-            "started_at": r.started_at.isoformat() if r.started_at else None,
-            "paused_at": r.paused_at.isoformat() if r.paused_at else None,
-            "resumed_at": r.resumed_at.isoformat() if r.resumed_at else None,
-            "completed_at": r.completed_at.isoformat() if r.completed_at else None,
-            "total_active_seconds": r.total_active_seconds,
-            "created_at": r.work_order_created_at.isoformat()
-            if r.work_order_created_at
-            else None,
-        }
-        for r in rows
-    ]
+    items = [row_to_item(r, include_internal=False) for r in rows]
     upcoming = sum(
         1 for r in rows if r.status not in ("completed", "canceled", "draft")
     )
