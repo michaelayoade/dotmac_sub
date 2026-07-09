@@ -28,6 +28,7 @@ from app.schemas.field import (
     FieldJobSummary,
     FieldMeResponse,
     FieldNoteRead,
+    FieldWorkLogRead,
 )
 from app.services.common import apply_pagination, coerce_uuid
 from app.services.field.map_assets import field_map_assets
@@ -278,10 +279,15 @@ class FieldJobs:
             raise HTTPException(status_code=404, detail="Job not found")
         subscriber = db.get(Subscriber, row.subscriber_id)
         from app.services.field.notes import field_notes
+        from app.services.field.worklogs import field_worklogs
 
         notes = [
             FieldNoteRead(**note)
             for note in field_notes.list_for_job(db, principal, crm_work_order_id)
+        ]
+        worklogs = [
+            FieldWorkLogRead(**worklog)
+            for worklog in field_worklogs.list_for_job(db, principal, crm_work_order_id)
         ]
         return FieldJobDetail(
             job=_summary(row),
@@ -291,6 +297,7 @@ class FieldJobs:
             project_id=row.crm_project_id,
             access_notes=row.access_notes,
             notes=notes,
+            worklogs=worklogs,
             history=[],
         )
 
