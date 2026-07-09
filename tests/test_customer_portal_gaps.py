@@ -363,18 +363,17 @@ class TestRestrictedContextHelpers:
         result = get_restricted_since(subscriber)
         assert result == datetime(2026, 3, 10, 12, 0, tzinfo=UTC)
 
-    def test_total_outstanding_balance_queries_positive_active_balances(self) -> None:
+    def test_total_outstanding_balance_uses_negative_available_balance(self) -> None:
         from app.services.customer_portal_context import get_total_outstanding_balance
 
-        scalar_query = MagicMock()
-        scalar_query.filter.return_value = scalar_query
-        scalar_query.scalar.return_value = 125.5
         db = MagicMock()
-        db.query.return_value = scalar_query
-
-        total = get_total_outstanding_balance(
-            db, "00000000-0000-0000-0000-000000000001"
-        )
+        with patch(
+            "app.services.customer_portal_context.get_available_balance",
+            return_value=-125.5,
+        ):
+            total = get_total_outstanding_balance(
+                db, "00000000-0000-0000-0000-000000000001"
+            )
 
         assert total == 125.5
 
