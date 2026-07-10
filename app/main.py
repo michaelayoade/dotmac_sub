@@ -106,6 +106,7 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.payment_proofs", "router", "api", "user"),
     ("app.api.service_requests", "router", "api", "user"),
     ("app.api.rbac", "router", "api", "user"),
+    ("app.api.staff_sync", "router", "api", "user"),
     ("app.api.customers", "router", "api", "user"),
     ("app.api.subscribers", "router", "api", "user"),
     ("app.api.support", "router", "api", "user"),
