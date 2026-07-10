@@ -13,15 +13,15 @@
 {% set general_notifications_enabled = notification_meta.get('general_notifications', True) %}
 {% set nin_locked = subscriber and subscriber.metadata_ and subscriber.metadata_.get('nin_verified') %}
 {% set masked_nin = (subscriber.nin[:6] ~ ('*' * (subscriber.nin|length - 6))) if subscriber and subscriber.nin and subscriber.nin|length > 6 else (subscriber.nin if subscriber and subscriber.nin else '') %}
-<div class="space-y-8">
-    <!-- Page Header -->
-    <div>
+{% set initials = customer.name[:2] | upper if customer and customer.name else 'CU' %}
+{% set profile_form_disabled = customer and customer.read_only %}
+{% set input_class = "block w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-3 text-sm text-stone-900 outline-none transition-all focus:border-[var(--color-brand-500)] focus:ring-4 focus:ring-[var(--color-brand-500)]/10 dark:border-stone-600 dark:bg-stone-700 dark:text-white" %}
+{% set label_class = "mb-2 block text-sm font-semibold text-stone-700 dark:text-stone-300" %}
+
+<div class="space-y-6 pb-28">
+    <div class="mb-2">
         <h1 class="text-3xl font-display font-bold text-stone-900 dark:text-white">Profile</h1>
         <p class="mt-1 text-base text-stone-500 dark:text-stone-400">Update your personal details and preferences</p>
-    </div>
-
-    <div class="rounded-xl border border-stone-200 bg-white px-5 py-4 text-sm text-stone-600 shadow-premium dark:border-stone-700 dark:bg-stone-800 dark:text-stone-300">
-        Authentication is managed via RADIUS. Credentials are tied to your device service.
     </div>
 
     {% if success %}
@@ -70,13 +70,13 @@
             </svg>
             <div>
                 <p class="text-sm font-semibold text-amber-900 dark:text-amber-200">Your email isn&rsquo;t verified</p>
-                <p class="mt-0.5 text-sm text-amber-800 dark:text-amber-300">Verify {{ subscriber.email }} so you don&rsquo;t miss invoices and important account updates.</p>
+                <p class="mt-0.5 text-sm text-amber-800 dark:text-amber-300">Verify {{ subscriber.email }} so you don&rsquo;t miss invoices.</p>
             </div>
         </div>
-        {% if not (customer and customer.read_only) %}
+        {% if not profile_form_disabled %}
         <form method="post" action="/portal/profile/verify-email/resend" class="flex-shrink-0">
             {% include "components/forms/csrf_input.html" %}
-            <button type="submit" class="inline-flex items-center justify-center gap-2 rounded-xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-700">
+            <button type="submit" class="inline-flex items-center justify-center rounded-xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-700">
                 Resend verification
             </button>
         </form>
@@ -84,91 +84,58 @@
     </div>
     {% endif %}
 
-    <form method="post" action="/portal/profile" class="space-y-6">
+    <form id="customer-profile-form" method="post" action="/portal/profile" class="space-y-8">
         {% include "components/forms/csrf_input.html" %}
-        <!-- Profile Card with Avatar -->
-        <div class="rounded-2xl border border-stone-200 bg-white shadow-premium dark:border-stone-700 dark:bg-stone-800 overflow-hidden">
-            <!-- Header with gradient -->
-            <div class="relative h-32 bg-gradient-to-r from-stone-800 via-stone-700 to-stone-800">
-                <div class="absolute inset-0 bg-[url('data:image/svg+xml,%3Csvg width=&quot;60&quot; height=&quot;60&quot; viewBox=&quot;0 0 60 60&quot; xmlns=&quot;http://www.w3.org/2000/svg&quot;%3E%3Cg fill=&quot;none&quot; fill-rule=&quot;evenodd&quot;%3E%3Cg fill=&quot;%23ffffff&quot; fill-opacity=&quot;0.03&quot;%3E%3Cpath d=&quot;M36 34h-2v-4h2v4zm0-6v-4h-2v4h2zm-6 6v-4h-2v4h2zm0-6v-4h-2v4h2z&quot;/%3E%3C/g%3E%3C/g%3E%3C/svg%3E')]"></div>
-            </div>
 
+        <div class="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-premium dark:border-stone-700 dark:bg-stone-800">
+            <div class="relative h-32 bg-gradient-to-r from-stone-800 via-stone-700 to-stone-800">
+                <div class="absolute inset-0 opacity-10 bg-[radial-gradient(#fff_1px,transparent_1px)] [background-size:20px_20px]"></div>
+            </div>
             <div class="relative px-6 pb-6">
-                <!-- Avatar -->
                 <div class="-mt-16 mb-6">
                     <div class="relative inline-block">
-                        <div class="flex h-32 w-32 items-center justify-center rounded-3xl bg-gradient-to-br from-[var(--color-brand-400)] to-[var(--color-brand-600)] text-4xl font-display font-bold text-white shadow-xl shadow-[var(--color-brand-500)]/30 ring-4 ring-white dark:ring-stone-800">
-                            {{ customer.name[:2] | upper if customer and customer.name else 'CU' }}
+                        <div class="flex h-32 w-32 items-center justify-center rounded-3xl bg-gradient-to-br from-[var(--color-brand-400)] to-[var(--color-brand-600)] text-4xl font-display font-bold text-white shadow-xl ring-4 ring-white dark:ring-stone-800">
+                            {{ initials }}
                         </div>
                     </div>
                 </div>
 
                 <h2 class="text-xl font-display font-semibold text-stone-900 dark:text-white">Contact Information</h2>
-                <p class="text-sm text-stone-500 dark:text-stone-400 mb-6">Update your personal contact details</p>
+                <p class="mb-6 text-sm text-stone-500 dark:text-stone-400">Update your personal contact details</p>
 
-                {% set _inp = "block w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-3 text-sm text-stone-900 transition-all focus:border-[var(--color-brand-500)] focus:outline-none focus:ring-4 focus:ring-[var(--color-brand-500)]/10 dark:border-stone-600 dark:bg-stone-700 dark:text-white" %}
-                {% set _lbl = "block text-sm font-semibold text-stone-700 dark:text-stone-300 mb-2" %}
                 <div class="grid gap-5 sm:grid-cols-2">
                     <div>
-                        <label class="{{ _lbl }}">First Name</label>
-                        <input type="text" name="first_name" required
-                               value="{{ subscriber.first_name if subscriber else '' }}" class="{{ _inp }}">
+                        <label class="{{ label_class }}">First Name</label>
+                        <input class="{{ input_class }}" {% if profile_form_disabled %}disabled{% endif %} name="first_name" required type="text" value="{{ subscriber.first_name if subscriber else '' }}"/>
                     </div>
                     <div>
-                        <label class="{{ _lbl }}">Last Name</label>
-                        <input type="text" name="last_name" required
-                               value="{{ subscriber.last_name if subscriber else '' }}" class="{{ _inp }}">
+                        <label class="{{ label_class }}">Last Name</label>
+                        <input class="{{ input_class }}" {% if profile_form_disabled %}disabled{% endif %} name="last_name" required type="text" value="{{ subscriber.last_name if subscriber else '' }}"/>
                     </div>
                     <div class="sm:col-span-2">
-                        <label class="{{ _lbl }}">Display Name <span class="font-normal text-stone-400">(optional)</span></label>
-                        <input type="text" name="display_name"
-                               value="{{ subscriber.display_name if subscriber and subscriber.display_name else '' }}" class="{{ _inp }}">
-                        <p class="mt-1.5 text-xs text-stone-400">How your name appears across the portal. Leave blank to use your full name.</p>
+                        <label class="{{ label_class }}">Display Name <span class="font-normal text-stone-400">(optional)</span></label>
+                        <input class="{{ input_class }}" {% if profile_form_disabled %}disabled{% endif %} name="display_name" type="text" value="{{ subscriber.display_name if subscriber and subscriber.display_name else '' }}"/>
+                    </div>
+                    <div class="sm:col-span-2">
+                        <label class="{{ label_class }}">Email Address</label>
+                        <input class="{{ input_class }}" {% if profile_form_disabled %}disabled{% endif %} name="email" required type="email" value="{{ (subscriber.email if subscriber else '') or (customer.email if customer else '') or '' }}"/>
                     </div>
                     <div>
-                        <label class="{{ _lbl }}">Email Address</label>
-                        <input type="email" name="email" required
-                               value="{{ (subscriber.email if subscriber else '') or (customer.email if customer else '') or '' }}" class="{{ _inp }}">
-                        {% if subscriber %}
-                        <p class="mt-2 flex items-center gap-1.5 text-xs font-semibold {{ 'text-emerald-600 dark:text-emerald-400' if subscriber.email_verified else 'text-amber-600 dark:text-amber-400' }}">
-                            {% if subscriber.email_verified %}
-                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                            Verified
-                            {% else %}
-                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                            Not verified
-                            {% endif %}
-                        </p>
-                        {% endif %}
+                        <label class="{{ label_class }}">Phone Number</label>
+                        <input class="{{ input_class }}" {% if profile_form_disabled %}disabled{% endif %} name="phone" placeholder="+234" type="tel" value="{{ (subscriber.phone if subscriber else '') or (customer.phone if customer else '') or '' }}"/>
                     </div>
                     <div>
-                        <label class="{{ _lbl }}">Phone Number</label>
-                        <input type="tel" name="phone"
-                               value="{{ (subscriber.phone if subscriber else '') or (customer.phone if customer else '') or '' }}" class="{{ _inp }}">
+                        <label class="{{ label_class }}">NIN</label>
+                        <input class="{{ input_class }}" {% if profile_form_disabled or nin_locked %}disabled{% endif %} {% if nin_locked %}placeholder="{{ masked_nin }}"{% endif %} maxlength="11" name="nin" type="text" value="{{ '' if nin_locked else (subscriber.nin if subscriber and subscriber.nin else '') }}"/>
                     </div>
                     <div>
-                        <label class="{{ _lbl }}">National Identification Number</label>
-                        <input type="text" name="nin" inputmode="numeric" maxlength="11"
-                               value="{{ '' if nin_locked else (subscriber.nin if subscriber and subscriber.nin else '') }}"
-                               {% if nin_locked %}placeholder="{{ masked_nin }}" readonly{% endif %}
-                               class="{{ _inp }}">
-                        <p class="mt-2 text-xs text-stone-500 dark:text-stone-400">
-                            {% if nin_locked %}
-                            Verified NIN is locked for self-service edits.
-                            {% else %}
-                            Enter your 11-digit NIN. It will be masked after verification.
-                            {% endif %}
-                        </p>
+                        <label class="{{ label_class }}">Date of Birth</label>
+                        <input class="{{ input_class }}" {% if profile_form_disabled %}disabled{% endif %} name="date_of_birth" type="date" value="{{ subscriber.date_of_birth.isoformat() if subscriber and subscriber.date_of_birth else '' }}"/>
                     </div>
                     <div>
-                        <label class="{{ _lbl }}">Date of Birth</label>
-                        <input type="date" name="date_of_birth"
-                               value="{{ subscriber.date_of_birth.isoformat() if subscriber and subscriber.date_of_birth else '' }}" class="{{ _inp }}">
-                    </div>
-                    <div>
-                        <label class="{{ _lbl }}">Gender</label>
+                        <label class="{{ label_class }}">Gender</label>
                         {% set _g = subscriber.gender.value if subscriber and subscriber.gender else 'unknown' %}
-                        <select name="gender" class="{{ _inp }}">
+                        <select class="{{ input_class }}" {% if profile_form_disabled %}disabled{% endif %} name="gender">
                             <option value="unknown" {{ 'selected' if _g == 'unknown' }}>Prefer not to say</option>
                             <option value="female" {{ 'selected' if _g == 'female' }}>Female</option>
                             <option value="male" {{ 'selected' if _g == 'male' }}>Male</option>
@@ -177,9 +144,9 @@
                         </select>
                     </div>
                     <div class="sm:col-span-2">
-                        <label class="{{ _lbl }}">Preferred Contact Method</label>
+                        <label class="{{ label_class }}">Preferred Contact Method</label>
                         {% set _cm = subscriber.preferred_contact_method.value if subscriber and subscriber.preferred_contact_method else '' %}
-                        <select name="preferred_contact_method" class="{{ _inp }}">
+                        <select class="{{ input_class }}" {% if profile_form_disabled %}disabled{% endif %} name="preferred_contact_method">
                             <option value="" {{ 'selected' if not _cm }}>No preference</option>
                             <option value="email" {{ 'selected' if _cm == 'email' }}>Email</option>
                             <option value="phone" {{ 'selected' if _cm == 'phone' }}>Phone</option>
@@ -191,157 +158,100 @@
             </div>
         </div>
 
-        <!-- Contact Address -->
         <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-premium dark:border-stone-700 dark:bg-stone-800">
             <h2 class="text-xl font-display font-semibold text-stone-900 dark:text-white">Contact Address</h2>
-            <p class="text-sm text-stone-500 dark:text-stone-400 mb-6">Where we reach you for correspondence and account notices</p>
-
+            <p class="mb-6 text-sm text-stone-500 dark:text-stone-400">Where we reach you for correspondence</p>
             <div class="grid gap-5 sm:grid-cols-2">
                 <div class="sm:col-span-2">
-                    <label class="{{ _lbl }}">Address Line 1</label>
-                    <input type="text" name="address_line1"
-                           value="{{ subscriber.address_line1 if subscriber and subscriber.address_line1 else '' }}" class="{{ _inp }}">
+                    <label class="{{ label_class }}">Address Line 1</label>
+                    <input class="{{ input_class }}" {% if profile_form_disabled %}disabled{% endif %} name="address_line1" type="text" value="{{ subscriber.address_line1 if subscriber and subscriber.address_line1 else '' }}"/>
                 </div>
                 <div class="sm:col-span-2">
-                    <label class="{{ _lbl }}">Address Line 2 <span class="font-normal text-stone-400">(optional)</span></label>
-                    <input type="text" name="address_line2"
-                           value="{{ subscriber.address_line2 if subscriber and subscriber.address_line2 else '' }}" class="{{ _inp }}">
+                    <label class="{{ label_class }}">Address Line 2</label>
+                    <input class="{{ input_class }}" {% if profile_form_disabled %}disabled{% endif %} name="address_line2" type="text" value="{{ subscriber.address_line2 if subscriber and subscriber.address_line2 else '' }}"/>
                 </div>
                 <div>
-                    <label class="{{ _lbl }}">City</label>
-                    <input type="text" name="city"
-                           value="{{ subscriber.city if subscriber and subscriber.city else '' }}" class="{{ _inp }}">
+                    <label class="{{ label_class }}">City</label>
+                    <input class="{{ input_class }}" {% if profile_form_disabled %}disabled{% endif %} name="city" type="text" value="{{ subscriber.city if subscriber and subscriber.city else '' }}"/>
                 </div>
                 <div>
-                    <label class="{{ _lbl }}">State / Region</label>
-                    <input type="text" name="region"
-                           value="{{ subscriber.region if subscriber and subscriber.region else '' }}" class="{{ _inp }}">
+                    <label class="{{ label_class }}">State / Region</label>
+                    <input class="{{ input_class }}" {% if profile_form_disabled %}disabled{% endif %} name="region" type="text" value="{{ subscriber.region if subscriber and subscriber.region else '' }}"/>
                 </div>
                 <div>
-                    <label class="{{ _lbl }}">Postal Code</label>
-                    <input type="text" name="postal_code"
-                           value="{{ subscriber.postal_code if subscriber and subscriber.postal_code else '' }}" class="{{ _inp }}">
+                    <label class="{{ label_class }}">Postal Code</label>
+                    <input class="{{ input_class }}" {% if profile_form_disabled %}disabled{% endif %} name="postal_code" type="text" value="{{ subscriber.postal_code if subscriber and subscriber.postal_code else '' }}"/>
                 </div>
                 <div>
-                    <label class="{{ _lbl }}">Country</label>
-                    <input type="text" name="country_code" maxlength="2" placeholder="NG"
-                           value="{{ subscriber.country_code if subscriber and subscriber.country_code else '' }}" class="{{ _inp }} uppercase">
-                    <p class="mt-1.5 text-xs text-stone-400">2-letter country code (e.g. NG).</p>
+                    <label class="{{ label_class }}">Country</label>
+                    <input class="{{ input_class }} uppercase" {% if profile_form_disabled %}disabled{% endif %} maxlength="2" name="country_code" placeholder="NG" type="text" value="{{ subscriber.country_code if subscriber and subscriber.country_code else '' }}"/>
                 </div>
             </div>
         </div>
 
-        <!-- Preferences -->
         <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-premium dark:border-stone-700 dark:bg-stone-800">
             <h2 class="text-xl font-display font-semibold text-stone-900 dark:text-white">Notification Preferences</h2>
-            <p class="text-sm text-stone-500 dark:text-stone-400 mb-6">Choose how you want to receive updates</p>
-
-            <div class="space-y-4">
-                <label class="group flex items-center gap-4 rounded-xl border-2 border-stone-200 bg-stone-50 p-4 cursor-pointer transition-all hover:border-[var(--color-brand-300)] dark:border-stone-700 dark:bg-stone-700/30 dark:hover:border-[var(--color-brand-500)]">
-                    <div class="relative flex items-center justify-center">
-                        <input type="checkbox" name="billing_notifications" value="true" {% if billing_notifications_enabled %}checked{% endif %} class="peer sr-only">
-                        <div class="h-6 w-6 rounded-lg border-2 border-stone-300 bg-white transition-all peer-checked:border-[var(--color-brand-500)] peer-checked:bg-[var(--color-brand-500)] dark:border-stone-600 dark:bg-stone-700">
-                            <svg class="h-full w-full text-white opacity-0 peer-checked:opacity-100 p-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/>
-                            </svg>
-                        </div>
-                    </div>
+            <p class="mb-6 text-sm text-stone-500 dark:text-stone-400">Choose how you want to receive updates</p>
+            <div class="space-y-3">
+                <label class="flex cursor-pointer items-center gap-4 rounded-xl border-2 border-stone-100 bg-stone-50 p-4 transition-all hover:border-[var(--color-brand-300)] dark:border-stone-700 dark:bg-stone-700/30">
+                    <input class="h-5 w-5 rounded border-stone-300 text-[var(--color-brand-600)] focus:ring-[var(--color-brand-500)]" {% if profile_form_disabled %}disabled{% endif %} {% if billing_notifications_enabled %}checked{% endif %} name="billing_notifications" type="checkbox" value="true"/>
                     <div class="flex-1">
                         <p class="text-sm font-semibold text-stone-900 dark:text-white">Billing Notifications</p>
                         <p class="text-xs text-stone-500 dark:text-stone-400">Receive invoices and payment reminders via email</p>
                     </div>
-                    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-100 dark:bg-blue-900/30">
-                        <svg class="h-5 w-5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
-                        </svg>
-                    </div>
                 </label>
-
-                <label class="group flex items-center gap-4 rounded-xl border-2 border-stone-200 bg-stone-50 p-4 cursor-pointer transition-all hover:border-[var(--color-brand-300)] dark:border-stone-700 dark:bg-stone-700/30 dark:hover:border-[var(--color-brand-500)]">
-                    <div class="relative flex items-center justify-center">
-                        <input type="checkbox" name="sms_updates" value="true" {% if sms_updates_enabled %}checked{% endif %} class="peer sr-only">
-                        <div class="h-6 w-6 rounded-lg border-2 border-stone-300 bg-white transition-all peer-checked:border-[var(--color-brand-500)] peer-checked:bg-[var(--color-brand-500)] dark:border-stone-600 dark:bg-stone-700">
-                            <svg class="h-full w-full text-white opacity-0 peer-checked:opacity-100 p-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/>
-                            </svg>
-                        </div>
-                    </div>
+                <label class="flex cursor-pointer items-center gap-4 rounded-xl border-2 border-stone-100 bg-stone-50 p-4 transition-all hover:border-[var(--color-brand-300)] dark:border-stone-700 dark:bg-stone-700/30">
+                    <input class="h-5 w-5 rounded border-stone-300 text-[var(--color-brand-600)] focus:ring-[var(--color-brand-500)]" {% if profile_form_disabled %}disabled{% endif %} {% if sms_updates_enabled %}checked{% endif %} name="sms_updates" type="checkbox" value="true"/>
                     <div class="flex-1">
                         <p class="text-sm font-semibold text-stone-900 dark:text-white">SMS Updates</p>
                         <p class="text-xs text-stone-500 dark:text-stone-400">Receive service alerts and updates via SMS</p>
                     </div>
-                    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-100 dark:bg-emerald-900/30">
-                        <svg class="h-5 w-5 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"/>
-                        </svg>
-                    </div>
                 </label>
-
-                <label class="group flex items-center gap-4 rounded-xl border-2 border-stone-200 bg-stone-50 p-4 cursor-pointer transition-all hover:border-[var(--color-brand-300)] dark:border-stone-700 dark:bg-stone-700/30 dark:hover:border-[var(--color-brand-500)]">
-                    <div class="relative flex items-center justify-center">
-                        <input type="checkbox" name="push_notifications" value="true" {% if push_notifications_enabled %}checked{% endif %} class="peer sr-only">
-                        <div class="h-6 w-6 rounded-lg border-2 border-stone-300 bg-white transition-all peer-checked:border-[var(--color-brand-500)] peer-checked:bg-[var(--color-brand-500)] dark:border-stone-600 dark:bg-stone-700">
-                            <svg class="h-full w-full text-white opacity-0 peer-checked:opacity-100 p-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/>
-                            </svg>
-                        </div>
-                    </div>
+                <label class="flex cursor-pointer items-center gap-4 rounded-xl border-2 border-stone-100 bg-stone-50 p-4 transition-all hover:border-[var(--color-brand-300)] dark:border-stone-700 dark:bg-stone-700/30">
+                    <input class="h-5 w-5 rounded border-stone-300 text-[var(--color-brand-600)] focus:ring-[var(--color-brand-500)]" {% if profile_form_disabled %}disabled{% endif %} {% if push_notifications_enabled %}checked{% endif %} name="push_notifications" type="checkbox" value="true"/>
                     <div class="flex-1">
                         <p class="text-sm font-semibold text-stone-900 dark:text-white">Push Notifications</p>
                         <p class="text-xs text-stone-500 dark:text-stone-400">Receive app or browser push alerts when available</p>
                     </div>
                 </label>
+            </div>
 
-                <div class="grid gap-3 sm:grid-cols-2">
-                    {% for pref_name, pref_label, pref_enabled in [
-                        ('service_notifications', 'Service updates', service_notifications_enabled),
-                        ('account_notifications', 'Account updates', account_notifications_enabled),
-                        ('usage_notifications', 'Usage alerts', usage_notifications_enabled),
-                        ('general_notifications', 'General notices', general_notifications_enabled)
-                    ] %}
-                    <label class="flex items-center gap-3 rounded-xl border border-stone-200 bg-white p-3 text-sm font-medium text-stone-700 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-300">
-                        <input type="checkbox" name="{{ pref_name }}" value="true" {% if pref_enabled %}checked{% endif %} class="rounded border-stone-300 text-[var(--color-brand-600)]">
-                        {{ pref_label }}
-                    </label>
-                    {% endfor %}
-                </div>
+            <div class="mt-4 grid gap-3 sm:grid-cols-2">
+                {% for pref_name, pref_label, pref_enabled in [
+                    ('service_notifications', 'Service updates', service_notifications_enabled),
+                    ('account_notifications', 'Account updates', account_notifications_enabled),
+                    ('usage_notifications', 'Usage alerts', usage_notifications_enabled),
+                    ('general_notifications', 'General notices', general_notifications_enabled)
+                ] %}
+                <label class="flex items-center gap-3 rounded-xl border border-stone-200 bg-white p-3 text-sm font-medium text-stone-700 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-300">
+                    <input class="rounded border-stone-300 text-[var(--color-brand-600)]" {% if profile_form_disabled %}disabled{% endif %} {% if pref_enabled %}checked{% endif %} name="{{ pref_name }}" type="checkbox" value="true"/>
+                    {{ pref_label }}
+                </label>
+                {% endfor %}
+            </div>
 
-                <div>
-                    <label class="{{ _lbl }}">Language / Locale</label>
-                    <select name="locale" class="{{ _inp }}">
-                        {% set _locale = subscriber.locale if subscriber and subscriber.locale else 'en-NG' %}
-                        <option value="en-NG" {{ 'selected' if _locale == 'en-NG' }}>English (Nigeria)</option>
-                        <option value="en-US" {{ 'selected' if _locale == 'en-US' }}>English (US)</option>
-                        <option value="" {{ 'selected' if not _locale }}>No preference</option>
-                    </select>
-                </div>
+            <div class="mt-5">
+                <label class="{{ label_class }}">Language / Locale</label>
+                {% set _locale = subscriber.locale if subscriber and subscriber.locale else 'en-NG' %}
+                <select class="{{ input_class }}" {% if profile_form_disabled %}disabled{% endif %} name="locale">
+                    <option value="en-NG" {{ 'selected' if _locale == 'en-NG' }}>English (Nigeria)</option>
+                    <option value="en-US" {{ 'selected' if _locale == 'en-US' }}>English (US)</option>
+                    <option value="" {{ 'selected' if not _locale }}>No preference</option>
+                </select>
             </div>
         </div>
 
-        <!-- Security Section -->
-        <div id="security" class="rounded-2xl border border-stone-200 bg-white p-6 shadow-premium dark:border-stone-700 dark:bg-stone-800">
-            <h2 class="text-xl font-display font-semibold text-stone-900 dark:text-white">Access & Credentials</h2>
-            <p class="text-sm text-stone-500 dark:text-stone-400 mb-6">
-                Authentication is managed via RADIUS. These credentials are used by your device service.
-            </p>
+        <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-premium dark:border-stone-700 dark:bg-stone-800" id="security">
+            <h2 class="text-xl font-display font-semibold text-stone-900 dark:text-white">Access &amp; Credentials</h2>
+            <p class="mb-6 text-sm text-stone-500 dark:text-stone-400">Security settings and active portal sessions</p>
 
             <div class="mb-4 flex flex-col gap-4 rounded-xl border-2 border-stone-200 bg-stone-50 p-4 dark:border-stone-700 dark:bg-stone-700/30 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                     <p class="text-sm font-semibold text-stone-900 dark:text-white">Two-factor authentication</p>
-                    <p class="mt-1 text-xs text-stone-500 dark:text-stone-400">Use a 6-digit authenticator app code when signing in.</p>
-                    <div class="mt-3">
-                        {% if mfa_enabled %}
-                        <span class="inline-flex items-center rounded-lg bg-emerald-50 px-2.5 py-1 text-sm font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">Enabled</span>
-                        {% else %}
-                        <span class="inline-flex items-center rounded-lg bg-stone-100 px-2.5 py-1 text-sm font-semibold text-stone-700 dark:bg-stone-700 dark:text-stone-300">Disabled</span>
-                        {% endif %}
-                    </div>
+                    <p class="mt-1 text-xs text-stone-500 dark:text-stone-400">{% if mfa_enabled %}Enabled{% else %}Disabled{% endif %}</p>
                 </div>
-                <a href="/portal/profile/mfa/setup" class="inline-flex items-center justify-center gap-2 rounded-xl bg-[var(--color-brand-600)] px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[var(--color-brand-700)]">
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 11c0-1.105.895-2 2-2s2 .895 2 2-.895 2-2 2-2-.895-2-2zM4 7a4 4 0 014-4h8a4 4 0 014 4v10a4 4 0 01-4 4H8a4 4 0 01-4-4V7z"/>
-                    </svg>
-                    {{ 'Replace authenticator app' if mfa_enabled else 'Set up authenticator app' }}
+                <a href="/portal/profile/mfa/setup" class="inline-flex items-center justify-center rounded-xl bg-[var(--color-brand-600)] px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[var(--color-brand-700)]">
+                    {{ 'Replace authenticator app' if mfa_enabled else 'Set up 2FA' }}
                 </a>
             </div>
 
@@ -351,11 +261,8 @@
                         <p class="text-sm font-semibold text-stone-900 dark:text-white">Portal sessions</p>
                         <p class="mt-1 text-xs text-stone-500 dark:text-stone-400">{{ active_sessions | length }} active</p>
                     </div>
-                    {% if other_session_count and not (customer and customer.read_only) %}
-                    <button type="submit" form="customer-sign-out-other-sessions" class="inline-flex items-center justify-center gap-2 rounded-xl border border-stone-300 bg-white px-4 py-2 text-sm font-semibold text-stone-700 transition hover:bg-stone-100 dark:border-stone-600 dark:bg-stone-700 dark:text-stone-200 dark:hover:bg-stone-600">
-                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H9m4 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
-                        </svg>
+                    {% if other_session_count and not profile_form_disabled %}
+                    <button class="inline-flex items-center justify-center gap-2 rounded-xl border border-stone-300 bg-white px-4 py-2 text-sm font-semibold text-stone-700 transition hover:bg-stone-100 dark:border-stone-600 dark:bg-stone-700 dark:text-stone-200 dark:hover:bg-stone-600" form="customer-sign-out-other-sessions" type="submit">
                         Sign out other sessions
                     </button>
                     {% endif %}
@@ -364,12 +271,8 @@
                     {% for session in active_sessions %}
                     <div class="flex flex-col gap-2 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
                         <div>
-                            <p class="font-semibold text-stone-900 dark:text-white">
-                                {{ 'Current session' if session.is_current else 'Active session' }}
-                            </p>
-                            <p class="mt-1 text-xs text-stone-500 dark:text-stone-400">
-                                Started {{ session.created_at | portal_datetime('%b %d, %Y %H:%M', 'recently') }}
-                            </p>
+                            <p class="font-semibold text-stone-900 dark:text-white">{{ 'Current session' if session.is_current else 'Active session' }}</p>
+                            <p class="mt-1 text-xs text-stone-500 dark:text-stone-400">Started {{ session.created_at | portal_datetime('%b %d, %Y %H:%M', 'recently') }}</p>
                         </div>
                         <div class="flex flex-wrap items-center gap-2">
                             {% if session.remember %}
@@ -388,31 +291,32 @@
 
             <div class="rounded-xl border-2 border-amber-200 bg-amber-50 p-4 text-amber-800 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-300">
                 <p class="text-sm font-semibold">Changing credentials can interrupt connectivity.</p>
-                <p class="mt-1 text-xs">We recommend scheduling changes with support to avoid downtime.</p>
-                <a href="/portal/support" class="mt-3 inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-amber-800 shadow-sm transition-colors hover:bg-amber-100 dark:bg-amber-900/30 dark:text-amber-200 dark:hover:bg-amber-900/40">
+                <p class="mt-1 text-xs">We recommend scheduling changes with support.</p>
+                <a href="/portal/support" class="mt-3 inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-amber-800 shadow-sm transition-colors hover:bg-amber-100 dark:bg-amber-900/30 dark:text-amber-200">
                     Request credential change
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
-                    </svg>
                 </a>
             </div>
         </div>
+    </form>
 
-        <!-- Actions -->
+    <form id="customer-sign-out-other-sessions" method="post" action="/portal/profile/sessions/sign-out-others" class="hidden">
+        {% include "components/forms/csrf_input.html" %}
+    </form>
+</div>
+
+<div class="fixed bottom-0 left-0 right-0 z-30 border-t border-stone-200/50 bg-white/90 backdrop-blur dark:border-stone-700/50 dark:bg-stone-900/90">
+    <div class="mx-auto max-w-7xl px-4 py-4 sm:px-6 lg:px-8">
         <div class="flex items-center justify-end gap-3">
-            <button type="reset" class="rounded-xl border-2 border-stone-200 bg-white px-5 py-2.5 text-sm font-semibold text-stone-700 transition-all hover:border-stone-300 hover:bg-stone-50 dark:border-stone-600 dark:bg-stone-700 dark:text-stone-300 dark:hover:border-stone-500">
+            <button class="rounded-xl border-2 border-stone-200 bg-white px-6 py-3 text-sm font-semibold text-stone-700 transition-all hover:border-stone-300 hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-stone-600 dark:bg-stone-700 dark:text-stone-300 dark:hover:border-stone-500" {% if profile_form_disabled %}disabled{% endif %} form="customer-profile-form" type="reset">
                 Reset Changes
             </button>
-            <button type="submit" class="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-[var(--color-brand-500)] to-[var(--color-brand-600)] px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-[var(--color-brand-500)]/20 transition-all hover:shadow-xl hover:shadow-[var(--color-brand-500)]/30 hover:-translate-y-0.5">
+            <button class="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-[var(--color-brand-500)] to-[var(--color-brand-600)] px-8 py-3 text-sm font-semibold text-white shadow-lg shadow-[var(--color-brand-500)]/20 transition-all hover:-translate-y-0.5 hover:shadow-xl hover:shadow-[var(--color-brand-500)]/30 disabled:cursor-not-allowed disabled:opacity-60" {% if profile_form_disabled %}disabled{% endif %} form="customer-profile-form" type="submit">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
                 </svg>
                 Save Changes
             </button>
         </div>
-    </form>
-    <form id="customer-sign-out-other-sessions" method="post" action="/portal/profile/sessions/sign-out-others" class="hidden">
-        {% include "components/forms/csrf_input.html" %}
-    </form>
+    </div>
 </div>
 {% endblock %}
