@@ -38,6 +38,7 @@ from app.tasks.crm_ticket_push import (
     push_ticket_to_crm,
 )
 from app.tasks.cross_app_drift import run_cross_app_drift_detection
+from app.tasks.customer_impact_metrics import export_customer_impact_metrics
 from app.tasks.enforcement import cleanup_subscription_block_sessions
 from app.tasks.events import (
     cleanup_old_events,
@@ -272,6 +273,7 @@ __all__ = [
     "run_topology_reconcile",
     "warm_topology_status",
     "run_infrastructure_poll",
+    "export_customer_impact_metrics",
     "run_radius_health_check",
     "run_lldp_topology_poll",
     "run_outage_scan",
