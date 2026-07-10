@@ -43,6 +43,13 @@ class InboxMessageDirection(enum.Enum):
     internal = "internal"
 
 
+class InboxAgentPresenceStatus(enum.Enum):
+    online = "online"
+    away = "away"
+    on_break = "on_break"
+    offline = "offline"
+
+
 class InboxTeamRole(enum.Enum):
     owner = "owner"
     participant = "participant"
@@ -155,6 +162,11 @@ class InboxConversation(Base):
         back_populates="conversation",
         cascade="all, delete-orphan",
     )
+    assignments = relationship(
+        "InboxConversationAssignment",
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+    )
 
 
 class InboxConversationTeam(Base):
@@ -254,3 +266,81 @@ class InboxMessage(Base):
     )
 
     conversation = relationship("InboxConversation", back_populates="messages")
+
+
+class InboxAgentPresence(Base):
+    __tablename__ = "inbox_agent_presence"
+    __table_args__ = (
+        UniqueConstraint("person_id", name="uq_inbox_agent_presence_person"),
+        Index("ix_inbox_agent_presence_status", "status"),
+        Index("ix_inbox_agent_presence_last_seen_at", "last_seen_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    person_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(40), default=InboxAgentPresenceStatus.offline.value, nullable=False
+    )
+    manual_override_status: Mapped[str | None] = mapped_column(String(40))
+    max_concurrent_conversations: Mapped[int | None] = mapped_column(Integer)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    metadata_: Mapped[dict | None] = mapped_column(
+        "metadata", MutableDict.as_mutable(JSON())
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
+class InboxConversationAssignment(Base):
+    __tablename__ = "inbox_conversation_assignments"
+    __table_args__ = (
+        Index(
+            "uq_inbox_conversation_one_active_assignment",
+            "conversation_id",
+            unique=True,
+            sqlite_where=text("is_active IS TRUE"),
+            postgresql_where=text("is_active IS TRUE"),
+        ),
+        Index("ix_inbox_conversation_assignments_person", "person_id", "is_active"),
+        Index("ix_inbox_conversation_assignments_team", "service_team_id", "is_active"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("inbox_conversations.id"), nullable=False
+    )
+    service_team_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("service_teams.id"), nullable=False
+    )
+    person_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    assigned_by_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    assigned_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    metadata_: Mapped[dict | None] = mapped_column(
+        "metadata", MutableDict.as_mutable(JSON())
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    conversation = relationship("InboxConversation", back_populates="assignments")
+    service_team = relationship("ServiceTeam")

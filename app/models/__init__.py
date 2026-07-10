@@ -585,8 +585,11 @@ from app.models.task_execution import (  # noqa: F401
     TaskExecutionStatus,
 )
 from app.models.team_inbox import (  # noqa: F401
+    InboxAgentPresence,
+    InboxAgentPresenceStatus,
     InboxChannelType,
     InboxConversation,
+    InboxConversationAssignment,
     InboxConversationStatus,
     InboxConversationTeam,
     InboxMessage,
