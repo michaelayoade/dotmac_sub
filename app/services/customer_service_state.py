@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -258,13 +258,29 @@ def subscription_ids_under_active_outage(
 def active_outage_subscription_ids(session: Session) -> set[object]:
     """Every subscription id inside the blast radius of a live outage incident.
 
-    Live = operator-declared ``open`` plus the customer-visible classifier
-    states (confirmed/clearing) — the same set ``open_incident_for_path``
-    surfaces to customers. The blast radius per incident scope (root node /
-    basestation / FDH cabinet) comes from ``topology.affected``.
+    Which incidents count (customer-impact policy):
+
+    - manual operator ``open``: until resolved — a human declared it and a
+      human owns closing it;
+    - classifier ``confirmed``/``clearing``: always — that lifecycle debounces
+      and auto-resolves itself;
+    - auto-detect operator ``open`` (``declared_by = system:outage-autodetect``):
+      only while FRESH. The legacy auto-detect path opens incidents that
+      nothing auto-resolves, and a few days of accumulated zombies once put
+      97% of the fleet "under outage" and suppressed nearly every billing
+      notice. Freshness window: ``autodetect_incident_impact_ttl_hours``
+      (default 6).
+
+    The blast radius per incident scope (root node / basestation / FDH
+    cabinet) comes from ``topology.affected``.
     """
+    from app.models.domain_settings import SettingDomain
     from app.models.network_monitoring import NetworkDevice, OutageIncident, PopSite
-    from app.services.topology.outage import CLASSIFIER_CUSTOMER_VISIBLE_STATUSES
+    from app.services.settings_spec import resolve_value
+    from app.services.topology.outage import (
+        AUTO_DETECT_ACTOR,
+        CLASSIFIER_CUSTOMER_VISIBLE_STATUSES,
+    )
 
     live_statuses = ("open", *CLASSIFIER_CUSTOMER_VISIBLE_STATUSES)
     incidents = (
@@ -272,6 +288,33 @@ def active_outage_subscription_ids(session: Session) -> set[object]:
         .filter(OutageIncident.status.in_(live_statuses))
         .all()
     )
+    if not incidents:
+        return set()
+
+    try:
+        ttl_hours = int(
+            resolve_value(
+                session,
+                SettingDomain.network_monitoring,
+                "autodetect_incident_impact_ttl_hours",
+            )
+            or 6
+        )
+    except (TypeError, ValueError):
+        ttl_hours = 6
+    autodetect_cutoff = datetime.now(UTC) - timedelta(hours=max(1, ttl_hours))
+
+    def _counts_for_impact(incident) -> bool:
+        if incident.status != "open" or incident.declared_by != AUTO_DETECT_ACTOR:
+            return True
+        started = incident.started_at
+        if started is None:
+            return False
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=UTC)
+        return started >= autodetect_cutoff
+
+    incidents = [incident for incident in incidents if _counts_for_impact(incident)]
     if not incidents:
         return set()
 
