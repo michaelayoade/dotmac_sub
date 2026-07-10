@@ -36,6 +36,7 @@ class _DotmacFieldAppState extends ConsumerState<DotmacFieldApp> {
   Widget build(BuildContext context) {
     return MaterialApp.router(
       title: 'DotMac Field',
+      debugShowCheckedModeBanner: false,
       scaffoldMessengerKey: pushScaffoldMessengerKey,
       theme: lightTheme,
       darkTheme: darkTheme,

@@ -7,6 +7,7 @@ import 'package:dotmac_field/features/jobs/job_models.dart';
 import 'package:dotmac_field/features/jobs/jobs_providers.dart';
 import 'package:dotmac_field/features/location/location_cadence.dart';
 import 'package:dotmac_field/features/location/location_ping_service.dart';
+import 'package:dotmac_field/features/manager/manager_providers.dart';
 import 'package:dotmac_field/features/profile/profile_screen.dart';
 import 'package:dotmac_field/features/vendor/vendor_providers.dart';
 import 'package:flutter/material.dart';
@@ -32,6 +33,7 @@ Widget _app({
   bool authenticated = true,
   LocationPingService? locationPingService,
   AuthController Function() controller = _AuthedController.new,
+  ManagerProfile? managerProfile,
   List<Override> extra = const [],
 }) {
   return ProviderScope(
@@ -43,6 +45,22 @@ Widget _app({
       if (authenticated) ...[
         authControllerProvider.overrideWith(controller),
         ...extra,
+        managerProfileProvider.overrideWith((ref) async => managerProfile),
+        managerSummaryProvider.overrideWith(
+          (ref) async => const ManagerSummary(
+            techniciansTotal: 3,
+            techniciansLive: 1,
+            techniciansSharing: 2,
+            openJobs: 4,
+            unassignedJobs: 1,
+            pendingExpenses: 2,
+          ),
+        ),
+        managerTechniciansProvider.overrideWith(
+          (ref) async => const <ManagerTechnician>[],
+        ),
+        managerJobsProvider.overrideWith((ref) async => const <ManagerJob>[]),
+        managerExpensesProvider.overrideWith((ref) async => const []),
         meProvider.overrideWith(
           (ref) async => const MeSummary(
             name: 'Chidi Tech',
@@ -84,7 +102,7 @@ void main() {
     expect(find.byType(NavigationBar), findsNothing);
   });
 
-  testWidgets('authenticated shell renders four-tab navigation', (
+  testWidgets('technician shell hides CRM search and sales tabs', (
     tester,
   ) async {
     await tester.pumpWidget(_app());
@@ -93,6 +111,8 @@ void main() {
     expect(find.text('Hello, Chidi'), findsOneWidget);
     expect(find.text('Map'), findsOneWidget);
     expect(find.text('Schedule'), findsOneWidget);
+    expect(find.text('Customers'), findsNothing);
+    expect(find.text('Sales'), findsNothing);
     expect(find.text('Profile'), findsOneWidget);
     expect(find.byType(NavigationBar), findsOneWidget);
   });
@@ -129,6 +149,29 @@ void main() {
     expect(find.text('Schedule'), findsNothing);
     expect(find.text('Materials'), findsNothing);
     expect(find.text('Customers'), findsNothing);
+    expect(find.text('Sales'), findsNothing);
+  });
+
+  testWidgets('manager shell shows dispatch and approval tabs', (tester) async {
+    await tester.pumpWidget(
+      _app(
+        managerProfile: const ManagerProfile(
+          name: 'Amaka Manager',
+          roles: ['field_manager'],
+          permissions: ['operations:work_order:read'],
+          isManager: true,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(NavigationBar), findsOneWidget);
+    expect(find.text('Operations dashboard'), findsOneWidget);
+    expect(find.text('Dashboard'), findsOneWidget);
+    expect(find.text('Team'), findsWidgets);
+    expect(find.text('Dispatch'), findsOneWidget);
+    expect(find.text('Approvals'), findsWidgets);
+    expect(find.text('Materials'), findsNothing);
     expect(find.text('Sales'), findsNothing);
   });
 

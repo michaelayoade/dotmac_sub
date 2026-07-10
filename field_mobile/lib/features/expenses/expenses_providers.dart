@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../auth/auth_state.dart';
@@ -83,6 +84,51 @@ class ExpensesRepository {
         .get('/api/v1/field/expense-requests/categories');
     return _items(response.data).map(ExpenseCategory.fromJson).toList();
   }
+
+  Future<List<String>> fetchVendors({String query = '', int limit = 25}) async {
+    final response = await _ref
+        .read(apiClientProvider)
+        .dio
+        .get(
+          '/api/v1/field/expense-requests/vendors',
+          queryParameters: {
+            if (query.trim().isNotEmpty) 'q': query.trim(),
+            'limit': limit,
+          },
+        );
+    return _items(response.data)
+        .map((item) => item['label']?.toString().trim() ?? '')
+        .where((label) => label.isNotEmpty)
+        .toList();
+  }
+
+  Future<String> uploadReceipt({
+    required String workOrderId,
+    required String filePath,
+    required String fileName,
+    String? clientRef,
+  }) async {
+    final response = await _ref
+        .read(apiClientProvider)
+        .dio
+        .post(
+          '/api/v1/field/expense-requests/receipts',
+          data: FormData.fromMap({
+            'work_order_id': workOrderId.trim(),
+            if (clientRef != null && clientRef.trim().isNotEmpty)
+              'client_ref': clientRef.trim(),
+            'file': await MultipartFile.fromFile(filePath, filename: fileName),
+          }),
+        );
+    final data = (response.data as Map).cast<String, dynamic>();
+    final downloadPath = data['download_path']?.toString().trim();
+    if (downloadPath != null && downloadPath.isNotEmpty) return downloadPath;
+    final id = data['id']?.toString().trim();
+    if (id != null && id.isNotEmpty) {
+      return '/api/v1/field/attachments/$id/content';
+    }
+    throw StateError('Receipt upload did not return an attachment link.');
+  }
 }
 
 Map<String, dynamic> buildExpenseRequestPayload({
@@ -157,4 +203,8 @@ final expenseRequestProvider = FutureProvider.family<ExpenseRequest, String>(
 
 final expenseCategoriesProvider = FutureProvider<List<ExpenseCategory>>(
   (ref) => ref.watch(expensesRepositoryProvider).fetchCategories(),
+);
+
+final expenseVendorsProvider = FutureProvider<List<String>>(
+  (ref) => ref.watch(expensesRepositoryProvider).fetchVendors(),
 );

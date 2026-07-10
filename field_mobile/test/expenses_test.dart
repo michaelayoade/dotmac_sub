@@ -1,4 +1,5 @@
 import 'dart:ffi' hide Size;
+import 'dart:io' as io;
 
 import 'package:dio/dio.dart';
 import 'package:dotmac_field/core/api/api_client.dart';
@@ -295,6 +296,72 @@ void main() {
     expect(categories.first.maxAmountPerClaim, 50000.0);
     expect(categories.last.maxAmountPerClaim, isNull);
   });
+
+  test('fetchVendors reads vendor pick list labels', () async {
+    adapter.on('GET', '/api/v1/field/expense-requests/vendors', (options) {
+      expect(options.queryParameters['limit'], 25);
+      return (
+        200,
+        {
+          'items': [
+            {'id': 'vendor-1', 'label': 'City Cabs'},
+            {'id': 'vendor-2', 'label': 'Diesel Depot'},
+          ],
+        },
+      );
+    });
+
+    final vendors = await container
+        .read(expensesRepositoryProvider)
+        .fetchVendors();
+
+    expect(vendors, ['City Cabs', 'Diesel Depot']);
+  });
+
+  test(
+    'uploadReceipt posts multipart receipt and returns download path',
+    () async {
+      final dir = await io.Directory.systemTemp.createTemp('receipt-test');
+      final file = io.File('${dir.path}/receipt.jpg');
+      await file.writeAsBytes([0xff, 0xd8, 0xff, 0xd9]);
+      addTearDown(() => dir.delete(recursive: true));
+
+      adapter.on('POST', '/api/v1/field/expense-requests/receipts', (options) {
+        final form = options.data as FormData;
+        expect(
+          form.fields.any(
+            (entry) => entry.key == 'work_order_id' && entry.value == 'wo-1',
+          ),
+          isTrue,
+        );
+        expect(
+          form.fields.any(
+            (entry) => entry.key == 'client_ref' && entry.value == 'ref-1',
+          ),
+          isTrue,
+        );
+        expect(form.files.single.key, 'file');
+        return (
+          201,
+          {
+            'id': 'attachment-1',
+            'download_path': '/api/v1/field/attachments/attachment-1/content',
+          },
+        );
+      });
+
+      final path = await container
+          .read(expensesRepositoryProvider)
+          .uploadReceipt(
+            workOrderId: 'wo-1',
+            filePath: file.path,
+            fileName: 'receipt.jpg',
+            clientRef: 'ref-1',
+          );
+
+      expect(path, '/api/v1/field/attachments/attachment-1/content');
+    },
+  );
 
   test('ExpenseRequest parses status, ERP fields and items', () {
     final request = ExpenseRequest.fromJson({
