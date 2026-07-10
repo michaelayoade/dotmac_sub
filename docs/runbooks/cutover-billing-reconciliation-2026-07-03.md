@@ -92,8 +92,12 @@ worklist.
 ## Regeneration
 
 The exported packet is read-only. It should be regenerated from production when
-finance asks for a fresh snapshot. The exporter used for the 2026-07-09 packet
-was run inside the app container and produced the four files listed above.
+finance asks for a fresh snapshot.
+
+```bash
+python -m scripts.one_off.cutover_reconstructed_balance export \
+  --out-dir scratchpad/cutover_reconstructed_statements_current
+```
 
 The standing invariant service remains:
 
@@ -103,3 +107,30 @@ app.services.cutover_balance_audit.audit_cutover_balance_invariant
 
 That service exists to detect drift. The finance-facing review packet is the
 statement reconstruction, not the older anomaly-specific audit documents.
+
+## Correction Runs
+
+Correction runs are dry-run by default.
+
+```bash
+python -m scripts.one_off.cutover_reconstructed_balance apply-corrections \
+  --csv-out scratchpad/cutover_reconstructed_balance_corrections_current.csv \
+  --json-out scratchpad/cutover_reconstructed_balance_corrections_current.json
+```
+
+By default, understated rows are prepared for application because they credit the
+customer. Overcredited rows are held for finance approval. After finance approves
+the overcredited worklist, add `--apply-overcredited`.
+
+Add `--apply` only after the generated CSV/JSON has been reviewed:
+
+```bash
+python -m scripts.one_off.cutover_reconstructed_balance apply-corrections \
+  --apply \
+  --snapshot-date YYYY-MM-DD
+```
+
+Approved correction entries use the internal `Correction:` memo prefix. Customer
+statements exclude those rows, so customers continue to see only real legacy
+transactions, payments, service charges, credit notes, refunds, and approved
+manual adjustments.

@@ -11,6 +11,7 @@ from decimal import Decimal
 
 import pytest
 
+from app.models.billing import LedgerEntry, LedgerEntryType, LedgerSource
 from app.models.catalog import SubscriptionStatus
 from app.models.subscription_change import (
     SubscriptionChangeRequest,
@@ -55,6 +56,17 @@ def test_instant_change_swaps_offer_now(db_session, subscriber, monkeypatch):
         next_billing_at=datetime.now(UTC) + timedelta(days=15),
         start_at=datetime.now(UTC) - timedelta(days=15),
     )
+    db_session.add(
+        LedgerEntry(
+            account_id=subscriber.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.payment,
+            amount=Decimal("25.00"),
+            currency="NGN",
+            memo="Wallet top-up for prorated admin plan change",
+        )
+    )
+    db_session.commit()
 
     result = core.bulk_change_plan(
         db_session,

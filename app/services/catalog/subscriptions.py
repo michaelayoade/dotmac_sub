@@ -1086,6 +1086,60 @@ def _create_prepaid_plan_change_debit(
     return entry
 
 
+def _ensure_prepaid_plan_change_affordable(
+    db: Session,
+    subscription: Subscription,
+    proration: dict,
+) -> None:
+    """Block immediate prepaid plan-change drawdowns that would overspend wallet.
+
+    Customer self-service already performs this affordability check before it
+    writes the prepaid plan-change debit. Admin/API updates route through this
+    catalog service, so the same invariant belongs here too: a prepaid upgrade
+    may only draw down available wallet value that actually exists. Scheduled
+    next-cycle changes and pre-debited customer changes pass
+    ``skip_proration_artifacts=True`` and therefore do not call this helper.
+    """
+    billing_mode = getattr(subscription, "billing_mode", None)
+    billing_mode_value = (
+        billing_mode.value
+        if billing_mode and hasattr(billing_mode, "value")
+        else str(billing_mode or "")
+    )
+    if billing_mode_value != BillingMode.prepaid.value:
+        return
+
+    required_amount = round_money(
+        max(Decimal("0.00"), Decimal(str(proration.get("net_amount", "0.00"))))
+    )
+    if required_amount <= Decimal("0.00"):
+        return
+
+    from app.services.billing._common import lock_account
+    from app.services.collections import get_available_balance
+
+    account_id = str(subscription.subscriber_id)
+    lock_account(db, account_id)
+    current_balance = round_money(get_available_balance(db, account_id))
+    shortfall = round_money(required_amount - current_balance)
+    if shortfall <= Decimal("0.00"):
+        return
+
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "code": "insufficient_prepaid_balance",
+            "message": (
+                "Insufficient prepaid balance for this plan change. "
+                "Top up the customer wallet or schedule the change for the next cycle."
+            ),
+            "required_amount": str(required_amount),
+            "current_balance": str(current_balance),
+            "shortfall": str(shortfall),
+        },
+    )
+
+
 def _emit_offer_change_event(
     db: Session,
     subscription: Subscription,
@@ -1495,6 +1549,12 @@ class Subscriptions(ListResponseMixin):
                 old_price=proration_result.get("old_price", Decimal("0")),
                 new_price=proration_result.get("new_price", Decimal("0")),
             )
+            if not skip_proration_artifacts and proration_result.get("generate_now"):
+                _ensure_prepaid_plan_change_affordable(
+                    db,
+                    subscription,
+                    proration_result,
+                )
 
         # When the offer changes, refresh the snapshotted recurring price to the
         # new offer (unless an explicit unit_price was supplied) so the customer

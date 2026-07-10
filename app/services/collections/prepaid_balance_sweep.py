@@ -30,6 +30,7 @@ from app.models.domain_settings import SettingDomain
 from app.models.enforcement_lock import EnforcementReason
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services import control_registry, enforcement_window, settings_spec
+from app.services.billing_profile import resolve_billing_profile
 from app.services.collections._core import (
     _clear_prepaid_dunning_flags,
     _effective_billing_mode_for_account,
@@ -120,13 +121,15 @@ def _resolve_config(db: Session) -> _SweepConfig:
     )
 
 
-def _prepaid_threshold(db: Session, account: Subscriber) -> Decimal:
+def _prepaid_threshold(
+    db: Session, account: Subscriber, *, now: datetime | None = None
+) -> Decimal:
     # Reuse the read-side threshold resolver (account override -> settings
     # default) so enforcement and the customer-facing projection agree.
     # Deferred import avoids a service_status <-> collections import cycle.
     from app.services.service_status import _prepaid_threshold as _resolver
 
-    return _resolver(db, account)
+    return _resolver(db, account, now=now)
 
 
 def _candidate_account_ids(db: Session) -> set:
@@ -367,6 +370,18 @@ def _reconcile_low(
 def _process_account(
     db: Session, account: Subscriber, now: datetime, cfg: _SweepConfig
 ) -> str:
+    profile = resolve_billing_profile(db, account)
+    if not profile.automation_safe and profile.has_collectible_subscriptions:
+        logger.warning(
+            "prepaid_balance_sweep skipped account %s: billing profile source=%s "
+            "invalid_reason=%s account=%s subscription_modes=%s",
+            account.id,
+            profile.source,
+            profile.invalid_reason,
+            profile.account_mode.value if profile.account_mode else None,
+            sorted(mode.value for mode in profile.subscription_modes),
+        )
+        return "billing_profile_invalid"
     if _effective_billing_mode_for_account(db, account) != BillingMode.prepaid:
         if (
             account.prepaid_low_balance_at is not None
@@ -377,7 +392,7 @@ def _process_account(
         return "ok"
 
     balance = get_available_balance(db, str(account.id))
-    threshold = _prepaid_threshold(db, account)
+    threshold = _prepaid_threshold(db, account, now=now)
     if balance >= threshold:
         return _reconcile_funded(db, account)
     return _reconcile_low(db, account, now, cfg, balance, threshold)
