@@ -12,13 +12,15 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
-from app.models.billing import LedgerEntry, LedgerEntryType
 from app.models.notification import NotificationChannel, NotificationStatus
 from app.schemas.notification import NotificationCreate
 from app.services import notification as notification_service
+from app.services.customer_financial_ledger import (
+    CustomerFinancialEvent,
+    list_customer_financial_events,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -61,16 +63,40 @@ def parse_statement_range(
     )
 
 
-def _signed_amount(entry: LedgerEntry) -> Decimal:
-    amount = Decimal(str(entry.amount or 0))
-    return amount if entry.entry_type == LedgerEntryType.credit else -amount
+def _signed_amount(entry: CustomerFinancialEvent) -> Decimal:
+    return entry.signed_amount
 
 
-def _base_ledger_query(db: Session, account_id: UUID):
-    return (
-        db.query(LedgerEntry)
-        .filter(LedgerEntry.account_id == account_id)
-        .filter(LedgerEntry.is_active.is_(True))
+def _statement_entries(
+    db: Session,
+    *,
+    account_id: UUID,
+    date_range: StatementRange,
+) -> list[CustomerFinancialEvent]:
+    return list_customer_financial_events(
+        db,
+        account_id,
+        start=date_range.start,
+        end=date_range.end,
+        currency=None,
+    )
+
+
+def _opening_balance(
+    db: Session,
+    *,
+    account_id: UUID,
+    date_range: StatementRange,
+) -> Decimal:
+    opening_entries = list_customer_financial_events(
+        db,
+        account_id,
+        end=date_range.start,
+        currency=None,
+    )
+    return sum(
+        (_signed_amount(entry) for entry in opening_entries),
+        Decimal("0.00"),
     )
 
 
@@ -81,25 +107,8 @@ def build_account_statement(
     date_range: StatementRange,
 ) -> dict[str, Any]:
     """Build statement payload for an account and date range."""
-    opening_entries = (
-        _base_ledger_query(db, account_id)
-        .filter(LedgerEntry.created_at < date_range.start)
-        .order_by(LedgerEntry.created_at.asc())
-        .all()
-    )
-    opening_balance = sum((_signed_amount(e) for e in opening_entries), Decimal("0.00"))
-
-    entries = (
-        _base_ledger_query(db, account_id)
-        .filter(
-            and_(
-                LedgerEntry.created_at >= date_range.start,
-                LedgerEntry.created_at < date_range.end,
-            )
-        )
-        .order_by(LedgerEntry.created_at.asc())
-        .all()
-    )
+    opening_balance = _opening_balance(db, account_id=account_id, date_range=date_range)
+    entries = _statement_entries(db, account_id=account_id, date_range=date_range)
     period_delta = sum((_signed_amount(e) for e in entries), Decimal("0.00"))
     closing_balance = opening_balance + period_delta
 

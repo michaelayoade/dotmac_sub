@@ -1529,6 +1529,7 @@ def create_customer_from_form(
                 "email": normalized_email,
                 "email_verified": form_data.get("email_verified") == "true",
                 "phone": _normalize_optional(form_data.get("phone")),
+                "nin": form_data.get("nin") or None,
                 "date_of_birth": form_data.get("date_of_birth") or None,
                 "gender": form_data.get("gender") or "unknown",
                 "preferred_contact_method": form_data.get("preferred_contact_method")
@@ -1692,6 +1693,7 @@ def update_person_customer(
     email: str | None,
     email_verified: str | None,
     phone: str | None,
+    nin: str | None,
     date_of_birth: str | None,
     gender: str | None,
     preferred_contact_method: str | None,
@@ -1736,6 +1738,7 @@ def update_person_customer(
         "email": normalized_email,
         "email_verified": email_verified == "true",
         "phone": phone or None,
+        "nin": nin or None,
         "date_of_birth": date_of_birth or None,
         "gender": gender or None,
         "preferred_contact_method": preferred_contact_method or None,
@@ -1753,6 +1756,8 @@ def update_person_customer(
         "notes": _normalize_optional(notes),
         "metadata_": metadata_json,
     }
+    if bool((before.metadata_ or {}).get("nin_verified")) and data["nin"] != before.nin:
+        data["nin"] = before.nin
     data.update(
         _billing_override_payload(
             billing_enabled_override=billing_enabled_override,
@@ -2329,6 +2334,7 @@ def update_customer_profile(
     email: str,
     display_name: str | None = None,
     phone: str | None = None,
+    nin: str | None = None,
     date_of_birth: str | None = None,
     gender: str | None = None,
     preferred_contact_method: str | None = None,
@@ -2366,6 +2372,7 @@ def update_customer_profile(
     email_changed = new_email.lower() != (subscriber.email or "").strip().lower()
 
     display = (display_name or "").strip()
+    nin_locked = bool((subscriber.metadata_ or {}).get("nin_verified"))
     update_fields: dict[str, Any] = {
         "first_name": first_name.strip(),
         "last_name": last_name.strip(),
@@ -2375,6 +2382,8 @@ def update_customer_profile(
         "locale": (locale or "").strip() or None,
         "metadata_": metadata,
     }
+    if not nin_locked:
+        update_fields["nin"] = (nin or "").strip() or None
 
     # Date of birth: blank clears it; a malformed value is ignored (keep prior).
     dob = (date_of_birth or "").strip()
