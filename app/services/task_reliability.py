@@ -369,6 +369,13 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "Native ping/SNMP reachability sweep; probes only stale devices, so "
         "re-runs converge instead of duplicating work.",
     ),
+    "app.tasks.customer_impact_metrics.export_customer_impact_metrics": _c(
+        "monitoring",
+        SWEEP,
+        IDEMP,
+        HEALTH,
+        "Read-only fleet impact counters recomputed from source each run.",
+    ),
     "app.tasks.radius_health.run_radius_health_check": _c(
         "network",
         SWEEP,
