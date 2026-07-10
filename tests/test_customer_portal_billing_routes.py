@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -54,6 +56,78 @@ class TestCustomerBillingRouteRegistration:
         }
         assert ("/portal/billing/payments/{payment_id}/receipt", "GET") in routes
         assert ("/portal/billing/payments/{payment_id}/receipt/pdf", "GET") in routes
+
+
+class TestPaymentReceiptPdf:
+    def _receipt_context(self) -> dict:
+        return {
+            "payment": SimpleNamespace(
+                id="197d4836-26a4-4431-a045-9c5e7df82f4a",
+                receipt_number="RCP-TEST",
+            ),
+            "receipt_number": "#RCP-TEST",
+            "receipt_date": datetime(2026, 7, 9, 12, 0, tzinfo=UTC),
+            "account_number": "ACC-1001",
+            "received_from": "Test Customer",
+            "received_email": "customer@example.com",
+            "amount_received": Decimal("5000.00"),
+            "amount_applied": Decimal("3500.00"),
+            "unallocated_credit": Decimal("1500.00"),
+            "currency": "NGN",
+            "status": "Succeeded",
+            "transaction_ref": "PAY-REF-1",
+            "method": "Card",
+            "allocations": [
+                SimpleNamespace(
+                    invoice_number="INV-1001",
+                    status="Partially Paid",
+                    amount=Decimal("3500.00"),
+                )
+            ],
+        }
+
+    def test_receipt_pdf_falls_back_when_weasyprint_fails(self) -> None:
+        from app.services import billing_payment_receipts as receipt_service
+
+        with patch.object(
+            receipt_service,
+            "_build_weasyprint_receipt_pdf",
+            side_effect=AttributeError("'super' object has no attribute 'transform'"),
+        ):
+            pdf_bytes = receipt_service.build_receipt_pdf(self._receipt_context())
+
+        assert pdf_bytes.startswith(b"%PDF-")
+        assert len(pdf_bytes) > 1500
+
+    def test_receipt_pdf_route_returns_pdf_response(self) -> None:
+        from app.web.customer.routes import customer_payment_receipt_pdf
+
+        context = self._receipt_context()
+        request = MagicMock()
+
+        with (
+            patch(
+                "app.web.customer.routes.get_current_customer_from_request",
+                return_value={"subscriber_id": "sub-1"},
+            ),
+            patch(
+                "app.web.customer.routes.payment_receipts_service.get_customer_payment_receipt_context",
+                return_value=context,
+            ),
+            patch(
+                "app.web.customer.routes.payment_receipts_service.build_receipt_pdf",
+                return_value=b"%PDF-1.4\nreceipt",
+            ),
+        ):
+            response = customer_payment_receipt_pdf(
+                request=request,
+                payment_id=context["payment"].id,
+                db=MagicMock(),
+            )
+
+        assert response.media_type == "application/pdf"
+        assert bytes(response.body).startswith(b"%PDF-")
+        assert "receipt-RCP-TEST.pdf" in response.headers["content-disposition"]
 
 
 class TestPaymentSuccessBanner:

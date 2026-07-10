@@ -20,7 +20,7 @@ def _link(db, subscriber, splynx_id=None):
 
 def _balance(monkeypatch, value):
     monkeypatch.setattr(
-        "app.services.billing._common.get_account_credit_balance",
+        "app.services.collections.get_available_balance",
         lambda db, account_id: Decimal(value),
     )
 

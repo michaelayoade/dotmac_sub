@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from math import asin, cos, radians, sin, sqrt
-from typing import Any
+from typing import Any, Protocol, cast
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -34,16 +34,23 @@ _CONFIDENCE = {
 }
 
 
+class _MapAssetModel(Protocol):
+    is_active: Any
+    latitude: Any
+    longitude: Any
+    updated_at: Any
+
+
 @dataclass(frozen=True)
 class _AssetConfig:
     asset_type: str
-    model: Any
+    model: type[_MapAssetModel]
     title: str
     subtitle: Callable[[Any], str | None]
 
 
 def _compact(parts: list[str | None]) -> str | None:
-    text = " · ".join(part for part in parts if part)
+    text = " - ".join(part for part in parts if part)
     return text or None
 
 
@@ -114,19 +121,19 @@ def _bounds(
 _ASSETS: dict[str, _AssetConfig] = {
     "fdh_cabinet": _AssetConfig(
         asset_type="fdh_cabinet",
-        model=FdhCabinet,
+        model=cast(type[_MapAssetModel], FdhCabinet),
         title="name",
         subtitle=lambda row: row.code,
     ),
     "splice_closure": _AssetConfig(
         asset_type="splice_closure",
-        model=FiberSpliceClosure,
+        model=cast(type[_MapAssetModel], FiberSpliceClosure),
         title="name",
         subtitle=lambda row: None,
     ),
     "fiber_access_point": _AssetConfig(
         asset_type="fiber_access_point",
-        model=FiberAccessPoint,
+        model=cast(type[_MapAssetModel], FiberAccessPoint),
         title="name",
         subtitle=lambda row: _compact(
             [row.code, row.access_point_type, row.placement, row.street]
@@ -134,13 +141,13 @@ _ASSETS: dict[str, _AssetConfig] = {
     ),
     "service_building": _AssetConfig(
         asset_type="service_building",
-        model=ServiceBuilding,
+        model=cast(type[_MapAssetModel], ServiceBuilding),
         title="name",
         subtitle=lambda row: _compact([row.code, row.clli, row.street]),
     ),
     "wireless_mast": _AssetConfig(
         asset_type="wireless_mast",
-        model=WirelessMast,
+        model=cast(type[_MapAssetModel], WirelessMast),
         title="name",
         subtitle=lambda row: _compact([row.structure_type, row.owner]),
     ),
