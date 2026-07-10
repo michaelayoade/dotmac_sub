@@ -243,6 +243,65 @@ def send_push(
     return ok > 0 or not active_tokens(db, str(subscriber_id))
 
 
+def send_push_to_system_user(
+    db: Session,
+    system_user_id: str,
+    title: str,
+    body: str,
+    *,
+    data: dict | None = None,
+    notification_id: str | None = None,
+) -> bool:
+    """Send a push to all of a staff/system user's active devices."""
+    tokens = active_system_user_tokens(db, str(system_user_id))
+    if not tokens:
+        logger.info("push: no active device tokens for system user %s", system_user_id)
+        return True
+    cfg = _fcm_config()
+    if not cfg:
+        logger.info("push: FCM not configured; skipping staff transport")
+        return True
+    access_token = _access_token(cfg)
+    if not access_token:
+        return False
+
+    url = f"https://fcm.googleapis.com/v1/projects/{cfg['project_id']}/messages:send"
+    headers = {"Authorization": f"Bearer {access_token}"}
+    string_data = {k: str(v) for k, v in (data or {}).items()}
+    if notification_id:
+        string_data["notification_id"] = str(notification_id)
+
+    ok = 0
+    for token in tokens:
+        payload = {
+            "message": {
+                "token": token,
+                "notification": {"title": title, "body": body},
+                "data": string_data,
+            }
+        }
+        try:
+            resp = httpx.post(url, headers=headers, json=payload, timeout=10)
+            if resp.status_code == 200:
+                ok += 1
+            elif resp.status_code in (400, 404):
+                _deactivate(db, token)
+                logger.info("push: pruned invalid staff token for %s", system_user_id)
+            else:
+                logger.warning(
+                    "push: FCM %s for system user %s",
+                    resp.status_code,
+                    system_user_id,
+                )
+        except Exception as exc:
+            logger.warning(
+                "push: FCM send error for system user %s: %s",
+                system_user_id,
+                exc,
+            )
+    return ok > 0 or not active_system_user_tokens(db, str(system_user_id))
+
+
 def _deactivate(db: Session, token: str) -> None:
     # Flush, don't commit: send_push runs inside the caller's transaction
     # (single-entity webhook mirrors, but also the *batched* ticket pull). A
