@@ -39,6 +39,7 @@ from app.web.admin.design_system import router as design_system_router
 from app.web.admin.dispatch_work_orders import router as dispatch_work_orders_router
 from app.web.admin.drift import router as drift_router
 from app.web.admin.gis import router as gis_router
+from app.web.admin.inbox import router as inbox_router
 from app.web.admin.integrations import router as integrations_router
 from app.web.admin.legal import router as legal_router
 from app.web.admin.nas import router as nas_router
@@ -231,6 +232,7 @@ router.include_router(
     billing_reporting_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("billing"))],
 )
+router.include_router(inbox_router)
 router.include_router(system_router)
 router.include_router(system_whats_new_router)
 router.include_router(

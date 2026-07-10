@@ -94,3 +94,23 @@ class InboxConversationTimelineRead(BaseModel):
     teams: list[InboxTimelineTeamRead] = Field(default_factory=list)
     assignments: list[InboxTimelineAssignmentRead] = Field(default_factory=list)
     messages: list[InboxTimelineMessageRead] = Field(default_factory=list)
+
+
+class InboxConversationListItemRead(BaseModel):
+    id: UUID
+    subscriber_id: UUID | None = None
+    primary_service_team_id: UUID | None = None
+    primary_service_team_name: str | None = None
+    primary_service_team_type: str | None = None
+    channel_type: str
+    status: str
+    subject: str | None = None
+    contact_address: str | None = None
+    first_message_at: datetime | None = None
+    last_message_at: datetime | None = None
+    latest_message_direction: str | None = None
+    latest_message_body: str | None = None
+    latest_message_at: datetime | None = None
+    active_assigned_person_id: UUID | None = None
+    needs_response: bool
+    team_count: int

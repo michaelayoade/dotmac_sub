@@ -25,6 +25,7 @@ from app.schemas.support import (
 from app.schemas.team_inbox import (
     InboxConversationEscalateRequest,
     InboxConversationEscalationRead,
+    InboxConversationListItemRead,
     InboxConversationReplyRead,
     InboxConversationReplyRequest,
     InboxConversationTimelineRead,
@@ -236,6 +237,44 @@ def escalate_inbox_conversation(
         ),
         reason=result.reason,
     )
+
+
+@router.get(
+    "/inbox/conversations",
+    response_model=ListResponse[InboxConversationListItemRead],
+    dependencies=[Depends(require_permission("support:ticket:read"))],
+)
+def list_inbox_conversations(
+    search: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    channel_type: str | None = Query(default=None),
+    service_team_id: str | None = Query(default=None),
+    assigned_person_id: str | None = Query(default=None),
+    needs_response: bool = Query(default=False),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    result = team_inbox_read.list_conversations(
+        db,
+        search=search,
+        status=status,
+        channel_type=channel_type,
+        service_team_id=service_team_id,
+        assigned_person_id=assigned_person_id,
+        needs_response=needs_response,
+        limit=limit,
+        offset=offset,
+    )
+    return {
+        "items": [
+            InboxConversationListItemRead.model_validate(row, from_attributes=True)
+            for row in result.items
+        ],
+        "count": result.count,
+        "limit": result.limit,
+        "offset": result.offset,
+    }
 
 
 @router.get(

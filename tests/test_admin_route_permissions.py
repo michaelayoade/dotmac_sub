@@ -11,6 +11,7 @@ from app.web.admin import dashboard as admin_dashboard
 from app.web.admin import design_system as admin_design_system
 from app.web.admin import dispatch_work_orders as admin_dispatch_work_orders
 from app.web.admin import gis as admin_gis
+from app.web.admin import inbox as admin_inbox
 from app.web.admin import integrations as admin_integrations
 from app.web.admin import legal as admin_legal
 from app.web.admin import network_device_groups as admin_network_device_groups
@@ -505,6 +506,15 @@ def test_report_routes_require_domain_permissions():
         "/reports/inbox-escalations/{conversation_id}/reply",
         "POST",
         "support:ticket:update",
+    )
+
+
+def test_team_inbox_routes_require_support_permissions():
+    assert _route_has_permission(
+        admin_inbox.router,
+        "/inbox",
+        "GET",
+        "support:ticket:read",
     )
 
 
