@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -41,3 +42,55 @@ class InboxConversationReplyRead(BaseModel):
     from_address: str | None = None
     to_email: str | None = None
     reason: str | None = None
+
+
+class InboxTimelineTeamRead(BaseModel):
+    service_team_id: UUID
+    service_team_name: str | None = None
+    service_team_type: str | None = None
+    role: str
+    source: str
+    is_active: bool
+
+
+class InboxTimelineAssignmentRead(BaseModel):
+    person_id: UUID
+    service_team_id: UUID
+    service_team_name: str | None = None
+    assigned_by_person_id: UUID | None = None
+    assigned_at: datetime
+    is_active: bool
+
+
+class InboxTimelineMessageRead(BaseModel):
+    id: UUID
+    channel_type: str
+    direction: str
+    subject: str | None = None
+    body: str | None = None
+    from_address: str | None = None
+    to_addresses: list = Field(default_factory=list)
+    cc_addresses: list = Field(default_factory=list)
+    sent_at: datetime | None = None
+    received_at: datetime | None = None
+    created_at: datetime
+    metadata: dict | None = None
+
+
+class InboxConversationTimelineRead(BaseModel):
+    id: UUID
+    subscriber_id: UUID | None = None
+    primary_service_team_id: UUID | None = None
+    channel_type: str
+    status: str
+    subject: str | None = None
+    contact_address: str | None = None
+    external_thread_id: str | None = None
+    first_message_at: datetime | None = None
+    last_message_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+    metadata: dict | None = None
+    teams: list[InboxTimelineTeamRead] = Field(default_factory=list)
+    assignments: list[InboxTimelineAssignmentRead] = Field(default_factory=list)
+    messages: list[InboxTimelineMessageRead] = Field(default_factory=list)

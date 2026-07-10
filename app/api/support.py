@@ -27,9 +27,10 @@ from app.schemas.team_inbox import (
     InboxConversationEscalationRead,
     InboxConversationReplyRead,
     InboxConversationReplyRequest,
+    InboxConversationTimelineRead,
 )
 from app.services import support as support_service
-from app.services import team_inbox_assignment, team_inbox_outbound
+from app.services import team_inbox_assignment, team_inbox_outbound, team_inbox_read
 from app.services.auth_dependencies import require_permission, require_user_auth
 
 router = APIRouter(prefix="/support", tags=["support"])
@@ -235,6 +236,21 @@ def escalate_inbox_conversation(
         ),
         reason=result.reason,
     )
+
+
+@router.get(
+    "/inbox/conversations/{conversation_id}",
+    response_model=InboxConversationTimelineRead,
+    dependencies=[Depends(require_permission("support:ticket:read"))],
+)
+def get_inbox_conversation_timeline(
+    conversation_id: UUID,
+    db: Session = Depends(get_db),
+):
+    timeline = team_inbox_read.get_conversation_timeline(db, conversation_id)
+    if timeline is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return InboxConversationTimelineRead.model_validate(timeline, from_attributes=True)
 
 
 @router.post(
