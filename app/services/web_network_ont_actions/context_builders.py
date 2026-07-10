@@ -631,8 +631,8 @@ def _service_recovery_context(
             _recovery_row(
                 "OLT registration",
                 "pending",
-                "Live OLT state has not been loaded on this view.",
-                detail="Open OLT Status if the customer is still down.",
+                "Live OLT registration was not checked on this page.",
+                detail="Open OLT Status to run the live OLT check; this pending state does not mean the OLT is down.",
             )
         )
     elif run_state == "online" and config_state == "normal" and match_state == "match":
@@ -666,8 +666,8 @@ def _service_recovery_context(
             _recovery_row(
                 "Internet service-port",
                 "pending",
-                "Service-port read is deferred on this view.",
-                detail="Open Service Ports to verify VLAN/GEM state.",
+                "Live service-port data was not checked on this page.",
+                detail="Open Service Ports to read VLAN/GEM state from the OLT; this pending state does not mean the path is missing.",
             )
         )
     elif port_error:
@@ -799,16 +799,21 @@ def _service_recovery_context(
     ).first()
     if active_radius:
         counters = int(active_radius.bytes_in or 0) + int(active_radius.bytes_out or 0)
+        radius_detail = (
+            "No traffic counters yet; check LAN/WiFi bind and customer device. "
+            "A ping timeout alone does not prove the customer cannot browse."
+            if counters == 0
+            else (
+                f"{counters} bytes counted. PPP/RADIUS is online; a ping timeout "
+                "can be caused by ICMP being blocked and does not by itself mean browsing is down."
+            )
+        )
         rows.append(
             _recovery_row(
                 "RADIUS session",
                 "ok" if counters > 0 else "warn",
                 f"Active session on {active_radius.framed_ip_address or 'unknown IP'}.",
-                detail=(
-                    "No traffic counters yet; check LAN/WiFi bind and customer device."
-                    if counters == 0
-                    else f"{counters} bytes counted."
-                ),
+                detail=radius_detail,
             )
         )
     else:
@@ -938,6 +943,10 @@ def _service_recovery_context(
         {
             "label": "WAN not bound",
             "meaning": "Internet is active on the ONT but not attached to WiFi or Ethernet ports.",
+        },
+        {
+            "label": "Ping timeout",
+            "meaning": "Many CPEs block ICMP. Use RADIUS/PPP state and traffic counters before deciding the customer is offline.",
         },
         {
             "label": "App/device drift",
