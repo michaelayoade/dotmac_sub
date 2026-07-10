@@ -1,7 +1,7 @@
 """Add field settings domain.
 
-Revision ID: 224_add_field_setting_domain
-Revises: 223_work_order_dispatch_foundation
+Revision ID: 225_add_field_setting_domain
+Revises: 224_add_subscriber_nin
 Create Date: 2026-07-09
 """
 
@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision = "224_add_field_setting_domain"
-down_revision = "223_work_order_dispatch_foundation"
+revision = "225_add_field_setting_domain"
+down_revision = "224_add_subscriber_nin"
 branch_labels = None
 depends_on = None
 
