@@ -46,6 +46,49 @@
                 <textarea name="description" rows="5" placeholder="Detailed description of the issue..." class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ prefill.description }}</textarea>
             </div>
 
+            {% if form_mode != 'edit' %}
+            {% set duplicate_matches = duplicate_warning.matches if duplicate_warning and duplicate_warning.matches else [] %}
+            <div id="ticket-duplicate-warning"
+                 class="{% if not duplicate_matches %}hidden {% endif %}lg:col-span-2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100"
+                 data-duplicate-server-rendered="{{ '1' if duplicate_matches else '0' }}"
+                 data-duplicate-warning>
+                <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                        <h3 class="font-semibold">Similar ticket already exists</h3>
+                        <p class="mt-1 text-xs text-amber-800 dark:text-amber-200">
+                            Review the existing ticket before creating another one for this customer.
+                        </p>
+                    </div>
+                    <label class="inline-flex items-center gap-2 rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-semibold text-amber-900 dark:border-amber-600 dark:bg-slate-900 dark:text-amber-100">
+                        <input type="checkbox" name="duplicate_override" value="1" class="rounded border-amber-400 text-amber-600 focus:ring-amber-500" data-duplicate-override>
+                        Create anyway
+                    </label>
+                </div>
+                <div class="mt-3 space-y-2" data-duplicate-matches>
+                    {% for match in duplicate_matches %}
+                    <div class="rounded-lg border border-amber-200 bg-white p-3 dark:border-amber-800 dark:bg-slate-900">
+                        <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                            <div>
+                                <p class="font-semibold text-slate-900 dark:text-white">
+                                    #{{ match.reference }} - {{ match.title }}
+                                </p>
+                                <p class="mt-1 text-xs text-slate-600 dark:text-slate-300">
+                                    {{ match.status|replace('_', ' ')|title }}{% if match.ticket_type %} · {{ match.ticket_type }}{% endif %} · {{ match.confidence|title }} match · Score {{ match.score }}
+                                </p>
+                                {% if match.reasons %}
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ match.reasons|join(', ') }}</p>
+                                {% endif %}
+                            </div>
+                            <a href="{{ match.url }}" target="_blank" rel="noopener" class="inline-flex items-center justify-center rounded-lg border border-amber-300 bg-amber-100 px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-200 dark:border-amber-700 dark:bg-amber-900/50 dark:text-amber-100 dark:hover:bg-amber-900">
+                                View ticket
+                            </a>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+
             <div>
                 <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-200">Customer</label>
                 <div class="relative"
@@ -326,4 +369,156 @@ function ticketFormPage() {
     };
 }
 </script>
+{% if form_mode != 'edit' %}
+<script>
+(function () {
+    const panel = document.querySelector('[data-duplicate-warning]');
+    if (!panel) {
+        return;
+    }
+    const matchesWrap = panel.querySelector('[data-duplicate-matches]');
+    const overrideInput = panel.querySelector('[data-duplicate-override]');
+    const titleInput = document.querySelector('input[name="title"]');
+    const descriptionInput = document.querySelector('textarea[name="description"]');
+    const subscriberHidden = document.querySelector('input[name="subscriber_id"][data-typeahead-hidden]');
+    const accountHidden = document.querySelector('input[name="customer_account_id"]');
+    const customerHidden = document.querySelector('input[name="customer_person_id"][data-typeahead-hidden]');
+    const typeSelect = document.querySelector('select[name="ticket_type"]');
+    const regionSelect = document.querySelector('select[name="region"]');
+    const tagsInput = document.querySelector('input[name="tags"]');
+    let timer = null;
+    let controller = null;
+    const serverRenderedWarning = panel.dataset.duplicateServerRendered === '1';
+    let userEditedDuplicateFields = false;
+
+    const escapeHtml = (value) => String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+
+    const hideWarning = () => {
+        panel.classList.add('hidden');
+        if (matchesWrap) {
+            matchesWrap.innerHTML = '';
+        }
+        if (overrideInput) {
+            overrideInput.checked = false;
+        }
+    };
+
+    const renderMatches = (matches) => {
+        if (!Array.isArray(matches) || matches.length === 0) {
+            hideWarning();
+            return;
+        }
+        if (overrideInput) {
+            overrideInput.checked = false;
+        }
+        panel.classList.remove('hidden');
+        if (!matchesWrap) {
+            return;
+        }
+        matchesWrap.innerHTML = matches.map((match) => {
+            const status = String(match.status || '').replace(/_/g, ' ');
+            const details = [
+                status ? status.replace(/\b\w/g, (char) => char.toUpperCase()) : '',
+                match.ticket_type || '',
+                `${match.confidence || 'possible'} match`,
+                `Score ${match.score || 0}`,
+            ].filter(Boolean).join(' · ');
+            const reasons = Array.isArray(match.reasons) ? match.reasons.join(', ') : '';
+            return `
+                <div class="rounded-lg border border-amber-200 bg-white p-3 dark:border-amber-800 dark:bg-slate-900">
+                    <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                            <p class="font-semibold text-slate-900 dark:text-white">
+                                #${escapeHtml(match.reference)} - ${escapeHtml(match.title)}
+                            </p>
+                            <p class="mt-1 text-xs text-slate-600 dark:text-slate-300">${escapeHtml(details)}</p>
+                            ${reasons ? `<p class="mt-1 text-xs text-slate-500 dark:text-slate-400">${escapeHtml(reasons)}</p>` : ''}
+                        </div>
+                        <a href="${escapeHtml(match.url)}" target="_blank" rel="noopener" class="inline-flex items-center justify-center rounded-lg border border-amber-300 bg-amber-100 px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-200 dark:border-amber-700 dark:bg-amber-900/50 dark:text-amber-100 dark:hover:bg-amber-900">
+                            View ticket
+                        </a>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    };
+
+    const runCheck = async () => {
+        const subscriberId = subscriberHidden ? subscriberHidden.value.trim() : '';
+        const accountId = accountHidden ? accountHidden.value.trim() : '';
+        const customerId = customerHidden ? customerHidden.value.trim() : '';
+        if (!subscriberId && !accountId && !customerId) {
+            if (!serverRenderedWarning || userEditedDuplicateFields) {
+                hideWarning();
+            }
+            return;
+        }
+
+        const params = new URLSearchParams();
+        if (titleInput && titleInput.value.trim()) params.set('title', titleInput.value.trim());
+        if (descriptionInput && descriptionInput.value.trim()) params.set('description', descriptionInput.value.trim());
+        if (subscriberId) params.set('subscriber_id', subscriberId);
+        if (accountId) params.set('customer_account_id', accountId);
+        if (customerId) params.set('customer_person_id', customerId);
+        if (typeSelect && typeSelect.value) params.set('ticket_type', typeSelect.value);
+        if (tagsInput && tagsInput.value.trim()) params.set('tags', tagsInput.value.trim());
+        if (regionSelect && regionSelect.value) params.set('region', regionSelect.value);
+
+        if (controller) {
+            controller.abort();
+        }
+        controller = new AbortController();
+        try {
+            const response = await fetch(`/api/v1/support/tickets/duplicates?${params.toString()}`, {
+                credentials: 'same-origin',
+                signal: controller.signal,
+            });
+            if (!response.ok) {
+                return;
+            }
+            const data = await response.json();
+            if (serverRenderedWarning && !userEditedDuplicateFields && (!Array.isArray(data.matches) || data.matches.length === 0)) {
+                return;
+            }
+            renderMatches(data.matches || []);
+        } catch (err) {
+            if (err.name !== 'AbortError') {
+                // Ignore duplicate lookup errors; the server re-checks on submit.
+            }
+        }
+    };
+
+    const scheduleCheck = () => {
+        if (timer) {
+            window.clearTimeout(timer);
+        }
+        timer = window.setTimeout(runCheck, 350);
+    };
+
+    [titleInput, descriptionInput, subscriberHidden, accountHidden, customerHidden, typeSelect, tagsInput, regionSelect]
+        .filter(Boolean)
+        .forEach((el) => {
+            ['input', 'change'].forEach((eventName) => {
+                el.addEventListener(eventName, (event) => {
+                    userEditedDuplicateFields = userEditedDuplicateFields || event.isTrusted;
+                    scheduleCheck();
+                });
+            });
+        });
+    // Typeahead selections update the hidden inputs via Alpine without firing
+    // input events, so also listen for the bubbling selection event.
+    document.addEventListener('typeahead:selected', () => {
+        userEditedDuplicateFields = true;
+        scheduleCheck();
+    });
+
+    scheduleCheck();
+})();
+</script>
+{% endif %}
 {% endblock %}

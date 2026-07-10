@@ -23,7 +23,12 @@ from app.schemas.support import (
     TicketMergeRequest,
     TicketUpdate,
 )
-from app.services import sla_assignment, support_ticket_filters, ticket_mentions
+from app.services import (
+    sla_assignment,
+    support_ticket_filters,
+    ticket_mentions,
+    ticket_validation,
+)
 from app.services import support as support_service
 from app.services import support_ticket_settings as support_ticket_settings_service
 from app.services.file_storage import file_uploads
@@ -475,16 +480,68 @@ def build_ticket_comment_payload(
     )
 
 
+class DuplicateTicketWarningError(Exception):
+    """A create submission matches existing open tickets and the operator has
+    not ticked the ``duplicate_override`` checkbox yet."""
+
+    def __init__(self, result: ticket_validation.TicketDuplicateResult):
+        super().__init__("A similar ticket already exists.")
+        self.result = result
+
+
+def _duplicate_input_from_payload(
+    payload: TicketCreate,
+) -> ticket_validation.TicketDuplicateInput:
+    metadata = payload.metadata_ if isinstance(payload.metadata_, dict) else {}
+    return ticket_validation.TicketDuplicateInput(
+        title=payload.title,
+        description=payload.description,
+        subscriber_id=payload.subscriber_id,
+        customer_account_id=payload.customer_account_id,
+        customer_person_id=payload.customer_person_id,
+        lead_id=payload.lead_id,
+        ticket_type=payload.ticket_type,
+        base_station_details=str(metadata.get("base_station_details") or "") or None,
+        tags=payload.tags,
+        region=payload.region,
+    )
+
+
 def create_ticket_from_form(
     db: Session,
     *,
     request,
     actor_id: str | None,
     attachments: list,
+    duplicate_override: bool = False,
     **form,
 ):
-    """Create a support ticket from web form values and attach uploaded files."""
+    """Create a support ticket from web form values and attach uploaded files.
+
+    Mirrors CRM's admin create flow: candidate duplicates are re-checked
+    server-side on submit; without the operator's ``duplicate_override``
+    confirmation a warning is raised so the route can re-render the form.
+    """
     payload = build_ticket_create_payload(actor_id=actor_id, **form)
+    duplicate_result = ticket_validation.find_duplicate_ticket_candidates(
+        db, _duplicate_input_from_payload(payload)
+    )
+    if duplicate_result.has_warning:
+        if not duplicate_override:
+            raise DuplicateTicketWarningError(duplicate_result)
+        metadata = dict(payload.metadata_ or {})
+        metadata["duplicate_override"] = True
+        metadata["possible_duplicate_tickets"] = [
+            {
+                "ticket_id": match.ticket_id,
+                "reference": match.reference,
+                "score": match.score,
+                "confidence": match.confidence,
+                "reasons": match.reasons,
+            }
+            for match in duplicate_result.matches
+        ]
+        payload.metadata_ = metadata
     ticket = support_service.tickets.create(
         db, payload, actor_id=actor_id, request=request
     )
