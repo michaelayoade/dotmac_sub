@@ -1,8 +1,9 @@
-"""Native read views over CRM-sourced work-order mirror rows.
+"""Native read views over imported work-order mirror rows.
 
-Phase 2 keeps CRM as the work-order source of truth while sub absorbs the
-field-ops surface. This module is the in-process read layer later admin,
-dispatch, and field APIs can use without fanning out to CRM.
+During migration, CRM can still hydrate legacy work-order headers into
+``work_order_mirror``. Native field execution activity is authored in sub, and
+this module is the in-process read layer admin, dispatch, and field APIs can use
+without fanning out to CRM.
 """
 
 from __future__ import annotations
