@@ -21,6 +21,7 @@ from app.timezone import APP_TIMEZONE
 logger = logging.getLogger(__name__)
 
 SENSITIVE_FIELDS = {
+    "nin",
     "password",
     "password_hash",
     "hashed_password",
@@ -35,6 +36,7 @@ SENSITIVE_FIELDS = {
 
 # Keys containing any of these tokens are treated as sensitive.
 SENSITIVE_FIELD_TOKENS = {
+    "nin",
     "password",
     "secret",
     "token",
