@@ -7,16 +7,23 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.models.service_team import ServiceTeam
 from app.models.team_inbox import (
     InboxChannelType,
     InboxConversation,
     InboxConversationStatus,
     InboxMessage,
     InboxMessageDirection,
+    InboxTeamSource,
 )
-from app.services import team_inbox_routing
+from app.services import team_inbox_assignment, team_inbox_routing
 
 _MESSAGE_ID_RE = re.compile(r"<[^<>]+>")
+_AUTO_ASSIGN_METADATA_KEYS = (
+    "inbox_auto_assign_to_agent",
+    "auto_assign_to_online_agent",
+    "inbox_auto_assign",
+)
 
 
 @dataclass(frozen=True)
@@ -120,6 +127,46 @@ def _trim_subject(value: str | None) -> str | None:
     return subject[:200]
 
 
+def _truthy(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value > 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on", "enabled"}
+    return False
+
+
+def _metadata_auto_assign_enabled(metadata: dict | None) -> bool:
+    if not isinstance(metadata, dict):
+        return False
+    nested = metadata.get("inbox_assignment")
+    candidates = [metadata.get(key) for key in _AUTO_ASSIGN_METADATA_KEYS]
+    if isinstance(nested, dict):
+        candidates.extend(nested.get(key) for key in _AUTO_ASSIGN_METADATA_KEYS)
+    return any(_truthy(value) for value in candidates)
+
+
+def _route_auto_assign_enabled(
+    db: Session,
+    plan: team_inbox_routing.EmailTeamRoutingPlan,
+) -> bool:
+    if not plan.primary_service_team_id:
+        return False
+    primary_match = next(
+        (
+            match
+            for match in plan.matches
+            if match.service_team_id == plan.primary_service_team_id
+        ),
+        None,
+    )
+    if primary_match and _metadata_auto_assign_enabled(primary_match.metadata):
+        return True
+    team = db.get(ServiceTeam, UUID(str(plan.primary_service_team_id)))
+    return _metadata_auto_assign_enabled(team.metadata_ if team is not None else None)
+
+
 def receive_inbound_email(
     db: Session,
     payload: InboundEmailPayload,
@@ -140,6 +187,7 @@ def receive_inbound_email(
     received_at = payload.received_at or datetime.now(UTC)
     thread_message_ids = _extract_message_ids(payload.in_reply_to, payload.references)
     conversation = _find_thread_conversation(db, message_ids=thread_message_ids)
+    created_conversation = conversation is None
 
     if conversation is None:
         conversation = InboxConversation(
@@ -175,6 +223,19 @@ def receive_inbound_email(
         conversation=conversation,
         plan=routing_plan,
     )
+    if (
+        created_conversation
+        and routing_plan.primary_service_team_id
+        and _route_auto_assign_enabled(db, routing_plan)
+    ):
+        team_inbox_assignment.assign_conversation_to_available_agent(
+            db,
+            conversation=conversation,
+            service_team_id=routing_plan.primary_service_team_id,
+            reason="inbound_email_route_auto_assign",
+            source=InboxTeamSource.routing_rule.value,
+            now=received_at,
+        )
 
     metadata = dict(payload.metadata or {})
     metadata["in_reply_to"] = payload.in_reply_to

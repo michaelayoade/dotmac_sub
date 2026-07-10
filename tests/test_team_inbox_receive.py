@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
-from app.models.service_team import ServiceTeam, ServiceTeamType
+from app.models.service_team import ServiceTeam, ServiceTeamMember, ServiceTeamType
 from app.models.team_inbox import (
+    InboxAgentPresence,
+    InboxAgentPresenceStatus,
     InboxConversation,
+    InboxConversationAssignment,
     InboxConversationTeam,
     InboxMessage,
     InboxTeamRole,
@@ -20,13 +24,21 @@ def _team(db_session, name: str, team_type: str) -> ServiceTeam:
     return team
 
 
-def _route(db_session, team: ServiceTeam, email: str, *, priority: int = 100) -> None:
+def _route(
+    db_session,
+    team: ServiceTeam,
+    email: str,
+    *,
+    priority: int = 100,
+    metadata: dict | None = None,
+) -> None:
     db_session.add(
         TeamInboxEmailRoute(
             service_team_id=team.id,
             email_address=email.lower(),
             priority=priority,
             is_active=True,
+            metadata_=metadata,
         )
     )
     db_session.flush()
@@ -78,6 +90,49 @@ def test_receive_inbound_email_creates_one_thread_for_multiple_teams(db_session)
     assert [link for link in links if link.service_team_id == support.id][
         0
     ].role == InboxTeamRole.owner.value
+
+
+def test_receive_inbound_email_auto_assigns_route_to_online_agent(db_session):
+    support = _team(db_session, "Support", ServiceTeamType.support.value)
+    person_id = uuid4()
+    db_session.add(
+        ServiceTeamMember(team_id=support.id, person_id=person_id, is_active=True)
+    )
+    db_session.add(
+        InboxAgentPresence(
+            person_id=person_id,
+            status=InboxAgentPresenceStatus.online.value,
+        )
+    )
+    _route(
+        db_session,
+        support,
+        "support@dotmac.io",
+        metadata={"inbox_auto_assign_to_agent": True},
+    )
+    db_session.commit()
+
+    result = team_inbox_receive.receive_inbound_email(
+        db_session,
+        team_inbox_receive.InboundEmailPayload(
+            from_address="customer@example.com",
+            to_addresses=["support@dotmac.io"],
+            subject="Help",
+            body="Please assign this.",
+            message_id="<assign-me@example.com>",
+            received_at=datetime(2026, 7, 10, tzinfo=UTC),
+        ),
+    )
+    db_session.commit()
+
+    conversation = db_session.get(InboxConversation, result.conversation_id)
+    assignment = db_session.query(InboxConversationAssignment).one()
+    assert conversation.primary_service_team_id == support.id
+    assert assignment.person_id == person_id
+    assert assignment.service_team_id == support.id
+    assert assignment.is_active is True
+    assert assignment.metadata_["source"] == "routing_rule"
+    assert assignment.metadata_["reason"] == "inbound_email_route_auto_assign"
 
 
 def test_receive_inbound_email_deduplicates_by_message_id(db_session):

@@ -196,6 +196,7 @@ def assign_conversation_to_agent(
     person_id: str | UUID,
     assigned_by_person_id: str | UUID | None = None,
     reason: str | None = None,
+    source: str = InboxTeamSource.escalation.value,
     now: datetime | None = None,
 ) -> InboxAssignmentResult:
     team_uuid = _coerce_uuid(service_team_id)
@@ -241,7 +242,7 @@ def assign_conversation_to_agent(
         db,
         conversation=conversation,
         service_team_id=team_uuid,
-        source=InboxTeamSource.escalation.value,
+        source=source,
     )
     for assignment in conversation.assignments:
         if assignment.is_active:
@@ -254,7 +255,7 @@ def assign_conversation_to_agent(
         assigned_by_person_id=actor_uuid,
         assigned_at=assigned_at,
         is_active=True,
-        metadata_={"reason": reason, "source": InboxTeamSource.escalation.value},
+        metadata_={"reason": reason, "source": source},
     )
     db.add(assignment)
     _record_escalation_metadata(
@@ -281,6 +282,7 @@ def queue_conversation_for_team(
     service_team_id: str | UUID,
     assigned_by_person_id: str | UUID | None = None,
     reason: str | None = None,
+    source: str = InboxTeamSource.escalation.value,
     now: datetime | None = None,
 ) -> InboxAssignmentResult:
     team_uuid = _coerce_uuid(service_team_id)
@@ -305,7 +307,7 @@ def queue_conversation_for_team(
         db,
         conversation=conversation,
         service_team_id=team_uuid,
-        source=InboxTeamSource.escalation.value,
+        source=source,
     )
     for assignment in conversation.assignments:
         if assignment.is_active:
@@ -334,6 +336,7 @@ def assign_conversation_to_available_agent(
     service_team_id: str | UUID,
     assigned_by_person_id: str | UUID | None = None,
     reason: str | None = None,
+    source: str = InboxTeamSource.escalation.value,
     now: datetime | None = None,
 ) -> InboxAssignmentResult:
     team_uuid = _coerce_uuid(service_team_id)
@@ -359,7 +362,7 @@ def assign_conversation_to_available_agent(
             db,
             conversation=conversation,
             service_team_id=team_uuid,
-            source=InboxTeamSource.escalation.value,
+            source=source,
         )
         _record_escalation_metadata(
             conversation,
@@ -385,5 +388,6 @@ def assign_conversation_to_available_agent(
         person_id=selected.person_id,
         assigned_by_person_id=actor_uuid,
         reason=reason,
+        source=source,
         now=assigned_at,
     )
