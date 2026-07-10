@@ -26,6 +26,8 @@ from app.schemas.field import (
     FieldJobDestination,
     FieldJobDestinationsResponse,
     FieldJobDetail,
+    FieldJobLocation,
+    FieldJobLocationUpdate,
     FieldJobSummary,
     FieldMeResponse,
 )
@@ -105,3 +107,22 @@ def list_field_job_destinations(
         "items": [FieldJobDestination(**item) for item in items],
         "count": len(items),
     }
+
+
+@router.patch(
+    "/jobs/{crm_work_order_id}/location",
+    response_model=FieldJobLocation,
+)
+def update_field_job_location(
+    crm_work_order_id: str,
+    payload: FieldJobLocationUpdate,
+    auth: dict = Depends(require_user_auth),
+    db: Session = Depends(get_db),
+):
+    return field_jobs.update_location(
+        db,
+        auth,
+        crm_work_order_id,
+        latitude=payload.latitude,
+        longitude=payload.longitude,
+    )
