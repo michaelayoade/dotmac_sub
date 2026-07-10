@@ -584,6 +584,17 @@ from app.models.task_execution import (  # noqa: F401
     TaskExecution,
     TaskExecutionStatus,
 )
+from app.models.team_inbox import (  # noqa: F401
+    InboxChannelType,
+    InboxConversation,
+    InboxConversationStatus,
+    InboxConversationTeam,
+    InboxMessage,
+    InboxMessageDirection,
+    InboxTeamRole,
+    InboxTeamSource,
+    TeamInboxEmailRoute,
+)
 from app.models.ticket_workflow import (  # noqa: F401
     SlaBreach,
     SlaBreachStatus,
