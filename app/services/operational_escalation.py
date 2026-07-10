@@ -535,3 +535,34 @@ def acknowledge_event(
             delivery.acknowledged_at = now
     db.flush()
     return event
+
+
+def cancel_entity_events(
+    db: Session,
+    *,
+    entity_type: str,
+    entity_id: str | UUID,
+    reason: str | None = None,
+    canceled_at: datetime | None = None,
+) -> list[OperationalEscalationEvent]:
+    now = canceled_at or datetime.now(UTC)
+    events = (
+        db.query(OperationalEscalationEvent)
+        .filter(OperationalEscalationEvent.entity_type == entity_type)
+        .filter(OperationalEscalationEvent.entity_id == _entity_id(entity_id))
+        .filter(OperationalEscalationEvent.status == OperationalEscalationStatus.open)
+        .all()
+    )
+    for event in events:
+        event.status = OperationalEscalationStatus.canceled
+        event.resolved_at = now
+        for delivery in event.deliveries:
+            if delivery.delivery_status == OperationalDeliveryStatus.pending:
+                delivery.delivery_status = OperationalDeliveryStatus.suppressed
+                delivery.error_message = reason
+                delivery.metadata_ = {
+                    **(delivery.metadata_ or {}),
+                    "suppressed_reason": reason,
+                }
+    db.flush()
+    return list(events)

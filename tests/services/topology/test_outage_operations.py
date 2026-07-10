@@ -5,9 +5,11 @@ from datetime import UTC, datetime
 from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.network_monitoring import NetworkDevice
 from app.models.operational_escalation import (
+    OperationalDeliveryStatus,
     OperationalEntityType,
     OperationalEscalationDelivery,
     OperationalEscalationEvent,
+    OperationalEscalationStatus,
     OperationalNotificationChannel,
     OperationalOwner,
     OperationalParticipantType,
@@ -21,6 +23,8 @@ from app.services.topology.outage import (
     confirm_incident,
     declare_outage,
     open_classifier_incident,
+    resolve_classifier_incident,
+    resolve_outage,
 )
 from app.services.topology.outage_operations import plan_outage_escalations
 
@@ -360,3 +364,65 @@ def test_customer_watcher_limit_prevents_bulk_customer_enrollment(
         == 0
     )
     assert db_session.query(OperationalEscalationDelivery).count() == 0
+
+
+def test_resolve_outage_cancels_pending_escalations(db_session):
+    _seed_ops_teams(db_session)
+    node = _node(db_session)
+    operational_escalation.create_policy(
+        db_session,
+        name="High outage internal channels",
+        entity_type=OperationalEntityType.outage,
+        channels=[OperationalNotificationChannel.email],
+        min_severity="high",
+    )
+    incident = declare_outage(
+        db_session,
+        node=node,
+        severity="high",
+        impact={"count": 20},
+    )
+
+    resolve_outage(db_session, incident.id)
+
+    event = db_session.query(OperationalEscalationEvent).one()
+    deliveries = db_session.query(OperationalEscalationDelivery).all()
+    assert event.status == OperationalEscalationStatus.canceled
+    assert event.resolved_at is not None
+    assert {delivery.delivery_status for delivery in deliveries} == {
+        OperationalDeliveryStatus.suppressed
+    }
+    assert {delivery.metadata_["suppressed_reason"] for delivery in deliveries} == {
+        "outage.resolved"
+    }
+
+
+def test_resolve_classifier_incident_cancels_pending_escalations(db_session):
+    _seed_ops_teams(db_session)
+    node = _node(db_session)
+    now = datetime(2026, 7, 10, 8, 0, tzinfo=UTC)
+    operational_escalation.create_policy(
+        db_session,
+        name="High classifier outage",
+        entity_type=OperationalEntityType.outage,
+        channels=[OperationalNotificationChannel.email],
+        min_affected_customers=10,
+    )
+    incident = open_classifier_incident(
+        db_session,
+        root_node=node,
+        affected_count=20,
+        now=now,
+    )
+    confirm_incident(db_session, incident, now=now)
+
+    resolve_classifier_incident(db_session, incident, now=now)
+
+    event = db_session.query(OperationalEscalationEvent).one()
+    assert event.status == OperationalEscalationStatus.canceled
+    assert event.resolved_at is not None
+    assert event.resolved_at.replace(tzinfo=UTC) == now
+    assert {
+        delivery.delivery_status
+        for delivery in db_session.query(OperationalEscalationDelivery).all()
+    } == {OperationalDeliveryStatus.suppressed}
