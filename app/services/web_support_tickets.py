@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import logging
 from collections.abc import Mapping
@@ -15,6 +17,7 @@ from app.models.support import Ticket, TicketChannel, TicketCommentAuthorType
 from app.schemas.support import (
     AttachmentMeta,
     TicketCommentCreate,
+    TicketCommentUpdate,
     TicketCreate,
     TicketLinkCreate,
     TicketMergeRequest,
@@ -61,6 +64,7 @@ TICKET_COLUMNS = [
     {"key": "due_at", "label": "Due Date"},
     {"key": "created_at", "label": "Opening Date"},
 ]
+TICKET_EXPORT_LIMIT = 10000
 
 
 def parse_uuid_or_none(value: str | None) -> UUID | None:
@@ -616,6 +620,29 @@ def add_ticket_comment_from_form(
     return comment
 
 
+def update_ticket_comment_from_form(
+    db: Session,
+    *,
+    request,
+    ticket_id: str,
+    comment_id: str,
+    actor_id: str | None,
+    body: str,
+):
+    from fastapi import HTTPException
+
+    comment = support_service.ticket_comments.get(db, comment_id)
+    if str(comment.ticket_id) != str(ticket_id):
+        raise HTTPException(status_code=404, detail="Ticket comment not found")
+    return support_service.ticket_comments.update(
+        db,
+        comment=comment,
+        payload=TicketCommentUpdate(body=body),
+        actor_id=actor_id,
+        request=request,
+    )
+
+
 def _parse_mentions_payload(raw: str | None) -> list[str]:
     if not raw:
         return []
@@ -875,6 +902,127 @@ def build_tickets_list_context(
         },
         "status_colors": support_ticket_settings_service.status_color_options(db),
     }
+
+
+def _ticket_csv_value(
+    ticket: Ticket,
+    key: str,
+    *,
+    staff_lookup: dict[str, str],
+    subscriber_lookup: dict[str, str],
+) -> str:
+    def _person(lookup: dict[str, str], value: object | None) -> str:
+        text = str(value) if value else ""
+        return lookup.get(text, text)
+
+    if key == "number":
+        return ticket.number or str(ticket.id)
+    if key == "ticket_type":
+        return ticket.ticket_type or ""
+    if key == "priority":
+        return ticket.priority or ""
+    if key == "status":
+        return ticket.status or ""
+    if key == "customer":
+        return _person(subscriber_lookup, ticket.customer_person_id)
+    if key == "customer_id":
+        return _person(subscriber_lookup, ticket.customer_account_id)
+    if key == "subscriber":
+        return _person(subscriber_lookup, ticket.subscriber_id)
+    if key == "region":
+        return ticket.region or ""
+    if key == "technician":
+        return _person(staff_lookup, ticket.technician_person_id)
+    if key == "project_manager":
+        return _person(staff_lookup, ticket.ticket_manager_person_id)
+    if key == "site_coordinator":
+        return _person(staff_lookup, ticket.site_coordinator_person_id)
+    if key == "channel":
+        return ticket.channel.value if ticket.channel else ""
+    if key == "due_at":
+        return ticket.due_at.strftime("%Y-%m-%d %H:%M UTC") if ticket.due_at else ""
+    if key == "created_at":
+        return (
+            ticket.created_at.strftime("%Y-%m-%d %H:%M UTC")
+            if ticket.created_at
+            else ""
+        )
+    return ""
+
+
+def render_tickets_csv(
+    db: Session,
+    *,
+    search: str | None,
+    status: str | None,
+    ticket_type: str | None,
+    assigned_to_me: bool,
+    actor_id: str | None,
+    project_manager_person_id: str | None,
+    site_coordinator_person_id: str | None,
+    subscriber_id: str | None,
+    order_by: str,
+    order_dir: str,
+    visible_columns_cookie: str | None,
+) -> str:
+    """Render the ticket list as CSV honoring list filters and visible columns."""
+    columns = visible_ticket_columns(visible_columns_cookie)
+    rows = support_service.tickets.list(
+        db,
+        search=search,
+        status=status,
+        ticket_type=ticket_type,
+        assigned_to_person_id=actor_id if assigned_to_me else None,
+        project_manager_person_id=project_manager_person_id,
+        site_coordinator_person_id=site_coordinator_person_id,
+        subscriber_id=subscriber_id,
+        order_by=order_by,
+        order_dir=order_dir,
+        limit=TICKET_EXPORT_LIMIT,
+        offset=0,
+    )
+    assignment_ids: list[object | None] = []
+    subscriber_ids: list[object | None] = []
+    for ticket in rows:
+        assignment_ids.extend(
+            [
+                ticket.technician_person_id,
+                ticket.ticket_manager_person_id,
+                ticket.site_coordinator_person_id,
+            ]
+        )
+        subscriber_ids.extend(
+            [
+                ticket.customer_person_id,
+                ticket.customer_account_id,
+                ticket.subscriber_id,
+            ]
+        )
+    staff_lookup = _label_lookup(
+        support_service.list_assignment_people(
+            db, include_ids=_non_empty_ids(assignment_ids)
+        )
+    )
+    subscriber_lookup = _label_lookup(
+        support_service.list_people(db, include_ids=_non_empty_ids(subscriber_ids))
+    )
+    labels = {item["key"]: item["label"] for item in TICKET_COLUMNS}
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow([labels[key] for key in columns])
+    for ticket in rows:
+        writer.writerow(
+            [
+                _ticket_csv_value(
+                    ticket,
+                    key,
+                    staff_lookup=staff_lookup,
+                    subscriber_lookup=subscriber_lookup,
+                )
+                for key in columns
+            ]
+        )
+    return buffer.getvalue()
 
 
 def build_ticket_detail_context(db: Session, *, ticket_lookup: str) -> dict:

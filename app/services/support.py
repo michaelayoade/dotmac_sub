@@ -508,6 +508,10 @@ class TicketComments:
         data = payload.model_dump(exclude_unset=True)
         if "body" in data:
             comment.body = str(data["body"]).strip()
+            comment.metadata_ = {
+                **(comment.metadata_ or {}),
+                "edited_at": datetime.now(UTC).isoformat(),
+            }
         if "is_internal" in data:
             comment.is_internal = bool(data["is_internal"])
         if "attachments" in data and data["attachments"] is not None:

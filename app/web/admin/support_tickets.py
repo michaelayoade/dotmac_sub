@@ -6,7 +6,12 @@ from urllib.parse import urlencode
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import (
+    HTMLResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
@@ -103,6 +108,45 @@ def tickets_list(
     if request.headers.get("HX-Request"):
         return templates.TemplateResponse("admin/support/tickets/_table.html", context)
     return templates.TemplateResponse("admin/support/tickets/index.html", context)
+
+
+@router.get(
+    "/export.csv",
+    dependencies=[Depends(require_permission("support:ticket:read"))],
+)
+def tickets_export_csv(
+    request: Request,
+    search: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    ticket_type: str | None = Query(default=None),
+    assigned_to_me: bool = Query(default=False),
+    project_manager_person_id: str | None = Query(default=None),
+    site_coordinator_person_id: str | None = Query(default=None),
+    subscriber_id: str | None = Query(default=None),
+    order_by: str = Query(default="created_at"),
+    order_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
+    columns: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    content = support_web_service.render_tickets_csv(
+        db,
+        search=search,
+        status=status,
+        ticket_type=ticket_type,
+        assigned_to_me=assigned_to_me,
+        actor_id=_actor_id(request),
+        project_manager_person_id=project_manager_person_id,
+        site_coordinator_person_id=site_coordinator_person_id,
+        subscriber_id=subscriber_id,
+        order_by=order_by,
+        order_dir=order_dir,
+        visible_columns_cookie=columns or request.cookies.get("ticket_columns"),
+    )
+    return StreamingResponse(
+        iter([content]),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="tickets_export.csv"'},
+    )
 
 
 @router.get(
@@ -314,6 +358,30 @@ def ticket_add_comment(
         mentions=mentions,
         attachments=attachments,
     )
+    return RedirectResponse(url=f"/admin/support/tickets/{ticket_id}", status_code=303)
+
+
+@router.post(
+    "/{ticket_id}/comments/{comment_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def ticket_edit_comment(
+    request: Request,
+    ticket_id: UUID,
+    comment_id: UUID,
+    body: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    if body.strip():
+        support_web_service.update_ticket_comment_from_form(
+            db,
+            request=request,
+            ticket_id=str(ticket_id),
+            comment_id=str(comment_id),
+            actor_id=_actor_id(request),
+            body=body,
+        )
     return RedirectResponse(url=f"/admin/support/tickets/{ticket_id}", status_code=303)
 
 

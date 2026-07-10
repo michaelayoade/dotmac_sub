@@ -996,3 +996,137 @@ def test_ticket_automation_is_suppressed_for_low_confidence_identity(
     assert ticket.status == "open"
     assert ticket.metadata_["identity_resolution"]["match_confidence"] == "LOW"
     assert ticket.metadata_["automation_paused"] is True
+
+
+def test_render_tickets_csv_honors_filters_and_columns(db_session, subscriber):
+    exported = support_service.tickets.create(
+        db_session,
+        TicketCreate(
+            title="Exported ticket",
+            description="",
+            subscriber_id=subscriber.id,
+            customer_account_id=subscriber.id,
+            ticket_type="billing",
+        ),
+        actor_id=str(subscriber.id),
+    )
+    support_service.tickets.create(
+        db_session,
+        TicketCreate(
+            title="Filtered out",
+            description="",
+            subscriber_id=subscriber.id,
+            customer_account_id=subscriber.id,
+            ticket_type="installation",
+        ),
+        actor_id=str(subscriber.id),
+    )
+
+    content = web_support_tickets_service.render_tickets_csv(
+        db_session,
+        search=None,
+        status=None,
+        ticket_type="billing",
+        assigned_to_me=False,
+        actor_id=None,
+        project_manager_person_id=None,
+        site_coordinator_person_id=None,
+        subscriber_id=None,
+        order_by="created_at",
+        order_dir="desc",
+        visible_columns_cookie="number,ticket_type,status",
+    )
+
+    lines = content.strip().splitlines()
+    assert lines[0] == "Ticket ID,Ticket Type,Status"
+    assert lines[1] == f"{exported.number},billing,open"
+    assert len(lines) == 2
+
+
+def test_render_tickets_csv_falls_back_to_default_columns(db_session, subscriber):
+    support_service.tickets.create(
+        db_session,
+        _ticket_payload(subscriber.id),
+        actor_id=str(subscriber.id),
+    )
+
+    content = web_support_tickets_service.render_tickets_csv(
+        db_session,
+        search=None,
+        status=None,
+        ticket_type=None,
+        assigned_to_me=False,
+        actor_id=None,
+        project_manager_person_id=None,
+        site_coordinator_person_id=None,
+        subscriber_id=None,
+        order_by="created_at",
+        order_dir="desc",
+        visible_columns_cookie="bogus,columns",
+    )
+
+    header = content.strip().splitlines()[0]
+    assert header == (
+        "Ticket ID,Ticket Type,Priority,Status,Customer Name,"
+        "Assigned Technician,Due Date,Opening Date"
+    )
+
+
+def test_web_comment_edit_updates_body_and_marks_edited(db_session, subscriber):
+    ticket = support_service.tickets.create(
+        db_session,
+        _ticket_payload(subscriber.id),
+        actor_id=str(subscriber.id),
+    )
+    comment = support_service.tickets.create_comment(
+        db_session,
+        str(ticket.id),
+        TicketCommentCreate(
+            body="Original body",
+            is_internal=False,
+            author_type=TicketCommentAuthorType.staff,
+        ),
+        actor_id=None,
+    )
+    assert not (comment.metadata_ or {}).get("edited_at")
+
+    updated = web_support_tickets_service.update_ticket_comment_from_form(
+        db_session,
+        request=None,
+        ticket_id=str(ticket.id),
+        comment_id=str(comment.id),
+        actor_id=None,
+        body="Corrected body",
+    )
+
+    assert updated.body == "Corrected body"
+    assert (updated.metadata_ or {}).get("edited_at")
+
+
+def test_web_comment_edit_rejects_comment_from_other_ticket(db_session, subscriber):
+    ticket = support_service.tickets.create(
+        db_session,
+        _ticket_payload(subscriber.id),
+        actor_id=str(subscriber.id),
+    )
+    comment = support_service.tickets.create_comment(
+        db_session,
+        str(ticket.id),
+        TicketCommentCreate(
+            body="Original body",
+            is_internal=False,
+            author_type=TicketCommentAuthorType.staff,
+        ),
+        actor_id=None,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        web_support_tickets_service.update_ticket_comment_from_form(
+            db_session,
+            request=None,
+            ticket_id=str(uuid4()),
+            comment_id=str(comment.id),
+            actor_id=None,
+            body="Should not apply",
+        )
+    assert exc.value.status_code == 404
