@@ -208,6 +208,26 @@ class FieldJobEventRead(BaseModel):
     client_event_id: UUID
 
 
+class FieldMovementRead(BaseModel):
+    id: UUID
+    crm_work_order_id: str
+    destination_type: str
+    destination_id: str | None = None
+    destination_label: str | None = None
+    destination_latitude: float | None = None
+    destination_longitude: float | None = None
+    started_at: datetime
+    arrived_at: datetime | None = None
+    start_latitude: float | None = None
+    start_longitude: float | None = None
+    arrival_latitude: float | None = None
+    arrival_longitude: float | None = None
+    status: str
+    client_ref: UUID | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
 class FieldTransitionRequest(BaseModel):
     event: Literal[
         "accept",
@@ -412,6 +432,7 @@ class FieldJobDetail(BaseModel):
     expense_requests: list[FieldExpenseRequestRead] = Field(default_factory=list)
     worklogs: list[FieldWorkLogRead] = Field(default_factory=list)
     events: list[FieldJobEventRead] = Field(default_factory=list)
+    movements: list[FieldMovementRead] = Field(default_factory=list)
     equipment: FieldEquipmentRead | None = None
     history: list[FieldJobHistoryItem] = Field(default_factory=list)
 

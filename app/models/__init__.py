@@ -186,6 +186,7 @@ from app.models.field_material import (  # noqa: F401
     FieldMaterialRequestItem,
     FieldWorkOrderMaterial,
 )
+from app.models.field_movement import FieldWorkOrderMovement  # noqa: F401
 from app.models.field_note import FieldWorkOrderNote  # noqa: F401
 from app.models.field_worklog import FieldWorkLog  # noqa: F401
 from app.models.fup import (  # noqa: F401
