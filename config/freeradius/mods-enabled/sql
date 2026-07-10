@@ -41,11 +41,11 @@ sql {
 
 	# Pool configuration
 	pool {
-		start = 5
-		min = 3
-		max = 10
-		spare = 3
-		uses = 1000
+		start = 10
+		min = 5
+		max = 30
+		spare = 10
+		uses = 0
 		lifetime = 3600
 		idle_timeout = 60
 	}
