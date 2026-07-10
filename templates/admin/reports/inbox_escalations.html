@@ -1,0 +1,143 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import
+    ambient_background, page_header, stats_card, card,
+    table_head, table_row, status_badge, animation_styles
+%}
+
+{% block title %}Inbox Escalations - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("rose", "orange") }}
+
+<div class="relative space-y-8">
+    {% if request.query_params.get('message') %}
+    <div class="rounded-xl border px-4 py-3 text-sm {% if request.query_params.get('status') == 'error' %}border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-800/40 dark:bg-rose-900/20 dark:text-rose-200{% else %}border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800/40 dark:bg-emerald-900/20 dark:text-emerald-200{% endif %}">
+        {{ request.query_params.get('message') }}
+    </div>
+    {% endif %}
+
+    {% call(content) page_header(
+        title="Inbox Escalations",
+        subtitle="Conversations that have breached response or queue rules and need supervisor attention",
+        icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M4.93 19h14.14c1.54 0 2.5-1.67 1.73-3L13.73 4c-.77-1.33-2.69-1.33-3.46 0L3.2 16c-.77 1.33.19 3 1.73 3z"/></svg>',
+        color="rose",
+        color2="orange",
+        breadcrumbs=[
+            {"label": "Reports", "href": "/admin/reports"},
+            {"label": "Inbox Escalations"}
+        ]
+    ) %}
+        <a href="/admin/reports/inbox-escalations/export?response_sla_seconds={{ response_sla_seconds }}&queue_sla_seconds={{ queue_sla_seconds }}{% if include_inactive %}&include_inactive=true{% endif %}" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+            Export
+        </a>
+    {% endcall %}
+
+    <form method="get" action="/admin/reports/inbox-escalations" class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="grid gap-3 lg:grid-cols-[1fr_1fr_auto_auto] lg:items-end">
+            <div>
+                <label for="response_sla_seconds" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Response SLA seconds</label>
+                <input id="response_sla_seconds" type="number" min="60" max="86400" step="60" name="response_sla_seconds" value="{{ response_sla_seconds }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div>
+                <label for="queue_sla_seconds" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Queue SLA seconds</label>
+                <input id="queue_sla_seconds" type="number" min="60" max="86400" step="60" name="queue_sla_seconds" value="{{ queue_sla_seconds }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <label class="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 dark:border-slate-600 dark:text-slate-200">
+                <input type="checkbox" name="include_inactive" value="true" {% if include_inactive %}checked{% endif %} class="rounded border-slate-300 text-rose-600">
+                Include inactive teams
+            </label>
+            <div class="flex gap-2">
+                <button type="submit" class="rounded-lg bg-rose-600 px-4 py-2 text-sm font-medium text-white hover:bg-rose-700">Filter</button>
+                <a href="/admin/reports/inbox-escalations" class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Clear</a>
+            </div>
+        </div>
+    </form>
+
+    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {{ stats_card("Candidates", candidate_count | default(0), icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h8M8 14h4m8-2a8 8 0 11-3.3-6.5"/></svg>', color="rose", color2="orange") }}
+        {{ stats_card("Response Breaches", response_breach_count | default(0), icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="red", color2="rose") }}
+        {{ stats_card("Queue Breaches", queue_breach_count | default(0), icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h10M4 18h7"/></svg>', color="amber", color2="orange") }}
+        {{ stats_card("No Agent", no_agent_count | default(0), icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 5.636l-12.728 12.728M15 11a3 3 0 10-4 4m6 5v-2a4 4 0 00-4-4H9"/></svg>', color="slate", color2="gray") }}
+    </div>
+
+    {% call card("Escalation Queue", color="rose", padding=False) %}
+    {% if rows %}
+    <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+            {{ table_head([
+                {"label": "Conversation"},
+                {"label": "Team"},
+                {"label": "Reasons"},
+                {"label": "Pending"},
+                {"label": "Queue Wait"},
+                {"label": "Agents"},
+                {"label": "Status"},
+                {"label": "Action"}
+            ]) }}
+            <tbody class="divide-y divide-slate-100 bg-white dark:divide-slate-700/50 dark:bg-slate-800">
+                {% for row in rows %}
+                {% set current_url = request.url.path ~ ('?' ~ request.url.query if request.url.query else '') %}
+                {% call table_row(color="rose") %}
+                <td class="min-w-[18rem] px-6 py-4">
+                    <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ row.subject }}</p>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ row.contact_address }}</p>
+                    <p class="mt-1 font-mono text-[11px] text-slate-400 dark:text-slate-500">{{ row.conversation_id }}</p>
+                </td>
+                <td class="whitespace-nowrap px-6 py-4">
+                    <p class="text-sm font-medium text-slate-900 dark:text-white">{{ row.service_team_name }}</p>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ row.service_team_type | replace('_', ' ') | title }}</p>
+                </td>
+                <td class="px-6 py-4">
+                    <div class="flex min-w-[12rem] flex-wrap gap-1.5">
+                        {% for reason in row.reasons %}
+                            {{ status_badge(reason, "overdue", size="sm") }}
+                        {% endfor %}
+                    </div>
+                </td>
+                <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-700 dark:text-slate-300">
+                    <span class="font-semibold text-rose-700 dark:text-rose-300">{{ row.pending_response }}</span>
+                    <span class="ml-1 text-xs text-slate-500 dark:text-slate-400">/ {{ row.response_sla }}</span>
+                </td>
+                <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-700 dark:text-slate-300">
+                    <span class="font-semibold text-amber-700 dark:text-amber-300">{{ row.queue_wait }}</span>
+                    <span class="ml-1 text-xs text-slate-500 dark:text-slate-400">/ {{ row.queue_sla }}</span>
+                </td>
+                <td class="whitespace-nowrap px-6 py-4 text-sm font-semibold {% if row.available_agent_count == 0 %}text-rose-700 dark:text-rose-300{% else %}text-slate-900 dark:text-white{% endif %}">{{ row.available_agent_count }}</td>
+                <td class="whitespace-nowrap px-6 py-4">{{ status_badge(row.status | replace('_', ' ') | title, "warning", size="sm") }}</td>
+                <td class="min-w-[18rem] px-6 py-4">
+                    <form method="post" action="/admin/reports/inbox-escalations/{{ row.conversation_id }}/action" class="flex flex-col gap-2">
+                        <input type="hidden" name="next" value="{{ current_url }}">
+                        <input type="hidden" name="reason" value="Admin escalation report">
+                        <select name="service_team_id" class="w-full rounded-lg border-slate-300 text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for team in service_team_options %}
+                            <option value="{{ team.id }}" {% if team.id|string == row.service_team_id %}selected{% endif %}>{{ team.name }}</option>
+                            {% endfor %}
+                        </select>
+                        <div class="flex gap-2">
+                            <button type="submit" name="action" value="auto_assign" class="rounded-lg bg-rose-600 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-700">Auto assign</button>
+                            <button type="submit" name="action" value="queue" class="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Queue</button>
+                        </div>
+                    </form>
+                    <details class="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-900/30">
+                        <summary class="cursor-pointer text-xs font-semibold text-slate-700 dark:text-slate-200">Reply from team inbox</summary>
+                        <form method="post" action="/admin/reports/inbox-escalations/{{ row.conversation_id }}/reply" class="mt-3 space-y-2">
+                            <input type="hidden" name="next" value="{{ current_url }}">
+                            <textarea name="body_text" rows="3" required placeholder="Type a customer reply" class="w-full rounded-lg border-slate-300 text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white"></textarea>
+                            <button type="submit" class="w-full rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-700 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200">Send reply</button>
+                        </form>
+                    </details>
+                </td>
+                {% endcall %}
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="px-6 py-8 text-center text-sm text-slate-500 dark:text-slate-400">No escalation candidates for the selected rules.</div>
+    {% endif %}
+    {% endcall %}
+</div>
+
+{{ animation_styles() }}
+{% endblock %}

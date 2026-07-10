@@ -20,8 +20,10 @@ from app.db import Base
 
 class ServiceTeamType(enum.Enum):
     operations = "operations"
+    billing = "billing"
     support = "support"
     field_service = "field_service"
+    project_management = "project_management"
 
 
 class ServiceTeamMemberRole(enum.Enum):

@@ -406,6 +406,22 @@ from app.models.offer_availability import (  # noqa: F401
 )
 from app.models.ont_autofind import OltAutofindCandidate  # noqa: F401
 from app.models.ont_observation import OntObservation  # noqa: F401
+from app.models.operational_escalation import (  # noqa: F401
+    OperationalDeliveryStatus,
+    OperationalEntityType,
+    OperationalEscalationDelivery,
+    OperationalEscalationEvent,
+    OperationalEscalationPolicy,
+    OperationalEscalationStatus,
+    OperationalNotificationChannel,
+    OperationalOwner,
+    OperationalOwnerRole,
+    OperationalParticipantType,
+    OperationalRoomLink,
+    OperationalRoomProvider,
+    OperationalWatcher,
+    OperationalWatcherRole,
+)
 from app.models.organization import (  # noqa: F401
     Organization,
     OrganizationAccountStatus,
@@ -630,6 +646,28 @@ from app.models.table_column_default_config import (  # noqa: F401
 from app.models.task_execution import (  # noqa: F401
     TaskExecution,
     TaskExecutionStatus,
+)
+from app.models.team_inbox import (  # noqa: F401
+    InboxAgentPresence,
+    InboxAgentPresenceStatus,
+    InboxChannelType,
+    InboxComment,
+    InboxContactLink,
+    InboxConversation,
+    InboxConversationAssignment,
+    InboxConversationLabel,
+    InboxConversationStatus,
+    InboxConversationTeam,
+    InboxLabel,
+    InboxMediaAsset,
+    InboxMessage,
+    InboxMessageDirection,
+    InboxMessageTemplate,
+    InboxReplyMacro,
+    InboxSavedFilter,
+    InboxTeamRole,
+    InboxTeamSource,
+    TeamInboxEmailRoute,
 )
 from app.models.ticket_workflow import (  # noqa: F401
     SlaBreach,

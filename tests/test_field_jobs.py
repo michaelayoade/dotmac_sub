@@ -7,11 +7,13 @@ import pytest
 from fastapi import HTTPException
 
 from app.models.dispatch import TechnicianProfile, WorkOrderAssignmentQueue
+from app.models.field_vendor import FieldVendor, FieldVendorUser
 from app.models.network import FdhCabinet, FiberAccessPoint, FiberSpliceClosure
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.models.work_order_mirror import WorkOrderMirror
 from app.services.field.jobs import field_jobs
+from app.services.field.transitions import field_transitions
 
 
 def _auth(user: SystemUser) -> dict:
@@ -50,6 +52,27 @@ def _profile(db_session, user: SystemUser, **overrides) -> TechnicianProfile:
     db_session.add(profile)
     db_session.flush()
     return profile
+
+
+def _vendor_membership(db_session, user: SystemUser, **overrides) -> FieldVendorUser:
+    vendor = FieldVendor(
+        name=overrides.pop("vendor_name", "Install Co"),
+        code=overrides.pop("vendor_code", f"VC-{uuid4().hex[:6]}"),
+        crm_vendor_id=overrides.pop("crm_vendor_id", None),
+        is_active=overrides.pop("vendor_active", True),
+    )
+    db_session.add(vendor)
+    db_session.flush()
+    membership = FieldVendorUser(
+        vendor_id=vendor.id,
+        system_user_id=user.id,
+        crm_vendor_user_id=overrides.pop("crm_vendor_user_id", None),
+        role=overrides.pop("role", "crew"),
+        is_active=overrides.pop("active", True),
+    )
+    db_session.add(membership)
+    db_session.flush()
+    return membership
 
 
 def _subscriber(db_session) -> Subscriber:
@@ -129,6 +152,85 @@ def test_field_jobs_scope_by_crm_person_and_assignment_queue(db_session):
         "wo-queue-assigned",
         "wo-hidden",
     }
+
+
+def test_field_vendor_profile_scopes_jobs_by_vendor_metadata(db_session):
+    user = _user(db_session, "Vendor")
+    _profile(db_session, user, crm_person_id="crm-vendor-tech")
+    membership = _vendor_membership(db_session, user, crm_vendor_id="crm-vendor-1")
+    rival_user = _user(db_session, "Rival")
+    _profile(db_session, rival_user, crm_person_id="crm-rival-tech")
+    rival_membership = _vendor_membership(db_session, rival_user)
+    subscriber = _subscriber(db_session)
+    assigned_by_vendor = _work_order(
+        db_session,
+        subscriber,
+        crm_work_order_id="wo-vendor-assigned",
+        assigned_to_crm_person_id=None,
+        metadata_={"assigned_vendor_id": str(membership.vendor_id)},
+    )
+    assigned_by_vendor_user = _work_order(
+        db_session,
+        subscriber,
+        crm_work_order_id="wo-vendor-user-assigned",
+        assigned_to_crm_person_id=None,
+        metadata_={"vendor_user_id": str(membership.id)},
+    )
+    assigned_by_crm_vendor = _work_order(
+        db_session,
+        subscriber,
+        crm_work_order_id="wo-crm-vendor-assigned",
+        assigned_to_crm_person_id=None,
+        metadata_={"crm_vendor_id": "crm-vendor-1"},
+    )
+    _work_order(
+        db_session,
+        subscriber,
+        crm_work_order_id="wo-rival-vendor",
+        assigned_to_crm_person_id=None,
+        metadata_={"assigned_vendor_id": str(rival_membership.vendor_id)},
+    )
+    db_session.commit()
+
+    jobs = field_jobs.list(db_session, _auth(user))
+
+    assert [job.id for job in jobs] == [
+        assigned_by_vendor.crm_work_order_id,
+        assigned_by_vendor_user.crm_work_order_id,
+        assigned_by_crm_vendor.crm_work_order_id,
+    ]
+    assert {job.id for job in field_jobs.list(db_session, _auth(rival_user))} == {
+        "wo-rival-vendor"
+    }
+
+
+def test_field_vendor_profile_can_open_and_transition_vendor_job(db_session):
+    user = _user(db_session, "Vendor")
+    _profile(db_session, user, crm_person_id="crm-vendor-tech")
+    membership = _vendor_membership(db_session, user)
+    subscriber = _subscriber(db_session)
+    _work_order(
+        db_session,
+        subscriber,
+        crm_work_order_id="wo-vendor-transition",
+        status="dispatched",
+        assigned_to_crm_person_id=None,
+        metadata_={"assigned_vendor": {"id": str(membership.vendor_id)}},
+    )
+    db_session.commit()
+
+    detail = field_jobs.get_detail(db_session, _auth(user), "wo-vendor-transition")
+    result = field_transitions.apply(
+        db_session,
+        _auth(user),
+        "wo-vendor-transition",
+        event="start",
+        client_event_id=uuid4(),
+    )
+
+    assert detail.job.id == "wo-vendor-transition"
+    assert result["job"].status == "in_progress"
+    assert result["event"]["person_id"] == user.id
 
 
 def test_field_job_detail_404_does_not_leak_unassigned_jobs(db_session):

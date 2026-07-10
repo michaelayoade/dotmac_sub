@@ -4,7 +4,7 @@ import logging
 from datetime import datetime
 from decimal import Decimal
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
@@ -402,17 +402,17 @@ def get_arrangement_error_context(
     account_id_str: str | None,
 ) -> dict:
     """Get context data for re-rendering the arrangement form after an error."""
-    balance_data = (
+    balance_data: dict[str, Any] = (
         get_outstanding_balance(db, account_id_str)
         if account_id_str
         else {"invoices": [], "outstanding_balance": 0}
     )
-    invoices = balance_data["invoices"]
+    invoices = cast(list[Invoice], balance_data["invoices"])
     outstanding_balance = balance_data["outstanding_balance"]
     # The form template needs the same eligibility fields as the GET page,
     # otherwise the error re-render falls into the "Not Eligible" branch.
     eligible = bool(account_id_str) and outstanding_balance and len(invoices) > 0
-    due_dates = [inv.due_at for inv in invoices if getattr(inv, "due_at", None)]
+    due_dates = [due_at for inv in invoices if (due_at := inv.due_at) is not None]
     return {
         "invoices": invoices,
         "overdue_invoices": invoices,

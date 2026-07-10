@@ -441,6 +441,23 @@ def seed_notification_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text=os.getenv("NOTIFICATION_QUEUE_INTERVAL_SECONDS", "60"),
     )
+    escalation_delivery_enabled_raw = os.getenv(
+        "OPERATIONAL_ESCALATION_DELIVERY_ENABLED", "true"
+    )
+    notification_settings.ensure_by_key(
+        db,
+        key="operational_escalation_delivery_enabled",
+        value_type=SettingValueType.boolean,
+        value_text=escalation_delivery_enabled_raw,
+        value_json=escalation_delivery_enabled_raw.lower()
+        in {"1", "true", "yes", "on"},
+    )
+    notification_settings.ensure_by_key(
+        db,
+        key="operational_escalation_delivery_interval_seconds",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("OPERATIONAL_ESCALATION_DELIVERY_INTERVAL_SECONDS", "60"),
+    )
     for key, env_name, default in [
         ("notification_max_retries", "NOTIFICATION_MAX_RETRIES", "3"),
         (

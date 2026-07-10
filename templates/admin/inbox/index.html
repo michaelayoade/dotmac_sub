@@ -1,0 +1,274 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, table_head, table_row, status_badge, animation_styles %}
+
+{% block title %}Team Inbox - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("cyan", "slate") }}
+
+<div class="relative space-y-6">
+    {% if request.query_params.get('message') %}
+    <div class="rounded-xl border px-4 py-3 text-sm {% if request.query_params.get('status') == 'error' %}border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-800/40 dark:bg-rose-900/20 dark:text-rose-200{% else %}border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800/40 dark:bg-emerald-900/20 dark:text-emerald-200{% endif %}">
+        {{ request.query_params.get('message') }}
+    </div>
+    {% endif %}
+
+    {% call(content) page_header(
+        title="Team Inbox",
+        subtitle="Native customer conversations by team, status, assignment, and response need",
+        icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h8M8 14h5m8-2a9 9 0 11-4.5-7.8L21 3v5h-5"/></svg>',
+        color="cyan",
+        color2="slate",
+        breadcrumbs=[
+            {"label": "Support", "href": "/admin/support/tickets"},
+            {"label": "Team Inbox"}
+        ]
+    ) %}
+        <a href="/admin/reports/inbox-escalations" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+            Escalations
+        </a>
+        <a href="/admin/inbox/reports/outbox-failures" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+            Outbox failures
+        </a>
+    {% endcall %}
+
+    <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+        {% for metric in [
+            {"label": "Open", "value": queue_metrics.total_open},
+            {"label": "Needs response", "value": queue_metrics.needs_response},
+            {"label": "Unassigned", "value": queue_metrics.unassigned_open},
+            {"label": "Send failed", "value": queue_metrics.failed_outbound},
+            {"label": "Snoozed", "value": queue_metrics.snoozed_open},
+            {"label": "Muted", "value": queue_metrics.muted_open}
+        ] %}
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">{{ metric.label }}</p>
+            <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">{{ metric.value }}</p>
+        </div>
+        {% endfor %}
+    </div>
+
+    <form method="get" action="/admin/inbox" class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="grid gap-3 xl:grid-cols-[1.5fr_1fr_1fr_1fr_1fr_1fr_auto] xl:items-end">
+            <div>
+                <label for="search" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Search</label>
+                <input id="search" type="search" name="search" value="{{ search }}" placeholder="Subject, contact, thread, message, comment" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div>
+                <label for="service_team_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Team</label>
+                <select id="service_team_id" name="service_team_id" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">All teams</option>
+                    {% for team in service_team_options %}
+                    <option value="{{ team.id }}" {% if team.id|string == service_team_id %}selected{% endif %}>{{ team.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label for="status" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Status</label>
+                <select id="status" name="status" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">All statuses</option>
+                    {% for option in status_options %}
+                    <option value="{{ option }}" {% if option == status %}selected{% endif %}>{{ option | replace('_', ' ') | title }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label for="channel_type" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Channel</label>
+                <select id="channel_type" name="channel_type" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">All channels</option>
+                    {% for option in channel_options %}
+                    <option value="{{ option }}" {% if option == channel_type %}selected{% endif %}>{{ option | replace('_', ' ') | title }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label for="contact_resolution_status" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Contact</label>
+                <select id="contact_resolution_status" name="contact_resolution_status" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">All contacts</option>
+                    {% for option in ['unmatched', 'ambiguous', 'suppressed_inactive', 'linked_subscriber', 'linked_reseller'] %}
+                    <option value="{{ option }}" {% if option == contact_resolution_status %}selected{% endif %}>{{ option | replace('_', ' ') | title }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label for="priority_at_most" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Priority</label>
+                <select id="priority_at_most" name="priority_at_most" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">Any</option>
+                    {% for option in [10, 25, 50, 100] %}
+                    <option value="{{ option }}" {% if priority_at_most == option %}selected{% endif %}>{{ option }} or higher</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="flex flex-wrap gap-2">
+                <label class="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 dark:border-slate-600 dark:text-slate-200">
+                    <input type="checkbox" name="needs_response" value="true" {% if needs_response %}checked{% endif %} class="rounded border-slate-300 text-cyan-600">
+                    Needs response
+                </label>
+                <label class="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 dark:border-slate-600 dark:text-slate-200">
+                    <input type="checkbox" name="snoozed" value="true" {% if snoozed is sameas true %}checked{% endif %} class="rounded border-slate-300 text-cyan-600">
+                    Snoozed
+                </label>
+                <button type="submit" class="rounded-lg bg-cyan-700 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-800">Filter</button>
+                <a href="/admin/inbox" class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Clear</a>
+            </div>
+        </div>
+    </form>
+
+    <div class="grid gap-4 lg:grid-cols-[1fr_22rem]">
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Saved filters</p>
+            <div class="mt-2 flex flex-wrap gap-2">
+                {% for saved_filter in saved_filters %}
+                {% set f = saved_filter.filter_payload %}
+                <a href="/admin/inbox?{% for key, value in f.items() %}{% if value is sameas true %}{{ key }}=true&{% elif value is not none and value != '' %}{{ key }}={{ value }}&{% endif %}{% endfor %}" class="rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200">
+                    {{ saved_filter.name }}{% if saved_filter.is_shared %} · shared{% endif %}
+                </a>
+                {% else %}
+                <span class="text-sm text-slate-500 dark:text-slate-400">No saved filters.</span>
+                {% endfor %}
+            </div>
+        </div>
+        <form method="post" action="/admin/inbox/filters/save" class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <label for="filter_name" class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Save current view</label>
+            <input id="filter_name" name="name" placeholder="Filter name" class="mt-2 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            <input type="hidden" name="search" value="{{ search }}">
+            <input type="hidden" name="status_value" value="{{ status }}">
+            <input type="hidden" name="channel_type" value="{{ channel_type }}">
+            <input type="hidden" name="service_team_id" value="{{ service_team_id }}">
+            <input type="hidden" name="contact_resolution_status" value="{{ contact_resolution_status }}">
+            <input type="hidden" name="priority_at_most" value="{{ priority_at_most or '' }}">
+            {% if needs_response %}<input type="hidden" name="needs_response" value="true">{% endif %}
+            {% if snoozed is sameas true %}<input type="hidden" name="snoozed" value="true">{% endif %}
+            <label class="mt-2 inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
+                <input type="checkbox" name="is_shared" value="true" class="rounded border-slate-300 text-cyan-600">
+                Shared
+            </label>
+            <button type="submit" class="mt-3 w-full rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200">Save filter</button>
+        </form>
+    </div>
+
+    {% call card("Conversation Queue", color="cyan", padding=False) %}
+    {% if rows %}
+    <form method="post" action="/admin/inbox/bulk">
+    <div class="flex flex-wrap items-end gap-3 border-b border-slate-200 bg-slate-50 px-6 py-4 dark:border-slate-700 dark:bg-slate-900/30">
+        <div>
+            <label for="bulk_action" class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Bulk action</label>
+            <select id="bulk_action" name="action" class="mt-1 rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="status">Set status</option>
+                <option value="label">Apply label</option>
+                <option value="escalate">Escalate/assign</option>
+            </select>
+        </div>
+        <div>
+            <label for="bulk_status" class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Status</label>
+            <select id="bulk_status" name="status_value" class="mt-1 rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                {% for option in status_options %}
+                <option value="{{ option }}">{{ option | replace('_', ' ') | title }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div>
+            <label for="bulk_label_id" class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Label</label>
+            <select id="bulk_label_id" name="label_id" class="mt-1 rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="">Select label</option>
+                {% for label in label_options %}
+                <option value="{{ label.id }}">{{ label.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div>
+            <label for="bulk_service_team_id" class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Team</label>
+            <select id="bulk_service_team_id" name="service_team_id" class="mt-1 rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="">Select team</option>
+                {% for team in service_team_options %}
+                <option value="{{ team.id }}">{{ team.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div>
+            <label for="bulk_assigned_person_id" class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Agent UUID</label>
+            <input id="bulk_assigned_person_id" name="assigned_person_id" placeholder="Optional" class="mt-1 w-40 rounded-lg border-slate-300 text-xs font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+        </div>
+        <button type="submit" class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700 dark:bg-white dark:text-slate-900">Apply</button>
+    </div>
+    <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+            {{ table_head([
+                {"label": ""},
+                {"label": "Conversation"},
+                {"label": "Team"},
+                {"label": "Latest"},
+                {"label": "Assignment"},
+                {"label": "Status"},
+                {"label": "Action"}
+            ]) }}
+            <tbody class="divide-y divide-slate-100 bg-white dark:divide-slate-700/50 dark:bg-slate-800">
+                {% for row in rows %}
+                {% call table_row(color="cyan") %}
+                <td class="w-10 px-6 py-4">
+                    <input type="checkbox" name="conversation_ids" value="{{ row.id }}" class="rounded border-slate-300 text-cyan-600">
+                </td>
+                <td class="min-w-[20rem] px-6 py-4">
+                    <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ row.subject or "(No subject)" }}</p>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ row.contact_address or "-" }}</p>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Priority {{ row.priority }}{% if row.is_muted %} · muted{% endif %}{% if row.is_snoozed %} · snoozed{% endif %}</p>
+                    {% if row.contact_resolution_status %}
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Contact: {{ row.contact_resolution_status | replace('_', ' ') | title }}</p>
+                    {% endif %}
+                    <p class="mt-1 font-mono text-[11px] text-slate-400 dark:text-slate-500">{{ row.id }}</p>
+                </td>
+                <td class="whitespace-nowrap px-6 py-4">
+                    <p class="text-sm font-medium text-slate-900 dark:text-white">{{ row.primary_service_team_name or "Unrouted" }}</p>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ row.primary_service_team_type or "-" }}</p>
+                </td>
+                <td class="min-w-[18rem] px-6 py-4">
+                    <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">{{ row.latest_message_direction or "No messages" }}</p>
+                    <p class="mt-1 line-clamp-2 text-sm text-slate-700 dark:text-slate-300">{{ row.latest_message_body or "-" }}</p>
+                    <p class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ row.latest_message_at or row.last_message_at or "-" }}</p>
+                </td>
+                <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-700 dark:text-slate-300">
+                    {% if row.active_assigned_person_id %}
+                    <span class="font-mono text-xs">{{ row.active_assigned_person_id }}</span>
+                    {% else %}
+                    <span class="text-amber-700 dark:text-amber-300">Unassigned</span>
+                    {% endif %}
+                </td>
+                <td class="whitespace-nowrap px-6 py-4">
+                    <div class="flex flex-col gap-1.5">
+                        {{ status_badge(row.status | replace('_', ' ') | title, "info", size="sm") }}
+                        {% if row.needs_response %}
+                        {{ status_badge("Needs response", "warning", size="sm") }}
+                        {% endif %}
+                        {% if row.latest_delivery_status == 'failed' %}
+                        {{ status_badge("Send failed", "danger", size="sm") }}
+                        {% endif %}
+                    </div>
+                </td>
+                <td class="whitespace-nowrap px-6 py-4">
+                    <a href="/admin/inbox/{{ row.id }}" class="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-700 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200">Open</a>
+                </td>
+                {% endcall %}
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    </form>
+    <div class="flex items-center justify-between border-t border-slate-200 px-6 py-4 text-sm dark:border-slate-700">
+        <span class="text-slate-500 dark:text-slate-400">{{ count }} conversation{{ '' if count == 1 else 's' }}</span>
+        <div class="flex gap-2">
+            {% if has_previous %}
+            <a href="/admin/inbox?page={{ page - 1 }}&per_page={{ per_page }}{% if search %}&search={{ search }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% if channel_type %}&channel_type={{ channel_type }}{% endif %}{% if service_team_id %}&service_team_id={{ service_team_id }}{% endif %}{% if contact_resolution_status %}&contact_resolution_status={{ contact_resolution_status }}{% endif %}{% if needs_response %}&needs_response=true{% endif %}" class="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300">Previous</a>
+            {% endif %}
+            {% if has_next %}
+            <a href="/admin/inbox?page={{ page + 1 }}&per_page={{ per_page }}{% if search %}&search={{ search }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% if channel_type %}&channel_type={{ channel_type }}{% endif %}{% if service_team_id %}&service_team_id={{ service_team_id }}{% endif %}{% if contact_resolution_status %}&contact_resolution_status={{ contact_resolution_status }}{% endif %}{% if needs_response %}&needs_response=true{% endif %}" class="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300">Next</a>
+            {% endif %}
+        </div>
+    </div>
+    {% else %}
+    <div class="px-6 py-8 text-center text-sm text-slate-500 dark:text-slate-400">No conversations match the selected filters.</div>
+    {% endif %}
+    {% endcall %}
+</div>
+
+{{ animation_styles() }}
+{% endblock %}

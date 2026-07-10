@@ -1,8 +1,9 @@
 """Live-chat broker + inbound chat webhook.
 
 The sub never lets a client self-declare identity: the broker asserts the
-authenticated principal to the CRM and returns only an opaque visitor token.
-The chat webhook is HMAC-gated and fans agent replies out to FCM.
+authenticated principal to the native team inbox and returns only an opaque
+visitor token. The legacy chat webhook is HMAC-gated and fans agent replies
+out to FCM.
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ import hmac
 import json
 import threading
 from contextlib import contextmanager
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from fastapi import HTTPException
@@ -49,14 +50,6 @@ def _chat_settings(*, enabled=True, config_id="cfg-1", base="https://crm.example
             object.__setattr__(settings, k, v)
 
 
-@contextmanager
-def _fake_crm(return_value: dict):
-    client = MagicMock()
-    client.create_widget_session.return_value = return_value
-    with patch("app.services.chat_session.get_crm_client", return_value=client):
-        yield client
-
-
 # ── customer broker ────────────────────────────────────────────────────────
 
 
@@ -83,66 +76,48 @@ def test_customer_session_disabled_returns_503(db_session):
 
 
 def test_customer_session_happy_path(db_session):
+    from app.models.team_inbox import InboxConversation
     from app.services import chat_session
 
     sub = _make_subscriber(db_session)
-    crm_resp = {
-        "session_id": "sess-1",
-        "visitor_token": "vt-abc",
-        "conversation_id": "conv-1",
-    }
-    with (
-        _chat_settings(),
-        _fake_crm(crm_resp) as client,
-        patch(
-            "app.services.chat_session.resolve_crm_subscriber_id",
-            return_value="crm-sub-9",
-        ),
-    ):
+    with _chat_settings():
         result = chat_session.broker_customer_session(db_session, str(sub.id))
 
-    # Bundle the client needs to talk to the CRM directly.
-    assert result["visitor_token"] == "vt-abc"
-    assert result["session_id"] == "sess-1"
-    assert result["conversation_id"] == "conv-1"
-    assert result["ws_url"] == "wss://crm.example/ws/widget"
-    assert result["api_base"] == "https://crm.example/widget"
-
-    # Identity asserted server-side, never by the client.
-    kwargs = client.create_widget_session.call_args.kwargs
-    assert kwargs["email"] == "cust@example.com"
-    assert kwargs["crm_subscriber_id"] == "crm-sub-9"
-    assert kwargs["metadata"] == {"surface": "customer", "subscriber_id": str(sub.id)}
-    assert kwargs["config_id"] == "cfg-1"
+    conversation = db_session.query(InboxConversation).one()
+    assert result["visitor_token"]
+    assert result["session_id"] == str(conversation.id)
+    assert result["conversation_id"] == str(conversation.id)
+    assert result["ws_url"] == "/ws/inbox"
+    assert result["api_base"] == "/widget"
+    assert conversation.metadata_["surface"] == "customer"
+    assert conversation.metadata_["subscriber_id"] == str(sub.id)
 
 
 def test_customer_session_carries_owned_ticket_context(db_session):
     from app.models.support import Ticket
+    from app.models.team_inbox import InboxConversation
     from app.services import chat_session
 
     sub = _make_subscriber(db_session)
     ticket = Ticket(title="Router down", subscriber_id=sub.id)
     db_session.add(ticket)
     db_session.commit()
-    with (
-        _chat_settings(),
-        _fake_crm({"session_id": "s", "visitor_token": "v"}) as client,
-        patch(
-            "app.services.chat_session.resolve_crm_subscriber_id",
-            return_value="crm-1",
-        ),
-    ):
+    with _chat_settings():
         chat_session.broker_customer_session(
             db_session, str(sub.id), ticket_id=str(ticket.id)
         )
-    meta = client.create_widget_session.call_args.kwargs["metadata"]
+    meta = db_session.query(InboxConversation).one().metadata_
     assert meta["ticket_id"] == str(ticket.id)
-    assert meta["subject"] == "Chat about a support ticket"
+    assert (
+        db_session.query(InboxConversation).one().subject
+        == "Chat about a support ticket"
+    )
     assert "project_id" not in meta
 
 
 def test_customer_session_carries_owned_project_context(db_session):
     from app.models.project_mirror import ProjectMirror
+    from app.models.team_inbox import InboxConversation
     from app.services import chat_session
 
     sub = _make_subscriber(db_session)
@@ -152,62 +127,44 @@ def test_customer_session_carries_owned_project_context(db_session):
         )
     )
     db_session.commit()
-    with (
-        _chat_settings(),
-        _fake_crm({"session_id": "s", "visitor_token": "v"}) as client,
-        patch(
-            "app.services.chat_session.resolve_crm_subscriber_id",
-            return_value="crm-1",
-        ),
-    ):
+    with _chat_settings():
         chat_session.broker_customer_session(db_session, str(sub.id), project_id="pj-9")
-    meta = client.create_widget_session.call_args.kwargs["metadata"]
+    meta = db_session.query(InboxConversation).one().metadata_
     assert meta["project_id"] == "pj-9"
-    assert meta["subject"] == "Chat about an installation project"
+    assert (
+        db_session.query(InboxConversation).one().subject
+        == "Chat about an installation project"
+    )
 
 
 def test_customer_session_drops_unowned_ticket_context(db_session):
+    from app.models.team_inbox import InboxConversation
     from app.services import chat_session
 
     sub = _make_subscriber(db_session)
-    with (
-        _chat_settings(),
-        _fake_crm({"session_id": "s", "visitor_token": "v"}) as client,
-        patch(
-            "app.services.chat_session.resolve_crm_subscriber_id",
-            return_value="crm-1",
-        ),
-    ):
+    with _chat_settings():
         # A ticket id the caller does not own (also not a real row) is dropped.
         chat_session.broker_customer_session(
             db_session, str(sub.id), ticket_id="11111111-1111-1111-1111-111111111111"
         )
-    meta = client.create_widget_session.call_args.kwargs["metadata"]
+    meta = db_session.query(InboxConversation).one().metadata_
     assert "ticket_id" not in meta
-    assert "subject" not in meta
+    assert db_session.query(InboxConversation).one().subject == "Chat with customer"
 
 
-def test_customer_session_crm_unavailable_returns_502(db_session):
+def test_customer_session_does_not_require_crm_settings(db_session):
     from app.services import chat_session
-    from app.services.crm_client import CRMClientError
 
     sub = _make_subscriber(db_session)
-    client = MagicMock()
-    client.create_widget_session.side_effect = CRMClientError("circuit open")
-    with (
-        _chat_settings(),
-        patch("app.services.chat_session.get_crm_client", return_value=client),
-        patch("app.services.chat_session.resolve_crm_subscriber_id", return_value=None),
-    ):
-        with pytest.raises(HTTPException) as exc:
-            chat_session.broker_customer_session(db_session, str(sub.id))
-    assert exc.value.status_code == 502
+    with _chat_settings(config_id="", base=""):
+        chat_session.broker_customer_session(db_session, str(sub.id))
 
 
 # ── reseller broker ──────────────────────────────────────────────────────────
 
 
 def test_reseller_session_prefers_reseller_user_identity(db_session):
+    from app.models.team_inbox import InboxConversation
     from app.services import chat_session
 
     reseller = Reseller(name="Acme Networks", contact_email="owner@acme.example")
@@ -223,24 +180,21 @@ def test_reseller_session_prefers_reseller_user_identity(db_session):
     db_session.commit()
 
     principal = {"principal_type": "reseller_user", "principal_id": str(ru.id)}
-    crm_resp = {"session_id": "s", "visitor_token": "t", "conversation_id": None}
-    with _chat_settings(), _fake_crm(crm_resp) as client:
+    with _chat_settings():
         result = chat_session.broker_reseller_session(
             db_session, str(reseller.id), principal
         )
 
-    assert result["conversation_id"] is None
-    kwargs = client.create_widget_session.call_args.kwargs
-    assert kwargs["email"] == "agent@acme.example"
-    assert kwargs["name"] == "Acme Agent"
-    assert kwargs["crm_subscriber_id"] is None
-    assert kwargs["metadata"] == {
-        "surface": "reseller_portal",
-        "reseller_id": str(reseller.id),
-    }
+    conversation = db_session.query(InboxConversation).one()
+    assert result["conversation_id"] == str(conversation.id)
+    assert conversation.contact_address == "agent@acme.example"
+    assert conversation.metadata_["reseller_name"] == "Acme Agent"
+    assert conversation.metadata_["surface"] == "reseller_portal"
+    assert conversation.metadata_["reseller_id"] == str(reseller.id)
 
 
 def test_reseller_session_falls_back_to_org_contact(db_session):
+    from app.models.team_inbox import InboxConversation
     from app.services import chat_session
 
     reseller = Reseller(name="Beta ISP", contact_email="contact@beta.example")
@@ -249,13 +203,12 @@ def test_reseller_session_falls_back_to_org_contact(db_session):
 
     # A subscriber-backed reseller login (no reseller_user row).
     principal = {"principal_type": "subscriber", "principal_id": "irrelevant"}
-    crm_resp = {"session_id": "s", "visitor_token": "t", "conversation_id": None}
-    with _chat_settings(), _fake_crm(crm_resp) as client:
+    with _chat_settings():
         chat_session.broker_reseller_session(db_session, str(reseller.id), principal)
 
-    kwargs = client.create_widget_session.call_args.kwargs
-    assert kwargs["email"] == "contact@beta.example"
-    assert kwargs["name"] == "Beta ISP"
+    conversation = db_session.query(InboxConversation).one()
+    assert conversation.contact_address == "contact@beta.example"
+    assert conversation.metadata_["reseller_name"] == "Beta ISP"
 
 
 # ── inbound chat webhook → push ──────────────────────────────────────────────

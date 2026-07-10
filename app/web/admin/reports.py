@@ -1,15 +1,23 @@
 """Admin reporting web routes."""
 
+import csv
 from datetime import UTC, datetime, time
+from html import escape
+from io import StringIO
+from urllib.parse import quote_plus
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi import APIRouter, Depends, Form, Query, Request
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.catalog import SubscriptionStatus
+from app.models.team_inbox import InboxConversation, InboxConversationStatus
 from app.services import ncc_subscriber_report as ncc_report_service
+from app.services import team_inbox_assignment, team_inbox_outbound
+from app.services import team_inbox_metrics as team_inbox_metrics_service
 from app.services import ticket_sla_reports as ticket_sla_reports_service
 from app.services import web_reports as web_reports_service
 from app.services import web_reports_extended as web_reports_ext_service
@@ -55,6 +63,16 @@ REPORT_HUB_SECTIONS: list[dict] = [
                 "name": "Ticket SLA",
                 "url": "/admin/reports/ticket-sla",
                 "description": "Support ticket SLA breaches and operational cleanup",
+            },
+            {
+                "name": "Inbox Performance",
+                "url": "/admin/reports/inbox-performance",
+                "description": "Team response SLA, queue load, and agent assignments",
+            },
+            {
+                "name": "Inbox Escalations",
+                "url": "/admin/reports/inbox-escalations",
+                "description": "Conversations that need supervisor attention",
             },
         ],
     },
@@ -469,6 +487,494 @@ def reports_ticket_sla(
         "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
     }
     return templates.TemplateResponse("admin/reports/ticket_sla.html", context)
+
+
+def _seconds_label(value: float | None) -> str:
+    if value is None:
+        return "-"
+    minutes = value / 60
+    if minutes < 60:
+        return f"{minutes:.1f}m"
+    return f"{minutes / 60:.1f}h"
+
+
+def _percent(value: float | None) -> float:
+    return round((value or 0) * 100, 1)
+
+
+def _inbox_team_rows(db: Session, response_sla_seconds: int, include_inactive: bool):
+    rows = team_inbox_metrics_service.team_performance_report(
+        db,
+        response_sla_seconds=response_sla_seconds,
+        include_inactive=include_inactive,
+    )
+    team_rows = []
+    for row in rows:
+        metrics = row.metrics
+        response_rate = (
+            metrics.responded_count / metrics.inbound_message_count
+            if metrics.inbound_message_count
+            else None
+        )
+        breach_rate = (
+            metrics.response_sla_breached_count / metrics.inbound_message_count
+            if metrics.inbound_message_count
+            else None
+        )
+        team_rows.append(
+            {
+                "team_id": row.service_team_id,
+                "name": row.service_team_name,
+                "team_type": row.service_team_type,
+                "response_sla_seconds": row.response_sla_seconds,
+                "conversation_count": metrics.conversation_count,
+                "open_count": metrics.open_count,
+                "unassigned_open_count": metrics.unassigned_open_count,
+                "assigned_open_count": metrics.assigned_open_count,
+                "inbound_message_count": metrics.inbound_message_count,
+                "outbound_message_count": metrics.outbound_message_count,
+                "responded_count": metrics.responded_count,
+                "response_sla_breached_count": metrics.response_sla_breached_count,
+                "response_rate": response_rate,
+                "response_rate_percent": _percent(response_rate),
+                "response_sla_breach_rate": breach_rate,
+                "response_sla_breach_rate_percent": _percent(breach_rate),
+                "average_first_response": _seconds_label(
+                    metrics.average_first_response_seconds
+                ),
+                "average_queue_wait": _seconds_label(
+                    metrics.average_queue_wait_seconds
+                ),
+            }
+        )
+    return team_rows
+
+
+def _inbox_agent_rows(db: Session):
+    rows = team_inbox_metrics_service.agent_performance_report(db)
+    return [
+        {
+            "person_id": row.person_id,
+            "service_team_id": row.service_team_id,
+            "service_team_name": row.service_team_name,
+            "service_team_type": row.service_team_type,
+            "active_assignment_count": row.metrics.active_assignment_count,
+            "handled_conversation_count": row.metrics.handled_conversation_count,
+            "average_queue_wait": _seconds_label(
+                row.metrics.average_queue_wait_seconds
+            ),
+        }
+        for row in rows
+    ]
+
+
+_ESCALATION_REASON_LABELS = {
+    "response_sla_breached": "Response SLA breached",
+    "unassigned_queue_breached": "Unassigned queue breached",
+    "no_available_agent": "No available agent",
+}
+
+
+def _reason_label(reason: str) -> str:
+    return _ESCALATION_REASON_LABELS.get(reason, reason.replace("_", " ").title())
+
+
+def _inbox_escalation_rows(
+    db: Session,
+    response_sla_seconds: int,
+    queue_sla_seconds: int,
+    include_inactive: bool,
+):
+    rows = team_inbox_metrics_service.escalation_candidates(
+        db,
+        response_sla_seconds=response_sla_seconds,
+        queue_sla_seconds=queue_sla_seconds,
+        include_inactive=include_inactive,
+    )
+    return [
+        {
+            "conversation_id": row.conversation_id,
+            "service_team_id": row.service_team_id,
+            "service_team_name": row.service_team_name,
+            "service_team_type": row.service_team_type,
+            "subject": row.subject or "(No subject)",
+            "contact_address": row.contact_address or "-",
+            "status": row.status,
+            "reasons": [_reason_label(reason) for reason in row.reasons],
+            "reason_keys": list(row.reasons),
+            "response_sla": _seconds_label(row.response_sla_seconds),
+            "queue_sla": _seconds_label(row.queue_sla_seconds),
+            "pending_response": _seconds_label(row.pending_response_seconds),
+            "queue_wait": _seconds_label(row.queue_wait_seconds),
+            "assigned_person_id": row.assigned_person_id or "-",
+            "available_agent_count": row.available_agent_count,
+        }
+        for row in rows
+    ]
+
+
+def _active_service_team_options(db: Session):
+    return team_inbox_metrics_service.active_service_team_options(db)
+
+
+def _inbox_escalation_return_url(
+    next_url: str | None,
+    *,
+    status: str,
+    message: str,
+) -> str:
+    target = str(next_url or "").strip()
+    if not target.startswith("/admin/reports/inbox-escalations"):
+        target = "/admin/reports/inbox-escalations"
+    separator = "&" if "?" in target else "?"
+    return (
+        f"{target}{separator}status={quote_plus(status)}&message={quote_plus(message)}"
+    )
+
+
+@router.get(
+    "/inbox-performance",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("provisioning:read"))],
+)
+def reports_inbox_performance(
+    request: Request,
+    response_sla_seconds: int = Query(default=900, ge=60, le=86400),
+    include_inactive: bool = False,
+    db: Session = Depends(get_db),
+):
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    team_rows = _inbox_team_rows(db, response_sla_seconds, include_inactive)
+    agent_rows = _inbox_agent_rows(db)
+    inbound_total = sum(row["inbound_message_count"] for row in team_rows)
+    breached_total = sum(row["response_sla_breached_count"] for row in team_rows)
+    responded_total = sum(row["responded_count"] for row in team_rows)
+    context = {
+        "request": request,
+        "active_page": "reports-inbox-performance",
+        "active_menu": "reports",
+        "current_user": get_current_user(request),
+        "sidebar_stats": get_sidebar_stats(db),
+        "response_sla_seconds": response_sla_seconds,
+        "include_inactive": include_inactive,
+        "team_rows": team_rows,
+        "agent_rows": agent_rows,
+        "team_count": len(team_rows),
+        "open_count": sum(row["open_count"] for row in team_rows),
+        "unassigned_open_count": sum(row["unassigned_open_count"] for row in team_rows),
+        "breached_total": breached_total,
+        "response_rate_percent": _percent(
+            responded_total / inbound_total if inbound_total else None
+        ),
+        "breach_rate_percent": _percent(
+            breached_total / inbound_total if inbound_total else None
+        ),
+        "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
+    }
+    return templates.TemplateResponse("admin/reports/inbox_performance.html", context)
+
+
+@router.get(
+    "/inbox-performance/export",
+    dependencies=[Depends(require_permission("provisioning:read"))],
+)
+def reports_inbox_performance_export(
+    response_sla_seconds: int = Query(default=900, ge=60, le=86400),
+    include_inactive: bool = False,
+    db: Session = Depends(get_db),
+):
+    output = StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=[
+            "name",
+            "team_type",
+            "response_sla_seconds",
+            "conversation_count",
+            "open_count",
+            "unassigned_open_count",
+            "inbound_message_count",
+            "outbound_message_count",
+            "responded_count",
+            "response_sla_breached_count",
+            "response_rate_percent",
+            "response_sla_breach_rate_percent",
+            "average_first_response",
+            "average_queue_wait",
+        ],
+    )
+    writer.writeheader()
+    for row in _inbox_team_rows(db, response_sla_seconds, include_inactive):
+        writer.writerow({field: row[field] for field in writer.fieldnames})
+    return Response(
+        output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=inbox-performance.csv"},
+    )
+
+
+@router.get(
+    "/inbox-escalations",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("provisioning:read"))],
+)
+def reports_inbox_escalations(
+    request: Request,
+    response_sla_seconds: int = Query(default=900, ge=60, le=86400),
+    queue_sla_seconds: int = Query(default=600, ge=60, le=86400),
+    include_inactive: bool = False,
+    db: Session = Depends(get_db),
+):
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    rows = _inbox_escalation_rows(
+        db,
+        response_sla_seconds,
+        queue_sla_seconds,
+        include_inactive,
+    )
+    context = {
+        "request": request,
+        "active_page": "reports-inbox-escalations",
+        "active_menu": "reports",
+        "current_user": get_current_user(request),
+        "sidebar_stats": get_sidebar_stats(db),
+        "response_sla_seconds": response_sla_seconds,
+        "queue_sla_seconds": queue_sla_seconds,
+        "include_inactive": include_inactive,
+        "rows": rows,
+        "service_team_options": _active_service_team_options(db),
+        "candidate_count": len(rows),
+        "response_breach_count": sum(
+            "response_sla_breached" in row["reason_keys"] for row in rows
+        ),
+        "queue_breach_count": sum(
+            "unassigned_queue_breached" in row["reason_keys"] for row in rows
+        ),
+        "no_agent_count": sum(
+            "no_available_agent" in row["reason_keys"] for row in rows
+        ),
+        "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
+    }
+    return templates.TemplateResponse("admin/reports/inbox_escalations.html", context)
+
+
+@router.post(
+    "/inbox-escalations/{conversation_id}/action",
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def reports_inbox_escalation_action(
+    conversation_id: str,
+    request: Request,
+    service_team_id: str = Form(...),
+    action: str = Form("auto_assign"),
+    reason: str = Form(""),
+    next: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+):
+    from app.services import web_admin as web_admin_service
+
+    try:
+        conversation_uuid = UUID(str(conversation_id))
+        team_uuid = UUID(str(service_team_id))
+    except ValueError:
+        return RedirectResponse(
+            _inbox_escalation_return_url(
+                next,
+                status="error",
+                message="Invalid conversation or team.",
+            ),
+            status_code=303,
+        )
+
+    conversation = db.get(InboxConversation, conversation_uuid)
+    if conversation is None or not conversation.is_active:
+        return RedirectResponse(
+            _inbox_escalation_return_url(
+                next,
+                status="error",
+                message="Conversation not found.",
+            ),
+            status_code=303,
+        )
+    if conversation.status == InboxConversationStatus.resolved.value:
+        return RedirectResponse(
+            _inbox_escalation_return_url(
+                next,
+                status="error",
+                message="Resolved conversations cannot be escalated.",
+            ),
+            status_code=303,
+        )
+
+    actor_id = web_admin_service.get_actor_id(request)
+    clean_reason = reason.strip() or None
+    if action == "queue":
+        result = team_inbox_assignment.queue_conversation_for_team(
+            db,
+            conversation=conversation,
+            service_team_id=team_uuid,
+            assigned_by_person_id=actor_id,
+            reason=clean_reason,
+        )
+    else:
+        result = team_inbox_assignment.assign_conversation_to_available_agent(
+            db,
+            conversation=conversation,
+            service_team_id=team_uuid,
+            assigned_by_person_id=actor_id,
+            reason=clean_reason,
+        )
+
+    if result.kind == "invalid_team":
+        return RedirectResponse(
+            _inbox_escalation_return_url(
+                next,
+                status="error",
+                message=result.reason or "Invalid target team.",
+            ),
+            status_code=303,
+        )
+
+    db.commit()
+    if result.kind == "assigned":
+        message = "Conversation assigned to an available agent."
+    else:
+        message = "Conversation moved to the target team queue."
+    return RedirectResponse(
+        _inbox_escalation_return_url(next, status="success", message=message),
+        status_code=303,
+    )
+
+
+@router.post(
+    "/inbox-escalations/{conversation_id}/reply",
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def reports_inbox_escalation_reply(
+    conversation_id: str,
+    request: Request,
+    body_text: str = Form(...),
+    next: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+):
+    from app.services import web_admin as web_admin_service
+
+    try:
+        conversation_uuid = UUID(str(conversation_id))
+    except ValueError:
+        return RedirectResponse(
+            _inbox_escalation_return_url(
+                next,
+                status="error",
+                message="Invalid conversation.",
+            ),
+            status_code=303,
+        )
+
+    clean_body = body_text.strip()
+    if not clean_body:
+        return RedirectResponse(
+            _inbox_escalation_return_url(
+                next,
+                status="error",
+                message="Reply body is required.",
+            ),
+            status_code=303,
+        )
+
+    conversation = db.get(InboxConversation, conversation_uuid)
+    if conversation is None or not conversation.is_active:
+        return RedirectResponse(
+            _inbox_escalation_return_url(
+                next,
+                status="error",
+                message="Conversation not found.",
+            ),
+            status_code=303,
+        )
+
+    body_html = (
+        "<p>" + "<br>".join(escape(line) for line in clean_body.splitlines()) + "</p>"
+    )
+    result = team_inbox_outbound.send_inbox_reply(
+        db,
+        conversation=conversation,
+        payload=team_inbox_outbound.InboxReplyPayload(
+            body_html=body_html,
+            body_text=clean_body,
+            sent_by_person_id=web_admin_service.get_actor_id(request),
+            metadata={"source_route": "admin_inbox_escalation_reply"},
+        ),
+    )
+
+    if result.kind != "sent":
+        return RedirectResponse(
+            _inbox_escalation_return_url(
+                next,
+                status="error",
+                message=result.reason or "Reply could not be sent.",
+            ),
+            status_code=303,
+        )
+
+    db.commit()
+    sender = result.from_address or result.sender_key or "team sender"
+    return RedirectResponse(
+        _inbox_escalation_return_url(
+            next,
+            status="success",
+            message=f"Reply sent from {sender}.",
+        ),
+        status_code=303,
+    )
+
+
+@router.get(
+    "/inbox-escalations/export",
+    dependencies=[Depends(require_permission("provisioning:read"))],
+)
+def reports_inbox_escalations_export(
+    response_sla_seconds: int = Query(default=900, ge=60, le=86400),
+    queue_sla_seconds: int = Query(default=600, ge=60, le=86400),
+    include_inactive: bool = False,
+    db: Session = Depends(get_db),
+):
+    output = StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=[
+            "conversation_id",
+            "service_team_name",
+            "service_team_type",
+            "subject",
+            "contact_address",
+            "status",
+            "reasons",
+            "response_sla",
+            "queue_sla",
+            "pending_response",
+            "queue_wait",
+            "assigned_person_id",
+            "available_agent_count",
+        ],
+    )
+    writer.writeheader()
+    for row in _inbox_escalation_rows(
+        db,
+        response_sla_seconds,
+        queue_sla_seconds,
+        include_inactive,
+    ):
+        export_row = {field: row[field] for field in writer.fieldnames}
+        export_row["reasons"] = "; ".join(row["reasons"])
+        writer.writerow(export_row)
+    return Response(
+        output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=inbox-escalations.csv"},
+    )
 
 
 # ===================================================================

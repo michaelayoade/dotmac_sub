@@ -419,7 +419,7 @@ def test_migration_244_is_single_alembic_head():
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
     heads = script.get_heads()
-    assert heads == ["244_phase3_expand_b_tables"]
+    assert heads == ["247_merge_phase3_inbox_heads"]
 
 
 def test_migration_244_source_recreates_leads_partial_unique():

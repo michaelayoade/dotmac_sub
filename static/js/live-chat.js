@@ -1,6 +1,5 @@
-/* Live chat client. Brokers a session through the sub (which asserts the
- * authenticated customer/reseller identity to the CRM), then talks to the CRM
- * chat_widget channel directly: WebSocket for real-time, REST for send/history.
+/* Live chat client. Brokers a native team-inbox session through the sub, then
+ * talks to the sub widget API: WebSocket for real-time, REST for send/history.
  *
  * The browser never supplies identity — it only ever holds the opaque
  * visitor_token returned by the broker. */
@@ -169,7 +168,7 @@
     return cookieValue("csrf_token");
   }
 
-  // ── CRM REST (direct, X-Visitor-Token) ─────────────────────────────────
+  // ── Widget REST (direct, X-Visitor-Token) ──────────────────────────────
   function crm(path, opts) {
     opts = opts || {};
     opts.headers = opts.headers || {};
