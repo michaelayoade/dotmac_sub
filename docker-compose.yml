@@ -559,110 +559,6 @@ services:
     - python
     - -m
     - app.syslog
-  # Zabbix stack retired from the default runtime (native infrastructure
-  # polling + VictoriaMetrics cover monitoring). Start explicitly with
-  # `docker compose --profile zabbix up -d` if ever needed again.
-  zabbix-db:
-    profiles:
-    - zabbix
-    image: postgres:16-alpine
-    container_name: dotmac_zabbix_db
-    restart: unless-stopped
-    mem_limit: 1g
-    mem_reservation: 512m
-    cpus: 1.0
-    pids_limit: 128
-    environment:
-      POSTGRES_DB: zabbix
-      POSTGRES_USER: zabbix
-      POSTGRES_PASSWORD_FILE: /run/secrets/zabbix_db_password
-    secrets:
-    - zabbix_db_password
-    volumes:
-    - zabbix_db_data:/var/lib/postgresql/data
-    healthcheck:
-      test:
-      - CMD-SHELL
-      - pg_isready -U zabbix
-      interval: 10s
-      timeout: 5s
-      retries: 5
-  zabbix-server:
-    profiles:
-    - zabbix
-    image: zabbix/zabbix-server-pgsql:7.0-alpine-latest
-    container_name: dotmac_zabbix_server
-    restart: unless-stopped
-    mem_limit: 5g
-    mem_reservation: 1g
-    cpus: 2
-    pids_limit: 512
-    logging: *id001
-    depends_on:
-    - zabbix-db
-    environment:
-      DB_SERVER_HOST: zabbix-db
-      POSTGRES_USER: zabbix
-      POSTGRES_PASSWORD_FILE: /run/secrets/zabbix_db_password
-      ZBX_STARTPOLLERS: 10
-      ZBX_STARTPINGERS: 5
-      ZBX_CACHESIZE: 2048M
-      ZBX_HISTORYCACHESIZE: 256M
-      ZBX_TRENDCACHESIZE: 64M
-      ZBX_VALUECACHESIZE: 128M
-    secrets:
-    - zabbix_db_password
-    ports:
-    - 10051:10051
-    volumes:
-    - ./config/zabbix/alertscripts:/usr/lib/zabbix/alertscripts:ro
-    - ./config/zabbix/externalscripts:/usr/lib/zabbix/externalscripts:ro
-    healthcheck:
-      test:
-      - CMD-SHELL
-      - nc -z localhost 10051 || exit 1
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-  zabbix-web:
-    profiles:
-    - zabbix
-    image: zabbix/zabbix-web-nginx-pgsql:7.0-alpine-latest
-    container_name: dotmac_zabbix_web
-    restart: unless-stopped
-    mem_limit: 512m
-    mem_reservation: 256m
-    cpus: 0.5
-    pids_limit: 96
-    depends_on:
-    - zabbix-server
-    environment:
-      DB_SERVER_HOST: zabbix-db
-      POSTGRES_USER: zabbix
-      POSTGRES_PASSWORD_FILE: /run/secrets/zabbix_db_password
-      ZBX_SERVER_HOST: zabbix-server
-      PHP_TZ: Africa/Lagos
-    secrets:
-    - zabbix_db_password
-    ports:
-    - 8085:8080
-  zabbix-agent:
-    profiles:
-    - zabbix
-    image: zabbix/zabbix-agent2:7.0-alpine-latest
-    container_name: dotmac_zabbix_agent
-    restart: unless-stopped
-    mem_limit: 256m
-    mem_reservation: 64m
-    cpus: 0.5
-    pids_limit: 64
-    environment:
-      ZBX_SERVER_HOST: zabbix-server
-      ZBX_HOSTNAME: dotmac-app-server
-    volumes:
-    - /var/run/docker.sock:/var/run/docker.sock:ro
-    privileged: true
   vmagent:
     image: victoriametrics/vmagent:v1.96.0
     container_name: dotmac_vmagent
@@ -680,7 +576,6 @@ services:
       victoriametrics:
         condition: service_started
 volumes:
-  zabbix_db_data: null
   dotmac_sub_db_data: null
   nominatim_data: null
   nominatim_flatnode: null
@@ -689,9 +584,6 @@ volumes:
   victoriametrics_data: null
   promtail_positions: null
   dotmac_router_ssh: null
-secrets:
-  zabbix_db_password:
-    file: ${ZABBIX_DB_PASSWORD_FILE:-./secrets/zabbix_db_password}
 networks:
   default:
     name: dotmac_sub_default

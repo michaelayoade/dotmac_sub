@@ -5,8 +5,8 @@ wireless/UFiber customer layer into sub's own tables:
 
   - wireless customer radios (airMax stations, airCube/blackBox) -> cpe_devices,
     keyed by ``uisp_device_id``, with the CPE -> AP edge stored as
-    ``parent_network_device_id`` (FK to the network_devices row the Zabbix
-    reconcile owns) so customer paths can walk radio -> AP -> basestation.
+    ``parent_network_device_id`` (FK to the historical reconcile-owned
+    network_devices row) so customer paths can walk radio -> AP -> basestation.
     ``cpe_devices.subscriber_id`` is NOT NULL, so creation is MATCH-THEN-CREATE:
     a new radio only gets a row once its MAC resolves to exactly one subscriber
     over ACTIVE subscriptions (unmatched/ambiguous radios are counted and
@@ -23,10 +23,10 @@ wireless/UFiber customer layer into sub's own tables:
     port number. Ports are ensured in ``pon_ports`` (match-don't-create by
     ``(olt_id, port_number)``) and stamped onto ``ont_units.pon_port_id``.
 
-Monitoring/state stays with the Zabbix layer (the co-located UISP->Zabbix
-importer feeds it); this sync only owns *relationships* and identity fill-in.
+Monitoring/state stays with the native polling layer; this sync only owns
+*relationships* and identity fill-in.
 
-Idioms follow zabbix_reconcile/lldp_poller: idempotent upsert by stable
+Idioms follow the retired zabbix_reconcile/lldp_poller: idempotent upsert by stable
 external id, match-don't-create against pre-existing rows, never overwrite a
 non-NULL human-set field, per-item failure isolation, soft-prune limited to
 the columns this sync owns.
@@ -411,8 +411,8 @@ def match_ap_nodes(
     """Match UISP APs to network_devices rows (mgmt IP first, then name).
 
     Stamps ``uisp_device_id`` on matched rows and returns uisp AP id -> node.
-    The Zabbix reconcile creates/owns these rows; this sync never creates
-    network_devices, it only links them.
+    These rows were created by the retired Zabbix reconcile; this sync never
+    creates network_devices, it only links them.
     """
     by_name, by_ip = build_device_index(session)
     ap_nodes: dict[str, NetworkDevice] = {}
@@ -1173,7 +1173,7 @@ def sync(session: Session, client, now: datetime | None = None) -> dict:
     Read-only against UISP. Idempotent: every row is keyed by its stable
     ``uisp_device_id``; re-runs only bump sync timestamps. Each device is
     upserted inside its own SAVEPOINT (``Session.begin_nested``, the
-    zabbix_host_sync idiom): a flush failure rolls back to the savepoint,
+    per-item SAVEPOINT idiom): a flush failure rolls back to the savepoint,
     is counted as ``failed`` and never aborts the run or poisons the
     session. Single-flight locking lives in the Celery task wrapper
     (``db_session_adapter.advisory_lock``), not here.
@@ -1240,7 +1240,7 @@ def sync(session: Session, client, now: datetime | None = None) -> dict:
             stats["skipped"] += 1
             continue
         try:
-            # SAVEPOINT per item (the zabbix_host_sync idiom): a flush failure
+            # SAVEPOINT per item: a flush failure
             # rolls back only this device, not the surrounding transaction.
             with session.begin_nested():
                 cpe, _created = _upsert_station(

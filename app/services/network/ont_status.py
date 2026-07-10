@@ -1,7 +1,9 @@
 """ONT state helpers.
 
-Zabbix is the monitoring authority for ONT online/offline state. OLT and ACS
-values are raw diagnostics/metadata only.
+The monitoring layer is the authority for ONT online/offline state. OLT and
+ACS values are raw diagnostics/metadata only. (The live Zabbix status source
+was retired with the native monitoring cutover; status reads degrade to
+offline/not-configured until a native per-ONT status source lands.)
 """
 
 from __future__ import annotations
@@ -578,7 +580,7 @@ def reconcile_ont_state(
         ont_id=ont.id,
         snapshot=snapshot,
         conflict=conflict,
-        reason="zabbix_is_monitoring_authority",
+        reason="monitoring_is_authority",
         authoritative_source=OntStatusSource.zabbix,
         recommended_action=None,
     )
@@ -605,17 +607,16 @@ def get_ont_status(
     mode: StatusProviderMode | str = StatusProviderMode.auto,
 ) -> OntStatusResult:
     _ = db, mode
-    from app.services.zabbix_ont_status import get_ont_signal_from_zabbix
-
-    zabbix_status = get_ont_signal_from_zabbix(ont)
-    status = OnuOnlineStatus.online if zabbix_status.online else OnuOnlineStatus.offline
+    # The live monitoring status source (Zabbix) was retired with the native
+    # monitoring cutover; degrade to the same offline/not-configured result the
+    # unconfigured path already produced.
     return OntStatusResult(
-        status=status,
+        status=OnuOnlineStatus.offline,
         status_source=OntStatusSource.zabbix,
         acs_last_inform_at=getattr(ont, "acs_last_inform_at", None),
         resolved_at=datetime.now(UTC),
         optical_metrics=_optical_metrics_from_ont(ont) if include_optical else None,
-        error=zabbix_status.error,
+        error="ONT status monitoring source is not configured",
     )
 
 
@@ -635,30 +636,14 @@ def refresh_ont_status(
     *,
     mode: StatusProviderMode | str = StatusProviderMode.auto,
 ) -> OntStatusResult:
-    _ = mode
-    from app.services.zabbix_ont_status import get_ont_signal_from_zabbix
-
-    zabbix_status = get_ont_signal_from_zabbix(ont)
-    status = OnuOnlineStatus.online if zabbix_status.online else OnuOnlineStatus.offline
-    if zabbix_status.error is None:
-        ont.olt_status = status
-        ont.olt_status_seen_at = zabbix_status.updated_at or datetime.now(UTC)
-        if status == OnuOnlineStatus.online:
-            ont.last_seen_at = ont.olt_status_seen_at
-            ont.offline_reason = None
-        else:
-            ont.offline_reason = OnuOfflineReason.unknown
-    if zabbix_status.updated_at is not None:
-        ont.last_seen_at = zabbix_status.updated_at
-    ont.olt_rx_signal_dbm = zabbix_status.olt_rx_dbm
-    ont.onu_rx_signal_dbm = zabbix_status.onu_rx_dbm
-    ont.signal_updated_at = zabbix_status.updated_at
-    ont.last_sync_source = "zabbix"
-    db.flush()
+    _ = db, mode
+    # The live monitoring refresh source (Zabbix) was retired with the native
+    # monitoring cutover. The unconfigured path never wrote status fields;
+    # stored ONT state (native-poll signal columns included) is left untouched.
     return OntStatusResult(
-        status=status,
+        status=OnuOnlineStatus.offline,
         status_source=OntStatusSource.zabbix,
         acs_last_inform_at=getattr(ont, "acs_last_inform_at", None),
         resolved_at=datetime.now(UTC),
-        error=zabbix_status.error,
+        error="ONT status monitoring source is not configured",
     )

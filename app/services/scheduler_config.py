@@ -31,16 +31,6 @@ TR069_TASK_QUEUE_NAMES = {
 }
 
 
-def _zabbix_configured_default() -> bool:
-    try:
-        from app.services.zabbix import zabbix_configured
-
-        return zabbix_configured()
-    except Exception:
-        logger.debug("zabbix_scheduler_default_resolution_failed", exc_info=True)
-        return False
-
-
 def _env_value(name: str) -> str | None:
     value = os.getenv(name)
     if value is None or value == "":
@@ -838,32 +828,15 @@ def build_beat_schedule() -> dict:
             enabled=usage_enabled,
             interval_seconds=max(usage_interval_seconds, 300),
         )
-        zabbix_usage_enabled_by_default = _zabbix_configured_default()
-        zabbix_usage_enabled = _effective_bool(
-            session,
-            SettingDomain.usage,
-            "zabbix_portal_usage_ingestion_enabled",
-            "ZABBIX_PORTAL_USAGE_INGESTION_ENABLED",
-            zabbix_usage_enabled_by_default,
-        )
-        zabbix_usage_interval_seconds = _effective_int(
-            session,
-            SettingDomain.usage,
-            "zabbix_portal_usage_ingestion_interval_seconds",
-            "ZABBIX_PORTAL_USAGE_INGESTION_INTERVAL_SECONDS",
-            300,
-        )
-        zabbix_usage_interval_seconds = max(zabbix_usage_interval_seconds, 30)
+        # Zabbix portal-usage ingestion retired with the native monitoring
+        # cutover; disable any existing DB rows.
         _retire_scheduled_task(
             session,
             "app.tasks.zabbix_ingestion.ingest_portal_usage",
         )
-        _sync_scheduled_task(
+        _retire_scheduled_task(
             session,
-            name="zabbix_portal_usage_ingestion",
-            task_name="app.tasks.zabbix_ingestion.dispatch_portal_usage_ingestion",
-            enabled=zabbix_usage_enabled,
-            interval_seconds=zabbix_usage_interval_seconds,
+            "app.tasks.zabbix_ingestion.dispatch_portal_usage_ingestion",
         )
         billing_enabled = _effective_bool(
             session,
@@ -1569,45 +1542,16 @@ def build_beat_schedule() -> dict:
             interval_seconds=600,
         )
 
-        # ONT telemetry ingest from centralized monitoring data. Zabbix-fed:
-        # enabled only while Zabbix is configured (runtime cutover — native
-        # infrastructure polling covers reachability without it).
-        zabbix_available = _zabbix_configured_default()
-        ont_signal_minutes = _resolve_int(
-            session,
-            SettingDomain.network_monitoring,
-            "ont_signal_ingest_interval_minutes",
-            15,
+        # Zabbix-fed ONT signal ingest + topology reconcile retired with the
+        # native monitoring cutover; disable any existing DB rows.
+        _retire_scheduled_task(
+            session, "app.tasks.zabbix_ingestion.ingest_olt_signals_from_zabbix"
         )
-        _sync_scheduled_task(
-            session,
-            name="ont_signal_ingest",
-            task_name="app.tasks.zabbix_ingestion.ingest_olt_signals_from_zabbix",
-            enabled=zabbix_available,
-            interval_seconds=max(ont_signal_minutes * 60, 120),
+        _retire_scheduled_task(
+            session, "app.tasks.zabbix_ingestion.repair_stale_olt_signal_ingest"
         )
-        _sync_scheduled_task(
-            session,
-            name="ont_signal_ingest_watchdog",
-            task_name="app.tasks.zabbix_ingestion.repair_stale_olt_signal_ingest",
-            enabled=zabbix_available,
-            interval_seconds=600,
-        )
-        # Topology reconcile: pull Zabbix groups/hosts onto pop_sites +
-        # network_devices. Device graph changes slowly, so hourly is ample.
-        # Zabbix-fed like the ingest above.
-        topology_reconcile_minutes = _resolve_int(
-            session,
-            SettingDomain.network_monitoring,
-            "topology_reconcile_interval_minutes",
-            60,
-        )
-        _sync_scheduled_task(
-            session,
-            name="topology_reconcile",
-            task_name="app.tasks.topology_sync.run_topology_reconcile",
-            enabled=zabbix_available,
-            interval_seconds=max(topology_reconcile_minutes * 60, 300),
+        _retire_scheduled_task(
+            session, "app.tasks.topology_sync.run_topology_reconcile"
         )
         # Native infrastructure poll: ping/SNMP reachability sweep over active
         # network devices (Zabbix runtime cutover). The sweep itself only
@@ -1724,8 +1668,8 @@ def build_beat_schedule() -> dict:
         )
         # UISP topology sync: import the wireless/UFiber customer-device
         # relationship layer (radios -> APs, ONUs -> UF-OLTs) into sub's
-        # tables. Association churn is faster than the device graph, so the
-        # default matches the UISP->Zabbix importer's 15-minute cadence.
+        # tables. Association churn is faster than the device graph, so it
+        # runs on a 15-minute default cadence.
         topology_uisp_minutes = _resolve_int(
             session,
             SettingDomain.network_monitoring,
@@ -1788,38 +1732,13 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(dashboard_cache_seconds, 60),
         )
-        # Default 120s, below the 180s snapshot cache TTL, so the key is
-        # re-warmed before it lapses (a 180s==180s interval let it expire just
-        # before the next write, exposing cold-cache reads).
-        ont_snapshot_cache_seconds = _resolve_int(
-            session,
-            SettingDomain.network_monitoring,
-            "ont_snapshot_cache_refresh_interval_seconds",
-            120,
+        # Zabbix ONT snapshot / monitoring summary cache warmers retired with
+        # the native monitoring cutover; disable any existing DB rows.
+        _retire_scheduled_task(
+            session, "app.tasks.app_cache.refresh_ont_zabbix_snapshot_cache"
         )
-        _sync_scheduled_task(
-            session,
-            name="ont_snapshot_cache_refresh",
-            task_name="app.tasks.app_cache.refresh_ont_zabbix_snapshot_cache",
-            enabled=_zabbix_configured_default(),
-            interval_seconds=max(ont_snapshot_cache_seconds, 60),
-        )
-        # Keep the per-OLT Zabbix summary cache the monitoring dashboard reads
-        # hot. Default 120s, below the 180s snapshot/summary cache TTL, so a
-        # viewer never lands on a cold cache and pays the live per-OLT fan-out.
-        # Zabbix-fed: enabled only while Zabbix is configured.
-        monitoring_summary_warm_seconds = _resolve_int(
-            session,
-            SettingDomain.network_monitoring,
-            "monitoring_summary_warm_interval_seconds",
-            120,
-        )
-        _sync_scheduled_task(
-            session,
-            name="monitoring_summary_cache_warm",
-            task_name="app.tasks.monitoring_warm.warm_monitoring_caches",
-            enabled=_zabbix_configured_default(),
-            interval_seconds=max(monitoring_summary_warm_seconds, 30),
+        _retire_scheduled_task(
+            session, "app.tasks.monitoring_warm.warm_monitoring_caches"
         )
         _retire_scheduled_task(
             session,
@@ -2444,36 +2363,12 @@ def build_beat_schedule() -> dict:
         # (queued_olt_operations table + OLTDevice circuit_* columns) was
         # dropped in migration 162.
 
-        # Zabbix device sync - syncs OLT/NAS devices to Zabbix hosts
-        zabbix_sync_enabled_by_default = _zabbix_configured_default()
-        zabbix_device_sync_enabled = _effective_bool(
-            session,
-            SettingDomain.network_monitoring,
-            "zabbix_device_sync_enabled",
-            "ZABBIX_DEVICE_SYNC_ENABLED",
-            zabbix_sync_enabled_by_default,
-        )
-        zabbix_device_sync_interval = _resolve_int(
-            session,
-            SettingDomain.network_monitoring,
-            "zabbix_device_sync_interval_seconds",
-            300,  # 5 minutes
-        )
-        zabbix_device_sync_interval = max(
-            zabbix_device_sync_interval, 60
-        )  # Min: 1 minute
-        # Retire the old un-time-limited copy that lived in zabbix_ingestion; the
-        # surviving task in zabbix_sync carries soft/hard time limits.
+        # Zabbix device sync retired with the native monitoring cutover;
+        # disable any existing DB rows (old copy + surviving copy).
         _retire_scheduled_task(
             session, "app.tasks.zabbix_ingestion.sync_devices_to_zabbix"
         )
-        _sync_scheduled_task(
-            session,
-            name="zabbix_device_sync",
-            task_name="app.tasks.zabbix_sync.sync_devices_to_zabbix",
-            enabled=zabbix_device_sync_enabled,
-            interval_seconds=zabbix_device_sync_interval,
-        )
+        _retire_scheduled_task(session, "app.tasks.zabbix_sync.sync_devices_to_zabbix")
         _sync_scheduled_task(
             session,
             name="infrastructure_admin_alert_evaluation",

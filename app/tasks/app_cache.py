@@ -26,28 +26,3 @@ def refresh_dashboard_stats_cache_task() -> dict[str, object]:
         return {"refreshed": False, "error": str(exc)}
     finally:
         db.close()
-
-
-@celery_app.task(
-    name="app.tasks.app_cache.refresh_ont_zabbix_snapshot_cache",
-    soft_time_limit=120,
-    time_limit=150,
-)
-def refresh_ont_zabbix_snapshot_cache_task() -> dict[str, object]:
-    from app.services.zabbix import zabbix_configured
-
-    if not zabbix_configured():
-        return {"refreshed": False, "skipped": "zabbix_token_missing"}
-
-    db = db_session_adapter.create_session()
-    try:
-        from app.services import zabbix_ont_status
-
-        result = zabbix_ont_status.refresh_all_olt_snapshots_cache(db)
-        return {"refreshed": True, **result}
-    except Exception as exc:
-        logger.exception("ont_zabbix_snapshot_cache_task_failed")
-        db.rollback()
-        return {"refreshed": False, "error": str(exc)}
-    finally:
-        db.close()

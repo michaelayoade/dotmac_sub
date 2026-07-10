@@ -107,7 +107,6 @@ from app.services import web_network_ip as web_network_ip_service
 from app.services import web_network_olts as web_network_olts_service
 from app.services import web_network_speedtests as web_network_speedtests_service
 from app.services import web_network_tr069 as web_network_tr069_service
-from app.services import zabbix_ont_status
 from app.services.credential_crypto import is_encrypted
 from app.services.network import olt_operations as olt_operations_service
 from app.services.network import olt_ssh as olt_ssh_service
@@ -707,9 +706,7 @@ def test_core_network_table_shows_ping_result_and_device_tooltip():
     assert "bg-red-100 text-red-700" in template
 
 
-def test_core_devices_list_page_data_prefers_zabbix_live_status(
-    db_session, monkeypatch
-):
+def test_core_devices_list_page_data_prefers_live_status(db_session, monkeypatch):
     monkeypatch.setattr(core_devices_forms, "warmer_is_stale", lambda: False)
     parent = NetworkDevice(
         name="Live Parent",
@@ -737,7 +734,7 @@ def test_core_devices_list_page_data_prefers_zabbix_live_status(
     assert payload["child_impacts"][str(parent.id)]["impacted"] is False
 
 
-def test_core_devices_list_page_data_falls_back_when_zabbix_live_status_stale(
+def test_core_devices_list_page_data_falls_back_when_live_status_stale(
     db_session, monkeypatch
 ):
     monkeypatch.setattr(core_devices_forms, "warmer_is_stale", lambda: True)
@@ -1609,7 +1606,9 @@ def test_network_map_context_includes_network_device_markers(db_session):
     assert context["stats"]["network_devices_online"] == 1
 
 
-def test_network_map_context_uses_zabbix_ont_status(db_session, monkeypatch):
+def test_network_map_context_renders_onts_offline(db_session):
+    """The live ONT status source was retired with the native monitoring
+    cutover: map ONTs render offline with empty signal values."""
     ont = OntUnit(
         serial_number="ONT-MAP-1",
         name="Map ONT",
@@ -1617,17 +1616,10 @@ def test_network_map_context_uses_zabbix_ont_status(db_session, monkeypatch):
         use_gps=True,
         gps_latitude=9.07,
         gps_longitude=7.51,
-        olt_status=OnuOnlineStatus.offline,
+        olt_status=OnuOnlineStatus.online,
     )
     db_session.add(ont)
     db_session.commit()
-    monkeypatch.setattr(
-        network_map_service,
-        "get_ont_snapshots_from_zabbix",
-        lambda db, onts: {
-            str(item.id): zabbix_ont_status.OntSignalData(online=True) for item in onts
-        },
-    )
 
     context = network_map_service.build_network_map_context(db_session)
     ont_features = [
@@ -1637,9 +1629,9 @@ def test_network_map_context_uses_zabbix_ont_status(db_session, monkeypatch):
     ]
 
     assert len(ont_features) == 1
-    assert ont_features[0]["properties"]["status"] == "online"
-    assert context["stats"]["onts_online"] == 1
-    assert context["stats"]["onts_offline"] == 0
+    assert ont_features[0]["properties"]["status"] == "offline"
+    assert context["stats"]["onts_online"] == 0
+    assert context["stats"]["onts_offline"] == 1
 
 
 def test_speedtest_form_parse_and_validate():
@@ -2392,164 +2384,25 @@ def test_devices_list_page_data_filters_core_network_devices(db_session):
     assert payload["type"] == "core"
 
 
-def test_network_devices_zabbix_probe_statuses_use_icmp_and_snmp_only(monkeypatch):
-    class _FakeZabbixClient:
-        @classmethod
-        def from_env(cls):
-            return cls()
-
-        def get_hosts(self, host_ids=None, limit=1000):
-            assert set(host_ids or []) == {"101", "102", "103"}
-            return [
-                {
-                    "hostid": "101",
-                    "status": "0",
-                    "interfaces": [{"type": "2", "available": "1"}],
-                },
-                {
-                    "hostid": "102",
-                    "status": "0",
-                    "interfaces": [
-                        {
-                            "type": "2",
-                            "available": "2",
-                            "error": "SNMP timeout",
-                        }
-                    ],
-                },
-                {
-                    "hostid": "103",
-                    "status": "0",
-                    "interfaces": [{"type": "2", "available": "1"}],
-                },
-            ]
-
-        def get_items(self, host_ids=None, metric=None, limit=100000):
-            assert set(host_ids or []) == {"101", "102", "103"}
-            assert metric == "icmpping"
-            return [
-                {"hostid": "101", "key_": "icmpping", "lastvalue": "1"},
-                {"hostid": "102", "key_": "icmpping", "lastvalue": "0"},
-                {"hostid": "102", "key_": "icmppingloss", "lastvalue": "0"},
-            ]
-
-    monkeypatch.setattr(
-        core_devices_inventory_service, "zabbix_configured", lambda: True
-    )
-    monkeypatch.setattr(
-        core_devices_inventory_service,
-        "ZabbixClient",
-        _FakeZabbixClient,
-    )
-
-    statuses = core_devices_inventory_service._build_zabbix_probe_statuses(
+def test_network_devices_legacy_probe_statuses_degrade_to_not_monitored():
+    """The Zabbix probe source was retired: every core-device row degrades to
+    a fixed "not monitored" placeholder (native reachability lives on the
+    poll columns / operational status)."""
+    statuses = core_devices_inventory_service._build_legacy_probe_statuses(
         [
-            {"id": "device-online", "zabbix_host_id": "101"},
-            {"id": "device-timeout", "zabbix_host_id": "102"},
-            {"id": "device-missing-icmp", "zabbix_host_id": "103"},
+            {"id": "device-a"},
+            {"id": "device-b"},
+            {"id": ""},
         ]
     )
 
-    assert statuses["device-online"]["ping_label"] == "Online"
-    assert statuses["device-online"]["ping_state"] == "ok"
-    assert statuses["device-online"]["snmp_label"] == "Online"
-    assert statuses["device-online"]["snmp_state"] == "ok"
-    assert statuses["device-timeout"]["ping_label"] == "Down"
-    assert statuses["device-timeout"]["ping_state"] == "fail"
-    assert statuses["device-timeout"]["snmp_label"] == "Timeout"
-    assert statuses["device-timeout"]["snmp_state"] == "fail"
-    assert statuses["device-missing-icmp"]["ping_label"] == "Not monitored"
-    assert statuses["device-missing-icmp"]["ping_state"] == "unknown"
-    assert statuses["device-missing-icmp"]["snmp_label"] == "Online"
-    assert statuses["device-missing-icmp"]["snmp_state"] == "ok"
-
-
-def test_network_devices_zabbix_probe_statuses_do_not_call_linked_failures_unlinked(
-    monkeypatch,
-):
-    class _FailingZabbixClient:
-        @classmethod
-        def from_env(cls):
-            return cls()
-
-        def get_hosts(self, host_ids=None, limit=1000):
-            raise core_devices_inventory_service.ZabbixClientError("boom")
-
-        def get_items(self, host_ids=None, metric=None, limit=100000):
-            raise core_devices_inventory_service.ZabbixClientError("boom")
-
-    monkeypatch.setattr(
-        core_devices_inventory_service, "zabbix_configured", lambda: True
-    )
-    monkeypatch.setattr(
-        core_devices_inventory_service,
-        "ZabbixClient",
-        _FailingZabbixClient,
-    )
-
-    statuses = core_devices_inventory_service._build_zabbix_probe_statuses(
-        [
-            {"id": "linked", "zabbix_host_id": "101"},
-            {"id": "unlinked", "zabbix_host_id": None},
-        ]
-    )
-
-    assert statuses["linked"]["ping_label"] == "Zabbix unavailable"
-    assert statuses["linked"]["ping_state"] == "unknown"
-    assert statuses["linked"]["ping_reason"] == "Could not read current Zabbix status"
-    assert statuses["linked"]["snmp_label"] == "Zabbix unavailable"
-    assert statuses["unlinked"]["ping_label"] == "Not linked"
-    assert statuses["unlinked"]["ping_reason"] == "Device is not linked to Zabbix"
-
-
-def test_network_devices_zabbix_probe_statuses_keep_successful_chunks(monkeypatch):
-    monkeypatch.setattr(
-        core_devices_inventory_service, "_NETWORK_DEVICE_ZABBIX_CHUNK_SIZE", 1
-    )
-
-    class _PartiallyFailingZabbixClient:
-        @classmethod
-        def from_env(cls):
-            return cls()
-
-        def get_hosts(self, host_ids=None, limit=1000):
-            if host_ids == ["bad"]:
-                raise core_devices_inventory_service.ZabbixClientError("boom")
-            return [
-                {
-                    "hostid": "good",
-                    "status": "0",
-                    "interfaces": [{"type": "2", "available": "1"}],
-                }
-            ]
-
-        def get_items(self, host_ids=None, metric=None, limit=100000):
-            if host_ids == ["bad"]:
-                raise core_devices_inventory_service.ZabbixClientError("boom")
-            return [{"hostid": "good", "key_": "icmpping", "lastvalue": "1"}]
-
-    monkeypatch.setattr(
-        core_devices_inventory_service, "zabbix_configured", lambda: True
-    )
-    monkeypatch.setattr(
-        core_devices_inventory_service,
-        "ZabbixClient",
-        _PartiallyFailingZabbixClient,
-    )
-
-    statuses = core_devices_inventory_service._build_zabbix_probe_statuses(
-        [
-            {"id": "device-good", "zabbix_host_id": "good"},
-            {"id": "device-bad", "zabbix_host_id": "bad"},
-        ]
-    )
-
-    assert statuses["device-good"]["ping_label"] == "Online"
-    assert statuses["device-good"]["ping_state"] == "ok"
-    assert statuses["device-good"]["snmp_label"] == "Online"
-    assert statuses["device-good"]["snmp_state"] == "ok"
-    assert statuses["device-bad"]["ping_label"] == "Zabbix unavailable"
-    assert statuses["device-bad"]["snmp_label"] == "Zabbix unavailable"
+    assert set(statuses) == {"device-a", "device-b"}
+    for status in statuses.values():
+        assert status["ping_label"] == "Not monitored"
+        assert status["ping_state"] == "unknown"
+        assert status["snmp_label"] == "Not monitored"
+        assert status["snmp_state"] == "unknown"
+        assert status["ping_reason"] == "Legacy probe source is not configured"
 
 
 def test_consolidated_nas_inventory_inherits_linked_monitoring_status(
@@ -2597,7 +2450,7 @@ def test_consolidated_nas_inventory_inherits_linked_monitoring_status(
     assert included.operational.status == "up"
 
 
-def test_consolidated_nas_inventory_uses_direct_router_status_without_zabbix(
+def test_consolidated_nas_inventory_uses_direct_router_status_without_link(
     db_session, monkeypatch
 ):
     monkeypatch.setattr(

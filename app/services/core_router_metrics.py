@@ -1,6 +1,6 @@
 """Live per-interface bandwidth for monitored core-router interfaces.
 
-Reads VictoriaMetrics, not Zabbix: the native infrastructure poller pushes raw
+Reads VictoriaMetrics: the native infrastructure poller pushes raw
 IF-MIB octet counters for every admin-monitored interface
 (``infrastructure_polling.push_interface_counters``), and this service derives
 bps with ``rate()`` at query time. Read-only and on-demand — no DB writes, no

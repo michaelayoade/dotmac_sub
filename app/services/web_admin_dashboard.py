@@ -210,7 +210,7 @@ def _build_pon_outages(db: Session, limit: int = 10) -> list[dict]:
 def _build_cached_ont_status_summary(db: Session) -> dict[str, int]:
     """Return ONT status from locally persisted monitoring fields.
 
-    The dashboard must not synchronously poll Zabbix per OLT during initial
+    The dashboard must not synchronously poll monitoring per OLT during initial
     render. Background ingestion keeps these columns fresh enough for overview
     counts, while live diagnostics pages can still query Zabbix directly.
     """

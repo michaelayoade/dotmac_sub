@@ -114,7 +114,7 @@ def _alert_intervals_by_device(
 def _pon_availability_items(db: Session, window_seconds: int) -> list[UptimeReportItem]:
     """Per-PON-port availability, *derived* from the current ONT-online ratio.
 
-    PON ports have no Zabbix host and no uptime ``Alert`` source, so unlike the
+    PON ports have no monitored host and no uptime ``Alert`` source, so unlike the
     other dimensions this is not measured from downtime intervals. We approximate
     a port's health as the fraction of its ONTs currently reporting ``online``
     (``offline``/``unknown`` ONTs count against it). Rows are flagged
@@ -1337,24 +1337,21 @@ class AlertEvents(ListResponseMixin):
 
 
 def get_onu_status_summary(db: Session, *, refresh: bool = False) -> dict[str, int]:
-    """Aggregate binary ONT monitoring status directly from Zabbix.
+    """Aggregate binary ONT monitoring status.
 
-    ``refresh=True`` forces a live per-OLT fetch (used by the background warmer)
-    instead of reading the per-OLT summary cache. With ``refresh=False`` (the
-    request path) the read is strictly cache-only: a cold per-OLT cache yields
-    no counts for that OLT rather than a live Zabbix fan-out on the request
-    thread — the warmer fills the cache on its own cadence.
+    Degraded: the live per-OLT ONT status source (Zabbix) was retired with the
+    native monitoring cutover, so no ONT is live-monitored here and every
+    non-UISP active ONT rolls up as offline — the same result the request path
+    already produced on a permanently cold cache. UISP-managed plant still
+    counts from its last observed state.
 
     Returns:
         Dictionary with total, online, offline, low_signal counts.
     """
+    del refresh
     from sqlalchemy import func as sa_func
 
     from app.models.network import OLTDevice, OntUnit, OnuOnlineStatus
-    from app.services.zabbix_ont_status import (
-        get_olt_ont_snapshot_from_zabbix,
-        get_olt_ont_summary_from_zabbix,
-    )
 
     inventory_total = (
         db.query(sa_func.count(OntUnit.id)).filter(OntUnit.is_active.is_(True)).scalar()
@@ -1365,8 +1362,7 @@ def get_onu_status_summary(db: Session, *, refresh: bool = False) -> dict[str, i
     low_signal = 0
 
     # UISP-managed plant (UFiber): the topology sync imports these OLTs as
-    # INACTIVE placeholder rows (no config pack, no Zabbix host), so the
-    # per-OLT Zabbix walk below never sees their ONTs. They are not
+    # INACTIVE placeholder rows (no config pack). They are not
     # unmonitored Huawei gear and must not be dumped into the offline bucket:
     # count them from their own last OBSERVED state instead — online/offline
     # only when a status was actually seen (olt_status_seen_at set), otherwise
@@ -1390,56 +1386,10 @@ def get_onu_status_summary(db: Session, *, refresh: bool = False) -> dict[str, i
         else:
             uisp_managed += 1
 
-    olts = (
-        db.query(OLTDevice)
-        .filter(OLTDevice.is_active.is_(True))
-        .filter(OLTDevice.zabbix_host_id.isnot(None))
-        .all()
-    )
-    monitored_ont_ids: set[str] = set()
-    for olt in olts:
-        onts = (
-            db.query(OntUnit)
-            .filter(OntUnit.is_active.is_(True))
-            .filter(OntUnit.olt_device_id == olt.id)
-            .all()
-        )
-        ont_ids = [str(ont.id) for ont in onts]
-        # On the request path (refresh=False) read cache only; the warmer
-        # (refresh=True) is the sole live fetcher, so a user never blocks on a
-        # per-OLT Zabbix round trip.
-        cached_only = not refresh
-        summary = get_olt_ont_summary_from_zabbix(
-            olt, onts, refresh=refresh, cached_only=cached_only
-        )
-        if summary.get("total_count", 0):
-            monitored_ont_ids.update(ont_ids)
-            online += int(summary.get("online_count", 0) or 0)
-            offline += int(summary.get("offline_count", 0) or 0)
-            low_signal += int(summary.get("low_signal_count", 0) or 0)
-            continue
-        if cached_only:
-            # Cold cache on the request path — skip the live snapshot walk; the
-            # warmer will populate it shortly. Leave these ONTs OUT of
-            # monitored_ont_ids so unmonitored_total counts them as offline
-            # rather than dropping them from the totals entirely.
-            continue
-
-        monitored_ont_ids.update(ont_ids)
-        snapshot = get_olt_ont_snapshot_from_zabbix(olt, onts)
-        online += sum(1 for item in snapshot.values() if item.online)
-        offline += sum(1 for item in snapshot.values() if not item.online)
-        low_signal += sum(
-            1
-            for item in snapshot.values()
-            if item.olt_rx_dbm is not None and item.olt_rx_dbm < -25
-        )
-
-    # UISP-managed ONTs were already bucketed above — keep them out of the
-    # unmonitored -> offline rollup.
-    unmonitored_total = max(
-        inventory_total - len(monitored_ont_ids) - len(uisp_ont_rows), 0
-    )
+    # No live per-OLT monitoring source remains, so every non-UISP active ONT
+    # is unmonitored and rolls up as offline (UISP-managed ONTs were already
+    # bucketed above — keep them out of the unmonitored -> offline rollup).
+    unmonitored_total = max(inventory_total - len(uisp_ont_rows), 0)
     offline += unmonitored_total
 
     return {
@@ -1452,7 +1402,7 @@ def get_onu_status_summary(db: Session, *, refresh: bool = False) -> dict[str, i
 
 
 def get_onu_olt_status_summary(db: Session) -> dict[str, int]:
-    """Aggregate raw ONT link status directly from Zabbix."""
+    """Aggregate raw ONT link status (same degraded rollup as the summary)."""
     return get_onu_status_summary(db)
 
 
@@ -1472,7 +1422,6 @@ def get_pon_outage_summary(db: Session) -> list[dict]:
         OntUnit,
         PonPort,
     )
-    from app.services.zabbix_ont_status import get_ont_snapshots_from_zabbix
 
     assignments = (
         db.query(OntAssignment)
@@ -1483,10 +1432,6 @@ def get_pon_outage_summary(db: Session) -> list[dict]:
     ont_ids = [assignment.ont_unit_id for assignment in assignments]
     onts = db.query(OntUnit).filter(OntUnit.id.in_(ont_ids)).all() if ont_ids else []
     ont_by_id = {ont.id: ont for ont in onts}
-    # Page-render path: read cached snapshots only. A cold cache returns no
-    # outages rather than blocking the dashboard on a per-OLT live Zabbix
-    # fan-out; the cache is warmed by the snapshot/refresh paths.
-    snapshots = get_ont_snapshots_from_zabbix(db, onts, cached_only=True)
 
     port_offline: dict[str, list[dict]] = {}
     total_per_port: dict[str, int] = {}
@@ -1497,9 +1442,9 @@ def get_pon_outage_summary(db: Session) -> list[dict]:
             continue
         total_per_port[port_key] = total_per_port.get(port_key, 0) + 1
         ont = ont_by_id.get(assignment.ont_unit_id)
-        snapshot = snapshots.get(str(assignment.ont_unit_id))
-        if snapshot and snapshot.online:
-            continue
+        # The live ONT snapshot source (Zabbix) was retired with the native
+        # monitoring cutover; no ONT ever reads online here, matching the
+        # permanently-cold-cache behaviour the request path already had.
         reason = getattr(ont, "offline_reason", None)
         last_seen = getattr(ont, "last_seen_at", None)
         port_offline.setdefault(port_key, []).append(

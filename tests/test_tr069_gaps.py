@@ -733,16 +733,12 @@ class TestAutoLinkOnts:
         assert rows[0].id == ont.id
         assert rows[0].last_seen_at == device.last_inform_at
 
-    def test_ont_list_page_data_uses_zabbix_for_last_seen(
-        self, db_session, monkeypatch
-    ) -> None:
+    def test_ont_list_page_data_uses_inventory_for_last_seen(self, db_session) -> None:
         from app.models.network import OntUnit
-        from app.services import zabbix_ont_status
         from app.services.web_network_core_devices_views import onts_list_page_data
 
         stale_last_seen = datetime.now(UTC) - timedelta(hours=2)
         latest_inform = datetime.now(UTC) - timedelta(minutes=5)
-        zabbix_seen = datetime.now(UTC) - timedelta(minutes=1)
         server = Tr069AcsServer(
             name="Latest Inform Table ACS",
             base_url="http://genieacs:7557",
@@ -768,29 +764,19 @@ class TestAutoLinkOnts:
         )
         db_session.commit()
 
-        monkeypatch.setattr(
-            zabbix_ont_status,
-            "get_ont_snapshots_from_zabbix",
-            lambda db, onts, **_: {
-                str(item.id): zabbix_ont_status.OntSignalData(
-                    online=True,
-                    updated_at=zabbix_seen,
-                )
-                for item in onts
-            },
-        )
-
         page_data = onts_list_page_data(
             db_session,
             authorization="all",
             search=ont.serial_number,
         )
 
+        # The live snapshot source was retired: the list renders from the
+        # persisted inventory columns (native poller writes them).
         signal_data = page_data["signal_data"][str(ont.id)]
         assert signal_data["acs_last_inform_at"] == stale_last_seen.replace(tzinfo=None)
-        assert signal_data["last_seen_at"] == zabbix_seen
-        assert signal_data["status_source"] == "zabbix"
-        assert signal_data["status_display"] == "Online"
+        assert signal_data["last_seen_at"] == stale_last_seen.replace(tzinfo=None)
+        assert signal_data["status_source"] == "inventory"
+        assert signal_data["status_display"] == "Offline"
 
     def test_ont_index_template_renders_zabbix_last_seen_column(self) -> None:
         ont_id = uuid4()

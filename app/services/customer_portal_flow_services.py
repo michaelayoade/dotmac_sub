@@ -1,7 +1,6 @@
 """Service and usage flows for customer portal."""
 
 import logging
-from collections import defaultdict
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -663,36 +662,6 @@ def _daily_radius_accounting_usage(
     return usage_by_day
 
 
-def _zabbix_usage_records(graph: list[dict[str, Any]]) -> list[Any]:
-    by_day: dict[datetime, dict[str, float]] = defaultdict(
-        lambda: {"download_bytes": 0.0, "upload_bytes": 0.0}
-    )
-    for point in graph:
-        day = datetime.fromtimestamp(int(point.get("timestamp") or 0), tz=UTC).replace(
-            hour=0,
-            minute=0,
-            second=0,
-            microsecond=0,
-        )
-        by_day[day]["download_bytes"] += float(point.get("download_bytes") or 0)
-        by_day[day]["upload_bytes"] += float(point.get("upload_bytes") or 0)
-
-    return [
-        SimpleNamespace(
-            recorded_at=day,
-            usage_type="Zabbix Bandwidth",
-            amount=(totals["download_bytes"] + totals["upload_bytes"]) / (1024**3),
-            usage_amount=(totals["download_bytes"] + totals["upload_bytes"])
-            / (1024**3),
-            download_amount=totals["download_bytes"] / (1024**3),
-            upload_amount=totals["upload_bytes"] / (1024**3),
-            unit="GB",
-            description=f"Counter-derived usage for {day.date().isoformat()}",
-        )
-        for day, totals in sorted(by_day.items(), reverse=True)
-    ]
-
-
 def _serialize_usage_chart_records(records: list[Any]) -> list[dict[str, Any]]:
     ordered_records = sorted(
         records,
@@ -885,32 +854,8 @@ def get_usage_page(
     start_at, end_at = _usage_period_bounds(period, activated_at=activated_at)
 
     usage_source = "postgres"
-    zabbix_usage = None
     chart_source_records: list[Any] = []
-    if len(subscription_ids) == 1:
-        try:
-            from app.services.zabbix_engine import get_zabbix_engine
-
-            zabbix_usage = get_zabbix_engine().get_cached_customer_usage(
-                subscription_id_str,
-                period,
-                page,
-                per_page,
-            )
-        except Exception:
-            logger.info(
-                "customer_zabbix_usage_cache_fallback",
-                extra={"event": "customer_zabbix_usage_cache_fallback"},
-            )
-            zabbix_usage = None
-
-    if zabbix_usage:
-        usage_records = zabbix_usage["usage_records"]
-        total = int(zabbix_usage["total"])
-        usage_summary = zabbix_usage["usage_summary"]
-        usage_source = "zabbix"
-        chart_source_records = _zabbix_usage_records(zabbix_usage.get("graph") or [])
-    elif not allow_postgres_fallback:
+    if not allow_postgres_fallback:
         return {
             **empty_result,
             "period": period,

@@ -265,7 +265,7 @@ class OntUnits(CRUDManager[OntUnit]):
                 )
             )
 
-        zabbix_status_filter = (
+        runtime_status_filter = (
             olt_status if olt_status in {"online", "offline"} else None
         )
 
@@ -300,17 +300,14 @@ class OntUnits(CRUDManager[OntUnit]):
             }
             stmt = _apply_ordering(stmt, order_by, order_dir, allowed)
 
-        if zabbix_status_filter is not None:
-            from app.services.zabbix_ont_status import get_ont_snapshots_from_zabbix
-
+        if runtime_status_filter is not None:
+            # The live runtime-status source (Zabbix) was retired with the
+            # native monitoring cutover: every ONT reads offline, matching the
+            # unconfigured behaviour ("online" matches nothing).
             ordered_results = list(db.scalars(stmt).all())
-            snapshots = get_ont_snapshots_from_zabbix(db, ordered_results)
-            filtered_results = [
-                ont
-                for ont in ordered_results
-                if snapshots.get(str(ont.id))
-                and snapshots[str(ont.id)].status == zabbix_status_filter
-            ]
+            filtered_results = (
+                [] if runtime_status_filter == "online" else ordered_results
+            )
             total = len(filtered_results)
             return filtered_results[offset : offset + limit], total
 

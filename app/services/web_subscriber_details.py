@@ -241,15 +241,15 @@ def _build_equipment_snapshot(db: Session, subscriber_id) -> dict[str, object]:
             ont = assignment.ont_unit
             if not ont:
                 continue
-            from app.services.zabbix_ont_status import get_ont_signal_from_zabbix
-
-            status_value = get_ont_signal_from_zabbix(ont).status
             equipment.append(
                 {
                     "type": "ONT",
                     "model": ont.model or ont.name or "ONT",
                     "serial": ont.serial_number or "-",
-                    "online": status_value == "online",
+                    # The live ONT status source (Zabbix) was retired with the
+                    # native monitoring cutover; ONTs list as offline here,
+                    # matching the unconfigured behaviour.
+                    "online": False,
                     "detail_url": f"/admin/network/onts/{ont.id}",
                     "tr069_url": f"/admin/network/onts/{ont.id}?tab=diagnostics",
                 }

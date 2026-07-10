@@ -1,4 +1,4 @@
-"""UISP client config resolution mirrors the Zabbix conventions.
+"""UISP client config resolution follows the shared client conventions.
 
 Token chain: UISP_API_TOKEN_FILE -> UISP_API_TOKEN (with bao:// reference
 resolution) -> OpenBao uisp/api_token fallback. Base URL defaults to the

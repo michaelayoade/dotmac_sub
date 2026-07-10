@@ -7,7 +7,7 @@ Three surfaces, all built from existing data:
   window, sorted by uptime % ascending, enriched with affected-subscriber count
   and incident count. Reuses ``network_monitoring.uptime_report`` as the engine.
 * **wallboard** — live up/down/degraded counts per tier from the warmed
-  ``live_status`` cache + ONT-online ratio (no Zabbix on the request path).
+  ``live_status`` cache + ONT-online ratio (no live fan-out on the request path).
 * **sla** — uptime % vs target with PASS/BREACH + MTTR (see Phase 2b).
 
 Tiers map onto the engine's ``group_by`` dimensions:
@@ -339,7 +339,7 @@ def wallboard(db: Session) -> dict:
     #458) so the wallboard agrees with the Network Devices page and a device
     with no/stale live signal counts as ``unmonitored``, not a false
     ``down``/``unknown``. Reads only the warmed ``live_status`` cache and
-    ONT-online ratios — never calls Zabbix on the request path.
+    ONT-online ratios — no live fan-out on the request path.
     """
     devices = (
         db.query(
