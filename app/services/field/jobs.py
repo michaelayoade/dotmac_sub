@@ -16,6 +16,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models.dispatch import TechnicianProfile, WorkOrderAssignmentQueue
+from app.models.field_vendor import FieldVendor, FieldVendorUser
 from app.models.subscriber import Subscriber
 from app.models.system_user import SystemUser
 from app.models.work_order_mirror import WorkOrderMirror
@@ -44,6 +45,30 @@ OPEN_STATUSES = frozenset({"scheduled", "dispatched", "in_progress", "paused"})
 FieldJobSummaries = list[FieldJobSummary]
 FieldJobDestinationPayload = dict[str, Any]
 FieldJobDestinationPayloads = list[FieldJobDestinationPayload]
+
+
+def _annotate_vendor_membership(
+    db: Session, profile: TechnicianProfile
+) -> TechnicianProfile:
+    if profile.system_user_id is None:
+        return profile
+    membership = (
+        db.query(FieldVendorUser)
+        .join(FieldVendor, FieldVendor.id == FieldVendorUser.vendor_id)
+        .filter(FieldVendorUser.system_user_id == profile.system_user_id)
+        .filter(FieldVendorUser.is_active.is_(True))
+        .filter(FieldVendor.is_active.is_(True))
+        .order_by(FieldVendorUser.created_at.desc())
+        .first()
+    )
+    if membership is None:
+        return profile
+    profile._field_vendor_id = str(membership.vendor_id)
+    profile._field_vendor_user_id = str(membership.id)
+    profile._field_crm_vendor_user_id = membership.crm_vendor_user_id
+    if membership.vendor is not None:
+        profile._field_crm_vendor_id = membership.vendor.crm_vendor_id
+    return profile
 
 
 def _string_list(value: Any) -> list[str]:
@@ -101,7 +126,7 @@ def _profile_from_principal(
             )
         ).first()
         if profile is not None:
-            return profile
+            return _annotate_vendor_membership(db, profile)
 
     crm_person_id = principal.get("crm_person_id")
     if crm_person_id:
@@ -109,9 +134,13 @@ def _profile_from_principal(
             TechnicianProfile.crm_person_id == str(crm_person_id)
         ).first()
         if profile is not None:
-            return profile
+            return _annotate_vendor_membership(db, profile)
 
     raise HTTPException(status_code=404, detail="Technician profile not found")
+
+
+def _metadata_text_match(key: str, value: str):
+    return WorkOrderMirror.metadata_[key].as_string() == value
 
 
 def _scoped_query(db: Session, profile: TechnicianProfile):
@@ -123,6 +152,41 @@ def _scoped_query(db: Session, profile: TechnicianProfile):
     if profile.crm_person_id:
         clauses.append(
             WorkOrderMirror.assigned_to_crm_person_id == profile.crm_person_id
+        )
+    vendor_id = getattr(profile, "_field_vendor_id", None)
+    if vendor_id:
+        clauses.extend(
+            [
+                _metadata_text_match("assigned_vendor_id", vendor_id),
+                _metadata_text_match("vendor_id", vendor_id),
+                WorkOrderMirror.metadata_["assigned_vendor"]["id"].as_string()
+                == vendor_id,
+                WorkOrderMirror.metadata_["vendor"]["id"].as_string() == vendor_id,
+            ]
+        )
+    vendor_user_id = getattr(profile, "_field_vendor_user_id", None)
+    if vendor_user_id:
+        clauses.extend(
+            [
+                _metadata_text_match("assigned_vendor_user_id", vendor_user_id),
+                _metadata_text_match("vendor_user_id", vendor_user_id),
+            ]
+        )
+    crm_vendor_id = getattr(profile, "_field_crm_vendor_id", None)
+    if crm_vendor_id:
+        clauses.extend(
+            [
+                _metadata_text_match("crm_assigned_vendor_id", crm_vendor_id),
+                _metadata_text_match("crm_vendor_id", crm_vendor_id),
+            ]
+        )
+    crm_vendor_user_id = getattr(profile, "_field_crm_vendor_user_id", None)
+    if crm_vendor_user_id:
+        clauses.extend(
+            [
+                _metadata_text_match("crm_assigned_vendor_user_id", crm_vendor_user_id),
+                _metadata_text_match("crm_vendor_user_id", crm_vendor_user_id),
+            ]
         )
     return query.filter(or_(*clauses))
 
