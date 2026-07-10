@@ -26,6 +26,11 @@ _INACTIVE_SUBSCRIBER_STATUSES = {
     SubscriberStatus.disabled.value,
     SubscriberStatus.canceled.value,
 }
+_OPAQUE_CONTACT_CHANNELS = {
+    InboxChannelType.facebook_messenger.value,
+    InboxChannelType.instagram_dm.value,
+    InboxChannelType.chat_widget.value,
+}
 
 
 @dataclass(frozen=True)
@@ -101,6 +106,9 @@ def _normalize_contact_with_country(
     *,
     country_code: str,
 ) -> str | None:
+    if channel_type in _OPAQUE_CONTACT_CHANNELS:
+        normalized = str(value or "").strip()
+        return normalized or None
     return normalize_channel_address(
         channel_type,
         value,
