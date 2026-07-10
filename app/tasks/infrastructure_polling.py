@@ -46,14 +46,21 @@ def run_infrastructure_poll() -> dict[str, Any]:
         DEFAULT_PING_INTERVAL_SECONDS,
         DEFAULT_SNMP_INTERVAL_SECONDS,
         poll_infrastructure,
+        record_poll_skip,
+        record_poll_success,
     )
 
     with db_session_adapter.advisory_lock(
         ADVISORY_LOCK_KEY, timeout_ms=_LOCK_TIMEOUT_MS
     ) as (db, acquired):
         if not acquired:
-            logger.info("infrastructure_poll_skipped: previous run still in progress")
-            return {"skipped": "already_running"}
+            streak = record_poll_skip()
+            logger.info(
+                "infrastructure_poll_skipped: previous run still in progress "
+                "(streak=%d)",
+                streak,
+            )
+            return {"skipped": "already_running", "skip_streak": streak}
         try:
             ping_interval = _interval_setting(
                 db,
@@ -73,6 +80,10 @@ def run_infrastructure_poll() -> dict[str, Any]:
                 snmp_interval_seconds=snmp_interval,
             )
             db.commit()
+            # Stamp the heartbeat only after a committed sweep so a stalled or
+            # failing poller ages out and trips the admin alert (dead-man
+            # switch — see admin_alerts poll-health findings).
+            record_poll_success(result)
             return result
         except SoftTimeLimitExceeded:
             db.rollback()
