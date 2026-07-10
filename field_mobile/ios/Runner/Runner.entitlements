@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+	<dict>
+		<!-- APNs environment for FCM. ci_post_clone.sh flips this to
+		     "production" for release/TestFlight archives when the
+		     GoogleService-Info.plist secret is provided; Xcode Cloud managed
+		     signing then provisions the Push Notifications capability. -->
+		<key>aps-environment</key>
+		<string>development</string>
+	</dict>
+</plist>
