@@ -113,6 +113,34 @@ def test_refresh_stale_cap_takes_longest_unchecked(db_session, monkeypatch):
     assert set(probed) == {str(never.id), str(oldest.id)}
 
 
+def test_unstampable_devices_never_count_as_stale(db_session, monkeypatch):
+    # A ping-enabled device with no mgmt_ip can never be pinged (ping_device
+    # early-returns without stamping), so it must not occupy capped batches.
+    probed = []
+    monkeypatch.setattr(
+        runtime,
+        "_refresh_device_health_worker",
+        lambda device_id, do_ping, do_snmp: probed.append(device_id),
+    )
+    hostname_only = _device(
+        "stale-hostname-only", None, hostname="ho-1", snmp_enabled=False
+    )
+    real = _device("stale-real", "10.80.9.1")
+    db_session.add_all([hostname_only, real])
+    db_session.commit()
+
+    totals = runtime.refresh_stale_devices_health(
+        db_session,
+        [hostname_only, real],
+        ping_interval_seconds=60,
+        snmp_interval_seconds=300,
+        max_devices=1,
+    )
+
+    assert totals["checked"] == 1
+    assert probed == [str(real.id)]
+
+
 def test_counter_targets_skip_ping_down_devices(db_session):
     from app.models.network_monitoring import DeviceInterface
 
