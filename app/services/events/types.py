@@ -81,6 +81,13 @@ class EventType(enum.Enum):
     appointment_scheduled = "appointment.scheduled"
     appointment_missed = "appointment.missed"
 
+    # Sales vertical events (3) — native from day one (Phase 3 risk #13:
+    # lead/quote lifecycle was webhook-silent in the CRM's event system;
+    # Phase 4 automation consumes these).
+    lead_created = "lead.created"
+    quote_accepted = "quote.accepted"
+    sales_order_paid = "sales_order.paid"
+
     # Network events (4)
     device_offline = "device.offline"
     device_online = "device.online"

@@ -422,6 +422,13 @@ from app.models.operational_escalation import (  # noqa: F401
     OperationalWatcher,
     OperationalWatcherRole,
 )
+from app.models.organization import (  # noqa: F401
+    Organization,
+    OrganizationAccountStatus,
+    OrganizationAccountType,
+    OrganizationMembership,
+    OrganizationMembershipRole,
+)
 from app.models.payment_arrangement import (  # noqa: F401
     ArrangementStatus,
     InstallmentStatus,
@@ -440,6 +447,23 @@ from app.models.portal_message import (  # noqa: F401
     PortalMessageStatus,
     PortalMessageType,
     PortalOnboardingState,
+)
+from app.models.project import (  # noqa: F401
+    Project,
+    ProjectComment,
+    ProjectPriority,
+    ProjectStatus,
+    ProjectTask,
+    ProjectTaskAssignee,
+    ProjectTaskComment,
+    ProjectTaskDependency,
+    ProjectTaskDependencyType,
+    ProjectTaskPriority,
+    ProjectTaskStatus,
+    ProjectTemplate,
+    ProjectTemplateTask,
+    ProjectTemplateTaskDependency,
+    ProjectType,
 )
 from app.models.project_mirror import (  # noqa: F401
     ProjectMirror,
@@ -504,6 +528,12 @@ from app.models.referral import (  # noqa: F401
     ReferralMirror,
     ReferralProgramCache,
 )
+from app.models.referral_native import (  # noqa: F401
+    Referral,
+    ReferralCode,
+    ReferralRewardStatus,
+    ReferralStatus,
+)
 from app.models.router_management import (  # noqa: F401
     JumpHost,
     Router,
@@ -518,6 +548,19 @@ from app.models.router_management import (  # noqa: F401
     RouterSnapshotSource,
     RouterStatus,
     RouterTemplateCategory,
+)
+from app.models.sales import (  # noqa: F401
+    Lead,
+    LeadStatus,
+    Pipeline,
+    PipelineStage,
+    Quote,
+    QuoteLineItem,
+    QuoteStatus,
+    SalesOrder,
+    SalesOrderLine,
+    SalesOrderPaymentStatus,
+    SalesOrderStatus,
 )
 from app.models.scheduler import ScheduledTask, ScheduleType  # noqa: F401
 from app.models.service_extension import (  # noqa: F401
@@ -565,6 +608,7 @@ from app.models.subscriber import (  # noqa: F401
     ChannelType,
     ContactMethod,
     Gender,
+    PartyStatus,
     Reseller,
     Subscriber,
     SubscriberChannel,
@@ -683,6 +727,11 @@ from app.models.wireguard import (  # noqa: F401
     WireGuardPeer,
     WireGuardPeerStatus,
     WireGuardServer,
+)
+from app.models.work_link import (  # noqa: F401
+    WorkEntityType,
+    WorkLink,
+    WorkLinkType,
 )
 from app.models.work_order_mirror import (  # noqa: F401
     WorkOrderMirror,
