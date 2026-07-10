@@ -9,6 +9,7 @@ from app.api.field.devices import router as devices_router
 from app.api.field.equipment import router as equipment_router
 from app.api.field.locations import router as locations_router
 from app.api.field.map_assets import router as map_assets_router
+from app.api.field.material_requests import router as material_requests_router
 from app.api.field.materials import router as materials_router
 from app.api.field.notes import router as notes_router
 from app.api.field.schedule import router as schedule_router
@@ -31,6 +32,7 @@ router.include_router(devices_router)
 router.include_router(equipment_router)
 router.include_router(locations_router)
 router.include_router(map_assets_router)
+router.include_router(material_requests_router)
 router.include_router(materials_router)
 router.include_router(notes_router)
 router.include_router(schedule_router)

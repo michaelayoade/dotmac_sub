@@ -178,6 +178,8 @@ from app.models.field_location import (  # noqa: F401
 )
 from app.models.field_material import (  # noqa: F401
     FieldInventoryItem,
+    FieldMaterialRequest,
+    FieldMaterialRequestItem,
     FieldWorkOrderMaterial,
 )
 from app.models.field_note import FieldWorkOrderNote  # noqa: F401

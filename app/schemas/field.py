@@ -280,6 +280,47 @@ class FieldMaterialConsumeRequest(BaseModel):
     items: list[FieldMaterialConsumeItem] = Field(min_length=1, max_length=50)
 
 
+class FieldMaterialRequestItemCreate(BaseModel):
+    item_id: UUID
+    quantity: int = Field(gt=0)
+    notes: str | None = Field(default=None, max_length=1000)
+
+
+class FieldMaterialRequestCreate(BaseModel):
+    crm_work_order_id: str = Field(min_length=1, max_length=64)
+    priority: Literal["low", "medium", "high", "urgent"] = "medium"
+    notes: str | None = Field(default=None, max_length=2000)
+    items: list[FieldMaterialRequestItemCreate] = Field(min_length=1, max_length=50)
+
+
+class FieldMaterialRequestItemRead(BaseModel):
+    id: UUID
+    item_id: UUID
+    sku: str | None = None
+    name: str
+    unit: str | None = None
+    quantity: int
+    notes: str | None = None
+
+
+class FieldMaterialRequestRead(BaseModel):
+    id: UUID
+    crm_work_order_id: str
+    crm_material_request_id: str | None = None
+    requested_by_person_id: UUID
+    requested_by_system_user_id: UUID | None = None
+    status: str
+    priority: str
+    notes: str | None = None
+    submitted_at: datetime | None = None
+    approved_at: datetime | None = None
+    rejected_at: datetime | None = None
+    fulfilled_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+    items: list[FieldMaterialRequestItemRead] = Field(default_factory=list)
+
+
 class FieldJobHistoryItem(BaseModel):
     id: str
     type: str
@@ -305,7 +346,7 @@ class FieldJobDetail(BaseModel):
     notes: list[FieldNoteRead] = Field(default_factory=list)
     attachments: list[FieldAttachmentRead] = Field(default_factory=list)
     materials: list[FieldMaterialRead] = Field(default_factory=list)
-    material_requests: list[dict[str, Any]] = Field(default_factory=list)
+    material_requests: list[FieldMaterialRequestRead] = Field(default_factory=list)
     worklogs: list[FieldWorkLogRead] = Field(default_factory=list)
     events: list[FieldJobEventRead] = Field(default_factory=list)
     equipment: FieldEquipmentRead | None = None
