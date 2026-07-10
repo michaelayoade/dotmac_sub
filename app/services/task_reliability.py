@@ -246,6 +246,13 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.notifications.deliver_notification_queue": _c(
         "notifications", STATE, GUARDED, STATUS
     ),
+    "app.tasks.operational_escalations.dispatch_operational_escalation_deliveries": _c(
+        "operations",
+        STATE,
+        GUARDED,
+        STATUS,
+        "Dispatches pending escalation deliveries; delivery row state gates retries.",
+    ),
     "app.tasks.oauth.check_token_health": _c("integrations", SWEEP, IDEMP, HEALTH),
     "app.tasks.oauth.refresh_expiring_tokens": _c(
         "integrations", STATE, GUARDED, STATUS

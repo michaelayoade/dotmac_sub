@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from fastapi import HTTPException
@@ -13,6 +15,13 @@ from app.models.subscriber import Subscriber, SubscriberStatus
 from app.models.team_inbox import InboxConversation, InboxMessage, InboxMessageDirection
 
 META_TEST_SECRET = "meta-secret"  # pragma: allowlist secret
+
+
+def _run_async(coro):
+    # Run the webhook coroutine on its own loop to avoid suite-level loop reuse.
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(asyncio.run, coro)
+        return future.result()
 
 
 def _request(body: bytes, headers: dict[str, str] | None = None) -> Request:
@@ -76,22 +85,18 @@ def test_meta_webhook_verify_rejects_bad_token(db_session, monkeypatch):
     assert exc.value.status_code == 403
 
 
-@pytest.mark.asyncio
-async def test_meta_whatsapp_webhook_rejects_bad_signature(db_session, monkeypatch):
+def test_meta_whatsapp_webhook_rejects_bad_signature(db_session, monkeypatch):
     monkeypatch.setattr(inbox_webhooks, "_app_secret", lambda db: META_TEST_SECRET)
     body = b'{"entry":[]}'
     request = _request(body, {"X-Hub-Signature-256": "sha256=bad"})
 
     with pytest.raises(HTTPException) as exc:
-        await inbox_webhooks.receive_meta_whatsapp_webhook(request, db_session)
+        _run_async(inbox_webhooks.receive_meta_whatsapp_webhook(request, db_session))
 
     assert exc.value.status_code == 401
 
 
-@pytest.mark.asyncio
-async def test_meta_whatsapp_webhook_creates_native_inbox_message(
-    db_session, monkeypatch
-):
+def test_meta_whatsapp_webhook_creates_native_inbox_message(db_session, monkeypatch):
     monkeypatch.setattr(inbox_webhooks, "_app_secret", lambda db: META_TEST_SECRET)
     subscriber = _subscriber(db_session)
     payload = {
@@ -132,7 +137,9 @@ async def test_meta_whatsapp_webhook_creates_native_inbox_message(
     body = json.dumps(payload).encode("utf-8")
     request = _request(body, {"X-Hub-Signature-256": _sign(body)})
 
-    response = await inbox_webhooks.receive_meta_whatsapp_webhook(request, db_session)
+    response = _run_async(
+        inbox_webhooks.receive_meta_whatsapp_webhook(request, db_session)
+    )
 
     conversation = db_session.query(InboxConversation).one()
     message = db_session.query(InboxMessage).one()
@@ -145,8 +152,7 @@ async def test_meta_whatsapp_webhook_creates_native_inbox_message(
     assert message.body == "My internet is down"
 
 
-@pytest.mark.asyncio
-async def test_meta_whatsapp_webhook_updates_outbound_delivery_status(
+def test_meta_whatsapp_webhook_updates_outbound_delivery_status(
     db_session, monkeypatch
 ):
     monkeypatch.setattr(inbox_webhooks, "_app_secret", lambda db: META_TEST_SECRET)
@@ -195,7 +201,9 @@ async def test_meta_whatsapp_webhook_updates_outbound_delivery_status(
     body = json.dumps(payload).encode("utf-8")
     request = _request(body, {"X-Hub-Signature-256": _sign(body)})
 
-    response = await inbox_webhooks.receive_meta_whatsapp_webhook(request, db_session)
+    response = _run_async(
+        inbox_webhooks.receive_meta_whatsapp_webhook(request, db_session)
+    )
 
     db_session.refresh(message)
     assert response["processed"] == 0
@@ -207,10 +215,7 @@ async def test_meta_whatsapp_webhook_updates_outbound_delivery_status(
     assert message.metadata_["delivery_status_history"][-1]["status"] == "delivered"
 
 
-@pytest.mark.asyncio
-async def test_meta_whatsapp_webhook_acknowledges_unknown_status(
-    db_session, monkeypatch
-):
+def test_meta_whatsapp_webhook_acknowledges_unknown_status(db_session, monkeypatch):
     monkeypatch.setattr(inbox_webhooks, "_app_secret", lambda db: META_TEST_SECRET)
     payload = {
         "object": "whatsapp_business_account",
@@ -239,7 +244,9 @@ async def test_meta_whatsapp_webhook_acknowledges_unknown_status(
     body = json.dumps(payload).encode("utf-8")
     request = _request(body, {"X-Hub-Signature-256": _sign(body)})
 
-    response = await inbox_webhooks.receive_meta_whatsapp_webhook(request, db_session)
+    response = _run_async(
+        inbox_webhooks.receive_meta_whatsapp_webhook(request, db_session)
+    )
 
     assert response["processed"] == 0
     assert response["status_processed"] == 1
