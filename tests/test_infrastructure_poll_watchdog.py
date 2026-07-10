@@ -41,18 +41,22 @@ def _pingable(db_session, name: str, ip: str, *, pinged_at=None):
 
 
 def test_success_stamps_heartbeat_and_resets_streak(db_session, monkeypatch):
+    from app.services import task_heartbeat
+
     cache = _wire_cache(monkeypatch)
+    skip_key = task_heartbeat._skip_key(infrastructure_polling.HEARTBEAT_TASK)
+    success_key = task_heartbeat._success_key(infrastructure_polling.HEARTBEAT_TASK)
     infrastructure_polling.record_poll_skip()
     infrastructure_polling.record_poll_skip()
-    assert cache.store[infrastructure_polling.SKIP_STREAK_KEY] == 2
+    assert cache.store[skip_key] == 2
 
     infrastructure_polling.record_poll_success(
         {"checked": 300, "interface_write_failed": 0, "skipped": "no"}
     )
 
-    heartbeat = cache.store[infrastructure_polling.HEARTBEAT_KEY]
+    heartbeat = cache.store[success_key]
     assert heartbeat["result"] == {"checked": 300, "interface_write_failed": 0}
-    assert cache.store[infrastructure_polling.SKIP_STREAK_KEY] == 0
+    assert cache.store[skip_key] == 0
 
 
 def test_snapshot_reads_heartbeat_and_db(db_session, monkeypatch):

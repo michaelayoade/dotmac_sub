@@ -108,6 +108,7 @@ from app.tasks.provisioning import (
 )
 from app.tasks.quotes import reconcile_quote_mirror
 from app.tasks.radius import run_radius_sync_job
+from app.tasks.radius_health import run_radius_health_check
 from app.tasks.radius_population import refresh_radius_from_subs, sync_device_login
 from app.tasks.referrals import reconcile_referral_mirror
 from app.tasks.router_sync import (
@@ -272,6 +273,7 @@ __all__ = [
     "run_topology_reconcile",
     "warm_topology_status",
     "run_infrastructure_poll",
+    "run_radius_health_check",
     "run_lldp_topology_poll",
     "run_outage_scan",
     "reconcile_detected_outages",

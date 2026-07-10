@@ -369,6 +369,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "Native ping/SNMP reachability sweep; probes only stale devices, so "
         "re-runs converge instead of duplicating work.",
     ),
+    "app.tasks.radius_health.run_radius_health_check": _c(
+        "network",
+        SWEEP,
+        IDEMP,
+        HEALTH,
+        "Read-only RADIUS accounting/enforcement health pass; every run "
+        "recomputes from source, so re-runs are idempotent.",
+    ),
     "app.tasks.topology_ufiber_link.run_ufiber_onu_link": _c(
         "network", SWEEP, IDEMP, HEALTH
     ),
