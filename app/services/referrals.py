@@ -118,6 +118,23 @@ def _generate_code(db: Session) -> str:
     )
 
 
+def native_read_enabled(db: Session) -> bool:
+    """Phase 3 read-flip flag (§4.2): native referral reads vs the CRM mirror.
+
+    OFF (default) — ``GET /me/referrals`` and the web Refer & Earn page keep
+    serving ``referrals_mirror``; ON — they serve the native tables via
+    ``Referrals.read_for_subscriber``. Lives in the §4.2
+    ``{vertical}_native_read_enabled`` flag family (``SettingDomain.projects``,
+    alongside ``quotes_native_write_enabled``), not with the five
+    ``referral_*`` program keys (``SettingDomain.subscriber``).
+    """
+    return bool(
+        settings_spec.resolve_value(
+            db, SettingDomain.projects, "referrals_native_read_enabled"
+        )
+    )
+
+
 def share_url(code: str) -> str:
     """The public share link for a referral code (the ``/r/{code}`` deep link).
 

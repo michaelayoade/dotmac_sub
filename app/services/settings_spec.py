@@ -4168,6 +4168,38 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=False,
         label="Phase 3: sync CRM changes into native tables (sync window)",
     ),
+    # Phase 3 read-flip flags (§4.2 flag family, one per vertical): OFF =
+    # the read surfaces (/me/*, web customer portal, reseller views) keep
+    # serving the CRM mirrors; ON = they serve the native services
+    # (projects.portal_read_for_subscriber, sales.selfserve read,
+    # referrals.read_for_subscriber). Shapes are identical (§2.5
+    # golden-payload contract), so flipping back is the cheap rollback
+    # during the sync window. Sales orders have no read surface of their
+    # own (§2.5 — sales_order_id rides inside the quote payload).
+    SettingSpec(
+        domain=SettingDomain.projects,
+        key="projects_native_read_enabled",
+        env_var="PROJECTS_NATIVE_READ_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=False,
+        label="Projects: native read path (Phase 3 read-flip flag)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.projects,
+        key="quotes_native_read_enabled",
+        env_var="QUOTES_NATIVE_READ_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=False,
+        label="Quotes: native read path (Phase 3 read-flip flag)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.projects,
+        key="referrals_native_read_enabled",
+        env_var="REFERRALS_NATIVE_READ_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=False,
+        label="Referrals: native read path (Phase 3 read-flip flag)",
+    ),
 ]
 
 DOMAIN_SETTINGS_SERVICE = {

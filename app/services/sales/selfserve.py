@@ -63,6 +63,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.models.catalog import CatalogOffer, OfferPrice, PriceType
 from app.models.domain_settings import SettingDomain
 from app.models.network import FiberAccessPoint
+from app.models.project import Project
 from app.models.sales import (
     Quote,
     QuoteStatus,
@@ -335,17 +336,41 @@ def _quote_status(quote: Quote) -> str:
 
 
 def _find_project_id_for_quote(db: Session, quote_id) -> str | None:
-    """PR 6 seam: install projects are not native in sub yet.
+    """Resolve the install project created from this quote.
 
     The CRM resolved the payload's ``project_id`` via
-    ``_find_existing_project_for_quote`` (idempotent on
-    ``Project.metadata_["quote_id"]``). Sub's ``projects`` service lands with
-    Phase 3 PR 6 — that PR must re-point this helper at the native ``Project``
-    model using the same ``metadata.quote_id`` key. Until then the portal
-    payload carries ``project_id: None`` for natively-accepted quotes (the
-    mobile/web schemas treat it as optional).
+    ``_find_existing_project_for_quote``, idempotent on
+    ``Project.metadata_["quote_id"]`` — the same key sub's native project
+    pipeline stamps. Quotes whose install project predates the native wiring
+    carry ``project_id: None`` (the mobile/web schemas treat it as optional).
     """
-    return None
+    project = (
+        db.query(Project)
+        .filter(Project.metadata_["quote_id"].as_string() == str(quote_id))
+        .filter(Project.is_active.is_(True))
+        .first()
+    )
+    return str(project.id) if project else None
+
+
+# Mirror parity: quotes_mirror.read_for_subscriber counts these as closed.
+_PORTAL_CLOSED_QUOTE_STATUSES = ("accepted", "rejected", "expired")
+
+
+def native_read_enabled(db: Session) -> bool:
+    """Phase 3 read-flip flag (§4.2): native quote reads vs the CRM mirror.
+
+    OFF (default) — ``/me/quotes``, the web portal page and the reseller
+    views keep serving ``quotes_mirror``; ON — they serve sub's native
+    ``quotes`` table via ``SelfServeQuotes.read_for_subscriber`` /
+    ``build_portal_quote_payload``. Distinct from the PR 5 write flag
+    (``quotes_native_write_enabled``) so reads can flip first (§4.2 step 3).
+    """
+    return bool(
+        settings_spec.resolve_value(
+            db, SettingDomain.projects, "quotes_native_read_enabled"
+        )
+    )
 
 
 class SelfServeQuotes:
@@ -370,6 +395,42 @@ class SelfServeQuotes:
         ):
             raise HTTPException(status_code=404, detail="Quote not found")
         return quote
+
+    @staticmethod
+    def list_for_subscribers(
+        db: Session, subscriber_ids: list[str] | str
+    ) -> list[Quote]:
+        """Active quotes for one subscriber or a set (a reseller's customer
+        subtree), newest first — the native counterpart of the mirror scans."""
+        if isinstance(subscriber_ids, str):
+            subscriber_ids = [subscriber_ids]
+        uuids = [
+            u for u in (coerce_uuid(str(s)) for s in subscriber_ids) if u is not None
+        ]
+        if not uuids:
+            return []
+        return (
+            db.query(Quote)
+            .options(selectinload(Quote.line_items))
+            .filter(Quote.subscriber_id.in_(uuids))
+            .filter(Quote.is_active.is_(True))
+            .order_by(Quote.created_at.desc())
+            .all()
+        )
+
+    @staticmethod
+    def read_for_subscriber(db: Session, subscriber_id: str) -> dict:
+        """Native ``GET /me/quotes`` / web-portal payload — the exact response
+        shell ``quotes_mirror.read_for_subscriber`` served (§2.5):
+        ``{quotes[], total, open}`` with ``build_portal_quote_payload`` items.
+        PR8 repoints the customer read surfaces here behind
+        ``quotes_native_read_enabled``."""
+        rows = SelfServeQuotes.list_for_subscribers(db, subscriber_id)
+        items = [build_portal_quote_payload(db, q) for q in rows]
+        open_count = sum(
+            1 for i in items if i["status"] not in _PORTAL_CLOSED_QUOTE_STATUSES
+        )
+        return {"quotes": items, "total": len(items), "open": open_count}
 
     @staticmethod
     def request_quote(
