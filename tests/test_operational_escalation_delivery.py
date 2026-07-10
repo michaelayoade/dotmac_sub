@@ -11,7 +11,7 @@ from app.models.operational_escalation import (
     OperationalParticipantType,
 )
 from app.models.service_team import ServiceTeam, ServiceTeamMember, ServiceTeamType
-from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
+from app.models.subscriber import Reseller, ResellerUser, Subscriber, SubscriberStatus
 from app.models.system_user import SystemUser
 from app.services import operational_escalation, operational_escalation_delivery
 
@@ -250,6 +250,134 @@ def test_dispatch_reseller_email_uses_reseller_contact(db_session, monkeypatch):
             "recipient": "ops@acme.example",
             "message": "Owner update overdue",
         }
+    ]
+
+
+def test_dispatch_reseller_email_fans_out_to_active_reseller_users(
+    db_session,
+    monkeypatch,
+):
+    reseller = Reseller(
+        name="Acme ISP",
+        contact_email="ops@acme.example",
+        is_active=True,
+    )
+    db_session.add(reseller)
+    db_session.flush()
+    db_session.add_all(
+        [
+            ResellerUser(
+                reseller_id=reseller.id,
+                email="owner@acme.example",
+                full_name="Acme Owner",
+                is_active=True,
+            ),
+            ResellerUser(
+                reseller_id=reseller.id,
+                email="inactive@acme.example",
+                full_name="Inactive Owner",
+                is_active=False,
+            ),
+        ]
+    )
+    db_session.flush()
+    event = _event(db_session)
+    delivery = operational_escalation.plan_delivery(
+        db_session,
+        event=event,
+        channel=OperationalNotificationChannel.email,
+        recipient_type=OperationalParticipantType.reseller,
+        recipient_id=reseller.id,
+    )
+    calls = []
+
+    def fake_send_notification(channel, recipient, message, **kwargs):
+        calls.append({"channel": channel, "recipient": recipient, "message": message})
+        return _adapter_result()
+
+    monkeypatch.setattr(
+        "app.services.notification_adapter.send_notification",
+        fake_send_notification,
+    )
+
+    result = operational_escalation_delivery.dispatch_delivery(db_session, delivery)
+
+    assert result.delivery_status == OperationalDeliveryStatus.sent
+    assert [call["recipient"] for call in calls] == [
+        "ops@acme.example",
+        "owner@acme.example",
+    ]
+
+
+def test_dispatch_reseller_whatsapp_fans_out_to_linked_reseller_user_phone(
+    db_session,
+    monkeypatch,
+):
+    reseller = Reseller(
+        name="Acme ISP",
+        contact_phone="+2348000000099",
+        is_active=True,
+    )
+    linked_user = Subscriber(
+        first_name="Acme",
+        last_name="Owner",
+        email="owner-login@acme.example",
+        phone="+2348000000100",
+        status=SubscriberStatus.active,
+        reseller=reseller,
+    )
+    inactive_linked_user = Subscriber(
+        first_name="Old",
+        last_name="Owner",
+        email="old-login@acme.example",
+        phone="+2348000000101",
+        status=SubscriberStatus.disabled,
+        reseller=reseller,
+    )
+    db_session.add_all([reseller, linked_user, inactive_linked_user])
+    db_session.flush()
+    db_session.add_all(
+        [
+            ResellerUser(
+                reseller_id=reseller.id,
+                subscriber_id=linked_user.id,
+                email="owner@acme.example",
+                is_active=True,
+            ),
+            ResellerUser(
+                reseller_id=reseller.id,
+                subscriber_id=inactive_linked_user.id,
+                email="old@acme.example",
+                is_active=True,
+            ),
+        ]
+    )
+    db_session.flush()
+    event = _event(db_session)
+    delivery = operational_escalation.plan_delivery(
+        db_session,
+        event=event,
+        channel=OperationalNotificationChannel.whatsapp,
+        recipient_type=OperationalParticipantType.reseller,
+        recipient_id=reseller.id,
+    )
+    calls = []
+
+    def fake_send_text_message(db, *, recipient, body, dry_run):
+        calls.append({"recipient": recipient, "body": body, "dry_run": dry_run})
+        return {"ok": True, "provider": "meta_cloud_api", "sent": True}
+
+    monkeypatch.setattr(
+        "app.services.integrations.connectors.whatsapp.send_text_message",
+        fake_send_text_message,
+    )
+
+    result = operational_escalation_delivery.dispatch_delivery(db_session, delivery)
+
+    assert result.delivery_status == OperationalDeliveryStatus.sent
+    assert [call["recipient"] for call in calls] == [
+        "+2348000000099",
+        "+2348000000100",
     ]
 
 

@@ -19,7 +19,7 @@ from app.models.operational_escalation import (
     OperationalRoomProvider,
 )
 from app.models.service_team import ServiceTeamMember
-from app.models.subscriber import Reseller, Subscriber
+from app.models.subscriber import Reseller, ResellerUser, Subscriber
 from app.models.system_user import SystemUser
 from app.services.notification_status_policy import status_allows_notification
 
@@ -413,11 +413,18 @@ def _reseller_target(
     reseller = db.get(Reseller, _uuid(delivery.recipient_id))
     if reseller is None:
         return []
+    targets: list[DeliveryTarget] = []
     if (
         delivery.channel == OperationalNotificationChannel.email
         and reseller.contact_email
     ):
-        address = reseller.contact_email
+        targets.append(
+            DeliveryTarget(
+                recipient_type=OperationalParticipantType.reseller,
+                recipient_id=str(reseller.id),
+                address=reseller.contact_email,
+            )
+        )
     elif (
         delivery.channel
         in {
@@ -426,16 +433,76 @@ def _reseller_target(
         }
         and reseller.contact_phone
     ):
-        address = reseller.contact_phone
-    else:
-        return []
-    return [
-        DeliveryTarget(
-            recipient_type=OperationalParticipantType.reseller,
-            recipient_id=str(reseller.id),
-            address=address,
+        targets.append(
+            DeliveryTarget(
+                recipient_type=OperationalParticipantType.reseller,
+                recipient_id=str(reseller.id),
+                address=reseller.contact_phone,
+            )
         )
-    ]
+    targets.extend(
+        _reseller_user_targets(db, reseller_id=reseller.id, delivery=delivery)
+    )
+    return _dedupe_targets(targets)
+
+
+def _reseller_user_targets(
+    db: Session,
+    *,
+    reseller_id: UUID,
+    delivery: OperationalEscalationDelivery,
+) -> list[DeliveryTarget]:
+    users = (
+        db.query(ResellerUser)
+        .filter(ResellerUser.reseller_id == reseller_id)
+        .filter(ResellerUser.is_active.is_(True))
+        .order_by(ResellerUser.created_at.asc())
+        .all()
+    )
+    targets: list[DeliveryTarget] = []
+    for user in users:
+        address: str | None = None
+        if delivery.channel == OperationalNotificationChannel.email:
+            address = user.email
+            if not address and user.subscriber_id:
+                subscriber = db.get(Subscriber, user.subscriber_id)
+                if subscriber is not None and _subscriber_can_receive(
+                    subscriber, delivery
+                ):
+                    address = subscriber.email
+        elif (
+            delivery.channel
+            in {
+                OperationalNotificationChannel.sms,
+                OperationalNotificationChannel.whatsapp,
+            }
+            and user.subscriber_id
+        ):
+            subscriber = db.get(Subscriber, user.subscriber_id)
+            if subscriber is not None and _subscriber_can_receive(subscriber, delivery):
+                address = subscriber.phone
+        if not address:
+            continue
+        targets.append(
+            DeliveryTarget(
+                recipient_type=OperationalParticipantType.reseller,
+                recipient_id=f"reseller_user:{user.id}",
+                address=address,
+            )
+        )
+    return targets
+
+
+def _dedupe_targets(targets: list[DeliveryTarget]) -> list[DeliveryTarget]:
+    deduped: list[DeliveryTarget] = []
+    seen: set[str] = set()
+    for target in targets:
+        key = target.address.strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(target)
+    return deduped
 
 
 def _duty_role_targets(delivery: OperationalEscalationDelivery) -> list[DeliveryTarget]:
@@ -535,13 +602,22 @@ def _subscriber_suppression_reason(
     subscriber = db.get(Subscriber, _uuid(subscriber_id))
     if subscriber is None:
         return None
-    if not subscriber.is_active:
-        return "subscriber.inactive"
-    category = str(_delivery_metadata(delivery).get("category") or "service")
-    if not status_allows_notification(subscriber.status, category):
+    if not _subscriber_can_receive(subscriber, delivery):
+        if not subscriber.is_active:
+            return "subscriber.inactive"
         status = subscriber.status.value if subscriber.status else "unknown"
         return f"subscriber.status.{status}"
     return None
+
+
+def _subscriber_can_receive(
+    subscriber: Subscriber,
+    delivery: OperationalEscalationDelivery,
+) -> bool:
+    if not subscriber.is_active:
+        return False
+    category = str(_delivery_metadata(delivery).get("category") or "service")
+    return status_allows_notification(subscriber.status, category)
 
 
 def _reseller_suppression_reason(
