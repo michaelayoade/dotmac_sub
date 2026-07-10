@@ -13,6 +13,15 @@ Unmapped subscriber policy is intentionally conservative:
   * closed/resolved/canceled/merged history can be imported unlinked when
     ``--allow-unmapped-closed`` is set;
   * all other unmapped subscriber rows block the run.
+
+Optional extensions:
+  * ``--staff-map staff_map.csv`` (from ``build_crm_staff_map.py``) derives
+    comment authorship (spec 10-phase1-tickets.md section 1.4) and
+    re-attributes pull-era comments that still carry
+    ``metadata.crm_author_person_id`` with no ``author_system_user_id``;
+  * ``--include-engine-data`` copies the one-time (non-watermarked) engine
+    tables: ticket_assignment_rules/_counters, sla_policies/_targets and
+    sla_clocks/_breaches (section 1.9), keyed on CRM UUIDs.
 """
 
 from __future__ import annotations
@@ -58,6 +67,14 @@ class ImportStats:
     links_inserted: int = 0
     access_tokens_upserted: int = 0
     service_teams_upserted: int = 0
+    re_attributed: int = 0
+    sla_events_inserted: int = 0
+    assignment_rules_upserted: int = 0
+    assignment_counters_upserted: int = 0
+    sla_policies_upserted: int = 0
+    sla_targets_upserted: int = 0
+    sla_clocks_upserted: int = 0
+    sla_breaches_upserted: int = 0
     max_crm_updated_at: str | None = None
     blockers: list[dict[str, Any]] = field(default_factory=list)
 
@@ -75,6 +92,14 @@ class ImportStats:
             "links_inserted": self.links_inserted,
             "access_tokens_upserted": self.access_tokens_upserted,
             "service_teams_upserted": self.service_teams_upserted,
+            "re_attributed": self.re_attributed,
+            "sla_events_inserted": self.sla_events_inserted,
+            "assignment_rules_upserted": self.assignment_rules_upserted,
+            "assignment_counters_upserted": self.assignment_counters_upserted,
+            "sla_policies_upserted": self.sla_policies_upserted,
+            "sla_targets_upserted": self.sla_targets_upserted,
+            "sla_clocks_upserted": self.sla_clocks_upserted,
+            "sla_breaches_upserted": self.sla_breaches_upserted,
             "max_crm_updated_at": self.max_crm_updated_at,
             "blockers": self.blockers,
         }
@@ -190,6 +215,52 @@ def _load_overrides(path: str | None) -> dict[str, UnmappedDecision]:
     return overrides
 
 
+def _load_staff_map(path: str | None) -> dict[str, str]:
+    """Load ``crm_person_id -> system_user_id`` from build_crm_staff_map.py output."""
+    if not path:
+        return {}
+    staff_map: dict[str, str] = {}
+    with Path(path).open(newline="", encoding="utf-8") as handle:
+        for row in csv.DictReader(handle):
+            crm_person_id = str(row.get("crm_person_id") or "").strip().lower()
+            system_user_id = str(row.get("system_user_id") or "").strip().lower()
+            if not crm_person_id or not system_user_id:
+                continue
+            existing = staff_map.get(crm_person_id)
+            if existing and existing != system_user_id:
+                raise SystemExit(
+                    f"Conflicting staff-map rows for crm_person_id {crm_person_id}"
+                )
+            staff_map[crm_person_id] = system_user_id
+    return staff_map
+
+
+def derive_comment_author(
+    crm_author_person_id: str | None,
+    *,
+    staff_map: dict[str, str],
+    person_subscriber_map: dict[str, str],
+) -> tuple[str, str | None, str | None]:
+    """Spec 10-phase1-tickets.md section 1.4 comment author derivation.
+
+    Returns ``(author_type, author_person_id, author_system_user_id)`` where
+    ``author_person_id`` is a sub subscriber UUID. Staff-map hits win over
+    subscriber links (a staff person commenting is acting as staff); unmapped
+    authors stay ``staff`` with a NULL system user and rely on the preserved
+    ``metadata.crm_author_person_id`` for later re-attribution.
+    """
+    if not crm_author_person_id:
+        return ("system", None, None)
+    key = crm_author_person_id.strip().lower()
+    system_user_id = staff_map.get(key)
+    if system_user_id:
+        return ("staff", None, system_user_id)
+    subscriber_id = person_subscriber_map.get(key)
+    if subscriber_id:
+        return ("customer", subscriber_id, None)
+    return ("staff", None, None)
+
+
 def decide_unmapped_ticket(
     ticket: dict[str, Any],
     *,
@@ -253,6 +324,64 @@ def _load_subscriber_map(sub: Connection) -> dict[str, str]:
             "CRM subscriber alias conflicts found:\n"
             + json.dumps(conflicts[:25], indent=2)
         )
+    return mapping
+
+
+def _load_person_subscriber_map(
+    sub: Connection,
+    crm: Connection,
+    person_ids: list[str],
+    subscriber_map: dict[str, str],
+) -> dict[str, str]:
+    """Resolve CRM person ids to sub subscriber ids (spec link keys 3/4).
+
+    Chain 1: CRM ``subscribers.person_id`` -> ``crm_subscriber_id`` link map.
+    Chain 2: CRM ``people.metadata->>'selfcare_id'`` validated against sub
+    ``subscribers.id`` (mirrors preflight ``crm_unmapped_customer_people``).
+    """
+    if not person_ids:
+        return {}
+    rows = _rows(
+        crm,
+        """
+        SELECT p.id::text AS person_id,
+               p.metadata->>'selfcare_id' AS selfcare_id,
+               s.id::text AS crm_subscriber_id
+        FROM people p
+        LEFT JOIN subscribers s ON s.person_id = p.id
+        WHERE p.id::text = ANY(:person_ids)
+        ORDER BY p.id, s.created_at NULLS LAST, s.id
+        """,
+        {"person_ids": person_ids},
+    )
+    selfcare_ids = sorted(
+        {str(row["selfcare_id"]) for row in rows if row.get("selfcare_id")}
+    )
+    valid_selfcare_ids: set[str] = set()
+    if selfcare_ids:
+        valid_selfcare_ids = {
+            str(row["id"])
+            for row in _rows(
+                sub,
+                "SELECT id::text AS id FROM subscribers WHERE id::text = ANY(:ids)",
+                {"ids": selfcare_ids},
+            )
+        }
+    mapping: dict[str, str] = {}
+    for row in rows:
+        person_id = str(row["person_id"]).lower()
+        if person_id in mapping:
+            continue
+        resolved = None
+        crm_subscriber_id = row.get("crm_subscriber_id")
+        if crm_subscriber_id:
+            resolved = subscriber_map.get(str(crm_subscriber_id))
+        if not resolved:
+            selfcare_id = row.get("selfcare_id")
+            if selfcare_id and str(selfcare_id) in valid_selfcare_ids:
+                resolved = str(selfcare_id)
+        if resolved:
+            mapping[person_id] = resolved
     return mapping
 
 
@@ -473,7 +602,12 @@ def _upsert_service_teams(sub: Connection, crm: Connection) -> int:
 
 
 def _sync_ticket_comments(
-    sub: Connection, crm: Connection, crm_to_local_ticket: dict[str, str]
+    sub: Connection,
+    crm: Connection,
+    crm_to_local_ticket: dict[str, str],
+    *,
+    staff_map: dict[str, str],
+    subscriber_map: dict[str, str],
 ) -> int:
     sub.execute(
         text(
@@ -496,11 +630,26 @@ def _sync_ticket_comments(
         """,
         {"ticket_ids": list(crm_to_local_ticket)},
     )
+    author_person_ids = sorted(
+        {
+            str(comment["author_person_id"]).lower()
+            for comment in comments
+            if comment.get("author_person_id")
+        }
+    )
+    person_subscriber_map = _load_person_subscriber_map(
+        sub, crm, author_person_ids, subscriber_map
+    )
     inserted = 0
     for comment in comments:
         ticket_id = crm_to_local_ticket.get(str(comment["ticket_id"]))
         if not ticket_id:
             continue
+        author_type, author_person_id, author_system_user_id = derive_comment_author(
+            _uuid_or_none(comment.get("author_person_id")),
+            staff_map=staff_map,
+            person_subscriber_map=person_subscriber_map,
+        )
         metadata = {
             "crm_comment_id": comment["id"],
             "crm_author_person_id": comment.get("author_person_id"),
@@ -514,8 +663,9 @@ def _sync_ticket_comments(
                     author_system_user_id, body, is_internal, attachments, metadata,
                     created_at
                 ) VALUES (
-                    CAST(:id AS uuid), CAST(:ticket_id AS uuid), NULL,
-                    :author_type, NULL, :body, :is_internal,
+                    CAST(:id AS uuid), CAST(:ticket_id AS uuid),
+                    CAST(:author_person_id AS uuid), :author_type,
+                    CAST(:author_system_user_id AS uuid), :body, :is_internal,
                     CAST(:attachments AS json), CAST(:metadata AS json), :created_at
                 )
                 """
@@ -523,7 +673,9 @@ def _sync_ticket_comments(
             {
                 "id": comment["id"],
                 "ticket_id": ticket_id,
-                "author_type": "staff" if comment.get("author_person_id") else "system",
+                "author_person_id": author_person_id,
+                "author_type": author_type,
+                "author_system_user_id": author_system_user_id,
                 "body": comment.get("body") or "",
                 "is_internal": bool(comment.get("is_internal")),
                 "attachments": json.dumps(_json(comment.get("attachments"), []) or []),
@@ -532,6 +684,88 @@ def _sync_ticket_comments(
             },
         )
         inserted += 1
+    return inserted
+
+
+def _reattribute_pull_era_comments(sub: Connection, staff_map: dict[str, str]) -> int:
+    """Re-attribute existing comments still carrying only the pull-era marker.
+
+    Targets rows with ``metadata.crm_author_person_id`` set and no
+    ``author_system_user_id`` (spec section 3.4 data-quality win); rows already
+    resolved to a subscriber author are left alone.
+    """
+    if not staff_map:
+        return 0
+    result = sub.execute(
+        text(
+            """
+            UPDATE support_ticket_comments c
+            SET author_type = 'staff',
+                author_system_user_id = m.system_user_id
+            FROM (
+                SELECT unnest(CAST(:crm_person_ids AS text[])) AS crm_person_id,
+                       unnest(CAST(:system_user_ids AS uuid[])) AS system_user_id
+            ) m
+            WHERE lower(c.metadata->>'crm_author_person_id') = m.crm_person_id
+              AND c.author_system_user_id IS NULL
+              AND c.author_person_id IS NULL
+            """
+        ),
+        {
+            "crm_person_ids": list(staff_map),
+            "system_user_ids": [staff_map[key] for key in staff_map],
+        },
+    )
+    return int(result.rowcount or 0)
+
+
+def _sync_sla_events(
+    sub: Connection, crm: Connection, crm_to_local_ticket: dict[str, str]
+) -> int:
+    events = _rows(
+        crm,
+        """
+        SELECT id::text, ticket_id::text, event_type, expected_at, actual_at,
+               metadata::text, created_at
+        FROM ticket_sla_events
+        WHERE ticket_id::text = ANY(:ticket_ids)
+        ORDER BY created_at, id
+        """,
+        {"ticket_ids": list(crm_to_local_ticket)},
+    )
+    inserted = 0
+    for event in events:
+        ticket_id = crm_to_local_ticket.get(str(event["ticket_id"]))
+        if not ticket_id:
+            continue
+        metadata = _json(event.get("metadata"), {}) or {}
+        if not isinstance(metadata, dict):
+            metadata = {"crm_metadata_raw": metadata}
+        metadata["sync_source"] = "crm_migration"
+        result = sub.execute(
+            text(
+                """
+                INSERT INTO support_ticket_sla_events (
+                    id, ticket_id, event_type, expected_at, actual_at, metadata,
+                    created_at
+                ) VALUES (
+                    CAST(:id AS uuid), CAST(:ticket_id AS uuid), :event_type,
+                    :expected_at, :actual_at, CAST(:metadata AS json), :created_at
+                )
+                ON CONFLICT (id) DO NOTHING
+                """
+            ),
+            {
+                "id": event["id"],
+                "ticket_id": ticket_id,
+                "event_type": event.get("event_type"),
+                "expected_at": event.get("expected_at"),
+                "actual_at": event.get("actual_at"),
+                "metadata": json.dumps(metadata),
+                "created_at": event.get("created_at"),
+            },
+        )
+        inserted += int(result.rowcount or 0)
     return inserted
 
 
@@ -737,6 +971,258 @@ def _sync_access_tokens(
     return upserted
 
 
+def _sync_assignment_rules(sub: Connection, crm: Connection) -> int:
+    rules = _rows(
+        crm,
+        """
+        SELECT id::text, name, priority, is_active, match_config::text,
+               strategy::text, team_id::text, assign_manager, assign_spc,
+               created_at, updated_at
+        FROM ticket_assignment_rules
+        ORDER BY created_at, id
+        """,
+    )
+    for rule in rules:
+        match_config = _json(rule.get("match_config"), None)
+        sub.execute(
+            text(
+                """
+                INSERT INTO ticket_assignment_rules (
+                    id, name, priority, is_active, match_config, strategy,
+                    team_id, assign_manager, assign_spc, created_at, updated_at
+                ) VALUES (
+                    CAST(:id AS uuid), :name, :priority, :is_active,
+                    CAST(:match_config AS json), :strategy, CAST(:team_id AS uuid),
+                    :assign_manager, :assign_spc, :created_at, :updated_at
+                )
+                ON CONFLICT (id) DO UPDATE SET
+                    name = EXCLUDED.name,
+                    priority = EXCLUDED.priority,
+                    is_active = EXCLUDED.is_active,
+                    match_config = EXCLUDED.match_config,
+                    strategy = EXCLUDED.strategy,
+                    team_id = EXCLUDED.team_id,
+                    assign_manager = EXCLUDED.assign_manager,
+                    assign_spc = EXCLUDED.assign_spc,
+                    updated_at = EXCLUDED.updated_at
+                """
+            ),
+            {
+                **rule,
+                "match_config": (
+                    json.dumps(match_config) if match_config is not None else None
+                ),
+            },
+        )
+    return len(rules)
+
+
+def _sync_assignment_counters(
+    sub: Connection, crm: Connection, staff_map: dict[str, str]
+) -> int:
+    counters = _rows(
+        crm,
+        """
+        SELECT id::text, rule_id::text, last_assigned_person_id::text, updated_at
+        FROM ticket_assignment_counters
+        ORDER BY rule_id, id
+        """,
+    )
+    for counter in counters:
+        last_assigned = _uuid_or_none(counter.get("last_assigned_person_id"))
+        if last_assigned:
+            last_assigned = staff_map.get(last_assigned.lower(), last_assigned)
+        sub.execute(
+            text(
+                """
+                INSERT INTO ticket_assignment_counters (
+                    id, rule_id, last_assigned_person_id, updated_at
+                ) VALUES (
+                    CAST(:id AS uuid), CAST(:rule_id AS uuid),
+                    CAST(:last_assigned_person_id AS uuid), :updated_at
+                )
+                ON CONFLICT (rule_id) DO UPDATE SET
+                    last_assigned_person_id = EXCLUDED.last_assigned_person_id,
+                    updated_at = EXCLUDED.updated_at
+                """
+            ),
+            {**counter, "last_assigned_person_id": last_assigned},
+        )
+    return len(counters)
+
+
+def _sync_sla_policies(sub: Connection, crm: Connection) -> int:
+    policies = _rows(
+        crm,
+        """
+        SELECT id::text, name, entity_type::text, description, is_active,
+               created_at, updated_at
+        FROM sla_policies
+        ORDER BY created_at, id
+        """,
+    )
+    for policy in policies:
+        sub.execute(
+            text(
+                """
+                INSERT INTO sla_policies (
+                    id, name, entity_type, description, is_active,
+                    created_at, updated_at
+                ) VALUES (
+                    CAST(:id AS uuid), :name, :entity_type, :description,
+                    :is_active, :created_at, :updated_at
+                )
+                ON CONFLICT (id) DO UPDATE SET
+                    name = EXCLUDED.name,
+                    entity_type = EXCLUDED.entity_type,
+                    description = EXCLUDED.description,
+                    is_active = EXCLUDED.is_active,
+                    updated_at = EXCLUDED.updated_at
+                """
+            ),
+            policy,
+        )
+    return len(policies)
+
+
+def _sync_sla_targets(sub: Connection, crm: Connection) -> int:
+    targets = _rows(
+        crm,
+        """
+        SELECT id::text, policy_id::text, priority, target_minutes,
+               warning_minutes, is_active, created_at, updated_at
+        FROM sla_targets
+        ORDER BY created_at, id
+        """,
+    )
+    for target in targets:
+        sub.execute(
+            text(
+                """
+                INSERT INTO sla_targets (
+                    id, policy_id, priority, target_minutes, warning_minutes,
+                    is_active, created_at, updated_at
+                ) VALUES (
+                    CAST(:id AS uuid), CAST(:policy_id AS uuid), :priority,
+                    :target_minutes, :warning_minutes, :is_active,
+                    :created_at, :updated_at
+                )
+                ON CONFLICT (id) DO UPDATE SET
+                    policy_id = EXCLUDED.policy_id,
+                    priority = EXCLUDED.priority,
+                    target_minutes = EXCLUDED.target_minutes,
+                    warning_minutes = EXCLUDED.warning_minutes,
+                    is_active = EXCLUDED.is_active,
+                    updated_at = EXCLUDED.updated_at
+                """
+            ),
+            target,
+        )
+    return len(targets)
+
+
+def _sync_sla_clocks(
+    sub: Connection, crm: Connection, crm_to_local_ticket: dict[str, str]
+) -> tuple[int, set[str]]:
+    """Copy all SLA clocks; ticket clocks are re-keyed to merged sub ticket ids.
+
+    Ticket clocks whose CRM ticket has no sub counterpart are skipped (their
+    breaches too); non-ticket entity ids are carried verbatim (plain UUIDs,
+    later phases attach those entities).
+    """
+    clocks = _rows(
+        crm,
+        """
+        SELECT id::text, policy_id::text, entity_type::text, entity_id::text,
+               priority, status::text, started_at, paused_at,
+               total_paused_seconds, due_at, completed_at, breached_at,
+               created_at, updated_at
+        FROM sla_clocks
+        ORDER BY created_at, id
+        """,
+    )
+    upserted = 0
+    clock_ids: set[str] = set()
+    for clock in clocks:
+        entity_id = str(clock["entity_id"])
+        if str(clock.get("entity_type")) == "ticket":
+            local_ticket_id = crm_to_local_ticket.get(entity_id)
+            if not local_ticket_id:
+                continue
+            entity_id = local_ticket_id
+        sub.execute(
+            text(
+                """
+                INSERT INTO sla_clocks (
+                    id, policy_id, entity_type, entity_id, priority, status,
+                    started_at, paused_at, total_paused_seconds, due_at,
+                    completed_at, breached_at, created_at, updated_at
+                ) VALUES (
+                    CAST(:id AS uuid), CAST(:policy_id AS uuid), :entity_type,
+                    CAST(:entity_id AS uuid), :priority, :status, :started_at,
+                    :paused_at, :total_paused_seconds, :due_at, :completed_at,
+                    :breached_at, :created_at, :updated_at
+                )
+                ON CONFLICT (id) DO UPDATE SET
+                    policy_id = EXCLUDED.policy_id,
+                    entity_type = EXCLUDED.entity_type,
+                    entity_id = EXCLUDED.entity_id,
+                    priority = EXCLUDED.priority,
+                    status = EXCLUDED.status,
+                    started_at = EXCLUDED.started_at,
+                    paused_at = EXCLUDED.paused_at,
+                    total_paused_seconds = EXCLUDED.total_paused_seconds,
+                    due_at = EXCLUDED.due_at,
+                    completed_at = EXCLUDED.completed_at,
+                    breached_at = EXCLUDED.breached_at,
+                    updated_at = EXCLUDED.updated_at
+                """
+            ),
+            {**clock, "entity_id": entity_id},
+        )
+        upserted += 1
+        clock_ids.add(str(clock["id"]))
+    return upserted, clock_ids
+
+
+def _sync_sla_breaches(sub: Connection, crm: Connection, clock_ids: set[str]) -> int:
+    if not clock_ids:
+        return 0
+    breaches = _rows(
+        crm,
+        """
+        SELECT id::text, clock_id::text, status::text, breached_at, notes,
+               created_at, updated_at
+        FROM sla_breaches
+        WHERE clock_id::text = ANY(:clock_ids)
+        ORDER BY created_at, id
+        """,
+        {"clock_ids": sorted(clock_ids)},
+    )
+    for breach in breaches:
+        sub.execute(
+            text(
+                """
+                INSERT INTO sla_breaches (
+                    id, clock_id, status, breached_at, notes,
+                    created_at, updated_at
+                ) VALUES (
+                    CAST(:id AS uuid), CAST(:clock_id AS uuid), :status,
+                    :breached_at, :notes, :created_at, :updated_at
+                )
+                ON CONFLICT (id) DO UPDATE SET
+                    clock_id = EXCLUDED.clock_id,
+                    status = EXCLUDED.status,
+                    breached_at = EXCLUDED.breached_at,
+                    notes = EXCLUDED.notes,
+                    updated_at = EXCLUDED.updated_at
+                """
+            ),
+            breach,
+        )
+    return len(breaches)
+
+
 def import_tickets(
     *,
     sub: Connection,
@@ -748,7 +1234,10 @@ def import_tickets(
     exclude_title_re: re.Pattern[str] | None,
     allow_unmapped_closed: bool,
     sync_comments: bool,
+    staff_map: dict[str, str] | None = None,
+    include_engine_data: bool = False,
 ) -> ImportStats:
+    staff_map = staff_map or {}
     stats = ImportStats()
     subscriber_map = _load_subscriber_map(sub)
     existing_by_crm_ticket = _load_existing_tickets(sub)
@@ -834,13 +1323,39 @@ def import_tickets(
             stats.created += 1
 
     if sync_comments and crm_to_local_ticket:
-        stats.comments_inserted = _sync_ticket_comments(sub, crm, crm_to_local_ticket)
+        stats.comments_inserted = _sync_ticket_comments(
+            sub,
+            crm,
+            crm_to_local_ticket,
+            staff_map=staff_map,
+            subscriber_map=subscriber_map,
+        )
+        stats.sla_events_inserted = _sync_sla_events(sub, crm, crm_to_local_ticket)
         stats.assignees_inserted = _sync_ticket_assignees(sub, crm, crm_to_local_ticket)
         stats.merges_inserted = _sync_ticket_merges(sub, crm, crm_to_local_ticket)
         stats.links_inserted = _sync_ticket_links(sub, crm, crm_to_local_ticket)
         stats.access_tokens_upserted = _sync_access_tokens(
             sub, crm, crm_to_local_ticket
         )
+
+    if staff_map:
+        stats.re_attributed = _reattribute_pull_era_comments(sub, staff_map)
+
+    if include_engine_data:
+        # One-time engine copy (spec section 1.9): not watermark-scoped, so
+        # ticket clocks re-key through every known crm_ticket_id, not just
+        # this run's fetch window.
+        full_ticket_map = {**existing_by_crm_ticket, **crm_to_local_ticket}
+        stats.assignment_rules_upserted = _sync_assignment_rules(sub, crm)
+        stats.assignment_counters_upserted = _sync_assignment_counters(
+            sub, crm, staff_map
+        )
+        stats.sla_policies_upserted = _sync_sla_policies(sub, crm)
+        stats.sla_targets_upserted = _sync_sla_targets(sub, crm)
+        stats.sla_clocks_upserted, clock_ids = _sync_sla_clocks(
+            sub, crm, full_ticket_map
+        )
+        stats.sla_breaches_upserted = _sync_sla_breaches(sub, crm, clock_ids)
 
     return stats
 
@@ -871,6 +1386,22 @@ def main() -> None:
     )
     parser.add_argument("--overrides-csv")
     parser.add_argument(
+        "--staff-map",
+        help=(
+            "staff_map.csv from build_crm_staff_map.py (crm_person_id -> "
+            "system_user_id); derives comment authorship and re-attributes "
+            "pull-era comments."
+        ),
+    )
+    parser.add_argument(
+        "--include-engine-data",
+        action="store_true",
+        help=(
+            "One-time copy of ticket_assignment_rules/_counters, "
+            "sla_policies/_targets and sla_clocks/_breaches (not watermarked)."
+        ),
+    )
+    parser.add_argument(
         "--exclude-title-regex",
         default=DEFAULT_EXCLUDE_TITLE_REGEX,
         help="Regex for CRM tickets to skip before unmapped-subscriber blocking.",
@@ -890,6 +1421,7 @@ def main() -> None:
     args = parser.parse_args()
 
     overrides = _load_overrides(args.overrides_csv)
+    staff_map = _load_staff_map(args.staff_map)
     exclude_title_re = (
         re.compile(args.exclude_title_regex) if args.exclude_title_regex else None
     )
@@ -917,6 +1449,8 @@ def main() -> None:
                 exclude_title_re=exclude_title_re,
                 allow_unmapped_closed=args.allow_unmapped_closed,
                 sync_comments=args.sync_comments,
+                staff_map=staff_map,
+                include_engine_data=args.include_engine_data,
             )
         except Exception:
             sub_trans.rollback()
@@ -936,6 +1470,9 @@ def main() -> None:
         "state_overlap_seconds": args.state_overlap_seconds,
         "allow_unmapped_closed": args.allow_unmapped_closed,
         "exclude_title_regex": args.exclude_title_regex,
+        "staff_map": args.staff_map,
+        "staff_map_entries": len(staff_map),
+        "include_engine_data": args.include_engine_data,
         "stats": stats.as_dict(),
     }
     print(json.dumps(report, indent=2, default=str))
