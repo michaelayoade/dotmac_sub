@@ -187,7 +187,8 @@ def test_create_submit_cancel_and_surface_expense_in_job_detail(db_session):
     assert created["status"] == "draft"
     assert str(created["total_amount"]) == "2500.00"
     db_session.refresh(work_order)
-    assert work_order.metadata_["native_expense_requests_pending_sync"] is True
+    assert work_order.metadata_["native_field_source"] == "sub"
+    assert "expense_requests" in work_order.metadata_["native_field_activity"]
 
     submitted = field_expense_requests.submit(
         db_session, _auth(user), str(created["id"])

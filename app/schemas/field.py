@@ -38,7 +38,7 @@ class FieldMeResponse(BaseModel):
 
 
 class FieldJobSummary(BaseModel):
-    """Technician job-list item sourced from the CRM work-order mirror."""
+    """Technician job-list item from the imported work-order view."""
 
     id: str
     work_order_mirror_id: UUID
@@ -78,6 +78,11 @@ class FieldJobLocation(BaseModel):
     longitude: float | None = None
     address_text: str | None = None
     source: str
+
+
+class FieldJobLocationUpdate(BaseModel):
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
 
 
 class FieldJobDestination(BaseModel):
@@ -547,6 +552,25 @@ class FieldMapAsset(BaseModel):
     status: str | None = None
     updated_at: datetime | None = None
     distance_m: float | None = None
+
+
+class FieldMapAssetNearbyResponse(BaseModel):
+    items: list[FieldMapAsset]
+    count: int
+    latitude: float
+    longitude: float
+    radius_m: float
+    server_time: datetime
+
+
+class FieldMapAssetLocationUpdate(BaseModel):
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    expected_updated_at: datetime | None = None
+    source: str | None = Field(default=None, max_length=32)
+    accuracy_m: float | None = Field(default=None, ge=0)
+    client_ref: UUID | None = None
+    force: bool = False
 
 
 class FieldMapSearchResult(BaseModel):

@@ -12,6 +12,9 @@ from app.models.field_material import FieldWorkOrderMaterial
 from app.models.work_order_mirror import WorkOrderMirror
 from app.services.common import coerce_uuid
 from app.services.field.jobs import _profile_from_principal, _scoped_query
+from app.services.field.source import (
+    mark_sub_authoritative as _mark_source_authoritative,
+)
 
 
 def serialize_material(material: FieldWorkOrderMaterial) -> dict:
@@ -109,7 +112,7 @@ class FieldMaterials:
                 material.status = "reserved"
             updated.append(material)
 
-        _mark_pending_sync(row)
+        _mark_sub_authoritative(row)
         db.commit()
         for material in updated:
             db.refresh(material)
@@ -146,10 +149,8 @@ def _quantity(value) -> int:
     return quantity
 
 
-def _mark_pending_sync(row: WorkOrderMirror) -> None:
-    metadata = dict(row.metadata_ or {})
-    metadata["native_materials_pending_sync"] = True
-    row.metadata_ = metadata
+def _mark_sub_authoritative(row: WorkOrderMirror) -> None:
+    _mark_source_authoritative(row, "materials")
 
 
 field_materials = FieldMaterials()

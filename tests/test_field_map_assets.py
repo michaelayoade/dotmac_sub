@@ -9,7 +9,9 @@ from fastapi.testclient import TestClient
 
 from app.api.field import router
 from app.db import get_db
+from app.models.audit import AuditEvent
 from app.models.dispatch import TechnicianProfile
+from app.models.field_map import FieldMapAssetLocationProvenance
 from app.models.gis import ServiceBuilding
 from app.models.network import FdhCabinet, FiberAccessPoint, FiberSpliceClosure
 from app.models.subscriber import Subscriber, UserType
@@ -152,9 +154,103 @@ def test_unknown_asset_type_is_rejected(db_session):
     assert exc.value.status_code == 400
 
 
+def test_update_map_asset_location_records_provenance_and_audit(db_session):
+    user = _user(db_session)
+    fdh, *_ = _seed_assets(db_session)
+
+    payload = field_map_assets.update_location(
+        db_session,
+        asset_type="fdh_cabinet",
+        asset_id=str(fdh.id),
+        latitude=9.081,
+        longitude=7.462,
+        actor_id=str(user.id),
+        source="manual",
+        accuracy_m=8.5,
+        client_ref="client-1",
+    )
+
+    assert payload["latitude"] == 9.081
+    assert payload["longitude"] == 7.462
+    db_session.refresh(fdh)
+    assert fdh.latitude == 9.081
+    assert fdh.longitude == 7.462
+    provenance = db_session.query(FieldMapAssetLocationProvenance).one()
+    assert provenance.asset_type == "fdh_cabinet"
+    assert provenance.asset_id == fdh.id
+    assert provenance.source == "manual"
+    audit = db_session.query(AuditEvent).one()
+    assert audit.action == "field:map_asset:update_location"
+    assert audit.metadata_["from"] == {"latitude": 9.071, "longitude": 7.451}
+    assert audit.metadata_["client_ref"] == "client-1"
+
+
+def test_update_map_asset_location_rejects_lower_confidence_without_force(db_session):
+    user = _user(db_session)
+    fdh, *_ = _seed_assets(db_session)
+    field_map_assets.update_location(
+        db_session,
+        asset_type="fdh_cabinet",
+        asset_id=str(fdh.id),
+        latitude=9.081,
+        longitude=7.462,
+        actor_id=str(user.id),
+        source="survey",
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        field_map_assets.update_location(
+            db_session,
+            asset_type="fdh_cabinet",
+            asset_id=str(fdh.id),
+            latitude=9.082,
+            longitude=7.463,
+            actor_id=str(user.id),
+            source="gps",
+        )
+
+    assert exc.value.status_code == 409
+    assert "higher-confidence" in str(exc.value.detail)
+
+
+def test_update_map_asset_location_force_and_revert(db_session):
+    user = _user(db_session)
+    fdh, *_ = _seed_assets(db_session)
+    field_map_assets.update_location(
+        db_session,
+        asset_type="fdh_cabinet",
+        asset_id=str(fdh.id),
+        latitude=9.081,
+        longitude=7.462,
+        actor_id=str(user.id),
+        source="survey",
+    )
+    field_map_assets.update_location(
+        db_session,
+        asset_type="fdh_cabinet",
+        asset_id=str(fdh.id),
+        latitude=9.082,
+        longitude=7.463,
+        actor_id=str(user.id),
+        source="gps",
+        force=True,
+    )
+
+    reverted = field_map_assets.revert_location(
+        db_session,
+        asset_type="fdh_cabinet",
+        asset_id=str(fdh.id),
+        actor_id=str(user.id),
+    )
+
+    assert reverted["latitude"] == 9.081
+    assert reverted["longitude"] == 7.462
+    assert db_session.query(AuditEvent).count() == 3
+
+
 def test_map_assets_api(db_session):
     user = _user(db_session)
-    _seed_assets(db_session)
+    fdh, *_ = _seed_assets(db_session)
 
     app = FastAPI()
     app.include_router(router, prefix="/api/v1")
@@ -176,6 +272,24 @@ def test_map_assets_api(db_session):
 
     assert nearby.status_code == 200
     assert nearby.json()[0]["distance_m"] >= 0
+
+    updated = TestClient(app).patch(
+        f"/api/v1/field/map-assets/fdh_cabinet/{fdh.id}/location",
+        json={
+            "latitude": 9.081,
+            "longitude": 7.462,
+            "source": "manual",
+            "accuracy_m": 5,
+        },
+    )
+    assert updated.status_code == 200
+    assert updated.json()["latitude"] == 9.081
+
+    reverted = TestClient(app).post(
+        f"/api/v1/field/map-assets/fdh_cabinet/{fdh.id}/revert-location"
+    )
+    assert reverted.status_code == 200
+    assert reverted.json()["latitude"] == 9.071
 
 
 def test_map_search_finds_scoped_jobs_then_assets(db_session):

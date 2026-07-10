@@ -17,6 +17,8 @@ from app.api.field.materials import router as materials_router
 from app.api.field.notes import router as notes_router
 from app.api.field.schedule import router as schedule_router
 from app.api.field.transitions import router as transitions_router
+from app.api.field.vendor_devices import router as vendor_devices_router
+from app.api.field.vendor_map import router as vendor_map_router
 from app.api.field.voice import router as voice_router
 from app.api.field.worklogs import router as worklogs_router
 from app.schemas.common import ListResponse
@@ -24,6 +26,8 @@ from app.schemas.field import (
     FieldJobDestination,
     FieldJobDestinationsResponse,
     FieldJobDetail,
+    FieldJobLocation,
+    FieldJobLocationUpdate,
     FieldJobSummary,
     FieldMeResponse,
 )
@@ -44,6 +48,8 @@ router.include_router(materials_router)
 router.include_router(notes_router)
 router.include_router(schedule_router)
 router.include_router(transitions_router)
+router.include_router(vendor_devices_router)
+router.include_router(vendor_map_router)
 router.include_router(voice_router)
 router.include_router(worklogs_router)
 
@@ -101,3 +107,22 @@ def list_field_job_destinations(
         "items": [FieldJobDestination(**item) for item in items],
         "count": len(items),
     }
+
+
+@router.patch(
+    "/jobs/{crm_work_order_id}/location",
+    response_model=FieldJobLocation,
+)
+def update_field_job_location(
+    crm_work_order_id: str,
+    payload: FieldJobLocationUpdate,
+    auth: dict = Depends(require_user_auth),
+    db: Session = Depends(get_db),
+):
+    return field_jobs.update_location(
+        db,
+        auth,
+        crm_work_order_id,
+        latitude=payload.latitude,
+        longitude=payload.longitude,
+    )

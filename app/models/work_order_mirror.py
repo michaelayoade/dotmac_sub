@@ -1,9 +1,8 @@
-"""Local mirror of CRM work-order data (Field Service tracker).
+"""Local work-order execution view for the Field Service tracker.
 
-The CRM owns work orders; these tables are a read-optimised local copy so the
-customer app/web can show "where's my technician?" instantly and during a CRM
-outage. Hydrated by CRM ``work_order.*`` webhooks + a periodic reconcile pull.
-Mirrors the project-mirror design.
+Legacy work-order headers can be imported from CRM during migration so customer
+app/web surfaces can show "where's my technician?" instantly. Sub owns native
+field execution activity once a work-order workflow has been ported.
 """
 
 import uuid
