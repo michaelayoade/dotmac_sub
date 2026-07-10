@@ -4007,6 +4007,107 @@ SETTINGS_SPECS: list[SettingSpec] = [
         min_value=10,
         max_value=600,
     ),
+    # ── Self-serve installation quotes (Phase 3 §2.2, projects domain) ──
+    # The nine CRM ``selfserve_quote_*`` keys migrated as-is, except the
+    # price-book SKU keys which are re-keyed to sub catalog offers
+    # (``*_offer_id`` — inventory is Phase 5). Placeholder defaults carried
+    # from the CRM — tune per market. Estimate = base_fee + max(0,
+    # distance_to_nearest_FAP - free_radius) * fee_per_km; deposit =
+    # estimate * deposit_percent. Feasibility radius bounds "covered".
+    SettingSpec(
+        domain=SettingDomain.projects,
+        key="selfserve_quote_enabled",
+        env_var="SELFSERVE_QUOTE_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=True,
+        label="Enable self-serve installation quotes",
+    ),
+    SettingSpec(
+        domain=SettingDomain.projects,
+        key="selfserve_quote_base_fee",
+        env_var="SELFSERVE_QUOTE_BASE_FEE",
+        value_type=SettingValueType.string,
+        default="50000.00",
+        label="Base installation fee (NGN) — fallback when no base offer is set",
+    ),
+    SettingSpec(
+        domain=SettingDomain.projects,
+        key="selfserve_quote_bundle_offer_id",
+        env_var="SELFSERVE_QUOTE_BUNDLE_OFFER_ID",
+        value_type=SettingValueType.string,
+        default=None,
+        label=(
+            "Bundle install catalog offer id (flat price, overrides the "
+            "derived estimate)"
+        ),
+    ),
+    SettingSpec(
+        domain=SettingDomain.projects,
+        key="selfserve_quote_base_offer_id",
+        env_var="SELFSERVE_QUOTE_BASE_OFFER_ID",
+        value_type=SettingValueType.string,
+        default=None,
+        label="Base install catalog offer id — its price is the base fee",
+    ),
+    SettingSpec(
+        domain=SettingDomain.projects,
+        key="selfserve_quote_distance_offer_id",
+        env_var="SELFSERVE_QUOTE_DISTANCE_OFFER_ID",
+        value_type=SettingValueType.string,
+        default=None,
+        label="Per-km drop catalog offer id — its price is the per-km surcharge",
+    ),
+    SettingSpec(
+        domain=SettingDomain.projects,
+        key="selfserve_quote_free_radius_meters",
+        env_var="SELFSERVE_QUOTE_FREE_RADIUS_METERS",
+        value_type=SettingValueType.integer,
+        default=300,
+        label="Free drop radius from nearest fiber access point (m)",
+        min_value=0,
+    ),
+    SettingSpec(
+        domain=SettingDomain.projects,
+        key="selfserve_quote_fee_per_km",
+        env_var="SELFSERVE_QUOTE_FEE_PER_KM",
+        value_type=SettingValueType.string,
+        default="25000.00",
+        label="Distance surcharge per km beyond free radius (NGN) — PLACEHOLDER",
+    ),
+    SettingSpec(
+        domain=SettingDomain.projects,
+        key="selfserve_quote_deposit_percent",
+        env_var="SELFSERVE_QUOTE_DEPOSIT_PERCENT",
+        value_type=SettingValueType.integer,
+        default=50,
+        label="Deposit required to confirm a quote (% of total)",
+        min_value=0,
+        max_value=100,
+    ),
+    SettingSpec(
+        domain=SettingDomain.projects,
+        key="selfserve_quote_feasibility_radius_meters",
+        env_var="SELFSERVE_QUOTE_FEASIBILITY_RADIUS_METERS",
+        value_type=SettingValueType.integer,
+        default=2000,
+        label=(
+            "Max distance to nearest fiber access point for instant feasibility (m)"
+        ),
+        min_value=0,
+    ),
+    # Phase 3 write-flip flag (§4.2/§4.3 flag family, quotes vertical):
+    # OFF = quote acceptance write-through to the CRM (mirror path); ON =
+    # native accept (sales/selfserve.accept_with_deposit → native sales
+    # order pipeline). Default OFF until the coordinated Phase 3 write
+    # window; flipping back is the cheap rollback.
+    SettingSpec(
+        domain=SettingDomain.projects,
+        key="quotes_native_write_enabled",
+        env_var="QUOTES_NATIVE_WRITE_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=False,
+        label="Quotes: native write path (Phase 3 flip flag)",
+    ),
 ]
 
 DOMAIN_SETTINGS_SERVICE = {
@@ -4025,6 +4126,7 @@ DOMAIN_SETTINGS_SERVICE = {
     SettingDomain.radius: settings_service.radius_settings,
     SettingDomain.collections: settings_service.collections_settings,
     SettingDomain.lifecycle: settings_service.lifecycle_settings,
+    SettingDomain.projects: settings_service.projects_settings,
     SettingDomain.inventory: settings_service.inventory_settings,
     SettingDomain.comms: settings_service.comms_settings,
     SettingDomain.tr069: settings_service.tr069_settings,
