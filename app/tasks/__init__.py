@@ -118,6 +118,15 @@ from app.tasks.router_sync import (
     sync_all_system_info,
 )
 from app.tasks.support_tickets import auto_confirm_resolved_tickets
+from app.tasks.team_inbox import (
+    auto_resolve_stale_conversations as auto_resolve_stale_inbox_conversations,
+)
+from app.tasks.team_inbox import (
+    promote_message_media_assets as promote_inbox_message_media_assets,
+)
+from app.tasks.team_inbox import (
+    retry_failed_outbound_messages as retry_failed_inbox_outbound_messages,
+)
 from app.tasks.topology_lldp import run_lldp_topology_poll
 from app.tasks.topology_metrics import export_topology_metrics
 from app.tasks.topology_outage import reconcile_detected_outages, run_outage_scan
@@ -226,6 +235,9 @@ __all__ = [
     "push_comment_to_crm",
     "push_crm_billing_snapshots",
     "auto_confirm_resolved_tickets",
+    "retry_failed_inbox_outbound_messages",
+    "promote_inbox_message_media_assets",
+    "auto_resolve_stale_inbox_conversations",
     "run_scheduled_export",
     "run_export_job",
     "retry_failed_events",

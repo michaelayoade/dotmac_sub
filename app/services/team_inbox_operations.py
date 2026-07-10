@@ -957,3 +957,83 @@ def queue_metrics(db: Session) -> InboxQueueMetrics:
             1 for conversation in open_rows if conversation.snoozed_until is not None
         ),
     )
+
+
+def set_satisfaction(
+    db: Session,
+    *,
+    conversation: InboxConversation,
+    rating: int,
+    comment: str | None = None,
+    actor: str | None = None,
+) -> InboxConversation:
+    clean_rating = int(rating)
+    if clean_rating < 1 or clean_rating > 5:
+        raise InboxOperationError("Rating must be between 1 and 5.")
+    if conversation.status != "resolved":
+        raise InboxOperationError("Only resolved conversations can be rated.")
+    metadata = dict(conversation.metadata_ or {})
+    metadata["csat"] = {
+        "rating": clean_rating,
+        "comment": str(comment or "").strip() or None,
+        "actor": str(actor or "").strip() or None,
+        "rated_at": datetime.now(UTC).isoformat(),
+    }
+    conversation.metadata_ = metadata
+    db.flush()
+    return conversation
+
+
+def auto_resolve_stale_conversations(
+    db: Session,
+    *,
+    stale_hours: int = 72,
+    limit: int = 200,
+    now: datetime | None = None,
+) -> int:
+    clock = now or datetime.now(UTC)
+    cutoff = clock - timedelta(hours=max(1, int(stale_hours)))
+    rows = (
+        db.query(InboxConversation)
+        .filter(InboxConversation.is_active.is_(True))
+        .filter(InboxConversation.status.in_(["open", "pending", "snoozed"]))
+        .filter(InboxConversation.last_message_at.isnot(None))
+        .filter(InboxConversation.last_message_at <= cutoff)
+        .order_by(InboxConversation.last_message_at.asc())
+        .limit(max(1, int(limit)))
+        .all()
+    )
+    if not rows:
+        return 0
+    latest_messages = {
+        message.conversation_id: message
+        for message in db.query(InboxMessage)
+        .filter(InboxMessage.conversation_id.in_([row.id for row in rows]))
+        .filter(InboxMessage.direction != "internal")
+        .order_by(InboxMessage.created_at.asc())
+        .all()
+    }
+    resolved = 0
+    for conversation in rows:
+        latest = latest_messages.get(conversation.id)
+        if latest is not None and latest.direction == "inbound":
+            continue
+        metadata = dict(conversation.metadata_ or {})
+        history = metadata.get("status_history")
+        if not isinstance(history, list):
+            history = []
+        history.append(
+            {
+                "from": conversation.status,
+                "to": "resolved",
+                "at": clock.isoformat(),
+                "source": "team_inbox_auto_resolve",
+            }
+        )
+        metadata["status_history"] = history[-50:]
+        metadata["auto_resolved_at"] = clock.isoformat()
+        conversation.status = "resolved"
+        conversation.metadata_ = metadata
+        resolved += 1
+    db.flush()
+    return resolved

@@ -20,7 +20,7 @@ from app.models.team_inbox import (
     InboxTeamRole,
 )
 from app.services import email as email_service
-from app.services import team_inbox_routing, team_outbound
+from app.services import team_inbox_realtime, team_inbox_routing, team_outbound
 from app.services.customer_identity_normalization import normalize_phone_identifier
 from app.services.integrations.connectors import whatsapp as whatsapp_connector
 
@@ -244,6 +244,20 @@ def _send_whatsapp_reply(
     db.add(message)
     conversation.last_message_at = sent_at
     db.flush()
+    team_inbox_realtime.publish_conversation_event(
+        str(conversation.id),
+        event_type=team_inbox_realtime.EventType.MESSAGE_NEW,
+        payload=team_inbox_realtime.message_event_payload(
+            conversation_id=str(conversation.id),
+            message_id=str(message.id),
+            body=message.body,
+            direction=message.direction,
+            channel_type=message.channel_type,
+            created_at=message.created_at,
+            author_name="Support",
+            extra={"sender_type": "agent", "from_customer": False},
+        ),
+    )
     return InboxReplyResult(
         kind="sent",
         conversation_id=str(conversation.id),
@@ -386,6 +400,20 @@ def send_inbox_reply(
     db.add(message)
     conversation.last_message_at = sent_at
     db.flush()
+    team_inbox_realtime.publish_conversation_event(
+        str(conversation.id),
+        event_type=team_inbox_realtime.EventType.MESSAGE_NEW,
+        payload=team_inbox_realtime.message_event_payload(
+            conversation_id=str(conversation.id),
+            message_id=str(message.id),
+            body=message.body,
+            direction=message.direction,
+            channel_type=message.channel_type,
+            created_at=message.created_at,
+            author_name="Support",
+            extra={"sender_type": "agent", "from_customer": False},
+        ),
+    )
     return InboxReplyResult(
         kind="sent",
         conversation_id=str(conversation.id),

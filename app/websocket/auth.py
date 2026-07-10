@@ -4,6 +4,7 @@ from fastapi import WebSocket
 
 from app.services.auth_flow import decode_access_token
 from app.services.db_session_adapter import db_session_adapter
+from app.services.team_inbox_widget import decode_widget_token
 
 
 async def authenticate_websocket(websocket: WebSocket) -> dict | None:
@@ -24,6 +25,17 @@ async def authenticate_websocket(websocket: WebSocket) -> dict | None:
 
     db = db_session_adapter.create_session()
     try:
+        try:
+            widget_principal = decode_widget_token(db, token)
+            return {
+                "subscriber_id": f"chat_widget:{widget_principal.session_id}",
+                "session_id": widget_principal.session_id,
+                "conversation_id": str(widget_principal.conversation_id),
+                "surface": widget_principal.surface,
+            }
+        except Exception:
+            pass
+
         payload = decode_access_token(db, token)
         subscriber_id = payload.get("sub")
         session_id = payload.get("session_id")

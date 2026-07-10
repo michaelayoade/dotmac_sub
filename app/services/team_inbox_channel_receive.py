@@ -15,13 +15,14 @@ from app.models.team_inbox import (
     InboxMessage,
     InboxMessageDirection,
 )
-from app.services import team_inbox_media, team_inbox_routing
+from app.services import team_inbox_media, team_inbox_realtime, team_inbox_routing
 from app.services.common import coerce_uuid
 from app.services.customer_identity_normalization import (
     default_country_code,
     normalize_channel_address,
 )
 from app.services.integrations.connectors import whatsapp as whatsapp_connector
+from app.websocket.events import EventType
 
 _INACTIVE_SUBSCRIBER_STATUSES = {
     SubscriberStatus.disabled.value,
@@ -412,6 +413,19 @@ def receive_inbound_channel(
         provider=str(metadata.get("provider") or "") or None,
     )
     conversation.last_message_at = received_at
+    team_inbox_realtime.publish_conversation_event(
+        str(conversation.id),
+        event_type=EventType.MESSAGE_NEW,
+        payload=team_inbox_realtime.message_event_payload(
+            conversation_id=str(conversation.id),
+            message_id=str(message.id),
+            body=message.body,
+            direction=message.direction,
+            channel_type=message.channel_type,
+            created_at=message.created_at,
+            extra={"sender_type": "visitor", "from_customer": True},
+        ),
+    )
     return InboundChannelReceiveResult(
         kind="received",
         conversation_id=str(conversation.id),

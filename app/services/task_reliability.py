@@ -276,6 +276,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.payment_reconciliation.reconcile_topups": _c(
         "billing", STATE, GUARDED, HEALTH
     ),
+    "app.tasks.operational_escalations.dispatch_operational_escalation_deliveries": _c(
+        "operations",
+        SWEEP,
+        IDEMP,
+        STATUS,
+        "Dispatches pending operational escalation deliveries through their "
+        "configured channels; terminal and over-retry rows are skipped on re-run.",
+    ),
     "app.tasks.profile_sync.execute_due_profile_sync_tasks": _c(
         "network", STATE, STATEFUL, STATUS
     ),
@@ -335,6 +343,30 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         STATUS,
         "Closes pending-confirmation tickets only after their grace window; "
         "closed/responded rows are skipped on re-run.",
+    ),
+    "app.tasks.team_inbox.retry_failed_outbound_messages": _c(
+        "support",
+        SWEEP,
+        IDEMP,
+        STATUS,
+        "Retries failed native inbox outbound messages up to a retry cap; "
+        "already-sent and over-cap rows are skipped on re-run.",
+    ),
+    "app.tasks.team_inbox.promote_message_media_assets": _c(
+        "support",
+        SWEEP,
+        IDEMP,
+        STATUS,
+        "Materializes message attachments into inbox media assets; existing "
+        "asset rows are reused on re-run.",
+    ),
+    "app.tasks.team_inbox.auto_resolve_stale_conversations": _c(
+        "support",
+        SWEEP,
+        IDEMP,
+        STATUS,
+        "Resolves stale conversations only when the latest customer-visible "
+        "message does not require an inbound response.",
     ),
     "app.tasks.topology_lldp.run_lldp_topology_poll": _c(
         "network", SWEEP, IDEMP, HEALTH

@@ -54,3 +54,26 @@ def promote_message_media_assets(*, limit: int = 200) -> dict[str, int]:
             extra={"event": "team_inbox_media_asset_promotion", **payload},
         )
         return payload
+
+
+@celery_app.task(name="app.tasks.team_inbox.auto_resolve_stale_conversations")
+def auto_resolve_stale_conversations(
+    *,
+    stale_hours: int = 72,
+    limit: int = 200,
+) -> dict[str, int]:
+    from app.services import team_inbox_operations
+
+    with db_session_adapter.session() as session:
+        resolved = team_inbox_operations.auto_resolve_stale_conversations(
+            session,
+            stale_hours=stale_hours,
+            limit=limit,
+        )
+        session.commit()
+        payload = {"resolved": resolved}
+        logger.info(
+            "team inbox stale conversation auto-resolve complete",
+            extra={"event": "team_inbox_auto_resolve", **payload},
+        )
+        return payload
