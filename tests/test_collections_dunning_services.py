@@ -818,7 +818,7 @@ def test_prepaid_suspend_skipped_when_available_balance_covers_invoice(
     outcome = _execute_dunning_action(
         db_session, case, DunningAction.suspend, day_offset=7, note=None
     )
-    assert outcome == "prepaid_balance_available"
+    assert outcome == "billing_profile_invalid"
     assert not get_active_locks(db_session, subscription_id=str(subscription.id))
 
 

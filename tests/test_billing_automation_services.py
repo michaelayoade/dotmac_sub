@@ -838,6 +838,53 @@ class TestRunInvoiceCycle:
         assert invoice.total == Decimal("100.00")
         assert subscription.next_billing_at > run_at
 
+    def test_zero_amount_subscription_advances_without_invoice(
+        self, db_session, subscription, subscriber_account
+    ):
+        """Free/internal services should not stay perpetually due."""
+        from app.models.billing import Invoice
+        from app.models.catalog import (
+            BillingCycle,
+            OfferPrice,
+            PriceType,
+            SubscriptionStatus,
+        )
+        from app.models.subscriber import AccountStatus
+
+        run_at = datetime(2026, 6, 17, tzinfo=UTC).replace(tzinfo=None)
+        period_start = run_at - timedelta(days=2)
+        subscription.status = SubscriptionStatus.active
+        subscriber_account.status = AccountStatus.active
+        subscription.start_at = run_at - timedelta(days=30)
+        subscription.next_billing_at = period_start
+        subscription.unit_price = Decimal("0.00")
+        db_session.add(
+            OfferPrice(
+                offer_id=subscription.offer_id,
+                price_type=PriceType.recurring,
+                amount=Decimal("0.00"),
+                currency="USD",
+                billing_cycle=BillingCycle.monthly,
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+        summary = billing_automation.run_invoice_cycle(db_session, run_at=run_at)
+
+        assert summary["invoices_created"] == 0
+        assert summary["zero_amount_advanced"] == 1
+        assert (
+            db_session.query(Invoice)
+            .filter(Invoice.account_id == subscriber_account.id)
+            .count()
+            == 0
+        )
+        db_session.refresh(subscription)
+        assert subscription.next_billing_at.replace(tzinfo=None) == (
+            billing_automation._period_end(period_start, BillingCycle.monthly)
+        )
+
     def test_skips_prepaid_invoice_when_paid_coverage_overlaps(
         self, db_session, subscription, subscriber_account
     ):
@@ -2945,7 +2992,7 @@ class TestPrepaidDraftUntilFunded:
         assert inv.due_at is None
 
     def test_underfunded_left_draft(self, db_session, subscription, subscriber_account):
-        from app.models.billing import InvoiceStatus
+        from app.models.billing import InvoiceStatus, ServiceEntitlement
 
         run_at = self._setup_prepaid_monthly(
             db_session, subscription, subscriber_account
@@ -2958,11 +3005,19 @@ class TestPrepaidDraftUntilFunded:
         assert inv.due_at is None
         assert inv.balance_due == Decimal("100.00")
         assert summary.get("prepaid_invoices_left_draft") == 1
+        db_session.refresh(subscription)
+        assert subscription.next_billing_at == run_at
+        assert (
+            db_session.query(ServiceEntitlement)
+            .filter(ServiceEntitlement.subscription_id == subscription.id)
+            .count()
+            == 0
+        )
 
     def test_fully_funded_issues_and_pays_drawing_down_wallet(
         self, db_session, subscription, subscriber_account
     ):
-        from app.models.billing import InvoiceStatus
+        from app.models.billing import InvoiceStatus, ServiceEntitlement
         from app.services.billing._common import get_account_credit_balance
 
         run_at = self._setup_prepaid_monthly(
@@ -2984,6 +3039,16 @@ class TestPrepaidDraftUntilFunded:
         assert get_account_credit_balance(
             db_session, str(subscriber_account.id), currency="NGN"
         ) == Decimal("0.00")
+        db_session.refresh(subscription)
+        assert subscription.next_billing_at > run_at
+        entitlement = (
+            db_session.query(ServiceEntitlement)
+            .filter(ServiceEntitlement.subscription_id == subscription.id)
+            .one()
+        )
+        assert entitlement.source_invoice_id == inv.id
+        assert entitlement.starts_at == run_at
+        assert entitlement.ends_at == subscription.next_billing_at
 
     def test_partial_credit_left_draft_no_allocation(
         self, db_session, subscription, subscriber_account
@@ -3015,7 +3080,7 @@ class TestPrepaidDraftUntilFunded:
     def test_later_topup_settles_existing_prepaid_draft(
         self, db_session, subscription, subscriber_account
     ):
-        from app.models.billing import InvoiceStatus
+        from app.models.billing import InvoiceStatus, ServiceEntitlement
         from app.services.billing._common import get_account_credit_balance
         from app.services.billing.reconcile_unposted import (
             settle_prepaid_draft_invoices_from_credit,
@@ -3028,8 +3093,7 @@ class TestPrepaidDraftUntilFunded:
         inv = self._invoice(db_session, subscriber_account)
         assert inv.status == InvoiceStatus.draft
         db_session.refresh(subscription)
-        assert subscription.next_billing_at is not None
-        assert subscription.next_billing_at > run_at
+        assert subscription.next_billing_at == run_at
 
         self._add_credit(db_session, subscriber_account, "100.00", run_at)
         result = settle_prepaid_draft_invoices_from_credit(
@@ -3044,3 +3108,11 @@ class TestPrepaidDraftUntilFunded:
         assert get_account_credit_balance(
             db_session, str(subscriber_account.id), currency="NGN"
         ) == Decimal("0.00")
+        db_session.refresh(subscription)
+        assert subscription.next_billing_at > run_at
+        assert (
+            db_session.query(ServiceEntitlement)
+            .filter(ServiceEntitlement.subscription_id == subscription.id)
+            .count()
+            == 1
+        )

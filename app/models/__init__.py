@@ -43,6 +43,8 @@ from app.models.billing import (  # noqa: F401
     PaymentProviderEventStatus,
     PaymentProviderType,
     PaymentStatus,
+    ServiceEntitlement,
+    ServiceEntitlementStatus,
     TaxApplication,
     TaxRate,
     TopupIntent,

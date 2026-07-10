@@ -122,7 +122,7 @@ def test_flag_off_is_noop(db_session, subscriber_account, subscription):
     assert _notices(db_session, subscriber_account) == []
 
 
-def test_subscription_prepaid_mode_drives_candidate_selection(
+def test_subscription_account_mode_mismatch_blocks_prepaid_enforcement(
     db_session, subscriber_account, subscription
 ):
     _make_prepaid(db_session, subscriber_account, subscription, credit=Decimal("0"))
@@ -133,8 +133,9 @@ def test_subscription_prepaid_mode_drives_candidate_selection(
     result = run_prepaid_balance_sweep(db_session, now=_MONDAY_NOON)
 
     db_session.refresh(subscriber_account)
-    assert result["warned"] == 1
-    assert subscriber_account.prepaid_low_balance_at is not None
+    assert result["billing_profile_invalid"] == 1
+    assert result["warned"] == 0
+    assert subscriber_account.prepaid_low_balance_at is None
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +163,78 @@ def test_low_balance_first_run_arms_and_warns_without_suspend(
     assert notices[0].subject == "Low Balance Warning"
     # Body placeholders resolved (default template mentions the threshold).
     assert "100" in notices[0].body
+
+
+def test_positive_but_insufficient_wallet_warns_when_current_period_unfunded(
+    db_session, subscriber_account, subscription
+):
+    _enable_control(db_session)
+    _make_prepaid(
+        db_session,
+        subscriber_account,
+        subscription,
+        credit=Decimal("543.00"),
+        min_balance="0.00",
+    )
+    subscription.unit_price = Decimal("17500.00")
+    db_session.commit()
+
+    result = run_prepaid_balance_sweep(db_session, now=_MONDAY_NOON)
+
+    db_session.refresh(subscriber_account)
+    db_session.refresh(subscription)
+    assert result["warned"] == 1
+    assert result["suspended"] == 0
+    assert subscriber_account.prepaid_low_balance_at is not None
+    assert subscription.status == SubscriptionStatus.active
+
+
+def test_low_wallet_does_not_warn_when_prepaid_period_is_already_funded(
+    db_session, subscriber_account, subscription
+):
+    _enable_control(db_session)
+    _make_prepaid(
+        db_session,
+        subscriber_account,
+        subscription,
+        credit=Decimal("0.00"),
+        min_balance="0.00",
+    )
+    subscription.unit_price = Decimal("17500.00")
+    invoice = Invoice(
+        account_id=subscriber_account.id,
+        invoice_number="INV-FUNDED-PREPAID-PERIOD",
+        status=InvoiceStatus.paid,
+        total=Decimal("17500.00"),
+        balance_due=Decimal("0.00"),
+        billing_period_start=_MONDAY_NOON - timedelta(days=10),
+        billing_period_end=_MONDAY_NOON + timedelta(days=20),
+        issued_at=_MONDAY_NOON - timedelta(days=10),
+        paid_at=_MONDAY_NOON - timedelta(days=10),
+    )
+    db_session.add(invoice)
+    db_session.flush()
+    db_session.add(
+        InvoiceLine(
+            invoice_id=invoice.id,
+            subscription_id=subscription.id,
+            description="Funded prepaid renewal",
+            quantity=Decimal("1.000"),
+            unit_price=Decimal("17500.00"),
+            amount=Decimal("17500.00"),
+            metadata_={"kind": "base_subscription"},
+        )
+    )
+    db_session.commit()
+
+    result = run_prepaid_balance_sweep(db_session, now=_MONDAY_NOON)
+
+    db_session.refresh(subscriber_account)
+    db_session.refresh(subscription)
+    assert result["ok"] == 1
+    assert result["warned"] == 0
+    assert subscriber_account.prepaid_low_balance_at is None
+    assert subscription.status == SubscriptionStatus.active
 
 
 def test_prepaid_legacy_invoice_ar_does_not_reduce_wallet_balance(

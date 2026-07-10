@@ -4,7 +4,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from app.models.billing import Invoice, InvoiceStatus
+from app.models.billing import Invoice, InvoiceLine, InvoiceStatus
 from app.models.catalog import (
     AccessType,
     BillingCycle,
@@ -19,9 +19,11 @@ from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services.billing_cleanup_remediation import (
     apply_cleanup_remediation,
+    discover_invoice_anchor_rows,
     plan_account_mode_row,
     plan_anchor_row,
     plan_cleanup_remediation,
+    plan_invoice_anchor_row,
     plan_stale_overdue_lock_row,
 )
 
@@ -203,6 +205,120 @@ def test_anchor_plan_refuses_if_anchor_changed_since_audit(db_session):
         {
             "account_id": str(account.id),
             "subscription_id": str(subscription.id),
+            "current_next_billing_at": datetime(2026, 7, 1, tzinfo=UTC).isoformat(),
+            "paid_through": datetime(2026, 7, 10, tzinfo=UTC).isoformat(),
+        },
+    )
+
+    assert item["decision"] == "refuse"
+    assert item["reason"] == "next_billing_at_changed_since_audit"
+
+
+def test_discovers_and_repairs_invoice_backed_anchor(db_session):
+    account = _account(db_session, mode=BillingMode.postpaid)
+    current = datetime(2026, 7, 1, tzinfo=UTC)
+    target = datetime(2026, 7, 10, tzinfo=UTC)
+    subscription = _subscription(
+        db_session,
+        account,
+        mode=BillingMode.postpaid,
+        next_billing_at=current,
+    )
+    invoice = Invoice(
+        account_id=account.id,
+        invoice_number="INV-ANCHOR-1",
+        status=InvoiceStatus.issued,
+        currency="NGN",
+        billing_period_start=datetime(2026, 6, 10, tzinfo=UTC),
+        billing_period_end=target,
+        is_active=True,
+    )
+    db_session.add(invoice)
+    db_session.flush()
+    db_session.add(
+        InvoiceLine(
+            invoice_id=invoice.id,
+            subscription_id=subscription.id,
+            description="Covered service",
+            quantity=Decimal("1.000"),
+            unit_price=Decimal("100.00"),
+            amount=Decimal("100.00"),
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    rows = discover_invoice_anchor_rows(db_session)
+
+    assert len(rows) == 1
+    assert rows[0]["subscription_id"] == str(subscription.id)
+    assert datetime.fromisoformat(rows[0]["paid_through"]).replace(tzinfo=UTC) == target
+    item = plan_invoice_anchor_row(db_session, rows[0])
+    assert item["decision"] == "apply"
+
+    result = apply_cleanup_remediation(db_session, {"items": [item]}, dry_run=False)
+
+    db_session.refresh(subscription)
+    assert result["applied_count"] == 1
+    assert subscription.next_billing_at.replace(tzinfo=UTC) == target
+    assert discover_invoice_anchor_rows(db_session) == []
+
+
+def test_invoice_anchor_discovery_ignores_draft_invoice_evidence(db_session):
+    account = _account(db_session, mode=BillingMode.prepaid)
+    current = datetime(2026, 7, 1, tzinfo=UTC)
+    subscription = _subscription(
+        db_session,
+        account,
+        mode=BillingMode.prepaid,
+        next_billing_at=current,
+    )
+    invoice = Invoice(
+        account_id=account.id,
+        invoice_number="INV-DRAFT-ANCHOR",
+        status=InvoiceStatus.draft,
+        currency="NGN",
+        billing_period_start=datetime(2026, 7, 1, tzinfo=UTC),
+        billing_period_end=datetime(2026, 8, 1, tzinfo=UTC),
+        is_active=True,
+    )
+    db_session.add(invoice)
+    db_session.flush()
+    db_session.add(
+        InvoiceLine(
+            invoice_id=invoice.id,
+            subscription_id=subscription.id,
+            description="Unfunded advance service",
+            quantity=Decimal("1.000"),
+            unit_price=Decimal("100.00"),
+            amount=Decimal("100.00"),
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    assert discover_invoice_anchor_rows(db_session) == []
+
+
+def test_invoice_anchor_plan_refuses_if_anchor_changed_since_audit(db_session):
+    account = _account(db_session, mode=BillingMode.postpaid)
+    current = datetime(2026, 7, 5, tzinfo=UTC)
+    subscription = _subscription(
+        db_session,
+        account,
+        mode=BillingMode.postpaid,
+        next_billing_at=current,
+    )
+    db_session.commit()
+
+    item = plan_invoice_anchor_row(
+        db_session,
+        {
+            "issue": "invoice_anchor_behind_paid_through",
+            "account_id": str(account.id),
+            "subscription_id": str(subscription.id),
+            "subscription_status": SubscriptionStatus.active.value,
+            "subscription_mode": BillingMode.postpaid.value,
             "current_next_billing_at": datetime(2026, 7, 1, tzinfo=UTC).isoformat(),
             "paid_through": datetime(2026, 7, 10, tzinfo=UTC).isoformat(),
         },

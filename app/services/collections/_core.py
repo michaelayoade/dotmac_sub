@@ -38,6 +38,7 @@ from app.services.billing_prepaid_overlap_repair import (
     apply_prepaid_overlap_hold,
     invoice_paid_prepaid_overlap,
 )
+from app.services.billing_profile import resolve_billing_profile
 from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
 from app.services.common import (
     apply_ordering,
@@ -150,33 +151,27 @@ def has_overdue_balance(db: Session, account_id: str) -> bool:
 def _effective_billing_mode_for_account(
     db: Session, account: Subscriber
 ) -> BillingMode | None:
-    """Resolve billing mode from collectible services, falling back to account."""
-    modes = {
-        row[0]
-        for row in (
-            db.query(Subscription.billing_mode)
-            .filter(Subscription.subscriber_id == account.id)
-            .filter(Subscription.status.in_(COLLECTIBLE_SERVICE_STATUSES))
-            .distinct()
-            .all()
+    """Resolve billing mode through the canonical billing profile."""
+    profile = resolve_billing_profile(db, account)
+    if not profile.is_valid:
+        logger.warning(
+            "Invalid billing profile for account %s: reason=%s account=%s "
+            "subscription_modes=%s",
+            account.id,
+            profile.invalid_reason,
+            profile.account_mode.value if profile.account_mode else None,
+            sorted(mode.value for mode in profile.subscription_modes),
         )
-        if row[0] is not None
-    }
-    if BillingMode.prepaid in modes:
-        effective = BillingMode.prepaid
-    elif BillingMode.postpaid in modes:
-        effective = BillingMode.postpaid
-    else:
-        effective = account.billing_mode
-    if modes and account.billing_mode != effective:
+        return None
+    if profile.account_subscription_mismatch:
         logger.info(
             "Resolved billing mode for account %s from collectible subscriptions: "
             "account=%s effective=%s",
             account.id,
-            account.billing_mode.value if account.billing_mode else None,
-            effective.value if effective else None,
+            profile.account_mode.value if profile.account_mode else None,
+            profile.effective_mode.value if profile.effective_mode else None,
         )
-    return effective
+    return profile.effective_mode
 
 
 def _general_default_policy_set_id(db: Session, account: Subscriber):
@@ -877,6 +872,7 @@ _NON_ADVANCING_DUNNING_OUTCOMES = frozenset(
         "balance_cleared",
         "shielded",
         "prepaid_balance_available",
+        "billing_profile_invalid",
         "notice_grace_active",
         "enforcement_health_blocked",
     }
@@ -884,25 +880,8 @@ _NON_ADVANCING_DUNNING_OUTCOMES = frozenset(
 
 
 def _account_has_prepaid_service(db: Session, account: Subscriber) -> bool:
-    if account.billing_mode == BillingMode.prepaid:
-        return True
-    return (
-        db.query(Subscription.id)
-        .filter(Subscription.subscriber_id == account.id)
-        .filter(Subscription.billing_mode == BillingMode.prepaid)
-        .filter(
-            Subscription.status.in_(
-                [
-                    SubscriptionStatus.active,
-                    SubscriptionStatus.suspended,
-                    SubscriptionStatus.pending,
-                ]
-            )
-        )
-        .limit(1)
-        .first()
-        is not None
-    )
+    profile = resolve_billing_profile(db, account)
+    return profile.is_valid and profile.effective_mode == BillingMode.prepaid
 
 
 def _prepaid_balance_gate_skip_reason(db: Session, account: Subscriber) -> str | None:
@@ -915,15 +894,9 @@ def _prepaid_balance_gate_skip_reason(db: Session, account: Subscriber) -> str |
     if not _account_has_prepaid_service(db, account):
         return None
 
-    default_threshold = settings_spec.resolve_value(
-        db, SettingDomain.collections, "prepaid_default_min_balance"
-    )
-    threshold_value = (
-        account.min_balance
-        if account.min_balance is not None
-        else (default_threshold if default_threshold is not None else "0.00")
-    )
-    threshold = Decimal(str(threshold_value))
+    from app.services.service_status import _prepaid_threshold
+
+    threshold = _prepaid_threshold(db, account)
     balance = _resolve_prepaid_available_balance(db, str(account.id))
     if balance >= threshold:
         logger.info(
@@ -1005,6 +978,19 @@ def _execute_dunning_action(
         ).scalar_one_or_none()
         if subscriber is None:
             return "account_not_found"
+        profile = resolve_billing_profile(db, subscriber)
+        if not profile.automation_safe:
+            logger.warning(
+                "Dunning %s blocked for account %s by billing profile: "
+                "source=%s invalid_reason=%s account=%s subscription_modes=%s",
+                action.value,
+                account_id,
+                profile.source,
+                profile.invalid_reason,
+                profile.account_mode.value if profile.account_mode else None,
+                sorted(mode.value for mode in profile.subscription_modes),
+            )
+            return "billing_profile_invalid"
         if not has_overdue_balance(db, account_id):
             return "balance_cleared"
         prepaid_skip = _prepaid_balance_gate_skip_reason(db, subscriber)
@@ -1535,6 +1521,13 @@ class DunningWorkflow(ListResponseMixin):
         for account_id, account_invoices in overdue_accounts.items():
             account = accounts.get(account_id)
             if not account:
+                skipped += 1
+                continue
+            profile = resolve_billing_profile(db, account)
+            if (
+                not profile.automation_safe
+                or profile.effective_mode != BillingMode.postpaid
+            ):
                 skipped += 1
                 continue
             if account_id not in postpaid_account_ids:

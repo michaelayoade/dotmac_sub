@@ -175,6 +175,16 @@ def check_billing_switch_task() -> dict:
                 "active_subs_on_terminal_account": (
                     health.active_subs_on_terminal_account
                 ),
+                "negative_prepaid_balance_count": (
+                    health.negative_prepaid_balance_count
+                ),
+                "negative_prepaid_balance_total": str(
+                    health.negative_prepaid_balance_total
+                ),
+                "prepaid_balance_sweep_enabled": (health.prepaid_balance_sweep_enabled),
+                "negative_prepaid_with_sweep_disabled_count": (
+                    health.negative_prepaid_with_sweep_disabled_count
+                ),
                 "anomalies": sorted(anomalies),
             }
             if "paid_invoices_with_balance" in anomalies:
@@ -220,6 +230,19 @@ def check_billing_switch_task() -> dict:
                     "subscription(s) no enabled billing path will invoice (flag off "
                     "or non-monthly offer) — revenue leak",
                     health.unbilled_no_path,
+                )
+            if "negative_prepaid_balances" in anomalies:
+                logger.error(
+                    "billing_negative_prepaid_balances: %d prepaid account(s) have "
+                    "wallet balance below zero (total exposure %s)",
+                    health.negative_prepaid_balance_count,
+                    health.negative_prepaid_balance_total,
+                )
+            if "negative_prepaid_sweep_disabled" in anomalies:
+                logger.error(
+                    "billing_negative_prepaid_sweep_disabled: %d negative prepaid "
+                    "account(s) exist while prepaid_balance_sweep is disabled",
+                    health.negative_prepaid_with_sweep_disabled_count,
                 )
         except Exception:
             logger.exception(

@@ -62,6 +62,9 @@ from app.services.billing._common import (
 from app.services.billing.payments import _apply_payment_allocation
 from app.services.common import coerce_uuid, round_money, to_decimal
 from app.services.notification_suppression import suppress_notifications
+from app.services.service_entitlements import (
+    ensure_prepaid_entitlements_for_paid_invoice,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +79,14 @@ _OPEN_STATUSES = (
     InvoiceStatus.partially_paid,
     InvoiceStatus.overdue,
 )
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 @dataclass
@@ -443,6 +454,24 @@ def settle_prepaid_draft_invoices_from_credit(
         db.flush()
         recalculate_invoice_totals(db, invoice)
         if invoice.status == InvoiceStatus.paid:
+            for entitlement in ensure_prepaid_entitlements_for_paid_invoice(
+                db, invoice
+            ):
+                subscription = db.get(Subscription, entitlement.subscription_id)
+                entitlement_end = _as_utc(entitlement.ends_at)
+                current_next_billing = (
+                    _as_utc(subscription.next_billing_at)
+                    if subscription is not None
+                    else None
+                )
+                if subscription is not None and (
+                    entitlement_end is not None
+                    and (
+                        current_next_billing is None
+                        or current_next_billing < entitlement_end
+                    )
+                ):
+                    subscription.next_billing_at = entitlement.ends_at
             result.applied = round_money(result.applied + applied)
             result.invoices_touched.append(str(invoice.id))
             result.invoices_settled.append(str(invoice.id))

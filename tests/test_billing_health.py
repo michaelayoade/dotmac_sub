@@ -10,6 +10,9 @@ from app.models.billing import (
     BillingRunStatus,
     Invoice,
     InvoiceStatus,
+    LedgerEntry,
+    LedgerEntryType,
+    LedgerSource,
     Payment,
     PaymentStatus,
 )
@@ -22,6 +25,7 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
+from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services import billing_health
 from app.services.billing_health import BillingHealthSnapshot
@@ -226,5 +230,116 @@ def test_anomalies_flag_each_signal():
     assert "paid_invoices_with_balance" in _snap(paid_with_balance_count=3).anomalies
     assert "invoice_scan_count_low" in _snap(scan_ratio=0.1).anomalies
     assert "payment_volume_collapse" in _snap(payment_volume_collapsed=True).anomalies
+    assert (
+        "negative_prepaid_balances" in _snap(negative_prepaid_balance_count=1).anomalies
+    )
+    assert (
+        "negative_prepaid_sweep_disabled"
+        in _snap(negative_prepaid_with_sweep_disabled_count=1).anomalies
+    )
+    assert (
+        "billing_profile_mismatch" in _snap(billing_profile_mismatch_count=1).anomalies
+    )
+    assert (
+        "billing_profile_mixed_modes" in _snap(billing_profile_mixed_count=1).anomalies
+    )
     # scan_ratio just above the floor is fine
     assert "invoice_scan_count_low" not in _snap(scan_ratio=0.6).anomalies
+
+
+# ---- negative prepaid exposure -------------------------------------------
+
+
+def _enable_prepaid_balance_sweep(db, enabled: bool) -> None:
+    db.add(
+        DomainSetting(
+            domain=SettingDomain.collections,
+            key="prepaid_balance_enforcement_enabled",
+            value_type=SettingValueType.boolean,
+            value_text="true" if enabled else "false",
+            value_json=enabled,
+            is_active=True,
+        )
+    )
+    db.commit()
+
+
+def test_negative_prepaid_balance_exposure_flags_disabled_sweep(db_session):
+    offer = _offer(db_session)
+    account = _subscriber(db_session)
+    _subscription(db_session, account, offer, billing_mode=BillingMode.prepaid)
+    db_session.add(
+        LedgerEntry(
+            account_id=account.id,
+            entry_type=LedgerEntryType.debit,
+            source=LedgerSource.adjustment,
+            amount=Decimal("75.00"),
+            currency="NGN",
+            memo="prepaid drawdown",
+        )
+    )
+    db_session.commit()
+
+    count, total, sweep_enabled, disabled_count = (
+        billing_health.negative_prepaid_balance_exposure(db_session)
+    )
+
+    assert count == 1
+    assert total == Decimal("75.00")
+    assert sweep_enabled is False
+    assert disabled_count == 1
+    snap = billing_health.billing_health_snapshot(db_session)
+    assert snap.negative_prepaid_balance_count == 1
+    assert snap.negative_prepaid_balance_total == Decimal("75.00")
+    assert "negative_prepaid_balances" in snap.anomalies
+    assert "negative_prepaid_sweep_disabled" in snap.anomalies
+
+
+def test_negative_prepaid_balance_exposure_respects_enabled_sweep(db_session):
+    offer = _offer(db_session)
+    account = _subscriber(db_session)
+    _subscription(db_session, account, offer, billing_mode=BillingMode.prepaid)
+    db_session.add(
+        LedgerEntry(
+            account_id=account.id,
+            entry_type=LedgerEntryType.debit,
+            source=LedgerSource.adjustment,
+            amount=Decimal("25.00"),
+            currency="NGN",
+            memo="prepaid drawdown",
+        )
+    )
+    db_session.commit()
+    _enable_prepaid_balance_sweep(db_session, True)
+
+    count, total, sweep_enabled, disabled_count = (
+        billing_health.negative_prepaid_balance_exposure(db_session)
+    )
+
+    assert count == 1
+    assert total == Decimal("25.00")
+    assert sweep_enabled is True
+    assert disabled_count == 0
+
+
+def test_billing_profile_integrity_counts_mismatch_and_mixed_modes(db_session):
+    offer = _offer(db_session)
+    mismatch = _subscriber(db_session, email="profile-mismatch@example.com")
+    mismatch.billing_mode = BillingMode.postpaid
+    _subscription(db_session, mismatch, offer, billing_mode=BillingMode.prepaid)
+
+    mixed = _subscriber(db_session, email="profile-mixed@example.com")
+    mixed.billing_mode = BillingMode.prepaid
+    _subscription(db_session, mixed, offer, billing_mode=BillingMode.prepaid)
+    _subscription(db_session, mixed, offer, billing_mode=BillingMode.postpaid)
+    db_session.commit()
+
+    mismatch_count, mixed_count = billing_health.billing_profile_integrity(db_session)
+
+    assert mismatch_count == 1
+    assert mixed_count == 1
+    snap = billing_health.billing_health_snapshot(db_session)
+    assert snap.billing_profile_mismatch_count == 1
+    assert snap.billing_profile_mixed_count == 1
+    assert "billing_profile_mismatch" in snap.anomalies
+    assert "billing_profile_mixed_modes" in snap.anomalies

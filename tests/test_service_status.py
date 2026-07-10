@@ -8,10 +8,14 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from app.models.billing import (
+    Invoice,
+    InvoiceLine,
     InvoiceStatus,
     LedgerEntry,
     LedgerEntryType,
     LedgerSource,
+    ServiceEntitlement,
+    ServiceEntitlementStatus,
 )
 from app.models.catalog import BillingMode, SubscriptionStatus
 from app.schemas.billing import InvoiceCreate
@@ -107,6 +111,108 @@ def test_prepaid_healthy_balance_is_ok_no_expiry(
     svc = resp.services[0]
     assert svc.reason == "ok"
     assert svc.expires_at is None
+
+
+def test_prepaid_insufficient_wallet_without_paid_coverage_is_low_balance(
+    db_session, subscriber_account, subscription
+):
+    subscriber_account.billing_mode = BillingMode.prepaid
+    subscriber_account.splynx_customer_id = None
+    subscriber_account.deposit = None
+    subscriber_account.min_balance = None
+    subscription.unit_price = Decimal("17500.00")
+    _activate(db_session, subscription, BillingMode.prepaid)
+    db_session.add(
+        LedgerEntry(
+            account_id=subscriber_account.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.payment,
+            amount=Decimal("543.00"),
+            currency="NGN",
+            memo="remaining wallet",
+        )
+    )
+    db_session.commit()
+
+    resp = build_service_status(db_session, str(subscriber_account.id))
+
+    assert resp.balance == Decimal("543.00")
+    assert resp.min_balance == Decimal("17500.00")
+    assert resp.low_balance is True
+    assert resp.services[0].reason == "low_balance"
+
+
+def test_prepaid_low_wallet_with_paid_current_period_is_ok(
+    db_session, subscriber_account, subscription
+):
+    subscriber_account.billing_mode = BillingMode.prepaid
+    subscriber_account.splynx_customer_id = None
+    subscriber_account.deposit = None
+    subscriber_account.min_balance = None
+    subscription.unit_price = Decimal("17500.00")
+    _activate(db_session, subscription, BillingMode.prepaid)
+    invoice = Invoice(
+        account_id=subscriber_account.id,
+        invoice_number="INV-STATUS-FUNDED-PREPAID",
+        status=InvoiceStatus.paid,
+        total=Decimal("17500.00"),
+        balance_due=Decimal("0.00"),
+        billing_period_start=datetime.now(UTC) - timedelta(days=10),
+        billing_period_end=datetime.now(UTC) + timedelta(days=20),
+        issued_at=datetime.now(UTC) - timedelta(days=10),
+        paid_at=datetime.now(UTC) - timedelta(days=10),
+    )
+    db_session.add(invoice)
+    db_session.flush()
+    db_session.add(
+        InvoiceLine(
+            invoice_id=invoice.id,
+            subscription_id=subscription.id,
+            description="Funded prepaid renewal",
+            quantity=Decimal("1.000"),
+            unit_price=Decimal("17500.00"),
+            amount=Decimal("17500.00"),
+            metadata_={"kind": "base_subscription"},
+        )
+    )
+    db_session.commit()
+
+    resp = build_service_status(db_session, str(subscriber_account.id))
+
+    assert resp.balance == Decimal("0.00")
+    assert resp.min_balance == Decimal("0.00")
+    assert resp.low_balance is False
+    assert resp.services[0].reason == "ok"
+
+
+def test_prepaid_low_wallet_with_active_entitlement_is_ok(
+    db_session, subscriber_account, subscription
+):
+    subscriber_account.billing_mode = BillingMode.prepaid
+    subscriber_account.splynx_customer_id = None
+    subscriber_account.deposit = None
+    subscriber_account.min_balance = None
+    subscription.unit_price = Decimal("17500.00")
+    _activate(db_session, subscription, BillingMode.prepaid)
+    db_session.add(
+        ServiceEntitlement(
+            account_id=subscriber_account.id,
+            subscription_id=subscription.id,
+            starts_at=datetime.now(UTC) - timedelta(days=10),
+            ends_at=datetime.now(UTC) + timedelta(days=20),
+            amount_funded=Decimal("17500.00"),
+            currency="NGN",
+            status=ServiceEntitlementStatus.active,
+        )
+    )
+    db_session.commit()
+
+    resp = build_service_status(db_session, str(subscriber_account.id))
+
+    assert resp.balance == Decimal("0.00")
+    assert resp.min_balance == Decimal("0.00")
+    assert resp.low_balance is False
+    assert resp.services[0].reason == "ok"
 
 
 def test_prepaid_low_balance_surfaces_grace_as_expiry(

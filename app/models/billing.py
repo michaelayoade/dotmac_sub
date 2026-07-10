@@ -133,6 +133,12 @@ class LedgerCategory(enum.Enum):
     other = "other"
 
 
+class ServiceEntitlementStatus(enum.Enum):
+    active = "active"
+    void = "void"
+    reversed = "reversed"
+
+
 class TaxApplication(enum.Enum):
     exclusive = "exclusive"
     inclusive = "inclusive"
@@ -806,6 +812,76 @@ class LedgerEntry(Base):
     account = relationship("Subscriber")
     invoice = relationship("Invoice", back_populates="ledger_entries")
     payment = relationship("Payment", back_populates="ledger_entries")
+
+
+class ServiceEntitlement(Base):
+    """Funded prepaid service period.
+
+    Money remains represented by invoices, payments, allocations, and ledger
+    entries. This row is the prepaid access proof created only after a service
+    period has been funded.
+    """
+
+    __tablename__ = "service_entitlements"
+    __table_args__ = (
+        Index(
+            "ix_service_entitlements_account_subscription_period",
+            "account_id",
+            "subscription_id",
+            "starts_at",
+            "ends_at",
+        ),
+        Index(
+            "uq_service_entitlements_active_invoice_line",
+            "source_invoice_line_id",
+            unique=True,
+            postgresql_where=text(
+                "status = 'active' AND source_invoice_line_id IS NOT NULL"
+            ),
+            sqlite_where=text(
+                "status = 'active' AND source_invoice_line_id IS NOT NULL"
+            ),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
+    )
+    subscription_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscriptions.id"), nullable=False
+    )
+    source_invoice_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("invoices.id")
+    )
+    source_invoice_line_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("invoice_lines.id")
+    )
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    amount_funded: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), default=Decimal("0.00")
+    )
+    currency: Mapped[str] = mapped_column(String(3), default="NGN")
+    status: Mapped[ServiceEntitlementStatus] = mapped_column(
+        Enum(ServiceEntitlementStatus), default=ServiceEntitlementStatus.active
+    )
+    metadata_: Mapped[dict | None] = mapped_column("metadata", JSONB)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    account = relationship("Subscriber")
+    subscription = relationship("Subscription")
+    source_invoice = relationship("Invoice")
+    source_invoice_line = relationship("InvoiceLine")
 
 
 class TaxRate(Base):

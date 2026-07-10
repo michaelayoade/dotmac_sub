@@ -81,6 +81,10 @@ from app.services.credential_crypto import decrypt_credential, encrypt_credentia
 from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.response import ListResponseMixin
+from app.services.service_entitlements import (
+    ensure_prepaid_entitlement_for_wallet_debit,
+    ensure_prepaid_entitlements_for_paid_invoice,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -653,20 +657,25 @@ def apply_prepaid_service_credit(
     if round_money(available) < charge_amount:
         return False
 
-    db.add(
-        LedgerEntry(
-            account_id=payment.account_id,
-            payment_id=payment.id,
-            entry_type=LedgerEntryType.debit,
-            source=LedgerSource.invoice,
-            category=LedgerCategory.internet_service,
-            amount=charge_amount,
-            currency=currency,
-            effective_date=effective_at,
-            memo=(
-                f"Prepaid service renewal {period_start.date()} - {period_end.date()}"
-            ),
-        )
+    ledger_entry = LedgerEntry(
+        account_id=payment.account_id,
+        payment_id=payment.id,
+        entry_type=LedgerEntryType.debit,
+        source=LedgerSource.invoice,
+        category=LedgerCategory.internet_service,
+        amount=charge_amount,
+        currency=currency,
+        effective_date=effective_at,
+        memo=f"Prepaid service renewal {period_start.date()} - {period_end.date()}",
+    )
+    db.add(ledger_entry)
+    db.flush()
+    ensure_prepaid_entitlement_for_wallet_debit(
+        db,
+        subscription=subscription,
+        ledger_entry=ledger_entry,
+        starts_at=period_start,
+        ends_at=period_end,
     )
     subscription.next_billing_at = period_end
 
@@ -888,6 +897,7 @@ def _finalize_invoice_payment_effects(db: Session, invoice: Invoice) -> None:
 
     if invoice.status == InvoiceStatus.paid:
         _reanchor_paid_prepaid_invoice_if_lapsed(db, invoice)
+        ensure_prepaid_entitlements_for_paid_invoice(db, invoice)
 
         from app.services import collections as collections_service
 
