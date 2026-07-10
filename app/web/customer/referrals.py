@@ -1,9 +1,12 @@
 """Customer portal Refer & Earn page (RFC #73).
 
-Server-rendered: reads the local referral mirror (fast, resilient to a CRM
-outage) and submits refer-a-friend write-throughs. Thin wrapper — all logic is
-in ``referrals_mirror``. Individual subscribers only (the customer portal is
-subscriber-scoped; reseller float wallets are never involved).
+Server-rendered. The page read runs behind the Phase 3
+``referrals_native_read_enabled`` read-flip flag (§4.2): OFF reads the local
+referral mirror (fast, resilient to a CRM outage), ON reads the native
+referral tables — same payload shape (§2.5). The refer-a-friend POST stays a
+mirror write-through until the Phase 3 write flip (§4.3, PR 14). Individual
+subscribers only (the customer portal is subscriber-scoped; reseller float
+wallets are never involved).
 """
 
 import logging
@@ -14,6 +17,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.services import referrals as referrals_service
 from app.services import referrals_mirror
 from app.web.customer.auth import get_current_customer_from_request
 from app.web.customer.branding import get_customer_templates
@@ -23,6 +27,12 @@ router = APIRouter(prefix="/portal", tags=["web-customer"])
 logger = logging.getLogger(__name__)
 
 _LOGIN = "/portal/auth/login?next=/portal/refer-and-earn"
+
+
+def _summary(db: Session, subscriber_id: str) -> dict:
+    if referrals_service.native_read_enabled(db):
+        return referrals_service.referrals.read_for_subscriber(db, subscriber_id)
+    return referrals_mirror.read_for_subscriber(db, subscriber_id)
 
 
 @router.get("/refer-and-earn", response_class=HTMLResponse)
@@ -38,7 +48,7 @@ def customer_refer_and_earn(
         "request": request,
         "customer": customer,
         "active_page": "refer-and-earn",
-        "referrals": referrals_mirror.read_for_subscriber(db, subscriber_id),
+        "referrals": _summary(db, subscriber_id),
         "submitted": request.query_params.get("referred") == "1",
         "form_error": request.query_params.get("error"),
     }

@@ -1336,6 +1336,37 @@ def build_portal_project_payload(project: Project) -> dict:
     }
 
 
+# Mirror parity: projects_mirror.read_for_subscriber counts these as inactive.
+_PORTAL_INACTIVE_STATUSES = ("completed", "canceled")
+
+
+def native_read_enabled(db: Session) -> bool:
+    """Phase 3 read-flip flag (§4.2): native project reads vs the CRM mirror.
+
+    OFF (default) — ``/me/projects``, the web tracker and the reseller views
+    keep serving ``projects_mirror``; ON — they serve the native ``projects``
+    table via ``portal_read_for_subscriber`` / ``Projects.portal_list``.
+    """
+    from app.services import settings_spec
+
+    return bool(
+        settings_spec.resolve_value(
+            db, SettingDomain.projects, "projects_native_read_enabled"
+        )
+    )
+
+
+def portal_read_for_subscriber(db: Session, subscriber_id: str) -> dict:
+    """Native ``GET /me/projects`` / web-tracker payload — the exact response
+    shell ``projects_mirror.read_for_subscriber`` served (§2.5):
+    ``{projects[], total, active}`` with ``build_portal_project_payload``
+    items. PR8 repoints the customer read surfaces here behind
+    ``projects_native_read_enabled``."""
+    items = Projects.portal_list(db, subscriber_id)
+    active = sum(1 for i in items if i["status"] not in _PORTAL_INACTIVE_STATUSES)
+    return {"projects": items, "total": len(items), "active": active}
+
+
 class Projects(ListResponseMixin):
     PROJECT_TYPE_DURATIONS: ClassVar[dict[str, int]] = {
         ProjectType.air_fiber_installation.value: 3,

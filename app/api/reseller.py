@@ -833,8 +833,9 @@ def my_reseller_quotes(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ) -> dict:
-    """Self-serve installation quotes across all the reseller's customers
-    (aggregated from the local CRM mirror; each row tagged with its account)."""
+    """Self-serve installation quotes across all the reseller's customers,
+    each row tagged with its account. Served from the local CRM mirror, or
+    natively behind ``quotes_native_read_enabled`` (Phase 3 §4.2)."""
     reseller_id = _reseller_id(db, principal)
     return reseller_crm_views.quotes_for_reseller(db, reseller_id)
 
@@ -845,7 +846,8 @@ def my_reseller_projects(
     principal: dict = Depends(require_user_auth),
 ) -> dict:
     """Installation/projects across all the reseller's customers (stage +
-    progress), from the local mirror."""
+    progress). Served from the local mirror, or natively behind
+    ``projects_native_read_enabled`` (Phase 3 §4.2)."""
     reseller_id = _reseller_id(db, principal)
     return reseller_crm_views.projects_for_reseller(db, reseller_id)
 
