@@ -125,6 +125,65 @@ def test_dispatch_api_technician_shift_and_assignment_queue(db_session):
     assert patched.json()["status"] == "assigned"
 
 
+def test_dispatch_api_native_work_order_header_crud(db_session):
+    client = _client(db_session)
+    user = _system_user(db_session)
+    sub = Subscriber(
+        first_name="Adaeze",
+        last_name="Nwosu",
+        email=f"native-wo-{uuid4().hex[:8]}@example.com",
+    )
+    db_session.add(sub)
+    db_session.commit()
+
+    created = client.post(
+        "/api/v1/dispatch/work-orders",
+        json={
+            "public_id": "sub-wo-api-1",
+            "subscriber_id": str(sub.id),
+            "title": "Fibre install",
+            "status": "scheduled",
+            "work_type": "install",
+            "required_skills": ["fiber"],
+            "tags": ["native"],
+            "metadata": {"source_ref": "api"},
+        },
+    )
+    assert created.status_code == 201
+    assert created.json()["crm_work_order_id"] == "sub-wo-api-1"
+    assert created.json()["metadata"]["native_source"] == "sub"
+
+    patched = client.patch(
+        "/api/v1/dispatch/work-orders/sub-wo-api-1",
+        json={"status": "dispatched", "assigned_to_name": "Ade Tech"},
+    )
+    assert patched.status_code == 200
+    assert patched.json()["status"] == "dispatched"
+    assert patched.json()["assigned_to_name"] == "Ade Tech"
+
+    listed = client.get(
+        f"/api/v1/dispatch/work-orders?subscriber_id={sub.id}&status=dispatched"
+    )
+    assert listed.status_code == 200
+    assert [item["crm_work_order_id"] for item in listed.json()["items"]] == [
+        "sub-wo-api-1"
+    ]
+
+    technician = client.post(
+        "/api/v1/dispatch/technicians",
+        json={"system_user_id": str(user.id), "region": "Jabi"},
+    )
+    queue = client.post(
+        "/api/v1/dispatch/assignment-queue",
+        json={
+            "crm_work_order_id": "sub-wo-api-1",
+            "assigned_technician_id": technician.json()["id"],
+        },
+    )
+    assert queue.status_code == 201
+    assert queue.json()["crm_work_order_id"] == "sub-wo-api-1"
+
+
 def test_dispatch_router_registered_with_permission_guard():
     from app.main import _DEFERRED_API_ROUTER_SPECS
 

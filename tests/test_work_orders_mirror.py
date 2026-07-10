@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
-from app.models.dispatch import TechnicianProfile
+import pytest
+
+from app.models.dispatch import TechnicianProfile, WorkOrderAssignmentQueue
+from app.models.field_location import FieldTechPresence
 from app.models.subscriber import Subscriber
 from app.models.work_order_mirror import WorkOrderMirror, WorkOrderSyncState
 from app.services import work_orders_mirror
@@ -307,3 +311,169 @@ def test_cold_read_stays_synchronous_and_does_not_enqueue(db_session):
 
     enq.assert_not_called()  # cold path fetched synchronously, no deferral
     assert out["total"] == 1  # populated on first load
+
+
+def test_technician_location_uses_native_presence_for_owned_work_order(db_session):
+    sub = _subscriber(db_session)
+    profile = TechnicianProfile(
+        person_id=uuid.uuid4(),
+        crm_person_id="crm-tech-live",
+        title="Field technician",
+    )
+    row = WorkOrderMirror(
+        subscriber_id=sub.id,
+        crm_work_order_id="wo-live",
+        title="Repair",
+        status="in_progress",
+        assigned_to_crm_person_id="crm-tech-live",
+        estimated_arrival_at=datetime(2026, 7, 9, 12, 0, tzinfo=UTC),
+    )
+    db_session.add_all([profile, row])
+    db_session.flush()
+    db_session.add(
+        FieldTechPresence(
+            technician_id=profile.id,
+            person_id=profile.person_id,
+            status="busy",
+            location_sharing_enabled=True,
+            last_latitude=9.0765,
+            last_longitude=7.3986,
+            last_location_accuracy_m=14.5,
+            last_location_at=datetime(2026, 7, 9, 11, 45, tzinfo=UTC),
+        )
+    )
+    db_session.commit()
+
+    out = work_orders_mirror.technician_location(db_session, str(sub.id), "wo-live")
+
+    assert out["available"] is True
+    assert out["latitude"] == 9.0765
+    assert out["longitude"] == 7.3986
+    assert out["accuracy_m"] == 14.5
+    assert out["estimated_arrival_at"] == "2026-07-09T12:00:00+00:00"
+
+
+def test_technician_location_uses_native_dispatch_assignment(db_session):
+    sub = _subscriber(db_session)
+    profile = TechnicianProfile(
+        person_id=uuid.uuid4(),
+        title="Field technician",
+    )
+    row = WorkOrderMirror(
+        subscriber_id=sub.id,
+        crm_work_order_id="wo-dispatch-live",
+        title="Repair",
+        status="in_progress",
+    )
+    db_session.add_all([profile, row])
+    db_session.flush()
+    db_session.add_all(
+        [
+            WorkOrderAssignmentQueue(
+                work_order_mirror_id=row.id,
+                crm_work_order_id=row.crm_work_order_id,
+                status="assigned",
+                assigned_technician_id=profile.id,
+            ),
+            FieldTechPresence(
+                technician_id=profile.id,
+                person_id=profile.person_id,
+                status="busy",
+                location_sharing_enabled=True,
+                last_latitude=9.01,
+                last_longitude=7.02,
+                last_location_at=datetime(2026, 7, 9, 11, 45, tzinfo=UTC),
+            ),
+        ]
+    )
+    db_session.commit()
+
+    out = work_orders_mirror.technician_location(
+        db_session, str(sub.id), "wo-dispatch-live"
+    )
+
+    assert out["available"] is True
+    assert out["latitude"] == 9.01
+    assert out["longitude"] == 7.02
+
+
+def test_technician_location_hidden_when_work_order_not_active(db_session):
+    sub = _subscriber(db_session)
+    db_session.add(
+        WorkOrderMirror(
+            subscriber_id=sub.id,
+            crm_work_order_id="wo-scheduled",
+            title="Install",
+            status="scheduled",
+        )
+    )
+    db_session.commit()
+
+    out = work_orders_mirror.technician_location(
+        db_session, str(sub.id), "wo-scheduled"
+    )
+
+    assert out == {
+        "available": False,
+        "reason": "not_active",
+        "work_order_id": "wo-scheduled",
+    }
+
+
+def test_rate_technician_stores_local_metadata_and_is_idempotent(db_session):
+    sub = _subscriber(db_session)
+    row = WorkOrderMirror(
+        subscriber_id=sub.id,
+        crm_work_order_id="wo-rate",
+        title="Repair",
+        status="completed",
+    )
+    db_session.add(row)
+    db_session.commit()
+
+    first = work_orders_mirror.rate_technician(
+        db_session,
+        str(sub.id),
+        "wo-rate",
+        rating=5,
+        comment="Great work",
+    )
+    db_session.refresh(row)
+    second = work_orders_mirror.rate_technician(
+        db_session,
+        str(sub.id),
+        "wo-rate",
+        rating=2,
+        comment="changed",
+    )
+
+    assert first == {
+        "ok": True,
+        "already_rated": False,
+        "rating": 5,
+        "work_order_id": "wo-rate",
+    }
+    assert second == {
+        "ok": True,
+        "already_rated": True,
+        "rating": 5,
+        "work_order_id": "wo-rate",
+    }
+    assert row.metadata_["technician_rating"]["comment"] == "Great work"
+    assert row.metadata_["technician_rating"]["source"] == "sub_portal"
+
+
+def test_rate_technician_rejects_incomplete_work_order(db_session):
+    sub = _subscriber(db_session)
+    db_session.add(
+        WorkOrderMirror(
+            subscriber_id=sub.id,
+            crm_work_order_id="wo-open",
+            title="Install",
+            status="in_progress",
+        )
+    )
+    db_session.commit()
+
+    with pytest.raises(ValueError, match="work_order_not_completed"):
+        work_orders_mirror.rate_technician(db_session, str(sub.id), "wo-open", rating=5)

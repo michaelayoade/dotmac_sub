@@ -1,9 +1,9 @@
 """Voice transcript extraction for field job forms.
 
-CRM uses the AI gateway for this flow. Sub does not own that AI stack yet, so
-Phase 2 keeps the mobile contract and quality gate while using a conservative
-local extractor. It only pre-fills obvious values and marks low-quality
-transcripts for manual review.
+The CRM implementation used the AI gateway for this flow. Until the shared AI
+layer is migrated, sub keeps the mobile contract and quality gate while using a
+conservative local extractor. It only pre-fills obvious values and marks
+low-quality transcripts for manual review.
 """
 
 from __future__ import annotations

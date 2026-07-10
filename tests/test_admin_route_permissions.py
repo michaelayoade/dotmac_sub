@@ -9,6 +9,7 @@ from app.web.admin import catalog_settings as admin_catalog_settings
 from app.web.admin import configuration as admin_configuration
 from app.web.admin import dashboard as admin_dashboard
 from app.web.admin import design_system as admin_design_system
+from app.web.admin import dispatch_work_orders as admin_dispatch_work_orders
 from app.web.admin import gis as admin_gis
 from app.web.admin import integrations as admin_integrations
 from app.web.admin import legal as admin_legal
@@ -76,6 +77,21 @@ def test_dashboard_routes_require_any_domain_read_permission():
         "POST",
         "system:settings:write",
     )
+
+
+def test_dispatch_work_order_routes_require_operations_dispatch_permission():
+    for path, method in [
+        ("/dispatch/work-orders", "GET"),
+        ("/dispatch/work-orders", "POST"),
+        ("/dispatch/work-orders/{work_order_id}", "POST"),
+        ("/dispatch/work-orders/{work_order_id}/queue", "POST"),
+    ]:
+        assert _route_has_permission(
+            admin_dispatch_work_orders.router,
+            path,
+            method,
+            "operations:dispatch",
+        )
 
 
 def test_catalog_settings_routes_require_catalog_permissions():

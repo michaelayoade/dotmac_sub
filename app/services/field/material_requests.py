@@ -18,6 +18,9 @@ from app.models.field_material import (
 from app.models.work_order_mirror import WorkOrderMirror
 from app.services.common import apply_pagination, coerce_uuid
 from app.services.field.jobs import _profile_from_principal, _scoped_query
+from app.services.field.source import (
+    mark_sub_authoritative as _mark_source_authoritative,
+)
 
 
 def serialize_material_request(request: FieldMaterialRequest) -> dict:
@@ -136,7 +139,7 @@ class FieldMaterialRequests:
                     notes=notes,
                 )
             )
-        _mark_pending_sync(row)
+        _mark_sub_authoritative(row)
         db.commit()
         db.refresh(request)
         return serialize_material_request(request)
@@ -155,7 +158,7 @@ class FieldMaterialRequests:
             raise HTTPException(status_code=409, detail="Only draft requests submit")
         request.status = "submitted"
         request.submitted_at = datetime.now(UTC)
-        _mark_pending_sync(request.work_order_mirror)
+        _mark_sub_authoritative(request.work_order_mirror)
         db.commit()
         db.refresh(request)
         return serialize_material_request(request)
@@ -241,10 +244,8 @@ def _status(value: str) -> str:
     return status
 
 
-def _mark_pending_sync(row: WorkOrderMirror) -> None:
-    metadata = dict(row.metadata_ or {})
-    metadata["native_material_requests_pending_sync"] = True
-    row.metadata_ = metadata
+def _mark_sub_authoritative(row: WorkOrderMirror) -> None:
+    _mark_source_authoritative(row, "material_requests")
 
 
 field_material_requests = FieldMaterialRequests()

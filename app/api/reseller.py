@@ -25,8 +25,12 @@ from app.schemas.portal import (
     TechnicianRatingResponse,
 )
 from app.services import chat_session as chat_session_service
-from app.services import crm_portal as crm_portal_service
-from app.services import quotes_mirror, reseller_crm_views, reseller_portal
+from app.services import (
+    quotes_mirror,
+    reseller_crm_views,
+    reseller_portal,
+    work_orders_mirror,
+)
 from app.services.auth_dependencies import require_user_auth
 
 router = APIRouter(prefix="/reseller", tags=["reseller"])
@@ -208,15 +212,7 @@ def reseller_work_order_technician_location(
     account = reseller_portal.owned_account(db, reseller_id, account_id)
     if account is None:
         raise HTTPException(status_code=404, detail="Account not found")
-    crm_id = crm_portal_service.resolve_crm_subscriber_id(db, str(account.id))
-    if not crm_id:
-        return TechnicianLocation(available=False, reason="not_linked")
-    from app.services.crm_client import CRMClientError, get_crm_client
-
-    try:
-        data = get_crm_client(db).get_portal_technician_location(crm_id, work_order_id)
-    except CRMClientError:
-        return TechnicianLocation(available=False, reason="unavailable")
+    data = work_orders_mirror.technician_location(db, str(account.id), work_order_id)
     return TechnicianLocation.model_validate(data)
 
 
@@ -236,18 +232,19 @@ def reseller_rate_technician(
     account = reseller_portal.owned_account(db, reseller_id, account_id)
     if account is None:
         raise HTTPException(status_code=404, detail="Account not found")
-    crm_id = crm_portal_service.resolve_crm_subscriber_id(db, str(account.id))
-    if not crm_id:
-        raise HTTPException(status_code=404, detail="Account not linked to CRM")
-    from app.services.crm_client import CRMClientError, get_crm_client
-
     try:
-        data = get_crm_client(db).submit_portal_technician_rating(
-            crm_id, work_order_id, rating=payload.rating, comment=payload.comment
+        data = work_orders_mirror.rate_technician(
+            db,
+            str(account.id),
+            work_order_id,
+            rating=payload.rating,
+            comment=payload.comment,
         )
-    except CRMClientError as exc:
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="Work order not found") from exc
+    except ValueError as exc:
         raise HTTPException(
-            status_code=503, detail="Rating service is temporarily unavailable."
+            status_code=409, detail="Work order is not completed"
         ) from exc
     return TechnicianRatingResponse.model_validate(data)
 

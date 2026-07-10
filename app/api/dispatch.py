@@ -27,6 +27,9 @@ from app.schemas.dispatch import (
     WorkOrderAssignmentQueueCreate,
     WorkOrderAssignmentQueueRead,
     WorkOrderAssignmentQueueUpdate,
+    WorkOrderHeaderCreate,
+    WorkOrderHeaderRead,
+    WorkOrderHeaderUpdate,
 )
 from app.services import dispatch as dispatch_service
 
@@ -260,6 +263,52 @@ def update_dispatch_rule(
     rule_id: str, payload: DispatchRuleUpdate, db: Session = Depends(get_db)
 ):
     return dispatch_service.dispatch_rules.update(db, rule_id, payload)
+
+
+@router.post(
+    "/work-orders",
+    response_model=WorkOrderHeaderRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_work_order_header(
+    payload: WorkOrderHeaderCreate, db: Session = Depends(get_db)
+):
+    return dispatch_service.work_order_headers.create(db, payload)
+
+
+@router.get("/work-orders", response_model=ListResponse[WorkOrderHeaderRead])
+def list_work_order_headers(
+    status: str | None = None,
+    subscriber_id: str | None = None,
+    work_type: str | None = None,
+    is_active: bool | None = True,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    return dispatch_service.work_order_headers.list_response(
+        db,
+        status=status,
+        subscriber_id=subscriber_id,
+        work_type=work_type,
+        is_active=is_active,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/work-orders/{work_order_id}", response_model=WorkOrderHeaderRead)
+def get_work_order_header(work_order_id: str, db: Session = Depends(get_db)):
+    return dispatch_service.work_order_headers.get(db, work_order_id)
+
+
+@router.patch("/work-orders/{work_order_id}", response_model=WorkOrderHeaderRead)
+def update_work_order_header(
+    work_order_id: str,
+    payload: WorkOrderHeaderUpdate,
+    db: Session = Depends(get_db),
+):
+    return dispatch_service.work_order_headers.update(db, work_order_id, payload)
 
 
 @router.post(

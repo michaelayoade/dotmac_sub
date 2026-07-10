@@ -17,8 +17,8 @@ from app.services import (
     customer_portal,
     reseller_crm_views,
     reseller_portal,
+    work_orders_mirror,
 )
-from app.services.crm_client import get_crm_client
 from app.web.reseller.branding import get_reseller_templates
 
 logger = logging.getLogger(__name__)
@@ -955,14 +955,7 @@ def reseller_technician_location(
     account = reseller_portal.owned_account(db, str(context["reseller"].id), account_id)
     if account is None:
         return JSONResponse({"available": False, "reason": "not_found"})
-    crm_id = crm_portal.resolve_crm_subscriber_id(db, str(account.id))
-    if not crm_id:
-        return JSONResponse({"available": False, "reason": "not_linked"})
-    try:
-        data = get_crm_client(db).get_portal_technician_location(crm_id, work_order_id)
-    except Exception:  # noqa: BLE001 - live position is best-effort
-        logger.warning("reseller_technician_location_failed wo=%s", work_order_id)
-        return JSONResponse({"available": False, "reason": "error"})
+    data = work_orders_mirror.technician_location(db, str(account.id), work_order_id)
     return JSONResponse(data)
 
 
@@ -982,20 +975,16 @@ def reseller_rate_technician(
     if account is None:
         status_flag = "error"
     else:
-        crm_id = crm_portal.resolve_crm_subscriber_id(db, str(account.id))
-        if not crm_id:
+        try:
+            work_orders_mirror.rate_technician(
+                db,
+                str(account.id),
+                work_order_id,
+                rating=max(1, min(5, rating)),
+                comment=(comment or "")[:2000] or None,
+            )
+        except (LookupError, ValueError):
             status_flag = "error"
-        else:
-            try:
-                get_crm_client(db).submit_portal_technician_rating(
-                    crm_id,
-                    work_order_id,
-                    rating=max(1, min(5, rating)),
-                    comment=(comment or "")[:2000] or None,
-                )
-            except Exception:  # noqa: BLE001 - rating is best-effort
-                logger.warning("reseller_rate_technician_failed wo=%s", work_order_id)
-                status_flag = "error"
     return RedirectResponse(
         url=f"/reseller/work-orders?rated={status_flag}", status_code=303
     )

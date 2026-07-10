@@ -18,6 +18,9 @@ from app.models.field_expense import (
 from app.models.work_order_mirror import WorkOrderMirror
 from app.services.common import apply_pagination, coerce_uuid
 from app.services.field.jobs import _profile_from_principal, _scoped_query
+from app.services.field.source import (
+    mark_sub_authoritative as _mark_source_authoritative,
+)
 
 
 def serialize_expense_request(request: FieldExpenseRequest) -> dict:
@@ -153,7 +156,7 @@ class FieldExpenseRequests:
         db.flush()
         for item in planned_items:
             request.items.append(FieldExpenseRequestItem(**item))
-        _mark_pending_sync(row)
+        _mark_sub_authoritative(row)
         db.commit()
         db.refresh(request)
         return serialize_expense_request(request)
@@ -168,7 +171,7 @@ class FieldExpenseRequests:
             raise HTTPException(status_code=409, detail="Only draft requests submit")
         request.status = "submitted"
         request.submitted_at = datetime.now(UTC)
-        _mark_pending_sync(request.work_order_mirror)
+        _mark_sub_authoritative(request.work_order_mirror)
         db.commit()
         db.refresh(request)
         return serialize_expense_request(request)
@@ -184,7 +187,7 @@ class FieldExpenseRequests:
                 status_code=409, detail="Only draft or submitted requests cancel"
             )
         request.status = "canceled"
-        _mark_pending_sync(request.work_order_mirror)
+        _mark_sub_authoritative(request.work_order_mirror)
         db.commit()
         db.refresh(request)
         return serialize_expense_request(request)
@@ -269,10 +272,8 @@ def _status(value: str) -> str:
     return status
 
 
-def _mark_pending_sync(row: WorkOrderMirror) -> None:
-    metadata = dict(row.metadata_ or {})
-    metadata["native_expense_requests_pending_sync"] = True
-    row.metadata_ = metadata
+def _mark_sub_authoritative(row: WorkOrderMirror) -> None:
+    _mark_source_authoritative(row, "expense_requests")
 
 
 field_expense_requests = FieldExpenseRequests()
