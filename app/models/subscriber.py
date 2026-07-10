@@ -338,9 +338,11 @@ class Subscriber(Base):
         UUID(as_uuid=True), ForeignKey("organizations.id"), index=True
     )
     # CRM-owned account-matrix field (doc 02 §2): the sales order that created
-    # this account. Plain UUID until the Phase 3 expand-B migration lands the
-    # sales_orders table; the FK is added there.
-    sales_order_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    # this account. Real FK since the Phase 3 expand-B migration landed the
+    # sales_orders table; backfilled from CRM via link key 2 (§1.5).
+    sales_order_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("sales_orders.id"), index=True
+    )
     metadata_: Mapped[dict | None] = mapped_column(
         "metadata", MutableDict.as_mutable(JSON())
     )
