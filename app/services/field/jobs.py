@@ -7,6 +7,7 @@ sub-authoritative metadata.
 
 from __future__ import annotations
 
+import builtins
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -401,7 +402,7 @@ class FieldJobs:
                 latitude=location.latitude,
                 longitude=location.longitude,
                 radius_m=750,
-                asset_types=list(_ASSET_DESTINATION_TYPES),
+                asset_types=builtins.list(_ASSET_DESTINATION_TYPES),
                 limit=20,
             )
             for asset in assets:
