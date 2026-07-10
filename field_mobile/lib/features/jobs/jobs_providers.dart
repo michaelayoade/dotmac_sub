@@ -116,6 +116,24 @@ class JobsRepository {
         .toList();
   }
 
+  Future<JobChatThread> fetchChat(String jobId) async {
+    final response = await _read
+        .read(apiClientProvider)
+        .dio
+        .get('/api/v1/field/jobs/$jobId/chat');
+    final data = (response.data as Map).cast<String, dynamic>();
+    return JobChatThread.fromJson(data);
+  }
+
+  Future<JobChatMessage> sendChatMessage(String jobId, String body) async {
+    final response = await _read
+        .read(apiClientProvider)
+        .dio
+        .post('/api/v1/field/jobs/$jobId/chat/messages', data: {'body': body});
+    final data = (response.data as Map).cast<String, dynamic>();
+    return JobChatMessage.fromJson(data);
+  }
+
   Future<JobLocation> updateLocation({
     required String jobId,
     required double latitude,
@@ -186,6 +204,10 @@ final jobDestinationsProvider =
       (ref, jobId) =>
           ref.watch(jobsRepositoryProvider).fetchDestinations(jobId),
     );
+
+final jobChatProvider = FutureProvider.family<JobChatThread, String>(
+  (ref, jobId) => ref.watch(jobsRepositoryProvider).fetchChat(jobId),
+);
 
 bool _isSameLocalDay(DateTime? value, DateTime day) {
   if (value == null) return false;

@@ -270,6 +270,16 @@ void main() {
       );
     });
 
+    test('signer name is included in the completion payload', () {
+      final state = const CompletionState(
+        checklistDone: true,
+        photoCount: 1,
+        hasSignature: true,
+      ).copyWith(signerName: '  Ada Customer  ');
+      expect(state.canComplete, isTrue);
+      expect(state.transitionPayload['signer_name'], 'Ada Customer');
+    });
+
     test('whitespace-only fallback does not count', () {
       final state = const CompletionState(
         checklistDone: true,

@@ -404,4 +404,35 @@ void main() {
     expect(sent?['client_ref'], 'expense-client-ref-1');
     expect(sent?['items'], payload['items']);
   });
+
+  test(
+    'material request outbox entry routes to the field material endpoint',
+    () async {
+      final payload = {
+        'priority': 'high',
+        'work_order_id': 'wo-1',
+        'items': [
+          {'item_id': 'item-1', 'quantity': 2},
+        ],
+        'submit': true,
+      };
+      final (method, path) = OutboxRouting.route('material_request', payload);
+      expect(method, 'POST');
+      expect(path, '/api/v1/field/material-requests');
+
+      Map? sent;
+      adapter.on('POST', '/api/v1/field/material-requests', (options) {
+        sent = options.data is String ? null : options.data as Map;
+        return (201, {'id': 'mr-1', 'status': 'submitted'});
+      });
+      await sync.enqueue(
+        kind: 'material_request',
+        clientRef: 'material-client-ref-1',
+        payload: payload,
+      );
+      expect(await sync.flushOutbox(), 1);
+      expect(sent?['work_order_id'], 'wo-1');
+      expect(sent?['items'], payload['items']);
+    },
+  );
 }

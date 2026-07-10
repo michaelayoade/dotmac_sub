@@ -1,10 +1,12 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
-import 'package:dio/dio.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../core/offline/draft_store.dart';
+import '../execution/execution_controller.dart';
 import 'material_models.dart';
 import 'materials_providers.dart';
 
@@ -552,6 +554,17 @@ class _NewMaterialRequestScreenState
       });
       return;
     }
+    final clientRef = const Uuid().v4();
+    final payload = buildMaterialRequestPayload(
+      priority: _priority,
+      notes: _notes.text,
+      workOrderId: _workOrderId.text,
+      projectId: _projectId.text,
+      ticketId: _ticketId.text,
+      sourceLocationId: _sourceLocationId,
+      destinationLocationId: _destinationLocationId,
+      items: _items,
+    );
     setState(() => _saving = true);
     try {
       final request = await ref
@@ -581,6 +594,22 @@ class _NewMaterialRequestScreenState
       }
     } on DioException catch (error) {
       if (!mounted) return;
+      if (error.response == null) {
+        await ref
+            .read(syncServiceProvider)
+            .enqueue(
+              kind: 'material_request',
+              clientRef: clientRef,
+              payload: payload,
+            );
+        await ref.read(draftStoreProvider).delete(materialRequestDraftId);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Material request queued for sync')),
+        );
+        context.go('/materials');
+        return;
+      }
       final message = _materialSubmitError(error);
       setState(() => _submitError = message);
       ScaffoldMessenger.of(

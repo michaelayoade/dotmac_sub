@@ -155,6 +155,9 @@ class _CompletionWizardState extends ConsumerState<CompletionWizard> {
             onFallbackChanged: (value) => ref
                 .read(completionStateProvider.notifier)
                 .update((s) => s.copyWith(signatureUnavailableReason: value)),
+            onSignerChanged: (value) => ref
+                .read(completionStateProvider.notifier)
+                .update((s) => s.copyWith(signerName: value)),
           ),
         },
       ),
@@ -286,6 +289,7 @@ class _SignOffStep extends StatelessWidget {
     required this.serial,
     required this.onSigned,
     required this.onFallbackChanged,
+    required this.onSignerChanged,
   });
 
   final SignaturePadController signature;
@@ -294,6 +298,7 @@ class _SignOffStep extends StatelessWidget {
   final TextEditingController serial;
   final VoidCallback onSigned;
   final ValueChanged<String> onFallbackChanged;
+  final ValueChanged<String> onSignerChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -309,6 +314,7 @@ class _SignOffStep extends StatelessWidget {
         TextField(
           controller: signerName,
           decoration: const InputDecoration(labelText: 'Signer name'),
+          onChanged: onSignerChanged,
         ),
         const SizedBox(height: 16),
         TextField(
