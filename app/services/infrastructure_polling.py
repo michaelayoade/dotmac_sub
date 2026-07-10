@@ -43,6 +43,12 @@ DEFAULT_MAX_DEVICES_PER_RUN = 300
 INTERFACE_IN_OCTETS_METRIC = "core_interface_in_octets_total"
 INTERFACE_OUT_OCTETS_METRIC = "core_interface_out_octets_total"
 
+# Per-probe ping results as VM series (degradation detection before outage
+# detection — rising latency shows up long before a device stops answering).
+# Latency only exists for successful probes; loss is 1/0 per probe.
+PING_LATENCY_METRIC = "device_ping_latency_ms"
+PING_LOSS_METRIC = "device_ping_loss"
+
 _vm_writer = None
 
 
@@ -98,6 +104,7 @@ def poll_infrastructure(
     One run probes at most ``max_devices`` (longest-unchecked first).
     """
     devices = pollable_devices(db)
+    sweep_started = datetime.now(UTC)
     totals = refresh_stale_devices_health(
         db,
         devices,
@@ -110,10 +117,66 @@ def poll_infrastructure(
     )
     totals["devices"] = len(devices)
     try:
+        totals.update(push_ping_metrics(db, since=sweep_started))
+    except Exception:  # metrics are additive; never fail the health sweep
+        logger.exception("ping_metric_push_failed")
+    try:
         totals.update(push_interface_counters(db))
     except Exception:  # counters are additive; never fail the health sweep
         logger.exception("interface_counter_push_failed")
     return totals
+
+
+def push_ping_metrics(db: Session, *, since: datetime) -> dict[str, int]:
+    """Push this sweep's ping probe results to VictoriaMetrics.
+
+    Reads the DeviceMetric rows the probe workers persisted after ``since``
+    (unit ``ping_ms`` for successes, ``ping_timeout`` for failures) and emits
+    ``device_ping_latency_ms`` (successes only) plus ``device_ping_loss``
+    (1/0 per probe). Labels carry the aggregation dimensions the dashboards
+    slice by: device_id, device_role, pop_site_id, matched_device_type.
+    """
+    from app.models.network_monitoring import DeviceMetric
+
+    rows = db.execute(
+        select(DeviceMetric, NetworkDevice)
+        .join(NetworkDevice, NetworkDevice.id == DeviceMetric.device_id)
+        .where(
+            DeviceMetric.unit.in_(("ping_ms", "ping_timeout")),
+            DeviceMetric.recorded_at >= since,
+        )
+    ).all()
+    if not rows:
+        return {"ping_metric_lines": 0, "ping_metric_write_failed": 0}
+
+    lines: list[str] = []
+    for metric, device in rows:
+        recorded_at = metric.recorded_at
+        if recorded_at.tzinfo is None:
+            recorded_at = recorded_at.replace(tzinfo=UTC)
+        ts_ms = int(recorded_at.timestamp() * 1000)
+        role = getattr(device.role, "value", device.role) or "unknown"
+        labels = (
+            f'device_id="{device.id}",device_role="{role}",'
+            f'pop_site_id="{device.pop_site_id or ""}",'
+            f'matched_device_type="{device.matched_device_type or ""}"'
+        )
+        success = metric.unit == "ping_ms"
+        if success:
+            lines.append(
+                f"{PING_LATENCY_METRIC}{{{labels}}} {float(metric.value)} {ts_ms}"
+            )
+        lines.append(f"{PING_LOSS_METRIC}{{{labels}}} {0 if success else 1} {ts_ms}")
+
+    write_result = _writer().write_prometheus_lines(
+        lines,
+        adapter="infrastructure.polling",
+        operation="ping_metrics",
+    )
+    return {
+        "ping_metric_lines": len(lines),
+        "ping_metric_write_failed": 0 if write_result.success else len(lines),
+    }
 
 
 def monitored_interface_targets(
