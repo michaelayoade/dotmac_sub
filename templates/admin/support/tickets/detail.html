@@ -191,6 +191,17 @@
                 <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Region</dt><dd class="text-right text-slate-800 dark:text-slate-100">{{ ticket.region or '-' }}</dd></div>
                 <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Project Manager</dt><dd class="break-all text-right text-slate-800 dark:text-slate-100">{{ staff_lookup.get(ticket.ticket_manager_person_id|string, ticket.ticket_manager_person_id or '-') if staff_lookup is defined else (ticket.ticket_manager_person_id or '-') }}</dd></div>
                 <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Site Coordinator</dt><dd class="break-all text-right text-slate-800 dark:text-slate-100">{{ staff_lookup.get(ticket.site_coordinator_person_id|string, ticket.site_coordinator_person_id or '-') if staff_lookup is defined else (ticket.site_coordinator_person_id or '-') }}</dd></div>
+                <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Assignees</dt><dd class="break-all text-right text-slate-800 dark:text-slate-100">
+                    {% if ticket.assignees %}
+                    <ul class="space-y-0.5">
+                        {% for assignee in ticket.assignees %}
+                        <li>{{ staff_lookup.get(assignee.person_id|string, assignee.person_id) if staff_lookup is defined else assignee.person_id }}</li>
+                        {% endfor %}
+                    </ul>
+                    {% else %}
+                    -
+                    {% endif %}
+                </dd></div>
                 <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Service Team</dt><dd class="break-all text-right text-slate-800 dark:text-slate-100">{{ service_team_lookup.get(ticket.service_team_id|string, ticket.service_team_id or '-') if service_team_lookup is defined else (ticket.service_team_id or '-') }}</dd></div>
                 <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Due</dt><dd class="text-right {% if sla_state.breached %}text-red-700 dark:text-red-300{% else %}text-slate-800 dark:text-slate-100{% endif %}">{{ ticket.due_at.strftime('%Y-%m-%d %H:%M UTC') if ticket.due_at else '-' }}{% if sla_state.breached %}<span class="ml-1 rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-red-700 dark:bg-red-900/30 dark:text-red-300">breached</span>{% endif %}</dd></div>
                 <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Age</dt><dd class="text-right text-slate-800 dark:text-slate-100">{{ sla_state.age_hours }}h</dd></div>
