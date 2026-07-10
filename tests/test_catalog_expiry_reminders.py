@@ -8,6 +8,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 from app.models.catalog import SubscriptionStatus
+from app.models.network_monitoring import NetworkDevice, OutageIncident
 from app.models.subscriber import Subscriber
 from app.models.support import Ticket, TicketStatus
 from app.services.events.types import EventType
@@ -92,6 +93,7 @@ def test_send_expiry_reminders_suppresses_open_infrastructure_down_ticket(
     assert result == {
         "reminded": 0,
         "suppressed_infrastructure_down": 1,
+        "suppressed_active_outage": 0,
         "total_expiring": 1,
     }
     assert events == []
@@ -125,6 +127,7 @@ def test_send_expiry_reminders_ignores_non_infrastructure_tickets(
     assert result == {
         "reminded": 1,
         "suppressed_infrastructure_down": 0,
+        "suppressed_active_outage": 0,
         "total_expiring": 1,
     }
     assert len(events) == 1
@@ -171,6 +174,7 @@ def test_send_expiry_reminders_batches_infrastructure_ticket_lookup(
     assert result == {
         "reminded": 1,
         "suppressed_infrastructure_down": 1,
+        "suppressed_active_outage": 0,
         "total_expiring": 2,
     }
     assert calls == [{subscriber.id, other_subscriber.id}]
@@ -207,3 +211,124 @@ def test_send_expiry_reminders_ignores_closed_infrastructure_down_tickets(
     assert result["reminded"] == 1
     assert result["suppressed_infrastructure_down"] == 0
     assert len(events) == 1
+
+
+def _outage_incident(db_session, *, status: str = "open"):
+    node = NetworkDevice(
+        name=f"outage-root-{uuid4().hex[:8]}",
+        source="zabbix_reconcile",
+        is_active=True,
+    )
+    db_session.add(node)
+    db_session.flush()
+    incident = OutageIncident(
+        root_node_id=node.id,
+        status=status,
+        detection_source="operator",
+        declared_by="test",
+    )
+    db_session.add(incident)
+    db_session.commit()
+    return incident
+
+
+def test_send_expiry_reminders_suppresses_active_outage(
+    db_session, subscriber, monkeypatch
+):
+    subscription = _expiring_subscription(db_session, subscriber)
+    _outage_incident(db_session, status="open")
+    _run_with_test_session(monkeypatch, db_session)
+    monkeypatch.setattr(
+        "app.services.topology.affected.affected_customers",
+        lambda session, node=None, basestation=None, fdh=None: {
+            "subscriptions": [subscription],
+        },
+    )
+    events = []
+    monkeypatch.setattr(
+        "app.services.events.emit_event",
+        lambda *args, **kwargs: events.append((args, kwargs)),
+    )
+
+    result = catalog_tasks.send_expiry_reminders(days_before=7)
+
+    assert result == {
+        "reminded": 0,
+        "suppressed_infrastructure_down": 0,
+        "suppressed_active_outage": 1,
+        "total_expiring": 1,
+    }
+    assert events == []
+    db_session.refresh(subscription)
+    assert subscription.status == SubscriptionStatus.active
+
+
+def test_send_expiry_reminders_sends_when_outage_resolved(
+    db_session, subscriber, monkeypatch
+):
+    subscription = _expiring_subscription(db_session, subscriber)
+    _outage_incident(db_session, status="resolved")
+    _run_with_test_session(monkeypatch, db_session)
+
+    def _unexpected(*args, **kwargs):
+        raise AssertionError(
+            "affected_customers must not run when no live incident exists"
+        )
+
+    monkeypatch.setattr(
+        "app.services.topology.affected.affected_customers", _unexpected
+    )
+    events = []
+    monkeypatch.setattr(
+        "app.services.events.emit_event",
+        lambda *args, **kwargs: events.append((args, kwargs)),
+    )
+
+    result = catalog_tasks.send_expiry_reminders(days_before=7)
+
+    assert result == {
+        "reminded": 1,
+        "suppressed_infrastructure_down": 0,
+        "suppressed_active_outage": 0,
+        "total_expiring": 1,
+    }
+    assert len(events) == 1
+    _, kwargs = events[0]
+    assert kwargs["subscription_id"] == subscription.id
+
+
+def test_send_expiry_reminders_outage_only_suppresses_covered_subscriptions(
+    db_session, subscriber, monkeypatch
+):
+    covered = _expiring_subscription(db_session, subscriber)
+    other_subscriber = _make_subscriber(db_session)
+    uncovered = _expiring_subscription(
+        db_session,
+        other_subscriber,
+        name="Unlimited Expiry Reminder Uncovered",
+    )
+    _outage_incident(db_session, status="confirmed")
+    _run_with_test_session(monkeypatch, db_session)
+    monkeypatch.setattr(
+        "app.services.topology.affected.affected_customers",
+        lambda session, node=None, basestation=None, fdh=None: {
+            "subscriptions": [covered],
+        },
+    )
+    events = []
+    monkeypatch.setattr(
+        "app.services.events.emit_event",
+        lambda *args, **kwargs: events.append((args, kwargs)),
+    )
+
+    result = catalog_tasks.send_expiry_reminders(days_before=7)
+
+    assert result == {
+        "reminded": 1,
+        "suppressed_infrastructure_down": 0,
+        "suppressed_active_outage": 1,
+        "total_expiring": 2,
+    }
+    assert len(events) == 1
+    _, kwargs = events[0]
+    assert kwargs["subscription_id"] == uncovered.id
