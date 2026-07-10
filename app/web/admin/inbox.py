@@ -60,10 +60,17 @@ def team_inbox_queue(
     service_team_id: str | None = Query(default=None),
     assigned_person_id: str | None = Query(default=None),
     needs_response: bool = Query(default=False),
+    contact_resolution_status: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     per_page: int = Query(default=25, ge=10, le=100),
     db: Session = Depends(get_db),
 ):
+    clean_contact_resolution_status = (
+        contact_resolution_status.strip()
+        if isinstance(contact_resolution_status, str)
+        and contact_resolution_status.strip()
+        else None
+    )
     offset = (page - 1) * per_page
     result = team_inbox_read.list_conversations(
         db,
@@ -73,6 +80,7 @@ def team_inbox_queue(
         service_team_id=service_team_id,
         assigned_person_id=assigned_person_id,
         needs_response=needs_response,
+        contact_resolution_status=clean_contact_resolution_status,
         limit=per_page,
         offset=offset,
     )
@@ -91,9 +99,11 @@ def team_inbox_queue(
             "service_team_id": service_team_id or "",
             "assigned_person_id": assigned_person_id or "",
             "needs_response": needs_response,
+            "contact_resolution_status": clean_contact_resolution_status or "",
             "service_team_options": team_inbox_metrics.active_service_team_options(db),
             "status_options": [item.value for item in InboxConversationStatus],
             "channel_options": [item.value for item in InboxChannelType],
+            "label_options": team_inbox_operations.list_labels(db),
         }
     )
     return templates.TemplateResponse("admin/inbox/index.html", context)
@@ -264,6 +274,9 @@ def team_inbox_detail(
             "macro_options": team_inbox_operations.list_macros(
                 db, person_id=_actor_id_from_request(request)
             ),
+            "template_options": team_inbox_operations.list_templates(
+                db, channel_type=timeline.channel_type
+            ),
         }
     )
     return templates.TemplateResponse("admin/inbox/detail.html", context)
@@ -282,13 +295,27 @@ def _actor_id_from_request(request: Request) -> str | None:
 def team_inbox_reply(
     conversation_id: UUID,
     request: Request,
-    body_text: str = Form(...),
+    body_text: str = Form(default=""),
     macro_id: str | None = Form(default=None),
+    template_id: str | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
     from app.services import web_admin as web_admin_service
 
     clean_body = body_text.strip()
+    template = None
+    clean_template_id = (
+        template_id.strip()
+        if isinstance(template_id, str) and template_id.strip()
+        else None
+    )
+    if clean_template_id:
+        try:
+            template = team_inbox_operations.get_template(db, clean_template_id)
+        except team_inbox_operations.InboxOperationError as exc:
+            return _detail_redirect(conversation_id, status="error", message=str(exc))
+        if not clean_body:
+            clean_body = template.body_text.strip()
     if not clean_body:
         return _detail_redirect(
             conversation_id,
@@ -311,9 +338,14 @@ def team_inbox_reply(
         payload=team_inbox_outbound.InboxReplyPayload(
             body_html=body_html,
             body_text=clean_body,
+            subject=template.subject if template is not None else None,
             sent_by_person_id=web_admin_service.get_actor_id(request),
-            metadata={"source_route": "admin_inbox_detail_reply"},
+            metadata={
+                "source_route": "admin_inbox_detail_reply",
+                "template_id": str(template.id) if template is not None else None,
+            },
         ),
+        record_failure=True,
     )
     if result.kind != "sent":
         return _detail_redirect(
@@ -440,6 +472,125 @@ def team_inbox_macro_create(
         conversation_id,
         status="success",
         message="Reply macro saved.",
+    )
+
+
+@router.post(
+    "/{conversation_id}/templates/create",
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def team_inbox_template_create(
+    conversation_id: UUID,
+    name: str = Form(...),
+    channel_type: str = Form(default="any"),
+    subject: str | None = Form(default=None),
+    body_text: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    try:
+        team_inbox_operations.create_template(
+            db,
+            name=name,
+            channel_type=channel_type,
+            subject=subject,
+            body_text=body_text,
+        )
+    except team_inbox_operations.InboxOperationError as exc:
+        return _detail_redirect(conversation_id, status="error", message=str(exc))
+    db.commit()
+    return _detail_redirect(
+        conversation_id,
+        status="success",
+        message="Message template saved.",
+    )
+
+
+@router.post(
+    "/messages/{message_id}/retry",
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def team_inbox_message_retry(
+    message_id: UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    message = db.get(InboxMessage, message_id)
+    if message is None:
+        return RedirectResponse(
+            url="/admin/inbox?status=error&message=Message%20not%20found",
+            status_code=303,
+        )
+    result = team_inbox_outbound.retry_outbound_message(
+        db,
+        message=message,
+        sent_by_person_id=_actor_id_from_request(request),
+    )
+    db.commit()
+    if result.kind != "sent":
+        return _detail_redirect(
+            message.conversation_id,
+            status="error",
+            message=result.reason or "Retry failed.",
+        )
+    return _detail_redirect(
+        message.conversation_id,
+        status="success",
+        message="Message retried.",
+    )
+
+
+@router.post(
+    "/bulk",
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def team_inbox_bulk_action(
+    request: Request,
+    conversation_ids: list[str] = Form(default=[]),
+    action: str = Form(...),
+    status_value: str | None = Form(default=None),
+    label_id: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+):
+    if not conversation_ids:
+        return RedirectResponse(
+            url="/admin/inbox?status=error&message=Select%20at%20least%20one%20conversation",
+            status_code=303,
+        )
+    try:
+        if action == "status":
+            result = team_inbox_operations.bulk_update_status(
+                db,
+                conversation_ids=conversation_ids,
+                status_value=status_value or "",
+                actor_person_id=_actor_id_from_request(request),
+            )
+            updated = result.get("updated")
+            updated_count = len(updated) if isinstance(updated, list) else 0
+            message = f"Updated {updated_count} conversation statuses."
+        elif action == "label":
+            result = team_inbox_operations.bulk_apply_label(
+                db,
+                conversation_ids=conversation_ids,
+                label_id=label_id or "",
+                actor_person_id=_actor_id_from_request(request),
+            )
+            updated = result.get("updated")
+            updated_count = len(updated) if isinstance(updated, list) else 0
+            message = f"Applied label to {updated_count} conversations."
+        else:
+            return RedirectResponse(
+                url="/admin/inbox?status=error&message=Unsupported%20bulk%20action",
+                status_code=303,
+            )
+    except team_inbox_operations.InboxOperationError as exc:
+        return RedirectResponse(
+            url=f"/admin/inbox?status=error&message={quote_plus(str(exc))}",
+            status_code=303,
+        )
+    db.commit()
+    return RedirectResponse(
+        url=f"/admin/inbox?status=success&message={quote_plus(message)}",
+        status_code=303,
     )
 
 

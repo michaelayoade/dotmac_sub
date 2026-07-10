@@ -258,10 +258,17 @@ def list_inbox_conversations(
     service_team_id: str | None = Query(default=None),
     assigned_person_id: str | None = Query(default=None),
     needs_response: bool = Query(default=False),
+    contact_resolution_status: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
+    clean_contact_resolution_status = (
+        contact_resolution_status.strip()
+        if isinstance(contact_resolution_status, str)
+        and contact_resolution_status.strip()
+        else None
+    )
     result = team_inbox_read.list_conversations(
         db,
         search=search,
@@ -270,6 +277,7 @@ def list_inbox_conversations(
         service_team_id=service_team_id,
         assigned_person_id=assigned_person_id,
         needs_response=needs_response,
+        contact_resolution_status=clean_contact_resolution_status,
         limit=limit,
         offset=offset,
     )

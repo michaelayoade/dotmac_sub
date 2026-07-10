@@ -280,6 +280,42 @@ class InboxReplyMacro(Base):
     )
 
 
+class InboxMessageTemplate(Base):
+    __tablename__ = "inbox_message_templates"
+    __table_args__ = (
+        Index(
+            "ix_inbox_message_templates_channel_active",
+            "channel_type",
+            "is_active",
+        ),
+        Index("ix_inbox_message_templates_name", "name"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    channel_type: Mapped[str] = mapped_column(
+        String(40), default=InboxChannelType.email.value, nullable=False
+    )
+    subject: Mapped[str | None] = mapped_column(String(200))
+    body_text: Mapped[str] = mapped_column(Text, nullable=False)
+    body_html: Mapped[str | None] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    metadata_: Mapped[dict | None] = mapped_column(
+        "metadata", MutableDict.as_mutable(JSON())
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
 class InboxContactLink(Base):
     __tablename__ = "inbox_contact_links"
     __table_args__ = (

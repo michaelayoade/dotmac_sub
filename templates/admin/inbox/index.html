@@ -7,6 +7,12 @@
 {{ ambient_background("cyan", "slate") }}
 
 <div class="relative space-y-6">
+    {% if request.query_params.get('message') %}
+    <div class="rounded-xl border px-4 py-3 text-sm {% if request.query_params.get('status') == 'error' %}border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-800/40 dark:bg-rose-900/20 dark:text-rose-200{% else %}border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800/40 dark:bg-emerald-900/20 dark:text-emerald-200{% endif %}">
+        {{ request.query_params.get('message') }}
+    </div>
+    {% endif %}
+
     {% call(content) page_header(
         title="Team Inbox",
         subtitle="Native customer conversations by team, status, assignment, and response need",
@@ -24,7 +30,7 @@
     {% endcall %}
 
     <form method="get" action="/admin/inbox" class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-        <div class="grid gap-3 xl:grid-cols-[1.5fr_1fr_1fr_1fr_auto] xl:items-end">
+        <div class="grid gap-3 xl:grid-cols-[1.5fr_1fr_1fr_1fr_1fr_auto] xl:items-end">
             <div>
                 <label for="search" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Search</label>
                 <input id="search" type="search" name="search" value="{{ search }}" placeholder="Subject, contact, thread" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
@@ -56,6 +62,15 @@
                     {% endfor %}
                 </select>
             </div>
+            <div>
+                <label for="contact_resolution_status" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Contact</label>
+                <select id="contact_resolution_status" name="contact_resolution_status" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">All contacts</option>
+                    {% for option in ['unmatched', 'ambiguous', 'suppressed_inactive', 'linked_subscriber', 'linked_reseller'] %}
+                    <option value="{{ option }}" {% if option == contact_resolution_status %}selected{% endif %}>{{ option | replace('_', ' ') | title }}</option>
+                    {% endfor %}
+                </select>
+            </div>
             <div class="flex flex-wrap gap-2">
                 <label class="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 dark:border-slate-600 dark:text-slate-200">
                     <input type="checkbox" name="needs_response" value="true" {% if needs_response %}checked{% endif %} class="rounded border-slate-300 text-cyan-600">
@@ -69,9 +84,38 @@
 
     {% call card("Conversation Queue", color="cyan", padding=False) %}
     {% if rows %}
+    <form method="post" action="/admin/inbox/bulk">
+    <div class="flex flex-wrap items-end gap-3 border-b border-slate-200 bg-slate-50 px-6 py-4 dark:border-slate-700 dark:bg-slate-900/30">
+        <div>
+            <label for="bulk_action" class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Bulk action</label>
+            <select id="bulk_action" name="action" class="mt-1 rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="status">Set status</option>
+                <option value="label">Apply label</option>
+            </select>
+        </div>
+        <div>
+            <label for="bulk_status" class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Status</label>
+            <select id="bulk_status" name="status_value" class="mt-1 rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                {% for option in status_options %}
+                <option value="{{ option }}">{{ option | replace('_', ' ') | title }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div>
+            <label for="bulk_label_id" class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Label</label>
+            <select id="bulk_label_id" name="label_id" class="mt-1 rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="">Select label</option>
+                {% for label in label_options %}
+                <option value="{{ label.id }}">{{ label.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <button type="submit" class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700 dark:bg-white dark:text-slate-900">Apply</button>
+    </div>
     <div class="overflow-x-auto">
         <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
             {{ table_head([
+                {"label": ""},
                 {"label": "Conversation"},
                 {"label": "Team"},
                 {"label": "Latest"},
@@ -82,9 +126,15 @@
             <tbody class="divide-y divide-slate-100 bg-white dark:divide-slate-700/50 dark:bg-slate-800">
                 {% for row in rows %}
                 {% call table_row(color="cyan") %}
+                <td class="w-10 px-6 py-4">
+                    <input type="checkbox" name="conversation_ids" value="{{ row.id }}" class="rounded border-slate-300 text-cyan-600">
+                </td>
                 <td class="min-w-[20rem] px-6 py-4">
                     <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ row.subject or "(No subject)" }}</p>
                     <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ row.contact_address or "-" }}</p>
+                    {% if row.contact_resolution_status %}
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Contact: {{ row.contact_resolution_status | replace('_', ' ') | title }}</p>
+                    {% endif %}
                     <p class="mt-1 font-mono text-[11px] text-slate-400 dark:text-slate-500">{{ row.id }}</p>
                 </td>
                 <td class="whitespace-nowrap px-6 py-4">
@@ -109,6 +159,9 @@
                         {% if row.needs_response %}
                         {{ status_badge("Needs response", "warning", size="sm") }}
                         {% endif %}
+                        {% if row.latest_delivery_status == 'failed' %}
+                        {{ status_badge("Send failed", "danger", size="sm") }}
+                        {% endif %}
                     </div>
                 </td>
                 <td class="whitespace-nowrap px-6 py-4">
@@ -119,14 +172,15 @@
             </tbody>
         </table>
     </div>
+    </form>
     <div class="flex items-center justify-between border-t border-slate-200 px-6 py-4 text-sm dark:border-slate-700">
         <span class="text-slate-500 dark:text-slate-400">{{ count }} conversation{{ '' if count == 1 else 's' }}</span>
         <div class="flex gap-2">
             {% if has_previous %}
-            <a href="/admin/inbox?page={{ page - 1 }}&per_page={{ per_page }}{% if search %}&search={{ search }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% if channel_type %}&channel_type={{ channel_type }}{% endif %}{% if service_team_id %}&service_team_id={{ service_team_id }}{% endif %}{% if needs_response %}&needs_response=true{% endif %}" class="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300">Previous</a>
+            <a href="/admin/inbox?page={{ page - 1 }}&per_page={{ per_page }}{% if search %}&search={{ search }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% if channel_type %}&channel_type={{ channel_type }}{% endif %}{% if service_team_id %}&service_team_id={{ service_team_id }}{% endif %}{% if contact_resolution_status %}&contact_resolution_status={{ contact_resolution_status }}{% endif %}{% if needs_response %}&needs_response=true{% endif %}" class="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300">Previous</a>
             {% endif %}
             {% if has_next %}
-            <a href="/admin/inbox?page={{ page + 1 }}&per_page={{ per_page }}{% if search %}&search={{ search }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% if channel_type %}&channel_type={{ channel_type }}{% endif %}{% if service_team_id %}&service_team_id={{ service_team_id }}{% endif %}{% if needs_response %}&needs_response=true{% endif %}" class="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300">Next</a>
+            <a href="/admin/inbox?page={{ page + 1 }}&per_page={{ per_page }}{% if search %}&search={{ search }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% if channel_type %}&channel_type={{ channel_type }}{% endif %}{% if service_team_id %}&service_team_id={{ service_team_id }}{% endif %}{% if contact_resolution_status %}&contact_resolution_status={{ contact_resolution_status }}{% endif %}{% if needs_response %}&needs_response=true{% endif %}" class="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300">Next</a>
             {% endif %}
         </div>
     </div>

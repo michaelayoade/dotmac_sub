@@ -93,6 +93,7 @@ class InboxTimelineMessageRead(BaseModel):
     received_at: datetime | None = None
     created_at: datetime
     metadata: dict | None = None
+    attachments: list[dict] = Field(default_factory=list)
 
 
 class InboxConversationTimelineRead(BaseModel):
@@ -129,6 +130,8 @@ class InboxConversationListItemRead(BaseModel):
     latest_message_direction: str | None = None
     latest_message_body: str | None = None
     latest_message_at: datetime | None = None
+    contact_resolution_status: str | None = None
+    latest_delivery_status: str | None = None
     active_assigned_person_id: UUID | None = None
     needs_response: bool
     team_count: int

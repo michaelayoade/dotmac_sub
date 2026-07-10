@@ -186,6 +186,8 @@ async def test_meta_whatsapp_webhook_preserves_media_message(db_session, monkeyp
     assert response["processed"] == 1
     assert message.external_message_id == "wamid.media-1"
     assert message.body == "[image]"
+    assert message.metadata_["attachments"][0]["type"] == "image"
+    assert message.metadata_["attachments"][0]["id"] == "media-1"
     assert message.metadata_["raw"]["raw"]["image"]["id"] == "media-1"
 
 

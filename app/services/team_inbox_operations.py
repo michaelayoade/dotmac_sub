@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -12,6 +13,7 @@ from app.models.team_inbox import (
     InboxConversation,
     InboxConversationLabel,
     InboxLabel,
+    InboxMessageTemplate,
     InboxReplyMacro,
 )
 from app.services.common import coerce_uuid
@@ -52,6 +54,16 @@ class MacroOption:
     visibility: str
     actions: list[dict[str, Any]]
     execution_count: int
+
+
+@dataclass(frozen=True)
+class MessageTemplateOption:
+    id: str
+    name: str
+    channel_type: str
+    subject: str | None
+    body_text: str
+    body_html: str | None
 
 
 def _slugify(value: str) -> str:
@@ -453,3 +465,146 @@ def record_macro_use(
     macro.execution_count = int(macro.execution_count or 0) + 1
     db.flush()
     return macro
+
+
+def list_templates(
+    db: Session,
+    *,
+    channel_type: str | None = None,
+    active_only: bool = True,
+) -> list[MessageTemplateOption]:
+    query = db.query(InboxMessageTemplate)
+    if active_only:
+        query = query.filter(InboxMessageTemplate.is_active.is_(True))
+    if channel_type:
+        query = query.filter(
+            InboxMessageTemplate.channel_type.in_([channel_type, "any"])
+        )
+    return [
+        MessageTemplateOption(
+            id=str(template.id),
+            name=template.name,
+            channel_type=template.channel_type,
+            subject=template.subject,
+            body_text=template.body_text,
+            body_html=template.body_html,
+        )
+        for template in query.order_by(func.lower(InboxMessageTemplate.name).asc())
+        .limit(200)
+        .all()
+    ]
+
+
+def create_template(
+    db: Session,
+    *,
+    name: str,
+    channel_type: str,
+    body_text: str,
+    subject: str | None = None,
+    body_html: str | None = None,
+) -> InboxMessageTemplate:
+    clean_name = str(name or "").strip()
+    clean_channel = str(channel_type or "any").strip().lower()
+    clean_body = str(body_text or "").strip()
+    if clean_channel not in {
+        "any",
+        "email",
+        "whatsapp",
+        "facebook_messenger",
+        "instagram_dm",
+        "chat_widget",
+    }:
+        clean_channel = "any"
+    if not clean_name:
+        raise InboxOperationError("Template name is required.")
+    if not clean_body:
+        raise InboxOperationError("Template body is required.")
+    template = InboxMessageTemplate(
+        name=clean_name[:160],
+        channel_type=clean_channel,
+        subject=str(subject or "").strip()[:200] or None,
+        body_text=clean_body,
+        body_html=str(body_html or "").strip() or None,
+        is_active=True,
+    )
+    db.add(template)
+    db.flush()
+    return template
+
+
+def get_template(db: Session, template_id: str | UUID) -> InboxMessageTemplate:
+    template = db.get(InboxMessageTemplate, coerce_uuid(template_id))
+    if template is None or not template.is_active:
+        raise InboxOperationError("Template not found.")
+    return template
+
+
+def bulk_update_status(
+    db: Session,
+    *,
+    conversation_ids: Sequence[str | UUID],
+    status_value: str,
+    actor_person_id: str | UUID | None = None,
+) -> dict[str, object]:
+    clean_status = str(status_value or "").strip().lower()
+    if clean_status not in {"open", "pending", "snoozed", "resolved"}:
+        raise InboxOperationError("Unsupported conversation status.")
+    actor_uuid = coerce_uuid(actor_person_id)
+    updated: list[str] = []
+    skipped: list[str] = []
+    for raw_id in conversation_ids:
+        conversation = db.get(InboxConversation, coerce_uuid(raw_id))
+        if conversation is None or not conversation.is_active:
+            skipped.append(str(raw_id))
+            continue
+        if conversation.status == clean_status:
+            skipped.append(str(conversation.id))
+            continue
+        metadata = dict(conversation.metadata_ or {})
+        history = metadata.get("status_history")
+        if not isinstance(history, list):
+            history = []
+        history.append(
+            {
+                "from": conversation.status,
+                "to": clean_status,
+                "at": _now_iso(),
+                "actor_id": str(actor_uuid) if actor_uuid else None,
+                "source": "team_inbox_bulk_status",
+            }
+        )
+        metadata["status_history"] = history[-50:]
+        conversation.status = clean_status
+        conversation.metadata_ = metadata
+        updated.append(str(conversation.id))
+    db.flush()
+    return {"updated": updated, "skipped": skipped, "status": clean_status}
+
+
+def bulk_apply_label(
+    db: Session,
+    *,
+    conversation_ids: Sequence[str | UUID],
+    label_id: str | UUID,
+    actor_person_id: str | UUID | None = None,
+) -> dict[str, object]:
+    updated: list[str] = []
+    skipped: list[str] = []
+    label = db.get(InboxLabel, coerce_uuid(label_id))
+    if label is None or not label.is_active:
+        raise InboxOperationError("Label not found.")
+    for raw_id in conversation_ids:
+        conversation = db.get(InboxConversation, coerce_uuid(raw_id))
+        if conversation is None or not conversation.is_active:
+            skipped.append(str(raw_id))
+            continue
+        apply_label(
+            db,
+            conversation=conversation,
+            label_id=label.id,
+            applied_by_person_id=actor_person_id,
+        )
+        updated.append(str(conversation.id))
+    db.flush()
+    return {"updated": updated, "skipped": skipped, "label_id": str(label.id)}

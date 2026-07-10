@@ -13,6 +13,7 @@ from app.models.team_inbox import (
     InboxLabel,
     InboxMessage,
     InboxMessageDirection,
+    InboxMessageTemplate,
     InboxReplyMacro,
 )
 from app.services import team_inbox_operations, team_inbox_read
@@ -328,3 +329,47 @@ def test_macro_actions_can_set_status_and_apply_label(db_session):
     assert conversation.metadata_["status_history"][-1]["macro_id"] == str(macro.id)
     assert labels[0].name == "Outage"
     assert macro.execution_count == 1
+
+
+def test_admin_template_create_and_reply_uses_template(db_session, monkeypatch):
+    actor_id = uuid.uuid4()
+    conversation = _conversation(db_session)
+    conversation.channel_type = InboxChannelType.email.value
+    conversation.contact_address = "ada@example.com"
+    sent: dict[str, object] = {}
+    from app.services import team_inbox_outbound
+    from app.services import web_admin as web_admin_service
+
+    monkeypatch.setattr(
+        web_admin_service, "get_actor_id", lambda request: str(actor_id)
+    )
+    monkeypatch.setattr(
+        team_inbox_outbound.email_service,
+        "send_email",
+        lambda *args, **kwargs: sent.update(kwargs) or True,
+    )
+
+    create_response = inbox_web.team_inbox_template_create(
+        conversation.id,
+        name="Outage update",
+        channel_type="email",
+        subject="Outage update",
+        body_text="We are still working on this.",
+        db=db_session,
+    )
+    template = db_session.query(InboxMessageTemplate).one()
+    reply_response = inbox_web.team_inbox_reply(
+        conversation.id,
+        _request(),
+        body_text="",
+        macro_id=None,
+        template_id=str(template.id),
+        db=db_session,
+    )
+
+    message = db_session.query(InboxMessage).one()
+    assert create_response.status_code == 303
+    assert reply_response.status_code == 303
+    assert sent["subject"] == "Re: Outage update"
+    assert message.metadata_["template_id"] == str(template.id)
+    assert "We are still working on this." in message.body

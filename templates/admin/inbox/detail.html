@@ -64,10 +64,29 @@
                     <span class="font-mono text-[11px] text-slate-400 dark:text-slate-500">{{ message.id }}</span>
                 </div>
                 <p class="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-800 dark:text-slate-200">{{ message.body or "-" }}</p>
+                {% if message.attachments %}
+                <div class="mt-3 space-y-2">
+                    {% for attachment in message.attachments %}
+                    <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
+                        <span class="font-semibold">{{ attachment.type | default('attachment') | title }}</span>
+                        {% if attachment.filename %}<span> · {{ attachment.filename }}</span>{% endif %}
+                        {% if attachment.mime_type %}<span> · {{ attachment.mime_type }}</span>{% endif %}
+                        {% if attachment.caption %}<p class="mt-1">{{ attachment.caption }}</p>{% endif %}
+                        {% if attachment.url %}<a href="{{ attachment.url }}" class="mt-1 inline-block text-cyan-700 hover:underline dark:text-cyan-300" target="_blank" rel="noopener">Open attachment</a>{% endif %}
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
                 <div class="mt-3 grid gap-1 text-xs text-slate-500 dark:text-slate-400 sm:grid-cols-2">
                     <p>From: {{ message.from_address or "-" }}</p>
                     <p>To: {{ message.to_addresses | join(', ') if message.to_addresses else "-" }}</p>
                 </div>
+                {% if message.metadata and message.metadata.get('delivery_status') == 'failed' %}
+                <form method="post" action="/admin/inbox/messages/{{ message.id }}/retry" class="mt-3">
+                    <button type="submit" class="rounded-lg border border-rose-300 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50 dark:border-rose-700 dark:text-rose-200 dark:hover:bg-rose-900/20">Retry failed send</button>
+                    <span class="ml-2 text-xs text-rose-600 dark:text-rose-300">{{ message.metadata.get('send_error') }}</span>
+                </form>
+                {% endif %}
             </div>
             {% endfor %}
         </div>
@@ -79,6 +98,13 @@
         <div class="space-y-6">
             {% call card("Reply", color="cyan") %}
             <form method="post" action="/admin/inbox/{{ timeline.id }}/reply" class="space-y-3" data-reply-form>
+                <select data-template-select class="w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">Insert template</option>
+                    {% for template in template_options %}
+                    <option value="{{ template.id }}" data-body="{{ template.body_text|e }}">{{ template.name }} · {{ template.channel_type | replace('_', ' ') | title }}</option>
+                    {% endfor %}
+                </select>
+                <input type="hidden" name="template_id" data-template-id>
                 <select data-macro-select class="w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                     <option value="">Insert macro</option>
                     {% for macro in macro_options %}
@@ -151,6 +177,20 @@
                         <option value="personal">Personal</option>
                     </select>
                     <button type="submit" class="w-full rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200">Save macro</button>
+                </form>
+
+                <form method="post" action="/admin/inbox/{{ timeline.id }}/templates/create" class="space-y-2 border-t border-slate-200 pt-4 dark:border-slate-700">
+                    <label for="template_name" class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Create message template</label>
+                    <input id="template_name" name="name" placeholder="Template name" class="w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <select name="channel_type" class="w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="any">Any channel</option>
+                        {% for option in ['email', 'whatsapp', 'facebook_messenger', 'instagram_dm', 'chat_widget'] %}
+                        <option value="{{ option }}">{{ option | replace('_', ' ') | title }}</option>
+                        {% endfor %}
+                    </select>
+                    <input name="subject" placeholder="Subject" class="w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <textarea name="body_text" rows="3" placeholder="Template text" class="w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></textarea>
+                    <button type="submit" class="w-full rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200">Save template</button>
                 </form>
             </div>
             {% endcall %}
@@ -254,8 +294,10 @@
 <script>
 document.querySelectorAll('[data-reply-form]').forEach((form) => {
     const select = form.querySelector('[data-macro-select]');
+    const templateSelect = form.querySelector('[data-template-select]');
     const body = form.querySelector('[data-reply-body]');
     const macroId = form.querySelector('[data-macro-id]');
+    const templateId = form.querySelector('[data-template-id]');
     if (!select || !body || !macroId) return;
     select.addEventListener('change', () => {
         const option = select.options[select.selectedIndex];
@@ -266,6 +308,17 @@ document.querySelectorAll('[data-reply-form]').forEach((form) => {
             body.focus();
         }
     });
+    if (templateSelect && templateId) {
+        templateSelect.addEventListener('change', () => {
+            const option = templateSelect.options[templateSelect.selectedIndex];
+            const text = option ? option.dataset.body || '' : '';
+            templateId.value = templateSelect.value || '';
+            if (text) {
+                body.value = text;
+                body.focus();
+            }
+        });
+    }
 });
 </script>
 

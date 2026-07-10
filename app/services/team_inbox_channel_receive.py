@@ -445,6 +445,9 @@ def receive_whatsapp_webhook(
             fallback_service_team_id=fallback_service_team_id,
             metadata={
                 "provider": normalized.get("provider"),
+                "attachments": payload.get("attachments")
+                if isinstance(payload.get("attachments"), list)
+                else [],
                 "raw": normalized.get("raw"),
             },
         ),

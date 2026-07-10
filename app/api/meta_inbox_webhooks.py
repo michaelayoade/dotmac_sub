@@ -48,6 +48,29 @@ def _message_text(message: dict[str, Any]) -> str:
     return ""
 
 
+def _message_attachments(message: dict[str, Any]) -> list[dict[str, Any]]:
+    attachments = message.get("attachments")
+    if not isinstance(attachments, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for item in attachments:
+        if not isinstance(item, dict):
+            continue
+        raw_payload = item.get("payload")
+        payload: dict[str, Any] = (
+            dict(raw_payload) if isinstance(raw_payload, dict) else {}
+        )
+        normalized.append(
+            {
+                "type": str(item.get("type") or "attachment"),
+                "url": payload.get("url"),
+                "title": item.get("title"),
+                "raw": item,
+            }
+        )
+    return normalized
+
+
 def _channel_for_object(payload_object: object) -> str | None:
     object_name = str(payload_object or "").strip().lower()
     if object_name == "page":
@@ -89,6 +112,7 @@ def _iter_meta_social_messages(payload: dict[str, Any]):
                     "provider": "meta",
                     "platform": channel_type,
                     "page_or_account_id": page_or_account_id,
+                    "attachments": _message_attachments(message),
                     "raw": event,
                 },
             }

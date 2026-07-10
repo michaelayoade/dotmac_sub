@@ -162,6 +162,35 @@ def test_list_conversations_filters_by_team_search_and_response_need(db_session)
     assert result.items[0].needs_response is True
 
 
+def test_list_conversations_filters_by_contact_resolution_status(db_session):
+    support = _team(db_session, "Support")
+    unmatched = _conversation(
+        db_session,
+        support,
+        subject="Instagram account",
+        contact_address="ig-1",
+        channel_type="instagram_dm",
+    )
+    unmatched.metadata_ = {"contact_resolution": {"status": "unmatched"}}
+    linked = _conversation(
+        db_session,
+        support,
+        subject="Known account",
+        contact_address="ada@example.com",
+    )
+    linked.metadata_ = {"contact_resolution": {"status": "linked_subscriber"}}
+    db_session.commit()
+
+    result = team_inbox_read.list_conversations(
+        db_session,
+        contact_resolution_status="unmatched",
+    )
+
+    assert result.count == 1
+    assert result.items[0].id == str(unmatched.id)
+    assert result.items[0].contact_resolution_status == "unmatched"
+
+
 def test_list_conversations_api_returns_list_response(db_session):
     support = _team(db_session, "Support")
     conversation = _conversation(db_session, support, subject="Router offline")

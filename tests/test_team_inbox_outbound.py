@@ -215,6 +215,56 @@ def test_send_inbox_reply_does_not_store_whatsapp_message_on_provider_failure(
     assert db_session.query(InboxMessage).count() == 0
 
 
+def test_send_inbox_reply_can_record_failed_message_for_retry(db_session, monkeypatch):
+    conversation = _whatsapp_conversation(db_session)
+    attempts: list[dict[str, object]] = []
+
+    def _fake_send(*args, **kwargs):
+        attempts.append(kwargs)
+        if len(attempts) == 1:
+            return {
+                "ok": False,
+                "provider": "meta_cloud_api",
+                "sent": True,
+                "status_code": 400,
+                "response": "bad recipient",
+            }
+        return {
+            "ok": True,
+            "provider": "meta_cloud_api",
+            "sent": True,
+            "status_code": 200,
+            "response": '{"messages":[{"id":"wamid.retry"}]}',
+        }
+
+    monkeypatch.setattr(
+        team_inbox_outbound.whatsapp_connector,
+        "send_text_message",
+        _fake_send,
+    )
+    db_session.commit()
+
+    failed = team_inbox_outbound.send_inbox_reply(
+        db_session,
+        conversation=conversation,
+        payload=team_inbox_outbound.InboxReplyPayload(
+            body_html="<p>We are checking this.</p>",
+        ),
+        record_failure=True,
+    )
+    failed_message = db_session.get(InboxMessage, failed.message_id)
+    retried = team_inbox_outbound.retry_outbound_message(
+        db_session,
+        message=failed_message,
+    )
+
+    assert failed.kind == "send_failed"
+    assert failed_message.metadata_["delivery_status"] == "retried"
+    assert failed_message.metadata_["retry_count"] == 1
+    assert retried.kind == "sent"
+    assert db_session.query(InboxMessage).count() == 2
+
+
 def test_send_inbox_reply_requires_whatsapp_recipient(db_session):
     conversation = _whatsapp_conversation(db_session)
     conversation.contact_address = None

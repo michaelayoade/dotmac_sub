@@ -83,6 +83,27 @@ def _text_body(message: dict[str, Any]) -> str:
     return ""
 
 
+def _whatsapp_attachments(message: dict[str, Any]) -> list[dict[str, Any]]:
+    message_type = str(message.get("type") or "").strip().lower()
+    if message_type in {"text", ""}:
+        return []
+    raw_payload = message.get(message_type)
+    payload = raw_payload if isinstance(raw_payload, dict) else {}
+    attachment: dict[str, Any] = {
+        "type": message_type,
+        "id": payload.get("id"),
+        "mime_type": payload.get("mime_type"),
+        "caption": payload.get("caption"),
+        "filename": payload.get("filename"),
+        "latitude": payload.get("latitude"),
+        "longitude": payload.get("longitude"),
+        "name": payload.get("name"),
+        "address": payload.get("address"),
+        "raw": message,
+    }
+    return [{key: value for key, value in attachment.items() if value is not None}]
+
+
 def _iter_meta_whatsapp_messages(payload: dict[str, Any]):
     for entry in payload.get("entry") or []:
         if not isinstance(entry, dict):
@@ -122,6 +143,7 @@ def _iter_meta_whatsapp_messages(payload: dict[str, Any]):
                     },
                     "contact_name": names_by_wa_id.get(sender),
                     "metadata": metadata,
+                    "attachments": _whatsapp_attachments(message),
                     "raw_message": message,
                 }
 
@@ -245,6 +267,7 @@ async def receive_meta_whatsapp_webhook(
             "message": item["message"],
             "contact_name": item.get("contact_name"),
             "metadata": item.get("metadata"),
+            "attachments": item.get("attachments"),
             "raw": item.get("raw_message"),
         }
         result = team_inbox_channel_receive.receive_whatsapp_webhook(

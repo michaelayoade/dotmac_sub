@@ -146,6 +146,7 @@ def _send_whatsapp_reply(
     conversation: InboxConversation,
     payload: InboxReplyPayload,
     now: datetime | None,
+    record_failure: bool = False,
 ) -> InboxReplyResult:
     recipient = normalize_phone_identifier(conversation.contact_address)
     if not recipient:
@@ -168,9 +169,22 @@ def _send_whatsapp_reply(
         body=body_text,
     )
     if not bool(result.get("ok")):
+        failed_message_id = None
+        if record_failure:
+            failed_message_id = _record_failed_outbound(
+                db,
+                conversation=conversation,
+                payload=payload,
+                channel_type=InboxChannelType.whatsapp.value,
+                to_addresses=[recipient],
+                reason="WhatsApp provider rejected the reply",
+                provider_result=_provider_metadata(result),
+                now=now,
+            )
         return InboxReplyResult(
             kind="send_failed",
             conversation_id=str(conversation.id),
+            message_id=failed_message_id,
             to_email=recipient,
             reason="WhatsApp provider rejected the reply",
         )
@@ -219,6 +233,7 @@ def send_inbox_reply(
     conversation: InboxConversation,
     payload: InboxReplyPayload,
     now: datetime | None = None,
+    record_failure: bool = False,
 ) -> InboxReplyResult:
     if not conversation.is_active:
         return InboxReplyResult(
@@ -239,6 +254,7 @@ def send_inbox_reply(
             conversation=conversation,
             payload=payload,
             now=now,
+            record_failure=record_failure,
         )
 
     to_email = _reply_to_address(conversation, payload.to_email)
@@ -286,9 +302,28 @@ def send_inbox_reply(
         activity=sender.activity,
     )
     if not sent:
+        failed_message_id = None
+        if record_failure:
+            failed_message_id = _record_failed_outbound(
+                db,
+                conversation=conversation,
+                payload=payload,
+                channel_type=InboxChannelType.email.value,
+                to_addresses=[to_email],
+                from_address=config.get("from_email"),
+                subject=subject,
+                reason="Email provider rejected the reply",
+                metadata={
+                    "service_team_id": sender.service_team_id,
+                    "sender_key": config.get("sender_key") or sender.sender_key,
+                    "activity": sender.activity,
+                },
+                now=now,
+            )
         return InboxReplyResult(
             kind="send_failed",
             conversation_id=str(conversation.id),
+            message_id=failed_message_id,
             service_team_id=sender.service_team_id,
             sender_key=config.get("sender_key") or sender.sender_key,
             activity=sender.activity,
@@ -336,3 +371,105 @@ def send_inbox_reply(
         from_address=config.get("from_email"),
         to_email=to_email,
     )
+
+
+def _record_failed_outbound(
+    db: Session,
+    *,
+    conversation: InboxConversation,
+    payload: InboxReplyPayload,
+    channel_type: str,
+    to_addresses: list[str],
+    reason: str,
+    provider_result: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+    from_address: str | None = None,
+    subject: str | None = None,
+    now: datetime | None = None,
+) -> str:
+    attempted_at = now or datetime.now(UTC)
+    combined_metadata = dict(payload.metadata or {})
+    combined_metadata.update(metadata or {})
+    combined_metadata.update(
+        {
+            "source": "team_inbox_reply",
+            "delivery_status": "failed",
+            "send_error": reason,
+            "retry_count": 0,
+            "sent_by_person_id": str(payload.sent_by_person_id)
+            if payload.sent_by_person_id
+            else None,
+        }
+    )
+    if provider_result:
+        combined_metadata["provider_result"] = provider_result
+    message = InboxMessage(
+        conversation_id=conversation.id,
+        channel_type=channel_type,
+        direction=InboxMessageDirection.outbound.value,
+        subject=subject or payload.subject,
+        body=payload.body_text or payload.body_html,
+        external_thread_id=conversation.external_thread_id,
+        from_address=from_address,
+        to_addresses=to_addresses,
+        cc_addresses=[],
+        sent_at=attempted_at,
+        metadata_=combined_metadata,
+    )
+    db.add(message)
+    conversation.last_message_at = attempted_at
+    db.flush()
+    return str(message.id)
+
+
+def retry_outbound_message(
+    db: Session,
+    *,
+    message: InboxMessage,
+    sent_by_person_id: str | UUID | None = None,
+    now: datetime | None = None,
+) -> InboxReplyResult:
+    metadata = dict(message.metadata_ or {})
+    if metadata.get("delivery_status") != "failed":
+        return InboxReplyResult(
+            kind="invalid_message",
+            conversation_id=str(message.conversation_id),
+            message_id=str(message.id),
+            reason="Only failed outbound inbox messages can be retried",
+        )
+    conversation = db.get(InboxConversation, message.conversation_id)
+    if conversation is None:
+        return InboxReplyResult(
+            kind="invalid_conversation",
+            conversation_id=str(message.conversation_id),
+            message_id=str(message.id),
+            reason="Conversation not found",
+        )
+    retry_count = int(metadata.get("retry_count") or 0) + 1
+    result = send_inbox_reply(
+        db,
+        conversation=conversation,
+        payload=InboxReplyPayload(
+            body_html=message.body or "",
+            body_text=message.body,
+            subject=message.subject,
+            to_email=(message.to_addresses or [None])[0],
+            sent_by_person_id=sent_by_person_id,
+            metadata={
+                "source_route": "team_inbox_retry",
+                "retry_of_message_id": str(message.id),
+                "retry_count": retry_count,
+            },
+        ),
+        now=now,
+        record_failure=False,
+    )
+    metadata["retry_count"] = retry_count
+    metadata["last_retry_at"] = (now or datetime.now(UTC)).isoformat()
+    metadata["last_retry_result"] = result.kind
+    if result.kind == "sent":
+        metadata["delivery_status"] = "retried"
+        metadata["retried_message_id"] = result.message_id
+    message.metadata_ = metadata
+    db.flush()
+    return result

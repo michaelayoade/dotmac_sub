@@ -224,4 +224,6 @@ async def test_meta_inbox_webhook_preserves_attachment_messages(
     message = db_session.query(InboxMessage).one()
     assert response["processed"] == 1
     assert message.body == "[image]"
+    assert message.metadata_["attachments"][0]["type"] == "image"
+    assert message.metadata_["attachments"][0]["url"] == "https://example.test/i.jpg"
     assert message.metadata_["raw"]["message"]["attachments"][0]["type"] == "image"

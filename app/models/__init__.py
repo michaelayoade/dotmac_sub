@@ -613,6 +613,7 @@ from app.models.team_inbox import (  # noqa: F401
     InboxLabel,
     InboxMessage,
     InboxMessageDirection,
+    InboxMessageTemplate,
     InboxReplyMacro,
     InboxTeamRole,
     InboxTeamSource,

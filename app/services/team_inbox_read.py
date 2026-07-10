@@ -51,6 +51,7 @@ class InboxTimelineMessage:
     received_at: datetime | None
     created_at: datetime
     metadata: dict | None
+    attachments: list[dict]
 
 
 @dataclass(frozen=True)
@@ -89,6 +90,8 @@ class InboxConversationListRow:
     latest_message_direction: str | None
     latest_message_body: str | None
     latest_message_at: datetime | None
+    contact_resolution_status: str | None
+    latest_delivery_status: str | None
     active_assigned_person_id: str | None
     needs_response: bool
     team_count: int
@@ -138,6 +141,40 @@ def _latest_messages_by_conversation(
     return latest
 
 
+def _contact_resolution_status(conversation: InboxConversation) -> str | None:
+    metadata = conversation.metadata_ or {}
+    resolution = metadata.get("contact_resolution")
+    if isinstance(resolution, dict):
+        value = str(resolution.get("status") or "").strip()
+        return value or None
+    return None
+
+
+def _delivery_status(message: InboxMessage | None) -> str | None:
+    if message is None:
+        return None
+    metadata = message.metadata_ or {}
+    value = str(metadata.get("delivery_status") or "").strip()
+    if value:
+        return value
+    provider_result = metadata.get("provider_result")
+    if isinstance(provider_result, dict):
+        status_code = provider_result.get("status_code")
+        if isinstance(status_code, int) and status_code >= 400:
+            return "failed"
+    if metadata.get("send_error"):
+        return "failed"
+    return None
+
+
+def _message_attachments(message: InboxMessage) -> list[dict]:
+    metadata = message.metadata_ or {}
+    attachments = metadata.get("attachments")
+    if not isinstance(attachments, list):
+        return []
+    return [item for item in attachments if isinstance(item, dict)]
+
+
 def list_conversations(
     db: Session,
     *,
@@ -147,6 +184,7 @@ def list_conversations(
     service_team_id: str | UUID | None = None,
     assigned_person_id: str | UUID | None = None,
     needs_response: bool = False,
+    contact_resolution_status: str | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> InboxConversationListResult:
@@ -197,9 +235,10 @@ def list_conversations(
         InboxConversation.created_at.desc(),
     )
     total = query.count()
+    needs_python_filter = bool(needs_response or contact_resolution_status)
     rows = (
         ordered_query.all()
-        if needs_response
+        if needs_python_filter
         else ordered_query.limit(limit).offset(offset).all()
     )
     conversations = [conversation for conversation, _team in rows]
@@ -236,12 +275,15 @@ def list_conversations(
     for conversation, team in rows:
         latest = latest_messages.get(conversation.id)
         active_assignment = active_assignments.get(conversation.id)
+        resolution_status = _contact_resolution_status(conversation)
         row_needs_response = (
             latest is not None
             and latest.direction == InboxMessageDirection.inbound.value
             and conversation.status != "resolved"
         )
         if needs_response and not row_needs_response:
+            continue
+        if contact_resolution_status and resolution_status != contact_resolution_status:
             continue
         items.append(
             InboxConversationListRow(
@@ -265,6 +307,8 @@ def list_conversations(
                 else None,
                 latest_message_body=latest.body if latest is not None else None,
                 latest_message_at=_message_time(latest) if latest is not None else None,
+                contact_resolution_status=resolution_status,
+                latest_delivery_status=_delivery_status(latest),
                 active_assigned_person_id=str(active_assignment.person_id)
                 if active_assignment is not None
                 else None,
@@ -272,8 +316,8 @@ def list_conversations(
                 team_count=int(team_counts.get(conversation.id, 0)),
             )
         )
-    filtered_count = len(items) if needs_response else total
-    page_items = items[offset : offset + limit] if needs_response else items
+    filtered_count = len(items) if needs_python_filter else total
+    page_items = items[offset : offset + limit] if needs_python_filter else items
     return InboxConversationListResult(
         items=page_items,
         count=filtered_count,
@@ -379,6 +423,7 @@ def get_conversation_timeline(
                 received_at=message.received_at,
                 created_at=message.created_at,
                 metadata=message.metadata_,
+                attachments=_message_attachments(message),
             )
             for message in messages
         ],
