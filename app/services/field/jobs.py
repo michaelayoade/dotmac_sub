@@ -29,6 +29,7 @@ from app.schemas.field import (
     FieldJobEventRead,
     FieldJobLocation,
     FieldJobSummary,
+    FieldMaterialRead,
     FieldMeResponse,
     FieldNoteRead,
     FieldWorkLogRead,
@@ -283,6 +284,7 @@ class FieldJobs:
         subscriber = db.get(Subscriber, row.subscriber_id)
         from app.services.field.attachments import field_attachments
         from app.services.field.equipment import field_equipment
+        from app.services.field.materials import field_materials
         from app.services.field.notes import field_notes
         from app.services.field.transitions import field_transitions
         from app.services.field.worklogs import field_worklogs
@@ -307,6 +309,12 @@ class FieldJobs:
                 db, principal, crm_work_order_id
             )
         ]
+        materials = [
+            FieldMaterialRead(**material)
+            for material in field_materials.list_for_job(
+                db, principal, crm_work_order_id
+            )
+        ]
         equipment = field_equipment.current_for_job(db, principal, crm_work_order_id)
         equipment_read = FieldEquipmentRead(**equipment) if equipment else None
         return FieldJobDetail(
@@ -318,6 +326,7 @@ class FieldJobs:
             access_notes=row.access_notes,
             notes=notes,
             attachments=attachments,
+            materials=materials,
             worklogs=worklogs,
             events=events,
             equipment=equipment_read,

@@ -176,6 +176,10 @@ from app.models.field_location import (  # noqa: F401
     FieldTechLocationPing,
     FieldTechPresence,
 )
+from app.models.field_material import (  # noqa: F401
+    FieldInventoryItem,
+    FieldWorkOrderMaterial,
+)
 from app.models.field_note import FieldWorkOrderNote  # noqa: F401
 from app.models.field_worklog import FieldWorkLog  # noqa: F401
 from app.models.fup import (  # noqa: F401
