@@ -61,8 +61,26 @@ def _verify_meta_signature(db: Session, raw_body: bytes, presented: str | None) 
 def _text_body(message: dict[str, Any]) -> str:
     text = message.get("text")
     if isinstance(text, dict):
-        return str(text.get("body") or "").strip()
-    return str(text or "").strip()
+        body = str(text.get("body") or "").strip()
+        if body:
+            return body
+    elif str(text or "").strip():
+        return str(text or "").strip()
+
+    message_type = str(message.get("type") or "").strip().lower()
+    if message_type in {
+        "image",
+        "document",
+        "audio",
+        "video",
+        "sticker",
+        "location",
+        "contacts",
+        "button",
+        "interactive",
+    }:
+        return f"[{message_type}]"
+    return ""
 
 
 def _iter_meta_whatsapp_messages(payload: dict[str, Any]):

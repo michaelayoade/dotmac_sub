@@ -170,6 +170,116 @@ class InboxConversation(Base):
     )
 
 
+class InboxLabel(Base):
+    __tablename__ = "inbox_labels"
+    __table_args__ = (
+        UniqueConstraint("slug", name="uq_inbox_labels_slug"),
+        Index("ix_inbox_labels_active", "is_active", "name"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(String(80), nullable=False)
+    slug: Mapped[str] = mapped_column(String(100), nullable=False)
+    color: Mapped[str | None] = mapped_column(String(24))
+    description: Mapped[str | None] = mapped_column(String(255))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    metadata_: Mapped[dict | None] = mapped_column(
+        "metadata", MutableDict.as_mutable(JSON())
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
+class InboxConversationLabel(Base):
+    __tablename__ = "inbox_conversation_labels"
+    __table_args__ = (
+        Index(
+            "ix_inbox_conversation_labels_conversation",
+            "conversation_id",
+            "is_active",
+        ),
+        Index("ix_inbox_conversation_labels_label", "label_id", "is_active"),
+        Index(
+            "uq_inbox_conversation_labels_active",
+            "conversation_id",
+            "label_id",
+            unique=True,
+            sqlite_where=text("is_active IS TRUE"),
+            postgresql_where=text("is_active IS TRUE"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("inbox_conversations.id"), nullable=False
+    )
+    label_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("inbox_labels.id"), nullable=False
+    )
+    applied_by_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    metadata_: Mapped[dict | None] = mapped_column(
+        "metadata", MutableDict.as_mutable(JSON())
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    conversation = relationship("InboxConversation")
+    label = relationship("InboxLabel")
+
+
+class InboxReplyMacro(Base):
+    __tablename__ = "inbox_reply_macros"
+    __table_args__ = (
+        Index("ix_inbox_reply_macros_active", "is_active", "name"),
+        Index("ix_inbox_reply_macros_creator", "created_by_person_id", "is_active"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    body_text: Mapped[str] = mapped_column(Text, nullable=False)
+    visibility: Mapped[str] = mapped_column(
+        String(40), default="shared", nullable=False
+    )
+    created_by_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    actions: Mapped[list | None] = mapped_column(JSON)
+    execution_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    metadata_: Mapped[dict | None] = mapped_column(
+        "metadata", MutableDict.as_mutable(JSON())
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
 class InboxContactLink(Base):
     __tablename__ = "inbox_contact_links"
     __table_args__ = (

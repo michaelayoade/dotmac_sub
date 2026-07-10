@@ -130,6 +130,8 @@ def _latest_messages_by_conversation(
     )
     latest: dict[UUID, InboxMessage] = {}
     for message in messages:
+        if message.direction == InboxMessageDirection.internal.value:
+            continue
         current = latest.get(message.conversation_id)
         if current is None or _message_time(message) >= _message_time(current):
             latest[message.conversation_id] = message

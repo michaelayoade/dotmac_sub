@@ -31,7 +31,21 @@ def _event_timestamp(value: object) -> datetime | None:
 
 
 def _message_text(message: dict[str, Any]) -> str:
-    return str(message.get("text") or "").strip()
+    text = str(message.get("text") or "").strip()
+    if text:
+        return text
+    attachments = message.get("attachments")
+    if isinstance(attachments, list) and attachments:
+        first = attachments[0]
+        attachment_type = (
+            str(first.get("type") or "attachment").strip()
+            if isinstance(first, dict)
+            else "attachment"
+        )
+        return f"[{attachment_type}]"
+    if "quick_reply" in message:
+        return "[quick reply]"
+    return ""
 
 
 def _channel_for_object(payload_object: object) -> str | None:

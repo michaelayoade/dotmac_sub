@@ -146,6 +146,50 @@ async def test_meta_whatsapp_webhook_creates_native_inbox_message(
 
 
 @pytest.mark.asyncio
+async def test_meta_whatsapp_webhook_preserves_media_message(db_session, monkeypatch):
+    monkeypatch.setattr(inbox_webhooks, "_app_secret", lambda db: META_TEST_SECRET)
+    payload = {
+        "object": "whatsapp_business_account",
+        "entry": [
+            {
+                "id": "waba-1",
+                "changes": [
+                    {
+                        "field": "messages",
+                        "value": {
+                            "messaging_product": "whatsapp",
+                            "contacts": [{"wa_id": "2348035550114"}],
+                            "messages": [
+                                {
+                                    "from": "2348035550114",
+                                    "id": "wamid.media-1",
+                                    "timestamp": "1783670400",
+                                    "type": "image",
+                                    "image": {
+                                        "id": "media-1",
+                                        "mime_type": "image/jpeg",
+                                    },
+                                }
+                            ],
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+    body = json.dumps(payload).encode("utf-8")
+    request = _request(body, {"X-Hub-Signature-256": _sign(body)})
+
+    response = await inbox_webhooks.receive_meta_whatsapp_webhook(request, db_session)
+
+    message = db_session.query(InboxMessage).one()
+    assert response["processed"] == 1
+    assert message.external_message_id == "wamid.media-1"
+    assert message.body == "[image]"
+    assert message.metadata_["raw"]["raw"]["image"]["id"] == "media-1"
+
+
+@pytest.mark.asyncio
 async def test_meta_whatsapp_webhook_updates_outbound_delivery_status(
     db_session, monkeypatch
 ):

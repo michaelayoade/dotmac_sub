@@ -187,7 +187,9 @@ async def test_meta_inbox_webhook_deduplicates_external_message_id(
 
 
 @pytest.mark.asyncio
-async def test_meta_inbox_webhook_ignores_non_text_messages(db_session, monkeypatch):
+async def test_meta_inbox_webhook_preserves_attachment_messages(
+    db_session, monkeypatch
+):
     monkeypatch.setattr(
         meta_inbox_webhooks, "_verify_meta_signature", lambda db, body, sig: None
     )
@@ -200,7 +202,15 @@ async def test_meta_inbox_webhook_ignores_non_text_messages(db_session, monkeypa
                     {
                         "sender": {"id": "psid-1"},
                         "timestamp": 1783670400000,
-                        "message": {"mid": "m_img", "attachments": []},
+                        "message": {
+                            "mid": "m_img",
+                            "attachments": [
+                                {
+                                    "type": "image",
+                                    "payload": {"url": "https://example.test/i.jpg"},
+                                }
+                            ],
+                        },
                     }
                 ],
             }
@@ -211,6 +221,7 @@ async def test_meta_inbox_webhook_ignores_non_text_messages(db_session, monkeypa
 
     response = await meta_inbox_webhooks.receive_meta_inbox_webhook(request, db_session)
 
-    assert response["processed"] == 0
-    assert db_session.query(InboxConversation).count() == 0
-    assert db_session.query(InboxMessage).count() == 0
+    message = db_session.query(InboxMessage).one()
+    assert response["processed"] == 1
+    assert message.body == "[image]"
+    assert message.metadata_["raw"]["message"]["attachments"][0]["type"] == "image"
