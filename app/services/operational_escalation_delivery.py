@@ -19,8 +19,9 @@ from app.models.operational_escalation import (
     OperationalRoomProvider,
 )
 from app.models.service_team import ServiceTeamMember
-from app.models.subscriber import Subscriber
+from app.models.subscriber import Reseller, Subscriber
 from app.models.system_user import SystemUser
+from app.services.notification_status_policy import status_allows_notification
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,13 @@ def dispatch_delivery(
             db,
             delivery,
             reason=f"event.{event.status}",
+            timestamp=timestamp,
+        )
+    if suppression_reason := _target_suppression_reason(db, delivery):
+        return _suppress_delivery(
+            db,
+            delivery,
+            reason=suppression_reason,
             timestamp=timestamp,
         )
 
@@ -267,6 +275,8 @@ def _delivery_targets(
         return _person_target(db, delivery)
     if delivery.recipient_type == OperationalParticipantType.subscriber:
         return _subscriber_target(db, delivery)
+    if delivery.recipient_type == OperationalParticipantType.reseller:
+        return _reseller_target(db, delivery)
     if delivery.recipient_type == OperationalParticipantType.external:
         address = _delivery_metadata(delivery).get("recipient_address")
         return (
@@ -394,6 +404,40 @@ def _subscriber_target(
     ]
 
 
+def _reseller_target(
+    db: Session,
+    delivery: OperationalEscalationDelivery,
+) -> list[DeliveryTarget]:
+    if not delivery.recipient_id:
+        return []
+    reseller = db.get(Reseller, _uuid(delivery.recipient_id))
+    if reseller is None:
+        return []
+    if (
+        delivery.channel == OperationalNotificationChannel.email
+        and reseller.contact_email
+    ):
+        address = reseller.contact_email
+    elif (
+        delivery.channel
+        in {
+            OperationalNotificationChannel.sms,
+            OperationalNotificationChannel.whatsapp,
+        }
+        and reseller.contact_phone
+    ):
+        address = reseller.contact_phone
+    else:
+        return []
+    return [
+        DeliveryTarget(
+            recipient_type=OperationalParticipantType.reseller,
+            recipient_id=str(reseller.id),
+            address=address,
+        )
+    ]
+
+
 def _duty_role_targets(delivery: OperationalEscalationDelivery) -> list[DeliveryTarget]:
     role_channels = _delivery_metadata(delivery).get("duty_role_channels")
     if not isinstance(role_channels, dict):
@@ -468,6 +512,48 @@ def _delivery_metadata(delivery: OperationalEscalationDelivery) -> dict[str, Any
         "trigger": delivery.event.trigger,
         "level": delivery.event.level,
     }
+
+
+def _target_suppression_reason(
+    db: Session,
+    delivery: OperationalEscalationDelivery,
+) -> str | None:
+    if delivery.recipient_type == OperationalParticipantType.subscriber:
+        return _subscriber_suppression_reason(db, delivery.recipient_id, delivery)
+    if delivery.recipient_type == OperationalParticipantType.reseller:
+        return _reseller_suppression_reason(db, delivery.recipient_id)
+    return None
+
+
+def _subscriber_suppression_reason(
+    db: Session,
+    subscriber_id: str | None,
+    delivery: OperationalEscalationDelivery,
+) -> str | None:
+    if not subscriber_id:
+        return None
+    subscriber = db.get(Subscriber, _uuid(subscriber_id))
+    if subscriber is None:
+        return None
+    if not subscriber.is_active:
+        return "subscriber.inactive"
+    category = str(_delivery_metadata(delivery).get("category") or "service")
+    if not status_allows_notification(subscriber.status, category):
+        status = subscriber.status.value if subscriber.status else "unknown"
+        return f"subscriber.status.{status}"
+    return None
+
+
+def _reseller_suppression_reason(
+    db: Session,
+    reseller_id: str | None,
+) -> str | None:
+    if not reseller_id:
+        return None
+    reseller = db.get(Reseller, _uuid(reseller_id))
+    if reseller is not None and not reseller.is_active:
+        return "reseller.inactive"
+    return None
 
 
 def _suppress_delivery(

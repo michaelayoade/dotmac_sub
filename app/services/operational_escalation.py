@@ -18,7 +18,7 @@ from app.models.operational_escalation import (
     OperationalWatcher,
     OperationalWatcherRole,
 )
-from app.models.subscriber import Subscriber
+from app.models.subscriber import Reseller, Subscriber
 
 DIRECT_ADDRESS_CHANNELS = {"email", "sms", "whatsapp", "webhook"}
 DEFAULT_ESCALATION_PARTICIPANTS = {
@@ -427,6 +427,42 @@ def plan_policy_deliveries(
                     )
                 )
 
+        if "subscriber" in recipient_groups and _participant_allowed(
+            channel_rule,
+            participant_types,
+            OperationalParticipantType.subscriber,
+        ):
+            for subscriber_id in _event_subscriber_ids(event.metadata_):
+                deliveries.append(
+                    plan_delivery(
+                        db,
+                        event=event,
+                        channel=channel,
+                        recipient_type=OperationalParticipantType.subscriber,
+                        recipient_id=subscriber_id,
+                        cooldown_seconds=active_policy.cooldown_seconds,
+                        metadata={"policy_id": str(active_policy.id)},
+                    )
+                )
+
+        if "reseller" in recipient_groups and _participant_allowed(
+            channel_rule,
+            participant_types,
+            OperationalParticipantType.reseller,
+        ):
+            for reseller_id in _event_reseller_ids(db, event.metadata_):
+                deliveries.append(
+                    plan_delivery(
+                        db,
+                        event=event,
+                        channel=channel,
+                        recipient_type=OperationalParticipantType.reseller,
+                        recipient_id=reseller_id,
+                        cooldown_seconds=active_policy.cooldown_seconds,
+                        metadata={"policy_id": str(active_policy.id)},
+                    )
+                )
+
     return deliveries
 
 
@@ -444,6 +480,78 @@ def _policy_channel_rules(policy: OperationalEscalationPolicy) -> list[dict]:
             rule.setdefault(key, value)
         rules.append(rule)
     return rules
+
+
+def _participant_allowed(
+    channel_rule: dict,
+    participant_types: set,
+    participant_type: str,
+) -> bool:
+    return (
+        "participant_types" not in channel_rule or participant_type in participant_types
+    )
+
+
+def _event_subscriber_ids(metadata: dict | None) -> list[str]:
+    return _metadata_ids(
+        metadata,
+        singular_keys=("subscriber_id", "customer_id", "account_id"),
+        plural_keys=("subscriber_ids", "customer_ids", "account_ids"),
+    )
+
+
+def _event_reseller_ids(db: Session, metadata: dict | None) -> list[str]:
+    reseller_ids = _metadata_ids(
+        metadata,
+        singular_keys=("reseller_id", "partner_id"),
+        plural_keys=("reseller_ids", "partner_ids"),
+    )
+    seen = set(reseller_ids)
+    for subscriber_id in _event_subscriber_ids(metadata):
+        subscriber = db.get(Subscriber, _uuid(subscriber_id))
+        if subscriber is None or subscriber.reseller_id is None:
+            continue
+        reseller = db.get(Reseller, subscriber.reseller_id)
+        if reseller is None or reseller.is_house:
+            continue
+        value = str(subscriber.reseller_id)
+        if value not in seen:
+            seen.add(value)
+            reseller_ids.append(value)
+    return reseller_ids
+
+
+def _metadata_ids(
+    metadata: dict | None,
+    *,
+    singular_keys: tuple[str, ...],
+    plural_keys: tuple[str, ...],
+) -> list[str]:
+    if not isinstance(metadata, dict):
+        return []
+    values: list[str] = []
+    seen: set[str] = set()
+    for key in singular_keys:
+        value = metadata.get(key)
+        if value:
+            text = str(value)
+            if text not in seen:
+                seen.add(text)
+                values.append(text)
+    for key in plural_keys:
+        raw_values = metadata.get(key)
+        if isinstance(raw_values, (str, bytes)) or raw_values is None:
+            raw_values = [raw_values] if raw_values else []
+        if not isinstance(raw_values, (list, tuple, set)):
+            continue
+        for value in raw_values:
+            if not value:
+                continue
+            text = str(value)
+            if text not in seen:
+                seen.add(text)
+                values.append(text)
+    return values
 
 
 def _active_owners(

@@ -15,7 +15,7 @@ from app.models.operational_escalation import (
     OperationalRoomProvider,
 )
 from app.models.service_team import ServiceTeam, ServiceTeamType
-from app.models.subscriber import Subscriber
+from app.models.subscriber import Reseller, Subscriber
 from app.services import operational_escalation
 
 
@@ -428,3 +428,52 @@ def test_plan_policy_deliveries_skips_direct_customer_channel_without_address(
         )
         == 0
     )
+
+
+def test_plan_policy_deliveries_can_target_event_subscriber_and_reseller(db_session):
+    reseller = Reseller(
+        name="Acme ISP",
+        contact_email="ops@acme.example",
+        contact_phone="+2348000000099",
+        is_active=True,
+    )
+    subscriber = Subscriber(
+        first_name="Ada",
+        last_name="Nwosu",
+        email="ada-reseller-linked@example.com",
+        reseller=reseller,
+    )
+    db_session.add_all([reseller, subscriber])
+    db_session.flush()
+    policy = operational_escalation.create_policy(
+        db_session,
+        name="Customer and partner outage update",
+        entity_type=OperationalEntityType.outage,
+        channels=[
+            {
+                "channel": OperationalNotificationChannel.email,
+                "recipients": ["subscriber", "reseller"],
+            }
+        ],
+    )
+    event = operational_escalation.record_event(
+        db_session,
+        entity_type=OperationalEntityType.outage,
+        entity_id=uuid4(),
+        policy_id=policy.id,
+        trigger="customer_update_due",
+        metadata={"subscriber_id": str(subscriber.id)},
+    )
+
+    deliveries = operational_escalation.plan_policy_deliveries(
+        db_session,
+        event=event,
+        policy=policy,
+    )
+
+    assert {
+        (delivery.recipient_type, delivery.recipient_id) for delivery in deliveries
+    } == {
+        (OperationalParticipantType.subscriber, str(subscriber.id)),
+        (OperationalParticipantType.reseller, str(reseller.id)),
+    }

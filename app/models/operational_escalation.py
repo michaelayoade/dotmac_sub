@@ -38,6 +38,7 @@ class OperationalParticipantType:
     team = "team"
     duty_role = "duty_role"
     subscriber = "subscriber"
+    reseller = "reseller"
     external = "external"
 
 

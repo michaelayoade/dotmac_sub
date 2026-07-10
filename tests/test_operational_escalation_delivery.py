@@ -11,7 +11,7 @@ from app.models.operational_escalation import (
     OperationalParticipantType,
 )
 from app.models.service_team import ServiceTeam, ServiceTeamMember, ServiceTeamType
-from app.models.subscriber import Subscriber
+from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
 from app.models.system_user import SystemUser
 from app.services import operational_escalation, operational_escalation_delivery
 
@@ -144,6 +144,144 @@ def test_dispatch_subscriber_whatsapp_uses_migrated_connector(
         }
     ]
     assert result.metadata_["dispatch_results"][0]["provider"] == "meta_cloud_api"
+
+
+def test_dispatch_suppresses_disabled_subscriber(db_session, monkeypatch):
+    subscriber = Subscriber(
+        first_name="Ada",
+        last_name="Nwosu",
+        email="ada-disabled@example.com",
+        phone="+2348000000001",
+        status=SubscriberStatus.disabled,
+    )
+    db_session.add(subscriber)
+    db_session.flush()
+    event = _event(db_session)
+    delivery = operational_escalation.plan_delivery(
+        db_session,
+        event=event,
+        channel=OperationalNotificationChannel.email,
+        recipient_type=OperationalParticipantType.subscriber,
+        recipient_id=subscriber.id,
+        recipient_address=subscriber.email,
+    )
+
+    def fake_send_notification(*args, **kwargs):
+        raise AssertionError("disabled subscribers must not receive notifications")
+
+    monkeypatch.setattr(
+        "app.services.notification_adapter.send_notification",
+        fake_send_notification,
+    )
+
+    result = operational_escalation_delivery.dispatch_delivery(db_session, delivery)
+
+    assert result.delivery_status == OperationalDeliveryStatus.suppressed
+    assert result.error_message == "subscriber.status.disabled"
+
+
+def test_dispatch_suppresses_inactive_subscriber(db_session, monkeypatch):
+    subscriber = Subscriber(
+        first_name="Churned",
+        last_name="Customer",
+        email="churned@example.com",
+        status=SubscriberStatus.active,
+        is_active=False,
+    )
+    db_session.add(subscriber)
+    db_session.flush()
+    event = _event(db_session)
+    delivery = operational_escalation.plan_delivery(
+        db_session,
+        event=event,
+        channel=OperationalNotificationChannel.email,
+        recipient_type=OperationalParticipantType.subscriber,
+        recipient_id=subscriber.id,
+    )
+
+    def fake_send_notification(*args, **kwargs):
+        raise AssertionError("inactive subscribers must not receive notifications")
+
+    monkeypatch.setattr(
+        "app.services.notification_adapter.send_notification",
+        fake_send_notification,
+    )
+
+    result = operational_escalation_delivery.dispatch_delivery(db_session, delivery)
+
+    assert result.delivery_status == OperationalDeliveryStatus.suppressed
+    assert result.error_message == "subscriber.inactive"
+
+
+def test_dispatch_reseller_email_uses_reseller_contact(db_session, monkeypatch):
+    reseller = Reseller(
+        name="Acme ISP",
+        contact_email="ops@acme.example",
+        contact_phone="+2348000000099",
+        is_active=True,
+    )
+    db_session.add(reseller)
+    db_session.flush()
+    event = _event(db_session)
+    delivery = operational_escalation.plan_delivery(
+        db_session,
+        event=event,
+        channel=OperationalNotificationChannel.email,
+        recipient_type=OperationalParticipantType.reseller,
+        recipient_id=reseller.id,
+    )
+    calls = []
+
+    def fake_send_notification(channel, recipient, message, **kwargs):
+        calls.append({"channel": channel, "recipient": recipient, "message": message})
+        return _adapter_result()
+
+    monkeypatch.setattr(
+        "app.services.notification_adapter.send_notification",
+        fake_send_notification,
+    )
+
+    result = operational_escalation_delivery.dispatch_delivery(db_session, delivery)
+
+    assert result.delivery_status == OperationalDeliveryStatus.sent
+    assert calls == [
+        {
+            "channel": OperationalNotificationChannel.email,
+            "recipient": "ops@acme.example",
+            "message": "Owner update overdue",
+        }
+    ]
+
+
+def test_dispatch_suppresses_inactive_reseller(db_session, monkeypatch):
+    reseller = Reseller(
+        name="Inactive ISP",
+        contact_email="ops@inactive.example",
+        is_active=False,
+    )
+    db_session.add(reseller)
+    db_session.flush()
+    event = _event(db_session)
+    delivery = operational_escalation.plan_delivery(
+        db_session,
+        event=event,
+        channel=OperationalNotificationChannel.email,
+        recipient_type=OperationalParticipantType.reseller,
+        recipient_id=reseller.id,
+    )
+
+    def fake_send_notification(*args, **kwargs):
+        raise AssertionError("inactive resellers must not receive notifications")
+
+    monkeypatch.setattr(
+        "app.services.notification_adapter.send_notification",
+        fake_send_notification,
+    )
+
+    result = operational_escalation_delivery.dispatch_delivery(db_session, delivery)
+
+    assert result.delivery_status == OperationalDeliveryStatus.suppressed
+    assert result.error_message == "reseller.inactive"
 
 
 def test_dispatch_staff_push_uses_fcm_service(db_session, monkeypatch):
