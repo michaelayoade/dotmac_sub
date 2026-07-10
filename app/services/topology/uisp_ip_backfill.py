@@ -76,9 +76,9 @@ def backfill_uisp_mgmt_ips(
 
     uisp_by_id: dict[str, dict] = {}
     for payload in client.list_devices():
-        uisp_id = _device_id(payload)
-        if uisp_id:
-            uisp_by_id[uisp_id.lower()] = payload
+        payload_id = _device_id(payload)
+        if payload_id:
+            uisp_by_id[payload_id.lower()] = payload
 
     claimed_ips = {
         ip
