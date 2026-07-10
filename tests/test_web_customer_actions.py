@@ -35,6 +35,7 @@ def test_update_person_customer_persists_billing_overrides(db_session, subscribe
         email=subscriber.email,
         email_verified="false",
         phone=None,
+        nin=None,
         date_of_birth=None,
         gender="unknown",
         preferred_contact_method=None,
@@ -298,6 +299,7 @@ def test_update_person_rejects_blank_name(db_session, subscriber):
             email=subscriber.email,
             email_verified="false",
             phone=None,
+            nin=None,
             date_of_birth=None,
             gender="unknown",
             preferred_contact_method=None,
@@ -335,6 +337,7 @@ def _update_person(db, subscriber, **overrides):
         email=subscriber.email,
         email_verified="false",
         phone=None,
+        nin=None,
         date_of_birth=None,
         gender="unknown",
         preferred_contact_method=None,
@@ -387,6 +390,27 @@ def test_update_person_allows_keeping_own_email(db_session, subscriber):
     _update_person(db_session, subscriber, email=subscriber.email, first_name="Renamed")
     refreshed = db_session.get(Subscriber, subscriber.id)
     assert refreshed.first_name == "Renamed"
+
+
+def test_update_person_normalizes_nin(db_session, subscriber):
+    _update_person(db_session, subscriber, nin="123-456-78901")
+    refreshed = db_session.get(Subscriber, subscriber.id)
+    assert refreshed.nin == "12345678901"
+
+
+def test_update_person_keeps_verified_nin_locked(db_session, subscriber):
+    subscriber.nin = "12345678901"
+    subscriber.metadata_ = {"nin_verified": True}
+    db_session.commit()
+
+    _update_person(db_session, subscriber, nin="99999999999")
+    refreshed = db_session.get(Subscriber, subscriber.id)
+    assert refreshed.nin == "12345678901"
+
+
+def test_update_person_rejects_invalid_nin(db_session, subscriber):
+    with pytest.raises(ValueError, match="11 digits"):
+        _update_person(db_session, subscriber, nin="12345")
 
 
 def test_create_customer_contact_bad_account_id_raises_value_error(db_session):

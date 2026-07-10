@@ -234,6 +234,36 @@ def test_imported_line_less_prepaid_ar_does_not_reduce_wallet_balance(
     assert subscription.status == SubscriptionStatus.active
 
 
+@pytest.mark.parametrize("hold_value", [True, "true", "1", "yes", "on"])
+def test_reconciliation_hold_invoice_does_not_reduce_wallet_balance(
+    db_session, subscriber_account, subscription, hold_value
+):
+    _enable_control(db_session)
+    _make_prepaid(
+        db_session, subscriber_account, subscription, credit=Decimal("100.00")
+    )
+    invoice = Invoice(
+        account_id=subscriber_account.id,
+        invoice_number="INV-HELD-PREPAID-AR",
+        status=InvoiceStatus.overdue,
+        total=Decimal("80.00"),
+        balance_due=Decimal("80.00"),
+        due_at=_MONDAY_NOON - timedelta(days=10),
+        metadata_={"reconciliation_hold": hold_value},
+    )
+    db_session.add(invoice)
+    db_session.commit()
+
+    result = run_prepaid_balance_sweep(db_session, now=_MONDAY_NOON)
+
+    db_session.refresh(subscriber_account)
+    db_session.refresh(subscription)
+    assert result["ok"] == 1
+    assert result["warned"] == 0
+    assert subscriber_account.prepaid_low_balance_at is None
+    assert subscription.status == SubscriptionStatus.active
+
+
 # ---------------------------------------------------------------------------
 # Deactivation window elapsed → suspend (EnforcementReason.prepaid)
 # ---------------------------------------------------------------------------
