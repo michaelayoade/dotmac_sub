@@ -503,9 +503,14 @@ def populate(dry_run: bool = True) -> dict[str, int]:
             # cancelled/disabled). Keeps the radius DB lean and prevents stale
             # auth surface from accumulating.
             if active_usernames:
+                from app.services.radius_probe import probe_username
+
                 cur.execute("SELECT DISTINCT username FROM radcheck")
                 radcheck_users = {r[0] for r in cur.fetchall()}
-                orphans = list(radcheck_users - active_usernames)
+                # The synthetic health-probe credential is app-owned but not a
+                # subscription — never reap it.
+                protected = {probe_username()}
+                orphans = list(radcheck_users - active_usernames - protected)
                 if orphans:
                     cur.execute(
                         "DELETE FROM radcheck WHERE username = ANY(%s)", (orphans,)
@@ -521,6 +526,12 @@ def populate(dry_run: bool = True) -> dict[str, int]:
                         stats["radreply_orphans_deleted"],
                     )
 
+            # --- synthetic health-probe identity -----------------------------
+            # App-owned, not a subscription: ensure the probe user (radcheck)
+            # and client (nas) exist so the RADIUS auth probe can authenticate.
+            # Idempotent, only when configured; protected from orphan cleanup.
+            stats["probe_identity_synced"] = _ensure_probe_identity(cur)
+
         rconn.commit()
         logger.info("committed RADIUS DB writes")
     finally:
@@ -528,6 +539,44 @@ def populate(dry_run: bool = True) -> dict[str, int]:
 
     logger.info("done: %s", stats)
     return stats
+
+
+def _ensure_probe_identity(cur) -> int:
+    """Upsert the synthetic auth-probe's radcheck user and nas client.
+
+    Returns 1 when synced, 0 when the probe is unconfigured. Env-sourced
+    (``RADIUS_PROBE_*``) — no secret lives in the app DB. The nas client is
+    loaded by FreeRADIUS at startup (``read_clients``), so a first-time client
+    add needs a FreeRADIUS restart; the user row takes effect immediately.
+    """
+    import os
+
+    from app.services.radius_probe import probe_config, probe_username
+
+    config = probe_config()
+    if not config["configured"]:
+        return 0
+    username = probe_username()
+    cur.execute(
+        "DELETE FROM radcheck WHERE username = %s AND attribute = 'Cleartext-Password'",
+        (username,),
+    )
+    cur.execute(
+        "INSERT INTO radcheck (username, attribute, op, value) "
+        "VALUES (%s, 'Cleartext-Password', ':=', %s)",
+        (username, config["password"]),
+    )
+
+    # nas client covering the worker source range (compose bridge by default).
+    client_subnet = os.getenv("RADIUS_PROBE_CLIENT_SUBNET", "172.20.0.0/16").strip()
+    cur.execute("DELETE FROM nas WHERE shortname = %s", (username,))
+    cur.execute(
+        "INSERT INTO nas (nasname, shortname, type, secret, description, "
+        "require_message_authenticator) "
+        "VALUES (%s, %s, 'other', %s, 'synthetic health probe', TRUE)",
+        (client_subnet, username, config["secret"]),
+    )
+    return 1
 
 
 if __name__ == "__main__":

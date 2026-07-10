@@ -192,6 +192,14 @@ def collect_radius_health(
         _radacct_signals(db, now=now, stale_after_seconds=stale_after_seconds)
     )
     health.update(_enforcement_signals(db))
+    try:
+        from app.services.radius_probe import run_configured_probe
+
+        probe_fields, _result = run_configured_probe()
+        health.update(probe_fields)
+    except Exception:  # the probe is additive; never fail the health pass
+        logger.exception("radius_health_probe_failed")
+        health.setdefault("probe_configured", 0)
     return health
 
 
@@ -206,6 +214,13 @@ def push_radius_metrics(health: dict, *, now: datetime | None = None) -> dict[st
         "radius_suspended_with_active_session": health.get("suspended_with_session"),
         "radius_paid_active_without_session": health.get("paid_active_without_session"),
         "radius_radacct_read_ok": health.get("radacct_read_ok"),
+        "radius_auth_rtt_ms": health.get("auth_rtt_ms"),
+        "radius_probe_ok": (
+            health.get("probe_ok") if health.get("probe_configured") else None
+        ),
+        "radius_probe_retries": (
+            health.get("probe_retries") if health.get("probe_configured") else None
+        ),
     }
     lines = [
         f"{name} {float(value)} {ts_ms}"
