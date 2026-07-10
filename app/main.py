@@ -110,6 +110,11 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.crm_referrals", "router", "api", "user"),
     ("app.api.crm_referrals", "public_router", "api", "none"),
     ("app.api.support", "router", "api", "user"),
+    # Sales vertical (Phase 3 port): per-route crm:lead / crm:quote /
+    # crm:sales_order permission guards on top of the user-auth base.
+    ("app.api.crm_sales", "router", "api", "user"),
+    ("app.api.sales", "router", "api", "user"),
+    ("app.api.sales_orders", "router", "api", "user"),
     ("app.api.dispatch", "router", "api", "perm:operations:dispatch"),
     ("app.api.field.config", "router", "api", "none"),
     ("app.api.field", "router", "api", "user"),
