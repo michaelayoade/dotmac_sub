@@ -66,6 +66,26 @@ class TestRecordDeadLetter:
         assert rows[0].status == CrmSyncFailureStatus.unresolved
         assert rows[0].attempts == 9
 
+    def test_on_failure_redacts_nin_from_payload(self, db_session):
+        from contextlib import contextmanager
+
+        from app.tasks import crm_sync
+
+        @contextmanager
+        def _fake_session():
+            yield db_session
+
+        with patch("app.db.task_session", _fake_session):
+            crm_sync._record_dead_letter(
+                external_id="abc",
+                external_system="selfcare",
+                payload={"nin": "12345678901", "status": "active"},
+                error="CRM unreachable",
+                attempts=9,
+            )
+        row = db_session.query(CrmSyncFailure).one()
+        assert row.payload["nin"] == "<redacted>"
+
 
 class TestVisibility:
     def test_unresolved_count_and_list(self, db_session):

@@ -218,6 +218,7 @@ class Subscriber(Base):
     email: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     email_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     phone: Mapped[str | None] = mapped_column(String(40))
+    nin: Mapped[str | None] = mapped_column(String(11))
 
     date_of_birth: Mapped[date | None] = mapped_column(Date)
     gender: Mapped[Gender] = mapped_column(Enum(Gender), default=Gender.unknown)
