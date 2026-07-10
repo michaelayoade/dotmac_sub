@@ -8,6 +8,9 @@ The CRM's webhook delivery task POSTs the raw JSON event payload with:
 Ticket events enqueue a single-ticket sync on the crm queue, so new CRM
 tickets appear locally in seconds instead of waiting for the 5-minute pull.
 Updates/comments have no CRM webhook events and remain covered by the pull.
+The ticket branch is gated by the same crm.ticket_pull control as the pull
+beat entries (legacy key crm_ticket_pull_enabled) — with it off, ticket
+events are acked as 200 noops (Phase 1 flip kill switch).
 
 Mounted with no router-level auth (see main.py) — authentication is the HMAC
 signature, fail-closed like the Zabbix webhook: unconfigured secret → 503,
@@ -180,7 +183,7 @@ async def receive_crm_customer(request: Request, db: Session = Depends(get_db)) 
 
 
 @router.post("")
-async def receive_crm_event(request: Request) -> dict:
+async def receive_crm_event(request: Request, db: Session = Depends(get_db)) -> dict:
     raw_body = await request.body()
     _verify_signature(raw_body, request.headers.get(SIGNATURE_HEADER))
 
@@ -197,6 +200,20 @@ async def receive_crm_event(request: Request) -> dict:
     if event_type not in TICKET_EVENTS:
         # Acknowledge so the CRM doesn't retry events we don't consume.
         return {"status": "ignored", "event": event_type}
+
+    # Flip kill switch: the same crm.ticket_pull control (legacy scheduler key
+    # crm_ticket_pull_enabled) that gates the crm_ticket_pull beat entries also
+    # gates this branch — once sub stops treating the CRM as ticket upstream,
+    # ticket events are acked with a 200 noop so the CRM doesn't retry.
+    # Lazy import to match the rest of the branch (deleted whole at contract).
+    from app.services import control_registry
+
+    if not control_registry.is_enabled(db, "crm.ticket_pull"):
+        return {
+            "status": "ignored",
+            "reason": "ticket_pull_disabled",
+            "event": event_type,
+        }
 
     ticket_id = str(payload.get("ticket_id") or "").strip()
     if not ticket_id:
