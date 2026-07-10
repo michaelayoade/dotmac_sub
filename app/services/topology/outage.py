@@ -25,6 +25,7 @@ from app.services.topology.affected import (
     downstream_nodes,
     lldp_adjacency,
 )
+from app.services.topology.outage_operations import ensure_outage_operations
 
 logger = logging.getLogger(__name__)
 
@@ -199,6 +200,7 @@ def declare_outage(
     )
     session.add(incident)
     session.flush()
+    ensure_outage_operations(session, incident)
     _emit_outage_event(session, incident, "outage.created")
     return incident
 
@@ -348,6 +350,7 @@ def confirm_incident(
     incident.status = "confirmed"
     incident.confirmed_at = now
     session.flush()
+    ensure_outage_operations(session, incident)
     _emit_outage_event(session, incident, "outage.confirmed")
 
 
