@@ -403,6 +403,21 @@ from app.models.offer_availability import (  # noqa: F401
 )
 from app.models.ont_autofind import OltAutofindCandidate  # noqa: F401
 from app.models.ont_observation import OntObservation  # noqa: F401
+from app.models.operational_escalation import (  # noqa: F401
+    OperationalDeliveryStatus,
+    OperationalEntityType,
+    OperationalEscalationDelivery,
+    OperationalEscalationEvent,
+    OperationalEscalationPolicy,
+    OperationalEscalationStatus,
+    OperationalOwner,
+    OperationalOwnerRole,
+    OperationalParticipantType,
+    OperationalRoomLink,
+    OperationalRoomProvider,
+    OperationalWatcher,
+    OperationalWatcherRole,
+)
 from app.models.payment_arrangement import (  # noqa: F401
     ArrangementStatus,
     InstallmentStatus,
