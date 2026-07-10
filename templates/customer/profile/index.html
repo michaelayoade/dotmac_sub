@@ -11,6 +11,8 @@
 {% set account_notifications_enabled = notification_meta.get('account_notifications', True) %}
 {% set usage_notifications_enabled = notification_meta.get('usage_notifications', True) %}
 {% set general_notifications_enabled = notification_meta.get('general_notifications', True) %}
+{% set nin_locked = subscriber and subscriber.metadata_ and subscriber.metadata_.get('nin_verified') %}
+{% set masked_nin = (subscriber.nin[:6] ~ ('*' * (subscriber.nin|length - 6))) if subscriber and subscriber.nin and subscriber.nin|length > 6 else (subscriber.nin if subscriber and subscriber.nin else '') %}
 <div class="space-y-8">
     <!-- Page Header -->
     <div>
@@ -48,6 +50,15 @@
     {% elif verify_sent == '0' %}
     <div class="rounded-xl border-2 border-amber-200 bg-amber-50 px-5 py-4 text-sm font-medium text-amber-700 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-300">
         We couldn&rsquo;t send the verification email right now. Please try again shortly.
+    </div>
+    {% endif %}
+
+    {% if profile_completion %}
+    <div class="rounded-xl border-2 {{ 'border-emerald-200 bg-emerald-50 dark:border-emerald-900/50 dark:bg-emerald-900/20' if profile_completion.complete else 'border-amber-200 bg-amber-50 dark:border-amber-900/50 dark:bg-amber-900/20' }} px-5 py-4">
+        <p class="text-sm font-semibold {{ 'text-emerald-700 dark:text-emerald-300' if profile_completion.complete else 'text-amber-700 dark:text-amber-300' }}">Profile completion</p>
+        <p class="mt-1 text-sm {{ 'text-emerald-700/90 dark:text-emerald-300/90' if profile_completion.complete else 'text-amber-700/90 dark:text-amber-300/90' }}">
+            {{ profile_completion.completed_count }}/{{ profile_completion.total_count }} identity fields completed{% if profile_completion.missing_labels %}. Missing: {{ profile_completion.missing_labels }}{% endif %}.
+        </p>
     </div>
     {% endif %}
 
@@ -134,6 +145,20 @@
                         <label class="{{ _lbl }}">Phone Number</label>
                         <input type="tel" name="phone"
                                value="{{ (subscriber.phone if subscriber else '') or (customer.phone if customer else '') or '' }}" class="{{ _inp }}">
+                    </div>
+                    <div>
+                        <label class="{{ _lbl }}">National Identification Number</label>
+                        <input type="text" name="nin" inputmode="numeric" maxlength="11"
+                               value="{{ '' if nin_locked else (subscriber.nin if subscriber and subscriber.nin else '') }}"
+                               {% if nin_locked %}placeholder="{{ masked_nin }}" readonly{% endif %}
+                               class="{{ _inp }}">
+                        <p class="mt-2 text-xs text-stone-500 dark:text-stone-400">
+                            {% if nin_locked %}
+                            Verified NIN is locked for self-service edits.
+                            {% else %}
+                            Enter your 11-digit NIN. It will be masked after verification.
+                            {% endif %}
+                        </p>
                     </div>
                     <div>
                         <label class="{{ _lbl }}">Date of Birth</label>

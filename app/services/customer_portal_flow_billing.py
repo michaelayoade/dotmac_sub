@@ -33,6 +33,18 @@ from app.services.customer_portal_flow_common import _compute_total_pages
 
 logger = logging.getLogger(__name__)
 
+INTERNAL_LEDGER_MEMO_EXACT = {
+    "Prepaid opening balance @ cutover",
+}
+INTERNAL_LEDGER_MEMO_PREFIXES = (
+    "Correction:",
+    "Partial cutover opening balance construction adjustment",
+    "Reversal of phantom",
+    "Reversal of prepaid opening",
+    "Data repair 2026-06-29:",
+    "Validated account credit consumed",
+)
+
 
 def _enum_value(value: Any) -> str:
     return str(getattr(value, "value", value) or "")
@@ -43,6 +55,13 @@ def _money_activity_timestamp(*values: Any) -> Any:
         if value is not None:
             return value
     return None
+
+
+def _customer_visible_ledger_memo(memo: str | None) -> bool:
+    text = str(memo or "")
+    return text not in INTERNAL_LEDGER_MEMO_EXACT and not text.startswith(
+        INTERNAL_LEDGER_MEMO_PREFIXES
+    )
 
 
 def _build_billing_activity(db: Session, account_id: str, limit: int = 25) -> list[Any]:
@@ -119,6 +138,8 @@ def _build_billing_activity(db: Session, account_id: str, limit: int = 25) -> li
     for entry in ledger_entries:
         source = _enum_value(entry.source)
         if source in {LedgerSource.payment.value, LedgerSource.credit_note.value}:
+            continue
+        if not _customer_visible_ledger_memo(entry.memo):
             continue
         entry_type = _enum_value(entry.entry_type)
         category = _enum_value(entry.category).replace("_", " ").title()

@@ -1,7 +1,7 @@
 """Add native field material requests.
 
-Revision ID: 233_field_material_requests
-Revises: 232_field_materials
+Revision ID: 234_field_material_requests
+Revises: 233_field_materials
 Create Date: 2026-07-09
 """
 
@@ -13,8 +13,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "233_field_material_requests"
-down_revision = "232_field_materials"
+revision = "234_field_material_requests"
+down_revision = "233_field_materials"
 branch_labels = None
 depends_on = None
 

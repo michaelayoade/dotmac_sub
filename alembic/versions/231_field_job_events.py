@@ -1,7 +1,7 @@
 """Add native field job transition events.
 
-Revision ID: 230_field_job_events
-Revises: 229_field_attachments
+Revision ID: 231_field_job_events
+Revises: 230_field_attachments
 Create Date: 2026-07-09
 """
 
@@ -13,8 +13,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "230_field_job_events"
-down_revision = "229_field_attachments"
+revision = "231_field_job_events"
+down_revision = "230_field_attachments"
 branch_labels = None
 depends_on = None
 
