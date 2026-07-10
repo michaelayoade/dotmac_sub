@@ -1,10 +1,11 @@
-"""Sales vertical services — leads, pipelines, quotes (Phase 3 §2.1).
+"""Sales vertical services (Phase 3).
 
-Ported from ``dotmac_crm/app/services/crm/sales/``. Self-serve quote
-extraction (feasibility / estimate / request / accept) lands separately as
-``app.services.sales.selfserve`` in the next PR of the Phase 3 series.
+* ``service`` — leads, pipelines, quotes port (§2.1).
+* ``selfserve`` — the self-serve quote extraction: feasibility (native FAP),
+  estimate, map-pinned request, accept-with-deposit (§2.2).
 """
 
+from app.services.sales import selfserve
 from app.services.sales.service import (
     LEAD_SOURCE_OPTIONS,
     Leads,
@@ -31,4 +32,5 @@ __all__ = [
     "pipelines",
     "quote_line_items",
     "quotes",
+    "selfserve",
 ]
