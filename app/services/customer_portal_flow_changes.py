@@ -15,6 +15,7 @@ from app.models.subscription_change import (
     SubscriptionChangeStatus,
 )
 from app.services import catalog as catalog_service
+from app.services.collections import get_available_balance
 from app.services.common import coerce_uuid
 from app.services.common import validate_enum as _validate_enum
 from app.services.customer_portal_context import get_available_portal_offers
@@ -79,9 +80,7 @@ def _to_int(value: object, default: int = 0) -> int:
 def _customer_credit_balance(db: Session, account_id: str | None) -> Decimal:
     if not account_id:
         return Decimal("0.00")
-    from app.services.billing._common import get_account_credit_balance
-
-    return get_account_credit_balance(db, account_id)
+    return get_available_balance(db, account_id)
 
 
 def _build_plan_change_quote(

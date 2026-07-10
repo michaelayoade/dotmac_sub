@@ -1,7 +1,7 @@
 """Add native field movement sessions.
 
-Revision ID: 235_field_movements
-Revises: 234_field_expense_requests
+Revision ID: 236_field_movements
+Revises: 235_field_expense_requests
 Create Date: 2026-07-09
 """
 
@@ -13,8 +13,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "235_field_movements"
-down_revision = "234_field_expense_requests"
+revision = "236_field_movements"
+down_revision = "235_field_expense_requests"
 branch_labels = None
 depends_on = None
 

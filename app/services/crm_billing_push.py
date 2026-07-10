@@ -45,9 +45,9 @@ def _setting_enabled(db: Session, domain: SettingDomain, key: str) -> bool:
 
 def build_snapshot(db: Session, subscriber: Subscriber) -> dict[str, Any]:
     """CRM Subscriber billing columns for one local subscriber."""
-    from app.services.billing._common import get_account_credit_balance
+    from app.services.collections import get_available_balance
 
-    balance = get_account_credit_balance(db, str(subscriber.id))
+    balance = get_available_balance(db, str(subscriber.id))
     next_bill: datetime | None = (
         db.query(Subscription.next_billing_at)
         .filter(

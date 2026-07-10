@@ -1,7 +1,7 @@
 """Add native field expense requests.
 
-Revision ID: 234_field_expense_requests
-Revises: 233_field_material_requests
+Revision ID: 235_field_expense_requests
+Revises: 234_field_material_requests
 Create Date: 2026-07-09
 """
 
@@ -13,8 +13,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "234_field_expense_requests"
-down_revision = "233_field_material_requests"
+revision = "235_field_expense_requests"
+down_revision = "234_field_material_requests"
 branch_labels = None
 depends_on = None
 

@@ -46,6 +46,7 @@ from app.services.customer_portal_context import (
     resolve_allowed_subscriber_ids,
     resolve_customer_subscription,
 )
+from app.services.nin_matching import mask_nin
 from app.web.customer.auth import get_current_customer_from_request
 from app.web.customer.branding import get_customer_templates
 
@@ -192,8 +193,9 @@ def _format_bps(value: float | int | None) -> str:
 
 
 def _profile_value(value):
-    if hasattr(value, "value"):
-        return value.value
+    enum_value = getattr(value, "value", None)
+    if isinstance(enum_value, str):
+        return enum_value
     if hasattr(value, "isoformat"):
         return value.isoformat()
     return value
@@ -201,12 +203,17 @@ def _profile_value(value):
 
 def _profile_audit_snapshot(subscriber) -> dict[str, object]:
     metadata = dict(getattr(subscriber, "metadata_", None) or {})
+    nin_value = getattr(subscriber, "nin", None)
+    masked_nin = (
+        mask_nin(nin_value) if isinstance(nin_value, str) and nin_value else None
+    )
     return {
         "first_name": subscriber.first_name,
         "last_name": subscriber.last_name,
         "display_name": subscriber.display_name,
         "email": subscriber.email,
         "phone": subscriber.phone,
+        "nin": masked_nin,
         "date_of_birth": _profile_value(subscriber.date_of_birth),
         "gender": _profile_value(subscriber.gender),
         "preferred_contact_method": _profile_value(subscriber.preferred_contact_method),
@@ -225,6 +232,26 @@ def _profile_audit_snapshot(subscriber) -> dict[str, object]:
         "general_notifications": bool(metadata.get("general_notifications", True)),
         "locale": subscriber.locale,
         "email_verified": subscriber.email_verified,
+    }
+
+
+def _profile_completion(subscriber) -> dict[str, object]:
+    gender_value = _profile_value(getattr(subscriber, "gender", None))
+    if not isinstance(gender_value, str):
+        gender_value = ""
+    required = {
+        "date_of_birth": bool(getattr(subscriber, "date_of_birth", None)),
+        "gender": gender_value not in {"", "unknown"},
+        "nin": bool(getattr(subscriber, "nin", None)),
+    }
+    missing = [key for key, complete in required.items() if not complete]
+    return {
+        "required": required,
+        "missing": missing,
+        "missing_labels": ", ".join(item.replace("_", " ") for item in missing),
+        "complete": not missing,
+        "completed_count": sum(1 for value in required.values() if value),
+        "total_count": len(required),
     }
 
 
@@ -1460,6 +1487,7 @@ def _profile_context(
         success = "Other portal sessions signed out."
     elif saved:
         success = "Profile updated successfully"
+    profile_completion = _profile_completion(subscriber) if subscriber else None
     return {
         "request": request,
         "customer": customer,
@@ -1476,6 +1504,7 @@ def _profile_context(
         "success": success,
         "error": error,
         "verify_sent": verify_sent,
+        "profile_completion": profile_completion,
     }
 
 
@@ -1536,6 +1565,7 @@ def customer_update_profile(
     email: str = Form(...),
     display_name: str = Form(None),
     phone: str = Form(None),
+    nin: str = Form(None),
     date_of_birth: str = Form(None),
     gender: str = Form(None),
     preferred_contact_method: str = Form(None),
@@ -1590,6 +1620,7 @@ def customer_update_profile(
                 display_name=display_name,
                 email=email,
                 phone=phone,
+                nin=nin,
                 date_of_birth=date_of_birth,
                 gender=gender,
                 preferred_contact_method=preferred_contact_method,

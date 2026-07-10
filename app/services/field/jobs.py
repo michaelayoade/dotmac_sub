@@ -7,6 +7,7 @@ pipeline continues to hydrate ``work_order_mirror``.
 
 from __future__ import annotations
 
+import builtins
 from datetime import UTC, datetime
 from typing import Any, TypeAlias
 from uuid import UUID
@@ -295,6 +296,57 @@ class FieldJobs:
         from app.services.field.transitions import field_transitions
         from app.services.field.worklogs import field_worklogs
 
+        notes = [
+            FieldNoteRead(**note)
+            for note in field_notes.list_for_job(db, principal, crm_work_order_id)
+        ]
+        attachments = [
+            FieldAttachmentRead(**attachment)
+            for attachment in field_attachments.list(
+                db, principal, crm_work_order_id=crm_work_order_id
+            )
+        ]
+        worklogs = [
+            FieldWorkLogRead(**worklog)
+            for worklog in field_worklogs.list_for_job(db, principal, crm_work_order_id)
+        ]
+        events = [
+            FieldJobEventRead(**event)
+            for event in field_transitions.list_for_job(
+                db, principal, crm_work_order_id
+            )
+        ]
+        materials = [
+            FieldMaterialRead(**material)
+            for material in field_materials.list_for_job(
+                db, principal, crm_work_order_id
+            )
+        ]
+        material_requests = [
+            FieldMaterialRequestRead(**material_request)
+            for material_request in field_material_requests.list_mine(
+                db,
+                principal,
+                crm_work_order_id=crm_work_order_id,
+                limit=50,
+                offset=0,
+            )
+        ]
+        expense_requests = [
+            FieldExpenseRequestRead(**expense_request)
+            for expense_request in field_expense_requests.list_mine(
+                db,
+                principal,
+                crm_work_order_id=crm_work_order_id,
+                limit=50,
+                offset=0,
+            )
+        ]
+        movements = [
+            FieldMovementRead(**movement) for movement in list_movements(db, row)
+        ]
+        equipment = field_equipment.current_for_job(db, principal, crm_work_order_id)
+        equipment_read = FieldEquipmentRead(**equipment) if equipment else None
         return FieldJobDetail(
             job=_summary(row),
             customer=_customer(row, subscriber),
@@ -302,65 +354,15 @@ class FieldJobs:
             ticket_ref=row.crm_ticket_id,
             project_id=row.crm_project_id,
             access_notes=row.access_notes,
-            materials=[
-                FieldMaterialRead(**item)
-                for item in field_materials.list_for_job(
-                    db, principal, crm_work_order_id
-                )
-            ],
-            material_requests=[
-                FieldMaterialRequestRead(**item)
-                for item in field_material_requests.list_mine(
-                    db,
-                    principal,
-                    crm_work_order_id=crm_work_order_id,
-                    limit=50,
-                    offset=0,
-                )
-            ],
-            expense_requests=[
-                FieldExpenseRequestRead(**item)
-                for item in field_expense_requests.list_mine(
-                    db,
-                    principal,
-                    crm_work_order_id=crm_work_order_id,
-                    limit=50,
-                    offset=0,
-                )
-            ],
-            notes=[
-                FieldNoteRead(**item)
-                for item in field_notes.list_for_job(db, principal, crm_work_order_id)
-            ],
-            attachments=[
-                FieldAttachmentRead(**item)
-                for item in field_attachments.list(
-                    db, principal, crm_work_order_id=crm_work_order_id
-                )
-            ],
-            worklogs=[
-                FieldWorkLogRead(**item)
-                for item in field_worklogs.list_for_job(
-                    db, principal, crm_work_order_id
-                )
-            ],
-            events=[
-                FieldJobEventRead(**item)
-                for item in field_transitions.list_for_job(
-                    db, principal, crm_work_order_id
-                )
-            ],
-            movements=[FieldMovementRead(**item) for item in list_movements(db, row)],
-            equipment=(
-                FieldEquipmentRead(**equipment)
-                if (
-                    equipment := field_equipment.current_for_job(
-                        db, principal, crm_work_order_id
-                    )
-                )
-                is not None
-                else None
-            ),
+            notes=notes,
+            attachments=attachments,
+            materials=materials,
+            material_requests=material_requests,
+            expense_requests=expense_requests,
+            worklogs=worklogs,
+            events=events,
+            movements=movements,
+            equipment=equipment_read,
             history=[],
         )
 
@@ -397,7 +399,7 @@ class FieldJobs:
                 latitude=location.latitude,
                 longitude=location.longitude,
                 radius_m=750,
-                asset_types=list(_ASSET_DESTINATION_TYPES),
+                asset_types=builtins.list(_ASSET_DESTINATION_TYPES),
                 limit=20,
             )
             for asset in assets:
