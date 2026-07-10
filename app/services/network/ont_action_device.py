@@ -223,7 +223,7 @@ def refresh_status(db: Session, ont_id: str) -> ActionResult:
         # No ACS available - return just the cached status
         return ActionResult(
             success=True,
-            message=f"Status updated from Zabbix: {status_result.status.value}",
+            message=f"Status updated: {status_result.status.value}",
             data={
                 "status": status_result.status.value,
                 "source": status_result.status_source.value,

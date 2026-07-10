@@ -992,17 +992,10 @@ def olt_ssh_get_config(
 def olt_refresh_ont_telemetry(
     request: Request, olt_id: str, db: Session = Depends(get_db)
 ) -> RedirectResponse:
-    dispatch = enqueue_task(
-        "app.tasks.zabbix_ingestion.ingest_olt_signals_from_zabbix",
-        correlation_id=f"ont_signal_ingest:{olt_id}",
-        source="olt_refresh_ont_telemetry",
-    )
-    ok = dispatch.queued
-    message = (
-        "Queued ONU telemetry refresh from monitoring data."
-        if ok
-        else f"Failed to queue ONU telemetry refresh: {dispatch.error}"
-    )
+    # The Zabbix telemetry ingest this button used to queue was retired with
+    # the native monitoring cutover; report the retirement instead of queueing.
+    ok = False
+    message = "ONU telemetry refresh is unavailable: monitoring ingest retired."
     _log_olt_action_result(
         request=request,
         olt_id=olt_id,

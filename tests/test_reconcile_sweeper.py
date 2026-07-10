@@ -416,7 +416,6 @@ def test_sweep_fires_escalation_on_threshold_crossing(
         ping_function=lambda ip, count, timeout_sec: False,  # unreachable
         reconcile_fn=lambda *a, **k: _stub_result(True),
         alert_threshold=3,
-        trapper=None,
     )
 
     assert len(escalations) == 2
@@ -448,7 +447,6 @@ def test_sweep_skips_escalation_when_threshold_is_zero(
         ping_function=lambda ip, count, timeout_sec: False,
         reconcile_fn=lambda *a, **k: _stub_result(True),
         alert_threshold=0,
-        trapper=None,
     )
 
     assert escalations == []

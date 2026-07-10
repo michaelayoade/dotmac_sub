@@ -43,7 +43,7 @@ from app.services.network.effective_ont_config import resolve_effective_ont_conf
 from app.services.network.olt_polling_parsers import _decode_huawei_packed_fsp
 from app.services.network.provisioning_events import list_ont_provisioning_events
 from app.services.web_network_core_devices_inventory import (
-    _build_zabbix_probe_statuses,
+    _build_legacy_probe_statuses,
     _network_device_is_olt_candidate,
     resolve_olt_device_for_network_device,
 )
@@ -789,11 +789,12 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
             onts_by_id[str(ont.id)] = ont
     onts_on_olt = list(onts_by_id.values())
 
-    from app.services.zabbix_ont_status import get_olt_ont_snapshot_from_zabbix
+    # The live per-ONT snapshot source (Zabbix) was retired with the native
+    # monitoring cutover; ONTs render offline with empty live signal values
+    # here, exactly as the unconfigured path already did.
+    live_snapshot: dict[str, Any] = {}
 
-    zabbix_snapshot = get_olt_ont_snapshot_from_zabbix(olt, onts_on_olt)
-
-    # Build signal data for each ONT directly from Zabbix
+    # Build signal data for each ONT
     signal_data: dict[str, dict[str, object]] = {}
     pon_port_display_by_ont_id: dict[str, str] = {}
     ont_mac_by_ont_id: dict[str, str] = {}
@@ -848,7 +849,7 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
             if normalized_port:
                 pon_port_display_by_ont_id[ont_id] = normalized_port
 
-        zbx = zabbix_snapshot.get(ont_id)
+        zbx = live_snapshot.get(ont_id)
         olt_rx = zbx.olt_rx_dbm if zbx else None
         onu_rx = zbx.onu_rx_dbm if zbx else None
         quality = classify_signal(olt_rx, warn_threshold=warn, crit_threshold=crit)
@@ -895,7 +896,7 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
             ont = assignment.ont_unit
             if not ont:
                 continue
-            zbx = zabbix_snapshot.get(str(ont.id))
+            zbx = live_snapshot.get(str(ont.id))
             status = zbx.status if zbx else "offline"
             if status == "online":
                 p_online += 1
@@ -1073,10 +1074,8 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
             ont_count_by_port_index.get(ont_port_index, 0) + 1
         )
         ont_signal = signal_data.get(str(getattr(ont, "id", "")), {}).get("olt_rx_dbm")
-        # Fall back to the persisted ``olt_rx_signal_dbm`` column when the
-        # Zabbix snapshot doesn't have a value for this ONT (Zabbix outage,
-        # ONT not yet polled). Keeps the PON-port table populated during
-        # those windows.
+        # Use the persisted ``olt_rx_signal_dbm`` column (written by the
+        # native OLT poller). Keeps the PON-port table populated.
         if ont_signal is None:
             ont_signal = getattr(ont, "olt_rx_signal_dbm", None)
         if ont_signal is None:
@@ -1204,9 +1203,8 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
                 signal_value = signal_data.get(str(getattr(ont, "id", "")), {}).get(
                     "olt_rx_dbm"
                 )
-                # Same Zabbix-snapshot fallback as the primary aggregator
-                # above -- use the persisted ``olt_rx_signal_dbm`` column
-                # when Zabbix has no value for this ONT.
+                # Same persisted-column read as the primary aggregator
+                # above (written by the native OLT poller).
                 if signal_value is None:
                     signal_value = getattr(ont, "olt_rx_signal_dbm", None)
                 if signal_value is not None:
@@ -1352,7 +1350,6 @@ ACS_STATUS_CLASSES: dict[str, str] = {
     "online": "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200",
     "stale": "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200",
     "unmanaged": "bg-sky-100 text-sky-800 dark:bg-sky-900 dark:text-sky-200",
-    "zabbix": "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
     "unknown": "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300",
 }
 
@@ -1508,20 +1505,13 @@ def onts_list_page_data(
     connection_request_by_ont_id = _connection_request_state_by_ont_id(
         db, [ont.id for ont in displayed_onts if getattr(ont, "id", None)]
     )
-    from app.services import zabbix_ont_status
-
-    # Render fast from cached Zabbix snapshots only; the cache is populated
-    # out-of-band by the snapshot refresh task. A live fan-out (7 OLTs * ~2s
-    # each) would otherwise block the inventory page on every cache miss.
-    zabbix_snapshots = zabbix_ont_status.get_ont_snapshots_from_zabbix(
-        db,
-        displayed_onts,
-        cached_only=True,
-    )
+    # The cached live-snapshot source (Zabbix) was retired with the native
+    # monitoring cutover; render from the persisted inventory columns (written
+    # by the native OLT poller), exactly as the permanently-cold-cache path
+    # already did.
     for ont in displayed_onts:
-        zbx = zabbix_snapshots.get(str(ont.id))
-        olt_rx_dbm = zbx.olt_rx_dbm if zbx else getattr(ont, "olt_rx_signal_dbm", None)
-        onu_rx_dbm = zbx.onu_rx_dbm if zbx else getattr(ont, "onu_rx_signal_dbm", None)
+        olt_rx_dbm = getattr(ont, "olt_rx_signal_dbm", None)
+        onu_rx_dbm = getattr(ont, "onu_rx_signal_dbm", None)
         quality = classify_signal(
             olt_rx_dbm,
             warn_threshold=warn,
@@ -1537,11 +1527,10 @@ def onts_list_page_data(
             status_val = "offline"
         if status_val not in ONLINE_STATUS_CLASSES:
             status_val = "unknown"
-        status_display_val = zbx.status if zbx else status_val
-        status_source = "zabbix" if zbx and zbx.error is None else "inventory"
+        status_display_val = status_val
+        status_source = "inventory"
         effective_last_seen_at = (
-            (zbx.updated_at if zbx and zbx.updated_at else None)
-            or getattr(ont, "last_seen_at", None)
+            getattr(ont, "last_seen_at", None)
             or getattr(ont, "olt_status_seen_at", None)
             or getattr(ont, "signal_updated_at", None)
         )
@@ -1602,7 +1591,7 @@ def onts_list_page_data(
             else "",
         }
 
-    # Summary counts use cached inventory state; live Zabbix polling runs out of band.
+    # Summary counts use cached inventory state; native polling runs out of band.
     total_cpes_count = db.scalar(select(func.count()).select_from(CPEDevice)) or 0
     stats_filters = [OntUnit.is_active.is_(True)]
     if olt_id:
@@ -3003,18 +2992,18 @@ def _core_device_table_maps(
     from app.services.web_network_core_devices_forms import (
         _display_status_value,
         _format_uptime_short,
-        _zabbix_live_status_available,
+        _live_status_available,
     )
 
     real_devices = [device for device in devices if isinstance(device, NetworkDevice)]
     device_ids = [device.id for device in real_devices]
-    zabbix_live_status_available = _zabbix_live_status_available()
+    live_status_available = _live_status_available()
     display_status_map: dict[str, str] = {}
     for device in devices:
         key = str(getattr(device, "id", ""))
         if isinstance(device, NetworkDevice):
             display_status_map[key] = _display_status_value(
-                device, zabbix_live_status_available=zabbix_live_status_available
+                device, live_status_available=live_status_available
             )
             continue
         live_status = str(getattr(device, "live_status", "") or "").strip().lower()
@@ -3182,27 +3171,21 @@ def consolidated_page_data(
     from app.services.device_operational_status import annotate_operational_status
 
     annotate_operational_status(core_devices)
-    zabbix_probe_statuses = _build_zabbix_probe_statuses(
-        [
-            {
-                "id": str(getattr(device, "id", "")),
-                "zabbix_host_id": getattr(device, "zabbix_hostid", None),
-            }
-            for device in core_devices
-        ]
+    legacy_probe_statuses = _build_legacy_probe_statuses(
+        [{"id": str(getattr(device, "id", ""))} for device in core_devices]
     )
     for device in core_devices:
-        probe_status = zabbix_probe_statuses.get(str(getattr(device, "id", ""))) or {}
+        probe_status = legacy_probe_statuses.get(str(getattr(device, "id", ""))) or {}
         device.ping_status = {
             "label": probe_status.get("ping_label") or "Timeout",
             "state": probe_status.get("ping_state") or "fail",
-            "source": "Zabbix",
+            "source": "Legacy",
             "reason": probe_status.get("ping_reason"),
         }
         device.snmp_status = {
             "label": probe_status.get("snmp_label") or "Unknown",
             "state": probe_status.get("snmp_state") or "unknown",
-            "source": "Zabbix",
+            "source": "Legacy",
             "reason": probe_status.get("snmp_reason"),
         }
     core_roles = {
@@ -3290,7 +3273,7 @@ def consolidated_page_data(
             # Keep unknown when we have no linked monitoring telemetry.
             olt.runtime_status = "unknown"
         # Derived operational status: the OLT's own ping/poll telemetry first,
-        # falling back to the linked Zabbix device's live_status (reachable if
+        # falling back to the linked monitoring device's live_status (reachable if
         # any source confirms). runtime_status above is admin status — stale.
         olt.operational = derive_olt_operational_status(
             olt,

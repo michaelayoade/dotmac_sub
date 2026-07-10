@@ -2,7 +2,7 @@
 
 Surfaces what the reconcile could not resolve so it can be fixed instead of
 silently lost:
-- Zabbix-synced nodes with no confident provisioning-device match (unmatched or
+- Reconciled nodes with no confident provisioning-device match (unmatched or
   ambiguous both land as matched_device_id IS NULL in Phase 1).
 - Active subscriptions whose resolve_customer_path returns a gap.
 
@@ -36,7 +36,7 @@ from app.services.topology.customer_path import (
     GAP_NO_NODE,
     GAP_NO_ONT,
 )
-from app.services.topology.zabbix_reconcile import SOURCE
+from app.services.topology.sources import RECONCILED_SOURCE as SOURCE
 
 DEFAULT_TABLE_PER_PAGE = 50
 

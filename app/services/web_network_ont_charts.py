@@ -14,53 +14,20 @@ from app.services.network.ont_metrics import (
     get_traffic_history,
 )
 from app.services.network.signal_thresholds import get_signal_thresholds
-from app.services.zabbix_ont_status import get_ont_signal_from_zabbix
 
 
 def _build_signal_fallback_from_ont(ont: OntUnit, time_range: str) -> ChartData:
-    """Build a one-point signal chart from the current Zabbix ONT snapshot."""
-    zabbix_signal = get_ont_signal_from_zabbix(ont)
-    timestamp = zabbix_signal.updated_at
-    if timestamp is None:
-        return ChartData(
-            time_range=time_range,
-            available=False,
-            error="No signal history data available for this ONT.",
-        )
-    if timestamp.tzinfo is None:
-        timestamp = timestamp.replace(tzinfo=UTC)
-    ts = timestamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+    """Signal-chart fallback when the metrics store has no series.
 
-    series = []
-    if zabbix_signal.onu_rx_dbm is not None:
-        series.append(
-            ChartSeries(
-                label="ONU Rx (dBm)",
-                timestamps=[ts],
-                values=[float(zabbix_signal.onu_rx_dbm)],
-            )
-        )
-    if zabbix_signal.olt_rx_dbm is not None:
-        series.append(
-            ChartSeries(
-                label="OLT Rx (dBm)",
-                timestamps=[ts],
-                values=[float(zabbix_signal.olt_rx_dbm)],
-            )
-        )
-
-    if not series:
-        return ChartData(
-            time_range=time_range,
-            available=False,
-            error="No signal history data available for this ONT.",
-        )
-
+    The live one-point snapshot source (Zabbix) was retired with the native
+    monitoring cutover; degrade to the same "no data" chart the unconfigured
+    path already produced.
+    """
+    del ont
     return ChartData(
-        series=series,
         time_range=time_range,
-        available=True,
-        error="Showing latest signal snapshot while historical series are unavailable.",
+        available=False,
+        error="No signal history data available for this ONT.",
     )
 
 

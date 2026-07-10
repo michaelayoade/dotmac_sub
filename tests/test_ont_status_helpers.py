@@ -2,7 +2,6 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 from app.models.network import OntStatusSource, OnuOnlineStatus
-from app.services import zabbix_ont_status
 from app.services.network.ont_status import (
     get_ont_status,
     get_optical_metrics,
@@ -34,23 +33,22 @@ def test_get_optical_metrics_reads_persisted_ont_ddm_fields() -> None:
     assert metrics.fetched_at == fetched_at
 
 
-def test_get_ont_status_uses_zabbix_monitoring_source(monkeypatch) -> None:
+def test_get_ont_status_degrades_to_offline_not_configured() -> None:
+    """The live monitoring status source (Zabbix) was retired: get_ont_status
+    reports the same offline/not-configured result the unconfigured path
+    always produced."""
     now = datetime.now(UTC)
     ont = SimpleNamespace(
-        olt_status=OnuOnlineStatus.offline,
+        olt_status=OnuOnlineStatus.online,
         olt_status_seen_at=now,
         acs_last_inform_at=now,
         tr069_acs_server_id="acs-1",
         tr069_acs_server=None,
         olt_device=None,
     )
-    monkeypatch.setattr(
-        zabbix_ont_status,
-        "get_ont_signal_from_zabbix",
-        lambda _ont: zabbix_ont_status.OntSignalData(online=True),
-    )
 
     result = get_ont_status(None, ont)  # type: ignore[arg-type]
 
-    assert result.status == OnuOnlineStatus.online
+    assert result.status == OnuOnlineStatus.offline
     assert result.status_source == OntStatusSource.zabbix
+    assert result.error is not None

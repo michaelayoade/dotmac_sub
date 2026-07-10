@@ -87,22 +87,13 @@ def monitoring_page_data(
 
 
 def dispatch_monitoring_refresh(*, request_id: str | None = None) -> None:
-    """Enqueue a cache warm so the page's ``?refresh=1`` actually refreshes.
+    """No-op refresh hook for the page's ``?refresh=1``.
 
-    The dashboard reads warmed caches (it no longer fans out to Zabbix on the
-    request thread), so a manual refresh means asking the warmer to re-populate
-    them now rather than fetching inline. Best-effort: a broker hiccup must not
-    break the page render.
+    The Zabbix cache warmer this used to enqueue was retired with the native
+    monitoring cutover; the dashboard reads native poll state directly, so
+    there is nothing to re-warm.
     """
-    try:
-        from app.tasks.monitoring_warm import warm_monitoring_caches
-
-        warm_monitoring_caches.delay()
-    except Exception:
-        logger.warning(
-            "monitoring_refresh_dispatch_failed",
-            extra={"event": "monitoring_refresh_dispatch_failed"},
-        )
+    del request_id
 
 
 def monitoring_index_context(
@@ -378,7 +369,7 @@ def _vm_range_query(
 
 
 def _get_onu_status_trend(db: Session, hours: int = 24) -> dict[str, Any]:
-    """Return current Zabbix ONT state in the chart-compatible shape."""
+    """Return the current ONT status rollup in the chart-compatible shape."""
     from app.services.network_monitoring import get_onu_status_summary
 
     now = datetime.now(UTC)
@@ -395,7 +386,7 @@ def _get_onu_status_trend(db: Session, hours: int = 24) -> dict[str, Any]:
         "olt_offline": [offline],
         "low_signal": [float(summary["low_signal"])],
         "has_data": bool(summary["total"]),
-        "source": "zabbix",
+        "source": "inventory",
         "hours": hours,
     }
 

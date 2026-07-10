@@ -1,56 +1,37 @@
-"""Outage auto-detect scan task is registered + routed + scheduled (Phase 5b)."""
+"""The open-only auto-detect scan is retired; the reconcile owns detection."""
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from app.celery_app import celery_app
 
-TASK = "app.tasks.topology_outage.run_outage_scan"
+SCAN_TASK = "app.tasks.topology_outage.run_outage_scan"
+RECONCILE_TASK = "app.tasks.topology_outage.reconcile_detected_outages"
 
 
-def test_task_registered():
+def test_scan_task_is_gone():
+    import app.tasks  # noqa: F401 - triggers task module imports
+
+    assert SCAN_TASK not in celery_app.tasks
+    assert SCAN_TASK not in celery_app.conf.task_routes
+
+
+def test_reconcile_task_still_registered_and_routed():
     import app.tasks  # noqa: F401
 
-    assert TASK in celery_app.tasks
+    assert RECONCILE_TASK in celery_app.tasks
+    assert celery_app.conf.task_routes[RECONCILE_TASK] == {"queue": "ingestion"}
 
 
-def test_task_routed_to_ingestion():
-    assert celery_app.conf.task_routes[TASK] == {"queue": "ingestion"}
+def test_scheduler_retires_the_scan_beat_row():
+    # The beat build must actively disable any existing DB row for the old
+    # scan task, not merely stop registering it.
+    import inspect
 
+    from app.services import scheduler_config
 
-def test_task_exported():
-    import app.tasks as tasks
-
-    assert "run_outage_scan" in tasks.__all__
-    assert hasattr(tasks, "run_outage_scan")
-
-
-def test_beat_row_registered_with_interval_floor():
-    """The scheduler_config beat row exists: name topology_outage_scan, driven
-    by the outage_scan_interval_seconds setting with a 120s floor."""
-    import app.services.scheduler_config as scheduler_config
-
-    source = Path(scheduler_config.__file__).read_text()
-    assert 'name="topology_outage_scan"' in source
-    assert f'task_name="{TASK}"' in source
-    assert '"outage_scan_interval_seconds"' in source
-    assert "max(outage_scan_seconds, 120)" in source
-
-
-def test_overlapping_scan_is_skipped():
-    """Single-flight: when the advisory lock is held by a previous run, the
-    task skips cleanly instead of double-declaring (TOCTOU guard)."""
-    from contextlib import contextmanager
-    from unittest import mock
-
-    from app.tasks import topology_outage
-
-    @contextmanager
-    def held_lock(key, timeout_ms=None):
-        yield (None, False)
-
-    with mock.patch.object(
-        topology_outage.db_session_adapter, "advisory_lock", held_lock
-    ):
-        assert topology_outage.run_outage_scan() == {"skipped": "already_running"}
+    src = inspect.getsource(scheduler_config)
+    assert (
+        f'_retire_scheduled_task(\n            session,\n            "{SCAN_TASK}"'
+        in src
+        or SCAN_TASK in src
+    )

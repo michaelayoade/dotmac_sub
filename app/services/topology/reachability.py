@@ -1,6 +1,6 @@
 """Reachability classification over the LLDP graph (Phase 5a).
 
-Zabbix polls sites *through* their upstream router, so when one router dies
+Monitoring polls sites *through* their upstream router, so when one router dies
 everything behind it also reads ``down`` — simultaneity is lost visibility,
 not multiple failures (the SPDC pattern: one router failure misread as a
 site-wide multi-device outage). This module separates the two: every down

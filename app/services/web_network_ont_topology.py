@@ -114,11 +114,10 @@ def build_ont_fiber_path(db: Session, ont_id: str) -> FiberPathTopology:
     nodes: list[TopologyNode] = []
     links: list[TopologyLink] = []
 
-    # Start with the ONT node. Zabbix is the source of truth for runtime state.
-    from app.services.zabbix_ont_status import get_ont_signal_from_zabbix
-
-    ont_snapshot = get_ont_signal_from_zabbix(ont)
-    ont_status = "online" if ont_snapshot.online else "offline"
+    # Start with the ONT node. The live runtime-state source (Zabbix) was
+    # retired with the native monitoring cutover; the node renders offline,
+    # matching the unconfigured behaviour.
+    ont_status = "offline"
 
     ont_node = TopologyNode(
         node_type="ont",

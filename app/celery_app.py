@@ -82,9 +82,6 @@ celery_app.conf.task_routes = {
     "app.tasks.bandwidth.aggregate_to_metrics": {"queue": "bandwidth"},
     "app.tasks.bandwidth.flush_bandwidth_buffer": {"queue": "bandwidth"},
     # High-volume ingestion tasks - dedicated queue
-    "app.tasks.zabbix_ingestion.ingest_portal_usage_chunk": {"queue": "ingestion"},
-    "app.tasks.zabbix_ingestion.ingest_portal_usage_batch": {"queue": "ingestion"},
-    "app.tasks.topology_sync.run_topology_reconcile": {"queue": "ingestion"},
     "app.tasks.topology_sync.warm_topology_status": {"queue": "ingestion"},
     "app.tasks.infrastructure_polling.run_infrastructure_poll": {"queue": "ingestion"},
     "app.tasks.radius_health.run_radius_health_check": {"queue": "ingestion"},
@@ -93,7 +90,6 @@ celery_app.conf.task_routes = {
     },
     "app.tasks.monitoring_coverage.refresh_monitoring_coverage": {"queue": "ingestion"},
     "app.tasks.topology_lldp.run_lldp_topology_poll": {"queue": "ingestion"},
-    "app.tasks.topology_outage.run_outage_scan": {"queue": "ingestion"},
     "app.tasks.topology_outage.reconcile_detected_outages": {"queue": "ingestion"},
     "app.tasks.topology_uisp.run_uisp_topology_sync": {"queue": "ingestion"},
     "app.tasks.uisp_ip_backfill.run_uisp_mgmt_ip_backfill": {"queue": "ingestion"},
@@ -111,9 +107,6 @@ celery_app.conf.task_routes = {
     "app.tasks.usage.lift_expired_fup_enforcement": {"queue": "ingestion"},
     # Operator-triggered identity checks should not wait behind bulk jobs.
     "app.tasks.nin_tasks.verify_nin_task": {"queue": "nin"},
-    # Monitoring cache warmer queries Zabbix; keep it off the default queue so
-    # it isn't starved by slow/long default-queue jobs.
-    "app.tasks.monitoring_warm.warm_monitoring_caches": {"queue": "ingestion"},
     # CRM ticket pull paginates an external API; the default queue's backlog
     # would push it far past its 5-minute schedule.
     "app.tasks.crm_ticket_pull.pull_crm_tickets": {"queue": "crm"},
@@ -153,7 +146,7 @@ celery_app.conf.task_queues = (
     Queue("tr069"),  # Dedicated OLT/TR-069 operations queue
     Queue("acs"),  # Dedicated GenieACS/TR-069 queue
     Queue("bandwidth"),  # High-volume bandwidth processing
-    Queue("ingestion"),  # High-volume data ingestion (Zabbix, usage)
+    Queue("ingestion"),  # High-volume data ingestion (usage, topology)
     Queue("crm"),  # CRM ticket/comment pull (external API paced)
     Queue("billing"),  # Daily business runners (billing/dunning/expiry/FUP)
 )

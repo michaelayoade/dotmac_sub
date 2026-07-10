@@ -18,7 +18,7 @@ Precedence (first match wins):
     live_status == up                 -> up
     else                              -> unknown
 
-Phase 1 scope: Zabbix-warmed `live_status` + warmer-heartbeat freshness +
+Phase 1 scope: warmer-fed `live_status` + warmer-heartbeat freshness +
 lifecycle override. Per-type ACS/OLT-poll sources and cached VPN-path coverage
 (the real ``no_path`` distinction) are Phase 2/3 — until then a no-path device
 reads ``unmonitored(monitoring_unknown)`` (it warms to ``unknown``), not
@@ -107,7 +107,7 @@ def _is_fresh(ts, now: datetime, seconds: int) -> bool:
 
 # ── Per-type derivers (Phase 2b) ─────────────────────────────────────────────
 # OLT and ONT carry their own native liveness fields; unlike NetworkDevice they
-# are NOT Zabbix-warmed into `live_status`. Today both tabs render an admin-ish
+# are NOT warmed into `live_status`. Today both tabs render an admin-ish
 # value (OLT `runtime_status` = linked device admin status; ONT badge = is_active),
 # so deriving from the real telemetry is an accuracy fix, not a re-skin.
 
@@ -119,14 +119,16 @@ _OLT_FRESH_SECONDS = 3600  # 1 hour
 
 
 def _live_status_to_operational(live: str | None, reason_suffix: str):
-    """Map a Zabbix-warmed live_status string to an operational bucket."""
+    """Map a warmer-fed live_status string to an operational bucket."""
     if live == "up":
-        return OperationalStatus(UP, f"zabbix_up{reason_suffix}", None, False, None)
+        return OperationalStatus(UP, f"observed_up{reason_suffix}", None, False, None)
     if live == "down":
-        return OperationalStatus(DOWN, f"zabbix_down{reason_suffix}", None, False, None)
+        return OperationalStatus(
+            DOWN, f"observed_down{reason_suffix}", None, False, None
+        )
     if live == "problem":
         return OperationalStatus(
-            DEGRADED, f"zabbix_problem{reason_suffix}", None, False, None
+            DEGRADED, f"active_trigger{reason_suffix}", None, False, None
         )
     return None
 
@@ -139,7 +141,8 @@ def derive_olt_operational_status(
     now: datetime | None = None,
 ):
     """Operational status for an OLT — direct ping/poll telemetry first, then a
-    fall-back to the linked Zabbix-monitored device (reachable if any source).
+    fall-back to the linked monitored device's live_status (reachable if any
+    source).
 
     up   = pinged OK and last poll succeeded
     degraded = pinged OK but SNMP/poll failing (reachable, partial telemetry)
@@ -147,7 +150,7 @@ def derive_olt_operational_status(
     unmonitored = no fresh telemetry from *either* source
 
     The fall-back matters in practice: OLT direct polling can be stale/dead while
-    the OLT is still observed by Zabbix via its linked NetworkDevice.
+    the OLT is still observed via its linked NetworkDevice.
     """
     now = now or datetime.now(UTC)
     last_ping_ok = getattr(olt, "last_ping_ok", None)
@@ -162,7 +165,7 @@ def derive_olt_operational_status(
     if direct_fresh and last_ping_ok is False:
         return OperationalStatus(DOWN, "ping_failed", None, False, None)
 
-    # Direct telemetry missing/stale — fall back to the linked Zabbix observation.
+    # Direct telemetry missing/stale — fall back to the linked observation.
     if linked_live_status and not warm_stale:
         mapped = _live_status_to_operational(linked_live_status, "_linked")
         if mapped is not None:
@@ -246,7 +249,7 @@ def derive_operational_status(
     if warm_stale:
         return _maybe_mismatch(UNMONITORED, "stale", admin)
     if live == "unknown":
-        # Disabled / in-maintenance in Zabbix, or no availability data.
+        # Disabled / in-maintenance in monitoring, or no availability data.
         return _maybe_mismatch(UNMONITORED, "monitoring_unknown", admin)
 
     # 5. Live observation maps to the UI bucket. "problem" is kept for legacy

@@ -405,3 +405,139 @@ def test_operator_incidents_unaffected(db_session, catalog_offer):
     # Still surfaced as open, alongside the classifier incident.
     open_ids = {i.id for i in list_open_incidents(db_session)}
     assert op.id in open_ids
+
+
+# --- wireless-cluster arm (migrated from the retired auto-detect scan) -----
+
+
+def _radio(db, ap, offer_id, *, uisp_status="active", tag=""):
+    """Subscriber-linked active radio parented to ``ap`` + active subscription."""
+    from app.models.network import CPEDevice, DeviceStatus
+
+    s = Subscriber(
+        first_name="R", last_name=tag or "X", email=f"r{tag}-{uuid.uuid4().hex}@ex.com"
+    )
+    db.add(s)
+    db.flush()
+    sub = Subscription(
+        subscriber_id=s.id,
+        offer_id=offer_id,
+        status=SubscriptionStatus.active,
+    )
+    db.add(sub)
+    db.flush()
+    cpe = CPEDevice(
+        subscriber_id=s.id,
+        parent_network_device_id=ap.id,
+        status=DeviceStatus.active,
+        last_uisp_status=uisp_status,
+    )
+    db.add(cpe)
+    db.flush()
+    return sub
+
+
+def _ap(db, name, *, live_status="up"):
+    return _node(db, name, mtype=None, mid=None, live_status=live_status)
+
+
+def test_wireless_cluster_opens_suspected_incident(db_session, catalog_offer):
+    ap = _ap(db_session, "AP-Cluster")
+    for i in range(3):
+        _radio(db_session, ap, catalog_offer.id, uisp_status="disconnected", tag=str(i))
+
+    reconcile_detected_outages(db_session, now=NOW)
+
+    incidents = _classifier_incidents(db_session)
+    assert len(incidents) == 1
+    incident = incidents[0]
+    assert incident.status == "suspected"
+    assert incident.root_node_id == ap.id
+    assert incident.classification == "radio_cluster"
+    assert incident.affected_count == 3
+
+
+def test_wireless_cluster_vetoed_by_online_customer(db_session, catalog_offer):
+    ap = _ap(db_session, "AP-Veto")
+    for i in range(3):
+        _radio(db_session, ap, catalog_offer.id, uisp_status="disconnected", tag=str(i))
+    online_sub = _radio(
+        db_session, ap, catalog_offer.id, uisp_status="active", tag="ok"
+    )
+    _session(db_session, online_sub, None, now=NOW)
+
+    reconcile_detected_outages(db_session, now=NOW)
+
+    assert _classifier_incidents(db_session) == []
+
+
+def test_wireless_cluster_below_thresholds_stays_quiet(db_session, catalog_offer):
+    ap = _ap(db_session, "AP-Small")
+    # 2 down of 5 -> below min_affected (3) and below 40% fraction
+    for i in range(2):
+        _radio(
+            db_session, ap, catalog_offer.id, uisp_status="disconnected", tag=f"d{i}"
+        )
+    for i in range(3):
+        _radio(db_session, ap, catalog_offer.id, uisp_status="active", tag=f"u{i}")
+
+    reconcile_detected_outages(db_session, now=NOW)
+
+    assert _classifier_incidents(db_session) == []
+
+
+def test_wireless_cluster_recovery_discards_suspected(db_session, catalog_offer):
+    from app.models.network import CPEDevice
+
+    ap = _ap(db_session, "AP-Recover")
+    for i in range(3):
+        _radio(db_session, ap, catalog_offer.id, uisp_status="disconnected", tag=str(i))
+    reconcile_detected_outages(db_session, now=NOW)
+    assert [i.status for i in _classifier_incidents(db_session)] == ["suspected"]
+
+    db_session.query(CPEDevice).update({CPEDevice.last_uisp_status: "active"})
+    db_session.flush()
+    reconcile_detected_outages(db_session, now=NOW + timedelta(seconds=60))
+
+    assert [i.status for i in _classifier_incidents(db_session)] == ["discarded"]
+
+
+def test_mgmt_down_ap_is_left_to_the_dark_arm(db_session, catalog_offer):
+    ap = _ap(db_session, "AP-Dark", live_status="down")
+    for i in range(3):
+        _radio(db_session, ap, catalog_offer.id, uisp_status="disconnected", tag=str(i))
+
+    reconcile_detected_outages(db_session, now=NOW)
+
+    # No radio_cluster incident: the mgmt-dark AP belongs to the dark arm
+    # (which may open its own node_outage incident for the same boundary).
+    assert not [
+        i
+        for i in _classifier_incidents(db_session)
+        if i.classification == "radio_cluster"
+    ]
+
+
+def test_dark_node_without_zabbix_hostid_now_counts(db_session, catalog_offer):
+    # Population widening: coverage no longer depends on the legacy
+    # zabbix_hostid link.
+    nas = _nas(db_session, "NAS-NoZbx", "10.9.9.1")
+    node = NetworkDevice(
+        name="NoZbx",
+        matched_device_type="nas",
+        matched_device_id=nas.id,
+        role=DeviceRole.edge,
+        is_active=True,
+        live_status="down",
+        zabbix_hostid=None,
+    )
+    db_session.add(node)
+    db_session.flush()
+    for _ in range(3):
+        _sub(db_session, catalog_offer.id, nas.id)
+
+    reconcile_detected_outages(db_session, now=NOW)
+
+    incidents = _classifier_incidents(db_session)
+    assert len(incidents) == 1
+    assert incidents[0].root_node_id == node.id

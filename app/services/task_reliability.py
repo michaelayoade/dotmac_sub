@@ -100,9 +100,6 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.app_cache.refresh_dashboard_stats_cache": _c(
         "cache", SWEEP, IDEMP, HEALTH
     ),
-    "app.tasks.app_cache.refresh_ont_zabbix_snapshot_cache": _c(
-        "cache", SWEEP, IDEMP, HEALTH
-    ),
     "app.tasks.arrangements.check_overdue_arrangements": _c(
         "billing", SWEEP, GUARDED, HEALTH
     ),
@@ -231,9 +228,6 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.monitoring_coverage.refresh_monitoring_coverage": _c(
         "monitoring", SWEEP, IDEMP, HEALTH
     ),
-    "app.tasks.monitoring_warm.warm_monitoring_caches": _c(
-        "monitoring", SWEEP, IDEMP, HEALTH
-    ),
     "app.tasks.mrr.snapshot_mrr": _c("billing", SWEEP, IDEMP, HEALTH),
     "app.tasks.nas.check_nas_health": _c("network", SWEEP, IDEMP, HEALTH),
     "app.tasks.nas.cleanup_nas_backups": _c("network", SWEEP, IDEMP, LOG),
@@ -342,13 +336,6 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.topology_metrics.export_topology_metrics": _c(
         "network", SWEEP, IDEMP, HEALTH
     ),
-    "app.tasks.topology_outage.run_outage_scan": _c(
-        "network",
-        SWEEP,
-        IDEMP,
-        HEALTH,
-        "Outage auto-detect scan; open-incident check dedupes across runs.",
-    ),
     "app.tasks.topology_outage.reconcile_detected_outages": _c(
         "network",
         SWEEP,
@@ -356,9 +343,6 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         HEALTH,
         "Classifier outage lifecycle debounce (§7.6); identity dedupes and "
         "every transition is state-guarded, so re-runs are idempotent.",
-    ),
-    "app.tasks.topology_sync.run_topology_reconcile": _c(
-        "network", SWEEP, IDEMP, HEALTH
     ),
     "app.tasks.topology_sync.warm_topology_status": _c("network", SWEEP, IDEMP, HEALTH),
     "app.tasks.infrastructure_polling.run_infrastructure_poll": _c(
@@ -461,31 +445,6 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "Best-effort on-view refresh; periodic reconcile backs it.",
     ),
     "app.tasks.workflow.detect_sla_breaches": _c("workflow", SWEEP, IDEMP, STATUS),
-    "app.tasks.zabbix_ingestion.dispatch_portal_usage_ingestion": _c(
-        "zabbix", SWEEP, IDEMP, HEALTH
-    ),
-    "app.tasks.zabbix_ingestion.ingest_olt_signals_from_zabbix": _c(
-        "zabbix", ITEMS, PER_ITEM, STATUS
-    ),
-    "app.tasks.zabbix_ingestion.ingest_portal_usage": _c(
-        "zabbix", ITEMS, PER_ITEM, STATUS
-    ),
-    "app.tasks.zabbix_ingestion.ingest_portal_usage_chunk": _c(
-        "zabbix", ITEMS, PER_ITEM, STATUS
-    ),
-    "app.tasks.zabbix_ingestion.repair_stale_olt_signal_ingest": _c(
-        "zabbix", SWEEP, IDEMP, STATUS
-    ),
-    "app.tasks.zabbix_sync.remove_device_from_zabbix": _c(
-        "zabbix", MANUAL, GUARDED, STATUS
-    ),
-    "app.tasks.zabbix_sync.sync_devices_to_zabbix": _c("zabbix", SWEEP, IDEMP, HEALTH),
-    "app.tasks.zabbix_sync.sync_single_nas_to_zabbix": _c(
-        "zabbix", MANUAL, IDEMP, STATUS
-    ),
-    "app.tasks.zabbix_sync.sync_single_olt_to_zabbix": _c(
-        "zabbix", MANUAL, IDEMP, STATUS
-    ),
     "router_sync.capture_scheduled_snapshots": _c("router", SWEEP, IDEMP, HEALTH),
     "router_sync.cleanup_idle_tunnels": _c("router", SWEEP, IDEMP, LOG),
     "router_sync.execute_config_push": _c("router", STATE, STATEFUL, STATUS),

@@ -6,7 +6,7 @@ actually down, how deep*. P1 uses two signals only:
   - **data plane** — a live ``RadiusActiveSession`` is proof a customer is
     ACTUALLY served. ``online(E) >= 1`` ⟹ E and everything upstream is UP
     (design §0/§2). One survivor vetoes "down".
-  - **mgmt plane** — ``NetworkDevice.live_status`` (Zabbix warmer: up/down/
+  - **mgmt plane** — ``NetworkDevice.live_status`` (native warmer: up/down/
     unknown/problem), the combined reachability+agent signal today.
 
 The two form a dependency ladder (design §1): a live session REQUIRES mgmt up,
@@ -123,7 +123,7 @@ def online_subscribers(
 
 
 def _mgmt_state(live_status: str | None) -> str:
-    """Zabbix-warmed ``live_status`` -> mgmt-plane state (up/down/unknown).
+    """Warmer-fed ``live_status`` -> mgmt-plane state (up/down/unknown).
 
     Today ``live_status`` is the *combined* reachability+agent signal. When the
     warmer starts publishing separate ping vs snmp signals (design §1), split

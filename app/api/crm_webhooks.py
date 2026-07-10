@@ -13,7 +13,7 @@ beat entries (legacy key crm_ticket_pull_enabled) — with it off, ticket
 events are acked as 200 noops (Phase 1 flip kill switch).
 
 Mounted with no router-level auth (see main.py) — authentication is the HMAC
-signature, fail-closed like the Zabbix webhook: unconfigured secret → 503,
+signature, fail-closed: unconfigured secret → 503,
 bad/missing signature → 401, compared in constant time.
 """
 

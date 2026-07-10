@@ -7,7 +7,7 @@ and writes it into the network_devices cache. A failed ping is always the
 primary outage signal; ping success is the primary healthy signal; SNMP
 reachability is used only when there is no fresh ping result. The Network
 Path panel reads that cache — no probe ever runs on the request path (same
-warm-and-store pattern as ``monitoring_warm``).
+warm-and-store pattern the retired monitoring warmers used).
 
 Formerly this warmer batch-fetched Zabbix host availability for reconciled
 (``source == zabbix_reconcile``) nodes; the derived statuses, heartbeat key

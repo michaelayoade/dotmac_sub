@@ -22,6 +22,15 @@ Optional extensions:
   * ``--include-engine-data`` copies the one-time (non-watermarked) engine
     tables: ticket_assignment_rules/_counters, sla_policies/_targets and
     sla_clocks/_breaches (section 1.9), keyed on CRM UUIDs.
+  * ``--sweep-comments`` sweeps CRM ``ticket_comments`` by ``created_at``
+    against a second state-file watermark (``last_crm_comment_created_at``,
+    minus ``--state-overlap-seconds``). CRM comment creation does not touch
+    ``tickets.updated_at``, so the ticket watermark alone misses comments
+    added to already-synced tickets; the sweep is one bulk query joined to
+    the existing ``crm_ticket_id`` map and inserts only missing comments via
+    the same dedupe/author-derivation path. ``--sweep-comments-since-hours``
+    overrides the comment watermark with ``now - N hours`` (and implies
+    ``--sweep-comments``).
 """
 
 from __future__ import annotations
@@ -75,7 +84,11 @@ class ImportStats:
     sla_targets_upserted: int = 0
     sla_clocks_upserted: int = 0
     sla_breaches_upserted: int = 0
+    comment_sweep_fetched: int = 0
+    comment_sweep_inserted: int = 0
+    comment_sweep_skipped_unmapped_ticket: int = 0
     max_crm_updated_at: str | None = None
+    max_crm_comment_created_at: str | None = None
     blockers: list[dict[str, Any]] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
@@ -100,7 +113,13 @@ class ImportStats:
             "sla_targets_upserted": self.sla_targets_upserted,
             "sla_clocks_upserted": self.sla_clocks_upserted,
             "sla_breaches_upserted": self.sla_breaches_upserted,
+            "comment_sweep_fetched": self.comment_sweep_fetched,
+            "comment_sweep_inserted": self.comment_sweep_inserted,
+            "comment_sweep_skipped_unmapped_ticket": (
+                self.comment_sweep_skipped_unmapped_ticket
+            ),
             "max_crm_updated_at": self.max_crm_updated_at,
+            "max_crm_comment_created_at": self.max_crm_comment_created_at,
             "blockers": self.blockers,
         }
 
@@ -162,34 +181,68 @@ def _format_datetime(value: datetime | None) -> str | None:
     return value.astimezone(UTC).isoformat()
 
 
-def _state_since(path: str | None, overlap_seconds: int) -> datetime | None:
+TICKET_WATERMARK_KEY = "last_crm_ticket_updated_at"
+COMMENT_WATERMARK_KEY = "last_crm_comment_created_at"
+
+
+def _read_state(path: str | None) -> dict[str, Any]:
     if not path:
-        return None
+        return {}
     state_path = Path(path)
     if not state_path.exists():
-        return None
+        return {}
     payload = json.loads(state_path.read_text(encoding="utf-8"))
-    parsed = _parse_datetime(payload.get("last_crm_ticket_updated_at"))
+    return payload if isinstance(payload, dict) else {}
+
+
+def _state_watermark(
+    path: str | None, key: str, overlap_seconds: int
+) -> datetime | None:
+    parsed = _parse_datetime(_read_state(path).get(key))
     if not parsed:
         return None
     overlap = max(overlap_seconds, 0)
     return parsed - timedelta(seconds=overlap)
 
 
-def _write_state(path: str | None, updated_at: str | None) -> None:
-    if not path or not updated_at:
+def _state_since(path: str | None, overlap_seconds: int) -> datetime | None:
+    return _state_watermark(path, TICKET_WATERMARK_KEY, overlap_seconds)
+
+
+def resolve_sweep_since(
+    *,
+    state_file: str | None,
+    overlap_seconds: int,
+    since_hours: float | None,
+    now: datetime | None = None,
+) -> datetime | None:
+    """Comment-sweep lower bound: explicit ``--sweep-comments-since-hours``
+    overrides the state-file comment watermark (minus overlap); with neither,
+    None means a full first-run sweep."""
+    if since_hours is not None:
+        return (now or datetime.now(UTC)) - timedelta(hours=since_hours)
+    return _state_watermark(state_file, COMMENT_WATERMARK_KEY, overlap_seconds)
+
+
+def _write_state(
+    path: str | None,
+    *,
+    ticket_updated_at: str | None = None,
+    comment_created_at: str | None = None,
+) -> None:
+    """Merge-write watermarks; a None value preserves the existing key."""
+    if not path or not (ticket_updated_at or comment_created_at):
         return
+    payload = _read_state(path)
+    if ticket_updated_at:
+        payload[TICKET_WATERMARK_KEY] = ticket_updated_at
+    if comment_created_at:
+        payload[COMMENT_WATERMARK_KEY] = comment_created_at
+    payload["updated_at"] = datetime.now(UTC).isoformat()
     state_path = Path(path)
     state_path.parent.mkdir(parents=True, exist_ok=True)
     state_path.write_text(
-        json.dumps(
-            {
-                "last_crm_ticket_updated_at": updated_at,
-                "updated_at": datetime.now(UTC).isoformat(),
-            },
-            indent=2,
-        )
-        + "\n",
+        json.dumps(payload, indent=2) + "\n",
         encoding="utf-8",
     )
 
@@ -601,6 +654,74 @@ def _upsert_service_teams(sub: Connection, crm: Connection) -> int:
     return len(teams)
 
 
+def _insert_comment_rows(
+    sub: Connection,
+    crm: Connection,
+    comments: list[dict[str, Any]],
+    crm_to_local_ticket: dict[str, str],
+    *,
+    staff_map: dict[str, str],
+    subscriber_map: dict[str, str],
+) -> int:
+    """Insert CRM comment rows (shared by the ticket sync and the sweep)."""
+    author_person_ids = sorted(
+        {
+            str(comment["author_person_id"]).lower()
+            for comment in comments
+            if comment.get("author_person_id")
+        }
+    )
+    person_subscriber_map = _load_person_subscriber_map(
+        sub, crm, author_person_ids, subscriber_map
+    )
+    inserted = 0
+    for comment in comments:
+        ticket_id = crm_to_local_ticket.get(str(comment["ticket_id"]))
+        if not ticket_id:
+            continue
+        author_type, author_person_id, author_system_user_id = derive_comment_author(
+            _uuid_or_none(comment.get("author_person_id")),
+            staff_map=staff_map,
+            person_subscriber_map=person_subscriber_map,
+        )
+        metadata = {
+            "crm_comment_id": comment["id"],
+            "crm_author_person_id": comment.get("author_person_id"),
+            "crm_import_source": "dotmac_crm_phase1",
+        }
+        result = sub.execute(
+            text(
+                """
+                INSERT INTO support_ticket_comments (
+                    id, ticket_id, author_person_id, author_type,
+                    author_system_user_id, body, is_internal, attachments, metadata,
+                    created_at
+                ) VALUES (
+                    CAST(:id AS uuid), CAST(:ticket_id AS uuid),
+                    CAST(:author_person_id AS uuid), :author_type,
+                    CAST(:author_system_user_id AS uuid), :body, :is_internal,
+                    CAST(:attachments AS json), CAST(:metadata AS json), :created_at
+                )
+                ON CONFLICT (id) DO NOTHING
+                """
+            ),
+            {
+                "id": comment["id"],
+                "ticket_id": ticket_id,
+                "author_person_id": author_person_id,
+                "author_type": author_type,
+                "author_system_user_id": author_system_user_id,
+                "body": comment.get("body") or "",
+                "is_internal": bool(comment.get("is_internal")),
+                "attachments": json.dumps(_json(comment.get("attachments"), []) or []),
+                "metadata": json.dumps(metadata),
+                "created_at": comment.get("created_at"),
+            },
+        )
+        inserted += int(result.rowcount or 0)
+    return inserted
+
+
 def _sync_ticket_comments(
     sub: Connection,
     crm: Connection,
@@ -630,61 +751,102 @@ def _sync_ticket_comments(
         """,
         {"ticket_ids": list(crm_to_local_ticket)},
     )
-    author_person_ids = sorted(
-        {
-            str(comment["author_person_id"]).lower()
-            for comment in comments
-            if comment.get("author_person_id")
-        }
+    return _insert_comment_rows(
+        sub,
+        crm,
+        comments,
+        crm_to_local_ticket,
+        staff_map=staff_map,
+        subscriber_map=subscriber_map,
     )
-    person_subscriber_map = _load_person_subscriber_map(
-        sub, crm, author_person_ids, subscriber_map
-    )
-    inserted = 0
+
+
+def plan_comment_sweep(
+    comments: list[dict[str, Any]],
+    ticket_map: dict[str, str],
+    existing_comment_ids: set[str],
+) -> tuple[list[dict[str, Any]], int]:
+    """Pure sweep planner: keep comments whose CRM ticket maps to a sub ticket
+    and whose crm_comment_id is not already present.
+
+    Returns ``(missing_comments, skipped_unmapped_ticket_count)``. Unmapped
+    tickets are safe to skip past the watermark: their comments arrive with
+    the full per-ticket sync when the ticket itself first imports.
+    """
+    mapped = [
+        comment for comment in comments if str(comment["ticket_id"]) in ticket_map
+    ]
+    skipped_unmapped = len(comments) - len(mapped)
+    missing = [
+        comment for comment in mapped if str(comment["id"]) not in existing_comment_ids
+    ]
+    return missing, skipped_unmapped
+
+
+def sweep_recent_comments(
+    sub: Connection,
+    crm: Connection,
+    *,
+    apply: bool,
+    since: datetime | None,
+    ticket_map: dict[str, str],
+    staff_map: dict[str, str],
+    subscriber_map: dict[str, str],
+) -> tuple[int, int, int, datetime | None]:
+    """Sweep CRM comments by ``created_at`` (comments never bump the parent
+    ticket's ``updated_at``, so the ticket watermark misses them).
+
+    One bulk CRM fetch, one sub dedupe query; no per-ticket round trips.
+    Returns ``(fetched, inserted, skipped_unmapped_ticket, max_created_at)``;
+    in dry-run ``inserted`` is the planned count.
+    """
+    sql = """
+        SELECT id::text, ticket_id::text, author_person_id::text, body, is_internal,
+               attachments::text, created_at
+        FROM ticket_comments
+    """
+    params: dict[str, Any] = {}
+    if since is not None:
+        sql += "\nWHERE created_at >= :since"
+        params["since"] = since
+    sql += "\nORDER BY created_at, id"
+    comments = _rows(crm, sql, params)
+    max_created_at: datetime | None = None
     for comment in comments:
-        ticket_id = crm_to_local_ticket.get(str(comment["ticket_id"]))
-        if not ticket_id:
-            continue
-        author_type, author_person_id, author_system_user_id = derive_comment_author(
-            _uuid_or_none(comment.get("author_person_id")),
-            staff_map=staff_map,
-            person_subscriber_map=person_subscriber_map,
+        created_at = _parse_datetime(comment.get("created_at"))
+        if created_at and (max_created_at is None or created_at > max_created_at):
+            max_created_at = created_at
+    if not comments:
+        return 0, 0, 0, None
+
+    existing_comment_ids = {
+        str(row["crm_comment_id"])
+        for row in _rows(
+            sub,
+            """
+            SELECT metadata->>'crm_comment_id' AS crm_comment_id
+            FROM support_ticket_comments
+            WHERE metadata->>'crm_comment_id' = ANY(:ids)
+            """,
+            {"ids": [str(comment["id"]) for comment in comments]},
         )
-        metadata = {
-            "crm_comment_id": comment["id"],
-            "crm_author_person_id": comment.get("author_person_id"),
-            "crm_import_source": "dotmac_crm_phase1",
-        }
-        sub.execute(
-            text(
-                """
-                INSERT INTO support_ticket_comments (
-                    id, ticket_id, author_person_id, author_type,
-                    author_system_user_id, body, is_internal, attachments, metadata,
-                    created_at
-                ) VALUES (
-                    CAST(:id AS uuid), CAST(:ticket_id AS uuid),
-                    CAST(:author_person_id AS uuid), :author_type,
-                    CAST(:author_system_user_id AS uuid), :body, :is_internal,
-                    CAST(:attachments AS json), CAST(:metadata AS json), :created_at
-                )
-                """
-            ),
-            {
-                "id": comment["id"],
-                "ticket_id": ticket_id,
-                "author_person_id": author_person_id,
-                "author_type": author_type,
-                "author_system_user_id": author_system_user_id,
-                "body": comment.get("body") or "",
-                "is_internal": bool(comment.get("is_internal")),
-                "attachments": json.dumps(_json(comment.get("attachments"), []) or []),
-                "metadata": json.dumps(metadata),
-                "created_at": comment.get("created_at"),
-            },
-        )
-        inserted += 1
-    return inserted
+        if row.get("crm_comment_id")
+    }
+    missing, skipped_unmapped = plan_comment_sweep(
+        comments, ticket_map, existing_comment_ids
+    )
+    if not apply:
+        return len(comments), len(missing), skipped_unmapped, max_created_at
+
+    inserted = _insert_comment_rows(
+        sub,
+        crm,
+        missing,
+        ticket_map,
+        staff_map=staff_map,
+        subscriber_map=subscriber_map,
+    )
+    return len(comments), inserted, skipped_unmapped, max_created_at
 
 
 def _reattribute_pull_era_comments(sub: Connection, staff_map: dict[str, str]) -> int:
@@ -1236,6 +1398,8 @@ def import_tickets(
     sync_comments: bool,
     staff_map: dict[str, str] | None = None,
     include_engine_data: bool = False,
+    sweep_comments: bool = False,
+    sweep_since: datetime | None = None,
 ) -> ImportStats:
     staff_map = staff_map or {}
     stats = ImportStats()
@@ -1306,12 +1470,37 @@ def import_tickets(
     if stats.blockers:
         return stats
 
+    full_ticket_map = {**existing_by_crm_ticket, **crm_to_local_ticket}
+
+    def _run_comment_sweep() -> None:
+        # Additive to the ticket watermark: comments never bump the parent
+        # ticket's updated_at, so already-synced tickets need this sweep.
+        # In dry-run the planned count can include comments the per-ticket
+        # sync of this same run would insert anyway.
+        (
+            stats.comment_sweep_fetched,
+            stats.comment_sweep_inserted,
+            stats.comment_sweep_skipped_unmapped_ticket,
+            max_comment_created_at,
+        ) = sweep_recent_comments(
+            sub,
+            crm,
+            apply=apply,
+            since=sweep_since,
+            ticket_map=full_ticket_map,
+            staff_map=staff_map,
+            subscriber_map=subscriber_map,
+        )
+        stats.max_crm_comment_created_at = _format_datetime(max_comment_created_at)
+
     if not apply:
         for _ticket, _payload, existed in planned_rows:
             if existed:
                 stats.updated += 1
             else:
                 stats.created += 1
+        if sweep_comments:
+            _run_comment_sweep()
         return stats
 
     stats.service_teams_upserted = _upsert_service_teams(sub, crm)
@@ -1338,6 +1527,10 @@ def import_tickets(
             sub, crm, crm_to_local_ticket
         )
 
+    if sweep_comments:
+        # After the per-ticket sync so its inserts are seen by the dedupe.
+        _run_comment_sweep()
+
     if staff_map:
         stats.re_attributed = _reattribute_pull_era_comments(sub, staff_map)
 
@@ -1345,7 +1538,6 @@ def import_tickets(
         # One-time engine copy (spec section 1.9): not watermark-scoped, so
         # ticket clocks re-key through every known crm_ticket_id, not just
         # this run's fetch window.
-        full_ticket_map = {**existing_by_crm_ticket, **crm_to_local_ticket}
         stats.assignment_rules_upserted = _sync_assignment_rules(sub, crm)
         stats.assignment_counters_upserted = _sync_assignment_counters(
             sub, crm, staff_map
@@ -1402,6 +1594,24 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--sweep-comments",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Sweep CRM ticket_comments by created_at against the "
+            "last_crm_comment_created_at state watermark (comments do not "
+            "bump tickets.updated_at, so the ticket watermark misses them)."
+        ),
+    )
+    parser.add_argument(
+        "--sweep-comments-since-hours",
+        type=float,
+        help=(
+            "Sweep comments created in the last N hours instead of the state "
+            "watermark. Implies --sweep-comments."
+        ),
+    )
+    parser.add_argument(
         "--exclude-title-regex",
         default=DEFAULT_EXCLUDE_TITLE_REGEX,
         help="Regex for CRM tickets to skip before unmapped-subscriber blocking.",
@@ -1430,6 +1640,18 @@ def main() -> None:
         if args.updated_since
         else _state_since(args.state_file, args.state_overlap_seconds)
     )
+    sweep_comments = bool(
+        args.sweep_comments or args.sweep_comments_since_hours is not None
+    )
+    sweep_since = (
+        resolve_sweep_since(
+            state_file=args.state_file,
+            overlap_seconds=args.state_overlap_seconds,
+            since_hours=args.sweep_comments_since_hours,
+        )
+        if sweep_comments
+        else None
+    )
 
     sub_engine = _engine_from_env("SUB_DATABASE_URL")
     crm_engine = _engine_from_env("CRM_DATABASE_URL")
@@ -1451,6 +1673,8 @@ def main() -> None:
                 sync_comments=args.sync_comments,
                 staff_map=staff_map,
                 include_engine_data=args.include_engine_data,
+                sweep_comments=sweep_comments,
+                sweep_since=sweep_since,
             )
         except Exception:
             sub_trans.rollback()
@@ -1458,7 +1682,11 @@ def main() -> None:
             raise
         if args.apply and not stats.blockers:
             sub_trans.commit()
-            _write_state(args.state_file, stats.max_crm_updated_at)
+            _write_state(
+                args.state_file,
+                ticket_updated_at=stats.max_crm_updated_at,
+                comment_created_at=stats.max_crm_comment_created_at,
+            )
         else:
             sub_trans.rollback()
         crm.rollback()
@@ -1473,6 +1701,9 @@ def main() -> None:
         "staff_map": args.staff_map,
         "staff_map_entries": len(staff_map),
         "include_engine_data": args.include_engine_data,
+        "sweep_comments": sweep_comments,
+        "sweep_comments_since_hours": args.sweep_comments_since_hours,
+        "sweep_since": _format_datetime(sweep_since),
         "stats": stats.as_dict(),
     }
     print(json.dumps(report, indent=2, default=str))

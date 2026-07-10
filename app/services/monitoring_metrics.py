@@ -494,7 +494,7 @@ def poll_onu_signal_strength(
     db: Session,
     olt_device: NetworkDevice,
 ) -> dict[str, int]:
-    """Query ONT signal status from inventory populated by Zabbix ingestion."""
+    """Query ONT signal status from persisted inventory columns."""
     from app.models.network import OLTDevice, OntUnit
     from app.services.network.olt_polling import get_signal_thresholds
 
