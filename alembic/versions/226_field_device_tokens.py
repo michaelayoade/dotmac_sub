@@ -1,7 +1,7 @@
 """Allow device tokens for field system users.
 
-Revision ID: 225_field_device_tokens
-Revises: 224_add_field_setting_domain
+Revision ID: 226_field_device_tokens
+Revises: 225_add_field_setting_domain
 Create Date: 2026-07-09
 """
 
@@ -13,8 +13,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "225_field_device_tokens"
-down_revision = "224_add_field_setting_domain"
+revision = "226_field_device_tokens"
+down_revision = "225_add_field_setting_domain"
 branch_labels = None
 depends_on = None
 

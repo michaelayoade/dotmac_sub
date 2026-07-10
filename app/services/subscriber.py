@@ -47,6 +47,7 @@ from app.services.customer_identity_normalization import (
 )
 from app.services.events import emit_event
 from app.services.events.types import EventType
+from app.services.nin_matching import normalize_nin
 from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
@@ -271,6 +272,8 @@ def _normalize_subscriber_identity_fields(data: dict) -> dict:
         normalized["email"] = normalize_email_identifier(normalized.get("email"))
     if "phone" in normalized:
         normalized["phone"] = normalize_phone_identifier(normalized.get("phone"))
+    if "nin" in normalized:
+        normalized["nin"] = normalize_nin(normalized.get("nin") or "") or None
     return normalized
 
 
