@@ -2,9 +2,11 @@ import json
 from datetime import UTC, datetime
 
 from scripts.migration.backfill_crm_subscriber_links import (
+    CLEAR_REPOINTED_SQL,
     BackfillPlan,
     CrmLinkRow,
     SubLinkRow,
+    _apply_updates,
     build_plan,
     choose_crm_link_row,
 )
@@ -217,6 +219,62 @@ def test_plan_repoint_frees_id_for_waiting_subscriber() -> None:
     by_id = {update.subscriber_id: update for update in plan.updates}
     assert by_id["sub-a"].crm_subscriber_id == "crm-1"
     assert by_id["sub-b"].crm_subscriber_id == "crm-2"
+
+
+class _RecordingTransaction:
+    def __init__(self, log: list[tuple[str, dict]]) -> None:
+        self._log = log
+
+    def commit(self) -> None:
+        self._log.append(("commit", {}))
+
+    def rollback(self) -> None:
+        self._log.append(("rollback", {}))
+
+
+class _RecordingConnection:
+    def __init__(self) -> None:
+        self.log: list[tuple[str, dict]] = []
+
+    def begin(self) -> _RecordingTransaction:
+        return _RecordingTransaction(self.log)
+
+    def execute(self, statement, params=None):  # noqa: ANN001, ANN201
+        self.log.append((str(statement), dict(params or {})))
+
+
+def test_apply_clears_repointed_holders_before_granting_freed_ids() -> None:
+    # sub-b holds crm-1 and repoints to crm-2; sub-a receives the freed crm-1.
+    # The clear must execute (and commit) before any grant of crm-1.
+    plan = build_plan(
+        [
+            _sub("sub-a", created_at=T1),
+            _sub("sub-b", crm_subscriber_id="crm-1", created_at=T2),
+        ],
+        [_crm("crm-1", "sub-a"), _crm("crm-2", "sub-b")],
+    )
+    assert plan.repointed_subscriber_ids == ["sub-b"]
+
+    conn = _RecordingConnection()
+    applied = _apply_updates(
+        conn,
+        plan.updates,
+        batch_size=500,
+        repointed_subscriber_ids=plan.repointed_subscriber_ids,
+    )
+
+    assert applied == len(plan.updates)
+    clear_index = next(
+        i for i, (sql, _) in enumerate(conn.log) if sql == CLEAR_REPOINTED_SQL
+    )
+    assert conn.log[clear_index][1]["ids"] == ["sub-b"]
+    assert conn.log[clear_index + 1][0] == "commit"
+    grant_index = next(
+        i
+        for i, (sql, params) in enumerate(conn.log)
+        if params.get("crm_subscriber_id") == "crm-1"
+    )
+    assert clear_index < grant_index
 
 
 def test_plan_is_idempotent_after_apply() -> None:

@@ -26,6 +26,12 @@ Decision rules:
     sub ``created_at``.
   * ``metadata.crm_person_id`` is set only where empty; a differing existing
     value is reported (``person_mismatch``) and never overwritten.
+
+Apply runs in two phases: repointed rows are first NULLed in a single
+committed statement so their freed ids can be re-granted without tripping the
+immediate unique index, then the per-row updates run in batches. A crash
+between the phases leaves repointed rows temporarily unlinked; a re-run plans
+them as ``linked`` again.
 """
 
 from __future__ import annotations
@@ -60,6 +66,12 @@ UPDATE subscribers
 SET crm_subscriber_id = CAST(:crm_subscriber_id AS uuid),
     metadata = CAST(:metadata AS json)
 WHERE id = CAST(:id AS uuid)
+"""
+
+CLEAR_REPOINTED_SQL = """
+UPDATE subscribers
+SET crm_subscriber_id = NULL
+WHERE id::text = ANY(:ids)
 """
 
 
@@ -130,6 +142,7 @@ class BackfillStats:
 @dataclass
 class BackfillPlan:
     updates: list[SubscriberUpdate] = field(default_factory=list)
+    repointed_subscriber_ids: list[str] = field(default_factory=list)
     reports: dict[str, list[dict[str, Any]]] = field(
         default_factory=lambda: {name: [] for name in REPORT_ACTIONS}
     )
@@ -371,6 +384,7 @@ def build_plan(sub_rows: list[SubLinkRow], crm_rows: list[CrmLinkRow]) -> Backfi
                 if old_kept:
                     metadata_changed = True
                 stats.repointed += 1
+                plan.repointed_subscriber_ids.append(row.id)
                 plan.reports["repointed"].append(
                     {
                         "subscriber_id": row.id,
@@ -498,8 +512,25 @@ def _load_sub_link_rows(sub: Connection) -> list[SubLinkRow]:
 
 
 def _apply_updates(
-    sub: Connection, updates: list[SubscriberUpdate], batch_size: int
+    sub: Connection,
+    updates: list[SubscriberUpdate],
+    batch_size: int,
+    repointed_subscriber_ids: list[str] | None = None,
 ) -> int:
+    # Phase A: free the ids held by repointed rows in one committed statement,
+    # otherwise a row can be granted an id before its current holder's repoint
+    # executes (the unique index is immediate, so in-transaction order fails).
+    if repointed_subscriber_ids:
+        clear_trans = sub.begin()
+        try:
+            sub.execute(
+                text(CLEAR_REPOINTED_SQL), {"ids": list(repointed_subscriber_ids)}
+            )
+            clear_trans.commit()
+        except Exception:
+            clear_trans.rollback()
+            raise
+
     applied = 0
     trans = sub.begin()
     try:
@@ -560,7 +591,9 @@ def main() -> None:
         plan = build_plan(sub_rows, crm_rows)
 
         if args.apply and plan.updates:
-            plan.stats.updates_applied = _apply_updates(sub, plan.updates, batch_size)
+            plan.stats.updates_applied = _apply_updates(
+                sub, plan.updates, batch_size, plan.repointed_subscriber_ids
+            )
 
     for name in REPORT_ACTIONS:
         _write_csv(out / f"{name}.csv", plan.reports[name])
