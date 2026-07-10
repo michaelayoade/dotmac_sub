@@ -75,9 +75,9 @@ def test_receive_inbound_email_creates_one_thread_for_multiple_teams(db_session)
         str(billing.id),
         str(field.id),
     }
-    assert [
-        link for link in links if link.service_team_id == support.id
-    ][0].role == InboxTeamRole.owner.value
+    assert [link for link in links if link.service_team_id == support.id][
+        0
+    ].role == InboxTeamRole.owner.value
 
 
 def test_receive_inbound_email_deduplicates_by_message_id(db_session):

@@ -82,7 +82,9 @@ def _extract_message_ids(*headers: str | None) -> list[str]:
     return values
 
 
-def _find_duplicate_message(db: Session, external_message_id: str | None) -> InboxMessage | None:
+def _find_duplicate_message(
+    db: Session, external_message_id: str | None
+) -> InboxMessage | None:
     if not external_message_id:
         return None
     return (
@@ -146,7 +148,9 @@ def receive_inbound_email(
             status=InboxConversationStatus.open.value,
             subject=_trim_subject(payload.subject),
             contact_address=normalized_from,
-            external_thread_id=thread_message_ids[0] if thread_message_ids else external_message_id,
+            external_thread_id=thread_message_ids[0]
+            if thread_message_ids
+            else external_message_id,
             first_message_at=received_at,
             last_message_at=received_at,
             metadata_={},
