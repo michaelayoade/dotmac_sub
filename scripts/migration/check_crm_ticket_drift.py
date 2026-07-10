@@ -19,8 +19,24 @@ subscriber map, title-regex default, and datetime normalization):
     other role/team UUIDs, and due/resolved/closed timestamps;
   * ``children_count_mismatch`` — per-ticket comment (by
     ``metadata->>'crm_comment_id'``), assignee, link, and merge counts;
+  * ``sub_enrichment`` — informational, non-gating: sub values that are
+    deliberately richer than CRM's (subscriber linked in sub while CRM has
+    none; sub titles CRM only holds truncated to its String(200) cap);
   * ``unresolved_subscribers`` / ``unmapped_staff`` — informational counts
     echoing the importer/preflight CSV shapes.
+
+Comment-count shortfalls (sub one short) are usually CRM comments created
+after the ticket's last incremental sync: CRM ``TicketComments.create`` does
+not bump ``tickets.updated_at`` (noted in ``crm_ticket_pull.py`` too), so new
+CRM comments are invisible to the importer's ``--state-file`` watermark and
+to the incremental pull, whose comment sweep only covers open
+``sync_source='crm'`` tickets. They stay gating — sub is genuinely missing
+data — and heal with a full importer run (no ``--state-file`` /
+``--updated-since``). CRM-side echo copies of sub-pushed comments cannot
+cause the asymmetry (``crm_ticket_push.push_comment`` stamps
+``crm_comment_id`` on the sub original exactly when the CRM copy is created,
+so each pushed comment counts once on both sides) and carry no data marker to
+exclude by (CRM ``ticket_comments`` has no metadata column).
 
 Tickets whose CRM ``updated_at`` falls within ``--updated-within-minutes``
 (default 30) are counted as ``expected_in_flight`` — the pull/push glue is
@@ -89,6 +105,10 @@ CRM_TO_SUB_STATUS = {
 # transition_ticket_status source="crm_pull" local precedence, spec §3.3).
 TERMINAL_STATUSES = {"closed", "canceled", "merged"}
 
+# CRM ``tickets.title`` is String(200) (schema max_length=200); sub's is
+# String(255). Sub titles pushed to CRM arrive truncated to this cap.
+CRM_TITLE_MAX_LENGTH = 200
+
 # Fields the importer copies verbatim (CRM column == sub column).
 VERBATIM_TEXT_FIELDS = ("ticket_type", "region", "number")
 
@@ -119,6 +139,9 @@ class FieldDiff:
 class TicketComparison:
     diffs: tuple[FieldDiff, ...]
     unresolved_subscriber_reason: str | None = None
+    # Sub-side values richer than CRM's — desired, never gating (sub linked a
+    # subscriber CRM lacks; sub holds the full title CRM truncated).
+    enrichments: tuple[FieldDiff, ...] = ()
 
 
 def expected_sub_status(crm_status: str | None) -> str:
@@ -172,6 +195,21 @@ def _norm_text(value: Any) -> str | None:
     return None if value is None else str(value)
 
 
+def title_matches_crm_truncation(crm_title: str | None, sub_title: str | None) -> bool:
+    """True when the titles differ only by CRM's String(200) cap (or strip).
+
+    CRM holds pushed sub titles truncated to its ``max_length=200`` schema
+    cap; sub's title is authoritative. A CRM title that equals sub's title
+    after strip, or is exactly sub's title cut at 200 chars, is desired
+    sub-side enrichment, not drift.
+    """
+    crm = crm_title or ""
+    sub = sub_title or ""
+    if crm.strip() == sub.strip():
+        return True
+    return len(sub) > CRM_TITLE_MAX_LENGTH and crm == sub[:CRM_TITLE_MAX_LENGTH]
+
+
 def compare_ticket_fields(
     crm_ticket: dict[str, Any],
     sub_row: dict[str, Any],
@@ -185,11 +223,16 @@ def compare_ticket_fields(
     ``_crm_tickets`` select (CRM column names).
     """
     diffs: list[FieldDiff] = []
+    enrichments: list[FieldDiff] = []
 
-    expected_title = crm_ticket.get("title") or "Untitled CRM ticket"
+    crm_title = _norm_text(crm_ticket.get("title"))
+    expected_title = crm_title or "Untitled CRM ticket"
     sub_title = _norm_text(sub_row.get("title"))
     if sub_title != expected_title:
-        diffs.append(FieldDiff("title", expected_title, sub_title))
+        if title_matches_crm_truncation(crm_title, sub_title):
+            enrichments.append(FieldDiff("title", crm_title, sub_title))
+        else:
+            diffs.append(FieldDiff("title", expected_title, sub_title))
 
     crm_status = _norm_text(crm_ticket.get("status"))
     sub_status = _norm_text(sub_row.get("status"))
@@ -241,7 +284,9 @@ def compare_ticket_fields(
     sub_subscriber_id = _norm_uuid(sub_row.get("subscriber_id"))
     if crm_subscriber_id is None:
         if sub_subscriber_id is not None:
-            diffs.append(FieldDiff("subscriber_id", None, sub_subscriber_id))
+            # CRM has no subscriber but sub linked one — desired sub-side
+            # enrichment (sub identity resolution is richer), never drift.
+            enrichments.append(FieldDiff("subscriber_id", None, sub_subscriber_id))
     else:
         mapped = subscriber_map.get(crm_subscriber_id)
         if mapped:
@@ -256,7 +301,7 @@ def compare_ticket_fields(
                 _norm_text(sub_row.get("unmapped_policy")) or "unmapped_subscriber"
             )
 
-    return TicketComparison(tuple(diffs), unresolved_reason)
+    return TicketComparison(tuple(diffs), unresolved_reason, tuple(enrichments))
 
 
 def compare_children_counts(
@@ -549,6 +594,7 @@ def run_drift_check(
         "sub_duplicate_crm_markers": [],
         "field_drift": [],
         "children_count_mismatch": [],
+        "sub_enrichment": [],
         "expected_in_flight": [],
         "probe_skipped": [],
         "unresolved_subscribers": [],
@@ -612,6 +658,17 @@ def run_drift_check(
                 in_flight_findings.setdefault(crm_ticket_id, []).append(
                     f"field:{diff.field}"
                 )
+        for enrichment in comparison.enrichments:
+            classes["sub_enrichment"].append(
+                {
+                    "crm_ticket_id": crm_ticket_id,
+                    "support_ticket_id": support_ticket_id,
+                    "number": crm_ticket.get("number"),
+                    "field": enrichment.field,
+                    "crm_value": enrichment.crm_value,
+                    "sub_value": enrichment.sub_value,
+                }
+            )
         if comparison.unresolved_subscriber_reason:
             classes["unresolved_subscribers"].append(
                 {
