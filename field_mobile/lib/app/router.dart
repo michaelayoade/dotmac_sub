@@ -15,7 +15,6 @@ import '../features/schedule/schedule_screen.dart';
 import '../features/today/map_screen.dart';
 import '../features/today/today_screen.dart';
 import '../features/vendor/vendor_map_screen.dart';
-import '../features/vendor/vendor_screens.dart';
 
 /// App shell: login gate + 4-tab bottom navigation per the visual plan.
 GoRouter buildRouter(Ref ref) {
@@ -139,7 +138,7 @@ class _RestoreScreen extends StatelessWidget {
   }
 }
 
-/// Vendor crews get their Projects module where techs see Today.
+/// Vendor crews get the vendor-scoped plant map where techs see Today.
 class _HomeSwitch extends ConsumerWidget {
   const _HomeSwitch();
 
@@ -147,7 +146,7 @@ class _HomeSwitch extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final auth = ref.watch(authControllerProvider);
     if (auth is Authenticated && auth.mode == LoginMode.vendor) {
-      return const VendorProjectsScreen();
+      return const VendorMapScreen();
     }
     return const TodayScreen();
   }
@@ -179,7 +178,7 @@ class _NavItem {
 }
 
 // Branch order (see StatefulShellRoute above):
-// 0 Today/Projects · 1 Map · 2 Schedule · 3 Materials · 4 Expenses ·
+// 0 Today/Vendor map · 1 Map · 2 Schedule · 3 Materials · 4 Expenses ·
 // 5 Profile
 const _staffNav = [
   _NavItem(0, Icons.assignment_outlined, 'Today'),
@@ -190,12 +189,10 @@ const _staffNav = [
   _NavItem(5, Icons.person_outline, 'Profile'),
 ];
 
-// Vendors get the tabs backed by vendor-aware endpoints: Projects, the
-// vendor-scoped Map (nearby plant), and Profile. Schedule / Materials /
-// Expenses are require_technician and would 403, so they stay hidden.
+// Vendors only get tabs backed by vendor-aware endpoints. Schedule / Materials
+// / Expenses are require_technician and would 403, so they stay hidden.
 const _vendorNav = [
-  _NavItem(0, Icons.assignment_outlined, 'Projects'),
-  _NavItem(1, Icons.map_outlined, 'Map'),
+  _NavItem(0, Icons.map_outlined, 'Map'),
   _NavItem(5, Icons.person_outline, 'Profile'),
 ];
 
