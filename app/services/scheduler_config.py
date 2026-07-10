@@ -2328,6 +2328,32 @@ def build_beat_schedule() -> dict:
                 "kwargs": {"full": True},
             }
 
+        # Phase 3 sync window (§4.2 step 4, PR 9): while CRM is still the
+        # writer for projects/quotes/referrals, pull CRM deltas into the
+        # NATIVE tables by running the backfill importer's watermark mode in
+        # process (webhooks cover status freshness; this covers full shapes).
+        # Gated by the same crm_phase3_native_sync_enabled flag as the
+        # webhook adapter — default OFF; the whole entry dies at the Phase 3
+        # contract (PR 15). Follows the crm.ticket_pull precedent.
+        crm_phase3_native_sync_enabled = bool(
+            resolve_value(
+                session, SettingDomain.projects, "crm_phase3_native_sync_enabled"
+            )
+        )
+        crm_phase3_delta_interval = _effective_int(
+            session,
+            SettingDomain.scheduler,
+            "crm_phase3_native_delta_interval_minutes",
+            "CRM_PHASE3_NATIVE_DELTA_INTERVAL_MINUTES",
+            5,
+        )
+        crm_phase3_delta_interval = max(crm_phase3_delta_interval, 1)
+        if crm_phase3_native_sync_enabled:
+            schedule["crm_phase3_native_delta"] = {
+                "task": "app.tasks.crm_native_sync.pull_crm_phase3_native_delta",
+                "schedule": timedelta(minutes=crm_phase3_delta_interval),
+            }
+
         # Nightly billing snapshot to the CRM (balance / next bill date /
         # billing cycle on the CRM subscriber record for support agents).
         crm_billing_push_enabled = _effective_bool(
