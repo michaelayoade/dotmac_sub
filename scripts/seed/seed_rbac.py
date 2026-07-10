@@ -190,6 +190,15 @@ DEFAULT_PERMISSIONS = [
     ("crm:conversation:write", "Manage conversations"),
     ("crm:lead:read", "View leads"),
     ("crm:lead:write", "Manage leads"),
+    # CRM - Sales vertical (Phase 3 §6 PR 12: quotes + sales orders, guarding
+    # app/api/crm_sales.py + app/api/sales_orders.py). Like crm:lead:*, these
+    # are deliberately granted to no seeded non-admin role — sub has no seeded
+    # sales role, so they stay admin-implicit (wildcard) until one exists;
+    # the keys are UI-assignable via the role builder.
+    ("crm:quote:read", "View quotes"),
+    ("crm:quote:write", "Manage quotes"),
+    ("crm:sales_order:read", "View sales orders"),
+    ("crm:sales_order:write", "Manage sales orders"),
     # Projects
     ("project:read", "View projects"),
     ("project:create", "Create projects"),
