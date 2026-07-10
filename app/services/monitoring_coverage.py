@@ -1,7 +1,7 @@
 """Monitoring-path coverage — which device subnets are actually reachable.
 
 Devices live on private networks reached only through WireGuard tunnels. When a
-tunnel is down or a subnet has no tunnel at all, Zabbix simply can't reach those
+tunnel is down or a subnet has no tunnel at all, the poller simply can't reach those
 devices — so they read "down" when they may be fine. That's a *blind spot*, not
 an outage (see DEVICE_OPERATIONAL_STATUS.md / INFRASTRUCTURE_SLA_PERFORMANCE.md).
 

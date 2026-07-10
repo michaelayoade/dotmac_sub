@@ -44,7 +44,7 @@ from app.services.device_operational_status import warmer_is_stale
 
 logger = logging.getLogger(__name__)
 
-_ZABBIX_LIVE_STATUS_TO_DEVICE_STATUS = {
+_LIVE_STATUS_TO_DEVICE_STATUS = {
     "up": DeviceStatus.online.value,
     "problem": DeviceStatus.degraded.value,
     "down": DeviceStatus.offline.value,
@@ -66,11 +66,11 @@ def _format_uptime_short(seconds: int | None) -> str | None:
     return f"{minutes}m"
 
 
-def _zabbix_live_status_available() -> bool:
+def _live_status_available() -> bool:
     try:
         return not warmer_is_stale()
     except Exception:
-        logger.warning("zabbix_live_status_warmer_check_failed", exc_info=True)
+        logger.warning("live_status_warmer_check_failed", exc_info=True)
         return True
 
 
@@ -79,13 +79,13 @@ def _status_value(device: NetworkDevice) -> str:
 
 
 def _display_status_value(
-    device: NetworkDevice, *, zabbix_live_status_available: bool
+    device: NetworkDevice, *, live_status_available: bool
 ) -> str:
     if device.status == DeviceStatus.maintenance:
         return DeviceStatus.maintenance.value
-    if zabbix_live_status_available:
+    if live_status_available:
         live_status = str(device.live_status or "").strip().lower()
-        mapped = _ZABBIX_LIVE_STATUS_TO_DEVICE_STATUS.get(live_status)
+        mapped = _LIVE_STATUS_TO_DEVICE_STATUS.get(live_status)
         if mapped:
             return mapped
     return _status_value(device)
@@ -271,7 +271,7 @@ def validate_values(
         try:
             snmp_port = int(snmp_port_value)
         except ValueError:
-            return None, "Zabbix SNMP port must be a valid number"
+            return None, "SNMP port must be a valid number"
     else:
         snmp_port = 161 if snmp_enabled else None
 
@@ -342,7 +342,7 @@ def validate_values(
     if ping_enabled and not host:
         return None, "Management IP or hostname is required for ping checks."
     if snmp_enabled and not host:
-        return None, "Management IP or hostname is required for Zabbix SNMP collection."
+        return None, "Management IP or hostname is required for SNMP collection."
 
     normalized = dict(values)
     normalized.update(
@@ -628,10 +628,10 @@ def list_page_data(
 
     devices = db.scalars(stmt.order_by(NetworkDevice.name).limit(200)).all()
     device_ids = [device.id for device in devices]
-    zabbix_live_status_available = _zabbix_live_status_available()
+    live_status_available = _live_status_available()
     display_status_map = {
         str(device.id): _display_status_value(
-            device, zabbix_live_status_available=zabbix_live_status_available
+            device, live_status_available=live_status_available
         )
         for device in devices
     }
@@ -655,7 +655,7 @@ def list_page_data(
             )
             bucket["total"] = int(bucket["total"]) + 1
             child_status = _display_status_value(
-                child, zabbix_live_status_available=zabbix_live_status_available
+                child, live_status_available=live_status_available
             )
             if child_status == DeviceStatus.offline.value:
                 bucket["offline"] = int(bucket["offline"]) + 1

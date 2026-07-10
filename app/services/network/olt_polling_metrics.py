@@ -81,7 +81,7 @@ def _push_signal_metrics(db: Session) -> int:
     """Push per-ONT traffic metrics to VictoriaMetrics.
 
     ONT online/offline and optical signal monitoring is read directly from
-    Zabbix elsewhere. This helper only exports recent TR-069 traffic counters
+    the metrics store elsewhere. This helper only exports recent TR-069 traffic counters
     so dashboard status cannot drift through a secondary metrics system.
 
     Returns:

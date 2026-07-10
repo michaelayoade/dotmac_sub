@@ -47,7 +47,7 @@ def probe_snmp_reachability(
 
     This is intentionally a reachability probe, not a telemetry collector. It
     proves the app/worker can reach UDP/161 with the configured community even
-    when Zabbix has not attached SNMP items yet.
+    when no SNMP items are attached yet.
     """
     binary = shutil.which("snmpget")
     if not binary:

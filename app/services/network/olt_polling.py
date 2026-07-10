@@ -1,9 +1,8 @@
 """OLT optical signal utilities.
 
-Provides signal classification, threshold management, and Zabbix-reported
-status reconciliation for OLT/ONT monitoring. Actual SNMP collection has
-been moved to Zabbix; this module retains utilities used by web UI and
-other monitoring services.
+Provides signal classification, threshold management, and collected-status
+reconciliation for OLT/ONT monitoring. This module retains utilities used by
+the web UI and other monitoring services.
 """
 
 from __future__ import annotations
@@ -200,7 +199,7 @@ def _get_threshold_override(
 
 
 # ---------------------------------------------------------------------------
-# Zabbix-reported status reconciliation
+# Collected-status reconciliation
 # ---------------------------------------------------------------------------
 
 
@@ -210,11 +209,11 @@ def reconcile_snmp_status_with_signal(
     raw_status: str | None,
     olt_rx_dbm: float | None,
 ) -> tuple[OnuOnlineStatus, OnuOfflineReason | None, bool]:
-    """Determine effective ONT status using Zabbix state and signal level.
+    """Determine effective ONT status using collected state and signal level.
 
     Args:
         vendor: OLT vendor key (e.g. "huawei", "zte").
-        raw_status: Raw Zabbix-reported online/offline state string.
+        raw_status: Raw collected online/offline state string.
         olt_rx_dbm: OLT-side received signal in dBm.
 
     Returns:
@@ -238,7 +237,7 @@ def reconcile_snmp_status_with_signal(
         if code in {2, 3, 4, 5}:
             if _has_valid_signal():
                 logger.warning(
-                    "Zabbix reports offline code %s but has valid signal %.1f dBm (vendor=%s)",
+                    "Collector reports offline code %s but has valid signal %.1f dBm (vendor=%s)",
                     code,
                     olt_rx_dbm,
                     vendor,
@@ -254,15 +253,15 @@ def reconcile_snmp_status_with_signal(
             except ValueError:
                 return OnuOnlineStatus.offline, OnuOfflineReason.unknown, False
 
-    # Map Zabbix-reported states to status
+    # Map collected states to status
     if state_lower in ("online", "up", "1", "active"):
         return OnuOnlineStatus.online, None, False
 
     if state_lower in ("offline", "down", "0", "inactive", "2"):
-        # If Zabbix says offline but we have a valid signal, something is off
+        # If the collector says offline but we have a valid signal, something is off
         if _has_valid_signal():
             logger.warning(
-                "Zabbix reports offline but has valid signal %.1f dBm (vendor=%s)",
+                "Collector reports offline but has valid signal %.1f dBm (vendor=%s)",
                 olt_rx_dbm,
                 vendor,
             )

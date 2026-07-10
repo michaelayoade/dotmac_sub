@@ -173,7 +173,7 @@ def subscriptions_for_nodes(
     sweeps and impact previews stay O(arms), not O(nodes).
 
     Four additive arms, deduped by subscription id per node — an AP node may
-    *also* be Zabbix-matched as a NAS:
+    *also* be reconcile-matched as a NAS:
       - nas: subscriptions provisioned on the node's matched NAS
         (Subscription.provisioning_nas_device_id — the STATIC edge);
       - live: subscriptions with a live ``RadiusActiveSession`` on the node's
@@ -262,7 +262,7 @@ def subscriptions_for_nodes(
                 for nid in olt_node_ids[ont_to_olt[ont_unit_id]]:
                     _credit(subscriber_id, nid)
 
-    # --- Wireless arm (works whether or not the node is Zabbix-matched —
+    # --- Wireless arm (works whether or not the node is reconcile-matched —
     #     the UISP CPE -> AP edge alone makes it an AP) ---
     for subscriber_id, parent_id in (
         session.query(CPEDevice.subscriber_id, CPEDevice.parent_network_device_id)

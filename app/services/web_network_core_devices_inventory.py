@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
@@ -15,25 +14,11 @@ from app.models.network_monitoring import DeviceInterface, NetworkDevice
 from app.services import network as network_service
 from app.services.network import cpe as cpe_service
 from app.services.network.imported_service_ports import imported_service_port_summary
-from app.services.zabbix import ZabbixClient, ZabbixClientError, zabbix_configured
 
 if TYPE_CHECKING:
     from app.models.network import Port
 
 logger = logging.getLogger(__name__)
-
-_OLT_ZABBIX_SCALAR_KEYS = {
-    "ont.count.offline",
-    "ont.count.online",
-    "ont.count.total",
-    "ont.low.signal",
-    "ont.pct.online",
-    "pon.port.total",
-    "pon.port.up",
-}
-_OLT_ZABBIX_FRESH_SECONDS = 15 * 60
-_NETWORK_DEVICE_ZABBIX_CHUNK_SIZE = 100
-
 
 def _network_device_is_olt_candidate(device: NetworkDevice) -> bool:
     """Treat monitoring devices with names ending in OLT as OLT list members."""
@@ -132,393 +117,35 @@ def _probe_state_presenter(*, enabled: bool, last_ok: bool | None) -> tuple[str,
     return "Unknown", "unknown"
 
 
-def _utc_from_zabbix_clock(value: object) -> datetime | None:
-    if value is None:
-        return None
-    try:
-        timestamp = int(str(value))
-    except (TypeError, ValueError):
-        return None
-    if timestamp <= 0:
-        return None
-    return datetime.fromtimestamp(timestamp, tz=UTC)
-
-
-def _zabbix_interface_state(host: dict[str, Any] | None) -> tuple[str, str, str | None]:
-    if not host:
-        return "Unknown", "unknown", None
-    if str(host.get("status") or "") == "1":
-        return "Disabled", "fail", "Zabbix host is disabled"
-
-    interfaces = host.get("interfaces") or []
-    snmp_interfaces = [
-        iface for iface in interfaces if str(iface.get("type") or "") == "2"
-    ]
-    if not snmp_interfaces:
-        return "No SNMP", "unknown", "No SNMP interface in Zabbix"
-
-    if any(str(iface.get("available") or "") == "2" for iface in snmp_interfaces):
-        error = next(
-            (
-                str(iface.get("error") or "").strip()
-                for iface in snmp_interfaces
-                if str(iface.get("available") or "") == "2"
-                and str(iface.get("error") or "").strip()
-            ),
-            None,
-        )
-        return "Fail", "fail", error or "Zabbix SNMP interface is unavailable"
-
-    if any(str(iface.get("available") or "") == "1" for iface in snmp_interfaces):
-        return "OK", "ok", None
-
-    return "Unknown", "unknown", "Zabbix SNMP availability is unknown"
-
-
-def _zabbix_icmp_probe_state(
-    items: list[dict[str, Any]],
-    host: dict[str, Any] | None = None,
-) -> tuple[str, str, str | None]:
-    if host and str(host.get("status") or "") == "1":
-        return "Disabled", "unknown", "Zabbix host is disabled"
-    item = next(
-        (item for item in items if str(item.get("key_") or "") == "icmpping"),
-        None,
-    )
-    if not item:
-        return "Not monitored", "unknown", "Zabbix ICMP item is missing"
-    value = str(item.get("lastvalue") or "").strip()
-    if value == "1":
-        return "Online", "ok", None
-    if value == "0":
-        return "Down", "fail", "Zabbix ICMP ping is down"
-    return "Unknown", "unknown", "Zabbix ICMP value is missing"
-
-
-def _zabbix_snmp_probe_state(
-    host: dict[str, Any] | None,
-) -> tuple[str, str, str | None]:
-    label, state, reason = _zabbix_interface_state(host)
-    if state == "ok":
-        return "Online", "ok", None
-    if reason == "Zabbix host is disabled":
-        return "Disabled", "unknown", reason
-    if state == "fail":
-        normalized_reason = str(reason or "").lower()
-        if "timeout" in normalized_reason or "timed out" in normalized_reason:
-            return "Timeout", "fail", reason
-        return "Unavailable", "fail", reason
-    return label, state, reason
-
-
-def _zabbix_unavailable_status(reason: str) -> dict[str, str | None]:
+def _monitoring_retired_probe_status() -> dict[str, str | None]:
+    # The legacy per-device ICMP/SNMP probe source (Zabbix) was retired with
+    # the native monitoring cutover; native reachability lives on the poll
+    # columns / operational status instead.
+    reason = "Legacy probe source is not configured"
     return {
-        "ping_label": "Zabbix unavailable",
+        "ping_label": "Not monitored",
         "ping_state": "unknown",
         "ping_reason": reason,
-        "snmp_label": "Zabbix unavailable",
+        "snmp_label": "Not monitored",
         "snmp_state": "unknown",
         "snmp_reason": reason,
     }
 
 
-def _chunked(items: list[str], size: int) -> list[list[str]]:
-    return [items[index : index + size] for index in range(0, len(items), size)]
-
-
-def _build_zabbix_probe_statuses(
+def _build_legacy_probe_statuses(
     devices: list[dict[str, Any]],
 ) -> dict[str, dict[str, str | None]]:
-    """Return Zabbix-only ICMP/SNMP states for Network Devices core rows."""
-    result: dict[str, dict[str, str | None]] = {}
-    host_ids = sorted(
-        {
-            str(device.get("zabbix_host_id") or "").strip()
-            for device in devices
-            if str(device.get("zabbix_host_id") or "").strip()
-        }
-    )
-    for device in devices:
-        device_id = str(device.get("id") or "").strip()
-        if not device_id:
-            continue
-        host_id = str(device.get("zabbix_host_id") or "").strip()
-        if host_id:
-            result[device_id] = _zabbix_unavailable_status(
-                "Could not read current Zabbix status"
-            )
-        else:
-            result[device_id] = {
-                "ping_label": "Not linked",
-                "ping_state": "unknown",
-                "ping_reason": "Device is not linked to Zabbix",
-                "snmp_label": "Not linked",
-                "snmp_state": "unknown",
-                "snmp_reason": "Device is not linked to Zabbix",
-            }
+    """Degraded ICMP/SNMP probe states for Network Devices core rows.
 
-    if not result or not host_ids:
-        return result
-
-    try:
-        if not zabbix_configured():
-            for status in result.values():
-                if status.get("ping_reason") != "Device is not linked to Zabbix":
-                    status.update(
-                        _zabbix_unavailable_status("Zabbix API is not configured")
-                    )
-            return result
-        client = ZabbixClient.from_env()
-    except ZabbixClientError as exc:
-        logger.warning(
-            "network_devices_zabbix_probe_statuses_failed",
-            extra={"error": str(exc)},
-        )
-        return result
-
-    hosts_by_id: dict[str, dict[str, Any]] = {}
-    icmp_items_by_host: dict[str, list[dict[str, Any]]] = {
-        host_id: [] for host_id in host_ids
+    The Zabbix probe source was retired with the native monitoring cutover, so
+    every row degrades to a fixed "not monitored" placeholder (matching the
+    empty state the page already showed while Zabbix was unconfigured).
+    """
+    return {
+        device_id: _monitoring_retired_probe_status()
+        for device in devices
+        if (device_id := str(device.get("id") or "").strip())
     }
-    icmp_loaded_host_ids: set[str] = set()
-
-    for chunk in _chunked(host_ids, _NETWORK_DEVICE_ZABBIX_CHUNK_SIZE):
-        try:
-            for zabbix_host in client.get_hosts(host_ids=chunk, limit=len(chunk)):
-                host_id = str(zabbix_host.get("hostid") or "")
-                if host_id:
-                    hosts_by_id[host_id] = zabbix_host
-        except ZabbixClientError as exc:
-            logger.warning(
-                "network_devices_zabbix_hosts_chunk_failed",
-                extra={"error": str(exc), "host_count": len(chunk)},
-            )
-
-        try:
-            for item in client.get_items(
-                host_ids=chunk, metric="icmpping", limit=100000
-            ):
-                host_id = str(item.get("hostid") or "")
-                if host_id in icmp_items_by_host:
-                    icmp_items_by_host[host_id].append(item)
-            icmp_loaded_host_ids.update(chunk)
-        except ZabbixClientError as exc:
-            logger.warning(
-                "network_devices_zabbix_items_chunk_failed",
-                extra={"error": str(exc), "host_count": len(chunk)},
-            )
-
-    for device in devices:
-        device_id = str(device.get("id") or "").strip()
-        host_id = str(device.get("zabbix_host_id") or "").strip()
-        if not device_id or not host_id:
-            continue
-        current_status = result[device_id]
-        if host_id in icmp_loaded_host_ids:
-            ping_label, ping_state, ping_reason = _zabbix_icmp_probe_state(
-                icmp_items_by_host.get(host_id, []), hosts_by_id.get(host_id)
-            )
-            current_status.update(
-                {
-                    "ping_label": ping_label,
-                    "ping_state": ping_state,
-                    "ping_reason": ping_reason,
-                }
-            )
-        if host_id in hosts_by_id:
-            snmp_label, snmp_state, snmp_reason = _zabbix_snmp_probe_state(
-                hosts_by_id.get(host_id)
-            )
-            current_status.update(
-                {
-                    "snmp_label": snmp_label,
-                    "snmp_state": snmp_state,
-                    "snmp_reason": snmp_reason,
-                }
-            )
-        result[device_id] = {
-            "ping_label": current_status.get("ping_label"),
-            "ping_state": current_status.get("ping_state"),
-            "ping_reason": current_status.get("ping_reason"),
-            "snmp_label": current_status.get("snmp_label"),
-            "snmp_state": current_status.get("snmp_state"),
-            "snmp_reason": current_status.get("snmp_reason"),
-        }
-    return result
-
-
-def _summarize_zabbix_items(
-    items: list[dict[str, Any]],
-) -> tuple[dict[str, str], datetime | None]:
-    values: dict[str, str] = {}
-    latest_seen: datetime | None = None
-    for item in items:
-        key = str(item.get("key_") or "")
-        if key not in _OLT_ZABBIX_SCALAR_KEYS:
-            continue
-        value = str(item.get("lastvalue") or "").strip()
-        if value:
-            values[key] = value
-        last_seen = _utc_from_zabbix_clock(item.get("lastclock"))
-        if last_seen and (latest_seen is None or last_seen > latest_seen):
-            latest_seen = last_seen
-    return values, latest_seen
-
-
-def _format_zabbix_value(value: str | None) -> str | None:
-    if value is None or value == "":
-        return None
-    try:
-        parsed = float(value)
-    except ValueError:
-        return value
-    if parsed.is_integer():
-        return str(int(parsed))
-    return f"{parsed:.1f}"
-
-
-def _zabbix_trigger_summary(triggers: list[dict[str, Any]]) -> str | None:
-    descriptions = [
-        str(trigger.get("description") or "").strip()
-        for trigger in sorted(
-            triggers,
-            key=lambda item: int(str(item.get("priority") or "0")),
-            reverse=True,
-        )
-        if str(trigger.get("description") or "").strip()
-    ]
-    if not descriptions:
-        return None
-    if len(descriptions) == 1:
-        return descriptions[0]
-    return f"{descriptions[0]} +{len(descriptions) - 1} more"
-
-
-def _build_olt_zabbix_health(
-    olts: list[OLTDevice],
-) -> dict[str, dict[str, object]]:
-    """Return current Zabbix-backed health for OLT table rows."""
-    host_ids = sorted(
-        {
-            str(getattr(olt, "zabbix_host_id", "") or "").strip()
-            for olt in olts
-            if str(getattr(olt, "zabbix_host_id", "") or "").strip()
-        }
-    )
-    if not host_ids or not zabbix_configured():
-        return {}
-
-    try:
-        client = ZabbixClient.from_env()
-        # Batch all three reads: one host.get, one item.get, one trigger.get for
-        # the whole page instead of ~2N+1 calls. The OLT list can hold many rows,
-        # and each per-host round trip added latency proportional to row count
-        # (and to Zabbix's response time).
-        host_count = len(host_ids)
-        hosts_by_id: dict[str, dict[str, Any]] = {}
-        for zabbix_host in client.get_hosts(host_ids=host_ids, limit=host_count):
-            if zabbix_host.get("hostid"):
-                hosts_by_id[str(zabbix_host["hostid"])] = zabbix_host
-
-        items_by_host: dict[str, list[dict[str, Any]]] = {}
-        for item in client.get_items(host_ids=host_ids, metric="", limit=1000):
-            items_by_host.setdefault(str(item.get("hostid") or ""), []).append(item)
-
-        # One batched trigger.get; group by host via each trigger's ``hosts``.
-        # Limit scales with host count so a busy host can't starve the others.
-        triggers_by_host: dict[str, list[dict[str, Any]]] = {}
-        host_id_set = set(host_ids)
-        for trigger in client.get_triggers(
-            host_ids=host_ids,
-            active_only=True,
-            limit=max(100, 20 * host_count),
-        ):
-            for trigger_host in trigger.get("hosts") or []:
-                trigger_host_id = str(trigger_host.get("hostid") or "")
-                if trigger_host_id in host_id_set:
-                    triggers_by_host.setdefault(trigger_host_id, []).append(trigger)
-    except ZabbixClientError:
-        logger.warning("olt_zabbix_health_load_failed", exc_info=True)
-        return {}
-
-    now = datetime.now(UTC)
-    health_by_olt_id: dict[str, dict[str, object]] = {}
-    for olt in olts:
-        host_id = str(getattr(olt, "zabbix_host_id", "") or "").strip()
-        if not host_id:
-            continue
-        current_host = hosts_by_id.get(host_id)
-        snmp_label, snmp_state, snmp_error = _zabbix_interface_state(current_host)
-        scalar_values, latest_seen = _summarize_zabbix_items(
-            items_by_host.get(host_id, [])
-        )
-        triggers = triggers_by_host.get(host_id, [])
-        trigger_summary = _zabbix_trigger_summary(triggers)
-
-        stale = True
-        if latest_seen is not None:
-            stale = (now - latest_seen).total_seconds() > _OLT_ZABBIX_FRESH_SECONDS
-
-        if snmp_state == "fail":
-            health_state = "attention"
-            health_label = "Attention"
-            health_reason = snmp_error or "Zabbix SNMP check failed"
-        elif triggers:
-            health_state = "attention"
-            health_label = "Attention"
-            health_reason = trigger_summary or "Active Zabbix trigger"
-        elif latest_seen is None:
-            health_state = "unknown"
-            health_label = "Unknown"
-            health_reason = "No current Zabbix OLT telemetry"
-        elif stale:
-            health_state = "attention"
-            health_label = "Attention"
-            health_reason = "Zabbix OLT telemetry is stale"
-        else:
-            health_state = "healthy"
-            health_label = "Healthy"
-            health_reason = "Zabbix OLT telemetry is current"
-
-        health_by_olt_id[str(olt.id)] = {
-            "runtime_health_state": health_state,
-            "runtime_health_label": health_label,
-            "runtime_health_reason": health_reason,
-            "runtime_ping_label": "Zabbix",
-            "runtime_ping_state": "ok"
-            if current_host and str(current_host.get("status")) == "0"
-            else "unknown",
-            "runtime_snmp_label": snmp_label,
-            "runtime_snmp_state": snmp_state,
-            "runtime_source": "Zabbix",
-            "runtime_last_seen_at": latest_seen,
-            "runtime_trigger_summary": trigger_summary,
-            "runtime_ont_online": _format_zabbix_value(
-                scalar_values.get("ont.count.online")
-            ),
-            "runtime_ont_offline": _format_zabbix_value(
-                scalar_values.get("ont.count.offline")
-            ),
-            "runtime_ont_total": _format_zabbix_value(
-                scalar_values.get("ont.count.total")
-            ),
-            "runtime_ont_online_pct": _format_zabbix_value(
-                scalar_values.get("ont.pct.online")
-            ),
-            "runtime_low_signal": _format_zabbix_value(
-                scalar_values.get("ont.low.signal")
-            ),
-            "runtime_pon_up": _format_zabbix_value(scalar_values.get("pon.port.up")),
-            "runtime_pon_total": _format_zabbix_value(
-                scalar_values.get("pon.port.total")
-            ),
-        }
-    return health_by_olt_id
-
-
-def build_olt_zabbix_health(olts: list[OLTDevice]) -> dict[str, dict[str, object]]:
-    """Public wrapper for current Zabbix-backed OLT health."""
-    return _build_olt_zabbix_health(olts)
 
 
 def _find_linked_monitoring_status(
@@ -890,8 +517,6 @@ def olts_list_page_data(
         resolved_count = db_count if db_count > 0 else snmp_count
         olt_stats[olt_id] = {"pon_ports": resolved_count}
 
-    zabbix_health_by_olt_id = _build_olt_zabbix_health(all_olts)
-
     olts = []
     for olt in all_olts:
         service_port_summary = imported_service_port_summary(db, olt_id=olt.id)
@@ -927,27 +552,10 @@ def olts_list_page_data(
             health_label = "Unknown"
             health_reason = "Monitoring result is incomplete"
 
-        zabbix_health = zabbix_health_by_olt_id.get(str(olt.id), {})
-        if zabbix_health:
-            ping_label = str(zabbix_health.get("runtime_ping_label") or ping_label)
-            ping_state = str(zabbix_health.get("runtime_ping_state") or ping_state)
-            snmp_label = str(zabbix_health.get("runtime_snmp_label") or snmp_label)
-            snmp_state = str(zabbix_health.get("runtime_snmp_state") or snmp_state)
-            if snmp_state == "fail":
-                health_state = "attention"
-                health_label = "Attention"
-                health_reason = str(
-                    zabbix_health.get("runtime_health_reason")
-                    or "Zabbix SNMP check failed"
-                )
-            elif snmp_state == "ok":
-                health_state = "healthy"
-                health_label = "Healthy"
-                health_reason = "Zabbix SNMP check is OK"
-            else:
-                health_state = "unknown"
-                health_label = "Unknown"
-                health_reason = "Zabbix SNMP check is unknown"
+        # The legacy runtime-health overlay (Zabbix telemetry) was retired
+        # with the native monitoring cutover: rows keep their local monitoring
+        # values, matching the empty overlay the unconfigured path produced.
+        runtime_health: dict[str, object] = {}
 
         olts.append(
             {
@@ -967,16 +575,16 @@ def olts_list_page_data(
                 "runtime_ping_state": ping_state,
                 "runtime_snmp_label": snmp_label,
                 "runtime_snmp_state": snmp_state,
-                "runtime_source": zabbix_health.get("runtime_source", "Local"),
-                "runtime_last_seen_at": zabbix_health.get("runtime_last_seen_at"),
-                "runtime_trigger_summary": zabbix_health.get("runtime_trigger_summary"),
-                "runtime_ont_online": zabbix_health.get("runtime_ont_online"),
-                "runtime_ont_offline": zabbix_health.get("runtime_ont_offline"),
-                "runtime_ont_total": zabbix_health.get("runtime_ont_total"),
-                "runtime_ont_online_pct": zabbix_health.get("runtime_ont_online_pct"),
-                "runtime_low_signal": zabbix_health.get("runtime_low_signal"),
-                "runtime_pon_up": zabbix_health.get("runtime_pon_up"),
-                "runtime_pon_total": zabbix_health.get("runtime_pon_total"),
+                "runtime_source": runtime_health.get("runtime_source", "Local"),
+                "runtime_last_seen_at": runtime_health.get("runtime_last_seen_at"),
+                "runtime_trigger_summary": runtime_health.get("runtime_trigger_summary"),
+                "runtime_ont_online": runtime_health.get("runtime_ont_online"),
+                "runtime_ont_offline": runtime_health.get("runtime_ont_offline"),
+                "runtime_ont_total": runtime_health.get("runtime_ont_total"),
+                "runtime_ont_online_pct": runtime_health.get("runtime_ont_online_pct"),
+                "runtime_low_signal": runtime_health.get("runtime_low_signal"),
+                "runtime_pon_up": runtime_health.get("runtime_pon_up"),
+                "runtime_pon_total": runtime_health.get("runtime_pon_total"),
                 "pon_ports": olt_stats.get(str(olt.id), {}).get("pon_ports", 0),
                 "imported_service_ports": service_port_summary["count"],
                 "imported_service_ports_at": service_port_summary["last_imported_at"],

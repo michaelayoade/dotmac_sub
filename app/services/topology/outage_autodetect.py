@@ -362,7 +362,7 @@ def evaluate_outages(
             logger.exception("outage_autodetect_ap_scope_failed", extra={"ap": ap_id})
 
     # 3b. Infra root causes: a device that itself turned down with no down
-    # ancestor. Zabbix already confirmed the failure, so no fraction gate —
+    # ancestor. Monitoring already confirmed the failure, so no fraction gate —
     # but min_affected (on downstream subscriber impact) keeps devices that
     # serve (nearly) nobody from opening incidents.
     for device in root_events:

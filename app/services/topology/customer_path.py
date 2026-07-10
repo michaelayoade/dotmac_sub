@@ -1,6 +1,6 @@
 """Resolve a subscription's end-to-end path: ONT -> access device -> basestation.
 
-Pure read; never calls Zabbix. Walks the provisioning edges sub already owns to
+Pure read; no live monitoring calls. Walks the provisioning edges sub already owns to
 a NetworkDevice node (linked by the reconcile's matched_device_*), then to the
 node's pop_site (the basestation). Returns a partial result + a gap marker when
 the chain breaks, so support sees *where* provisioning is incomplete rather than
@@ -418,7 +418,7 @@ def resolve_customer_path(session: Session, subscription: Subscription) -> Custo
     # for a currently-online customer.
     #
     # But the live NAS only wins when it resolves to a COMPLETE path: a
-    # roaming/failover customer can land on a NAS not yet Zabbix-matched (no
+    # roaming/failover customer can land on a NAS with no matched (no
     # topology node), which today the static provisioning NAS still resolves.
     # So if the live NAS fails to resolve (device row or topology node missing),
     # fall back to the static provisioning NAS before recording any gap — a live

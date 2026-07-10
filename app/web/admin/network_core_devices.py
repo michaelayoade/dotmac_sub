@@ -401,7 +401,7 @@ def core_device_detail(request: Request, device_id: str, db: Session = Depends(g
     interfaces = list(page_data.get("interfaces") or [])
     interfaces.sort(key=lambda i: (not bool(i.monitored), (i.name or "").lower()))
     context["interfaces"] = interfaces
-    # Live per-interface bandwidth (no-op if no monitored interfaces or Zabbix is down)
+    # Live per-interface bandwidth (no-op if no monitored interfaces)
     context["bandwidth"] = core_router_metrics.get_interface_bandwidth(
         db, page_data["device"], interfaces
     )
@@ -470,7 +470,7 @@ def core_device_interfaces_bandwidth_partial(
     device_id: str,
     db: Session = Depends(get_db),
 ):
-    """Re-render the interfaces card with the latest Zabbix bandwidth values.
+    """Re-render the interfaces card with the latest interface bandwidth values.
 
     Designed to be hit by HTMX polling every ~10 s. Returns the full card
     partial so all rows (including the search input via hx-preserve) refresh

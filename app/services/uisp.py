@@ -1,6 +1,6 @@
 """Read-only UISP (Ubiquiti network controller) NMS API client.
 
-Mirrors the conventions of :mod:`app.services.zabbix`: base-URL/token
+Follows the shared external-API client conventions: base-URL/token
 resolution (file -> env -> OpenBao), request timeout from env, and a
 short-cooldown reachability circuit breaker so an unreachable UISP fast-fails
 instead of stacking full HTTP timeouts.
@@ -44,7 +44,7 @@ NMS_API_PREFIX = "/nms/api/v2.1"
 class _UispReachabilityCircuit:
     """Short-cooldown breaker tripped by connection/timeout failures.
 
-    Mirrors ``app.services.zabbix._ZabbixReachabilityCircuit``: one transport
+    One transport
     failure trips the breaker so the remaining requests in the same window
     fast-fail instead of each waiting out the full HTTP timeout.
     """
@@ -90,7 +90,7 @@ def get_uisp_api_url() -> str:
 def get_uisp_api_token() -> str:
     """Resolve the UISP API token: file -> env -> OpenBao fallback.
 
-    Mirrors ``get_zabbix_api_token`` exactly: ``UISP_API_TOKEN_FILE`` wins,
+    ``UISP_API_TOKEN_FILE`` wins,
     then ``UISP_API_TOKEN`` (with ``bao://`` reference resolution), then the
     OpenBao ``uisp/api_token`` secret. Returns "" when unconfigured.
     """

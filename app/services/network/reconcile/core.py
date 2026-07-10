@@ -47,7 +47,7 @@ from .adapters import (
     desired_from_ont_unit,
     upsert_ont_observation,
 )
-from .alerts import ZabbixTrapper, resolve_sweep_unreachable
+from .alerts import resolve_sweep_unreachable
 from .applier import ApplyContext, SecretResolver, apply_plan
 from .locking import OntNotFound, acquire_reconcile_lock
 from .planner import compute_plan
@@ -287,8 +287,6 @@ def reconcile_ont(
                     serial_number=str(ont.serial_number or ""),
                     mgmt_ip=target.mgmt_ip,
                     before=prior_unreachable,
-                    trapper=ZabbixTrapper.from_env(),
-                    zabbix_host=target.mgmt_ip,
                 )
 
             # ── Verification re-read ────────────────────────────────────────

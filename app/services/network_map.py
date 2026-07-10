@@ -26,7 +26,6 @@ from app.services.network.signal_thresholds import (
     classify_signal,
     get_signal_thresholds,
 )
-from app.services.zabbix_ont_status import get_ont_snapshots_from_zabbix
 
 logger = logging.getLogger(__name__)
 
@@ -247,18 +246,16 @@ def build_network_map_context(db: Session) -> dict:
     ont_offline = 0
     ont_warning = 0
     warn_threshold, crit_threshold = get_signal_thresholds(db)
-    zabbix_snapshots = get_ont_snapshots_from_zabbix(db, ont_units)
+    # The live ONT status/signal source (Zabbix) was retired with the native
+    # monitoring cutover: every ONT reads offline with empty signal values on
+    # the map, matching the unconfigured behaviour.
     for ont in ont_units:
-        zabbix_snapshot = zabbix_snapshots.get(str(ont.id))
-        status = zabbix_snapshot.status if zabbix_snapshot else "offline"
-        if status == "online":
-            ont_online += 1
-        else:
-            ont_offline += 1
+        status = "offline"
+        ont_offline += 1
         if ont.gps_longitude is None or ont.gps_latitude is None:
             continue
-        olt_rx_dbm = zabbix_snapshot.olt_rx_dbm if zabbix_snapshot else None
-        onu_rx_dbm = zabbix_snapshot.onu_rx_dbm if zabbix_snapshot else None
+        olt_rx_dbm = None
+        onu_rx_dbm = None
         signal_quality = classify_signal(
             olt_rx_dbm,
             warn_threshold=warn_threshold,
