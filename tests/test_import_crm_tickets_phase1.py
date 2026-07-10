@@ -1,17 +1,25 @@
+import json
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from scripts.migration.import_crm_tickets_phase1 import (
+    COMMENT_WATERMARK_KEY,
     DEFAULT_EXCLUDE_TITLE_REGEX,
+    TICKET_WATERMARK_KEY,
     UnmappedDecision,
     _format_datetime,
     _load_staff_map,
     _parse_datetime,
+    _state_since,
+    _state_watermark,
+    _write_state,
     decide_unmapped_ticket,
     derive_comment_author,
+    plan_comment_sweep,
+    resolve_sweep_since,
 )
 
 
@@ -181,3 +189,101 @@ def test_derive_comment_author_unmapped_stays_staff_without_system_user() -> Non
     )
 
     assert derived == ("staff", None, None)
+
+
+def _comment(comment_id: str, ticket_id: str) -> dict[str, str]:
+    return {"id": comment_id, "ticket_id": ticket_id, "body": "hello"}
+
+
+def test_plan_comment_sweep_keeps_only_missing_mapped_comments() -> None:
+    comments = [
+        _comment("c-1", "crm-1"),
+        _comment("c-2", "crm-1"),
+        _comment("c-3", "crm-unmapped"),
+    ]
+
+    missing, skipped_unmapped = plan_comment_sweep(
+        comments,
+        {"crm-1": "sub-1"},
+        existing_comment_ids={"c-1"},
+    )
+
+    assert [comment["id"] for comment in missing] == ["c-2"]
+    assert skipped_unmapped == 1
+
+
+def test_plan_comment_sweep_empty_inputs() -> None:
+    assert plan_comment_sweep([], {}, set()) == ([], 0)
+
+
+def test_plan_comment_sweep_preserves_created_at_order() -> None:
+    comments = [_comment("c-2", "crm-1"), _comment("c-1", "crm-1")]
+
+    missing, skipped_unmapped = plan_comment_sweep(comments, {"crm-1": "sub-1"}, set())
+
+    assert [comment["id"] for comment in missing] == ["c-2", "c-1"]
+    assert skipped_unmapped == 0
+
+
+def test_resolve_sweep_since_since_hours_overrides_state(tmp_path: Path) -> None:
+    state = tmp_path / "state.json"
+    state.write_text(
+        json.dumps({COMMENT_WATERMARK_KEY: "2026-07-01T00:00:00+00:00"}),
+        encoding="utf-8",
+    )
+    now = datetime(2026, 7, 10, 12, 0, 0, tzinfo=UTC)
+
+    since = resolve_sweep_since(
+        state_file=str(state),
+        overlap_seconds=600,
+        since_hours=48,
+        now=now,
+    )
+
+    assert since == now - timedelta(hours=48)
+
+
+def test_resolve_sweep_since_uses_state_watermark_minus_overlap(
+    tmp_path: Path,
+) -> None:
+    state = tmp_path / "state.json"
+    state.write_text(
+        json.dumps({COMMENT_WATERMARK_KEY: "2026-07-08T12:00:00+00:00"}),
+        encoding="utf-8",
+    )
+
+    since = resolve_sweep_since(
+        state_file=str(state), overlap_seconds=600, since_hours=None
+    )
+
+    assert since == datetime(2026, 7, 8, 11, 50, 0, tzinfo=UTC)
+
+
+def test_resolve_sweep_since_without_state_or_hours_is_full_sweep() -> None:
+    assert (
+        resolve_sweep_since(state_file=None, overlap_seconds=600, since_hours=None)
+        is None
+    )
+
+
+def test_write_state_merges_and_preserves_other_watermark(tmp_path: Path) -> None:
+    state = tmp_path / "state.json"
+
+    _write_state(str(state), ticket_updated_at="2026-07-08T00:00:00+00:00")
+    _write_state(str(state), comment_created_at="2026-07-09T00:00:00+00:00")
+
+    payload = json.loads(state.read_text(encoding="utf-8"))
+    assert payload[TICKET_WATERMARK_KEY] == "2026-07-08T00:00:00+00:00"
+    assert payload[COMMENT_WATERMARK_KEY] == "2026-07-09T00:00:00+00:00"
+    assert _state_since(str(state), 0) == datetime(2026, 7, 8, tzinfo=UTC)
+    assert _state_watermark(str(state), COMMENT_WATERMARK_KEY, 0) == datetime(
+        2026, 7, 9, tzinfo=UTC
+    )
+
+
+def test_write_state_without_values_is_a_noop(tmp_path: Path) -> None:
+    state = tmp_path / "state.json"
+
+    _write_state(str(state))
+
+    assert not state.exists()
