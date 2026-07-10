@@ -3,7 +3,7 @@
 An outage is declared against a node, basestation, or FDH cabinet; the
 affected subscriber count is snapshotted from affected_customers at declare
 time. Declared either by an operator (manual console) or by the auto-detect
-scan (``outage_autodetect``), which marks its incidents via ``declared_by ==
+scan (retired; see ``outage_reconcile``), which marked incidents via ``declared_by ==
 AUTO_DETECT_ACTOR`` + an ``AUTO_NOTE_PREFIX`` note — deliberately NOT a new
 column (no migration needed; the model stays lean). No notification sending
 here; incident create/resolve fan out to the event system (webhooks) only.

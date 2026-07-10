@@ -336,13 +336,6 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.topology_metrics.export_topology_metrics": _c(
         "network", SWEEP, IDEMP, HEALTH
     ),
-    "app.tasks.topology_outage.run_outage_scan": _c(
-        "network",
-        SWEEP,
-        IDEMP,
-        HEALTH,
-        "Outage auto-detect scan; open-incident check dedupes across runs.",
-    ),
     "app.tasks.topology_outage.reconcile_detected_outages": _c(
         "network",
         SWEEP,
