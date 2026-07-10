@@ -23,6 +23,8 @@ from app.schemas.support import (
     TicketUpdate,
 )
 from app.schemas.team_inbox import (
+    InboxConversationContactLinkRead,
+    InboxConversationContactLinkRequest,
     InboxConversationEscalateRequest,
     InboxConversationEscalationRead,
     InboxConversationListItemRead,
@@ -31,7 +33,12 @@ from app.schemas.team_inbox import (
     InboxConversationTimelineRead,
 )
 from app.services import support as support_service
-from app.services import team_inbox_assignment, team_inbox_outbound, team_inbox_read
+from app.services import (
+    team_inbox_assignment,
+    team_inbox_contact_links,
+    team_inbox_outbound,
+    team_inbox_read,
+)
 from app.services.auth_dependencies import require_permission, require_user_auth
 
 router = APIRouter(prefix="/support", tags=["support"])
@@ -344,6 +351,43 @@ def reply_to_inbox_conversation(
         from_address=result.from_address,
         to_email=result.to_email,
         reason=result.reason,
+    )
+
+
+@router.post(
+    "/inbox/conversations/{conversation_id}/contact-link",
+    response_model=InboxConversationContactLinkRead,
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def link_inbox_conversation_contact(
+    conversation_id: UUID,
+    payload: InboxConversationContactLinkRequest,
+    auth=Depends(require_user_auth),
+    db: Session = Depends(get_db),
+):
+    conversation = db.get(InboxConversation, conversation_id)
+    if conversation is None or not conversation.is_active:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    try:
+        result = team_inbox_contact_links.link_conversation_contact(
+            db,
+            conversation=conversation,
+            subscriber_id=payload.subscriber_id,
+            reseller_id=payload.reseller_id,
+            linked_by_person_id=_actor_id(auth),
+            note=payload.note,
+        )
+    except team_inbox_contact_links.ContactLinkError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db.commit()
+    return InboxConversationContactLinkRead(
+        conversation_id=conversation.id,
+        contact_link_id=result.contact_link_id,
+        channel_type=result.channel_type,
+        normalized_contact=result.normalized_contact,
+        subscriber_id=result.subscriber_id,
+        reseller_id=result.reseller_id,
+        previous_link_ids_deactivated=result.previous_link_ids_deactivated,
     )
 
 

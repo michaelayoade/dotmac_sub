@@ -604,6 +604,7 @@ from app.models.team_inbox import (  # noqa: F401
     InboxAgentPresence,
     InboxAgentPresenceStatus,
     InboxChannelType,
+    InboxContactLink,
     InboxConversation,
     InboxConversationAssignment,
     InboxConversationStatus,

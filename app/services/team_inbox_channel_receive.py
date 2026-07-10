@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
 from app.models.team_inbox import (
     InboxChannelType,
+    InboxContactLink,
     InboxConversation,
     InboxConversationStatus,
     InboxMessage,
@@ -154,6 +155,59 @@ def resolve_contact_context(
             suppressed_subscriber_ids=[],
             matched_reseller_ids=[str(reseller_id)] if reseller_id is not None else [],
         )
+
+    active_link = None
+    if normalized:
+        active_link = (
+            db.query(InboxContactLink)
+            .filter(InboxContactLink.channel_type == channel_type)
+            .filter(InboxContactLink.normalized_contact == normalized)
+            .filter(InboxContactLink.is_active.is_(True))
+            .first()
+        )
+    if active_link is not None:
+        subscriber = (
+            db.get(Subscriber, active_link.subscriber_id)
+            if active_link.subscriber_id is not None
+            else None
+        )
+        reseller = (
+            db.get(Reseller, active_link.reseller_id)
+            if active_link.reseller_id is not None
+            else None
+        )
+        if subscriber is not None and _subscriber_is_linkable(subscriber):
+            return ContactResolution(
+                status="linked_subscriber",
+                normalized_contact=normalized,
+                subscriber_id=subscriber.id,
+                reseller_id=subscriber.reseller_id,
+                matched_subscriber_ids=[str(subscriber.id)],
+                suppressed_subscriber_ids=[],
+                matched_reseller_ids=[str(subscriber.reseller_id)]
+                if subscriber.reseller_id is not None
+                else [],
+            )
+        if subscriber is not None:
+            return ContactResolution(
+                status="suppressed_inactive",
+                normalized_contact=normalized,
+                subscriber_id=None,
+                reseller_id=None,
+                matched_subscriber_ids=[],
+                suppressed_subscriber_ids=[str(subscriber.id)],
+                matched_reseller_ids=[],
+            )
+        if reseller is not None and reseller.is_active:
+            return ContactResolution(
+                status="linked_reseller",
+                normalized_contact=normalized,
+                subscriber_id=None,
+                reseller_id=reseller.id,
+                matched_subscriber_ids=[],
+                suppressed_subscriber_ids=[],
+                matched_reseller_ids=[str(reseller.id)],
+            )
 
     matched_subscribers: list[Subscriber] = []
     suppressed_subscribers: list[Subscriber] = []

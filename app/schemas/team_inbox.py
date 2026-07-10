@@ -44,6 +44,24 @@ class InboxConversationReplyRead(BaseModel):
     reason: str | None = None
 
 
+class InboxConversationContactLinkRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    subscriber_id: UUID | None = None
+    reseller_id: UUID | None = None
+    note: str | None = Field(default=None, max_length=500)
+
+
+class InboxConversationContactLinkRead(BaseModel):
+    conversation_id: UUID
+    contact_link_id: UUID
+    channel_type: str
+    normalized_contact: str
+    subscriber_id: UUID | None = None
+    reseller_id: UUID | None = None
+    previous_link_ids_deactivated: list[UUID] = Field(default_factory=list)
+
+
 class InboxTimelineTeamRead(BaseModel):
     service_team_id: UUID
     service_team_name: str | None = None

@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -167,6 +168,63 @@ class InboxConversation(Base):
         back_populates="conversation",
         cascade="all, delete-orphan",
     )
+
+
+class InboxContactLink(Base):
+    __tablename__ = "inbox_contact_links"
+    __table_args__ = (
+        CheckConstraint(
+            "(subscriber_id IS NOT NULL AND reseller_id IS NULL)"
+            " OR (subscriber_id IS NULL AND reseller_id IS NOT NULL)",
+            name="ck_inbox_contact_links_one_target",
+        ),
+        Index(
+            "ix_inbox_contact_links_contact",
+            "channel_type",
+            "normalized_contact",
+            "is_active",
+        ),
+        Index("ix_inbox_contact_links_subscriber", "subscriber_id", "is_active"),
+        Index("ix_inbox_contact_links_reseller", "reseller_id", "is_active"),
+        Index(
+            "uq_inbox_contact_links_active_contact",
+            "channel_type",
+            "normalized_contact",
+            unique=True,
+            sqlite_where=text("is_active IS TRUE"),
+            postgresql_where=text("is_active IS TRUE"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    channel_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    normalized_contact: Mapped[str] = mapped_column(String(255), nullable=False)
+    subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id")
+    )
+    reseller_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("resellers.id")
+    )
+    linked_by_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    source: Mapped[str] = mapped_column(String(80), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    metadata_: Mapped[dict | None] = mapped_column(
+        "metadata", MutableDict.as_mutable(JSON())
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    subscriber = relationship("Subscriber")
+    reseller = relationship("Reseller")
 
 
 class InboxConversationTeam(Base):
