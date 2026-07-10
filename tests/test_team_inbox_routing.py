@@ -118,9 +118,7 @@ def test_apply_routing_plan_sets_one_owner_and_participating_teams(db_session):
         str(support.id),
         str(billing.id),
     }
-    assert [
-        (str(link.service_team_id), link.role, link.source) for link in links
-    ] == [
+    assert [(str(link.service_team_id), link.role, link.source) for link in links] == [
         (
             str(billing.id),
             InboxTeamRole.participant.value,

@@ -65,7 +65,9 @@ class TeamInboxEmailRoute(Base):
             "email_address",
             name="uq_team_inbox_email_routes_team_address",
         ),
-        Index("ix_team_inbox_email_routes_address_active", "email_address", "is_active"),
+        Index(
+            "ix_team_inbox_email_routes_address_active", "email_address", "is_active"
+        ),
         Index("ix_team_inbox_email_routes_team", "service_team_id"),
     )
 
@@ -101,7 +103,11 @@ class InboxConversation(Base):
         Index("ix_inbox_conversations_subscriber", "subscriber_id"),
         Index("ix_inbox_conversations_primary_team", "primary_service_team_id"),
         Index("ix_inbox_conversations_status_last", "status", "last_message_at"),
-        Index("ix_inbox_conversations_external_thread", "channel_type", "external_thread_id"),
+        Index(
+            "ix_inbox_conversations_external_thread",
+            "channel_type",
+            "external_thread_id",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -204,7 +210,9 @@ class InboxMessage(Base):
             "channel_type",
             "external_message_id",
             unique=True,
-            sqlite_where=text("external_message_id IS NOT NULL AND direction = 'inbound'"),
+            sqlite_where=text(
+                "external_message_id IS NOT NULL AND direction = 'inbound'"
+            ),
             postgresql_where=text(
                 "external_message_id IS NOT NULL AND direction = 'inbound'"
             ),

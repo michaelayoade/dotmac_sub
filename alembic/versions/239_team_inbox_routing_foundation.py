@@ -31,13 +31,15 @@ def upgrade() -> None:
         op.create_table(
             "team_inbox_email_routes",
             sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
-            sa.Column(
-                "service_team_id", postgresql.UUID(as_uuid=True), nullable=False
-            ),
+            sa.Column("service_team_id", postgresql.UUID(as_uuid=True), nullable=False),
             sa.Column("email_address", sa.String(length=255), nullable=False),
-            sa.Column("is_primary", sa.Boolean(), nullable=False, server_default=sa.false()),
+            sa.Column(
+                "is_primary", sa.Boolean(), nullable=False, server_default=sa.false()
+            ),
             sa.Column("priority", sa.Integer(), nullable=False, server_default="100"),
-            sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
+            sa.Column(
+                "is_active", sa.Boolean(), nullable=False, server_default=sa.true()
+            ),
             sa.Column("metadata", postgresql.JSONB(astext_type=sa.Text())),
             sa.Column("created_at", sa.DateTime(timezone=True)),
             sa.Column("updated_at", sa.DateTime(timezone=True)),
@@ -72,14 +74,14 @@ def upgrade() -> None:
             sa.Column("external_thread_id", sa.String(length=255)),
             sa.Column("first_message_at", sa.DateTime(timezone=True)),
             sa.Column("last_message_at", sa.DateTime(timezone=True)),
-            sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
+            sa.Column(
+                "is_active", sa.Boolean(), nullable=False, server_default=sa.true()
+            ),
             sa.Column("metadata", postgresql.JSONB(astext_type=sa.Text())),
             sa.Column("created_at", sa.DateTime(timezone=True)),
             sa.Column("updated_at", sa.DateTime(timezone=True)),
             sa.ForeignKeyConstraint(["subscriber_id"], ["subscribers.id"]),
-            sa.ForeignKeyConstraint(
-                ["primary_service_team_id"], ["service_teams.id"]
-            ),
+            sa.ForeignKeyConstraint(["primary_service_team_id"], ["service_teams.id"]),
         )
         op.create_index(
             "ix_inbox_conversations_subscriber",
@@ -110,7 +112,9 @@ def upgrade() -> None:
             sa.Column("service_team_id", postgresql.UUID(as_uuid=True), nullable=False),
             sa.Column("role", sa.String(length=40), nullable=False),
             sa.Column("source", sa.String(length=40), nullable=False),
-            sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
+            sa.Column(
+                "is_active", sa.Boolean(), nullable=False, server_default=sa.true()
+            ),
             sa.Column("metadata", postgresql.JSONB(astext_type=sa.Text())),
             sa.Column("created_at", sa.DateTime(timezone=True)),
             sa.Column("updated_at", sa.DateTime(timezone=True)),
