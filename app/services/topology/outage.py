@@ -26,6 +26,7 @@ from app.services.topology.affected import (
     lldp_adjacency,
 )
 from app.services.topology.outage_operations import (
+    ensure_outage_customer_watchers,
     ensure_outage_operations,
     plan_outage_escalations,
 )
@@ -204,6 +205,7 @@ def declare_outage(
     session.add(incident)
     session.flush()
     ensure_outage_operations(session, incident)
+    ensure_outage_customer_watchers(session, incident, impact=impact)
     plan_outage_escalations(session, incident, trigger="outage.created")
     _emit_outage_event(session, incident, "outage.created")
     return incident
@@ -355,6 +357,7 @@ def confirm_incident(
     incident.confirmed_at = now
     session.flush()
     ensure_outage_operations(session, incident)
+    ensure_outage_customer_watchers(session, incident)
     plan_outage_escalations(session, incident, trigger="outage.confirmed")
     _emit_outage_event(session, incident, "outage.confirmed")
 

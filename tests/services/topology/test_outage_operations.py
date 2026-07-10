@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.network_monitoring import NetworkDevice
 from app.models.operational_escalation import (
     OperationalEntityType,
@@ -14,6 +15,7 @@ from app.models.operational_escalation import (
     OperationalWatcher,
 )
 from app.models.service_team import ServiceTeam, ServiceTeamType
+from app.models.subscriber import Subscriber
 from app.services import operational_escalation
 from app.services.topology.outage import (
     confirm_incident,
@@ -55,6 +57,28 @@ def _node(db_session) -> NetworkDevice:
     db_session.add(node)
     db_session.flush()
     return node
+
+
+def _subscriptions(db_session, offer_id, count: int) -> list[Subscription]:
+    subscriptions = []
+    for index in range(count):
+        subscriber = Subscriber(
+            first_name="Affected",
+            last_name=str(index),
+            email=f"affected-{index}@example.com",
+            phone=f"+23480000000{index}",
+        )
+        db_session.add(subscriber)
+        db_session.flush()
+        subscription = Subscription(
+            subscriber_id=subscriber.id,
+            offer_id=offer_id,
+            status=SubscriptionStatus.active,
+        )
+        db_session.add(subscription)
+        subscriptions.append(subscription)
+    db_session.flush()
+    return subscriptions
 
 
 def test_declare_outage_creates_default_owner_watchers_and_room(db_session):
@@ -251,3 +275,88 @@ def test_outage_escalation_planning_is_idempotent_for_same_trigger(db_session):
 
     assert db_session.query(OperationalEscalationEvent).count() == 1
     assert db_session.query(OperationalEscalationDelivery).count() == 3
+
+
+def test_customer_targeted_policy_adds_affected_subscribers_as_watchers(
+    db_session,
+    catalog_offer,
+):
+    _seed_ops_teams(db_session)
+    node = _node(db_session)
+    subscriptions = _subscriptions(db_session, catalog_offer.id, 2)
+    operational_escalation.create_policy(
+        db_session,
+        name="Customer outage update",
+        entity_type=OperationalEntityType.outage,
+        channels=[
+            {
+                "channel": OperationalNotificationChannel.email,
+                "recipients": ["watchers"],
+                "participant_types": [OperationalParticipantType.subscriber],
+            }
+        ],
+        min_severity="high",
+        metadata={"customer_watchers": {"max_watchers": 5}},
+    )
+
+    incident = declare_outage(
+        db_session,
+        node=node,
+        severity="high",
+        impact={"count": 2, "subscriptions": subscriptions},
+    )
+
+    subscriber_watchers = [
+        watcher
+        for watcher in db_session.query(OperationalWatcher).all()
+        if watcher.subscriber_id is not None
+    ]
+    deliveries = db_session.query(OperationalEscalationDelivery).all()
+    assert {watcher.subscriber_id for watcher in subscriber_watchers} == {
+        subscription.subscriber_id for subscription in subscriptions
+    }
+    assert {delivery.recipient_type for delivery in deliveries} == {
+        OperationalParticipantType.subscriber
+    }
+    assert {delivery.recipient_id for delivery in deliveries} == {
+        str(subscription.subscriber_id) for subscription in subscriptions
+    }
+    assert incident.affected_count == 2
+
+
+def test_customer_watcher_limit_prevents_bulk_customer_enrollment(
+    db_session,
+    catalog_offer,
+):
+    _seed_ops_teams(db_session)
+    node = _node(db_session)
+    subscriptions = _subscriptions(db_session, catalog_offer.id, 3)
+    operational_escalation.create_policy(
+        db_session,
+        name="Small customer outage update only",
+        entity_type=OperationalEntityType.outage,
+        channels=[
+            {
+                "channel": OperationalNotificationChannel.email,
+                "recipients": ["watchers"],
+                "participant_types": [OperationalParticipantType.subscriber],
+            }
+        ],
+        min_severity="high",
+        metadata={"customer_watchers": {"max_watchers": 2}},
+    )
+
+    declare_outage(
+        db_session,
+        node=node,
+        severity="high",
+        impact={"count": 3, "subscriptions": subscriptions},
+    )
+
+    assert (
+        db_session.query(OperationalWatcher)
+        .filter(OperationalWatcher.subscriber_id.is_not(None))
+        .count()
+        == 0
+    )
+    assert db_session.query(OperationalEscalationDelivery).count() == 0

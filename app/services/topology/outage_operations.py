@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from sqlalchemy import or_
 
+from app.models.network import FdhCabinet
 from app.models.network_monitoring import NetworkDevice, OutageIncident, PopSite
 from app.models.operational_escalation import (
     OperationalEntityType,
@@ -10,11 +11,14 @@ from app.models.operational_escalation import (
     OperationalEscalationStatus,
     OperationalOwner,
     OperationalOwnerRole,
+    OperationalParticipantType,
     OperationalRoomProvider,
+    OperationalWatcher,
     OperationalWatcherRole,
 )
 from app.models.service_team import ServiceTeam, ServiceTeamType
 from app.services import operational_escalation
+from app.services.topology.affected import affected_customers
 
 SEVERITY_RANK = {
     "info": 0,
@@ -142,6 +146,63 @@ def ensure_outage_operations(session, incident: OutageIncident) -> None:
     )
 
 
+def ensure_outage_customer_watchers(
+    session,
+    incident: OutageIncident,
+    *,
+    impact: dict | None = None,
+) -> list[OperationalWatcher]:
+    """Attach affected subscribers as watchers only for customer-targeted policies."""
+
+    policies = _matching_outage_policies(session, incident)
+    customer_limits = [
+        _customer_watcher_limit(policy)
+        for policy in policies
+        if _policy_targets_subscribers(policy)
+    ]
+    if not customer_limits:
+        return []
+    max_watchers = max(customer_limits)
+    resolved_impact = impact or affected_customers(
+        session,
+        node=session.get(NetworkDevice, incident.root_node_id)
+        if incident.root_node_id
+        else None,
+        basestation=session.get(PopSite, incident.basestation_id)
+        if incident.basestation_id
+        else None,
+        fdh=session.get(FdhCabinet, incident.fdh_cabinet_id)
+        if incident.fdh_cabinet_id
+        else None,
+    )
+    subscriber_ids = {
+        subscription.subscriber_id
+        for subscription in resolved_impact.get("subscriptions", [])
+        if subscription.subscriber_id is not None
+    }
+    if len(subscriber_ids) > max_watchers:
+        return []
+
+    watchers = []
+    for subscriber_id in sorted(subscriber_ids, key=str):
+        watchers.append(
+            operational_escalation.add_watcher(
+                session,
+                entity_type=OperationalEntityType.outage,
+                entity_id=incident.id,
+                subscriber_id=subscriber_id,
+                source="outage_impact",
+                reason="Affected customer",
+                metadata={
+                    "status": incident.status,
+                    "severity": incident.severity,
+                    "affected_count": incident.affected_count,
+                },
+            )
+        )
+    return watchers
+
+
 def plan_outage_escalations(
     session,
     incident: OutageIncident,
@@ -231,6 +292,33 @@ def _severity_at_least(actual: str | None, minimum: str) -> bool:
     if actual_key not in SEVERITY_RANK or minimum_key not in SEVERITY_RANK:
         return actual_key == minimum_key
     return SEVERITY_RANK[actual_key] >= SEVERITY_RANK[minimum_key]
+
+
+def _policy_targets_subscribers(policy: OperationalEscalationPolicy) -> bool:
+    defaults = (policy.metadata_ or {}).get("delivery_defaults") or {}
+    for raw_channel in policy.channels or []:
+        if isinstance(raw_channel, dict):
+            participant_types = raw_channel.get("participant_types") or defaults.get(
+                "participant_types"
+            )
+        else:
+            participant_types = defaults.get("participant_types")
+        if participant_types and OperationalParticipantType.subscriber in set(
+            participant_types
+        ):
+            return True
+    return False
+
+
+def _customer_watcher_limit(policy: OperationalEscalationPolicy) -> int:
+    settings = (policy.metadata_ or {}).get("customer_watchers") or {}
+    if isinstance(settings, dict) and settings.get("enabled") is False:
+        return 0
+    raw_limit = settings.get("max_watchers") if isinstance(settings, dict) else None
+    try:
+        return max(0, int(raw_limit or 100))
+    except (TypeError, ValueError):
+        return 100
 
 
 def _record_outage_event_once(
