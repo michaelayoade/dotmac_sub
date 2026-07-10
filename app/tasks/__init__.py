@@ -150,6 +150,7 @@ from app.tasks.tr069 import (
 from app.tasks.tr069 import (
     sync_all_acs_devices as tr069_sync_all_acs_devices,
 )
+from app.tasks.uisp_ip_backfill import run_uisp_mgmt_ip_backfill
 from app.tasks.unmatched_radio import run_unmatched_radio_review
 from app.tasks.usage import (
     import_radius_accounting,
@@ -279,6 +280,7 @@ __all__ = [
     "run_outage_scan",
     "reconcile_detected_outages",
     "run_uisp_topology_sync",
+    "run_uisp_mgmt_ip_backfill",
     "run_ufiber_onu_link",
     "run_unmatched_radio_review",
     "export_topology_metrics",
