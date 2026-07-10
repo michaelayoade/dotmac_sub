@@ -113,7 +113,9 @@ def _encrypt_password(secret: bytes, authenticator: bytes, password: bytes) -> b
     out = b""
     previous = authenticator
     for i in range(0, len(padded), 16):
-        digest = hashlib.md5(secret + previous).digest()  # noqa: S324 - RFC 2865
+        digest = hashlib.md5(  # noqa: S324 - RFC 2865 obfuscation, not a security hash
+            secret + previous, usedforsecurity=False
+        ).digest()
         block = bytes(a ^ b for a, b in zip(padded[i : i + 16], digest))
         out += block
         previous = block
@@ -156,7 +158,8 @@ def _response_valid(
     if resp_id != packet_id or length > len(data):
         return None
     expected = hashlib.md5(  # noqa: S324 - RFC 2865 response authenticator
-        data[:4] + request_authenticator + data[20:length] + secret
+        data[:4] + request_authenticator + data[20:length] + secret,
+        usedforsecurity=False,
     ).digest()
     if not hmac.compare_digest(expected, data[4:20]):
         return None

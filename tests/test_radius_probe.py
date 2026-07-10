@@ -66,7 +66,7 @@ class _FakeServer:
         req_auth = data[4:20]
         body = struct.pack("!BBH", self.respond_code, pid, 20)
         resp_auth = hashlib.md5(  # noqa: S324 - RFC 2865 response authenticator
-            body + req_auth + _SECRET
+            body + req_auth + _SECRET, usedforsecurity=False
         ).digest()
         self.sock.sendto(body + resp_auth, addr)
 
