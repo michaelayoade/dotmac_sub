@@ -33,6 +33,7 @@ from sqlalchemy.orm import (
 
 from app.db import Base
 from app.models.catalog import BillingMode
+from app.models.organization import Organization  # noqa: F401 (mapper registry)
 from app.models.subscription_engine import SettingValueType
 
 
@@ -73,6 +74,20 @@ class SubscriberStatus(enum.Enum):
     disabled = "disabled"  # Permanently deactivated by admin
     canceled = "canceled"  # Terminated / soft-deleted
     delinquent = "delinquent"  # Past due, pre-suspension
+
+
+class PartyStatus(enum.Enum):
+    """Lifecycle status for the unified party model (CRM ``people.party_status``).
+
+    Ported in Phase 3 (doc 02 §2, phase 3 §1.9): keeps prospects created by the
+    party backfill (leads/quotes/referrals persons with no account) out of
+    billing/RADIUS sweeps. Stored as String(20) + app enum per sub convention.
+    """
+
+    lead = "lead"  # Prospect, minimal info
+    contact = "contact"  # Known individual, verified
+    customer = "customer"  # Converted (accepted quote/signed up)
+    subscriber = "subscriber"  # Active billing account
 
 
 # --- Deprecated aliases for backwards compatibility ---
@@ -313,6 +328,19 @@ class Subscriber(Base):
     # splynx_customer_id -> CRM external_id resolution chain for subscribers
     # that have it; backfilled from CRM, persisted lazily on first resolve.
     crm_subscriber_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    # Party lifecycle status ported from CRM people.party_status (Phase 3
+    # §1.9). PartyStatus values; NULL means the row predates the party
+    # backfill and is treated as an ordinary subscriber.
+    party_status: Mapped[str | None] = mapped_column(String(20))
+    # B2B organization link (ported CRM party model, doc 02 §3.3). Replaces
+    # the flattened company_name/legal_name/tax_id/domain fields over time.
+    organization_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), index=True
+    )
+    # CRM-owned account-matrix field (doc 02 §2): the sales order that created
+    # this account. Plain UUID until the Phase 3 expand-B migration lands the
+    # sales_orders table; the FK is added there.
+    sales_order_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     metadata_: Mapped[dict | None] = mapped_column(
         "metadata", MutableDict.as_mutable(JSON())
     )
@@ -333,6 +361,7 @@ class Subscriber(Base):
     # === Relationships ===
     reseller = relationship("Reseller", back_populates="subscribers")
     tax_rate = relationship("TaxRate")
+    organization = relationship("Organization")
 
     addresses = relationship(
         "Address", back_populates="subscriber", cascade="all, delete-orphan"
