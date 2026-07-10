@@ -382,9 +382,9 @@ services:
     image: freeradius/freeradius-server:3.2.7
     container_name: dotmac_sub_freeradius
     restart: unless-stopped
-    mem_limit: 256m
-    mem_reservation: 64m
-    cpus: 0.5
+    mem_limit: 512m
+    mem_reservation: 128m
+    cpus: 1.0
     pids_limit: 64
     logging: *id001
     ports:
@@ -393,6 +393,7 @@ services:
     - 1822:1822/udp
     - 1823:1823/udp
     volumes:
+    - ./config/freeradius/radiusd.conf:/etc/freeradius/radiusd.conf:ro
     - ./config/freeradius/mods-enabled/sql:/etc/raddb/mods-enabled/sql:ro
     - ./config/freeradius/mods-enabled/sql_admin:/etc/raddb/mods-enabled/sql_admin:ro
     - ./config/freeradius/sites-enabled/default:/etc/raddb/sites-enabled/default:ro

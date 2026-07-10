@@ -17,6 +17,7 @@ from app.web.admin import network_device_groups as admin_network_device_groups
 from app.web.admin import network_olts_profiles as admin_network_olts_profiles
 from app.web.admin import reports as admin_reports
 from app.web.admin import resellers as admin_resellers
+from app.web.admin import support_assignment_rules as admin_support_assignment_rules
 from app.web.admin import support_automation as admin_support_automation
 from app.web.admin import system as admin_system
 from app.web.admin import system_whats_new as admin_system_whats_new
@@ -320,6 +321,33 @@ def test_support_automation_routes_require_automation_permissions():
     assert _route_has_permission(
         admin_support_automation.router,
         "/support/automation/{rule_id}/toggle",
+        "POST",
+        "support:automation:write",
+    )
+
+
+def test_support_assignment_rule_routes_require_automation_permissions():
+    assert _route_has_permission(
+        admin_support_assignment_rules.router,
+        "/support/assignment-rules",
+        "GET",
+        "support:automation:read",
+    )
+    assert _route_has_permission(
+        admin_support_assignment_rules.router,
+        "/support/assignment-rules",
+        "POST",
+        "support:automation:write",
+    )
+    assert _route_has_permission(
+        admin_support_assignment_rules.router,
+        "/support/assignment-rules/{rule_id}/edit",
+        "GET",
+        "support:automation:write",
+    )
+    assert _route_has_permission(
+        admin_support_assignment_rules.router,
+        "/support/assignment-rules/{rule_id}/toggle",
         "POST",
         "support:automation:write",
     )

@@ -273,40 +273,45 @@ def push_interface_counters(
 # ---------------------------------------------------------------------------
 # Heartbeat: the poll task records every outcome so the admin-alert evaluator
 # can notice silence. Zabbix's most important job was noticing when nothing
-# was being measured; this is its replacement's dead-man switch.
+# was being measured; this is its replacement's dead-man switch. The generic
+# machinery lives in ``task_heartbeat`` (shared with radius_health).
 # ---------------------------------------------------------------------------
 
-HEARTBEAT_KEY = "infrastructure_poll:last_success"
-SKIP_STREAK_KEY = "infrastructure_poll:skip_streak"
-_HEARTBEAT_TTL_SECONDS = 7 * 86_400
+HEARTBEAT_TASK = "infrastructure_poll"
+# Legacy cache keys from before the heartbeat was generalized; read as a
+# fallback for one deploy generation so the cutover doesn't trip a false
+# "stalled" alert while the new key is still unwritten.
+_LEGACY_HEARTBEAT_KEY = "infrastructure_poll:last_success"
+_LEGACY_SKIP_STREAK_KEY = "infrastructure_poll:skip_streak"
 
 
 def record_poll_success(result: dict, *, now: datetime | None = None) -> None:
     """Stamp the heartbeat after a completed sweep (advisory, cache-only)."""
-    try:
-        from app.services.app_cache import set_json
+    from app.services.task_heartbeat import record_success
 
-        stamp = {
-            "at": (now or datetime.now(UTC)).isoformat(),
-            "result": {k: v for k, v in result.items() if isinstance(v, int)},
-        }
-        set_json(HEARTBEAT_KEY, stamp, _HEARTBEAT_TTL_SECONDS)
-        set_json(SKIP_STREAK_KEY, 0, _HEARTBEAT_TTL_SECONDS)
-    except Exception:  # cache is advisory; never fail the sweep over it
-        logger.exception("infrastructure_poll_heartbeat_write_failed")
+    record_success(HEARTBEAT_TASK, result, now=now)
 
 
 def record_poll_skip() -> int:
     """Count consecutive already_running skips; returns the current streak."""
-    try:
-        from app.services.app_cache import get_json, set_json
+    from app.services.task_heartbeat import record_skip
 
-        streak = int(get_json(SKIP_STREAK_KEY) or 0) + 1
-        set_json(SKIP_STREAK_KEY, streak, _HEARTBEAT_TTL_SECONDS)
-        return streak
+    return record_skip(HEARTBEAT_TASK)
+
+
+def _legacy_heartbeat_age(now: datetime) -> float | None:
+    try:
+        from app.services.app_cache import get_json
+
+        heartbeat = get_json(_LEGACY_HEARTBEAT_KEY)
+        if isinstance(heartbeat, dict) and heartbeat.get("at"):
+            recorded = datetime.fromisoformat(str(heartbeat["at"]))
+            if recorded.tzinfo is None:
+                recorded = recorded.replace(tzinfo=UTC)
+            return max(0.0, (now - recorded).total_seconds())
     except Exception:
-        logger.exception("infrastructure_poll_skip_streak_write_failed")
-        return 0
+        logger.exception("infrastructure_poll_legacy_heartbeat_read_failed")
+    return None
 
 
 def poll_health_snapshot(db: Session, *, now: datetime | None = None) -> dict:
@@ -320,25 +325,16 @@ def poll_health_snapshot(db: Session, *, now: datetime | None = None) -> dict:
     """
     from sqlalchemy import and_, func
 
+    from app.services.task_heartbeat import snapshot as heartbeat_snapshot
+
     now = now or datetime.now(UTC)
 
-    last_success_age: float | None = None
-    interface_write_failed = 0
-    skip_streak = 0
-    try:
-        from app.services.app_cache import get_json
-
-        heartbeat = get_json(HEARTBEAT_KEY)
-        if isinstance(heartbeat, dict) and heartbeat.get("at"):
-            recorded = datetime.fromisoformat(str(heartbeat["at"]))
-            if recorded.tzinfo is None:
-                recorded = recorded.replace(tzinfo=UTC)
-            last_success_age = max(0.0, (now - recorded).total_seconds())
-            result = heartbeat.get("result") or {}
-            interface_write_failed = int(result.get("interface_write_failed") or 0)
-        skip_streak = int(get_json(SKIP_STREAK_KEY) or 0)
-    except Exception:
-        logger.exception("infrastructure_poll_heartbeat_read_failed")
+    beat = heartbeat_snapshot(HEARTBEAT_TASK, now=now)
+    last_success_age = beat["last_success_age_seconds"]
+    if last_success_age is None:
+        last_success_age = _legacy_heartbeat_age(now)
+    skip_streak = int(beat["skip_streak"])
+    interface_write_failed = int(beat["result"].get("interface_write_failed") or 0)
 
     pingable = and_(
         NetworkDevice.is_active.is_(True),

@@ -3,7 +3,8 @@
 import types
 
 from app.models.catalog import SubscriptionStatus
-from app.services.radius_population import _radreply_attrs
+from app.models.subscriber import SubscriberCategory, UserType
+from app.services.radius_population import _captive_redirect_allowed, _radreply_attrs
 
 
 def _sub(ipv4="10.0.0.5", status=SubscriptionStatus.active):
@@ -110,3 +111,50 @@ class TestRadreplyIPv6:
         )
         attrs = _radreply_attrs(sub, None, None, captive_redirect_enabled=True)
         assert ("Framed-IPv6-Prefix", ":=", "2001:db8::/64") in attrs
+
+
+class TestCaptiveRedirectEligibility:
+    def _subscriber(
+        self,
+        *,
+        user_type=UserType.customer,
+        category=SubscriberCategory.residential.value,
+        house_reseller=True,
+    ):
+        metadata = {} if category is None else {"subscriber_category": category}
+        reseller = (
+            None
+            if house_reseller is None
+            else types.SimpleNamespace(is_house=house_reseller)
+        )
+        return types.SimpleNamespace(
+            user_type=user_type, metadata_=metadata, reseller=reseller
+        )
+
+    def test_direct_house_residential_customer_allowed(self):
+        assert _captive_redirect_allowed(self._subscriber()) is True
+
+    def test_uncategorized_customer_not_allowed(self):
+        assert _captive_redirect_allowed(self._subscriber(category=None)) is False
+
+    def test_business_customer_not_allowed(self):
+        assert (
+            _captive_redirect_allowed(
+                self._subscriber(category=SubscriberCategory.business.value)
+            )
+            is False
+        )
+
+    def test_reseller_user_not_allowed(self):
+        assert (
+            _captive_redirect_allowed(self._subscriber(user_type=UserType.reseller))
+            is False
+        )
+
+    def test_non_house_reseller_customer_not_allowed(self):
+        assert (
+            _captive_redirect_allowed(self._subscriber(house_reseller=False)) is False
+        )
+
+    def test_missing_reseller_not_allowed(self):
+        assert _captive_redirect_allowed(self._subscriber(house_reseller=None)) is False

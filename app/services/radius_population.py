@@ -48,6 +48,34 @@ ACCT_INTERIM_SECONDS = 300  # 5 min Acct-Interim-Update cadence
 SUSPENDED_ADDRESS_LIST = DEFAULT_SUSPENDED_ADDRESS_LIST
 
 
+def _captive_redirect_allowed(subscriber: object | None) -> bool:
+    """Return whether a blocked subscriber may enter captive quarantine.
+
+    Captive sessions expose Dotmac customer/payment portal paths. Keep reseller,
+    business/enterprise, system, uncategorized, and non-house accounts on the
+    safer hard-reject path.
+    """
+    if subscriber is None:
+        return False
+
+    from app.models.subscriber import SubscriberCategory, UserType
+
+    if getattr(subscriber, "user_type", None) != UserType.customer:
+        return False
+
+    metadata = getattr(subscriber, "metadata_", None) or {}
+    raw_category = metadata.get("subscriber_category")
+    if isinstance(raw_category, SubscriberCategory):
+        category = raw_category.value
+    else:
+        category = str(raw_category or "").strip().lower()
+    if category != SubscriberCategory.residential.value:
+        return False
+
+    reseller = getattr(subscriber, "reseller", None)
+    return bool(reseller is not None and getattr(reseller, "is_house", False))
+
+
 def _rate_limit(offer: CatalogOffer, profile: RadiusProfile | None) -> str | None:
     """Pick MikroTik rate-limit string: profile override > offer-derived > None."""
     if profile and profile.mikrotik_rate_limit:
@@ -192,12 +220,15 @@ def populate(dry_run: bool = True) -> dict[str, int]:
         "radcheck_upserts": 0,
         "radreply_upserts": 0,
         "blocked_users_written": 0,
+        "captive_ineligible_optins": 0,
     }
 
     enc_key = get_encryption_key()
     db = SessionLocal()
     try:
         suspended_list_name = suspended_address_list(db)
+        from app.models.subscriber import Subscriber, SubscriberStatus
+
         # Active, blocked, or suspended subs with a login — blocked/suspended
         # subs get a walled-garden radreply so suspension actually takes
         # effect at the BNG (hard-deleting their rows would fail-closed but
@@ -208,6 +239,7 @@ def populate(dry_run: bool = True) -> dict[str, int]:
                 .options(
                     joinedload(Subscription.offer),
                     joinedload(Subscription.radius_profile),
+                    joinedload(Subscription.subscriber).joinedload(Subscriber.reseller),
                 )
                 .where(
                     Subscription.status.in_(
@@ -250,9 +282,7 @@ def populate(dry_run: bool = True) -> dict[str, int]:
         }
 
         # Pre-fetch blocked subscriber IDs. Customer-level block triggers
-        # walled-garden regardless of subscription status.
-        from app.models.subscriber import Subscriber, SubscriberStatus
-
+        # blocked RADIUS treatment regardless of subscription status.
         blocked_subscriber_ids: set = {
             sid
             for (sid,) in db.execute(
@@ -362,7 +392,10 @@ def populate(dry_run: bool = True) -> dict[str, int]:
                 continue
 
             sub_blocked = sub.subscriber_id in blocked_subscriber_ids
-            captive = sub.subscriber_id in captive_optin_ids
+            requested_captive = sub.subscriber_id in captive_optin_ids
+            captive = requested_captive and _captive_redirect_allowed(sub.subscriber)
+            if requested_captive and not captive:
+                stats["captive_ineligible_optins"] += 1
             eff_ipv4 = sub.ipv4_address
             if not eff_ipv4 or eff_ipv4 == "0.0.0.0":  # nosec B104  # noqa: S104
                 eff_ipv4 = ipv4_by_subscriber.get(sub.subscriber_id)
