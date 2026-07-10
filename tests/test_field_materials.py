@@ -143,7 +143,8 @@ def test_list_consume_and_surface_materials_in_job_detail(db_session):
     assert material.consumed_quantity == 50
     assert material.status == "used"
     db_session.refresh(work_order)
-    assert work_order.metadata_["native_materials_pending_sync"] is True
+    assert work_order.metadata_["native_field_source"] == "sub"
+    assert "materials" in work_order.metadata_["native_field_activity"]
 
     detail = field_jobs.get_detail(db_session, _auth(user), "wo-materials")
     assert len(detail.materials) == 1

@@ -222,7 +222,8 @@ def test_geofence_auto_starts_arrived_job_once(db_session):
     event = db_session.query(FieldJobEvent).one()
     assert event.event == "start"
     assert event.payload["source"] == "geofence"
-    assert row.metadata_["native_transition_pending_sync"] is True
+    assert row.metadata_["native_field_source"] == "sub"
+    assert row.metadata_["native_field_activity"]["transition"]["event"] == "start"
 
     replay = field_location_tracking.record_batch(
         db_session,

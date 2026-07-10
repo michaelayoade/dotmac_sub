@@ -120,7 +120,8 @@ def test_create_submit_and_surface_material_request_in_job_detail(db_session):
     assert created["priority"] == "urgent"
     assert created["items"][0]["name"] == "Connector"
     db_session.refresh(work_order)
-    assert work_order.metadata_["native_material_requests_pending_sync"] is True
+    assert work_order.metadata_["native_field_source"] == "sub"
+    assert "material_requests" in work_order.metadata_["native_field_activity"]
 
     listed = field_material_requests.list_mine(db_session, _auth(user))
     assert [request["id"] for request in listed] == [created["id"]]

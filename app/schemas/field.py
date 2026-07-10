@@ -38,7 +38,7 @@ class FieldMeResponse(BaseModel):
 
 
 class FieldJobSummary(BaseModel):
-    """Technician job-list item sourced from the CRM work-order mirror."""
+    """Technician job-list item from the imported work-order view."""
 
     id: str
     work_order_mirror_id: UUID
@@ -78,6 +78,11 @@ class FieldJobLocation(BaseModel):
     longitude: float | None = None
     address_text: str | None = None
     source: str
+
+
+class FieldJobLocationUpdate(BaseModel):
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
 
 
 class FieldJobDestination(BaseModel):
@@ -342,6 +347,26 @@ class FieldMaterialRequestRead(BaseModel):
     items: list[FieldMaterialRequestItemRead] = Field(default_factory=list)
 
 
+class FieldInventoryItemRead(BaseModel):
+    id: UUID
+    crm_item_id: str | None = None
+    sku: str | None = None
+    name: str
+    unit: str | None = None
+    description: str | None = None
+    category: str | None = None
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class FieldInventoryLocationRead(BaseModel):
+    id: UUID
+    name: str
+    code: str | None = None
+    is_active: bool = True
+
+
 class FieldExpenseRequestItemCreate(BaseModel):
     category_code: str = Field(min_length=1, max_length=30)
     category_name: str | None = Field(default=None, max_length=120)
@@ -529,6 +554,25 @@ class FieldMapAsset(BaseModel):
     distance_m: float | None = None
 
 
+class FieldMapAssetNearbyResponse(BaseModel):
+    items: list[FieldMapAsset]
+    count: int
+    latitude: float
+    longitude: float
+    radius_m: float
+    server_time: datetime
+
+
+class FieldMapAssetLocationUpdate(BaseModel):
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    expected_updated_at: datetime | None = None
+    source: str | None = Field(default=None, max_length=32)
+    accuracy_m: float | None = Field(default=None, ge=0)
+    client_ref: UUID | None = None
+    force: bool = False
+
+
 class FieldMapSearchResult(BaseModel):
     kind: Literal["job", "asset"]
     id: str
@@ -546,3 +590,62 @@ class FieldMapSearchResponse(BaseModel):
     count: int
     limit: int
     offset: int = 0
+
+
+class FieldSpliceCreate(BaseModel):
+    closure_id: UUID
+    from_strand_id: UUID
+    to_strand_id: UUID
+    tray_id: UUID | None = None
+    position: int | None = Field(default=None, ge=1)
+    splice_type: str | None = Field(default=None, max_length=80)
+    loss_db: float | None = Field(default=None, ge=0, le=5)
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class FieldSpliceProposalResponse(BaseModel):
+    change_request_id: UUID
+    status: str
+    replayed: bool
+    closure_id: UUID
+    from_strand_id: UUID
+    to_strand_id: UUID
+
+
+class FieldFiberTestCreate(BaseModel):
+    crm_work_order_id: str = Field(min_length=1, max_length=64)
+    asset_type: str = Field(min_length=1, max_length=80)
+    asset_id: UUID
+    test_type: str = Field(min_length=1, max_length=40)
+    wavelength_nm: int | None = Field(default=None, ge=0)
+    value_db: float | None = None
+    unit: str | None = Field(default=None, max_length=16)
+    passed: bool | None = None
+    instrument: str | None = Field(default=None, max_length=120)
+    measured_at: datetime | None = None
+    notes: str | None = Field(default=None, max_length=2000)
+    attachment_id: UUID | None = None
+    client_ref: UUID | None = None
+
+
+class FieldFiberTestRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    work_order_mirror_id: UUID
+    crm_work_order_id: str
+    asset_type: str
+    asset_id: UUID
+    test_type: str
+    wavelength_nm: int | None = None
+    value_db: float | None = None
+    unit: str | None = None
+    passed: bool | None = None
+    instrument: str | None = None
+    attachment_id: UUID | None = None
+    measured_by_person_id: UUID
+    measured_by_system_user_id: UUID | None = None
+    measured_at: datetime | None = None
+    notes: str | None = None
+    client_ref: UUID | None = None
+    created_at: datetime
