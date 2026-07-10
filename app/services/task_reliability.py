@@ -361,6 +361,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "network", SWEEP, IDEMP, HEALTH
     ),
     "app.tasks.topology_sync.warm_topology_status": _c("network", SWEEP, IDEMP, HEALTH),
+    "app.tasks.infrastructure_polling.run_infrastructure_poll": _c(
+        "network",
+        SWEEP,
+        IDEMP,
+        HEALTH,
+        "Native ping/SNMP reachability sweep; probes only stale devices, so "
+        "re-runs converge instead of duplicating work.",
+    ),
     "app.tasks.topology_ufiber_link.run_ufiber_onu_link": _c(
         "network", SWEEP, IDEMP, HEALTH
     ),

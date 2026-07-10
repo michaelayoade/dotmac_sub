@@ -2,45 +2,30 @@
 
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 from app.celery_app import celery_app
 from app.services.billing_settings import billing_enabled
 from app.services.catalog import subscriptions as subscriptions_service
+
+# Outage/ticket suppression predicates live in the shared customer-service-state
+# service (single source of truth for outage-aware comms); re-exported here so
+# existing callers and tests keep their import/monkeypatch paths.
+from app.services.customer_service_state import (
+    INFRASTRUCTURE_DOWN_TICKET_MARKERS,  # noqa: F401 - re-export
+    OPEN_INFRASTRUCTURE_TICKET_STATUSES,  # noqa: F401 - re-export
+)
+from app.services.customer_service_state import (
+    is_infrastructure_down_ticket as _is_infrastructure_down_ticket,  # noqa: F401
+)
+from app.services.customer_service_state import (
+    subscribers_with_open_infrastructure_down_tickets as _subscribers_with_open_infrastructure_down_tickets,
+)
+from app.services.customer_service_state import (
+    subscription_ids_under_active_outage as _subscription_ids_under_active_outage,
+)
 from app.services.db_session_adapter import db_session_adapter
 
 logger = logging.getLogger(__name__)
-
-OPEN_INFRASTRUCTURE_TICKET_STATUSES = {
-    "new",
-    "open",
-    "pending",
-    "waiting_on_customer",
-    "lastmile_rerun",
-    "site_under_construction",
-    "on_hold",
-    "pending_confirmation",
-}
-
-INFRASTRUCTURE_DOWN_TICKET_MARKERS = (
-    "infrastructure down",
-    "service down",
-    "internet down",
-    "no internet",
-    "outage",
-    "link down",
-    "fiber cut",
-    "link disconnection",
-    "customer link disconnection",
-    "multiple customer link disconnection",
-    "core link disconnection",
-    "multiple core link disconnection",
-    "cabinet disconnection",
-    "multiple cabinet disconnection",
-    "multiple cabinet link disconnection",
-    "access point outage",
-    "bts outage",
-)
 
 
 @celery_app.task(name="app.tasks.catalog.expire_subscriptions")
@@ -127,9 +112,13 @@ def send_expiry_reminders(days_before: int | None = None) -> dict:
             session,
             {sub.subscriber_id for sub in expiring},
         )
+        outage_subscription_ids = _subscription_ids_under_active_outage(
+            session, expiring
+        )
 
         reminded = 0
         suppressed = 0
+        suppressed_outage = 0
         for sub in expiring:
             try:
                 if sub.subscriber_id in suppressed_subscriber_ids:
@@ -137,6 +126,14 @@ def send_expiry_reminders(days_before: int | None = None) -> dict:
                     logger.info(
                         "Suppressed expiry reminder for subscription %s: "
                         "open infrastructure-down ticket exists",
+                        sub.id,
+                    )
+                    continue
+                if sub.id in outage_subscription_ids:
+                    suppressed_outage += 1
+                    logger.info(
+                        "Suppressed expiry reminder for subscription %s: "
+                        "active outage incident covers its path",
                         sub.id,
                     )
                     continue
@@ -159,13 +156,16 @@ def send_expiry_reminders(days_before: int | None = None) -> dict:
 
         session.commit()
         logger.info(
-            "Sent %d expiry reminders; suppressed %d for infrastructure-down tickets",
+            "Sent %d expiry reminders; suppressed %d for infrastructure-down "
+            "tickets, %d for active outage incidents",
             reminded,
             suppressed,
+            suppressed_outage,
         )
     return {
         "reminded": reminded,
         "suppressed_infrastructure_down": suppressed,
+        "suppressed_active_outage": suppressed_outage,
         "total_expiring": len(expiring),
     }
 
@@ -183,59 +183,3 @@ def _has_open_infrastructure_down_ticket(session, subscriber_id: object) -> bool
         session,
         {subscriber_id},
     )
-
-
-def _subscribers_with_open_infrastructure_down_tickets(
-    session,
-    subscriber_ids: set[object],
-) -> set[object]:
-    from sqlalchemy import or_
-
-    from app.models.support import Ticket
-
-    subscriber_ids = {
-        subscriber_id for subscriber_id in subscriber_ids if subscriber_id
-    }
-    if not subscriber_ids:
-        return set()
-
-    tickets = (
-        session.query(Ticket)
-        .filter(Ticket.is_active.is_(True))
-        .filter(Ticket.status.in_(OPEN_INFRASTRUCTURE_TICKET_STATUSES))
-        .filter(
-            or_(
-                Ticket.subscriber_id.in_(subscriber_ids),
-                Ticket.customer_account_id.in_(subscriber_ids),
-                Ticket.customer_person_id.in_(subscriber_ids),
-            )
-        )
-        .all()
-    )
-    suppressed: set[object] = set()
-    for ticket in tickets:
-        if not _is_infrastructure_down_ticket(ticket):
-            continue
-        for field in ("subscriber_id", "customer_account_id", "customer_person_id"):
-            ticket_subscriber_id = getattr(ticket, field, None)
-            if ticket_subscriber_id in subscriber_ids:
-                suppressed.add(ticket_subscriber_id)
-    return suppressed
-
-
-def _is_infrastructure_down_ticket(ticket: Any) -> bool:
-    parts: list[str] = [
-        str(getattr(ticket, "ticket_type", "") or ""),
-        str(getattr(ticket, "title", "") or ""),
-        str(getattr(ticket, "description", "") or ""),
-    ]
-    tags = getattr(ticket, "tags", None)
-    if isinstance(tags, list):
-        parts.extend(str(tag or "") for tag in tags)
-    metadata = getattr(ticket, "metadata_", None)
-    if isinstance(metadata, dict):
-        for key in ("ticket_type", "category", "issue", "reason", "source"):
-            parts.append(str(metadata.get(key) or ""))
-    text = " ".join(parts).strip().lower()
-    text = " ".join(text.split())
-    return any(marker in text for marker in INFRASTRUCTURE_DOWN_TICKET_MARKERS)

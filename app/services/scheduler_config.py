@@ -1569,7 +1569,10 @@ def build_beat_schedule() -> dict:
             interval_seconds=600,
         )
 
-        # ONT telemetry ingest from centralized monitoring data.
+        # ONT telemetry ingest from centralized monitoring data. Zabbix-fed:
+        # enabled only while Zabbix is configured (runtime cutover — native
+        # infrastructure polling covers reachability without it).
+        zabbix_available = _zabbix_configured_default()
         ont_signal_minutes = _resolve_int(
             session,
             SettingDomain.network_monitoring,
@@ -1580,18 +1583,19 @@ def build_beat_schedule() -> dict:
             session,
             name="ont_signal_ingest",
             task_name="app.tasks.zabbix_ingestion.ingest_olt_signals_from_zabbix",
-            enabled=True,
+            enabled=zabbix_available,
             interval_seconds=max(ont_signal_minutes * 60, 120),
         )
         _sync_scheduled_task(
             session,
             name="ont_signal_ingest_watchdog",
             task_name="app.tasks.zabbix_ingestion.repair_stale_olt_signal_ingest",
-            enabled=True,
+            enabled=zabbix_available,
             interval_seconds=600,
         )
         # Topology reconcile: pull Zabbix groups/hosts onto pop_sites +
         # network_devices. Device graph changes slowly, so hourly is ample.
+        # Zabbix-fed like the ingest above.
         topology_reconcile_minutes = _resolve_int(
             session,
             SettingDomain.network_monitoring,
@@ -1602,8 +1606,26 @@ def build_beat_schedule() -> dict:
             session,
             name="topology_reconcile",
             task_name="app.tasks.topology_sync.run_topology_reconcile",
-            enabled=True,
+            enabled=zabbix_available,
             interval_seconds=max(topology_reconcile_minutes * 60, 300),
+        )
+        # Native infrastructure poll: ping/SNMP reachability sweep over active
+        # network devices (Zabbix runtime cutover). The sweep itself only
+        # probes devices whose last check is older than the per-check staleness
+        # settings, so a tight beat cadence is safe; overlap is single-flighted
+        # by an advisory lock inside the task.
+        infrastructure_poll_seconds = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "infrastructure_poll_interval_seconds",
+            60,
+        )
+        _sync_scheduled_task(
+            session,
+            name="infrastructure_poll",
+            task_name="app.tasks.infrastructure_polling.run_infrastructure_poll",
+            enabled=True,
+            interval_seconds=max(infrastructure_poll_seconds, 30),
         )
         # Warm cached live status for topology nodes (read by the Network Path
         # panel). Default 180s, matching the monitoring dashboard cache TTL.
@@ -1748,12 +1770,13 @@ def build_beat_schedule() -> dict:
             session,
             name="ont_snapshot_cache_refresh",
             task_name="app.tasks.app_cache.refresh_ont_zabbix_snapshot_cache",
-            enabled=True,
+            enabled=_zabbix_configured_default(),
             interval_seconds=max(ont_snapshot_cache_seconds, 60),
         )
         # Keep the per-OLT Zabbix summary cache the monitoring dashboard reads
         # hot. Default 120s, below the 180s snapshot/summary cache TTL, so a
         # viewer never lands on a cold cache and pays the live per-OLT fan-out.
+        # Zabbix-fed: enabled only while Zabbix is configured.
         monitoring_summary_warm_seconds = _resolve_int(
             session,
             SettingDomain.network_monitoring,
@@ -1764,7 +1787,7 @@ def build_beat_schedule() -> dict:
             session,
             name="monitoring_summary_cache_warm",
             task_name="app.tasks.monitoring_warm.warm_monitoring_caches",
-            enabled=True,
+            enabled=_zabbix_configured_default(),
             interval_seconds=max(monitoring_summary_warm_seconds, 30),
         )
         _retire_scheduled_task(
