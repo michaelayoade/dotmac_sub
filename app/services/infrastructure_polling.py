@@ -30,11 +30,11 @@ ADVISORY_LOCK_KEY = 0x6E_69_50
 DEFAULT_PING_INTERVAL_SECONDS = 60
 DEFAULT_SNMP_INTERVAL_SECONDS = 300
 
-# Cap one sweep to the N longest-unchecked stale devices. With 12 workers and
-# worst-case ~4s per down device this bounds a run to ~2 minutes — safely
-# inside the task's soft time limit even when the whole fleet is stale (fresh
-# deploy, poller downtime); successive 60s beat runs cover the remainder.
+# Cap one sweep to the N longest-unchecked stale devices. The poller runs inside
+# a Celery child and each worker thread opens its own DB session, so the default
+# fan-out must stay below the per-process SQLAlchemy pool budget.
 DEFAULT_MAX_DEVICES_PER_RUN = 300
+DEFAULT_MAX_WORKERS = 4
 
 # Raw IF-MIB octet counters for admin-monitored interfaces, pushed every sweep.
 # Counters (not rates): the reader (core_router_metrics) derives bps with
@@ -50,6 +50,18 @@ PING_LATENCY_METRIC = "device_ping_latency_ms"
 PING_LOSS_METRIC = "device_ping_loss"
 
 _vm_writer = None
+
+
+def _release_postgres_read_transaction(db: Session) -> None:
+    """Release long PostgreSQL read transactions before external I/O.
+
+    SQLite test fixtures often wrap each test in a transaction; rolling that
+    transaction back inside the service deletes fixture rows. The production
+    idle-in-transaction guardrail this supports is PostgreSQL-specific.
+    """
+    bind = db.get_bind()
+    if bind.dialect.name.startswith("postgres"):
+        db.rollback()
 
 
 def _writer():
@@ -92,7 +104,7 @@ def poll_infrastructure(
     *,
     ping_interval_seconds: int = DEFAULT_PING_INTERVAL_SECONDS,
     snmp_interval_seconds: int = DEFAULT_SNMP_INTERVAL_SECONDS,
-    max_workers: int = 12,
+    max_workers: int = DEFAULT_MAX_WORKERS,
     force: bool = False,
     max_devices: int | None = DEFAULT_MAX_DEVICES_PER_RUN,
 ) -> dict[str, int]:
@@ -168,6 +180,9 @@ def push_ping_metrics(db: Session, *, since: datetime) -> dict[str, int]:
             )
         lines.append(f"{PING_LOSS_METRIC}{{{labels}}} {0 if success else 1} {ts_ms}")
 
+    # Rows are materialized; release the read transaction before the VM HTTP
+    # write so the advisory-lock connection is not idle-in-transaction.
+    _release_postgres_read_transaction(db)
     write_result = _writer().write_prometheus_lines(
         lines,
         adapter="infrastructure.polling",
@@ -222,6 +237,9 @@ def push_interface_counters(
             "interface_write_failed": 0,
         }
 
+    # Targets are materialized; release the read transaction before slow SNMP
+    # network calls and the VM HTTP write.
+    _release_postgres_read_transaction(db)
     ts_ms = int((now or datetime.now(UTC)).timestamp() * 1000)
     lines: list[str] = []
     devices_read = 0

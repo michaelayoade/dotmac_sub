@@ -108,6 +108,12 @@ services:
     - -c
     - maintenance_work_mem=512MB
     - -c
+    - statement_timeout=120000
+    - -c
+    - lock_timeout=10000
+    - -c
+    - idle_in_transaction_session_timeout=120000
+    - -c
     - wal_level=replica
     - -c
     - max_wal_senders=5
@@ -232,6 +238,7 @@ services:
       OPENBAO_TOKEN: ${OPENBAO_TOKEN}
       APP_RELEASE: ${APP_RELEASE:-}
       GIT_SHA: ${GIT_SHA:-}
+      NETWORK_MONITORING_MAX_WORKERS: ${NETWORK_MONITORING_MAX_WORKERS:-4}
     env_file:
     - .env
     volumes:
