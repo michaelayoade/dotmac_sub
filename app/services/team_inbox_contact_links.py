@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.subscriber import Reseller, Subscriber
@@ -24,6 +25,103 @@ class ContactLinkResult:
     subscriber_id: UUID | None
     reseller_id: UUID | None
     previous_link_ids_deactivated: list[UUID]
+
+
+def _subscriber_label(row: Subscriber) -> str:
+    full_name = " ".join(
+        part for part in [row.first_name, row.last_name] if part
+    ).strip()
+    label = (
+        row.display_name or row.company_name or full_name or row.email or str(row.id)
+    )
+    extras = [
+        row.account_number,
+        row.subscriber_number,
+        row.email,
+        row.phone,
+        getattr(row.status, "value", row.status),
+    ]
+    suffix = " · ".join(str(item) for item in extras if item)
+    return f"{label} ({suffix})" if suffix else label
+
+
+def _reseller_label(row: Reseller) -> str:
+    extras = [row.code, row.contact_email, row.contact_phone]
+    suffix = " · ".join(str(item) for item in extras if item)
+    return f"{row.name} ({suffix})" if suffix else row.name
+
+
+def contact_link_candidates(
+    db: Session,
+    terms: list[str],
+) -> dict[str, list[dict[str, str]]]:
+    subscribers: list[Subscriber] = []
+    resellers: list[Reseller] = []
+    if terms:
+        subscriber_filters = []
+        reseller_filters = []
+        for term in terms:
+            like = f"%{term}%"
+            subscriber_filters.extend(
+                [
+                    Subscriber.email.ilike(like),
+                    Subscriber.phone.ilike(like),
+                    Subscriber.first_name.ilike(like),
+                    Subscriber.last_name.ilike(like),
+                    Subscriber.display_name.ilike(like),
+                    Subscriber.company_name.ilike(like),
+                    Subscriber.account_number.ilike(like),
+                    Subscriber.subscriber_number.ilike(like),
+                ]
+            )
+            reseller_filters.extend(
+                [
+                    Reseller.name.ilike(like),
+                    Reseller.code.ilike(like),
+                    Reseller.contact_email.ilike(like),
+                    Reseller.contact_phone.ilike(like),
+                ]
+            )
+        subscribers = (
+            db.query(Subscriber)
+            .filter(Subscriber.is_active.is_(True))
+            .filter(or_(*subscriber_filters))
+            .order_by(Subscriber.updated_at.desc().nullslast())
+            .limit(8)
+            .all()
+        )
+        resellers = (
+            db.query(Reseller)
+            .filter(Reseller.is_active.is_(True))
+            .filter(or_(*reseller_filters))
+            .order_by(Reseller.name.asc())
+            .limit(8)
+            .all()
+        )
+    if not subscribers:
+        subscribers = (
+            db.query(Subscriber)
+            .filter(Subscriber.is_active.is_(True))
+            .order_by(Subscriber.updated_at.desc().nullslast())
+            .limit(8)
+            .all()
+        )
+    if not resellers:
+        resellers = (
+            db.query(Reseller)
+            .filter(Reseller.is_active.is_(True))
+            .order_by(Reseller.name.asc())
+            .limit(8)
+            .all()
+        )
+    return {
+        "subscribers": [
+            {"id": str(row.id), "label": _subscriber_label(row)} for row in subscribers
+        ],
+        "resellers": [
+            {"id": str(row.id), "label": _reseller_label(row)} for row in resellers
+        ],
+    }
 
 
 def _target(
