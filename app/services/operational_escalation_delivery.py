@@ -198,7 +198,7 @@ def _send_to_target(
     )
     from app.services.notification_adapter import send_notification
 
-    result = send_notification(
+    notification_result = send_notification(
         adapter_channel,
         target.address,
         body,
@@ -208,12 +208,12 @@ def _send_to_target(
         idempotency_key=delivery.dedup_key,
     )
     return {
-        "ok": bool(result.success),
+        "ok": bool(notification_result.success),
         "channel": channel,
         "recipient": target.address,
-        "message": result.message,
-        "status": result.status.value,
-        "error": result.error,
+        "message": notification_result.message,
+        "status": notification_result.status.value,
+        "error": notification_result.error,
     }
 
 
