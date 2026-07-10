@@ -25,6 +25,7 @@ from app.schemas.field import (
     FieldAttachmentRead,
     FieldCustomer,
     FieldEquipmentRead,
+    FieldExpenseRequestRead,
     FieldJobDetail,
     FieldJobEventRead,
     FieldJobLocation,
@@ -285,6 +286,7 @@ class FieldJobs:
         subscriber = db.get(Subscriber, row.subscriber_id)
         from app.services.field.attachments import field_attachments
         from app.services.field.equipment import field_equipment
+        from app.services.field.expense_requests import field_expense_requests
         from app.services.field.material_requests import field_material_requests
         from app.services.field.materials import field_materials
         from app.services.field.notes import field_notes
@@ -327,6 +329,16 @@ class FieldJobs:
                 offset=0,
             )
         ]
+        expense_requests = [
+            FieldExpenseRequestRead(**expense_request)
+            for expense_request in field_expense_requests.list_mine(
+                db,
+                principal,
+                crm_work_order_id=crm_work_order_id,
+                limit=50,
+                offset=0,
+            )
+        ]
         equipment = field_equipment.current_for_job(db, principal, crm_work_order_id)
         equipment_read = FieldEquipmentRead(**equipment) if equipment else None
         return FieldJobDetail(
@@ -340,6 +352,7 @@ class FieldJobs:
             attachments=attachments,
             materials=materials,
             material_requests=material_requests,
+            expense_requests=expense_requests,
             worklogs=worklogs,
             events=events,
             equipment=equipment_read,

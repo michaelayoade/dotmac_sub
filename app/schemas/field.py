@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Any, Literal
 from uuid import UUID
 
@@ -321,6 +322,67 @@ class FieldMaterialRequestRead(BaseModel):
     items: list[FieldMaterialRequestItemRead] = Field(default_factory=list)
 
 
+class FieldExpenseRequestItemCreate(BaseModel):
+    category_code: str = Field(min_length=1, max_length=30)
+    category_name: str | None = Field(default=None, max_length=120)
+    description: str = Field(min_length=1, max_length=500)
+    amount: Decimal = Field(gt=0)
+    expense_date: date | None = None
+    vendor_name: str | None = Field(default=None, max_length=200)
+    receipt_url: str | None = Field(default=None, max_length=500)
+    receipt_attachment_id: UUID | None = None
+    notes: str | None = Field(default=None, max_length=2000)
+
+
+class FieldExpenseRequestCreate(BaseModel):
+    crm_work_order_id: str = Field(min_length=1, max_length=64)
+    purpose: str = Field(min_length=1, max_length=500)
+    expense_date: date | None = None
+    currency: str = Field(default="NGN", min_length=3, max_length=3)
+    notes: str | None = Field(default=None, max_length=2000)
+    client_ref: UUID | None = None
+    items: list[FieldExpenseRequestItemCreate] = Field(min_length=1, max_length=50)
+
+
+class FieldExpenseRequestItemRead(BaseModel):
+    id: UUID
+    category_code: str
+    category_name: str | None = None
+    description: str
+    amount: Decimal
+    expense_date: date | None = None
+    vendor_name: str | None = None
+    receipt_url: str | None = None
+    receipt_attachment_id: UUID | None = None
+    notes: str | None = None
+
+
+class FieldExpenseRequestRead(BaseModel):
+    id: UUID
+    crm_work_order_id: str
+    crm_expense_request_id: str | None = None
+    requested_by_person_id: UUID
+    requested_by_system_user_id: UUID | None = None
+    status: str
+    purpose: str
+    expense_date: date | None = None
+    currency: str
+    notes: str | None = None
+    rejection_reason: str | None = None
+    erp_expense_claim_id: str | None = None
+    erp_claim_number: str | None = None
+    erp_claim_status: str | None = None
+    client_ref: UUID | None = None
+    total_amount: Decimal
+    submitted_at: datetime | None = None
+    approved_at: datetime | None = None
+    rejected_at: datetime | None = None
+    paid_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+    items: list[FieldExpenseRequestItemRead] = Field(default_factory=list)
+
+
 class FieldJobHistoryItem(BaseModel):
     id: str
     type: str
@@ -347,6 +409,7 @@ class FieldJobDetail(BaseModel):
     attachments: list[FieldAttachmentRead] = Field(default_factory=list)
     materials: list[FieldMaterialRead] = Field(default_factory=list)
     material_requests: list[FieldMaterialRequestRead] = Field(default_factory=list)
+    expense_requests: list[FieldExpenseRequestRead] = Field(default_factory=list)
     worklogs: list[FieldWorkLogRead] = Field(default_factory=list)
     events: list[FieldJobEventRead] = Field(default_factory=list)
     equipment: FieldEquipmentRead | None = None
