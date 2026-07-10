@@ -55,6 +55,15 @@ class CrmPushTask(Task):
             logger.exception("Failed to record CRM dead-letter for %s", task_id)
 
 
+def _redact_sensitive_payload(payload: dict | None) -> dict | None:
+    if not isinstance(payload, dict):
+        return payload
+    redacted = dict(payload)
+    if "nin" in redacted and redacted["nin"]:
+        redacted["nin"] = "<redacted>"
+    return redacted
+
+
 @celery_app.task(
     name="app.tasks.crm_sync.push_subscriber_change",
     base=CrmPushTask,
@@ -184,7 +193,7 @@ def _record_dead_letter(
                 entity="subscriber",
                 external_id=external_id,
                 external_system=external_system,
-                payload=payload,
+                payload=_redact_sensitive_payload(payload),
                 error=error[:2000],
                 attempts=attempts,
             )

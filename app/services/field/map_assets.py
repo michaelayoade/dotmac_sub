@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from math import asin, cos, radians, sin, sqrt
-from typing import Any
+from typing import Any, Protocol, TypeAlias, cast
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -19,16 +19,27 @@ _EARTH_RADIUS_M = 6_371_000.0
 _METERS_PER_DEGREE = 111_320.0
 
 
+class _MapAssetModel(Protocol):
+    is_active: Any
+    latitude: Any
+    longitude: Any
+    updated_at: Any
+
+
+MapAssetPayload: TypeAlias = dict[str, Any]
+MapAssetPayloadList: TypeAlias = list[MapAssetPayload]
+
+
 @dataclass(frozen=True)
 class _AssetConfig:
     asset_type: str
-    model: type
+    model: type[_MapAssetModel]
     title: str
     subtitle: Callable[[Any], str | None]
 
 
 def _compact(parts: list[str | None]) -> str | None:
-    text = " · ".join(part for part in parts if part)
+    text = " - ".join(part for part in parts if part)
     return text or None
 
 
@@ -74,19 +85,19 @@ def _bounds(
 _ASSETS: dict[str, _AssetConfig] = {
     "fdh_cabinet": _AssetConfig(
         asset_type="fdh_cabinet",
-        model=FdhCabinet,
+        model=cast(type[_MapAssetModel], FdhCabinet),
         title="name",
         subtitle=lambda row: row.code,
     ),
     "splice_closure": _AssetConfig(
         asset_type="splice_closure",
-        model=FiberSpliceClosure,
+        model=cast(type[_MapAssetModel], FiberSpliceClosure),
         title="name",
         subtitle=lambda row: None,
     ),
     "fiber_access_point": _AssetConfig(
         asset_type="fiber_access_point",
-        model=FiberAccessPoint,
+        model=cast(type[_MapAssetModel], FiberAccessPoint),
         title="name",
         subtitle=lambda row: _compact(
             [row.code, row.access_point_type, row.placement, row.street]
@@ -94,20 +105,20 @@ _ASSETS: dict[str, _AssetConfig] = {
     ),
     "service_building": _AssetConfig(
         asset_type="service_building",
-        model=ServiceBuilding,
+        model=cast(type[_MapAssetModel], ServiceBuilding),
         title="name",
         subtitle=lambda row: _compact([row.code, row.clli, row.street]),
     ),
     "wireless_mast": _AssetConfig(
         asset_type="wireless_mast",
-        model=WirelessMast,
+        model=cast(type[_MapAssetModel], WirelessMast),
         title="name",
         subtitle=lambda row: _compact([row.structure_type, row.owner]),
     ),
 }
 
 
-def _configs(asset_types: list[str] | None) -> list[_AssetConfig]:
+def _configs(asset_types: Sequence[str] | None) -> list[_AssetConfig]:
     if not asset_types:
         return list(_ASSETS.values())
     unknown = sorted(set(asset_types) - set(_ASSETS))
@@ -134,7 +145,7 @@ def _serialize(
     config: _AssetConfig,
     *,
     distance_m: float | None = None,
-) -> dict:
+) -> MapAssetPayload:
     return {
         "id": row.id,
         "type": config.asset_type,
@@ -157,8 +168,8 @@ class FieldMapAssets:
         updated_since: datetime | None = None,
         limit: int = 1000,
         offset: int = 0,
-    ) -> list[dict]:
-        items: list[dict] = []
+    ) -> list[MapAssetPayload]:
+        items: list[MapAssetPayload] = []
         for config in _configs(asset_types):
             model = config.model
             query = _base_query(db, config)
@@ -177,11 +188,11 @@ class FieldMapAssets:
         latitude: float,
         longitude: float,
         radius_m: float = 500.0,
-        asset_types: list[str] | None = None,
+        asset_types: Sequence[str] | None = None,
         limit: int = 50,
-    ) -> list[dict]:
+    ) -> MapAssetPayloadList:
         min_lat, max_lat, min_lng, max_lng = _bounds(latitude, longitude, radius_m)
-        items: list[dict] = []
+        items: list[MapAssetPayload] = []
         for config in _configs(asset_types):
             model = config.model
             rows = (
@@ -208,14 +219,14 @@ class FieldMapAssets:
         db: Session,
         query: str,
         *,
-        asset_types: list[str] | None = None,
+        asset_types: Sequence[str] | None = None,
         limit: int = 20,
-    ) -> list[dict]:
+    ) -> MapAssetPayloadList:
         term = query.strip().casefold()
         if not term:
             return []
 
-        items: list[dict] = []
+        items: list[MapAssetPayload] = []
         for config in _configs(asset_types):
             for row in _base_query(db, config).all():
                 payload = _serialize(row, config)
