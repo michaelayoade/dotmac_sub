@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -91,7 +92,9 @@ class InvoiceLineBase(BaseModel):
     amount: Decimal | None = None
     tax_rate_id: UUID | None = None
     tax_application: TaxApplication = TaxApplication.exclusive
-    metadata_: str | None = Field(
+    # JSONB in the ORM: dict payloads (e.g. subscription line context); str
+    # kept for legacy writers that send a pre-encoded JSON string.
+    metadata_: dict[str, Any] | str | None = Field(
         default=None,
         serialization_alias="metadata",
     )
@@ -114,7 +117,9 @@ class InvoiceLineUpdate(BaseModel):
     amount: Decimal | None = Field(default=None, ge=0)
     tax_rate_id: UUID | None = None
     tax_application: TaxApplication | None = None
-    metadata_: str | None = Field(
+    # JSONB in the ORM: dict payloads (e.g. subscription line context); str
+    # kept for legacy writers that send a pre-encoded JSON string.
+    metadata_: dict[str, Any] | str | None = Field(
         default=None,
         serialization_alias="metadata",
     )
@@ -174,7 +179,9 @@ class CreditNoteLineBase(BaseModel):
     amount: Decimal | None = None
     tax_rate_id: UUID | None = None
     tax_application: TaxApplication = TaxApplication.exclusive
-    metadata_: str | None = Field(
+    # JSONB in the ORM: dict payloads (e.g. subscription line context); str
+    # kept for legacy writers that send a pre-encoded JSON string.
+    metadata_: dict[str, Any] | str | None = Field(
         default=None,
         serialization_alias="metadata",
     )
@@ -196,7 +203,9 @@ class CreditNoteLineUpdate(BaseModel):
     amount: Decimal | None = Field(default=None, ge=0)
     tax_rate_id: UUID | None = None
     tax_application: TaxApplication | None = None
-    metadata_: str | None = Field(
+    # JSONB in the ORM: dict payloads (e.g. subscription line context); str
+    # kept for legacy writers that send a pre-encoded JSON string.
+    metadata_: dict[str, Any] | str | None = Field(
         default=None,
         serialization_alias="metadata",
     )
