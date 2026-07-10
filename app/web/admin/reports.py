@@ -13,7 +13,6 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.catalog import SubscriptionStatus
-from app.models.service_team import ServiceTeam
 from app.models.team_inbox import InboxConversation, InboxConversationStatus
 from app.services import ncc_subscriber_report as ncc_report_service
 from app.services import team_inbox_assignment
@@ -614,12 +613,7 @@ def _inbox_escalation_rows(
 
 
 def _active_service_team_options(db: Session):
-    return (
-        db.query(ServiceTeam)
-        .filter(ServiceTeam.is_active.is_(True))
-        .order_by(ServiceTeam.name.asc())
-        .all()
-    )
+    return team_inbox_metrics_service.active_service_team_options(db)
 
 
 def _inbox_escalation_return_url(

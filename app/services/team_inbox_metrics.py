@@ -464,6 +464,15 @@ def agent_performance_report(
     return rows
 
 
+def active_service_team_options(db: Session) -> list[ServiceTeam]:
+    return (
+        db.query(ServiceTeam)
+        .filter(ServiceTeam.is_active.is_(True))
+        .order_by(ServiceTeam.name.asc())
+        .all()
+    )
+
+
 def escalation_candidates(
     db: Session,
     *,
