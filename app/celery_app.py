@@ -88,11 +88,15 @@ celery_app.conf.task_routes = {
     "app.tasks.topology_sync.warm_topology_status": {"queue": "ingestion"},
     "app.tasks.infrastructure_polling.run_infrastructure_poll": {"queue": "ingestion"},
     "app.tasks.radius_health.run_radius_health_check": {"queue": "ingestion"},
+    "app.tasks.customer_impact_metrics.export_customer_impact_metrics": {
+        "queue": "ingestion"
+    },
     "app.tasks.monitoring_coverage.refresh_monitoring_coverage": {"queue": "ingestion"},
     "app.tasks.topology_lldp.run_lldp_topology_poll": {"queue": "ingestion"},
     "app.tasks.topology_outage.run_outage_scan": {"queue": "ingestion"},
     "app.tasks.topology_outage.reconcile_detected_outages": {"queue": "ingestion"},
     "app.tasks.topology_uisp.run_uisp_topology_sync": {"queue": "ingestion"},
+    "app.tasks.uisp_ip_backfill.run_uisp_mgmt_ip_backfill": {"queue": "ingestion"},
     "app.tasks.topology_ufiber_link.run_ufiber_onu_link": {"queue": "ingestion"},
     "app.tasks.topology_metrics.export_topology_metrics": {"queue": "ingestion"},
     "app.tasks.olt_mac_harvest.run_olt_mac_harvest": {"queue": "ingestion"},

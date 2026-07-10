@@ -1643,6 +1643,21 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(radius_health_seconds, 60),
         )
+        # Customer-impact counters (customers under outage / with infra
+        # tickets / suppressed from billing comms) -> VictoriaMetrics trends.
+        customer_impact_seconds = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "customer_impact_metrics_interval_seconds",
+            300,
+        )
+        _sync_scheduled_task(
+            session,
+            name="customer_impact_metrics",
+            task_name="app.tasks.customer_impact_metrics.export_customer_impact_metrics",
+            enabled=True,
+            interval_seconds=max(customer_impact_seconds, 120),
+        )
         # Warm cached live status for topology nodes (read by the Network Path
         # panel). Default 180s, matching the monitoring dashboard cache TTL.
         topology_status_seconds = _resolve_int(

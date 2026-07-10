@@ -38,6 +38,7 @@ from app.tasks.crm_ticket_push import (
     push_ticket_to_crm,
 )
 from app.tasks.cross_app_drift import run_cross_app_drift_detection
+from app.tasks.customer_impact_metrics import export_customer_impact_metrics
 from app.tasks.enforcement import cleanup_subscription_block_sessions
 from app.tasks.events import (
     cleanup_old_events,
@@ -149,6 +150,7 @@ from app.tasks.tr069 import (
 from app.tasks.tr069 import (
     sync_all_acs_devices as tr069_sync_all_acs_devices,
 )
+from app.tasks.uisp_ip_backfill import run_uisp_mgmt_ip_backfill
 from app.tasks.unmatched_radio import run_unmatched_radio_review
 from app.tasks.usage import (
     import_radius_accounting,
@@ -272,11 +274,13 @@ __all__ = [
     "run_topology_reconcile",
     "warm_topology_status",
     "run_infrastructure_poll",
+    "export_customer_impact_metrics",
     "run_radius_health_check",
     "run_lldp_topology_poll",
     "run_outage_scan",
     "reconcile_detected_outages",
     "run_uisp_topology_sync",
+    "run_uisp_mgmt_ip_backfill",
     "run_ufiber_onu_link",
     "run_unmatched_radio_review",
     "export_topology_metrics",

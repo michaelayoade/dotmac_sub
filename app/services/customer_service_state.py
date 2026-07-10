@@ -248,17 +248,21 @@ def subscribers_with_open_infrastructure_down_tickets(
 def subscription_ids_under_active_outage(
     session: Session, subscriptions
 ) -> set[object]:
-    """Subscription ids inside the blast radius of a live outage incident.
+    """Subset of ``subscriptions`` inside a live outage incident's blast radius."""
+    subscription_ids = {sub.id for sub in subscriptions if sub.id}
+    if not subscription_ids:
+        return set()
+    return active_outage_subscription_ids(session) & subscription_ids
+
+
+def active_outage_subscription_ids(session: Session) -> set[object]:
+    """Every subscription id inside the blast radius of a live outage incident.
 
     Live = operator-declared ``open`` plus the customer-visible classifier
     states (confirmed/clearing) — the same set ``open_incident_for_path``
     surfaces to customers. The blast radius per incident scope (root node /
     basestation / FDH cabinet) comes from ``topology.affected``.
     """
-    subscription_ids = {sub.id for sub in subscriptions if sub.id}
-    if not subscription_ids:
-        return set()
-
     from app.models.network_monitoring import NetworkDevice, OutageIncident, PopSite
     from app.services.topology.outage import CLASSIFIER_CUSTOMER_VISIBLE_STATUSES
 
@@ -307,7 +311,7 @@ def subscription_ids_under_active_outage(
         affected.update(
             s.id for s in impact.get("subscriptions", []) if getattr(s, "id", None)
         )
-    return affected & subscription_ids
+    return affected
 
 
 def is_infrastructure_down_ticket(ticket: Any) -> bool:

@@ -369,6 +369,13 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "Native ping/SNMP reachability sweep; probes only stale devices, so "
         "re-runs converge instead of duplicating work.",
     ),
+    "app.tasks.customer_impact_metrics.export_customer_impact_metrics": _c(
+        "monitoring",
+        SWEEP,
+        IDEMP,
+        HEALTH,
+        "Read-only fleet impact counters recomputed from source each run.",
+    ),
     "app.tasks.radius_health.run_radius_health_check": _c(
         "network",
         SWEEP,
@@ -379,6 +386,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     ),
     "app.tasks.topology_ufiber_link.run_ufiber_onu_link": _c(
         "network", SWEEP, IDEMP, HEALTH
+    ),
+    "app.tasks.uisp_ip_backfill.run_uisp_mgmt_ip_backfill": _c(
+        "network",
+        MANUAL,
+        IDEMP,
+        LOG,
+        "One-shot inventory backfill; re-runs only stamp still-empty mgmt_ips, "
+        "so redriving after a failure is safe.",
     ),
     "app.tasks.topology_uisp.run_uisp_topology_sync": _c(
         "network",
