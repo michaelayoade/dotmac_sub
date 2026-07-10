@@ -21,6 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       mobile: ${{ steps.filter.outputs.mobile }}
+      field_mobile: ${{ steps.filter.outputs.field_mobile }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -29,6 +30,9 @@ jobs:
           filters: |
             mobile:
               - 'mobile/**'
+              - '.github/workflows/mobile.yml'
+            field_mobile:
+              - 'field_mobile/**'
               - '.github/workflows/mobile.yml'
 
   flutter:
@@ -79,6 +83,47 @@ jobs:
       - name: Unit tests
         run: flutter test
 
+  field-flutter:
+    name: Field Flutter analyze & test
+    needs: changes
+    if: needs.changes.outputs.field_mobile == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: field_mobile
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.44.1
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Verify formatting (changed files)
+        run: |
+          if [ -n "${{ github.event.pull_request.base.sha }}" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          else
+            base="${{ github.event.before }}"
+          fi
+          files=$(cd .. && git diff --name-only "$base"...HEAD -- 'field_mobile/**/*.dart' 2>/dev/null | sed 's|^field_mobile/||')
+          if [ -z "$files" ]; then echo "No changed Dart files to format-check."; exit 0; fi
+          echo "Format-checking:"; echo "$files"
+          echo "$files" | xargs dart format --output=none --set-exit-if-changed
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Unit tests
+        run: flutter test
+
   # iOS can only be compiled on macOS — this proves the committed ios/ project
   # builds. No code signing (CI has no provisioning profile). Advisory: it is not
   # part of the required `Mobile CI` gate (macOS runs are slow/flaky for a
@@ -113,17 +158,19 @@ jobs:
   # intentionally excluded (advisory).
   gate:
     name: Mobile CI
-    needs: [flutter]
+    needs: [flutter, field-flutter]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Require Flutter checks (or skip on backend-only PRs)
         run: |
           result='${{ needs.flutter.result }}'
+          field_result='${{ needs.field-flutter.result }}'
           echo "flutter job result: $result"
-          if [ "$result" = "success" ] || [ "$result" = "skipped" ]; then
+          echo "field flutter job result: $field_result"
+          if { [ "$result" = "success" ] || [ "$result" = "skipped" ]; } && { [ "$field_result" = "success" ] || [ "$field_result" = "skipped" ]; }; then
             echo "Mobile CI gate passed."
           else
-            echo "Mobile CI gate failed (flutter=$result)."
+            echo "Mobile CI gate failed (flutter=$result, field_flutter=$field_result)."
             exit 1
           fi
