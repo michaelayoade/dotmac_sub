@@ -24,6 +24,7 @@ from app.tasks.billing import (
 from app.tasks.catalog import apply_due_subscription_changes, expire_subscriptions
 from app.tasks.collections import prepaid_balance_sweep, run_dunning
 from app.tasks.crm_billing_push import push_crm_billing_snapshots
+from app.tasks.crm_native_sync import pull_crm_phase3_native_delta
 from app.tasks.crm_sync import push_subscriber_change as push_crm_subscriber_change
 from app.tasks.crm_sync import redrive_crm_dead_letters
 from app.tasks.crm_ticket_pull import (
@@ -221,6 +222,7 @@ __all__ = [
     "push_ticket_to_crm",
     "push_comment_to_crm",
     "push_crm_billing_snapshots",
+    "pull_crm_phase3_native_delta",
     "auto_confirm_resolved_tickets",
     "retry_failed_inbox_outbound_messages",
     "promote_inbox_message_media_assets",

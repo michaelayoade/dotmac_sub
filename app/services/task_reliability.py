@@ -156,6 +156,15 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.crm_billing_push.push_crm_billing_snapshots": _c(
         "crm", DLQ, PER_ITEM, DEAD
     ),
+    "app.tasks.crm_native_sync.pull_crm_phase3_native_delta": _c(
+        "crm",
+        SWEEP,
+        IDEMP,
+        HEALTH,
+        "Phase 3 sync window (PR 9, dies at PR 15): watermarked importer "
+        "pass, all upserts ON CONFLICT on CRM UUIDs; the next beat run "
+        "re-covers anything a failed run missed.",
+    ),
     "app.tasks.crm_sync.push_subscriber_change": _c("crm", AUTORETRY, GUARDED, DEAD),
     "app.tasks.crm_sync.redrive_crm_dead_letters": _c("crm", DLQ, IDEMP, DEAD),
     "app.tasks.crm_ticket_pull.pull_crm_tickets": _c("crm", SWEEP, IDEMP, HEALTH),

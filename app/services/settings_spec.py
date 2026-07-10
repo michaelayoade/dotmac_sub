@@ -4151,6 +4151,23 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=False,
         label="Quotes: native write path (Phase 3 flip flag)",
     ),
+    # Phase 3 sync-window flag (§4.2 step 4, PR 9): while CRM remains the
+    # writer for projects/quotes/referrals (backfill done, write flip not
+    # yet), ON makes CRM webhooks ALSO apply thin status deltas to the
+    # NATIVE tables and enables the crm_phase3_native_delta beat (the
+    # backfill importer's watermark mode run in-process against the CRM
+    # DB), so the flip-day delta stays minutes. One flag for all verticals
+    # because the delta importer is cross-vertical by FK order (§3.5) — a
+    # per-vertical flag would misrepresent what actually runs. Default
+    # OFF; deleted with the whole adapter at the Phase 3 contract (PR 15).
+    SettingSpec(
+        domain=SettingDomain.projects,
+        key="crm_phase3_native_sync_enabled",
+        env_var="CRM_PHASE3_NATIVE_SYNC_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=False,
+        label="Phase 3: sync CRM changes into native tables (sync window)",
+    ),
 ]
 
 DOMAIN_SETTINGS_SERVICE = {

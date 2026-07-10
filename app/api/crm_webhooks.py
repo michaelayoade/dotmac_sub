@@ -35,6 +35,7 @@ from app.config import settings
 from app.db import get_db
 from app.models.crm_webhook_delivery import CrmWebhookDelivery
 from app.services import (
+    crm_native_sync,
     projects_mirror,
     quotes_mirror,
     referrals_mirror,
@@ -355,7 +356,11 @@ async def receive_crm_referral_event(
     if not _claim_delivery(db, _delivery_uuid(request), event_type):
         return {"status": "ignored", "reason": "duplicate", "event": event_type}
 
-    return referrals_mirror.apply_webhook(db, event_type, body)
+    result = referrals_mirror.apply_webhook(db, event_type, body)
+    # Phase 3 sync window (§4.2 step 4): ALSO apply the thin delta to the
+    # native referrals table (flag-gated inside; best-effort, never raises).
+    crm_native_sync.apply_webhook_delta(db, "referral", event_type, body)
+    return result
 
 
 @router.post("/projects")
@@ -394,7 +399,11 @@ async def receive_crm_project_event(
     inner = payload.get("payload")
     body = inner if isinstance(inner, dict) else payload
 
-    return projects_mirror.apply_webhook(db, event_type, body)
+    result = projects_mirror.apply_webhook(db, event_type, body)
+    # Phase 3 sync window (§4.2 step 4): ALSO apply the thin delta to the
+    # native projects table (flag-gated inside; best-effort, never raises).
+    crm_native_sync.apply_webhook_delta(db, "project", event_type, body)
+    return result
 
 
 @router.post("/work-orders")
@@ -487,4 +496,8 @@ async def receive_crm_quote_event(
     inner = payload.get("payload")
     body = inner if isinstance(inner, dict) else payload
 
-    return quotes_mirror.apply_webhook(db, event_type, body)
+    result = quotes_mirror.apply_webhook(db, event_type, body)
+    # Phase 3 sync window (§4.2 step 4): ALSO apply the thin delta to the
+    # native quotes table (flag-gated inside; best-effort, never raises).
+    crm_native_sync.apply_webhook_delta(db, "quote", event_type, body)
+    return result
