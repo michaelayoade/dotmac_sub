@@ -25,9 +25,11 @@ from app.schemas.support import (
 from app.schemas.team_inbox import (
     InboxConversationEscalateRequest,
     InboxConversationEscalationRead,
+    InboxConversationReplyRead,
+    InboxConversationReplyRequest,
 )
 from app.services import support as support_service
-from app.services import team_inbox_assignment
+from app.services import team_inbox_assignment, team_inbox_outbound
 from app.services.auth_dependencies import require_permission, require_user_auth
 
 router = APIRouter(prefix="/support", tags=["support"])
@@ -231,6 +233,61 @@ def escalate_inbox_conversation(
         assigned_person_id=(
             UUID(result.assigned_person_id) if result.assigned_person_id else None
         ),
+        reason=result.reason,
+    )
+
+
+@router.post(
+    "/inbox/conversations/{conversation_id}/reply",
+    response_model=InboxConversationReplyRead,
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def reply_to_inbox_conversation(
+    conversation_id: UUID,
+    payload: InboxConversationReplyRequest,
+    auth=Depends(require_user_auth),
+    db: Session = Depends(get_db),
+):
+    conversation = db.get(InboxConversation, conversation_id)
+    if conversation is None or not conversation.is_active:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    result = team_inbox_outbound.send_inbox_reply(
+        db,
+        conversation=conversation,
+        payload=team_inbox_outbound.InboxReplyPayload(
+            body_html=payload.body_html,
+            body_text=payload.body_text,
+            subject=payload.subject,
+            to_email=payload.to_email,
+            sent_by_person_id=_actor_id(auth),
+        ),
+    )
+    if result.kind == "invalid_conversation":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=result.reason,
+        )
+    if result.kind in {"missing_recipient", "empty_body"}:
+        raise HTTPException(status_code=400, detail=result.reason)
+    if result.kind == "send_failed":
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=result.reason,
+        )
+
+    db.commit()
+    return InboxConversationReplyRead(
+        conversation_id=UUID(result.conversation_id),
+        kind=result.kind,
+        message_id=UUID(result.message_id) if result.message_id else None,
+        service_team_id=UUID(result.service_team_id)
+        if result.service_team_id
+        else None,
+        sender_key=result.sender_key,
+        activity=result.activity,
+        from_address=result.from_address,
+        to_email=result.to_email,
         reason=result.reason,
     )
 
