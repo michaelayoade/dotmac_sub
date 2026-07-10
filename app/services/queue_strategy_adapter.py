@@ -97,7 +97,6 @@ TASK_QUEUE_ROUTING: dict[str, str] = {
     "app.tasks.olt_queue.": "tr069",
     # High-volume tasks -> dedicated queues (to be created)
     "app.tasks.bandwidth.": "bandwidth",
-    "app.tasks.zabbix_ingestion.": "ingestion",
     "app.tasks.usage.": "ingestion",
 }
 
@@ -119,7 +118,6 @@ TASK_PRIORITY_MAPPING: dict[str, TaskPriority] = {
     "app.tasks.monitoring_cleanup.": TaskPriority.low,
     # Bulk - always deferrable
     "app.tasks.bandwidth.": TaskPriority.bulk,
-    "app.tasks.zabbix_ingestion.": TaskPriority.bulk,
     "app.tasks.usage.": TaskPriority.bulk,
     "app.tasks.exports.": TaskPriority.bulk,
 }

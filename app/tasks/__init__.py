@@ -1,9 +1,6 @@
 from app.tasks.admin_alerts import evaluate_infrastructure_alerts
 from app.tasks.alert_evaluation import evaluate_alert_rules
-from app.tasks.app_cache import (
-    refresh_dashboard_stats_cache_task,
-    refresh_ont_zabbix_snapshot_cache_task,
-)
+from app.tasks.app_cache import refresh_dashboard_stats_cache_task
 from app.tasks.arrangements import check_overdue_arrangements
 from app.tasks.autopay import charge_due_invoices
 from app.tasks.bandwidth import (
@@ -69,7 +66,6 @@ from app.tasks.monitoring_cleanup import (
     sync_nas_to_monitoring as sync_nas_devices_to_monitoring,
 )
 from app.tasks.monitoring_coverage import refresh_monitoring_coverage
-from app.tasks.monitoring_warm import warm_monitoring_caches
 from app.tasks.mrr import snapshot_mrr
 from app.tasks.nas import (
     check_nas_health,
@@ -123,7 +119,7 @@ from app.tasks.support_tickets import auto_confirm_resolved_tickets
 from app.tasks.topology_lldp import run_lldp_topology_poll
 from app.tasks.topology_metrics import export_topology_metrics
 from app.tasks.topology_outage import reconcile_detected_outages, run_outage_scan
-from app.tasks.topology_sync import run_topology_reconcile, warm_topology_status
+from app.tasks.topology_sync import warm_topology_status
 from app.tasks.topology_ufiber_link import run_ufiber_onu_link
 from app.tasks.topology_uisp import run_uisp_topology_sync
 from app.tasks.tr069 import (
@@ -181,19 +177,6 @@ from app.tasks.wireguard import (
 )
 from app.tasks.work_orders import reconcile_work_order_mirror
 from app.tasks.workflow import detect_sla_breaches as retired_detect_sla_breaches
-from app.tasks.zabbix_ingestion import (
-    dispatch_portal_usage_ingestion,
-    ingest_olt_signals_from_zabbix,
-    ingest_portal_usage,
-    ingest_portal_usage_chunk,
-    repair_stale_olt_signal_ingest,
-)
-from app.tasks.zabbix_sync import (
-    remove_device_from_zabbix_task,
-    sync_devices_to_zabbix,
-    sync_single_nas_to_zabbix,
-    sync_single_olt_to_zabbix,
-)
 
 __all__ = [
     "cleanup_old_operations",
@@ -271,7 +254,6 @@ __all__ = [
     "snapshot_infrastructure_availability",
     "prune_infrastructure_availability",
     "prune_ip_pool_utilization_snapshots",
-    "run_topology_reconcile",
     "warm_topology_status",
     "run_infrastructure_poll",
     "export_customer_impact_metrics",
@@ -300,24 +282,13 @@ __all__ = [
     "evaluate_alert_rules",
     "evaluate_infrastructure_alerts",
     "refresh_dashboard_stats_cache_task",
-    "refresh_ont_zabbix_snapshot_cache_task",
     "cleanup_device_metrics",
     "sync_nas_devices_to_monitoring",
     "sync_inventory_devices_to_monitoring",
     "retired_detect_sla_breaches",
     "resume_expired_holds",
-    "dispatch_portal_usage_ingestion",
-    "ingest_olt_signals_from_zabbix",
-    "ingest_portal_usage",
-    "ingest_portal_usage_chunk",
-    "repair_stale_olt_signal_ingest",
-    "sync_devices_to_zabbix",
-    "sync_single_olt_to_zabbix",
-    "sync_single_nas_to_zabbix",
-    "remove_device_from_zabbix_task",
     # OLT queue processing (Phase 4)
     "execute_due_profile_sync_tasks",
-    "warm_monitoring_caches",
     "refresh_monitoring_coverage",
     # Router config sync/snapshot (keystone) — previously unregistered, so the
     # scheduled capture never ran. Importing here registers them with the worker.

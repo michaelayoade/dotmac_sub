@@ -10,7 +10,7 @@ tickets appear locally in seconds instead of waiting for the 5-minute pull.
 Updates/comments have no CRM webhook events and remain covered by the pull.
 
 Mounted with no router-level auth (see main.py) — authentication is the HMAC
-signature, fail-closed like the Zabbix webhook: unconfigured secret → 503,
+signature, fail-closed: unconfigured secret → 503,
 bad/missing signature → 401, compared in constant time.
 """
 
