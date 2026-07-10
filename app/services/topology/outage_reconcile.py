@@ -11,7 +11,7 @@ Each pass (mirrors the radius / outage-autodetect sweeps — advisory-lock
 single-flight in the task wrapper, per-item savepoint here so one bad candidate
 never poisons the run):
 
-1. **Verdicts** — classify every active, zabbix-linked node with the online
+1. **Verdicts** — classify every active node with the online
    overlay (``affected.subscriptions_for_nodes`` + proof-of-life) and mgmt
    ``live_status``; keep the nodes currently ``node_outage``. Localize each dark
    node to the deepest dark-under-live boundary (``localize_outage``) -> a
@@ -75,8 +75,7 @@ from app.services.topology.outage import (
 logger = logging.getLogger(__name__)
 
 # Single-flight guard (pg advisory lock via db_session_adapter.advisory_lock,
-# same pattern as radius reconcile / outage_autodetect). "oir" = Outage Incident
-# Reconcile — distinct from the autodetect scan's key so the two never contend.
+# same pattern as the radius reconcile). "oir" = Outage Incident Reconcile.
 ADVISORY_LOCK_KEY = 0x6F_69_72
 
 # W_confirm (suspected -> confirmed) is scaled by impact (design §7.6 decision 2):
@@ -207,45 +206,48 @@ class _Candidate:
 
 
 def _candidate_outages(session: Session, now: datetime) -> dict:
-    """Current classifier candidate outages, keyed by deepest-dark node id.
+    """Current classifier candidate outages, keyed by boundary node id.
 
-    One online-overlay pass over every active zabbix-linked node -> the nodes
-    currently ``node_outage`` -> localize each to its deepest dark-under-live
-    boundary. Whole-graph maps computed ONCE and reused (no per-candidate BFS).
+    Two detector arms feed one lifecycle:
+
+    1. **Dark nodes** — one online-overlay pass over every active node -> the
+       nodes currently ``node_outage`` -> localize each to its deepest
+       dark-under-live boundary.
+    2. **Wireless clusters** — an AP whose subscriber radios are down en masse
+       while nobody behind it is online. The AP itself often stays mgmt-UP
+       (``service_fault`` to the ladder), so the dark arm can never see it —
+       this arm carries the retired auto-detect scan's unique coverage, but
+       STATE-based (current radio state, not transition diffs) so recovery
+       debounces down through the ordinary lifecycle.
+
+    Whole-graph maps computed ONCE and reused (no per-candidate BFS).
     """
-    nodes = (
-        session.query(NetworkDevice)
-        .filter(
-            NetworkDevice.is_active.is_(True),
-            NetworkDevice.zabbix_hostid.isnot(None),
-        )
-        .all()
-    )
-    if not nodes:
-        return {}
-    node_ids = [n.id for n in nodes]
-    by_node = subscriptions_for_nodes(session, node_ids)
-    all_sub_ids = {s.id for subs in by_node.values() for s in subs}
-    online_ids = online_subscription_ids(session, all_sub_ids, now=now)
-    online_by_node = {
-        nid: sum(1 for s in by_node.get(nid, []) if s.id in online_ids)
-        for nid in node_ids
-    }
-    provisioned = {nid: len(by_node.get(nid, [])) for nid in node_ids}
-
-    dark_nodes = [
-        n
-        for n in nodes
-        if classify_node(n, online_by_node[n.id], provisioned[n.id] > 0) == NODE_OUTAGE
-    ]
-    if not dark_nodes:
-        return {}
-
-    dark_ids = {n.id for n in dark_nodes}
     adjacency = lldp_adjacency(session)
     dist = _dist_to_core(session, adjacency=adjacency)
-
     candidates: dict = {}
+
+    nodes = session.query(NetworkDevice).filter(NetworkDevice.is_active.is_(True)).all()
+    dark_nodes: list[NetworkDevice] = []
+    online_by_node: dict = {}
+    provisioned: dict = {}
+    if nodes:
+        node_ids = [n.id for n in nodes]
+        by_node = subscriptions_for_nodes(session, node_ids)
+        all_sub_ids = {s.id for subs in by_node.values() for s in subs}
+        online_ids = online_subscription_ids(session, all_sub_ids, now=now)
+        online_by_node = {
+            nid: sum(1 for s in by_node.get(nid, []) if s.id in online_ids)
+            for nid in node_ids
+        }
+        provisioned = {nid: len(by_node.get(nid, [])) for nid in node_ids}
+        dark_nodes = [
+            n
+            for n in nodes
+            if classify_node(n, online_by_node[n.id], provisioned[n.id] > 0)
+            == NODE_OUTAGE
+        ]
+
+    dark_ids = {n.id for n in dark_nodes}
     for dn in dark_nodes:
         # Localize among the ``node_outage`` nodes in this dark node's downstream
         # span only — not the full scope. localize_outage reads "dark" as
@@ -284,7 +286,117 @@ def _candidate_outages(session: Session, now: datetime) -> dict:
             classification=loc["class"],
             component_node_ids=component,
         )
+    _add_wireless_cluster_candidates(
+        session,
+        candidates,
+        dist=dist,
+        adjacency=adjacency,
+        online_by_node=online_by_node,
+        provisioned=provisioned,
+    )
     return candidates
+
+
+# UISP radio statuses that count as "up" — NULL covers rows written before the
+# status column existed (same reading as customer_path / affected).
+_RADIO_UP_STATUSES = (None, "active")
+
+# Wireless-cluster thresholds reuse the auto-detect scan's setting keys so
+# existing operator tuning carries over.
+MIN_AFFECTED_DEFAULT = 3
+MIN_FRACTION_PCT_DEFAULT = 40
+
+RADIO_CLUSTER_CLASSIFICATION = "radio_cluster"
+_RADIO_CLUSTER_CONFIDENCE = _CONFIDENCE_SCORE["medium"]
+
+
+def _add_wireless_cluster_candidates(
+    session: Session,
+    candidates: dict,
+    *,
+    dist: dict,
+    adjacency: dict,
+    online_by_node: dict,
+    provisioned: dict,
+) -> None:
+    """Add AP-scope candidates for wireless clusters the dark arm can't see.
+
+    An AP trips when BOTH thresholds pass — at least ``min_affected`` of its
+    subscriber-linked radios are currently down AND they are at least
+    ``min_fraction`` of its radio population — and nobody behind it holds a
+    live session (proof-of-life veto: one online customer kills the
+    candidate, chronic-churn noise included). A mgmt-DOWN AP is left to the
+    dark arm, which owns that shape. The online/provisioned maps come from
+    the population pass so the veto shares its time base (``now``).
+    """
+    from app.models.network import CPEDevice, DeviceStatus
+
+    min_affected = max(
+        _setting_int(session, "outage_autodetect_min_affected", MIN_AFFECTED_DEFAULT),
+        1,
+    )
+    min_fraction = (
+        max(
+            min(
+                _setting_int(
+                    session,
+                    "outage_autodetect_min_fraction_pct",
+                    MIN_FRACTION_PCT_DEFAULT,
+                ),
+                100,
+            ),
+            1,
+        )
+        / 100.0
+    )
+
+    per_ap: dict = {}
+    for parent_id, uisp_status in (
+        session.query(CPEDevice.parent_network_device_id, CPEDevice.last_uisp_status)
+        .filter(
+            CPEDevice.parent_network_device_id.isnot(None),
+            CPEDevice.subscriber_id.isnot(None),
+            CPEDevice.status == DeviceStatus.active,
+        )
+        .all()
+    ):
+        if uisp_status == "vanished":
+            continue
+        total, down = per_ap.get(parent_id, (0, 0))
+        per_ap[parent_id] = (
+            total + 1,
+            down + (0 if uisp_status in _RADIO_UP_STATUSES else 1),
+        )
+
+    for ap_id, (total, down) in per_ap.items():
+        if ap_id in candidates:
+            continue  # the dark arm already owns this boundary
+        if total <= 0 or down < min_affected or (down / total) < min_fraction:
+            continue
+        try:
+            ap = session.get(NetworkDevice, ap_id)
+            if ap is None or not ap.is_active:
+                continue
+            if (getattr(ap, "live_status", "") or "").strip().lower() == "down":
+                continue  # mgmt-dark AP is the dark arm's shape
+            if provisioned.get(ap.id, 0) <= 0 or online_by_node.get(ap.id, 0) > 0:
+                continue  # dormant scope, or proof of life vetoes the outage
+            component = set(
+                downstream_nodes(session, ap, dist=dist, adjacency=adjacency)
+            )
+            component.add(ap.id)
+            candidates[ap.id] = _Candidate(
+                root_node=ap,
+                basestation_id=ap.pop_site_id,
+                affected_count=provisioned[ap.id],
+                confidence=_RADIO_CLUSTER_CONFIDENCE,
+                classification=RADIO_CLUSTER_CLASSIFICATION,
+                component_node_ids=component,
+            )
+        except Exception:  # one bad AP must not poison the pass
+            logger.exception(
+                "outage_reconcile_wireless_candidate_failed", extra={"ap": str(ap_id)}
+            )
 
 
 def reconcile_detected_outages(

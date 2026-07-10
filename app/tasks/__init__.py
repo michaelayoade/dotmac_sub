@@ -118,7 +118,7 @@ from app.tasks.router_sync import (
 from app.tasks.support_tickets import auto_confirm_resolved_tickets
 from app.tasks.topology_lldp import run_lldp_topology_poll
 from app.tasks.topology_metrics import export_topology_metrics
-from app.tasks.topology_outage import reconcile_detected_outages, run_outage_scan
+from app.tasks.topology_outage import reconcile_detected_outages
 from app.tasks.topology_sync import warm_topology_status
 from app.tasks.topology_ufiber_link import run_ufiber_onu_link
 from app.tasks.topology_uisp import run_uisp_topology_sync
@@ -259,7 +259,6 @@ __all__ = [
     "export_customer_impact_metrics",
     "run_radius_health_check",
     "run_lldp_topology_poll",
-    "run_outage_scan",
     "reconcile_detected_outages",
     "run_uisp_topology_sync",
     "run_uisp_mgmt_ip_backfill",
