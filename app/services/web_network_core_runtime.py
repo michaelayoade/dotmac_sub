@@ -160,7 +160,8 @@ def refresh_devices_health(
         return totals
 
     workers = max(1, min(_bounded_max_workers(max_workers), len(targets)))
-    with ThreadPoolExecutor(max_workers=workers) as pool:
+    pool = ThreadPoolExecutor(max_workers=workers)
+    try:
         futures = [
             pool.submit(_refresh_device_health_worker, device_id, do_ping, do_snmp)
             for device_id, do_ping, do_snmp in targets
@@ -170,6 +171,13 @@ def refresh_devices_health(
                 future.result()
             except Exception:
                 logger.exception("Core-device refresh worker crashed unexpectedly.")
+    finally:
+        # cancel_futures: on an abnormal exit (Celery soft time limit) drop the
+        # queued backlog and wait only for the <= `workers` in-flight probes. A
+        # plain context-manager exit waits for the ENTIRE backlog, which turned
+        # soft kills into hard kills mid-cleanup and leaked the poll task's
+        # advisory lock into a pooled DB connection.
+        pool.shutdown(wait=True, cancel_futures=True)
     return totals
 
 
@@ -182,10 +190,13 @@ def refresh_stale_devices_health(
     include_snmp: bool = True,
     force: bool = False,
     max_workers: int = 12,
+    max_devices: int | None = None,
 ) -> dict[str, int]:
     """Refresh only devices whose ping or vendor-backed monitoring checks are stale.
 
     `force=True` refreshes all eligible devices regardless of recency.
+    `max_devices` caps one call to the N longest-unchecked stale devices so a
+    scheduled sweep always fits its time budget; the next run picks up the rest.
     """
     now = datetime.now(UTC)
     ping_interval_seconds = max(10, int(ping_interval_seconds or 0))
@@ -226,6 +237,17 @@ def refresh_stale_devices_health(
 
     if not stale_targets:
         return {"checked": 0, "ping": 0, "snmp": 0}
+    if max_devices is not None and len(stale_targets) > max_devices:
+        _epoch = datetime(1970, 1, 1, tzinfo=UTC)
+
+        def _last_checked(device: NetworkDevice) -> datetime:
+            checked = device.last_ping_at or device.last_snmp_at
+            if checked is None:
+                return _epoch
+            return checked if checked.tzinfo else checked.replace(tzinfo=UTC)
+
+        stale_targets.sort(key=_last_checked)
+        stale_targets = stale_targets[:max_devices]
     return refresh_devices_health(
         db,
         stale_targets,

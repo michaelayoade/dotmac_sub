@@ -85,6 +85,55 @@ def test_poll_infrastructure_delegates_to_stale_refresh(db_session, monkeypatch)
     }
 
 
+def test_refresh_stale_cap_takes_longest_unchecked(db_session, monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    probed = []
+    monkeypatch.setattr(
+        runtime,
+        "_refresh_device_health_worker",
+        lambda device_id, do_ping, do_snmp: probed.append(device_id),
+    )
+    now = datetime.now(UTC)
+    never = _device("cap-never", "10.80.7.1")
+    oldest = _device("cap-oldest", "10.80.7.2", last_ping_at=now - timedelta(hours=3))
+    newer = _device("cap-newer", "10.80.7.3", last_ping_at=now - timedelta(hours=1))
+    db_session.add_all([never, oldest, newer])
+    db_session.commit()
+
+    totals = runtime.refresh_stale_devices_health(
+        db_session,
+        [newer, never, oldest],
+        ping_interval_seconds=60,
+        snmp_interval_seconds=300,
+        max_devices=2,
+    )
+
+    assert totals["checked"] == 2
+    assert set(probed) == {str(never.id), str(oldest.id)}
+
+
+def test_counter_targets_skip_ping_down_devices(db_session):
+    from app.models.network_monitoring import DeviceInterface
+
+    up = _device("ctr-up", "10.80.8.1", snmp_enabled=True, last_ping_ok=True)
+    down = _device("ctr-down", "10.80.8.2", snmp_enabled=True, last_ping_ok=False)
+    unknown = _device("ctr-unknown", "10.80.8.3", snmp_enabled=True)
+    db_session.add_all([up, down, unknown])
+    db_session.flush()
+    for dev in (up, down, unknown):
+        db_session.add(
+            DeviceInterface(device_id=dev.id, name="sfp1", snmp_index=1, monitored=True)
+        )
+    db_session.commit()
+
+    names = {
+        device.name
+        for device, _ in infrastructure_polling.monitored_interface_targets(db_session)
+    }
+    assert names == {"ctr-up", "ctr-unknown"}
+
+
 def test_ping_transitions_drive_device_status(db_session, monkeypatch):
     device = _device("core-transition", "10.80.2.1")
     db_session.add(device)

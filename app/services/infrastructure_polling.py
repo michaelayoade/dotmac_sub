@@ -30,6 +30,12 @@ ADVISORY_LOCK_KEY = 0x6E_69_50
 DEFAULT_PING_INTERVAL_SECONDS = 60
 DEFAULT_SNMP_INTERVAL_SECONDS = 300
 
+# Cap one sweep to the N longest-unchecked stale devices. With 12 workers and
+# worst-case ~4s per down device this bounds a run to ~2 minutes — safely
+# inside the task's soft time limit even when the whole fleet is stale (fresh
+# deploy, poller downtime); successive 60s beat runs cover the remainder.
+DEFAULT_MAX_DEVICES_PER_RUN = 300
+
 # Raw IF-MIB octet counters for admin-monitored interfaces, pushed every sweep.
 # Counters (not rates): the reader (core_router_metrics) derives bps with
 # rate() at query time, so the poller stays stateless — no previous-sample
@@ -82,12 +88,14 @@ def poll_infrastructure(
     snmp_interval_seconds: int = DEFAULT_SNMP_INTERVAL_SECONDS,
     max_workers: int = 12,
     force: bool = False,
+    max_devices: int | None = DEFAULT_MAX_DEVICES_PER_RUN,
 ) -> dict[str, int]:
     """Run one reachability sweep over the pollable devices.
 
     Delegates to ``refresh_stale_devices_health`` — each probe runs in its own
     worker thread with an isolated, self-committing session, honours the
     ``maintenance`` operator override, and rolls status up the parent chain.
+    One run probes at most ``max_devices`` (longest-unchecked first).
     """
     devices = pollable_devices(db)
     totals = refresh_stale_devices_health(
@@ -98,6 +106,7 @@ def poll_infrastructure(
         include_snmp=True,
         force=force,
         max_workers=max_workers,
+        max_devices=max_devices,
     )
     totals["devices"] = len(devices)
     try:
@@ -110,13 +119,18 @@ def poll_infrastructure(
 def monitored_interface_targets(
     db: Session,
 ) -> list[tuple[NetworkDevice, list[DeviceInterface]]]:
-    """SNMP-enabled active devices with admin-monitored, indexed interfaces."""
+    """SNMP-enabled active devices with admin-monitored, indexed interfaces.
+
+    Devices whose last ping failed are skipped: they won't answer SNMP either,
+    and each one would cost a full snmpget timeout per OID chunk.
+    """
     rows = db.execute(
         select(NetworkDevice, DeviceInterface)
         .join(DeviceInterface, DeviceInterface.device_id == NetworkDevice.id)
         .where(
             NetworkDevice.is_active.is_(True),
             NetworkDevice.snmp_enabled.is_(True),
+            NetworkDevice.last_ping_ok.isnot(False),
             DeviceInterface.monitored.is_(True),
             DeviceInterface.snmp_index.isnot(None),
         )
