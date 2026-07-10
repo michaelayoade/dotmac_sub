@@ -118,6 +118,23 @@ def _generate_code(db: Session) -> str:
     )
 
 
+def native_read_enabled(db: Session) -> bool:
+    """Phase 3 read-flip flag (§4.2): native referral reads vs the CRM mirror.
+
+    OFF (default) — ``GET /me/referrals`` and the web Refer & Earn page keep
+    serving ``referrals_mirror``; ON — they serve the native tables via
+    ``Referrals.read_for_subscriber``. Lives in the §4.2
+    ``{vertical}_native_read_enabled`` flag family (``SettingDomain.projects``,
+    alongside ``quotes_native_write_enabled``), not with the five
+    ``referral_*`` program keys (``SettingDomain.subscriber``).
+    """
+    return bool(
+        settings_spec.resolve_value(
+            db, SettingDomain.projects, "referrals_native_read_enabled"
+        )
+    )
+
+
 def share_url(code: str) -> str:
     """The public share link for a referral code (the ``/r/{code}`` deep link).
 
@@ -600,6 +617,47 @@ class Referrals:
         return referral
 
     @staticmethod
+    def qualify_override(db: Session, referral_id: str) -> Referral:
+        """Admin override (Phase 3 §2.6): force-qualify a referral without
+        waiting for the referred subscriber's activation event.
+
+        Deliberately bypasses the program-enabled, subscriber-active and
+        qualification-window checks of ``qualify_for_subscriber`` — the
+        operator is asserting the referral is genuine (prospect signed up
+        out-of-band, or the window lapsed unfairly, so ``expired`` rows may
+        be rescued too). Reward fields snapshot the current program config,
+        exactly like the automatic path.
+        """
+        referral = get_or_404(db, Referral, str(referral_id), "Referral not found")
+        if referral.status not in (
+            ReferralStatus.pending.value,
+            ReferralStatus.expired.value,
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Cannot qualify a referral in status {referral.status}",
+            )
+        cfg = _config(db)
+        referral.status = ReferralStatus.qualified.value
+        referral.qualified_at = datetime.now(UTC)
+        referral.reward_amount = cfg["amount"]
+        referral.reward_currency = cfg["currency"]
+        referral.reward_status = (
+            ReferralRewardStatus.approved.value
+            if cfg["auto_approve"]
+            else ReferralRewardStatus.pending.value
+        )
+        db.commit()
+        db.refresh(referral)
+        logger.info(
+            "referral_qualified_override referral_id=%s referrer=%s amount=%s",
+            referral.id,
+            referral.referrer_subscriber_id,
+            referral.reward_amount,
+        )
+        return referral
+
+    @staticmethod
     def reject(db: Session, referral_id: str, reason: str) -> Referral:
         referral = get_or_404(db, Referral, str(referral_id), "Referral not found")
         referral.status = ReferralStatus.rejected.value
@@ -615,6 +673,7 @@ class Referrals:
         db: Session,
         *,
         status: str | None = None,
+        reward_status: str | None = None,
         referrer_subscriber_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
@@ -623,6 +682,11 @@ class Referrals:
         if status:
             member = validate_enum(status, ReferralStatus, "status")
             query = query.filter(Referral.status == member.value)
+        if reward_status:
+            reward_member = validate_enum(
+                reward_status, ReferralRewardStatus, "reward_status"
+            )
+            query = query.filter(Referral.reward_status == reward_member.value)
         if referrer_subscriber_id:
             query = query.filter(
                 Referral.referrer_subscriber_id == coerce_uuid(referrer_subscriber_id)

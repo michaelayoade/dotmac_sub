@@ -142,6 +142,7 @@ from app.services import customer_portal_flow_payments as customer_payments
 from app.services import geocoding as geocoding_service
 from app.services import notification as notification_service
 from app.services import portal_session as portal_session_service
+from app.services import projects as projects_service
 from app.services import (
     projects_mirror,
     quote_deposits,
@@ -151,6 +152,7 @@ from app.services import (
     work_orders_mirror,
 )
 from app.services import push as push_service
+from app.services import referrals as referrals_service
 from app.services import support as support_service
 from app.services import usage as usage_service
 from app.services import usage_summary as usage_summary_service
@@ -162,6 +164,7 @@ from app.services.bandwidth import (
     bandwidth_samples,
     with_subscriber_directions,
 )
+from app.services.sales import selfserve as selfserve_service
 from app.services.topology import connection_status as connection_status_service
 
 router = APIRouter(prefix="/me", tags=["me"])
@@ -849,8 +852,12 @@ def my_referrals(
     principal: dict = Depends(require_user_auth),
 ):
     """The caller's Refer & Earn summary — code, share link, program terms, and
-    history — served from the local mirror (refreshed from the CRM lazily)."""
+    history. Behind the Phase 3 ``referrals_native_read_enabled`` read-flip
+    flag (§4.2): OFF serves the local CRM mirror (refreshed lazily), ON serves
+    the native referral tables — same shape either way (§2.5)."""
     subscriber_id = _subscriber_id(principal)
+    if referrals_service.native_read_enabled(db):
+        return referrals_service.referrals.read_for_subscriber(db, subscriber_id)
     return referrals_mirror.read_for_subscriber(db, subscriber_id)
 
 
@@ -859,9 +866,13 @@ def my_projects(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """The caller's installations/projects — stage timeline + progress % —
-    served from the local mirror (refreshed from the CRM lazily)."""
+    """The caller's installations/projects — stage timeline + progress %.
+    Behind the Phase 3 ``projects_native_read_enabled`` read-flip flag (§4.2):
+    OFF serves the local CRM mirror (refreshed lazily), ON serves the native
+    ``projects`` table — same shape and ids either way (§2.5)."""
     subscriber_id = _subscriber_id(principal)
+    if projects_service.native_read_enabled(db):
+        return projects_service.portal_read_for_subscriber(db, subscriber_id)
     return projects_mirror.read_for_subscriber(db, subscriber_id)
 
 
@@ -928,8 +939,12 @@ def my_quotes(
     principal: dict = Depends(require_user_auth),
 ):
     """The caller's self-serve installation quotes — feasibility, estimate,
-    deposit, status — served from the local mirror (refreshed lazily)."""
+    deposit, status. Behind the Phase 3 ``quotes_native_read_enabled``
+    read-flip flag (§4.2): OFF serves the local CRM mirror (refreshed lazily),
+    ON serves sub's native ``quotes`` table — same shape either way (§2.5)."""
     subscriber_id = _subscriber_id(principal)
+    if selfserve_service.native_read_enabled(db):
+        return selfserve_service.selfserve_quotes.read_for_subscriber(db, subscriber_id)
     return quotes_mirror.read_for_subscriber(db, subscriber_id)
 
 
