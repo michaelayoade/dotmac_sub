@@ -4,8 +4,23 @@ The install deposit is collected by reusing the customer's normal invoice + pay
 flow — so every configured provider (Paystack / Flutterwave / bank transfer /
 saved card) works with no bespoke deposit gateway. A deposit Invoice is raised
 for the quote, paid via ``create_invoice_payment_intent`` +
-``verify_and_record_payment``, and on settlement the quote is accepted in the CRM
-(which records the deposit and triggers the sales order + install project).
+``verify_and_record_payment``, and on settlement the quote is accepted — which
+records the deposit and triggers the sales order + install project.
+
+Phase 3 (§2.2 step 4): the accept tail runs behind the
+``quotes_native_write_enabled`` flag (projects domain, default OFF):
+
+* OFF — write-through to the CRM (``quotes_mirror.accept_quote``), unchanged.
+* ON  — native accept (``sales.selfserve.accept_with_deposit``): the quote is
+  accepted in sub's own ``quotes`` table, firing the native sales-order
+  pipeline. The mirror row is upserted from the native payload afterwards so
+  mirror-based reads (``/me/quotes``, web portal — repointed in PR 8) and
+  ``initiate_deposit``'s dedup check stay coherent during the transition
+  window; that write-back dies with the mirror at the Phase 3 contract.
+
+Billing-safety invariant (risk #2): on either path the sole ledger event per
+deposit is ``verify_and_record_payment`` on the deposit invoice; the accept
+only marks the sales order.
 """
 
 from __future__ import annotations
@@ -19,14 +34,25 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.billing import InvoiceStatus
+from app.models.domain_settings import SettingDomain
 from app.models.quote_mirror import QuoteMirror
 from app.schemas.billing import InvoiceCreate
 from app.services import billing as billing_service
 from app.services import customer_portal_flow_payments as payments
-from app.services import quotes_mirror
+from app.services import quotes_mirror, settings_spec
 from app.services.common import coerce_uuid
+from app.services.sales import selfserve
 
 logger = logging.getLogger(__name__)
+
+
+def _native_write_enabled(db: Session) -> bool:
+    """Phase 3 flip flag: native quote accept vs CRM write-through."""
+    return bool(
+        settings_spec.resolve_value(
+            db, SettingDomain.projects, "quotes_native_write_enabled"
+        )
+    )
 
 
 def _quote_row(db: Session, subscriber_id: str, quote_id: str) -> QuoteMirror:
@@ -107,7 +133,21 @@ def verify_deposit(
     reference: str,
     provider: str | None = None,
 ) -> dict:
-    """Verify the deposit payment; on full settlement, accept the quote in the CRM."""
+    """Verify the deposit payment; on full settlement, accept the quote.
+
+    Acceptance is native or CRM write-through per the
+    ``quotes_native_write_enabled`` flag (module docstring).
+    """
+    if _native_write_enabled(db):
+        return _verify_deposit_native(
+            db,
+            customer,
+            subscriber_id,
+            quote_id,
+            reference=reference,
+            provider=provider,
+        )
+
     row = _quote_row(db, subscriber_id, quote_id)
     try:
         result = payments.verify_and_record_payment(
@@ -139,3 +179,66 @@ def verify_deposit(
         provider=provider,
     )
     return {"paid": True, "quote": quote, "reference": reference}
+
+
+def _verify_deposit_native(
+    db: Session,
+    customer: dict,
+    subscriber_id: str,
+    quote_id: str,
+    *,
+    reference: str,
+    provider: str | None = None,
+) -> dict:
+    """Native tail (§2.2 step 4): verify the payment, then accept the quote
+    in sub's own sales vertical — no CRM hop."""
+    quote = selfserve.selfserve_quotes.get_for_subscriber(db, subscriber_id, quote_id)
+    try:
+        result = payments.verify_and_record_payment(
+            db, customer, reference, provider=provider
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    invoice = result.get("invoice")
+    paid = (
+        invoice is not None and getattr(invoice, "status", None) == InvoiceStatus.paid
+    )
+    if not paid:
+        return {
+            "paid": False,
+            "quote": selfserve.build_portal_quote_payload(db, quote),
+            "reference": reference,
+        }
+
+    current = selfserve.build_portal_quote_payload(db, quote)
+    amount = str(result.get("amount") or current.get("deposit_amount") or "0")
+    payload = selfserve.selfserve_quotes.accept_with_deposit(
+        db,
+        str(subscriber_id),
+        str(quote_id),
+        deposit_reference=reference,
+        deposit_amount=amount,
+        provider=provider,
+    )
+    _sync_mirror_after_native_accept(db, subscriber_id, payload)
+    return {"paid": True, "quote": payload, "reference": reference}
+
+
+def _sync_mirror_after_native_accept(
+    db: Session, subscriber_id: str, payload: dict
+) -> None:
+    """Transitional: reflect the native accept into the quote mirror so
+    mirror-based reads and ``initiate_deposit``'s already-paid check stay
+    coherent until the PR 8 read flip / Phase 3 contract. Best-effort."""
+    try:
+        sub_uuid = coerce_uuid(str(subscriber_id))
+        quotes_mirror._upsert_row(db, subscriber_id=sub_uuid, item=payload)
+        db.commit()
+    except Exception:  # pragma: no cover - defensive
+        db.rollback()
+        logger.warning(
+            "quote_mirror_sync_after_native_accept_failed quote_id=%s",
+            payload.get("id"),
+            exc_info=True,
+        )
