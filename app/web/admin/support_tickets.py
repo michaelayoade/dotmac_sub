@@ -210,15 +210,23 @@ def ticket_create(
     related_outage_ticket_id: str | None = Form(default=None),
     assignee_person_ids: list[str] = Form(default=[]),
     attachments: list[UploadFile] = File(default=[]),
+    duplicate_override: str | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
     actor_id = _actor_id(request)
+    duplicate_confirmed = str(duplicate_override or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     try:
         ticket = support_web_service.create_ticket_from_form(
             db,
             request=request,
             actor_id=actor_id,
             attachments=attachments,
+            duplicate_override=duplicate_confirmed,
             title=title,
             description=description,
             subscriber_id=subscriber_id,
@@ -237,6 +245,46 @@ def ticket_create(
             tags=tags,
             related_outage_ticket_id=related_outage_ticket_id,
             assignee_person_ids=assignee_person_ids,
+        )
+    except support_web_service.DuplicateTicketWarningError as exc:
+        # Similar open tickets exist and the operator has not confirmed the
+        # override — re-render the form with the duplicate warning (409, like
+        # CRM's admin create flow) so they can review or tick "Create anyway".
+        db.rollback()
+        context = _ctx(request, db)
+        context.update(
+            support_web_service.build_ticket_form_context(
+                db,
+                query_params={
+                    "title": title,
+                    "description": description,
+                    "subscriber_id": subscriber_id or "",
+                    "customer_account_id": customer_account_id or "",
+                    "customer_person_id": customer_person_id or "",
+                    "region": region or "",
+                    "ticket_type": ticket_type or "",
+                    "priority": priority,
+                    "channel": channel,
+                    "status": status,
+                    "tags": tags or "",
+                    "related_outage_ticket_id": related_outage_ticket_id or "",
+                },
+            )
+        )
+        context.update(
+            {
+                "page_title": "New Ticket",
+                "form_mode": "create",
+                "ticket": None,
+                "error": (
+                    "A similar ticket already exists. Review the warning below, "
+                    "then open the existing ticket or tick Create anyway."
+                ),
+                "duplicate_warning": exc.result.as_dict(),
+            }
+        )
+        return templates.TemplateResponse(
+            "admin/support/tickets/new.html", context, status_code=409
         )
     except (ValidationError, ValueError) as exc:
         # Re-render the form with a clean message instead of a 500 (e.g. a
