@@ -2,6 +2,7 @@
 
 import csv
 from datetime import UTC, datetime, time
+from html import escape
 from io import StringIO
 from urllib.parse import quote_plus
 from uuid import UUID
@@ -15,7 +16,7 @@ from app.db import get_db
 from app.models.catalog import SubscriptionStatus
 from app.models.team_inbox import InboxConversation, InboxConversationStatus
 from app.services import ncc_subscriber_report as ncc_report_service
-from app.services import team_inbox_assignment
+from app.services import team_inbox_assignment, team_inbox_outbound
 from app.services import team_inbox_metrics as team_inbox_metrics_service
 from app.services import ticket_sla_reports as ticket_sla_reports_service
 from app.services import web_reports as web_reports_service
@@ -843,6 +844,89 @@ def reports_inbox_escalation_action(
         message = "Conversation moved to the target team queue."
     return RedirectResponse(
         _inbox_escalation_return_url(next, status="success", message=message),
+        status_code=303,
+    )
+
+
+@router.post(
+    "/inbox-escalations/{conversation_id}/reply",
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def reports_inbox_escalation_reply(
+    conversation_id: str,
+    request: Request,
+    body_text: str = Form(...),
+    next: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+):
+    from app.services import web_admin as web_admin_service
+
+    try:
+        conversation_uuid = UUID(str(conversation_id))
+    except ValueError:
+        return RedirectResponse(
+            _inbox_escalation_return_url(
+                next,
+                status="error",
+                message="Invalid conversation.",
+            ),
+            status_code=303,
+        )
+
+    clean_body = body_text.strip()
+    if not clean_body:
+        return RedirectResponse(
+            _inbox_escalation_return_url(
+                next,
+                status="error",
+                message="Reply body is required.",
+            ),
+            status_code=303,
+        )
+
+    conversation = db.get(InboxConversation, conversation_uuid)
+    if conversation is None or not conversation.is_active:
+        return RedirectResponse(
+            _inbox_escalation_return_url(
+                next,
+                status="error",
+                message="Conversation not found.",
+            ),
+            status_code=303,
+        )
+
+    body_html = (
+        "<p>" + "<br>".join(escape(line) for line in clean_body.splitlines()) + "</p>"
+    )
+    result = team_inbox_outbound.send_inbox_reply(
+        db,
+        conversation=conversation,
+        payload=team_inbox_outbound.InboxReplyPayload(
+            body_html=body_html,
+            body_text=clean_body,
+            sent_by_person_id=web_admin_service.get_actor_id(request),
+            metadata={"source_route": "admin_inbox_escalation_reply"},
+        ),
+    )
+
+    if result.kind != "sent":
+        return RedirectResponse(
+            _inbox_escalation_return_url(
+                next,
+                status="error",
+                message=result.reason or "Reply could not be sent.",
+            ),
+            status_code=303,
+        )
+
+    db.commit()
+    sender = result.from_address or result.sender_key or "team sender"
+    return RedirectResponse(
+        _inbox_escalation_return_url(
+            next,
+            status="success",
+            message=f"Reply sent from {sender}.",
+        ),
         status_code=303,
     )
 

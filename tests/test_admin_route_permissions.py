@@ -500,6 +500,12 @@ def test_report_routes_require_domain_permissions():
         "POST",
         "support:ticket:update",
     )
+    assert _route_has_permission(
+        admin_reports.router,
+        "/reports/inbox-escalations/{conversation_id}/reply",
+        "POST",
+        "support:ticket:update",
+    )
 
 
 # --- 2026-06-29 admin-web authz hardening (regression locks) -----------------

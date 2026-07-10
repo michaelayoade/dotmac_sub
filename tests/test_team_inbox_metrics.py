@@ -18,7 +18,7 @@ from app.models.team_inbox import (
     InboxTeamRole,
     InboxTeamSource,
 )
-from app.services import team_inbox_metrics
+from app.services import team_inbox_metrics, team_inbox_outbound
 from app.web.admin import reports as admin_reports
 
 
@@ -36,6 +36,7 @@ def _conversation(
         channel_type="email",
         status=InboxConversationStatus.open.value,
         subject="Need help",
+        contact_address="customer@example.com",
         first_message_at=first_at,
         last_message_at=first_at,
     )
@@ -490,3 +491,35 @@ def test_inbox_escalation_report_action_auto_assigns_candidate(db_session):
     assert conversation.metadata_["last_inbox_escalation"]["reason"] == (
         "Admin escalation report"
     )
+
+
+def test_inbox_escalation_report_reply_sends_team_message(db_session, monkeypatch):
+    team = _team(db_session)
+    conversation = _conversation(
+        db_session,
+        team,
+        first_at=datetime(2026, 1, 1, 8, 0, tzinfo=UTC),
+    )
+    sent: dict[str, object] = {}
+    monkeypatch.setattr(
+        team_inbox_outbound.email_service,
+        "send_email",
+        lambda *args, **kwargs: sent.update(kwargs) or True,
+    )
+    db_session.commit()
+
+    response = admin_reports.reports_inbox_escalation_reply(
+        str(conversation.id),
+        request=SimpleNamespace(state=SimpleNamespace()),
+        body_text="We are checking this now.",
+        next="/admin/reports/inbox-escalations",
+        db=db_session,
+    )
+
+    message = db_session.query(InboxMessage).one()
+    assert response.status_code == 303
+    assert "status=success" in response.headers["location"]
+    assert sent["to_email"] == "customer@example.com"
+    assert sent["activity"] == "support_ticket"
+    assert message.direction == InboxMessageDirection.outbound.value
+    assert message.metadata_["source_route"] == "admin_inbox_escalation_reply"
