@@ -64,10 +64,22 @@ def list_tickets(
     search: str | None = Query(default=None),
     status: str | None = Query(default=None),
     ticket_type: str | None = Query(default=None),
+    priority: str | None = Query(default=None),
+    channel: str | None = Query(default=None),
     assigned_to_person_id: str | None = Query(default=None),
+    created_by_person_id: str | None = Query(default=None),
     project_manager_person_id: str | None = Query(default=None),
     site_coordinator_person_id: str | None = Query(default=None),
     subscriber_id: str | None = Query(default=None),
+    is_active: bool | None = Query(default=None),
+    filters: str | None = Query(
+        default=None,
+        description=(
+            "Advanced JSON filter: rows [doctype, field, operator, value] "
+            'combined as {"and": [rows], "or": [rows]} or a list of rows '
+            'with optional inline {"or": [rows]} groups.'
+        ),
+    ),
     order_by: str = Query(default="created_at"),
     order_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
     limit: int = Query(default=50, ge=1, le=200),
@@ -76,17 +88,22 @@ def list_tickets(
 ):
     return support_service.tickets.list_response(
         db,
-        search,
-        status,
-        ticket_type,
-        assigned_to_person_id,
-        project_manager_person_id,
-        site_coordinator_person_id,
-        subscriber_id,
-        order_by,
-        order_dir,
-        limit,
-        offset,
+        search=search,
+        status=status,
+        ticket_type=ticket_type,
+        priority=priority,
+        channel=channel,
+        assigned_to_person_id=assigned_to_person_id,
+        created_by_person_id=created_by_person_id,
+        project_manager_person_id=project_manager_person_id,
+        site_coordinator_person_id=site_coordinator_person_id,
+        subscriber_id=subscriber_id,
+        is_active=is_active,
+        filters=filters,
+        order_by=order_by,
+        order_dir=order_dir,
+        limit=limit,
+        offset=offset,
     )
 
 
