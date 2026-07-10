@@ -121,6 +121,18 @@ def _bounded_max_workers(max_workers: int) -> int:
     return max(1, min(effective, 12))
 
 
+def _release_postgres_read_transaction(db: Session) -> None:
+    """Release a read transaction only where long idle transactions hurt us.
+
+    Test sessions commonly run inside a SQLite transaction fixture; rolling
+    that back here erases fixture data and expires caller-visible ORM objects.
+    The production issue this protects against is PostgreSQL-specific.
+    """
+    bind = db.get_bind()
+    if bind.dialect.name.startswith("postgres"):
+        db.rollback()
+
+
 @dataclass
 class PingResult:
     """Result of a core device ping probe."""
@@ -163,7 +175,7 @@ def refresh_devices_health(
     # The caller's session is only used to build the primitive target list.
     # Release the read transaction before the long ping/SNMP fan-out; each
     # worker opens and commits its own short-lived session.
-    db.rollback()
+    _release_postgres_read_transaction(db)
     pool = ThreadPoolExecutor(max_workers=workers)
     try:
         futures = [

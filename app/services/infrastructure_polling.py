@@ -52,6 +52,18 @@ PING_LOSS_METRIC = "device_ping_loss"
 _vm_writer = None
 
 
+def _release_postgres_read_transaction(db: Session) -> None:
+    """Release long PostgreSQL read transactions before external I/O.
+
+    SQLite test fixtures often wrap each test in a transaction; rolling that
+    transaction back inside the service deletes fixture rows. The production
+    idle-in-transaction guardrail this supports is PostgreSQL-specific.
+    """
+    bind = db.get_bind()
+    if bind.dialect.name.startswith("postgres"):
+        db.rollback()
+
+
 def _writer():
     global _vm_writer
     if _vm_writer is None:
@@ -170,7 +182,7 @@ def push_ping_metrics(db: Session, *, since: datetime) -> dict[str, int]:
 
     # Rows are materialized; release the read transaction before the VM HTTP
     # write so the advisory-lock connection is not idle-in-transaction.
-    db.rollback()
+    _release_postgres_read_transaction(db)
     write_result = _writer().write_prometheus_lines(
         lines,
         adapter="infrastructure.polling",
@@ -227,7 +239,7 @@ def push_interface_counters(
 
     # Targets are materialized; release the read transaction before slow SNMP
     # network calls and the VM HTTP write.
-    db.rollback()
+    _release_postgres_read_transaction(db)
     ts_ms = int((now or datetime.now(UTC)).timestamp() * 1000)
     lines: list[str] = []
     devices_read = 0
