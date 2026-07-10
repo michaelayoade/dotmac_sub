@@ -1,6 +1,8 @@
 """Admin reporting web routes."""
 
+import csv
 from datetime import UTC, datetime, time
+from io import StringIO
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, Response
@@ -10,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models.catalog import SubscriptionStatus
 from app.services import ncc_subscriber_report as ncc_report_service
+from app.services import team_inbox_metrics as team_inbox_metrics_service
 from app.services import ticket_sla_reports as ticket_sla_reports_service
 from app.services import web_reports as web_reports_service
 from app.services import web_reports_extended as web_reports_ext_service
@@ -55,6 +58,11 @@ REPORT_HUB_SECTIONS: list[dict] = [
                 "name": "Ticket SLA",
                 "url": "/admin/reports/ticket-sla",
                 "description": "Support ticket SLA breaches and operational cleanup",
+            },
+            {
+                "name": "Inbox Performance",
+                "url": "/admin/reports/inbox-performance",
+                "description": "Team response SLA, queue load, and agent assignments",
             },
         ],
     },
@@ -469,6 +477,167 @@ def reports_ticket_sla(
         "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
     }
     return templates.TemplateResponse("admin/reports/ticket_sla.html", context)
+
+
+def _seconds_label(value: float | None) -> str:
+    if value is None:
+        return "-"
+    minutes = value / 60
+    if minutes < 60:
+        return f"{minutes:.1f}m"
+    return f"{minutes / 60:.1f}h"
+
+
+def _percent(value: float | None) -> float:
+    return round((value or 0) * 100, 1)
+
+
+def _inbox_team_rows(db: Session, response_sla_seconds: int, include_inactive: bool):
+    rows = team_inbox_metrics_service.team_performance_report(
+        db,
+        response_sla_seconds=response_sla_seconds,
+        include_inactive=include_inactive,
+    )
+    team_rows = []
+    for row in rows:
+        metrics = row.metrics
+        response_rate = (
+            metrics.responded_count / metrics.inbound_message_count
+            if metrics.inbound_message_count
+            else None
+        )
+        breach_rate = (
+            metrics.response_sla_breached_count / metrics.inbound_message_count
+            if metrics.inbound_message_count
+            else None
+        )
+        team_rows.append(
+            {
+                "team_id": row.service_team_id,
+                "name": row.service_team_name,
+                "team_type": row.service_team_type,
+                "response_sla_seconds": row.response_sla_seconds,
+                "conversation_count": metrics.conversation_count,
+                "open_count": metrics.open_count,
+                "unassigned_open_count": metrics.unassigned_open_count,
+                "assigned_open_count": metrics.assigned_open_count,
+                "inbound_message_count": metrics.inbound_message_count,
+                "outbound_message_count": metrics.outbound_message_count,
+                "responded_count": metrics.responded_count,
+                "response_sla_breached_count": metrics.response_sla_breached_count,
+                "response_rate": response_rate,
+                "response_rate_percent": _percent(response_rate),
+                "response_sla_breach_rate": breach_rate,
+                "response_sla_breach_rate_percent": _percent(breach_rate),
+                "average_first_response": _seconds_label(
+                    metrics.average_first_response_seconds
+                ),
+                "average_queue_wait": _seconds_label(
+                    metrics.average_queue_wait_seconds
+                ),
+            }
+        )
+    return team_rows
+
+
+def _inbox_agent_rows(db: Session):
+    rows = team_inbox_metrics_service.agent_performance_report(db)
+    return [
+        {
+            "person_id": row.person_id,
+            "service_team_id": row.service_team_id,
+            "service_team_name": row.service_team_name,
+            "service_team_type": row.service_team_type,
+            "active_assignment_count": row.metrics.active_assignment_count,
+            "handled_conversation_count": row.metrics.handled_conversation_count,
+            "average_queue_wait": _seconds_label(
+                row.metrics.average_queue_wait_seconds
+            ),
+        }
+        for row in rows
+    ]
+
+
+@router.get(
+    "/inbox-performance",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("provisioning:read"))],
+)
+def reports_inbox_performance(
+    request: Request,
+    response_sla_seconds: int = Query(default=900, ge=60, le=86400),
+    include_inactive: bool = False,
+    db: Session = Depends(get_db),
+):
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    team_rows = _inbox_team_rows(db, response_sla_seconds, include_inactive)
+    agent_rows = _inbox_agent_rows(db)
+    inbound_total = sum(row["inbound_message_count"] for row in team_rows)
+    breached_total = sum(row["response_sla_breached_count"] for row in team_rows)
+    responded_total = sum(row["responded_count"] for row in team_rows)
+    context = {
+        "request": request,
+        "active_page": "reports-inbox-performance",
+        "active_menu": "reports",
+        "current_user": get_current_user(request),
+        "sidebar_stats": get_sidebar_stats(db),
+        "response_sla_seconds": response_sla_seconds,
+        "include_inactive": include_inactive,
+        "team_rows": team_rows,
+        "agent_rows": agent_rows,
+        "team_count": len(team_rows),
+        "open_count": sum(row["open_count"] for row in team_rows),
+        "unassigned_open_count": sum(row["unassigned_open_count"] for row in team_rows),
+        "breached_total": breached_total,
+        "response_rate_percent": _percent(
+            responded_total / inbound_total if inbound_total else None
+        ),
+        "breach_rate_percent": _percent(
+            breached_total / inbound_total if inbound_total else None
+        ),
+        "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
+    }
+    return templates.TemplateResponse("admin/reports/inbox_performance.html", context)
+
+
+@router.get(
+    "/inbox-performance/export",
+    dependencies=[Depends(require_permission("provisioning:read"))],
+)
+def reports_inbox_performance_export(
+    response_sla_seconds: int = Query(default=900, ge=60, le=86400),
+    include_inactive: bool = False,
+    db: Session = Depends(get_db),
+):
+    output = StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=[
+            "name",
+            "team_type",
+            "response_sla_seconds",
+            "conversation_count",
+            "open_count",
+            "unassigned_open_count",
+            "inbound_message_count",
+            "outbound_message_count",
+            "responded_count",
+            "response_sla_breached_count",
+            "response_rate_percent",
+            "response_sla_breach_rate_percent",
+            "average_first_response",
+            "average_queue_wait",
+        ],
+    )
+    writer.writeheader()
+    for row in _inbox_team_rows(db, response_sla_seconds, include_inactive):
+        writer.writerow({field: row[field] for field in writer.fieldnames})
+    return Response(
+        output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=inbox-performance.csv"},
+    )
 
 
 # ===================================================================
