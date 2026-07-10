@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -25,6 +25,9 @@ from app.services.notification_status_policy import status_allows_notification
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_MAX_RETRIES = 3
+DEFAULT_RETRY_BACKOFF_SECONDS = (60, 300, 900)
+
 
 @dataclass(frozen=True)
 class DeliveryTarget:
@@ -38,19 +41,29 @@ def dispatch_pending_deliveries(
     *,
     limit: int = 100,
     now: datetime | None = None,
+    max_retries: int = DEFAULT_MAX_RETRIES,
 ) -> list[OperationalEscalationDelivery]:
+    timestamp = now or datetime.now(UTC)
     deliveries = (
         db.query(OperationalEscalationDelivery)
         .join(OperationalEscalationEvent)
         .filter(
-            OperationalEscalationDelivery.delivery_status
-            == OperationalDeliveryStatus.pending
+            OperationalEscalationDelivery.delivery_status.in_(
+                [
+                    OperationalDeliveryStatus.pending,
+                    OperationalDeliveryStatus.failed,
+                ]
+            )
         )
         .order_by(OperationalEscalationDelivery.created_at.asc())
-        .limit(limit)
         .all()
     )
-    return [dispatch_delivery(db, delivery, now=now) for delivery in deliveries]
+    due = [
+        delivery
+        for delivery in deliveries
+        if _delivery_due(delivery, timestamp, max_retries=max_retries)
+    ][:limit]
+    return [dispatch_delivery(db, delivery, now=timestamp) for delivery in due]
 
 
 def dispatch_delivery(
@@ -115,6 +128,37 @@ def dispatch_delivery(
             exc,
         )
         return _fail_delivery(db, delivery, str(exc), timestamp)
+
+
+def delivery_audit_for_entity(
+    db: Session,
+    *,
+    entity_type: str,
+    entity_id: str | UUID,
+    recent_limit: int = 5,
+) -> dict[str, object]:
+    deliveries = (
+        db.query(OperationalEscalationDelivery)
+        .join(OperationalEscalationEvent)
+        .filter(OperationalEscalationEvent.entity_type == entity_type)
+        .filter(OperationalEscalationEvent.entity_id == str(entity_id))
+        .order_by(OperationalEscalationDelivery.created_at.desc())
+        .all()
+    )
+    counts = {
+        OperationalDeliveryStatus.pending: 0,
+        OperationalDeliveryStatus.sent: 0,
+        OperationalDeliveryStatus.failed: 0,
+        OperationalDeliveryStatus.suppressed: 0,
+        OperationalDeliveryStatus.acknowledged: 0,
+    }
+    for delivery in deliveries:
+        counts[delivery.delivery_status] = counts.get(delivery.delivery_status, 0) + 1
+    return {
+        "total": len(deliveries),
+        "counts": counts,
+        "recent": deliveries[:recent_limit],
+    }
 
 
 def _send_to_target(
@@ -656,14 +700,63 @@ def _fail_delivery(
     error: str,
     timestamp: datetime,
 ) -> OperationalEscalationDelivery:
+    retry_count = int((delivery.metadata_ or {}).get("retry_count") or 0) + 1
     delivery.delivery_status = OperationalDeliveryStatus.failed
     delivery.error_message = error
     delivery.metadata_ = {
         **(delivery.metadata_ or {}),
+        "retry_count": retry_count,
         "failed_at": timestamp.isoformat(),
+        "next_retry_at": _next_retry_at(timestamp, retry_count).isoformat(),
     }
     db.flush()
     return delivery
+
+
+def _delivery_due(
+    delivery: OperationalEscalationDelivery,
+    now: datetime,
+    *,
+    max_retries: int,
+) -> bool:
+    if delivery.event.status != OperationalEscalationStatus.open:
+        return True
+    if delivery.delivery_status == OperationalDeliveryStatus.pending:
+        if delivery.cooldown_until and _coerce_aware(delivery.cooldown_until) > now:
+            return False
+        return True
+    if delivery.delivery_status != OperationalDeliveryStatus.failed:
+        return False
+    metadata = delivery.metadata_ or {}
+    retry_count = int(metadata.get("retry_count") or 0)
+    if retry_count >= max_retries:
+        return False
+    next_retry_at = _parse_datetime(metadata.get("next_retry_at"))
+    return next_retry_at is None or next_retry_at <= now
+
+
+def _next_retry_at(timestamp: datetime, retry_count: int) -> datetime:
+    index = min(max(retry_count - 1, 0), len(DEFAULT_RETRY_BACKOFF_SECONDS) - 1)
+    return timestamp + timedelta(seconds=DEFAULT_RETRY_BACKOFF_SECONDS[index])
+
+
+def _parse_datetime(value: object) -> datetime | None:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return _coerce_aware(value)
+    if not isinstance(value, str):
+        return None
+    try:
+        return _coerce_aware(datetime.fromisoformat(value))
+    except ValueError:
+        return None
+
+
+def _coerce_aware(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def _uuid(value: str | UUID) -> UUID:

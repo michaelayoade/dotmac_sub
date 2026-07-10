@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -485,6 +486,105 @@ def test_dispatch_pending_suppresses_closed_event(db_session, monkeypatch):
     assert result.error_message == "event.canceled"
 
 
+def test_dispatch_pending_waits_for_delivery_cooldown(db_session, monkeypatch):
+    team = _team_with_member(db_session)
+    now = datetime(2026, 7, 10, 9, 0, tzinfo=UTC)
+    event = _event(db_session)
+    delivery = operational_escalation.plan_delivery(
+        db_session,
+        event=event,
+        channel=OperationalNotificationChannel.email,
+        recipient_type=OperationalParticipantType.team,
+        recipient_id=team.id,
+    )
+    delivery.cooldown_until = now + timedelta(minutes=5)
+
+    def fake_send_notification(*args, **kwargs):
+        raise AssertionError("cooling down deliveries must not send")
+
+    monkeypatch.setattr(
+        "app.services.notification_adapter.send_notification",
+        fake_send_notification,
+    )
+
+    assert (
+        operational_escalation_delivery.dispatch_pending_deliveries(
+            db_session,
+            now=now,
+        )
+        == []
+    )
+    assert delivery.delivery_status == OperationalDeliveryStatus.pending
+
+
+def test_dispatch_pending_retries_failed_delivery_after_backoff(
+    db_session,
+    monkeypatch,
+):
+    team = _team_with_member(db_session, email="retry@example.com")
+    now = datetime(2026, 7, 10, 9, 0, tzinfo=UTC)
+    event = _event(db_session)
+    delivery = operational_escalation.plan_delivery(
+        db_session,
+        event=event,
+        channel=OperationalNotificationChannel.email,
+        recipient_type=OperationalParticipantType.team,
+        recipient_id=team.id,
+    )
+    delivery.delivery_status = OperationalDeliveryStatus.failed
+    delivery.metadata_ = {
+        "retry_count": 1,
+        "next_retry_at": (now - timedelta(seconds=1)).isoformat(),
+    }
+    calls = []
+
+    def fake_send_notification(channel, recipient, message, **kwargs):
+        calls.append(recipient)
+        return _adapter_result()
+
+    monkeypatch.setattr(
+        "app.services.notification_adapter.send_notification",
+        fake_send_notification,
+    )
+
+    [result] = operational_escalation_delivery.dispatch_pending_deliveries(
+        db_session,
+        now=now,
+    )
+
+    assert result.id == delivery.id
+    assert result.delivery_status == OperationalDeliveryStatus.sent
+    assert calls == ["retry@example.com"]
+
+
+def test_dispatch_pending_does_not_retry_exhausted_delivery(db_session):
+    team = _team_with_member(db_session)
+    now = datetime(2026, 7, 10, 9, 0, tzinfo=UTC)
+    event = _event(db_session)
+    delivery = operational_escalation.plan_delivery(
+        db_session,
+        event=event,
+        channel=OperationalNotificationChannel.email,
+        recipient_type=OperationalParticipantType.team,
+        recipient_id=team.id,
+    )
+    delivery.delivery_status = OperationalDeliveryStatus.failed
+    delivery.metadata_ = {
+        "retry_count": 3,
+        "next_retry_at": (now - timedelta(minutes=30)).isoformat(),
+    }
+
+    assert (
+        operational_escalation_delivery.dispatch_pending_deliveries(
+            db_session,
+            now=now,
+            max_retries=3,
+        )
+        == []
+    )
+    assert delivery.delivery_status == OperationalDeliveryStatus.failed
+
+
 def test_dispatch_marks_failed_when_no_target(db_session):
     event = _event(db_session)
     delivery = operational_escalation.plan_delivery(
@@ -499,3 +599,5 @@ def test_dispatch_marks_failed_when_no_target(db_session):
 
     assert result.delivery_status == OperationalDeliveryStatus.failed
     assert result.error_message == "No delivery target"
+    assert result.metadata_["retry_count"] == 1
+    assert result.metadata_["next_retry_at"]

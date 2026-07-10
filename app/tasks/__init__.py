@@ -94,6 +94,7 @@ from app.tasks.ont_provisioning import (
     queue_bulk_provisioning,
 )
 from app.tasks.ont_signal_observations import record_ont_observations
+from app.tasks.operational_escalations import dispatch_operational_escalation_deliveries
 from app.tasks.payment_reconciliation import reconcile_topups
 from app.tasks.profile_sync import (
     execute_due_profile_sync_tasks,
@@ -249,6 +250,7 @@ __all__ = [
     "trim_bandwidth_stream",
     "backup_all_olts",
     "run_olt_mac_harvest",
+    "dispatch_operational_escalation_deliveries",
     "retry_failed_olt_connections",
     "retry_single_olt",
     "trigger_immediate_retry",

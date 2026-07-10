@@ -1372,6 +1372,34 @@ def build_beat_schedule() -> dict:
             enabled=notification_queue_enabled,
             interval_seconds=notification_queue_interval_seconds,
         )
+        operational_escalation_delivery_enabled = _effective_bool(
+            session,
+            SettingDomain.notification,
+            "operational_escalation_delivery_enabled",
+            "OPERATIONAL_ESCALATION_DELIVERY_ENABLED",
+            True,
+        )
+        operational_escalation_delivery_interval_seconds = _effective_int(
+            session,
+            SettingDomain.notification,
+            "operational_escalation_delivery_interval_seconds",
+            "OPERATIONAL_ESCALATION_DELIVERY_INTERVAL_SECONDS",
+            60,
+        )
+        operational_escalation_delivery_interval_seconds = max(
+            operational_escalation_delivery_interval_seconds,
+            30,
+        )
+        _sync_scheduled_task(
+            session,
+            name="operational_escalation_delivery_runner",
+            task_name=(
+                "app.tasks.operational_escalations."
+                "dispatch_operational_escalation_deliveries"
+            ),
+            enabled=operational_escalation_delivery_enabled,
+            interval_seconds=operational_escalation_delivery_interval_seconds,
+        )
         retention_enabled = _effective_bool(
             session,
             SettingDomain.catalog,

@@ -276,6 +276,7 @@ def outages_console(request: Request, db: Session = Depends(get_db)):
     incidents. No auto-detection, no notification sending."""
     from app.models.network import FdhCabinet
     from app.models.network_monitoring import NetworkDevice, PopSite
+    from app.services.operational_escalation_delivery import delivery_audit_for_entity
     from app.services.topology.affected import (
         list_basestations,
         list_fdh_cabinets,
@@ -307,7 +308,18 @@ def outages_console(request: Request, db: Session = Depends(get_db)):
             target = f"Node: {node.name}" if node else "Node"
         else:
             target = "—"
-        rows.append({"incident": inc, "target": target, "stale": is_stale_open(inc)})
+        rows.append(
+            {
+                "incident": inc,
+                "target": target,
+                "stale": is_stale_open(inc),
+                "delivery_audit": delivery_audit_for_entity(
+                    db,
+                    entity_type="outage",
+                    entity_id=inc.id,
+                ),
+            }
+        )
     context["incidents"] = rows
     return templates.TemplateResponse("admin/network/outages.html", context)
 
