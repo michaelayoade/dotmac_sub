@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Coroutine
 from textwrap import dedent
-
-import pytest
+from typing import Any
 
 from app.models.service_team import ServiceTeam, ServiceTeamType
 from app.models.team_inbox import InboxMessage, TeamInboxEmailRoute
@@ -14,6 +14,15 @@ class _Envelope:
         self.mail_from = mail_from
         self.rcpt_tos = rcpt_tos
         self.content = content
+
+
+def _run_immediate_coroutine(coroutine: Coroutine[Any, Any, str]) -> str:
+    try:
+        coroutine.send(None)
+    except StopIteration as exc:
+        return str(exc.value)
+    coroutine.close()
+    raise AssertionError("Expected handler coroutine to complete without awaiting.")
 
 
 def _team(db_session, name: str, team_type: str) -> ServiceTeam:
@@ -100,8 +109,7 @@ def test_handle_smtp_message_skips_self_sender(db_session):
     assert db_session.query(InboxMessage).count() == 0
 
 
-@pytest.mark.asyncio
-async def test_smtp_handler_returns_ok_for_accepted_message(db_session, monkeypatch):
+def test_smtp_handler_returns_ok_for_accepted_message(db_session, monkeypatch):
     support = _team(db_session, "Support", ServiceTeamType.support.value)
     _route(db_session, support, "support@dotmac.io")
     db_session.commit()
@@ -114,13 +122,15 @@ async def test_smtp_handler_returns_ok_for_accepted_message(db_session, monkeypa
         allowed_recipients={"support@dotmac.io"}
     )
 
-    response = await handler.handle_DATA(
-        None,
-        None,
-        _Envelope(
-            mail_from="customer@example.com",
-            rcpt_tos=["support@dotmac.io"],
-            content=_raw_email(message_id="handler"),
+    response = _run_immediate_coroutine(
+        handler.handle_DATA(
+            None,
+            None,
+            _Envelope(
+                mail_from="customer@example.com",
+                rcpt_tos=["support@dotmac.io"],
+                content=_raw_email(message_id="handler"),
+            ),
         ),
     )
 
