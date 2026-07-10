@@ -224,14 +224,6 @@ const _staffNav = [
   _NavItem(5, Icons.person_outline, 'Profile'),
 ];
 
-// Managers keep the same branch set but re-skinned: the Today branch hosts
-// the dashboard, Map becomes the team map, Schedule becomes dispatch, and
-// Expenses becomes the approvals queue.
-const _managerNav = [
-  _NavItem(0, Icons.dashboard_outlined, 'Dashboard'),
-  _NavItem(1, Icons.map_outlined, 'Team'),
-  _NavItem(2, Icons.assignment_ind_outlined, 'Dispatch'),
-  _NavItem(4, Icons.fact_check_outlined, 'Approvals'),
 // Vendors process sub-native work orders through the same execution tabs. The
 // Map branch remains vendor-scoped via _MapSwitch.
 const _vendorNav = [
