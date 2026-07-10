@@ -12,12 +12,21 @@ Reads CRM ``subscribers`` rows with ``external_system='selfcare'`` (their
 always read-only. The backfill is dry-run by default. Pass ``--apply`` to
 write.
 
+Metadata key semantics:
+  * ``crm_alias_ids`` is an OWNERSHIP claim ("these CRM subscriber rows are
+    duplicates of me") — consumers (ticket import, crm_duplicate_merge) treat
+    it as such.
+  * ``crm_previous_ids`` is provenance only ("this row used to point here").
+
 Decision rules:
   * CRM rows sharing one external_id: prefer the row already referenced by any
     sub ``crm_subscriber_id``, else the row with ``person_id`` set, else the
     newest ``updated_at``; losers are recorded in ``metadata.crm_alias_ids``.
   * Sub rows whose ``crm_subscriber_id`` disagrees with the chosen CRM row are
-    repointed; the old UUID is preserved in ``metadata.crm_alias_ids``.
+    repointed; the old UUID is preserved in ``metadata.crm_previous_ids``.
+  * An id found in a row's ``crm_alias_ids`` that is another row's primary
+    ``crm_subscriber_id`` is moved to ``crm_previous_ids``
+    (``alias_conflict_repaired``) — it is not this row's duplicate.
   * Sub rows pointing at a CRM id with no selfcare row pointing back are left
     untouched and reported (``dangling``).
   * Would-be violations of the partial-unique index
@@ -54,6 +63,7 @@ REPORT_ACTIONS = [
     "linked",
     "repointed",
     "alias_recorded",
+    "alias_conflict_repaired",
     "person_linked",
     "person_mismatch",
     "dangling",
@@ -95,7 +105,7 @@ class SubLinkRow:
 @dataclass(frozen=True)
 class SubscriberUpdate:
     subscriber_id: str
-    crm_subscriber_id: str
+    crm_subscriber_id: str | None
     metadata_json: str | None
 
 
@@ -108,6 +118,7 @@ class BackfillStats:
     linked: int = 0
     repointed: int = 0
     alias_recorded: int = 0
+    alias_conflict_repaired: int = 0
     person_linked: int = 0
     person_mismatch: int = 0
     dangling: int = 0
@@ -127,6 +138,7 @@ class BackfillStats:
             "linked": self.linked,
             "repointed": self.repointed,
             "alias_recorded": self.alias_recorded,
+            "alias_conflict_repaired": self.alias_conflict_repaired,
             "person_linked": self.person_linked,
             "person_mismatch": self.person_mismatch,
             "dangling": self.dangling,
@@ -228,6 +240,36 @@ def _append_alias(alias_ids: list[str], chosen_id: str, alias_id: str | None) ->
     return True
 
 
+def _id_list(metadata: dict[str, Any], key: str) -> list[str]:
+    raw = metadata.get(key)
+    if isinstance(raw, list):
+        return [str(item) for item in raw]
+    return []
+
+
+def _repair_alias_conflicts(
+    row_id: str,
+    alias_ids: list[str],
+    previous_ids: list[str],
+    ownership: dict[str, str],
+) -> list[str]:
+    """Move alias ids that are another row's primary link to previous_ids.
+
+    ``crm_alias_ids`` is an ownership claim; an id owned by a different sub
+    row cannot be this row's duplicate — it is stale repoint provenance.
+    """
+    moved = [
+        alias
+        for alias in alias_ids
+        if ownership.get(alias) is not None and ownership[alias] != row_id
+    ]
+    for alias in moved:
+        alias_ids.remove(alias)
+        if alias not in previous_ids:
+            previous_ids.append(alias)
+    return moved
+
+
 def choose_crm_link_row(
     rows: list[CrmLinkRow], referenced_crm_ids: set[str]
 ) -> tuple[CrmLinkRow, list[CrmLinkRow]]:
@@ -323,6 +365,16 @@ def build_plan(sub_rows: list[SubLinkRow], crm_rows: list[CrmLinkRow]) -> Backfi
         pending = remaining
     collision_ids = {row.id for row in pending}
 
+    def _report_repair(row_id: str, moved: list[str], current: str | None) -> None:
+        stats.alias_conflict_repaired += 1
+        plan.reports["alias_conflict_repaired"].append(
+            {
+                "subscriber_id": row_id,
+                "crm_subscriber_id": current,
+                "moved_to_previous_ids": ";".join(moved),
+            }
+        )
+
     for row in ordered:
         chosen = winners.get(row.id)
         current = row.crm_subscriber_id
@@ -338,6 +390,28 @@ def build_plan(sub_rows: list[SubLinkRow], crm_rows: list[CrmLinkRow]) -> Backfi
                 )
             else:
                 stats.unmatched += 1
+            metadata = _json(row.metadata_text, {}) or {}
+            if isinstance(metadata, dict):
+                orphan_alias_ids = _id_list(metadata, "crm_alias_ids")
+                orphan_previous_ids = _id_list(metadata, "crm_previous_ids")
+                moved = _repair_alias_conflicts(
+                    row.id, orphan_alias_ids, orphan_previous_ids, ownership
+                )
+                if moved:
+                    _report_repair(row.id, moved, current)
+                    merged = dict(metadata)
+                    if orphan_alias_ids:
+                        merged["crm_alias_ids"] = orphan_alias_ids
+                    else:
+                        merged.pop("crm_alias_ids", None)
+                    merged["crm_previous_ids"] = orphan_previous_ids
+                    plan.updates.append(
+                        SubscriberUpdate(
+                            subscriber_id=row.id,
+                            crm_subscriber_id=current,
+                            metadata_json=json.dumps(merged),
+                        )
+                    )
             continue
 
         if row.id in collision_ids:
@@ -360,10 +434,10 @@ def build_plan(sub_rows: list[SubLinkRow], crm_rows: list[CrmLinkRow]) -> Backfi
         link_changed = current != chosen.id
         metadata_changed = False
         alias_ids: list[str] = []
+        previous_ids: list[str] = []
         if metadata is not None:
-            raw_aliases = metadata.get("crm_alias_ids")
-            if isinstance(raw_aliases, list):
-                alias_ids = [str(alias) for alias in raw_aliases]
+            alias_ids = _id_list(metadata, "crm_alias_ids")
+            previous_ids = _id_list(metadata, "crm_previous_ids")
 
         if link_changed:
             if current is None:
@@ -379,7 +453,7 @@ def build_plan(sub_rows: list[SubLinkRow], crm_rows: list[CrmLinkRow]) -> Backfi
                 )
             else:
                 old_kept = metadata is not None and _append_alias(
-                    alias_ids, chosen.id, current
+                    previous_ids, chosen.id, current
                 )
                 if old_kept:
                     metadata_changed = True
@@ -390,7 +464,7 @@ def build_plan(sub_rows: list[SubLinkRow], crm_rows: list[CrmLinkRow]) -> Backfi
                         "subscriber_id": row.id,
                         "old_crm_subscriber_id": current,
                         "new_crm_subscriber_id": chosen.id,
-                        "old_kept_as_alias": old_kept,
+                        "old_kept_as_previous": old_kept,
                     }
                 )
 
@@ -412,6 +486,14 @@ def build_plan(sub_rows: list[SubLinkRow], crm_rows: list[CrmLinkRow]) -> Backfi
                     "alias_ids_total": len(alias_ids),
                 }
             )
+
+        if metadata is not None:
+            repaired = _repair_alias_conflicts(
+                row.id, alias_ids, previous_ids, ownership
+            )
+            if repaired:
+                metadata_changed = True
+                _report_repair(row.id, repaired, chosen.id)
 
         if chosen.person_id and metadata is not None:
             existing_person = _norm_id(metadata.get("crm_person_id"))
@@ -445,6 +527,10 @@ def build_plan(sub_rows: list[SubLinkRow], crm_rows: list[CrmLinkRow]) -> Backfi
             merged = dict(metadata)
             if alias_ids:
                 merged["crm_alias_ids"] = alias_ids
+            else:
+                merged.pop("crm_alias_ids", None)
+            if previous_ids:
+                merged["crm_previous_ids"] = previous_ids
             if chosen.person_id and _norm_id(metadata.get("crm_person_id")) is None:
                 merged["crm_person_id"] = chosen.person_id
             metadata_json = json.dumps(merged)
