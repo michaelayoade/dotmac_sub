@@ -77,13 +77,33 @@
         <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Open outages</h3>
         <table class="mt-4 w-full text-sm">
             <thead><tr class="text-left text-xs uppercase text-slate-400">
-                <th class="py-2">Target</th><th>Affected</th><th>Declared</th><th>By</th><th>Note</th><th></th>
+                <th class="py-2">Target</th><th>Affected</th><th>Deliveries</th><th>Declared</th><th>By</th><th>Note</th><th></th>
             </tr></thead>
             <tbody>
             {% for row in incidents %}
                 <tr class="border-t border-slate-100 dark:border-slate-700">
                     <td class="py-2 text-slate-700 dark:text-slate-200">{{ row.target }}{% if row.stale %} <span class="ml-1 rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300" title="Open longer than 36h — review and resolve if the outage is over">stale</span>{% endif %}</td>
                     <td class="font-semibold text-slate-900 dark:text-white">{{ row.incident.affected_count }}</td>
+                    <td class="min-w-[14rem] text-xs text-slate-500">
+                        {% set counts = row.delivery_audit.counts %}
+                        {% if row.delivery_audit.total %}
+                        <div class="flex flex-wrap gap-1">
+                            <span class="rounded bg-slate-100 px-1.5 py-0.5 text-slate-600 dark:bg-slate-700 dark:text-slate-200">pending {{ counts.pending }}</span>
+                            <span class="rounded bg-emerald-100 px-1.5 py-0.5 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">sent {{ counts.sent }}</span>
+                            <span class="rounded bg-rose-100 px-1.5 py-0.5 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300">failed {{ counts.failed }}</span>
+                            <span class="rounded bg-amber-100 px-1.5 py-0.5 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">suppressed {{ counts.suppressed }}</span>
+                        </div>
+                        {% if row.delivery_audit.recent %}
+                        <div class="mt-1 space-y-0.5">
+                            {% for delivery in row.delivery_audit.recent %}
+                            <div>{{ delivery.channel }} · {{ delivery.recipient_type }} · {{ delivery.delivery_status }}</div>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                        {% else %}
+                        —
+                        {% endif %}
+                    </td>
                     <td class="text-slate-500">{{ row.incident.started_at.strftime('%Y-%m-%d %H:%M') if row.incident.started_at else '—' }}</td>
                     <td class="text-slate-500">{{ row.incident.declared_by or '—' }}</td>
                     <td class="text-slate-500">{{ row.incident.note or '' }}</td>
@@ -94,7 +114,7 @@
                     </td>
                 </tr>
             {% else %}
-                <tr><td colspan="6" class="py-4 text-slate-400">No open outages.</td></tr>
+                <tr><td colspan="7" class="py-4 text-slate-400">No open outages.</td></tr>
             {% endfor %}
             </tbody>
         </table>

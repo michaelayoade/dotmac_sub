@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models.team_inbox import InboxConversation, InboxConversationStatus
 from app.schemas.common import ListResponse
 from app.schemas.support import (
     TicketBulkUpdateRequest,
@@ -21,8 +22,26 @@ from app.schemas.support import (
     TicketSlaEventUpdate,
     TicketUpdate,
 )
-from app.services import support as support_service
-from app.services import ticket_validation
+from app.schemas.team_inbox import (
+    InboxConversationContactLinkRead,
+    InboxConversationContactLinkRequest,
+    InboxConversationEscalateRequest,
+    InboxConversationEscalationRead,
+    InboxConversationListItemRead,
+    InboxConversationReplyRead,
+    InboxConversationReplyRequest,
+    InboxConversationTimelineRead,
+)
+from app.services import (
+    support as support_service,
+)
+from app.services import (
+    team_inbox_assignment,
+    team_inbox_contact_links,
+    team_inbox_outbound,
+    team_inbox_read,
+    ticket_validation,
+)
 from app.services.auth_dependencies import require_permission, require_user_auth
 
 router = APIRouter(prefix="/support", tags=["support"])
@@ -218,6 +237,234 @@ def manual_auto_assign(
 ):
     return support_service.tickets.manual_auto_assign(
         db, str(ticket_id), actor_id=_actor_id(auth), request=None
+    )
+
+
+@router.post(
+    "/inbox/conversations/{conversation_id}/escalate",
+    response_model=InboxConversationEscalationRead,
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def escalate_inbox_conversation(
+    conversation_id: UUID,
+    payload: InboxConversationEscalateRequest,
+    auth=Depends(require_user_auth),
+    db: Session = Depends(get_db),
+):
+    conversation = db.get(InboxConversation, conversation_id)
+    if conversation is None or not conversation.is_active:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    if conversation.status == InboxConversationStatus.resolved.value:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Resolved conversations cannot be escalated",
+        )
+
+    actor_id = _actor_id(auth)
+    if payload.assigned_person_id is not None:
+        result = team_inbox_assignment.assign_conversation_to_agent(
+            db,
+            conversation=conversation,
+            service_team_id=payload.service_team_id,
+            person_id=payload.assigned_person_id,
+            assigned_by_person_id=actor_id,
+            reason=payload.reason,
+        )
+    elif payload.auto_assign:
+        result = team_inbox_assignment.assign_conversation_to_available_agent(
+            db,
+            conversation=conversation,
+            service_team_id=payload.service_team_id,
+            assigned_by_person_id=actor_id,
+            reason=payload.reason,
+        )
+    else:
+        result = team_inbox_assignment.queue_conversation_for_team(
+            db,
+            conversation=conversation,
+            service_team_id=payload.service_team_id,
+            assigned_by_person_id=actor_id,
+            reason=payload.reason,
+        )
+
+    if result.kind in {"invalid_team", "invalid_agent"}:
+        raise HTTPException(status_code=400, detail=result.reason)
+
+    db.commit()
+    return InboxConversationEscalationRead(
+        conversation_id=conversation.id,
+        kind=result.kind,
+        service_team_id=UUID(result.service_team_id)
+        if result.service_team_id
+        else None,
+        assigned_person_id=(
+            UUID(result.assigned_person_id) if result.assigned_person_id else None
+        ),
+        reason=result.reason,
+    )
+
+
+@router.get(
+    "/inbox/conversations",
+    response_model=ListResponse[InboxConversationListItemRead],
+    dependencies=[Depends(require_permission("support:ticket:read"))],
+)
+def list_inbox_conversations(
+    search: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    channel_type: str | None = Query(default=None),
+    service_team_id: str | None = Query(default=None),
+    assigned_person_id: str | None = Query(default=None),
+    needs_response: bool = Query(default=False),
+    contact_resolution_status: str | None = Query(default=None),
+    priority_at_most: int | None = Query(default=None, ge=0, le=999),
+    muted: bool | None = Query(default=None),
+    snoozed: bool | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    clean_contact_resolution_status = (
+        contact_resolution_status.strip()
+        if isinstance(contact_resolution_status, str)
+        and contact_resolution_status.strip()
+        else None
+    )
+    clean_priority_at_most = (
+        priority_at_most if isinstance(priority_at_most, int) else None
+    )
+    clean_muted = muted if isinstance(muted, bool) else None
+    clean_snoozed = snoozed if isinstance(snoozed, bool) else None
+    result = team_inbox_read.list_conversations(
+        db,
+        search=search,
+        status=status,
+        channel_type=channel_type,
+        service_team_id=service_team_id,
+        assigned_person_id=assigned_person_id,
+        needs_response=needs_response,
+        contact_resolution_status=clean_contact_resolution_status,
+        priority_at_most=clean_priority_at_most,
+        muted=clean_muted,
+        snoozed=clean_snoozed,
+        limit=limit,
+        offset=offset,
+    )
+    return {
+        "items": [
+            InboxConversationListItemRead.model_validate(row, from_attributes=True)
+            for row in result.items
+        ],
+        "count": result.count,
+        "limit": result.limit,
+        "offset": result.offset,
+    }
+
+
+@router.get(
+    "/inbox/conversations/{conversation_id}",
+    response_model=InboxConversationTimelineRead,
+    dependencies=[Depends(require_permission("support:ticket:read"))],
+)
+def get_inbox_conversation_timeline(
+    conversation_id: UUID,
+    db: Session = Depends(get_db),
+):
+    timeline = team_inbox_read.get_conversation_timeline(db, conversation_id)
+    if timeline is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return InboxConversationTimelineRead.model_validate(timeline, from_attributes=True)
+
+
+@router.post(
+    "/inbox/conversations/{conversation_id}/reply",
+    response_model=InboxConversationReplyRead,
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def reply_to_inbox_conversation(
+    conversation_id: UUID,
+    payload: InboxConversationReplyRequest,
+    auth=Depends(require_user_auth),
+    db: Session = Depends(get_db),
+):
+    conversation = db.get(InboxConversation, conversation_id)
+    if conversation is None or not conversation.is_active:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    result = team_inbox_outbound.send_inbox_reply(
+        db,
+        conversation=conversation,
+        payload=team_inbox_outbound.InboxReplyPayload(
+            body_html=payload.body_html,
+            body_text=payload.body_text,
+            subject=payload.subject,
+            to_email=payload.to_email,
+            sent_by_person_id=_actor_id(auth),
+        ),
+    )
+    if result.kind == "invalid_conversation":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=result.reason,
+        )
+    if result.kind in {"missing_recipient", "empty_body"}:
+        raise HTTPException(status_code=400, detail=result.reason)
+    if result.kind == "send_failed":
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=result.reason,
+        )
+
+    db.commit()
+    return InboxConversationReplyRead(
+        conversation_id=UUID(result.conversation_id),
+        kind=result.kind,
+        message_id=UUID(result.message_id) if result.message_id else None,
+        service_team_id=UUID(result.service_team_id)
+        if result.service_team_id
+        else None,
+        sender_key=result.sender_key,
+        activity=result.activity,
+        from_address=result.from_address,
+        to_email=result.to_email,
+        reason=result.reason,
+    )
+
+
+@router.post(
+    "/inbox/conversations/{conversation_id}/contact-link",
+    response_model=InboxConversationContactLinkRead,
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def link_inbox_conversation_contact(
+    conversation_id: UUID,
+    payload: InboxConversationContactLinkRequest,
+    auth=Depends(require_user_auth),
+    db: Session = Depends(get_db),
+):
+    conversation = db.get(InboxConversation, conversation_id)
+    if conversation is None or not conversation.is_active:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    try:
+        result = team_inbox_contact_links.link_conversation_contact(
+            db,
+            conversation=conversation,
+            subscriber_id=payload.subscriber_id,
+            reseller_id=payload.reseller_id,
+            linked_by_person_id=_actor_id(auth),
+            note=payload.note,
+        )
+    except team_inbox_contact_links.ContactLinkError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db.commit()
+    return InboxConversationContactLinkRead(
+        conversation_id=conversation.id,
+        contact_link_id=result.contact_link_id,
+        channel_type=result.channel_type,
+        normalized_contact=result.normalized_contact,
+        subscriber_id=result.subscriber_id,
+        reseller_id=result.reseller_id,
+        previous_link_ids_deactivated=result.previous_link_ids_deactivated,
     )
 
 

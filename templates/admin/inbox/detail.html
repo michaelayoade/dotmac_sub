@@ -1,0 +1,390 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, status_badge, animation_styles %}
+
+{% block title %}Inbox Conversation - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("cyan", "slate") }}
+
+<div class="relative space-y-6">
+    {% if request.query_params.get('message') %}
+    <div class="rounded-xl border px-4 py-3 text-sm {% if request.query_params.get('status') == 'error' %}border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-800/40 dark:bg-rose-900/20 dark:text-rose-200{% else %}border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800/40 dark:bg-emerald-900/20 dark:text-emerald-200{% endif %}">
+        {{ request.query_params.get('message') }}
+    </div>
+    {% endif %}
+
+    {% call(content) page_header(
+        title=timeline.subject or "Inbox Conversation",
+        subtitle=(timeline.contact_address or "No contact address") ~ " · " ~ (timeline.channel_type | replace('_', ' ') | title),
+        icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h8M8 14h5m8-2a9 9 0 11-4.5-7.8L21 3v5h-5"/></svg>',
+        color="cyan",
+        color2="slate",
+        breadcrumbs=[
+            {"label": "Team Inbox", "href": "/admin/inbox"},
+            {"label": "Conversation"}
+        ]
+    ) %}
+        <a href="/admin/inbox" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Back</a>
+    {% endcall %}
+
+    {% if conversation_labels %}
+    <div class="flex flex-wrap gap-2">
+        {% for label in conversation_labels %}
+        <form method="post" action="/admin/inbox/{{ timeline.id }}/labels/remove" class="inline-flex">
+            <input type="hidden" name="label_id" value="{{ label.id }}">
+            <button type="submit" class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
+                <span class="h-2 w-2 rounded-full bg-cyan-500" data-label-color="{{ label.color }}"></span>
+                {{ label.name }}
+                <span class="text-slate-400">x</span>
+            </button>
+        </form>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="grid gap-6 xl:grid-cols-[1fr_22rem]">
+        {% call card("Timeline", color="cyan", padding=False) %}
+        {% if timeline.messages %}
+        <div class="divide-y divide-slate-100 dark:divide-slate-700/60">
+            {% for message in timeline.messages %}
+            <div class="px-6 py-5 {% if message.direction == 'internal' %}bg-slate-50/70 dark:bg-slate-900/20{% endif %}">
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                    <div class="flex items-center gap-2">
+                        {% if message.direction == 'inbound' %}
+                        {{ status_badge("Inbound", "warning", size="sm") }}
+                        {% elif message.direction == 'outbound' %}
+                        {{ status_badge("Outbound", "success", size="sm") }}
+                        {% elif message.direction == 'internal' %}
+                        {{ status_badge("Internal note", "info", size="sm") }}
+                        {% else %}
+                        {{ status_badge(message.direction | title, "info", size="sm") }}
+                        {% endif %}
+                        <span class="text-xs text-slate-500 dark:text-slate-400">{{ message.created_at }}</span>
+                    </div>
+                    <span class="font-mono text-[11px] text-slate-400 dark:text-slate-500">{{ message.id }}</span>
+                </div>
+                <p class="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-800 dark:text-slate-200">{{ message.body or "-" }}</p>
+                {% if message.attachments %}
+                <div class="mt-3 space-y-2">
+                    {% for attachment in message.attachments %}
+                    <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
+                        <span class="font-semibold">{{ attachment.type | default('attachment') | title }}</span>
+                        {% if attachment.filename %}<span> · {{ attachment.filename }}</span>{% endif %}
+                        {% if attachment.mime_type %}<span> · {{ attachment.mime_type }}</span>{% endif %}
+                        {% if attachment.caption %}<p class="mt-1">{{ attachment.caption }}</p>{% endif %}
+                        {% if attachment.url %}<a href="{{ attachment.url }}" class="mt-1 inline-block text-cyan-700 hover:underline dark:text-cyan-300" target="_blank" rel="noopener">Open attachment</a>{% endif %}
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+                <div class="mt-3 grid gap-1 text-xs text-slate-500 dark:text-slate-400 sm:grid-cols-2">
+                    <p>From: {{ message.from_address or "-" }}</p>
+                    <p>To: {{ message.to_addresses | join(', ') if message.to_addresses else "-" }}</p>
+                </div>
+                {% if message.metadata and message.metadata.get('delivery_status') == 'failed' %}
+                <form method="post" action="/admin/inbox/messages/{{ message.id }}/retry" class="mt-3">
+                    <button type="submit" class="rounded-lg border border-rose-300 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50 dark:border-rose-700 dark:text-rose-200 dark:hover:bg-rose-900/20">Retry failed send</button>
+                    <span class="ml-2 text-xs text-rose-600 dark:text-rose-300">{{ message.metadata.get('send_error') }}</span>
+                </form>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="px-6 py-8 text-center text-sm text-slate-500 dark:text-slate-400">No messages recorded for this conversation.</div>
+        {% endif %}
+        {% endcall %}
+
+        <div class="space-y-6">
+            {% call card("Reply", color="cyan") %}
+            <form method="post" action="/admin/inbox/{{ timeline.id }}/reply" class="space-y-3" data-reply-form>
+                <select data-template-select class="w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">Insert template</option>
+                    {% for template in template_options %}
+                    <option value="{{ template.id }}" data-body="{{ template.body_text|e }}">{{ template.name }} · {{ template.channel_type | replace('_', ' ') | title }}</option>
+                    {% endfor %}
+                </select>
+                <input type="hidden" name="template_id" data-template-id>
+                <select data-macro-select class="w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">Insert macro</option>
+                    {% for macro in macro_options %}
+                    <option value="{{ macro.id }}" data-body="{{ macro.body_text|e }}">{{ macro.name }}{% if macro.visibility == 'personal' %} · personal{% endif %}</option>
+                    {% endfor %}
+                </select>
+                <input type="hidden" name="macro_id" data-macro-id>
+                <textarea name="body_text" rows="6" required placeholder="Type a customer reply" class="w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" data-reply-body></textarea>
+                <button type="submit" class="w-full rounded-lg bg-cyan-700 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-800">Send reply</button>
+            </form>
+            {% endcall %}
+
+            {% call card("Operations", color="slate") %}
+            <div class="space-y-4">
+                <form method="post" action="/admin/inbox/{{ timeline.id }}/workflow" class="space-y-3">
+                    <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Workflow</p>
+                    <div class="grid grid-cols-2 gap-2">
+                        <label class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                            Priority
+                            <input type="number" name="priority" min="0" max="999" value="{{ timeline.priority }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </label>
+                        <label class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                            Snooze
+                            <select name="snooze_minutes" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <option value="">No change</option>
+                                <option value="0">Clear</option>
+                                <option value="60">1 hour</option>
+                                <option value="240">4 hours</option>
+                                <option value="1440">1 day</option>
+                            </select>
+                        </label>
+                    </div>
+                    <label class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                        Mute
+                        <select name="is_muted" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">No change</option>
+                            <option value="true" {% if timeline.is_muted %}selected{% endif %}>Muted</option>
+                            <option value="false" {% if not timeline.is_muted %}selected{% endif %}>Not muted</option>
+                        </select>
+                    </label>
+                    {% if timeline.snoozed_until %}
+                    <p class="text-xs text-slate-500 dark:text-slate-400">Snoozed until {{ timeline.snoozed_until }}</p>
+                    {% endif %}
+                    <button type="submit" class="w-full rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200">Update workflow</button>
+                </form>
+
+                <div>
+                    <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Status</p>
+                    <div class="mt-2 grid grid-cols-2 gap-2">
+                        {% for option in ['open', 'pending', 'snoozed', 'resolved'] %}
+                        <form method="post" action="/admin/inbox/{{ timeline.id }}/status">
+                            <input type="hidden" name="status_value" value="{{ option }}">
+                            <button type="submit" class="w-full rounded-lg border px-3 py-2 text-xs font-semibold {% if timeline.status == option %}border-cyan-500 bg-cyan-50 text-cyan-800 dark:border-cyan-400 dark:bg-cyan-900/30 dark:text-cyan-100{% else %}border-slate-200 text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700{% endif %}">
+                                {{ option | title }}
+                            </button>
+                        </form>
+                        {% endfor %}
+                    </div>
+                </div>
+
+                <form method="post" action="/admin/inbox/{{ timeline.id }}/note" class="space-y-3">
+                    <label for="internal_note" class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Private note</label>
+                    <textarea id="internal_note" name="body_text" rows="4" required placeholder="Add an internal note" class="w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></textarea>
+                    <button type="submit" class="w-full rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">Save note</button>
+                </form>
+            </div>
+            {% endcall %}
+
+            {% call card("Collaboration", color="cyan") %}
+            <div class="space-y-4">
+                <form method="post" action="/admin/inbox/{{ timeline.id }}/comments" class="space-y-3">
+                    <label for="comment_body" class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Comment</label>
+                    <textarea id="comment_body" name="body_text" rows="4" required placeholder="Add a team comment" class="w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></textarea>
+                    <button type="submit" class="w-full rounded-lg border border-cyan-300 px-4 py-2 text-sm font-semibold text-cyan-800 hover:bg-cyan-50 dark:border-cyan-700 dark:text-cyan-200 dark:hover:bg-cyan-900/20">Save comment</button>
+                </form>
+                <div class="space-y-2 border-t border-slate-200 pt-4 dark:border-slate-700">
+                    {% for comment in timeline.comments %}
+                    <div class="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-700 dark:bg-slate-900/40">
+                        <div class="flex items-start justify-between gap-3">
+                            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">{{ comment.author_person_id or "System" }}</p>
+                            {% if comment.is_resolved %}
+                            {{ status_badge("Resolved", "success", size="sm") }}
+                            {% else %}
+                            <form method="post" action="/admin/inbox/comments/{{ comment.id }}/resolve">
+                                <button type="submit" class="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-white dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800">Resolve</button>
+                            </form>
+                            {% endif %}
+                        </div>
+                        <p class="mt-2 whitespace-pre-wrap text-slate-800 dark:text-slate-200">{{ comment.body }}</p>
+                        <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">{{ comment.created_at }}</p>
+                    </div>
+                    {% else %}
+                    <p class="text-sm text-slate-500 dark:text-slate-400">No comments yet.</p>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endcall %}
+
+            {% call card("Labels & Macros", color="slate") %}
+            <div class="space-y-4">
+                <form method="post" action="/admin/inbox/{{ timeline.id }}/labels/apply" class="space-y-2">
+                    <label for="label_id" class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Apply label</label>
+                    <div class="grid grid-cols-[1fr_auto] gap-2">
+                        <select id="label_id" name="label_id" required class="w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Select label</option>
+                            {% for label in label_options %}
+                            <option value="{{ label.id }}">{{ label.name }}{% if label.usage_count %} · {{ label.usage_count }}{% endif %}</option>
+                            {% endfor %}
+                        </select>
+                        <button type="submit" class="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200">Apply</button>
+                    </div>
+                </form>
+
+                <form method="post" action="/admin/inbox/{{ timeline.id }}/labels/create" class="space-y-2 border-t border-slate-200 pt-4 dark:border-slate-700">
+                    <label for="new_label_name" class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Create label</label>
+                    <input id="new_label_name" name="name" placeholder="Label name" class="w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <select name="color" class="w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% for color in ['slate', 'blue', 'indigo', 'violet', 'emerald', 'teal', 'amber', 'orange', 'rose', 'red'] %}
+                        <option value="{{ color }}">{{ color | title }}</option>
+                        {% endfor %}
+                    </select>
+                    <button type="submit" class="w-full rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200">Save label</button>
+                </form>
+
+                <form method="post" action="/admin/inbox/{{ timeline.id }}/macros/create" class="space-y-2 border-t border-slate-200 pt-4 dark:border-slate-700">
+                    <label for="macro_name" class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Create reply macro</label>
+                    <input id="macro_name" name="name" placeholder="Macro name" class="w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <input name="description" placeholder="Description" class="w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <textarea name="body_text" rows="3" placeholder="Reply text" class="w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></textarea>
+                    <select name="visibility" class="w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="shared">Shared</option>
+                        <option value="personal">Personal</option>
+                    </select>
+                    <button type="submit" class="w-full rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200">Save macro</button>
+                </form>
+
+                <form method="post" action="/admin/inbox/{{ timeline.id }}/templates/create" class="space-y-2 border-t border-slate-200 pt-4 dark:border-slate-700">
+                    <label for="template_name" class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Create message template</label>
+                    <input id="template_name" name="name" placeholder="Template name" class="w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <select name="channel_type" class="w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="any">Any channel</option>
+                        {% for option in ['email', 'whatsapp', 'facebook_messenger', 'instagram_dm', 'chat_widget'] %}
+                        <option value="{{ option }}">{{ option | replace('_', ' ') | title }}</option>
+                        {% endfor %}
+                    </select>
+                    <input name="subject" placeholder="Subject" class="w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <textarea name="body_text" rows="3" placeholder="Template text" class="w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></textarea>
+                    <input name="provider_template_name" placeholder="WhatsApp approved template name" class="w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <input name="provider_template_language" placeholder="Language, e.g. en" class="w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <button type="submit" class="w-full rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200">Save template</button>
+                </form>
+            </div>
+            {% endcall %}
+
+            {% call card("Contact Link", color="cyan") %}
+            {% set resolution = timeline.metadata.get('contact_resolution') if timeline.metadata else {} %}
+            <div class="space-y-4">
+                <dl class="space-y-2 text-xs">
+                    <div class="flex justify-between gap-3">
+                        <dt class="font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Resolution</dt>
+                        <dd class="text-right text-slate-800 dark:text-slate-100">{{ resolution.get('status', 'unmatched') | replace('_', ' ') | title }}</dd>
+                    </div>
+                    <div class="flex justify-between gap-3">
+                        <dt class="font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Subscriber</dt>
+                        <dd class="break-all text-right text-slate-800 dark:text-slate-100">{{ timeline.subscriber_id or resolution.get('subscriber_id') or '-' }}</dd>
+                    </div>
+                    <div class="flex justify-between gap-3">
+                        <dt class="font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Reseller</dt>
+                        <dd class="break-all text-right text-slate-800 dark:text-slate-100">{{ resolution.get('reseller_id') or '-' }}</dd>
+                    </div>
+                </dl>
+
+                <form method="post" action="/admin/inbox/{{ timeline.id }}/contact-link" class="space-y-3">
+                    <div class="grid grid-cols-2 gap-2 text-sm">
+                        <label class="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 dark:border-slate-600">
+                            <input type="radio" name="target_type" value="subscriber" checked class="border-slate-300 text-cyan-600">
+                            <span class="font-medium text-slate-700 dark:text-slate-200">Subscriber</span>
+                        </label>
+                        <label class="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 dark:border-slate-600">
+                            <input type="radio" name="target_type" value="reseller" class="border-slate-300 text-cyan-600">
+                            <span class="font-medium text-slate-700 dark:text-slate-200">Reseller</span>
+                        </label>
+                    </div>
+
+                    <div>
+                        <label for="subscriber_id" class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Suggested subscriber</label>
+                        <select id="subscriber_id" name="subscriber_id" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Select subscriber</option>
+                            {% for option in contact_link_candidates.subscribers %}
+                            <option value="{{ option.id }}">{{ option.label }}</option>
+                            {% endfor %}
+                        </select>
+                        <input name="subscriber_id_manual" placeholder="Subscriber UUID" class="mt-2 w-full rounded-lg border-slate-300 text-xs font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="reseller_id" class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Suggested reseller</label>
+                        <select id="reseller_id" name="reseller_id" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Select reseller</option>
+                            {% for option in contact_link_candidates.resellers %}
+                            <option value="{{ option.id }}">{{ option.label }}</option>
+                            {% endfor %}
+                        </select>
+                        <input name="reseller_id_manual" placeholder="Reseller UUID" class="mt-2 w-full rounded-lg border-slate-300 text-xs font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <textarea name="note" rows="2" placeholder="Note" class="w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></textarea>
+                    <button type="submit" class="w-full rounded-lg bg-cyan-700 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-800">Link contact</button>
+                </form>
+            </div>
+            {% endcall %}
+
+            {% call card("Routing", color="slate") %}
+            <dl class="space-y-3 text-sm">
+                <div>
+                    <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Status</dt>
+                    <dd class="mt-1">{{ status_badge(timeline.status | replace('_', ' ') | title, "info", size="sm") }}</dd>
+                </div>
+                <div>
+                    <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Teams</dt>
+                    <dd class="mt-1 space-y-1">
+                        {% for team in timeline.teams %}
+                        <div class="rounded-lg bg-slate-50 px-3 py-2 text-xs dark:bg-slate-900/40">
+                            <span class="font-semibold text-slate-900 dark:text-white">{{ team.service_team_name or team.service_team_id }}</span>
+                            <span class="text-slate-500 dark:text-slate-400"> · {{ team.role }} · {{ team.source }}</span>
+                        </div>
+                        {% else %}
+                        <span class="text-slate-500 dark:text-slate-400">No team routing.</span>
+                        {% endfor %}
+                    </dd>
+                </div>
+                <div>
+                    <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Assignments</dt>
+                    <dd class="mt-1 space-y-1">
+                        {% for assignment in timeline.assignments %}
+                        <div class="rounded-lg bg-slate-50 px-3 py-2 text-xs dark:bg-slate-900/40">
+                            <span class="font-mono text-slate-900 dark:text-white">{{ assignment.person_id }}</span>
+                            <span class="text-slate-500 dark:text-slate-400"> · {{ assignment.service_team_name or assignment.service_team_id }}{% if assignment.is_active %} · active{% endif %}</span>
+                        </div>
+                        {% else %}
+                        <span class="text-slate-500 dark:text-slate-400">Unassigned.</span>
+                        {% endfor %}
+                    </dd>
+                </div>
+            </dl>
+            {% endcall %}
+        </div>
+    </div>
+</div>
+
+<script>
+document.querySelectorAll('[data-reply-form]').forEach((form) => {
+    const select = form.querySelector('[data-macro-select]');
+    const templateSelect = form.querySelector('[data-template-select]');
+    const body = form.querySelector('[data-reply-body]');
+    const macroId = form.querySelector('[data-macro-id]');
+    const templateId = form.querySelector('[data-template-id]');
+    if (!select || !body || !macroId) return;
+    select.addEventListener('change', () => {
+        const option = select.options[select.selectedIndex];
+        const text = option ? option.dataset.body || '' : '';
+        macroId.value = select.value || '';
+        if (text) {
+            body.value = text;
+            body.focus();
+        }
+    });
+    if (templateSelect && templateId) {
+        templateSelect.addEventListener('change', () => {
+            const option = templateSelect.options[templateSelect.selectedIndex];
+            const text = option ? option.dataset.body || '' : '';
+            templateId.value = templateSelect.value || '';
+            if (text) {
+                body.value = text;
+                body.focus();
+            }
+        });
+    }
+});
+</script>
+
+{{ animation_styles() }}
+{% endblock %}

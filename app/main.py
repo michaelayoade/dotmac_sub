@@ -72,6 +72,9 @@ _CORE_ROUTER_SPECS = [
     # payment confirmations / monitoring alerts on every restart.
     ("app.api.billing", "webhook_router", "api", "none"),
     ("app.api.crm_webhooks", "router", "api", "none"),
+    ("app.api.inbox_webhooks", "router", "api", "none"),
+    ("app.api.meta_inbox_webhooks", "router", "api", "none"),
+    ("app.api.chat_widget", "router", "web", "none"),
     ("app.api.crm", "router", "api", "none"),
     ("app.api.search", "router", "api", "readperm:customer:read"),
     ("app.api.network_ont_ops", "router", "api", "user"),

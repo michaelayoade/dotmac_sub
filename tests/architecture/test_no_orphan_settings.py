@@ -54,7 +54,6 @@ _KNOWN_ORPHAN_SETTINGS: set[str] = {
     "meta_access_token_override",
     "meta_api_timeout_seconds",
     "meta_oauth_redirect_uri",
-    "meta_webhook_verify_token",
     "notification_category_preferences_enabled",
     "olt_polling_interval_minutes",
     "ont_offline_poll_threshold",

@@ -146,16 +146,13 @@ class _RestoreScreen extends StatelessWidget {
   }
 }
 
-/// Vendor crews get the vendor-scoped plant map where techs see Today.
+/// Work-order processing is shared for staff and vendor crews; the backend
+/// scopes each mode to its own assigned jobs. Managers still get the dashboard.
 class _HomeSwitch extends ConsumerWidget {
   const _HomeSwitch();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final auth = ref.watch(authControllerProvider);
-    if (auth is Authenticated && auth.mode == LoginMode.vendor) {
-      return const VendorMapScreen();
-    }
     if (isManagerProfile(ref.watch(managerProfileProvider))) {
       return const ManagerDashboardScreen();
     }
@@ -227,10 +224,22 @@ const _staffNav = [
   _NavItem(5, Icons.person_outline, 'Profile'),
 ];
 
-// Vendors only get tabs backed by vendor-aware endpoints. Schedule / Materials
-// / Expenses are require_technician and would 403, so they stay hidden.
+// Managers keep the same branch set but re-skinned: the Today branch hosts
+// the dashboard, Map becomes the team map, Schedule becomes dispatch, and
+// Expenses becomes the approvals queue.
+const _managerNav = [
+  _NavItem(0, Icons.dashboard_outlined, 'Dashboard'),
+  _NavItem(1, Icons.map_outlined, 'Team'),
+  _NavItem(2, Icons.assignment_ind_outlined, 'Dispatch'),
+  _NavItem(4, Icons.fact_check_outlined, 'Approvals'),
+// Vendors process sub-native work orders through the same execution tabs. The
+// Map branch remains vendor-scoped via _MapSwitch.
 const _vendorNav = [
-  _NavItem(0, Icons.map_outlined, 'Map'),
+  _NavItem(0, Icons.assignment_outlined, 'Today'),
+  _NavItem(1, Icons.map_outlined, 'Map'),
+  _NavItem(2, Icons.calendar_today_outlined, 'Schedule'),
+  _NavItem(3, Icons.inventory_2_outlined, 'Materials'),
+  _NavItem(4, Icons.receipt_long_outlined, 'Expenses'),
   _NavItem(5, Icons.person_outline, 'Profile'),
 ];
 

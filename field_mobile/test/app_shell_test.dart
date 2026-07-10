@@ -127,7 +127,9 @@ void main() {
     expect(find.text('Schedule'), findsWidgets);
   });
 
-  testWidgets('vendor shell shows Map and Profile only', (tester) async {
+  testWidgets('vendor shell shows work-order tabs and vendor-scoped map', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       _app(
         controller: _VendorController.new,
@@ -142,13 +144,19 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(NavigationBar), findsOneWidget);
-    expect(find.text('Nearby plant'), findsOneWidget);
+    expect(find.text('Hello, Chidi'), findsOneWidget);
+    expect(find.text('Today'), findsOneWidget);
     expect(find.text('Map'), findsOneWidget); // vendor-scoped nearby-plant map
+    expect(find.text('Schedule'), findsOneWidget);
+    expect(find.text('Materials'), findsOneWidget);
+    expect(find.text('Expenses'), findsOneWidget);
     expect(find.text('Profile'), findsOneWidget);
-    // The require_technician tabs stay hidden for vendors (would 403).
+
+    await tester.tap(find.text('Map'));
+    await tester.pumpAndSettle();
+    expect(find.text('Nearby plant'), findsOneWidget);
+
     expect(find.text('Projects'), findsNothing);
-    expect(find.text('Schedule'), findsNothing);
-    expect(find.text('Materials'), findsNothing);
     expect(find.text('Customers'), findsNothing);
     expect(find.text('Sales'), findsNothing);
   });

@@ -1,0 +1,203 @@
+from __future__ import annotations
+
+import base64
+from collections.abc import Iterable
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from email import message_from_bytes, policy
+from email.header import decode_header
+from email.message import Message
+from email.utils import getaddresses, parseaddr, parsedate_to_datetime
+from typing import Any
+
+from sqlalchemy.orm import Session
+
+from app.models.team_inbox import InboxMessage
+from app.services import team_inbox_media, team_inbox_receive
+
+
+@dataclass(frozen=True)
+class ParsedInboundEmail:
+    payload: team_inbox_receive.InboundEmailPayload
+    attachments: list[dict[str, Any]] = field(default_factory=list)
+
+
+def decode_header_value(value: str | None) -> str | None:
+    if not value:
+        return None
+    decoded = ""
+    for fragment, encoding in decode_header(value):
+        if isinstance(fragment, bytes):
+            decoded += fragment.decode(encoding or "utf-8", errors="replace")
+        else:
+            decoded += fragment
+    return decoded.strip() or None
+
+
+def parse_address_headers(values: Iterable[str]) -> list[str]:
+    addresses: list[str] = []
+    seen: set[str] = set()
+    for _name, address in getaddresses(values):
+        normalized = address.strip()
+        if normalized and normalized.lower() not in seen:
+            seen.add(normalized.lower())
+            addresses.append(normalized)
+    return addresses
+
+
+def _payload_bytes(value: object | None) -> bytes:
+    if isinstance(value, bytes):
+        return value
+    if value is None:
+        return b""
+    if isinstance(value, str):
+        return value.encode("utf-8", errors="replace")
+    return str(value).encode("utf-8", errors="replace")
+
+
+def extract_bodies(message: Message) -> tuple[str | None, str | None]:
+    text_body = None
+    html_body = None
+    if message.is_multipart():
+        for part in message.walk():
+            if part.is_multipart():
+                continue
+            content_type = part.get_content_type()
+            disposition = (part.get("Content-Disposition") or "").lower()
+            if "attachment" in disposition:
+                continue
+            payload = _payload_bytes(part.get_payload(decode=True))
+            charset = part.get_content_charset() or "utf-8"
+            content = payload.decode(charset, errors="replace")
+            if content_type == "text/plain" and text_body is None:
+                text_body = content
+            elif content_type == "text/html" and html_body is None:
+                html_body = content
+    else:
+        payload = _payload_bytes(message.get_payload(decode=True))
+        charset = message.get_content_charset() or "utf-8"
+        content = payload.decode(charset, errors="replace")
+        if message.get_content_type() == "text/html":
+            html_body = content
+        else:
+            text_body = content
+    return text_body, html_body
+
+
+def extract_attachments(message: Message) -> list[dict[str, Any]]:
+    attachments: list[dict[str, Any]] = []
+    for part in message.walk():
+        if part.is_multipart():
+            continue
+        disposition = (part.get("Content-Disposition") or "").lower()
+        filename = part.get_filename()
+        content_id = part.get("Content-ID")
+        if "attachment" not in disposition and not filename and not content_id:
+            continue
+        payload = _payload_bytes(part.get_payload(decode=True))
+        if not payload:
+            continue
+        attachments.append(
+            {
+                "file_name": decode_header_value(filename) if filename else None,
+                "mime_type": part.get_content_type(),
+                "file_size": len(payload),
+                "content_id": content_id,
+                "content_base64": base64.b64encode(payload).decode("ascii"),
+            }
+        )
+    return attachments
+
+
+def _parse_received_at(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = parsedate_to_datetime(value)
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return None
+    if parsed is None:
+        return None
+    return parsed.astimezone(UTC) if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def parse_rfc822_email(
+    data: bytes,
+    *,
+    mail_from: str | None = None,
+    rcpt_to: list[str] | None = None,
+    source: str = "rfc822",
+    fallback_service_team_id: str | None = None,
+) -> ParsedInboundEmail:
+    message = message_from_bytes(data, policy=policy.default)
+    from_name, from_address = parseaddr(message.get("From") or "")
+    if not from_address:
+        from_address = (mail_from or "").strip()
+    to_addresses = parse_address_headers(message.get_all("To", []))
+    if not to_addresses and rcpt_to:
+        to_addresses = parse_address_headers(rcpt_to)
+    cc_addresses = parse_address_headers(message.get_all("Cc", []))
+    subject = decode_header_value(message.get("Subject"))
+    text_body, html_body = extract_bodies(message)
+    body = (text_body or html_body or "").strip() or subject or "(no content)"
+    received_at = _parse_received_at(message.get("Date"))
+    metadata: dict[str, Any] = {
+        "source": source,
+        "from_raw": message.get("From"),
+        "from_name": decode_header_value(from_name) if from_name else None,
+        "to_raw": message.get("To"),
+        "cc_raw": message.get("Cc"),
+        "reply_to": parse_address_headers(message.get_all("Reply-To", [])),
+        "recipients": list(rcpt_to or []),
+    }
+    if html_body:
+        metadata["html_body"] = html_body
+
+    return ParsedInboundEmail(
+        payload=team_inbox_receive.InboundEmailPayload(
+            from_address=from_address,
+            to_addresses=to_addresses,
+            cc_addresses=cc_addresses,
+            subject=subject,
+            body=body,
+            message_id=message.get("Message-ID"),
+            in_reply_to=message.get("In-Reply-To"),
+            references=message.get("References"),
+            received_at=received_at,
+            fallback_service_team_id=fallback_service_team_id,
+            metadata=metadata,
+        ),
+        attachments=extract_attachments(message),
+    )
+
+
+def receive_rfc822_email(
+    db: Session,
+    data: bytes,
+    *,
+    mail_from: str | None = None,
+    rcpt_to: list[str] | None = None,
+    source: str = "rfc822",
+    fallback_service_team_id: str | None = None,
+) -> team_inbox_receive.InboundEmailReceiveResult:
+    parsed = parse_rfc822_email(
+        data,
+        mail_from=mail_from,
+        rcpt_to=rcpt_to,
+        source=source,
+        fallback_service_team_id=fallback_service_team_id,
+    )
+    result = team_inbox_receive.receive_inbound_email(db, parsed.payload)
+    if parsed.attachments:
+        message = db.get(InboxMessage, result.message_id)
+        if message is not None:
+            metadata = dict(message.metadata_ or {})
+            metadata["attachments"] = parsed.attachments
+            message.metadata_ = metadata
+            team_inbox_media.promote_message_attachments(
+                db,
+                message=message,
+                provider=source,
+            )
+            db.flush()
+    return result

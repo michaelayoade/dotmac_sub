@@ -22,7 +22,11 @@ async def parse_json_body(request: Request) -> dict[str, Any]:
 
 def parse_form_data_sync(request: Request) -> FormData:
     """Read form data from sync handlers running in threadpool."""
-    return anyio.from_thread.run(request.form)
+
+    async def _read_form() -> FormData:
+        return await request.form()
+
+    return anyio.from_thread.run(_read_form)
 
 
 def parse_json_body_sync(request: Request) -> dict[str, Any]:

@@ -19,11 +19,18 @@ from sqlalchemy.orm import Session
 
 from app.models.network import FdhCabinet
 from app.models.network_monitoring import NetworkDevice, OutageIncident, PopSite
+from app.models.operational_escalation import OperationalEntityType
+from app.services import operational_escalation
 from app.services.topology.affected import (
     _dist_to_core,
     affected_customers,
     downstream_nodes,
     lldp_adjacency,
+)
+from app.services.topology.outage_operations import (
+    ensure_outage_customer_watchers,
+    ensure_outage_operations,
+    plan_outage_escalations,
 )
 
 logger = logging.getLogger(__name__)
@@ -199,6 +206,9 @@ def declare_outage(
     )
     session.add(incident)
     session.flush()
+    ensure_outage_operations(session, incident)
+    ensure_outage_customer_watchers(session, incident, impact=impact)
+    plan_outage_escalations(session, incident, trigger="outage.created")
     _emit_outage_event(session, incident, "outage.created")
     return incident
 
@@ -213,6 +223,12 @@ def resolve_outage(session: Session, incident_id) -> OutageIncident | None:
         return incident
     if set_outage_status(incident, "resolved"):
         session.flush()
+        operational_escalation.cancel_entity_events(
+            session,
+            entity_type=OperationalEntityType.outage,
+            entity_id=incident.id,
+            reason="outage.resolved",
+        )
         _emit_outage_event(session, incident, "outage.resolved")
     return incident
 
@@ -348,6 +364,9 @@ def confirm_incident(
     incident.status = "confirmed"
     incident.confirmed_at = now
     session.flush()
+    ensure_outage_operations(session, incident)
+    ensure_outage_customer_watchers(session, incident)
+    plan_outage_escalations(session, incident, trigger="outage.confirmed")
     _emit_outage_event(session, incident, "outage.confirmed")
 
 
@@ -356,6 +375,12 @@ def discard_incident(session: Session, incident: OutageIncident) -> None:
     No confirmed event ever fires for a discarded incident."""
     incident.status = "discarded"
     session.flush()
+    operational_escalation.cancel_entity_events(
+        session,
+        entity_type=OperationalEntityType.outage,
+        entity_id=incident.id,
+        reason="outage.discarded",
+    )
     _emit_outage_event(session, incident, "outage.discarded")
 
 
@@ -387,6 +412,13 @@ def resolve_classifier_incident(
     incident.status = "resolved"
     incident.resolved_at = now
     session.flush()
+    operational_escalation.cancel_entity_events(
+        session,
+        entity_type=OperationalEntityType.outage,
+        entity_id=incident.id,
+        reason="outage.resolved",
+        canceled_at=now,
+    )
     _emit_outage_event(session, incident, "outage.resolved")
 
 
