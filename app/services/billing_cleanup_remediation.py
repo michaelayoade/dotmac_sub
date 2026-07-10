@@ -654,6 +654,7 @@ def plan_missing_radius_row(db: Session, row: dict[str, str]) -> dict[str, Any]:
     )
     if not usable:
         return _refuse(action, row, "credential_unusable_requires_password_reset")
+    assert credential is not None
     return {
         "action": action,
         "decision": "apply",
