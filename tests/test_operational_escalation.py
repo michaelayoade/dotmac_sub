@@ -7,6 +7,7 @@ import pytest
 from app.models.operational_escalation import (
     OperationalDeliveryStatus,
     OperationalEntityType,
+    OperationalEscalationDelivery,
     OperationalEscalationStatus,
     OperationalNotificationChannel,
     OperationalOwner,
@@ -221,3 +222,209 @@ def test_acknowledge_event_marks_pending_deliveries_acknowledged(db_session):
     assert event.acknowledged_at is not None
     assert delivery.delivery_status == OperationalDeliveryStatus.acknowledged
     assert delivery.acknowledged_at == event.acknowledged_at
+
+
+def test_plan_policy_deliveries_uses_configured_channels(db_session):
+    owner_team = _team(db_session, "NOC")
+    watcher_team = _team(db_session, "Support")
+    incident_id = uuid4()
+    operational_escalation.set_owner(
+        db_session,
+        entity_type=OperationalEntityType.outage,
+        entity_id=incident_id,
+        service_team_id=owner_team.id,
+    )
+    operational_escalation.add_watcher(
+        db_session,
+        entity_type=OperationalEntityType.outage,
+        entity_id=incident_id,
+        service_team_id=watcher_team.id,
+    )
+    policy = operational_escalation.create_policy(
+        db_session,
+        name="High outage channels",
+        entity_type=OperationalEntityType.outage,
+        channels=[
+            OperationalNotificationChannel.email,
+            OperationalNotificationChannel.nextcloud_talk,
+        ],
+        cooldown_seconds=600,
+    )
+    event = operational_escalation.record_event(
+        db_session,
+        entity_type=OperationalEntityType.outage,
+        entity_id=incident_id,
+        policy_id=policy.id,
+        trigger="high_severity",
+        level=2,
+    )
+
+    deliveries = operational_escalation.plan_policy_deliveries(
+        db_session,
+        event=event,
+        policy=policy,
+    )
+
+    assert len(deliveries) == 4
+    assert {
+        (delivery.channel, delivery.recipient_type, delivery.recipient_id)
+        for delivery in deliveries
+    } == {
+        (
+            OperationalNotificationChannel.email,
+            OperationalParticipantType.team,
+            str(owner_team.id),
+        ),
+        (
+            OperationalNotificationChannel.email,
+            OperationalParticipantType.team,
+            str(watcher_team.id),
+        ),
+        (
+            OperationalNotificationChannel.nextcloud_talk,
+            OperationalParticipantType.team,
+            str(owner_team.id),
+        ),
+        (
+            OperationalNotificationChannel.nextcloud_talk,
+            OperationalParticipantType.team,
+            str(watcher_team.id),
+        ),
+    }
+
+
+def test_plan_policy_deliveries_excludes_customer_watchers_by_default(db_session):
+    subscriber = Subscriber(
+        first_name="Ada",
+        last_name="Nwosu",
+        email="ada-default-excluded@example.com",
+    )
+    db_session.add(subscriber)
+    db_session.flush()
+    incident_id = uuid4()
+    operational_escalation.add_watcher(
+        db_session,
+        entity_type=OperationalEntityType.outage,
+        entity_id=incident_id,
+        subscriber_id=subscriber.id,
+    )
+    policy = operational_escalation.create_policy(
+        db_session,
+        name="Internal email only",
+        entity_type=OperationalEntityType.outage,
+        channels=[OperationalNotificationChannel.email],
+    )
+    event = operational_escalation.record_event(
+        db_session,
+        entity_type=OperationalEntityType.outage,
+        entity_id=incident_id,
+        policy_id=policy.id,
+        trigger="customer_update_due",
+    )
+
+    assert (
+        operational_escalation.plan_policy_deliveries(
+            db_session,
+            event=event,
+            policy=policy,
+        )
+        == []
+    )
+
+
+def test_plan_policy_deliveries_can_include_customer_watchers(db_session):
+    subscriber = Subscriber(
+        first_name="Ada",
+        last_name="Nwosu",
+        email="ada-customer-watcher@example.com",
+    )
+    db_session.add(subscriber)
+    db_session.flush()
+    incident_id = uuid4()
+    operational_escalation.add_watcher(
+        db_session,
+        entity_type=OperationalEntityType.outage,
+        entity_id=incident_id,
+        subscriber_id=subscriber.id,
+        source="affected_customer",
+    )
+    policy = operational_escalation.create_policy(
+        db_session,
+        name="Customer-safe outage email",
+        entity_type=OperationalEntityType.outage,
+        channels=[
+            {
+                "channel": OperationalNotificationChannel.email,
+                "recipients": ["watchers"],
+                "participant_types": [OperationalParticipantType.subscriber],
+            }
+        ],
+    )
+    event = operational_escalation.record_event(
+        db_session,
+        entity_type=OperationalEntityType.outage,
+        entity_id=incident_id,
+        policy_id=policy.id,
+        trigger="customer_update_due",
+    )
+
+    [delivery] = operational_escalation.plan_policy_deliveries(
+        db_session,
+        event=event,
+        policy=policy,
+    )
+
+    assert delivery.recipient_type == OperationalParticipantType.subscriber
+    assert delivery.recipient_id == str(subscriber.id)
+    assert delivery.recipient_address == "ada-customer-watcher@example.com"
+
+
+def test_plan_policy_deliveries_skips_direct_customer_channel_without_address(
+    db_session,
+):
+    subscriber = Subscriber(
+        first_name="Ada",
+        last_name="Nwosu",
+        email="ada-no-phone@example.com",
+    )
+    db_session.add(subscriber)
+    db_session.flush()
+    incident_id = uuid4()
+    operational_escalation.add_watcher(
+        db_session,
+        entity_type=OperationalEntityType.outage,
+        entity_id=incident_id,
+        subscriber_id=subscriber.id,
+        source="affected_customer",
+    )
+    policy = operational_escalation.create_policy(
+        db_session,
+        name="Customer-safe outage WhatsApp",
+        entity_type=OperationalEntityType.outage,
+        channels=[
+            {
+                "channel": OperationalNotificationChannel.whatsapp,
+                "recipients": ["watchers"],
+                "participant_types": [OperationalParticipantType.subscriber],
+            }
+        ],
+    )
+    event = operational_escalation.record_event(
+        db_session,
+        entity_type=OperationalEntityType.outage,
+        entity_id=incident_id,
+        policy_id=policy.id,
+        trigger="customer_update_due",
+    )
+
+    assert (
+        db_session.query(OperationalEscalationDelivery).count()
+        == len(
+            operational_escalation.plan_policy_deliveries(
+                db_session,
+                event=event,
+                policy=policy,
+            )
+        )
+        == 0
+    )

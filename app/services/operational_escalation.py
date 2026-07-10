@@ -18,6 +18,14 @@ from app.models.operational_escalation import (
     OperationalWatcher,
     OperationalWatcherRole,
 )
+from app.models.subscriber import Subscriber
+
+DIRECT_ADDRESS_CHANNELS = {"email", "sms", "whatsapp", "webhook"}
+DEFAULT_ESCALATION_PARTICIPANTS = {
+    OperationalParticipantType.person,
+    OperationalParticipantType.team,
+    OperationalParticipantType.duty_role,
+}
 
 
 def _entity_id(value: str | UUID) -> str:
@@ -345,6 +353,154 @@ def plan_delivery(
     db.add(delivery)
     db.flush()
     return delivery
+
+
+def plan_policy_deliveries(
+    db: Session,
+    *,
+    event: OperationalEscalationEvent,
+    policy: OperationalEscalationPolicy | None = None,
+) -> list[OperationalEscalationDelivery]:
+    active_policy = policy or event.policy
+    if active_policy is None:
+        return []
+
+    deliveries: list[OperationalEscalationDelivery] = []
+    for channel_rule in _policy_channel_rules(active_policy):
+        channel = channel_rule["channel"]
+        recipient_groups = set(channel_rule.get("recipients") or ["owners", "watchers"])
+        participant_types = set(
+            channel_rule.get("participant_types") or DEFAULT_ESCALATION_PARTICIPANTS
+        )
+        watcher_roles = set(channel_rule.get("watcher_roles") or [])
+
+        if "owners" in recipient_groups:
+            for owner in _active_owners(db, event):
+                if owner.owner_type not in participant_types:
+                    continue
+                deliveries.append(
+                    plan_delivery(
+                        db,
+                        event=event,
+                        channel=channel,
+                        recipient_type=owner.owner_type,
+                        recipient_id=_owner_recipient_id(owner),
+                        owner_id=owner.id,
+                        cooldown_seconds=active_policy.cooldown_seconds,
+                        metadata={"policy_id": str(active_policy.id)},
+                    )
+                )
+
+        if "watchers" in recipient_groups:
+            for watcher in list_watchers(
+                db,
+                entity_type=event.entity_type,
+                entity_id=event.entity_id,
+            ):
+                if watcher_roles and watcher.role not in watcher_roles:
+                    continue
+                if watcher.watcher_type not in participant_types:
+                    continue
+                recipient_id = _watcher_recipient_id(watcher)
+                recipient_address = _watcher_recipient_address(db, watcher, channel)
+                if (
+                    watcher.watcher_type
+                    in {
+                        OperationalParticipantType.subscriber,
+                        OperationalParticipantType.external,
+                    }
+                    and channel in DIRECT_ADDRESS_CHANNELS
+                    and not recipient_address
+                ):
+                    continue
+                deliveries.append(
+                    plan_delivery(
+                        db,
+                        event=event,
+                        channel=channel,
+                        recipient_type=watcher.watcher_type,
+                        recipient_id=recipient_id,
+                        recipient_address=recipient_address,
+                        watcher_id=watcher.id,
+                        cooldown_seconds=active_policy.cooldown_seconds,
+                        metadata={"policy_id": str(active_policy.id)},
+                    )
+                )
+
+    return deliveries
+
+
+def _policy_channel_rules(policy: OperationalEscalationPolicy) -> list[dict]:
+    rules: list[dict] = []
+    defaults = (policy.metadata_ or {}).get("delivery_defaults") or {}
+    for raw_channel in policy.channels or []:
+        if isinstance(raw_channel, str):
+            rule = {"channel": raw_channel}
+        elif isinstance(raw_channel, dict) and raw_channel.get("channel"):
+            rule = dict(raw_channel)
+        else:
+            continue
+        for key, value in defaults.items():
+            rule.setdefault(key, value)
+        rules.append(rule)
+    return rules
+
+
+def _active_owners(
+    db: Session,
+    event: OperationalEscalationEvent,
+) -> list[OperationalOwner]:
+    return list(
+        db.query(OperationalOwner)
+        .filter(OperationalOwner.entity_type == event.entity_type)
+        .filter(OperationalOwner.entity_id == event.entity_id)
+        .filter(OperationalOwner.is_active.is_(True))
+        .order_by(OperationalOwner.assigned_at.asc())
+        .all()
+    )
+
+
+def _owner_recipient_id(owner: OperationalOwner) -> str | UUID | None:
+    if owner.service_team_id is not None:
+        return owner.service_team_id
+    if owner.person_id is not None:
+        return owner.person_id
+    return owner.duty_role
+
+
+def _watcher_recipient_id(watcher: OperationalWatcher) -> str | UUID | None:
+    if watcher.service_team_id is not None:
+        return watcher.service_team_id
+    if watcher.person_id is not None:
+        return watcher.person_id
+    if watcher.subscriber_id is not None:
+        return watcher.subscriber_id
+    return watcher.duty_role
+
+
+def _watcher_recipient_address(
+    db: Session,
+    watcher: OperationalWatcher,
+    channel: str,
+) -> str | None:
+    metadata = watcher.metadata_ or {}
+    channel_addresses = metadata.get("channels")
+    if isinstance(channel_addresses, dict) and channel_addresses.get(channel):
+        return str(channel_addresses[channel])
+    explicit_address = metadata.get(f"{channel}_address")
+    if explicit_address:
+        return str(explicit_address)
+
+    if watcher.subscriber_id is not None:
+        subscriber = db.get(Subscriber, watcher.subscriber_id)
+        if subscriber is None:
+            return None
+        if channel == "email":
+            return subscriber.email
+        if channel in {"sms", "whatsapp"}:
+            return subscriber.phone
+
+    return None
 
 
 def mark_delivery_sent(
