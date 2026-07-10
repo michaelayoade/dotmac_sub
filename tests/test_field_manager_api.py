@@ -1,0 +1,374 @@
+from __future__ import annotations
+
+from datetime import UTC, date, datetime
+from uuid import uuid4
+
+import pytest
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
+
+from app.api.field import router
+from app.db import get_db
+from app.models.dispatch import TechnicianProfile, WorkOrderAssignmentQueue
+from app.models.field_location import FieldTechPresence
+from app.models.subscriber import Subscriber, UserType
+from app.models.system_user import SystemUser
+from app.models.work_order_mirror import WorkOrderMirror
+from app.services.auth_dependencies import require_user_auth
+from app.services.field.expense_requests import field_expense_requests
+from app.services.field.jobs import field_jobs
+from app.services.field.manager import field_manager
+
+
+def _user(db_session, name: str = "Manager") -> SystemUser:
+    user = SystemUser(
+        first_name=name,
+        last_name="Staff",
+        display_name=f"{name} Staff",
+        email=f"{name.lower()}-{uuid4().hex[:8]}@example.com",
+        user_type=UserType.system_user,
+    )
+    db_session.add(user)
+    db_session.flush()
+    return user
+
+
+def _auth(user: SystemUser, roles: list[str] | None = None) -> dict:
+    return {
+        "principal_id": str(user.id),
+        "person_id": str(user.id),
+        "subscriber_id": str(user.id),
+        "principal_type": "system_user",
+        "roles": roles if roles is not None else ["admin"],
+        "scopes": [],
+    }
+
+
+def _profile(db_session, user: SystemUser, **overrides) -> TechnicianProfile:
+    profile = TechnicianProfile(
+        person_id=user.id,
+        system_user_id=user.id,
+        crm_person_id=overrides.pop("crm_person_id", f"crm-{uuid4().hex[:8]}"),
+        title=overrides.pop("title", "Installer"),
+        **overrides,
+    )
+    db_session.add(profile)
+    db_session.flush()
+    return profile
+
+
+def _subscriber(db_session) -> Subscriber:
+    subscriber = Subscriber(
+        first_name="Field",
+        last_name="Customer",
+        email=f"manager-{uuid4().hex[:8]}@example.com",
+        account_number=f"AC{uuid4().hex[:6]}",
+    )
+    db_session.add(subscriber)
+    db_session.flush()
+    return subscriber
+
+
+def _work_order(db_session, subscriber: Subscriber, **overrides) -> WorkOrderMirror:
+    row = WorkOrderMirror(
+        crm_work_order_id=overrides.pop("crm_work_order_id", f"wo-{uuid4().hex[:8]}"),
+        subscriber_id=subscriber.id,
+        title=overrides.pop("title", "Manager job"),
+        status=overrides.pop("status", "scheduled"),
+        scheduled_start=overrides.pop("scheduled_start", datetime.now(UTC)),
+        **overrides,
+    )
+    db_session.add(row)
+    db_session.flush()
+    return row
+
+
+def _presence(db_session, profile: TechnicianProfile, **overrides) -> FieldTechPresence:
+    presence = FieldTechPresence(
+        technician_id=profile.id,
+        person_id=profile.person_id,
+        status=overrides.pop("status", "on_shift"),
+        location_sharing_enabled=overrides.pop("location_sharing_enabled", True),
+        last_latitude=overrides.pop("last_latitude", 9.0765),
+        last_longitude=overrides.pop("last_longitude", 7.3986),
+        last_location_at=overrides.pop("last_location_at", datetime.now(UTC)),
+        last_seen_at=overrides.pop("last_seen_at", datetime.now(UTC)),
+        **overrides,
+    )
+    db_session.add(presence)
+    db_session.flush()
+    return presence
+
+
+def _expense(db_session, tech_user, profile, work_order, status="submitted") -> dict:
+    created = field_expense_requests.create(
+        db_session,
+        _auth(tech_user, roles=[]),
+        crm_work_order_id=work_order.crm_work_order_id,
+        purpose="Transport",
+        expense_date=date.today(),
+        currency="NGN",
+        notes=None,
+        client_ref=None,
+        items=[
+            {
+                "category_code": "transport",
+                "description": "Bike delivery",
+                "amount": "2500.00",
+            }
+        ],
+    )
+    if status != "draft":
+        created = field_expense_requests.submit(
+            db_session, _auth(tech_user, roles=[]), str(created["id"])
+        )
+    return created
+
+
+def test_manager_me_summary_and_technicians(db_session):
+    manager = _user(db_session)
+    tech_user = _user(db_session, "Tech")
+    profile = _profile(db_session, tech_user, crm_person_id="crm-mgr-tech")
+    _presence(db_session, profile)
+    subscriber = _subscriber(db_session)
+    assigned = _work_order(
+        db_session,
+        subscriber,
+        crm_work_order_id="wo-mgr-assigned",
+        status="in_progress",
+        assigned_to_crm_person_id="crm-mgr-tech",
+    )
+    _work_order(db_session, subscriber, crm_work_order_id="wo-mgr-unassigned")
+    _expense(db_session, tech_user, profile, assigned)
+    db_session.commit()
+
+    me = field_manager.me(db_session, _auth(manager))
+    assert me["is_manager"] is True
+    assert me["name"] == "Manager Staff"
+    assert me["roles"] == ["admin"]
+
+    summary = field_manager.summary(db_session)
+    assert summary["technicians_total"] == 1
+    assert summary["technicians_live"] == 1
+    assert summary["technicians_sharing"] == 1
+    assert summary["open_jobs"] == 2
+    assert summary["unassigned_jobs"] == 1
+    assert summary["pending_expenses"] == 1
+
+    technicians = field_manager.list_technicians(db_session)
+    assert len(technicians) == 1
+    item = technicians[0]
+    assert item["person_id"] == profile.person_id
+    assert item["person_label"] == "Tech Staff"
+    assert item["status"] == "on_shift"
+    assert item["is_live"] is True
+    assert item["last_latitude"] == pytest.approx(9.0765)
+    assert item["active_work_order"]["id"] == "wo-mgr-assigned"
+    assert item["active_work_order"]["status"] == "in_progress"
+
+
+def test_manager_jobs_and_assign_flow(db_session):
+    tech_user = _user(db_session, "Tech")
+    profile = _profile(db_session, tech_user, crm_person_id="crm-assign-tech")
+    subscriber = _subscriber(db_session)
+    row = _work_order(db_session, subscriber, crm_work_order_id="wo-assign")
+    db_session.commit()
+
+    jobs = field_manager.list_jobs(db_session)
+    assert len(jobs) == 1
+    assert jobs[0]["id"] == "wo-assign"
+    assert jobs[0]["assigned_to_person_id"] is None
+    assert subscriber.account_number in jobs[0]["subscriber_label"]
+
+    assigned = field_manager.assign_job(
+        db_session,
+        "wo-assign",
+        person_id=str(profile.person_id),
+    )
+    assert assigned["assigned_to_person_id"] == profile.person_id
+    assert assigned["assigned_to_label"] == "Tech Staff"
+    assert assigned["status"] == "dispatched"
+
+    db_session.refresh(row)
+    assert row.assigned_to_crm_person_id == "crm-assign-tech"
+    assert row.technician_name == "Tech Staff"
+    assert row.metadata_["native_field_activity"]["assignment"]["technician_id"] == str(
+        profile.id
+    )
+    queue = (
+        db_session.query(WorkOrderAssignmentQueue)
+        .filter(WorkOrderAssignmentQueue.work_order_mirror_id == row.id)
+        .one()
+    )
+    assert queue.assigned_technician_id == profile.id
+    assert queue.status == "assigned"
+
+    # The technician now sees the job in their scoped list.
+    mine = field_jobs.list(db_session, _auth(tech_user, roles=[]))
+    assert [job.id for job in mine] == ["wo-assign"]
+
+    # Filtering the manager board by the technician works both ways.
+    filtered = field_manager.list_jobs(
+        db_session, assigned_to_person_id=str(profile.person_id)
+    )
+    assert [job["id"] for job in filtered] == ["wo-assign"]
+
+
+def test_manager_assign_queue_only_technician(db_session):
+    """A technician profile without crm_person_id is scoped via the queue."""
+    tech_user = _user(db_session, "Native")
+    profile = _profile(db_session, tech_user, crm_person_id=None)
+    subscriber = _subscriber(db_session)
+    _work_order(db_session, subscriber, crm_work_order_id="wo-native-assign")
+    db_session.commit()
+
+    assigned = field_manager.assign_job(
+        db_session, "wo-native-assign", person_id=str(profile.person_id)
+    )
+    assert assigned["assigned_to_person_id"] == profile.person_id
+
+    mine = field_jobs.list(db_session, _auth(tech_user, roles=[]))
+    assert [job.id for job in mine] == ["wo-native-assign"]
+
+
+def test_manager_assign_validation(db_session):
+    subscriber = _subscriber(db_session)
+    _work_order(db_session, subscriber, crm_work_order_id="wo-assign-bad")
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as missing_job:
+        field_manager.assign_job(db_session, "wo-nope", person_id=str(uuid4()))
+    assert missing_job.value.status_code == 404
+
+    with pytest.raises(HTTPException) as missing_tech:
+        field_manager.assign_job(db_session, "wo-assign-bad", person_id=str(uuid4()))
+    assert missing_tech.value.status_code == 404
+
+    tech_user = _user(db_session, "Tech")
+    profile = _profile(db_session, tech_user)
+    db_session.commit()
+    with pytest.raises(HTTPException) as bad_status:
+        field_manager.assign_job(
+            db_session,
+            "wo-assign-bad",
+            person_id=str(profile.person_id),
+            status="completed",
+        )
+    assert bad_status.value.status_code == 422
+
+
+def test_manager_expense_approve_and_reject(db_session):
+    tech_user = _user(db_session, "Tech")
+    profile = _profile(db_session, tech_user, crm_person_id="crm-exp-tech")
+    subscriber = _subscriber(db_session)
+    work_order = _work_order(
+        db_session,
+        subscriber,
+        crm_work_order_id="wo-exp-mgr",
+        status="in_progress",
+        assigned_to_crm_person_id="crm-exp-tech",
+    )
+    first = _expense(db_session, tech_user, profile, work_order)
+    second = _expense(db_session, tech_user, profile, work_order)
+    db_session.commit()
+
+    pending = field_expense_requests.list_all(db_session, status="submitted")
+    assert {str(item["id"]) for item in pending} == {
+        str(first["id"]),
+        str(second["id"]),
+    }
+
+    approved = field_expense_requests.approve(db_session, str(first["id"]))
+    assert approved["status"] == "approved"
+    assert approved["approved_at"] is not None
+
+    rejected = field_expense_requests.reject(
+        db_session, str(second["id"]), "No receipt provided"
+    )
+    assert rejected["status"] == "rejected"
+    assert rejected["rejection_reason"] == "No receipt provided"
+
+    with pytest.raises(HTTPException) as re_approve:
+        field_expense_requests.approve(db_session, str(first["id"]))
+    assert re_approve.value.status_code == 409
+
+    assert field_expense_requests.list_all(db_session, status="submitted") == []
+
+
+def test_manager_api(db_session):
+    manager = _user(db_session)
+    tech_user = _user(db_session, "Tech")
+    profile = _profile(db_session, tech_user, crm_person_id="crm-api-tech")
+    _presence(db_session, profile)
+    subscriber = _subscriber(db_session)
+    work_order = _work_order(
+        db_session,
+        subscriber,
+        crm_work_order_id="wo-mgr-api",
+        status="in_progress",
+        assigned_to_crm_person_id="crm-api-tech",
+    )
+    expense = _expense(db_session, tech_user, profile, work_order)
+    db_session.commit()
+
+    app = FastAPI()
+    app.include_router(router, prefix="/api/v1")
+    app.dependency_overrides[get_db] = lambda: db_session
+    app.dependency_overrides[require_user_auth] = lambda: _auth(manager)
+    client = TestClient(app)
+
+    me = client.get("/api/v1/field/manager/me")
+    assert me.status_code == 200
+    assert me.json()["is_manager"] is True
+
+    summary = client.get("/api/v1/field/manager/summary")
+    assert summary.status_code == 200
+    assert summary.json()["technicians_total"] == 1
+    assert summary.json()["pending_expenses"] == 1
+
+    technicians = client.get("/api/v1/field/manager/technicians")
+    assert technicians.status_code == 200
+    body = technicians.json()
+    assert body["count"] == 1
+    assert body["live_count"] == 1
+    assert body["items"][0]["person_label"] == "Tech Staff"
+    assert body["items"][0]["active_work_order"]["id"] == "wo-mgr-api"
+
+    jobs = client.get("/api/v1/field/manager/jobs")
+    assert jobs.status_code == 200
+    assert jobs.json()["items"][0]["id"] == "wo-mgr-api"
+
+    assigned = client.post(
+        "/api/v1/field/manager/jobs/wo-mgr-api/assign",
+        json={"person_id": str(profile.person_id)},
+    )
+    assert assigned.status_code == 200
+    assert assigned.json()["status"] == "dispatched"
+
+    expenses = client.get("/api/v1/field/manager/expenses")
+    assert expenses.status_code == 200
+    assert expenses.json()["items"][0]["id"] == str(expense["id"])
+
+    approved = client.post(f"/api/v1/field/manager/expenses/{expense['id']}/approve")
+    assert approved.status_code == 200
+    assert approved.json()["status"] == "approved"
+
+    short_reason = client.post(
+        f"/api/v1/field/manager/expenses/{expense['id']}/reject",
+        json={"reason": "x"},
+    )
+    assert short_reason.status_code == 422
+
+
+def test_manager_api_forbidden_without_permissions(db_session):
+    plain = _user(db_session, "Plain")
+    db_session.commit()
+
+    app = FastAPI()
+    app.include_router(router, prefix="/api/v1")
+    app.dependency_overrides[get_db] = lambda: db_session
+    app.dependency_overrides[require_user_auth] = lambda: _auth(plain, roles=[])
+    client = TestClient(app)
+
+    response = client.get("/api/v1/field/manager/me")
+    assert response.status_code == 403

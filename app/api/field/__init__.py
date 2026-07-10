@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
@@ -11,6 +11,7 @@ from app.api.field.expense_requests import router as expense_requests_router
 from app.api.field.fiber import router as fiber_router
 from app.api.field.inventory import router as inventory_router
 from app.api.field.locations import router as locations_router
+from app.api.field.manager import router as manager_router
 from app.api.field.map_assets import router as map_assets_router
 from app.api.field.material_requests import router as material_requests_router
 from app.api.field.materials import router as materials_router
@@ -23,6 +24,9 @@ from app.api.field.voice import router as voice_router
 from app.api.field.worklogs import router as worklogs_router
 from app.schemas.common import ListResponse
 from app.schemas.field import (
+    FieldJobChatMessageCreate,
+    FieldJobChatMessageRead,
+    FieldJobChatThread,
     FieldJobDestination,
     FieldJobDestinationsResponse,
     FieldJobDetail,
@@ -32,6 +36,7 @@ from app.schemas.field import (
     FieldMeResponse,
 )
 from app.services.auth_dependencies import require_user_auth
+from app.services.field.chat import field_job_chat
 from app.services.field.jobs import field_jobs
 
 router = APIRouter(prefix="/field", tags=["field"])
@@ -42,6 +47,7 @@ router.include_router(expense_requests_router)
 router.include_router(fiber_router)
 router.include_router(inventory_router)
 router.include_router(locations_router)
+router.include_router(manager_router)
 router.include_router(map_assets_router)
 router.include_router(material_requests_router)
 router.include_router(materials_router)
@@ -107,6 +113,33 @@ def list_field_job_destinations(
         "items": [FieldJobDestination(**item) for item in items],
         "count": len(items),
     }
+
+
+@router.get(
+    "/jobs/{crm_work_order_id}/chat",
+    response_model=FieldJobChatThread,
+)
+def get_field_job_chat(
+    crm_work_order_id: str,
+    limit: int = Query(default=50, ge=1, le=200),
+    auth: dict = Depends(require_user_auth),
+    db: Session = Depends(get_db),
+):
+    return field_job_chat.get_thread(db, auth, crm_work_order_id, limit=limit)
+
+
+@router.post(
+    "/jobs/{crm_work_order_id}/chat/messages",
+    response_model=FieldJobChatMessageRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def send_field_job_chat_message(
+    crm_work_order_id: str,
+    payload: FieldJobChatMessageCreate,
+    auth: dict = Depends(require_user_auth),
+    db: Session = Depends(get_db),
+):
+    return field_job_chat.send_message(db, auth, crm_work_order_id, body=payload.body)
 
 
 @router.patch(
