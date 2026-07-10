@@ -3,7 +3,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from app.models.service_team import ServiceTeam, ServiceTeamType
+from app.api import analytics as analytics_api
+from app.models.service_team import ServiceTeam, ServiceTeamMember, ServiceTeamType
 from app.models.team_inbox import (
     InboxConversation,
     InboxConversationAssignment,
@@ -188,3 +189,95 @@ def test_agent_performance_metrics_tracks_active_assignments_and_wait(db_session
     assert metrics.active_assignment_count == 1
     assert metrics.handled_conversation_count == 1
     assert metrics.average_queue_wait_seconds == 300
+
+
+def test_team_performance_report_uses_team_sla_metadata(db_session):
+    team = _team(db_session)
+    team.metadata_ = {"inbox_sla": {"first_response_seconds": "900"}}
+    base = datetime(2026, 7, 10, 8, 0, tzinfo=UTC)
+    conversation = _conversation(db_session, team, first_at=base)
+    _message(
+        db_session,
+        conversation,
+        direction=InboxMessageDirection.inbound.value,
+        at=base,
+    )
+    db_session.commit()
+
+    rows = team_inbox_metrics.team_performance_report(
+        db_session,
+        response_sla_seconds=3600,
+        now=base + timedelta(minutes=20),
+    )
+
+    assert len(rows) == 1
+    assert rows[0].response_sla_seconds == 900
+    assert rows[0].metrics.response_sla_breached_count == 1
+
+
+def test_agent_performance_report_lists_active_team_members(db_session):
+    team = _team(db_session)
+    person_id = uuid4()
+    db_session.add(
+        ServiceTeamMember(
+            team_id=team.id,
+            person_id=person_id,
+            is_active=True,
+        )
+    )
+    base = datetime(2026, 7, 10, 8, 0, tzinfo=UTC)
+    conversation = _conversation(db_session, team, first_at=base)
+    db_session.add(
+        InboxConversationAssignment(
+            conversation_id=conversation.id,
+            service_team_id=team.id,
+            person_id=person_id,
+            assigned_at=base + timedelta(minutes=3),
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    rows = team_inbox_metrics.agent_performance_report(
+        db_session,
+        service_team_id=team.id,
+    )
+
+    assert len(rows) == 1
+    assert rows[0].person_id == str(person_id)
+    assert rows[0].metrics.active_assignment_count == 1
+    assert rows[0].metrics.average_queue_wait_seconds == 180
+
+
+def test_analytics_api_returns_inbox_team_performance(db_session):
+    team = _team(db_session)
+    base = datetime(2026, 7, 10, 8, 0, tzinfo=UTC)
+    conversation = _conversation(db_session, team, first_at=base)
+    _message(
+        db_session,
+        conversation,
+        direction=InboxMessageDirection.inbound.value,
+        at=base,
+    )
+    _message(
+        db_session,
+        conversation,
+        direction=InboxMessageDirection.outbound.value,
+        at=base + timedelta(minutes=5),
+    )
+    db_session.commit()
+
+    response = analytics_api.list_inbox_team_performance(
+        response_sla_seconds=600,
+        limit=50,
+        offset=0,
+        db=db_session,
+    )
+
+    assert response["count"] == 1
+    item = response["items"][0]
+    assert item.service_team_id == team.id
+    assert item.service_team_name == "Support"
+    assert item.responded_count == 1
+    assert item.response_rate == 1.0
+    assert item.response_sla_breach_rate == 0.0

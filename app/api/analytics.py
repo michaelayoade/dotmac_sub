@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
@@ -11,7 +13,12 @@ from app.schemas.analytics import (
     KPIReadout,
 )
 from app.schemas.common import ListResponse
+from app.schemas.team_inbox_metrics import (
+    InboxAgentPerformanceRead,
+    InboxTeamPerformanceRead,
+)
 from app.services import analytics as analytics_service
+from app.services import team_inbox_metrics as team_inbox_metrics_service
 from app.services.response import list_response
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
@@ -88,3 +95,91 @@ def list_kpi_aggregates(
 @router.get("/kpis", response_model=list[KPIReadout])
 def compute_kpis(db: Session = Depends(get_db)):
     return analytics_service.compute_kpis(db)
+
+
+def _ratio(numerator: int, denominator: int) -> float | None:
+    if denominator <= 0:
+        return None
+    return numerator / denominator
+
+
+def _team_performance_read(
+    row: team_inbox_metrics_service.InboxTeamPerformanceReportRow,
+) -> InboxTeamPerformanceRead:
+    metrics = row.metrics
+    return InboxTeamPerformanceRead(
+        service_team_id=UUID(metrics.service_team_id),
+        service_team_name=row.service_team_name,
+        service_team_type=row.service_team_type,
+        response_sla_seconds=row.response_sla_seconds,
+        conversation_count=metrics.conversation_count,
+        open_count=metrics.open_count,
+        unassigned_open_count=metrics.unassigned_open_count,
+        assigned_open_count=metrics.assigned_open_count,
+        inbound_message_count=metrics.inbound_message_count,
+        outbound_message_count=metrics.outbound_message_count,
+        responded_count=metrics.responded_count,
+        response_sla_breached_count=metrics.response_sla_breached_count,
+        response_rate=_ratio(metrics.responded_count, metrics.inbound_message_count),
+        response_sla_breach_rate=_ratio(
+            metrics.response_sla_breached_count,
+            metrics.inbound_message_count,
+        ),
+        average_first_response_seconds=metrics.average_first_response_seconds,
+        average_queue_wait_seconds=metrics.average_queue_wait_seconds,
+    )
+
+
+def _agent_performance_read(
+    row: team_inbox_metrics_service.InboxAgentPerformanceReportRow,
+) -> InboxAgentPerformanceRead:
+    metrics = row.metrics
+    return InboxAgentPerformanceRead(
+        person_id=UUID(metrics.person_id),
+        service_team_id=UUID(metrics.service_team_id),
+        service_team_name=row.service_team_name,
+        service_team_type=row.service_team_type,
+        active_assignment_count=metrics.active_assignment_count,
+        handled_conversation_count=metrics.handled_conversation_count,
+        average_queue_wait_seconds=metrics.average_queue_wait_seconds,
+    )
+
+
+@router.get(
+    "/inbox/team-performance",
+    response_model=ListResponse[InboxTeamPerformanceRead],
+)
+def list_inbox_team_performance(
+    response_sla_seconds: int | None = Query(default=None, gt=0),
+    include_inactive: bool = False,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    rows = team_inbox_metrics_service.team_performance_report(
+        db,
+        response_sla_seconds=response_sla_seconds,
+        include_inactive=include_inactive,
+    )
+    items = [_team_performance_read(row) for row in rows[offset : offset + limit]]
+    return list_response(items, limit, offset)
+
+
+@router.get(
+    "/inbox/agent-performance",
+    response_model=ListResponse[InboxAgentPerformanceRead],
+)
+def list_inbox_agent_performance(
+    service_team_id: str | None = None,
+    include_inactive_members: bool = False,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    rows = team_inbox_metrics_service.agent_performance_report(
+        db,
+        service_team_id=service_team_id,
+        include_inactive_members=include_inactive_members,
+    )
+    items = [_agent_performance_read(row) for row in rows[offset : offset + limit]]
+    return list_response(items, limit, offset)

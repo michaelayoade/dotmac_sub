@@ -7,6 +7,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.models.service_team import ServiceTeam, ServiceTeamMember
 from app.models.team_inbox import (
     InboxConversation,
     InboxConversationAssignment,
@@ -41,6 +42,24 @@ class InboxAgentPerformanceMetrics:
     average_queue_wait_seconds: float | None
 
 
+@dataclass(frozen=True)
+class InboxTeamPerformanceReportRow:
+    service_team_id: str
+    service_team_name: str
+    service_team_type: str
+    response_sla_seconds: int | None
+    metrics: InboxTeamPerformanceMetrics
+
+
+@dataclass(frozen=True)
+class InboxAgentPerformanceReportRow:
+    person_id: str
+    service_team_id: str
+    service_team_name: str
+    service_team_type: str
+    metrics: InboxAgentPerformanceMetrics
+
+
 def _as_utc(value: datetime | None) -> datetime | None:
     if value is None:
         return None
@@ -59,6 +78,43 @@ def _seconds_between(start: datetime | None, end: datetime | None) -> float | No
 
 def _avg(values: list[float]) -> float | None:
     return mean(values) if values else None
+
+
+def _positive_int(value: object) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if not isinstance(value, (str, bytes, bytearray, int, float)):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def response_sla_seconds_for_team(
+    team: ServiceTeam,
+    *,
+    fallback: int | None = None,
+) -> int | None:
+    metadata = team.metadata_ or {}
+    nested = metadata.get("inbox_sla")
+    candidates = [
+        metadata.get("inbox_response_sla_seconds"),
+        metadata.get("response_sla_seconds"),
+    ]
+    if isinstance(nested, dict):
+        candidates.extend(
+            [
+                nested.get("response_sla_seconds"),
+                nested.get("first_response_seconds"),
+            ]
+        )
+    for candidate in candidates:
+        parsed = _positive_int(candidate)
+        if parsed is not None:
+            return parsed
+    return fallback
 
 
 def _conversation_ids_for_team(db: Session, service_team_id: str | UUID) -> list[UUID]:
@@ -273,3 +329,72 @@ def agent_performance_metrics(
         ),
         average_queue_wait_seconds=_avg(queue_wait_values),
     )
+
+
+def team_performance_report(
+    db: Session,
+    *,
+    response_sla_seconds: int | None = None,
+    include_inactive: bool = False,
+    now: datetime | None = None,
+) -> list[InboxTeamPerformanceReportRow]:
+    query = db.query(ServiceTeam).order_by(ServiceTeam.name.asc())
+    if not include_inactive:
+        query = query.filter(ServiceTeam.is_active.is_(True))
+    rows: list[InboxTeamPerformanceReportRow] = []
+    for team in query.all():
+        team_sla_seconds = response_sla_seconds_for_team(
+            team,
+            fallback=response_sla_seconds,
+        )
+        rows.append(
+            InboxTeamPerformanceReportRow(
+                service_team_id=str(team.id),
+                service_team_name=team.name,
+                service_team_type=team.team_type,
+                response_sla_seconds=team_sla_seconds,
+                metrics=team_performance_metrics(
+                    db,
+                    team.id,
+                    response_sla_seconds=team_sla_seconds,
+                    now=now,
+                ),
+            )
+        )
+    return rows
+
+
+def agent_performance_report(
+    db: Session,
+    *,
+    service_team_id: str | UUID | None = None,
+    include_inactive_members: bool = False,
+) -> list[InboxAgentPerformanceReportRow]:
+    query = (
+        db.query(ServiceTeamMember, ServiceTeam)
+        .join(ServiceTeam, ServiceTeam.id == ServiceTeamMember.team_id)
+        .filter(ServiceTeam.is_active.is_(True))
+        .order_by(ServiceTeam.name.asc(), ServiceTeamMember.created_at.asc())
+    )
+    if service_team_id is not None:
+        query = query.filter(ServiceTeam.id == UUID(str(service_team_id)))
+    if not include_inactive_members:
+        query = query.filter(ServiceTeamMember.is_active.is_(True))
+
+    rows: list[InboxAgentPerformanceReportRow] = []
+    for member, team in query.all():
+        metrics = agent_performance_metrics(
+            db,
+            service_team_id=team.id,
+            person_id=member.person_id,
+        )
+        rows.append(
+            InboxAgentPerformanceReportRow(
+                person_id=str(member.person_id),
+                service_team_id=str(team.id),
+                service_team_name=team.name,
+                service_team_type=team.team_type,
+                metrics=metrics,
+            )
+        )
+    return rows
