@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import html
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -17,6 +20,10 @@ from app.models.team_inbox import (
 )
 from app.services import email as email_service
 from app.services import team_inbox_routing, team_outbound
+from app.services.customer_identity_normalization import normalize_phone_identifier
+from app.services.integrations.connectors import whatsapp as whatsapp_connector
+
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
 
 
 @dataclass(frozen=True)
@@ -82,6 +89,101 @@ def _reply_to_address(
     )
 
 
+def _plain_text_reply(payload: InboxReplyPayload) -> str:
+    body_text = (payload.body_text or "").strip()
+    if body_text:
+        return body_text
+    body_html = (payload.body_html or "").strip()
+    if not body_html:
+        return ""
+    text = _HTML_TAG_RE.sub(" ", body_html)
+    return html.unescape(" ".join(text.split())).strip()
+
+
+def _provider_metadata(result: dict[str, Any]) -> dict[str, Any]:
+    metadata = {
+        "provider": result.get("provider"),
+        "sent": result.get("sent"),
+        "status_code": result.get("status_code"),
+        "message": result.get("message"),
+    }
+    response = result.get("response")
+    if response is not None:
+        metadata["response"] = str(response)[:500]
+    return {key: value for key, value in metadata.items() if value is not None}
+
+
+def _send_whatsapp_reply(
+    db: Session,
+    *,
+    conversation: InboxConversation,
+    payload: InboxReplyPayload,
+    now: datetime | None,
+) -> InboxReplyResult:
+    recipient = normalize_phone_identifier(conversation.contact_address)
+    if not recipient:
+        return InboxReplyResult(
+            kind="missing_recipient",
+            conversation_id=str(conversation.id),
+            reason="Conversation has no WhatsApp reply recipient",
+        )
+    body_text = _plain_text_reply(payload)
+    if not body_text:
+        return InboxReplyResult(
+            kind="empty_body",
+            conversation_id=str(conversation.id),
+            reason="Reply body is required",
+        )
+
+    result = whatsapp_connector.send_text_message(
+        db,
+        recipient=recipient,
+        body=body_text,
+    )
+    if not bool(result.get("ok")):
+        return InboxReplyResult(
+            kind="send_failed",
+            conversation_id=str(conversation.id),
+            to_email=recipient,
+            reason="WhatsApp provider rejected the reply",
+        )
+
+    sent_at = now or datetime.now(UTC)
+    metadata = dict(payload.metadata or {})
+    metadata.update(
+        {
+            "source": "team_inbox_reply",
+            "channel_type": InboxChannelType.whatsapp.value,
+            "sent_by_person_id": str(payload.sent_by_person_id)
+            if payload.sent_by_person_id
+            else None,
+            "provider_result": _provider_metadata(result),
+        }
+    )
+    message = InboxMessage(
+        conversation_id=conversation.id,
+        channel_type=InboxChannelType.whatsapp.value,
+        direction=InboxMessageDirection.outbound.value,
+        subject=None,
+        body=body_text,
+        external_thread_id=conversation.external_thread_id,
+        from_address=None,
+        to_addresses=[recipient],
+        cc_addresses=[],
+        sent_at=sent_at,
+        metadata_=metadata,
+    )
+    db.add(message)
+    conversation.last_message_at = sent_at
+    db.flush()
+    return InboxReplyResult(
+        kind="sent",
+        conversation_id=str(conversation.id),
+        message_id=str(message.id),
+        to_email=recipient,
+    )
+
+
 def send_inbox_reply(
     db: Session,
     *,
@@ -100,6 +202,14 @@ def send_inbox_reply(
             kind="invalid_conversation",
             conversation_id=str(conversation.id),
             reason="Resolved conversations cannot be replied to",
+        )
+
+    if conversation.channel_type == InboxChannelType.whatsapp.value:
+        return _send_whatsapp_reply(
+            db,
+            conversation=conversation,
+            payload=payload,
+            now=now,
         )
 
     to_email = _reply_to_address(conversation, payload.to_email)

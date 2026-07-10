@@ -82,6 +82,20 @@ def _conversation(db_session, team: ServiceTeam) -> InboxConversation:
     return conversation
 
 
+def _whatsapp_conversation(db_session) -> InboxConversation:
+    conversation = InboxConversation(
+        channel_type="whatsapp",
+        subject="WhatsApp support",
+        contact_address="whatsapp:0803 555 0114",
+        status=InboxConversationStatus.open.value,
+        first_message_at=datetime(2026, 7, 10, 8, 0, tzinfo=UTC),
+        last_message_at=datetime(2026, 7, 10, 8, 0, tzinfo=UTC),
+    )
+    db_session.add(conversation)
+    db_session.flush()
+    return conversation
+
+
 def test_send_inbox_reply_uses_owner_team_sender(db_session, monkeypatch):
     _smtp_sender(db_session, "support", from_email="support@dotmac.io")
     _activity_sender(db_session, "support_ticket", "support")
@@ -122,6 +136,94 @@ def test_send_inbox_reply_uses_owner_team_sender(db_session, monkeypatch):
     assert message.from_address == "support@dotmac.io"
     assert message.to_addresses == ["customer@example.com"]
     assert message.metadata_["sender_key"] == "support"
+
+
+def test_send_inbox_reply_sends_whatsapp_text(db_session, monkeypatch):
+    conversation = _whatsapp_conversation(db_session)
+    sent: dict[str, object] = {}
+    monkeypatch.setattr(
+        team_inbox_outbound.whatsapp_connector,
+        "send_text_message",
+        lambda *args, **kwargs: (
+            sent.update(kwargs)
+            or {
+                "ok": True,
+                "provider": "meta_cloud_api",
+                "sent": True,
+                "status_code": 200,
+                "response": '{"messages":[{"id":"wamid.outbound"}]}',
+            }
+        ),
+    )
+    db_session.commit()
+
+    result = team_inbox_outbound.send_inbox_reply(
+        db_session,
+        conversation=conversation,
+        payload=team_inbox_outbound.InboxReplyPayload(
+            body_html="<p>We are checking this.</p>",
+            sent_by_person_id=uuid4(),
+        ),
+        now=datetime(2026, 7, 10, 8, 5, tzinfo=UTC),
+    )
+    db_session.commit()
+
+    message = db_session.query(InboxMessage).one()
+    assert result.kind == "sent"
+    assert result.to_email == "+2348035550114"
+    assert sent["recipient"] == "+2348035550114"
+    assert sent["body"] == "We are checking this."
+    assert message.channel_type == "whatsapp"
+    assert message.direction == InboxMessageDirection.outbound.value
+    assert message.body == "We are checking this."
+    assert message.to_addresses == ["+2348035550114"]
+    assert message.metadata_["provider_result"]["provider"] == "meta_cloud_api"
+    assert conversation.last_message_at == datetime(2026, 7, 10, 8, 5)
+
+
+def test_send_inbox_reply_does_not_store_whatsapp_message_on_provider_failure(
+    db_session, monkeypatch
+):
+    conversation = _whatsapp_conversation(db_session)
+    monkeypatch.setattr(
+        team_inbox_outbound.whatsapp_connector,
+        "send_text_message",
+        lambda *args, **kwargs: {
+            "ok": False,
+            "provider": "meta_cloud_api",
+            "sent": True,
+            "status_code": 400,
+            "response": "bad recipient",
+        },
+    )
+    db_session.commit()
+
+    result = team_inbox_outbound.send_inbox_reply(
+        db_session,
+        conversation=conversation,
+        payload=team_inbox_outbound.InboxReplyPayload(
+            body_html="<p>We are checking this.</p>",
+        ),
+    )
+
+    assert result.kind == "send_failed"
+    assert result.reason == "WhatsApp provider rejected the reply"
+    assert db_session.query(InboxMessage).count() == 0
+
+
+def test_send_inbox_reply_requires_whatsapp_recipient(db_session):
+    conversation = _whatsapp_conversation(db_session)
+    conversation.contact_address = None
+    db_session.commit()
+
+    result = team_inbox_outbound.send_inbox_reply(
+        db_session,
+        conversation=conversation,
+        payload=team_inbox_outbound.InboxReplyPayload(body_html="<p>Hello.</p>"),
+    )
+
+    assert result.kind == "missing_recipient"
+    assert result.reason == "Conversation has no WhatsApp reply recipient"
 
 
 def test_send_inbox_reply_uses_field_service_sender_for_field_team(
