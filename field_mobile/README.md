@@ -9,6 +9,10 @@ override it with `--dart-define=API_BASE_URL=...`.
 Field service is work-order execution only. The old CRM field-sales/customer
 lookup module was intentionally not carried forward.
 
+Vendor mode currently exposes only the sub-native nearby-plant map and profile.
+Do not re-add CRM project/quote routes; vendor work must come back as
+sub-native work orders.
+
 ## Useful Commands
 
 ```sh

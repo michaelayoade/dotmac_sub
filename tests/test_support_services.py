@@ -527,7 +527,12 @@ def test_native_ticket_writes_remain_enabled_before_crm_cutover(db_session, subs
     assert updated.status == "closed"
 
 
-def test_field_visit_tag_creates_work_order_once(db_session, subscriber):
+def test_field_visit_tag_creates_native_work_order_once(db_session, subscriber):
+    """Phase 2 (sub = work-order SoT): a field_visit ticket births a native
+    dispatch work-order header — visible to dispatch and field_mobile — not
+    the legacy provisioning ServiceOrder stub."""
+    from app.models.work_order_mirror import WorkOrderMirror
+
     ticket = support_service.tickets.create(
         db_session,
         TicketCreate(
@@ -543,16 +548,99 @@ def test_field_visit_tag_creates_work_order_once(db_session, subscriber):
     db_session.refresh(ticket)
     work_order_id = (ticket.metadata_ or {}).get("work_order_id")
     assert work_order_id is not None
-    assert db_session.get(ServiceOrder, work_order_id) is not None
+    assert work_order_id.startswith("sub-")  # native dispatch public id
+    row = (
+        db_session.query(WorkOrderMirror)
+        .filter_by(crm_work_order_id=work_order_id)
+        .one()
+    )
+    assert row.subscriber_id == subscriber.id
+    assert row.crm_ticket_id == str(ticket.id)
+    assert row.title == "Field visit — Fiber issue"
+    assert (row.metadata_ or {}).get("native_source") == "sub"
+    assert (row.metadata_ or {}).get("created_from") == "support_ticket"
+    # No legacy provisioning ServiceOrder stub anymore.
+    assert db_session.query(ServiceOrder).count() == 0
 
-    # Updating with field_visit again should not duplicate work order.
+    # Updating with field_visit again should not duplicate the work order.
     support_service.tickets.update(
         db_session,
         str(ticket.id),
         TicketUpdate(tags=["field_visit"]),
         actor_id=str(subscriber.id),
     )
-    assert db_session.query(ServiceOrder).count() == 1
+    assert db_session.query(WorkOrderMirror).count() == 1
+
+
+def test_legacy_service_order_backed_ticket_not_double_created(db_session, subscriber):
+    """A pre-cutover ticket whose metadata.work_order_id points at a legacy
+    ServiceOrder stub is honored for dedupe — no new work order on update."""
+    from app.models.provisioning import ServiceOrder as ServiceOrderModel
+    from app.models.work_order_mirror import WorkOrderMirror
+
+    legacy = ServiceOrderModel(subscriber_id=subscriber.id)
+    db_session.add(legacy)
+    db_session.commit()
+
+    ticket = support_service.tickets.create(
+        db_session,
+        TicketCreate(
+            title="Old flow",
+            description="pre-cutover",
+            subscriber_id=subscriber.id,
+            customer_account_id=subscriber.id,
+        ),
+        actor_id=str(subscriber.id),
+    )
+    ticket.metadata_ = {"work_order_id": str(legacy.id)}
+    db_session.commit()
+
+    support_service.tickets.update(
+        db_session,
+        str(ticket.id),
+        TicketUpdate(tags=["field_visit"]),
+        actor_id=str(subscriber.id),
+    )
+    assert db_session.query(WorkOrderMirror).count() == 0
+
+
+def test_automation_added_field_visit_tag_births_work_order(db_session, subscriber):
+    """Automation→WO hook: an add_tag rule stamping field_visit on
+    ticket_created births the native work order in the same create flow."""
+    from app.models.support import AutomationActionType, AutomationTrigger
+    from app.models.work_order_mirror import WorkOrderMirror
+
+    support_automation.create_rule(
+        db_session,
+        name="Site visits get a work order",
+        trigger=AutomationTrigger.ticket_created,
+        conditions={"ticket_type": "site_visit"},
+        action_type=AutomationActionType.add_tag,
+        action_value={"tag": "field_visit"},
+    )
+
+    ticket = support_service.tickets.create(
+        db_session,
+        TicketCreate(
+            title="Router down at site",
+            description="Needs onsite check",
+            subscriber_id=subscriber.id,
+            customer_account_id=subscriber.id,
+            ticket_type="site_visit",
+        ),
+        actor_id=str(subscriber.id),
+    )
+
+    db_session.refresh(ticket)
+    assert "field_visit" in (ticket.tags or [])
+    work_order_id = (ticket.metadata_ or {}).get("work_order_id")
+    assert work_order_id is not None
+    assert (
+        db_session.query(WorkOrderMirror)
+        .filter_by(crm_work_order_id=work_order_id)
+        .count()
+        == 1
+    )
 
 
 def test_merge_moves_comments_assignees_and_blocks_source_mutations(

@@ -1818,7 +1818,16 @@ def build_beat_schedule() -> dict:
             interval_seconds=max(project_reconcile_seconds, 900),
         )
         # Work-order/field-service mirror reconcile — backstop for missed
-        # work_order.* webhook deliveries.
+        # work_order.* webhook deliveries. Gated by the crm.work_order_pull
+        # kill switch (Phase 2 flip lever, ticket-pattern #1111): off means sub
+        # is the work-order system-of-record and the CRM is no longer polled.
+        work_order_pull_enabled = _effective_bool(
+            session,
+            SettingDomain.scheduler,
+            "crm_work_order_pull_enabled",
+            "CRM_WORK_ORDER_PULL_ENABLED",
+            True,
+        )
         work_order_reconcile_seconds = _resolve_int(
             session,
             SettingDomain.subscriber,
@@ -1829,7 +1838,7 @@ def build_beat_schedule() -> dict:
             session,
             name="work_order_mirror_reconcile",
             task_name="app.tasks.work_orders.reconcile_work_order_mirror",
-            enabled=True,
+            enabled=work_order_pull_enabled,
             interval_seconds=max(work_order_reconcile_seconds, 900),
         )
         # Self-serve quote mirror reconcile — backstop for missed quote.* webhooks.

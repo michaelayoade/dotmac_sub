@@ -58,7 +58,7 @@ class OutboxEntries extends Table {
   IntColumn get seq => integer().autoIncrement()();
   TextColumn get clientRef => text().unique()();
   TextColumn get kind =>
-      text()(); // transition|note|worklog|material_consume|expense_request|as_built
+      text()(); // transition|note|worklog|material_consume|expense_request
   TextColumn get payloadJson => text()();
   TextColumn get status =>
       text().withDefault(const Constant('pending'))(); // pending|sent|conflict

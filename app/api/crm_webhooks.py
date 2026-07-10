@@ -10,7 +10,9 @@ tickets appear locally in seconds instead of waiting for the 5-minute pull.
 Updates/comments have no CRM webhook events and remain covered by the pull.
 The ticket branch is gated by the same crm.ticket_pull control as the pull
 beat entries (legacy key crm_ticket_pull_enabled) — with it off, ticket
-events are acked as 200 noops (Phase 1 flip kill switch).
+events are acked as 200 noops (Phase 1 flip kill switch). The work-order
+branch is gated the same way by crm.work_order_pull (legacy key
+crm_work_order_pull_enabled — Phase 2 flip kill switch).
 
 Mounted with no router-level auth (see main.py) — authentication is the HMAC
 signature, fail-closed: unconfigured secret → 503,
@@ -411,6 +413,22 @@ async def receive_crm_work_order_event(
     event_type = str(request.headers.get(EVENT_HEADER) or "").strip()
     if event_type and event_type not in WORK_ORDER_EVENTS:
         return {"status": "ignored", "event": event_type}
+
+    # Flip kill switch (Phase 2, ticket-pattern #1111): the same
+    # crm.work_order_pull control (legacy scheduler key
+    # crm_work_order_pull_enabled) that gates the work_order_mirror_reconcile
+    # beat entry also gates this branch — once sub is the work-order
+    # system-of-record, CRM lifecycle events are acked with a 200 noop so the
+    # CRM doesn't retry. Lazy import to match the ticket branch (deleted whole
+    # at contract).
+    from app.services import control_registry
+
+    if not control_registry.is_enabled(db, "crm.work_order_pull"):
+        return {
+            "status": "ignored",
+            "reason": "work_order_pull_disabled",
+            "event": event_type,
+        }
 
     try:
         payload = json.loads(raw_body or b"{}")

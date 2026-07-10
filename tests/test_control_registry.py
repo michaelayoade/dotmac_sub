@@ -201,6 +201,40 @@ def test_env_overrides_canonical_row(db_session, monkeypatch):
     assert control_registry.is_enabled(db_session, "billing.autopay") is True
 
 
+def test_work_order_pull_defaults_on_and_flips_via_scheduler_row(db_session):
+    """Phase 2 flip lever: crm.work_order_pull fails OPEN (inert until flipped)
+    and the legacy scheduler row turns it off — both through the resolver and
+    through the scheduler chokepoint that gates work_order_mirror_reconcile."""
+    from app.models.domain_settings import SettingDomain
+
+    assert control_registry.is_enabled(db_session, "crm.work_order_pull") is True
+    assert (
+        scheduler_config._effective_bool(
+            db_session,
+            SettingDomain.scheduler,
+            "crm_work_order_pull_enabled",
+            "CRM_WORK_ORDER_PULL_ENABLED",
+            True,
+        )
+        is True
+    )
+
+    _set_legacy(
+        db_session, SettingDomain.scheduler, "crm_work_order_pull_enabled", False
+    )
+    assert control_registry.is_enabled(db_session, "crm.work_order_pull") is False
+    assert (
+        scheduler_config._effective_bool(
+            db_session,
+            SettingDomain.scheduler,
+            "crm_work_order_pull_enabled",
+            "CRM_WORK_ORDER_PULL_ENABLED",
+            True,
+        )
+        is False
+    )
+
+
 def test_disabled_components_covers_all_capture_features(db_session):
     _set_canonical(db_session, "billing.arrangements", False)
     _set_canonical(db_session, "billing.topup_reconciliation", False)

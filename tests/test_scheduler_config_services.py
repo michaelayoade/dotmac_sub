@@ -710,6 +710,66 @@ class TestBuildBeatSchedule:
 
         assert "integration_job_crm-job-123" not in schedule
 
+    def test_work_order_mirror_reconcile_gated_by_pull_flag(self, monkeypatch):
+        """Phase 2 flip: CRM_WORK_ORDER_PULL_ENABLED=false disables the
+        work_order_mirror_reconcile beat entry (and only that entry here)."""
+        monkeypatch.setenv("GIS_SYNC_ENABLED", "false")
+        monkeypatch.setenv("CRM_WORK_ORDER_PULL_ENABLED", "false")
+        monkeypatch.delenv("USAGE_RATING_ENABLED", raising=False)
+        monkeypatch.delenv("DUNNING_ENABLED", raising=False)
+
+        mock_session = MagicMock()
+        mock_session.query.return_value.filter.return_value.filter.return_value.filter.return_value.first.return_value = None
+        mock_session.query.return_value.filter.return_value.all.return_value = []
+        mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
+
+        with patch.object(scheduler_config, "SessionLocal", return_value=mock_session):
+            with patch.object(
+                scheduler_config.integration_service,
+                "list_interval_jobs",
+                return_value=[],
+            ):
+                with patch.object(
+                    scheduler_config, "_sync_scheduled_task"
+                ) as sync_task:
+                    scheduler_config.build_beat_schedule()
+
+        by_name = {
+            call.kwargs.get("name"): call.kwargs for call in sync_task.call_args_list
+        }
+        assert by_name["work_order_mirror_reconcile"]["enabled"] is False
+        # Neighboring mirror reconciles stay unaffected by the WO flip lever.
+        assert by_name["project_mirror_reconcile"]["enabled"] is True
+
+    def test_work_order_mirror_reconcile_enabled_by_default(self, monkeypatch):
+        """No env, no rows -> the crm.work_order_pull control fails OPEN and the
+        reconcile beat stays registered (inert kill switch until the flip)."""
+        monkeypatch.setenv("GIS_SYNC_ENABLED", "false")
+        monkeypatch.delenv("CRM_WORK_ORDER_PULL_ENABLED", raising=False)
+        monkeypatch.delenv("USAGE_RATING_ENABLED", raising=False)
+        monkeypatch.delenv("DUNNING_ENABLED", raising=False)
+
+        mock_session = MagicMock()
+        mock_session.query.return_value.filter.return_value.filter.return_value.filter.return_value.first.return_value = None
+        mock_session.query.return_value.filter.return_value.all.return_value = []
+        mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
+
+        with patch.object(scheduler_config, "SessionLocal", return_value=mock_session):
+            with patch.object(
+                scheduler_config.integration_service,
+                "list_interval_jobs",
+                return_value=[],
+            ):
+                with patch.object(
+                    scheduler_config, "_sync_scheduled_task"
+                ) as sync_task:
+                    scheduler_config.build_beat_schedule()
+
+        by_name = {
+            call.kwargs.get("name"): call.kwargs for call in sync_task.call_args_list
+        }
+        assert by_name["work_order_mirror_reconcile"]["enabled"] is True
+
     def test_builds_scheduled_task_schedules(self, monkeypatch):
         """Test builds scheduled task schedules."""
         monkeypatch.setenv("GIS_SYNC_ENABLED", "false")

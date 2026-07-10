@@ -391,6 +391,24 @@ _FEATURE_CONTROLS: tuple[Control, ...] = (
         description="Pull tickets from CRM.",
     ),
     Control(
+        # Phase 2 flip lever (work-order SoT): gates the CRM work-order webhook
+        # branch, the work_order_mirror_reconcile beat entry, and the lazy CRM
+        # refresh in work_orders_mirror.read_for_subscriber. Fail-OPEN so the
+        # switch is inert (mirror keeps pulling) until deliberately flipped off
+        # — at which point sub serves and writes work orders natively only.
+        key="crm.work_order_pull",
+        layer=Layer.feature,
+        owner_module="crm",
+        default=True,
+        on_missing=True,
+        legacy=(
+            LegacyAlias(
+                _SCH, "crm_work_order_pull_enabled", "CRM_WORK_ORDER_PULL_ENABLED"
+            ),
+        ),
+        description="Pull work orders from CRM (webhook + reconcile + lazy refresh).",
+    ),
+    Control(
         key="crm.billing_push",
         layer=Layer.feature,
         owner_module="crm",
