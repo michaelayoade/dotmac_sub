@@ -163,11 +163,31 @@ def _send_whatsapp_reply(
             reason="Reply body is required",
         )
 
-    result = whatsapp_connector.send_text_message(
-        db,
-        recipient=recipient,
-        body=body_text,
+    payload_metadata = dict(payload.metadata or {})
+    raw_template_spec = payload_metadata.get("whatsapp_template")
+    template_spec = raw_template_spec if isinstance(raw_template_spec, dict) else None
+    template_name = (
+        str(template_spec.get("name") or "").strip() if template_spec else ""
     )
+    use_template = bool(template_spec and template_name)
+    if use_template:
+        raw_variables = template_spec.get("variables") if template_spec else None
+        result = whatsapp_connector.send_template_message(
+            db,
+            recipient=recipient,
+            template_name=template_name,
+            language=str(template_spec.get("language") or "").strip() or None
+            if template_spec
+            else None,
+            variables=raw_variables if isinstance(raw_variables, dict) else None,
+            dry_run=False,
+        )
+    else:
+        result = whatsapp_connector.send_text_message(
+            db,
+            recipient=recipient,
+            body=body_text,
+        )
     if not bool(result.get("ok")):
         failed_message_id = None
         if record_failure:
@@ -177,7 +197,9 @@ def _send_whatsapp_reply(
                 payload=payload,
                 channel_type=InboxChannelType.whatsapp.value,
                 to_addresses=[recipient],
-                reason="WhatsApp provider rejected the reply",
+                reason="WhatsApp provider rejected the template"
+                if use_template
+                else "WhatsApp provider rejected the reply",
                 provider_result=_provider_metadata(result),
                 now=now,
             )
@@ -186,16 +208,19 @@ def _send_whatsapp_reply(
             conversation_id=str(conversation.id),
             message_id=failed_message_id,
             to_email=recipient,
-            reason="WhatsApp provider rejected the reply",
+            reason="WhatsApp provider rejected the template"
+            if use_template
+            else "WhatsApp provider rejected the reply",
         )
 
     sent_at = now or datetime.now(UTC)
-    metadata = dict(payload.metadata or {})
+    metadata = payload_metadata
     provider_message_id = _provider_message_id(result)
     metadata.update(
         {
             "source": "team_inbox_reply",
             "channel_type": InboxChannelType.whatsapp.value,
+            "message_kind": "template" if use_template else "text",
             "sent_by_person_id": str(payload.sent_by_person_id)
             if payload.sent_by_person_id
             else None,
@@ -207,7 +232,7 @@ def _send_whatsapp_reply(
         channel_type=InboxChannelType.whatsapp.value,
         direction=InboxMessageDirection.outbound.value,
         subject=None,
-        body=body_text,
+        body=body_text if not use_template else f"[WhatsApp template: {template_name}]",
         external_message_id=provider_message_id,
         external_thread_id=conversation.external_thread_id,
         from_address=None,

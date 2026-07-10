@@ -355,6 +355,8 @@ def test_admin_template_create_and_reply_uses_template(db_session, monkeypatch):
         channel_type="email",
         subject="Outage update",
         body_text="We are still working on this.",
+        provider_template_name=None,
+        provider_template_language=None,
         db=db_session,
     )
     template = db_session.query(InboxMessageTemplate).one()
@@ -373,3 +375,23 @@ def test_admin_template_create_and_reply_uses_template(db_session, monkeypatch):
     assert sent["subject"] == "Re: Outage update"
     assert message.metadata_["template_id"] == str(template.id)
     assert "We are still working on this." in message.body
+
+
+def test_admin_template_create_stores_whatsapp_provider_mapping(db_session):
+    conversation = _conversation(db_session)
+
+    response = inbox_web.team_inbox_template_create(
+        conversation.id,
+        name="Service update",
+        channel_type="whatsapp",
+        subject=None,
+        body_text="Fallback text",
+        provider_template_name="service_update",
+        provider_template_language="en",
+        db=db_session,
+    )
+
+    template = db_session.query(InboxMessageTemplate).one()
+    assert response.status_code == 303
+    assert template.metadata_["provider_template_name"] == "service_update"
+    assert template.metadata_["provider_template_language"] == "en"

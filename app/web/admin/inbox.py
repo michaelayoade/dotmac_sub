@@ -350,6 +350,31 @@ def team_inbox_reply(
     body_html = (
         "<p>" + "<br>".join(escape(line) for line in clean_body.splitlines()) + "</p>"
     )
+    reply_metadata: dict[str, object] = {
+        "source_route": "admin_inbox_detail_reply",
+        "template_id": str(template.id) if template is not None else None,
+    }
+    if (
+        template is not None
+        and conversation.channel_type == InboxChannelType.whatsapp.value
+    ):
+        template_metadata = dict(template.metadata_ or {})
+        provider_template_name = str(
+            template_metadata.get("provider_template_name")
+            or template_metadata.get("whatsapp_template_name")
+            or ""
+        ).strip()
+        if provider_template_name:
+            variables = template_metadata.get("provider_template_variables")
+            reply_metadata["whatsapp_template"] = {
+                "name": provider_template_name,
+                "language": str(
+                    template_metadata.get("provider_template_language") or ""
+                ).strip()
+                or None,
+                "variables": variables if isinstance(variables, dict) else {},
+                "inbox_template_id": str(template.id),
+            }
     result = team_inbox_outbound.send_inbox_reply(
         db,
         conversation=conversation,
@@ -358,10 +383,7 @@ def team_inbox_reply(
             body_text=clean_body,
             subject=template.subject if template is not None else None,
             sent_by_person_id=web_admin_service.get_actor_id(request),
-            metadata={
-                "source_route": "admin_inbox_detail_reply",
-                "template_id": str(template.id) if template is not None else None,
-            },
+            metadata=reply_metadata,
         ),
         record_failure=True,
     )
@@ -503,8 +525,18 @@ def team_inbox_template_create(
     channel_type: str = Form(default="any"),
     subject: str | None = Form(default=None),
     body_text: str = Form(...),
+    provider_template_name: str | None = Form(default=None),
+    provider_template_language: str | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
+    metadata = {
+        key: value
+        for key, value in {
+            "provider_template_name": str(provider_template_name or "").strip(),
+            "provider_template_language": str(provider_template_language or "").strip(),
+        }.items()
+        if value
+    }
     try:
         team_inbox_operations.create_template(
             db,
@@ -512,6 +544,7 @@ def team_inbox_template_create(
             channel_type=channel_type,
             subject=subject,
             body_text=body_text,
+            metadata=metadata or None,
         )
     except team_inbox_operations.InboxOperationError as exc:
         return _detail_redirect(conversation_id, status="error", message=str(exc))

@@ -185,6 +185,55 @@ def test_send_inbox_reply_sends_whatsapp_text(db_session, monkeypatch):
     assert conversation.last_message_at == datetime(2026, 7, 10, 8, 5)
 
 
+def test_send_inbox_reply_sends_whatsapp_template(db_session, monkeypatch):
+    conversation = _whatsapp_conversation(db_session)
+    sent: dict[str, object] = {}
+    monkeypatch.setattr(
+        team_inbox_outbound.whatsapp_connector,
+        "send_template_message",
+        lambda *args, **kwargs: (
+            sent.update(kwargs)
+            or {
+                "ok": True,
+                "provider": "meta_cloud_api",
+                "sent": True,
+                "status_code": 200,
+                "response": '{"messages":[{"id":"wamid.template"}]}',
+            }
+        ),
+    )
+    db_session.commit()
+
+    result = team_inbox_outbound.send_inbox_reply(
+        db_session,
+        conversation=conversation,
+        payload=team_inbox_outbound.InboxReplyPayload(
+            body_html="<p>Template fallback.</p>",
+            body_text="Template fallback.",
+            metadata={
+                "whatsapp_template": {
+                    "name": "service_update",
+                    "language": "en",
+                    "variables": {"1": "Ada"},
+                }
+            },
+        ),
+        now=datetime(2026, 7, 10, 8, 5, tzinfo=UTC),
+    )
+    db_session.commit()
+
+    message = db_session.query(InboxMessage).one()
+    assert result.kind == "sent"
+    assert sent["recipient"] == "+2348035550114"
+    assert sent["template_name"] == "service_update"
+    assert sent["language"] == "en"
+    assert sent["variables"] == {"1": "Ada"}
+    assert sent["dry_run"] is False
+    assert message.body == "[WhatsApp template: service_update]"
+    assert message.metadata_["message_kind"] == "template"
+    assert message.external_message_id == "wamid.template"
+
+
 def test_send_inbox_reply_does_not_store_whatsapp_message_on_provider_failure(
     db_session, monkeypatch
 ):

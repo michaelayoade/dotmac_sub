@@ -528,6 +528,7 @@ def create_template(
     body_text: str,
     subject: str | None = None,
     body_html: str | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> InboxMessageTemplate:
     clean_name = str(name or "").strip()
     clean_channel = str(channel_type or "any").strip().lower()
@@ -551,6 +552,7 @@ def create_template(
         subject=str(subject or "").strip()[:200] or None,
         body_text=clean_body,
         body_html=str(body_html or "").strip() or None,
+        metadata_=metadata or None,
         is_active=True,
     )
     db.add(template)
