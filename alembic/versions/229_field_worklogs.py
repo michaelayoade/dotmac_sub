@@ -1,7 +1,7 @@
 """Add native field worklogs.
 
-Revision ID: 228_field_worklogs
-Revises: 227_field_work_order_notes
+Revision ID: 229_field_worklogs
+Revises: 228_field_work_order_notes
 Create Date: 2026-07-09
 """
 
@@ -13,8 +13,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "228_field_worklogs"
-down_revision = "227_field_work_order_notes"
+revision = "229_field_worklogs"
+down_revision = "228_field_work_order_notes"
 branch_labels = None
 depends_on = None
 
