@@ -164,20 +164,77 @@ def set_conversation_owner_team(
     return conversation
 
 
-def assign_conversation_to_available_agent(
+def _record_escalation_metadata(
+    conversation: InboxConversation,
+    *,
+    service_team_id: UUID,
+    assigned_person_id: UUID | None,
+    assigned_by_person_id: UUID | None,
+    reason: str | None,
+    kind: str,
+    now: datetime,
+) -> None:
+    metadata = dict(conversation.metadata_ or {})
+    metadata["last_inbox_escalation"] = {
+        "service_team_id": str(service_team_id),
+        "assigned_person_id": str(assigned_person_id) if assigned_person_id else None,
+        "assigned_by_person_id": (
+            str(assigned_by_person_id) if assigned_by_person_id else None
+        ),
+        "reason": reason,
+        "kind": kind,
+        "at": now.isoformat(),
+    }
+    conversation.metadata_ = metadata
+
+
+def assign_conversation_to_agent(
     db: Session,
     *,
     conversation: InboxConversation,
     service_team_id: str | UUID,
+    person_id: str | UUID,
     assigned_by_person_id: str | UUID | None = None,
+    reason: str | None = None,
     now: datetime | None = None,
 ) -> InboxAssignmentResult:
     team_uuid = _coerce_uuid(service_team_id)
+    person_uuid = _coerce_uuid(person_id)
+    actor_uuid = _coerce_uuid(assigned_by_person_id)
+    assigned_at = now or datetime.now(UTC)
     if team_uuid is None:
         return InboxAssignmentResult(
             kind="invalid_team",
             service_team_id=None,
             reason="service_team_id must be a valid UUID",
+        )
+    if person_uuid is None:
+        return InboxAssignmentResult(
+            kind="invalid_agent",
+            service_team_id=str(team_uuid),
+            reason="person_id must be a valid UUID",
+        )
+
+    team = db.get(ServiceTeam, team_uuid)
+    if team is None or not team.is_active:
+        return InboxAssignmentResult(
+            kind="invalid_team",
+            service_team_id=str(team_uuid),
+            reason="service_team_id must reference an active team",
+        )
+
+    member = (
+        db.query(ServiceTeamMember)
+        .filter(ServiceTeamMember.team_id == team_uuid)
+        .filter(ServiceTeamMember.person_id == person_uuid)
+        .filter(ServiceTeamMember.is_active.is_(True))
+        .one_or_none()
+    )
+    if member is None:
+        return InboxAssignmentResult(
+            kind="invalid_agent",
+            service_team_id=str(team_uuid),
+            reason="person_id must be an active member of the target team",
         )
 
     set_conversation_owner_team(
@@ -186,31 +243,147 @@ def assign_conversation_to_available_agent(
         service_team_id=team_uuid,
         source=InboxTeamSource.escalation.value,
     )
+    for assignment in conversation.assignments:
+        if assignment.is_active:
+            assignment.is_active = False
+
+    assignment = InboxConversationAssignment(
+        conversation_id=conversation.id,
+        service_team_id=team_uuid,
+        person_id=person_uuid,
+        assigned_by_person_id=actor_uuid,
+        assigned_at=assigned_at,
+        is_active=True,
+        metadata_={"reason": reason, "source": InboxTeamSource.escalation.value},
+    )
+    db.add(assignment)
+    _record_escalation_metadata(
+        conversation,
+        service_team_id=team_uuid,
+        assigned_person_id=person_uuid,
+        assigned_by_person_id=actor_uuid,
+        reason=reason,
+        kind="assigned",
+        now=assigned_at,
+    )
+    db.flush()
+    return InboxAssignmentResult(
+        kind="assigned",
+        service_team_id=str(team_uuid),
+        assigned_person_id=str(person_uuid),
+    )
+
+
+def queue_conversation_for_team(
+    db: Session,
+    *,
+    conversation: InboxConversation,
+    service_team_id: str | UUID,
+    assigned_by_person_id: str | UUID | None = None,
+    reason: str | None = None,
+    now: datetime | None = None,
+) -> InboxAssignmentResult:
+    team_uuid = _coerce_uuid(service_team_id)
+    actor_uuid = _coerce_uuid(assigned_by_person_id)
+    queued_at = now or datetime.now(UTC)
+    if team_uuid is None:
+        return InboxAssignmentResult(
+            kind="invalid_team",
+            service_team_id=None,
+            reason="service_team_id must be a valid UUID",
+        )
+
+    team = db.get(ServiceTeam, team_uuid)
+    if team is None or not team.is_active:
+        return InboxAssignmentResult(
+            kind="invalid_team",
+            service_team_id=str(team_uuid),
+            reason="service_team_id must reference an active team",
+        )
+
+    set_conversation_owner_team(
+        db,
+        conversation=conversation,
+        service_team_id=team_uuid,
+        source=InboxTeamSource.escalation.value,
+    )
+    for assignment in conversation.assignments:
+        if assignment.is_active:
+            assignment.is_active = False
+    _record_escalation_metadata(
+        conversation,
+        service_team_id=team_uuid,
+        assigned_person_id=None,
+        assigned_by_person_id=actor_uuid,
+        reason=reason,
+        kind="queued",
+        now=queued_at,
+    )
+    db.flush()
+    return InboxAssignmentResult(
+        kind="queued",
+        service_team_id=str(team_uuid),
+        reason="manual_queue",
+    )
+
+
+def assign_conversation_to_available_agent(
+    db: Session,
+    *,
+    conversation: InboxConversation,
+    service_team_id: str | UUID,
+    assigned_by_person_id: str | UUID | None = None,
+    reason: str | None = None,
+    now: datetime | None = None,
+) -> InboxAssignmentResult:
+    team_uuid = _coerce_uuid(service_team_id)
+    actor_uuid = _coerce_uuid(assigned_by_person_id)
+    assigned_at = now or datetime.now(UTC)
+    if team_uuid is None:
+        return InboxAssignmentResult(
+            kind="invalid_team",
+            service_team_id=None,
+            reason="service_team_id must be a valid UUID",
+        )
+
     candidates = list_available_team_agents(db, team_uuid)
     if not candidates:
+        team = db.get(ServiceTeam, team_uuid)
+        if team is None or not team.is_active:
+            return InboxAssignmentResult(
+                kind="invalid_team",
+                service_team_id=str(team_uuid),
+                reason="service_team_id must reference an active team",
+            )
+        set_conversation_owner_team(
+            db,
+            conversation=conversation,
+            service_team_id=team_uuid,
+            source=InboxTeamSource.escalation.value,
+        )
+        _record_escalation_metadata(
+            conversation,
+            service_team_id=team_uuid,
+            assigned_person_id=None,
+            assigned_by_person_id=actor_uuid,
+            reason=reason,
+            kind="queued",
+            now=assigned_at,
+        )
+        db.flush()
         return InboxAssignmentResult(
             kind="queued",
             service_team_id=str(team_uuid),
             reason="no_available_agent",
         )
 
-    for assignment in conversation.assignments:
-        if assignment.is_active:
-            assignment.is_active = False
-
     selected = candidates[0]
-    assignment = InboxConversationAssignment(
-        conversation_id=conversation.id,
+    return assign_conversation_to_agent(
+        db,
+        conversation=conversation,
         service_team_id=team_uuid,
-        person_id=UUID(selected.person_id),
-        assigned_by_person_id=_coerce_uuid(assigned_by_person_id),
-        assigned_at=now or datetime.now(UTC),
-        is_active=True,
-    )
-    db.add(assignment)
-    db.flush()
-    return InboxAssignmentResult(
-        kind="assigned",
-        service_team_id=str(team_uuid),
-        assigned_person_id=selected.person_id,
+        person_id=selected.person_id,
+        assigned_by_person_id=actor_uuid,
+        reason=reason,
+        now=assigned_at,
     )
