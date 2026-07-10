@@ -90,7 +90,6 @@ celery_app.conf.task_routes = {
     },
     "app.tasks.monitoring_coverage.refresh_monitoring_coverage": {"queue": "ingestion"},
     "app.tasks.topology_lldp.run_lldp_topology_poll": {"queue": "ingestion"},
-    "app.tasks.topology_outage.run_outage_scan": {"queue": "ingestion"},
     "app.tasks.topology_outage.reconcile_detected_outages": {"queue": "ingestion"},
     "app.tasks.topology_uisp.run_uisp_topology_sync": {"queue": "ingestion"},
     "app.tasks.uisp_ip_backfill.run_uisp_mgmt_ip_backfill": {"queue": "ingestion"},

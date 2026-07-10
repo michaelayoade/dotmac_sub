@@ -1632,22 +1632,11 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(lldp_poll_minutes * 60, 300),
         )
-        # Outage auto-detect scan: evaluate recent down-transitions (infra +
-        # radios) against reachability classification and open auto-detected
-        # OutageIncidents for tripped scopes. Idempotent (open-incident check),
-        # so a tight cadence is safe; floor 120s keeps it off the warmer's toes.
-        outage_scan_seconds = _resolve_int(
+        # The open-only auto-detect scan is retired: the classifier reconcile
+        # below owns all auto detection (dark nodes + wireless clusters).
+        _retire_scheduled_task(
             session,
-            SettingDomain.network_monitoring,
-            "outage_scan_interval_seconds",
-            300,
-        )
-        _sync_scheduled_task(
-            session,
-            name="topology_outage_scan",
-            task_name="app.tasks.topology_outage.run_outage_scan",
-            enabled=True,
-            interval_seconds=max(outage_scan_seconds, 120),
+            "app.tasks.topology_outage.run_outage_scan",
         )
         # Detected-outage incident reconcile (design §7.6): debounce the
         # classifier's point-in-time verdicts into the suspected/confirmed/
