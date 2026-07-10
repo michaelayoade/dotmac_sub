@@ -15,6 +15,7 @@ from app.schemas.analytics import (
 from app.schemas.common import ListResponse
 from app.schemas.team_inbox_metrics import (
     InboxAgentPerformanceRead,
+    InboxEscalationCandidateRead,
     InboxTeamPerformanceRead,
 )
 from app.services import analytics as analytics_service
@@ -145,6 +146,29 @@ def _agent_performance_read(
     )
 
 
+def _escalation_candidate_read(
+    row: team_inbox_metrics_service.InboxEscalationCandidate,
+) -> InboxEscalationCandidateRead:
+    return InboxEscalationCandidateRead(
+        conversation_id=UUID(row.conversation_id),
+        service_team_id=UUID(row.service_team_id),
+        service_team_name=row.service_team_name,
+        service_team_type=row.service_team_type,
+        subject=row.subject,
+        contact_address=row.contact_address,
+        status=row.status,
+        reasons=list(row.reasons),
+        response_sla_seconds=row.response_sla_seconds,
+        queue_sla_seconds=row.queue_sla_seconds,
+        pending_response_seconds=row.pending_response_seconds,
+        queue_wait_seconds=row.queue_wait_seconds,
+        assigned_person_id=(
+            UUID(row.assigned_person_id) if row.assigned_person_id else None
+        ),
+        available_agent_count=row.available_agent_count,
+    )
+
+
 @router.get(
     "/inbox/team-performance",
     response_model=ListResponse[InboxTeamPerformanceRead],
@@ -182,4 +206,26 @@ def list_inbox_agent_performance(
         include_inactive_members=include_inactive_members,
     )
     items = [_agent_performance_read(row) for row in rows[offset : offset + limit]]
+    return list_response(items, limit, offset)
+
+
+@router.get(
+    "/inbox/escalation-candidates",
+    response_model=ListResponse[InboxEscalationCandidateRead],
+)
+def list_inbox_escalation_candidates(
+    response_sla_seconds: int | None = Query(default=None, gt=0),
+    queue_sla_seconds: int | None = Query(default=None, gt=0),
+    include_inactive: bool = False,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    rows = team_inbox_metrics_service.escalation_candidates(
+        db,
+        response_sla_seconds=response_sla_seconds,
+        queue_sla_seconds=queue_sla_seconds,
+        include_inactive=include_inactive,
+    )
+    items = [_escalation_candidate_read(row) for row in rows[offset : offset + limit]]
     return list_response(items, limit, offset)

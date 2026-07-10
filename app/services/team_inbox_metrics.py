@@ -16,6 +16,7 @@ from app.models.team_inbox import (
     InboxMessage,
     InboxMessageDirection,
 )
+from app.services import team_inbox_assignment
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,24 @@ class InboxAgentPerformanceReportRow:
     service_team_name: str
     service_team_type: str
     metrics: InboxAgentPerformanceMetrics
+
+
+@dataclass(frozen=True)
+class InboxEscalationCandidate:
+    conversation_id: str
+    service_team_id: str
+    service_team_name: str
+    service_team_type: str
+    subject: str | None
+    contact_address: str | None
+    status: str
+    reasons: tuple[str, ...]
+    response_sla_seconds: int | None
+    queue_sla_seconds: int | None
+    pending_response_seconds: float | None
+    queue_wait_seconds: float | None
+    assigned_person_id: str | None
+    available_agent_count: int
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
@@ -108,6 +127,32 @@ def response_sla_seconds_for_team(
             [
                 nested.get("response_sla_seconds"),
                 nested.get("first_response_seconds"),
+            ]
+        )
+    for candidate in candidates:
+        parsed = _positive_int(candidate)
+        if parsed is not None:
+            return parsed
+    return fallback
+
+
+def queue_sla_seconds_for_team(
+    team: ServiceTeam,
+    *,
+    fallback: int | None = None,
+) -> int | None:
+    metadata = team.metadata_ or {}
+    nested = metadata.get("inbox_sla")
+    candidates = [
+        metadata.get("inbox_queue_sla_seconds"),
+        metadata.get("queue_sla_seconds"),
+    ]
+    if isinstance(nested, dict):
+        candidates.extend(
+            [
+                nested.get("queue_sla_seconds"),
+                nested.get("assignment_sla_seconds"),
+                nested.get("assignment_seconds"),
             ]
         )
     for candidate in candidates:
@@ -174,6 +219,25 @@ def _first_response_seconds(messages: list[InboxMessage]) -> float | None:
     if first_outbound is None:
         return None
     return _seconds_between(inbound_time, _message_time(first_outbound))
+
+
+def _first_inbound_message(messages: list[InboxMessage]) -> InboxMessage | None:
+    return next(
+        (
+            message
+            for message in messages
+            if message.direction == InboxMessageDirection.inbound.value
+        ),
+        None,
+    )
+
+
+def _has_outbound_after(messages: list[InboxMessage], at: datetime) -> bool:
+    return any(
+        message.direction == InboxMessageDirection.outbound.value
+        and _message_time(message) >= at
+        for message in messages
+    )
 
 
 def team_performance_metrics(
@@ -398,3 +462,118 @@ def agent_performance_report(
             )
         )
     return rows
+
+
+def escalation_candidates(
+    db: Session,
+    *,
+    response_sla_seconds: int | None = None,
+    queue_sla_seconds: int | None = None,
+    include_inactive: bool = False,
+    now: datetime | None = None,
+) -> list[InboxEscalationCandidate]:
+    now_utc = _as_utc(now) or datetime.now(UTC)
+    team_query = db.query(ServiceTeam).order_by(ServiceTeam.name.asc())
+    if not include_inactive:
+        team_query = team_query.filter(ServiceTeam.is_active.is_(True))
+
+    candidates: list[InboxEscalationCandidate] = []
+    for team in team_query.all():
+        team_response_sla = response_sla_seconds_for_team(
+            team,
+            fallback=response_sla_seconds,
+        )
+        team_queue_sla = queue_sla_seconds_for_team(
+            team,
+            fallback=queue_sla_seconds,
+        )
+        conversation_ids = _conversation_ids_for_team(db, team.id)
+        if not conversation_ids:
+            continue
+
+        conversations = (
+            db.query(InboxConversation)
+            .filter(InboxConversation.id.in_(conversation_ids))
+            .filter(InboxConversation.status != InboxConversationStatus.resolved.value)
+            .filter(InboxConversation.is_active.is_(True))
+            .all()
+        )
+        if not conversations:
+            continue
+
+        messages_by_conversation = _messages_by_conversation(db, conversation_ids)
+        active_assignments = {
+            row.conversation_id: row
+            for row in db.query(InboxConversationAssignment)
+            .filter(InboxConversationAssignment.conversation_id.in_(conversation_ids))
+            .filter(InboxConversationAssignment.is_active.is_(True))
+            .all()
+        }
+        available_agent_count = len(
+            team_inbox_assignment.list_available_team_agents(db, team.id)
+        )
+
+        for conversation in conversations:
+            messages = messages_by_conversation.get(conversation.id, [])
+            first_inbound = _first_inbound_message(messages)
+            pending_response_seconds = None
+            reasons: list[str] = []
+            if first_inbound is not None:
+                inbound_at = _message_time(first_inbound)
+                if not _has_outbound_after(messages, inbound_at):
+                    pending_response_seconds = _seconds_between(inbound_at, now_utc)
+                    if (
+                        team_response_sla is not None
+                        and pending_response_seconds is not None
+                        and pending_response_seconds > team_response_sla
+                    ):
+                        reasons.append("response_sla_breached")
+
+            assignment = active_assignments.get(conversation.id)
+            queue_wait_seconds = _seconds_between(
+                conversation.first_message_at,
+                assignment.assigned_at if assignment is not None else now_utc,
+            )
+            if (
+                assignment is None
+                and team_queue_sla is not None
+                and queue_wait_seconds is not None
+                and queue_wait_seconds > team_queue_sla
+            ):
+                reasons.append("unassigned_queue_breached")
+            if assignment is None and available_agent_count == 0:
+                reasons.append("no_available_agent")
+
+            if not reasons:
+                continue
+
+            candidates.append(
+                InboxEscalationCandidate(
+                    conversation_id=str(conversation.id),
+                    service_team_id=str(team.id),
+                    service_team_name=team.name,
+                    service_team_type=team.team_type,
+                    subject=conversation.subject,
+                    contact_address=conversation.contact_address,
+                    status=conversation.status,
+                    reasons=tuple(reasons),
+                    response_sla_seconds=team_response_sla,
+                    queue_sla_seconds=team_queue_sla,
+                    pending_response_seconds=pending_response_seconds,
+                    queue_wait_seconds=queue_wait_seconds,
+                    assigned_person_id=(
+                        str(assignment.person_id) if assignment is not None else None
+                    ),
+                    available_agent_count=available_agent_count,
+                )
+            )
+
+    candidates.sort(
+        key=lambda item: (
+            "response_sla_breached" not in item.reasons,
+            -(item.pending_response_seconds or 0),
+            -(item.queue_wait_seconds or 0),
+            item.service_team_name,
+        )
+    )
+    return candidates

@@ -6,6 +6,8 @@ from uuid import uuid4
 from app.api import analytics as analytics_api
 from app.models.service_team import ServiceTeam, ServiceTeamMember, ServiceTeamType
 from app.models.team_inbox import (
+    InboxAgentPresence,
+    InboxAgentPresenceStatus,
     InboxConversation,
     InboxConversationAssignment,
     InboxConversationStatus,
@@ -281,3 +283,120 @@ def test_analytics_api_returns_inbox_team_performance(db_session):
     assert item.responded_count == 1
     assert item.response_rate == 1.0
     assert item.response_sla_breach_rate == 0.0
+
+
+def test_escalation_candidates_flag_breached_unassigned_conversation(db_session):
+    team = _team(db_session)
+    team.metadata_ = {
+        "inbox_sla": {
+            "first_response_seconds": 600,
+            "assignment_seconds": 300,
+        }
+    }
+    base = datetime(2026, 7, 10, 8, 0, tzinfo=UTC)
+    conversation = _conversation(db_session, team, first_at=base)
+    conversation.contact_address = "customer@example.com"
+    _message(
+        db_session,
+        conversation,
+        direction=InboxMessageDirection.inbound.value,
+        at=base,
+    )
+    db_session.commit()
+
+    candidates = team_inbox_metrics.escalation_candidates(
+        db_session,
+        now=base + timedelta(minutes=20),
+    )
+
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate.conversation_id == str(conversation.id)
+    assert candidate.service_team_id == str(team.id)
+    assert candidate.contact_address == "customer@example.com"
+    assert candidate.response_sla_seconds == 600
+    assert candidate.queue_sla_seconds == 300
+    assert candidate.pending_response_seconds == 1200
+    assert candidate.queue_wait_seconds == 1200
+    assert candidate.available_agent_count == 0
+    assert candidate.reasons == (
+        "response_sla_breached",
+        "unassigned_queue_breached",
+        "no_available_agent",
+    )
+
+
+def test_escalation_candidates_ignore_responded_assigned_conversation(db_session):
+    team = _team(db_session)
+    person_id = uuid4()
+    db_session.add(
+        ServiceTeamMember(team_id=team.id, person_id=person_id, is_active=True)
+    )
+    db_session.add(
+        InboxAgentPresence(
+            person_id=person_id,
+            status=InboxAgentPresenceStatus.online.value,
+            max_concurrent_conversations=3,
+        )
+    )
+    base = datetime(2026, 7, 10, 8, 0, tzinfo=UTC)
+    conversation = _conversation(db_session, team, first_at=base)
+    _message(
+        db_session,
+        conversation,
+        direction=InboxMessageDirection.inbound.value,
+        at=base,
+    )
+    _message(
+        db_session,
+        conversation,
+        direction=InboxMessageDirection.outbound.value,
+        at=base + timedelta(minutes=2),
+    )
+    db_session.add(
+        InboxConversationAssignment(
+            conversation_id=conversation.id,
+            service_team_id=team.id,
+            person_id=person_id,
+            assigned_at=base + timedelta(minutes=1),
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    candidates = team_inbox_metrics.escalation_candidates(
+        db_session,
+        response_sla_seconds=60,
+        queue_sla_seconds=60,
+        now=base + timedelta(minutes=20),
+    )
+
+    assert candidates == []
+
+
+def test_analytics_api_returns_escalation_candidates(db_session):
+    team = _team(db_session)
+    base = datetime(2026, 1, 1, 8, 0, tzinfo=UTC)
+    conversation = _conversation(db_session, team, first_at=base)
+    _message(
+        db_session,
+        conversation,
+        direction=InboxMessageDirection.inbound.value,
+        at=base,
+    )
+    db_session.commit()
+
+    response = analytics_api.list_inbox_escalation_candidates(
+        response_sla_seconds=300,
+        queue_sla_seconds=300,
+        limit=50,
+        offset=0,
+        db=db_session,
+    )
+
+    assert response["count"] == 1
+    item = response["items"][0]
+    assert item.conversation_id == conversation.id
+    assert item.service_team_id == team.id
+    assert "response_sla_breached" in item.reasons
+    assert "unassigned_queue_breached" in item.reasons
