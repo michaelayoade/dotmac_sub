@@ -39,14 +39,6 @@ class OutboxRouting {
         'POST',
         '/api/v1/field/jobs/${payload['work_order_id']}/equipment',
       ),
-      'as_built' => (
-        'POST',
-        '/api/v1/field/projects/${payload['project_id']}/as-built',
-      ),
-      'quote_line_item' => (
-        'POST',
-        '/api/v1/field/quotes/${payload['quote_id']}/line-items',
-      ),
       'material_request' => ('POST', '/api/v1/field/material-requests'),
       'expense_request' => ('POST', '/api/v1/field/expense-requests'),
       _ => throw ArgumentError('Unknown outbox kind: $kind'),

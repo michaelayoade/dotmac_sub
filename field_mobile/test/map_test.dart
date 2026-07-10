@@ -258,7 +258,7 @@ void main() {
     expect(find.text('12 Fiber Street, Lekki · dispatched'), findsOneWidget);
   });
 
-  testWidgets('map search finds a CRM asset and opens it', (tester) async {
+  testWidgets('map search finds a network asset and opens it', (tester) async {
     final assets = [
       const MapAsset(
         id: 'olt-1',
@@ -339,7 +339,9 @@ void main() {
     expect(find.text('No pins loaded yet'), findsOneWidget);
   });
 
-  testWidgets('map renders crm asset pins and layer filters', (tester) async {
+  testWidgets('map renders network asset pins and layer filters', (
+    tester,
+  ) async {
     final assets = [
       const MapAsset(
         id: 'olt-1',
@@ -370,7 +372,7 @@ void main() {
     expect(find.text('Edit asset location'), findsOneWidget);
   });
 
-  testWidgets('map ignores invalid job and crm asset coordinates', (
+  testWidgets('map ignores invalid job and network asset coordinates', (
     tester,
   ) async {
     final pins = [
