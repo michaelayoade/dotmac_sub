@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
@@ -16,6 +17,7 @@ from app.models.field_location import (
 from app.services.field.jobs import _profile_from_principal
 
 MAX_BATCH_PINGS = 200
+logger = logging.getLogger(__name__)
 
 
 def _now() -> datetime:
@@ -170,11 +172,25 @@ class FieldLocationTracking:
             else FieldLocationTracking.get_or_create_presence(db, principal)
         )
         db.refresh(presence)
+        transitions: list[dict[str, Any]] = []
+        if presence.last_latitude is not None and presence.last_longitude is not None:
+            try:
+                from app.services.field import geofence
+
+                transitions = geofence.evaluate(
+                    db,
+                    principal,
+                    presence.last_latitude,
+                    presence.last_longitude,
+                )
+            except Exception:
+                logger.exception("geofence_evaluate_failed")
+            db.refresh(presence)
         return {
             "accepted": accepted,
             "errors": errors,
             "presence": presence,
-            "transitions": [],
+            "transitions": transitions,
         }
 
 

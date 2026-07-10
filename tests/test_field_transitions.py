@@ -244,7 +244,11 @@ def test_completion_requires_photo_and_signature_fallback(db_session, fake_uploa
 
     assert completed["job"].status == "completed"
     assert _with_utc(completed["job"].completed_at) == completed_at
-    assert completed["job"].metadata_["native_transition_pending_sync"] is True
+    assert completed["job"].metadata_["native_field_source"] == "sub"
+    assert (
+        completed["job"].metadata_["native_field_activity"]["transition"]["event"]
+        == "complete"
+    )
     assert completed["event"]["new_status"] == "completed"
 
 

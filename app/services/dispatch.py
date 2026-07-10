@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import uuid4
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -15,6 +16,7 @@ from app.models.dispatch import (
     WorkOrderAssignmentQueue,
 )
 from app.models.service_team import ServiceTeam
+from app.models.subscriber import Subscriber
 from app.models.system_user import SystemUser
 from app.models.work_order_mirror import WorkOrderMirror
 from app.schemas.dispatch import (
@@ -32,6 +34,8 @@ from app.schemas.dispatch import (
     TechnicianSkillUpdate,
     WorkOrderAssignmentQueueCreate,
     WorkOrderAssignmentQueueUpdate,
+    WorkOrderHeaderCreate,
+    WorkOrderHeaderUpdate,
 )
 from app.services.common import apply_ordering, apply_pagination, coerce_uuid
 from app.services.response import ListResponseMixin
@@ -71,6 +75,10 @@ def _ensure_service_team(db: Session, service_team_id) -> None:
 def _ensure_rule(db: Session, rule_id) -> None:
     if rule_id is not None:
         _get_or_404(db, DispatchRule, rule_id, "Dispatch rule not found")
+
+
+def _ensure_subscriber(db: Session, subscriber_id) -> None:
+    _get_or_404(db, Subscriber, subscriber_id, "Subscriber not found")
 
 
 def _normalize_skill_ids(db: Session, data: dict[str, Any]) -> None:
@@ -400,6 +408,84 @@ class DispatchRules(ListResponseMixin):
         return row
 
 
+class WorkOrderHeaders(ListResponseMixin):
+    @staticmethod
+    def create(db: Session, payload: WorkOrderHeaderCreate) -> WorkOrderMirror:
+        data = _data(payload)
+        public_id = (data.pop("public_id", None) or f"sub-{uuid4().hex}").strip()
+        _ensure_subscriber(db, data["subscriber_id"])
+        existing = (
+            db.query(WorkOrderMirror).filter_by(crm_work_order_id=public_id).first()
+        )
+        if existing is not None:
+            raise HTTPException(status_code=409, detail="Work order id already exists")
+        metadata = dict(data.pop("metadata_", None) or {})
+        metadata["native_source"] = "sub"
+        row = WorkOrderMirror(
+            crm_work_order_id=public_id,
+            metadata_=metadata,
+            work_order_created_at=data.get("work_order_created_at"),
+            **data,
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return row
+
+    @staticmethod
+    def get(db: Session, work_order_id: str) -> WorkOrderMirror:
+        row = (
+            db.query(WorkOrderMirror).filter_by(crm_work_order_id=work_order_id).first()
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="Work order not found")
+        return row
+
+    @staticmethod
+    def list(
+        db: Session,
+        *,
+        status: str | None = None,
+        subscriber_id: str | None = None,
+        work_type: str | None = None,
+        is_active: bool | None = True,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[WorkOrderMirror]:
+        query = db.query(WorkOrderMirror)
+        if status:
+            query = query.filter(WorkOrderMirror.status == status)
+        if subscriber_id:
+            query = query.filter(
+                WorkOrderMirror.subscriber_id == coerce_uuid(subscriber_id)
+            )
+        if work_type:
+            query = query.filter(WorkOrderMirror.work_type == work_type)
+        if is_active is not None:
+            query = query.filter(WorkOrderMirror.is_active.is_(is_active))
+        query = query.order_by(WorkOrderMirror.created_at.desc())
+        return apply_pagination(query, limit, offset).all()
+
+    @staticmethod
+    def update(
+        db: Session, work_order_id: str, payload: WorkOrderHeaderUpdate
+    ) -> WorkOrderMirror:
+        row = WorkOrderHeaders.get(db, work_order_id)
+        data = _data(payload, exclude_unset=True)
+        if "subscriber_id" in data:
+            _ensure_subscriber(db, data["subscriber_id"])
+        if "metadata_" in data:
+            metadata = dict(row.metadata_ or {})
+            metadata.update(data.pop("metadata_") or {})
+            metadata.setdefault("native_source", "sub")
+            row.metadata_ = metadata
+        for key, value in data.items():
+            setattr(row, key, value)
+        db.commit()
+        db.refresh(row)
+        return row
+
+
 class AssignmentQueue(ListResponseMixin):
     @staticmethod
     def create(
@@ -467,4 +553,5 @@ technician_skills = TechnicianSkills()
 shifts = Shifts()
 availability_blocks = AvailabilityBlocks()
 dispatch_rules = DispatchRules()
+work_order_headers = WorkOrderHeaders()
 assignment_queue = AssignmentQueue()
