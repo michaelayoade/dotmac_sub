@@ -1627,6 +1627,22 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(infrastructure_poll_seconds, 30),
         )
+        # RADIUS health: accounting freshness + enforcement drift from the
+        # external radacct DB and the reconciled live-session view. Customer
+        # experience often fails here before any router goes down.
+        radius_health_seconds = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "radius_health_interval_seconds",
+            120,
+        )
+        _sync_scheduled_task(
+            session,
+            name="radius_health_check",
+            task_name="app.tasks.radius_health.run_radius_health_check",
+            enabled=True,
+            interval_seconds=max(radius_health_seconds, 60),
+        )
         # Warm cached live status for topology nodes (read by the Network Path
         # panel). Default 180s, matching the monitoring dashboard cache TTL.
         topology_status_seconds = _resolve_int(
