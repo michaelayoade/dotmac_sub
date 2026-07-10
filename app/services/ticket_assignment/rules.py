@@ -1,4 +1,8 @@
-"""Rule loading and matching for support ticket auto-assignment."""
+"""Rule loading and matching for ticket/project auto-assignment.
+
+Projects joined in Phase 3 (§2.1): rules gain an optional ``project_types``
+match key and contexts carry ``entity_type ∈ {ticket, project}``.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +10,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
+from app.models.project import Project
 from app.models.support import Ticket
 from app.models.ticket_workflow import TicketAssignmentRule
 
@@ -19,6 +24,7 @@ class TicketAssignmentContext:
     source: str | None
     service_team_id: str | None
     tags: set[str]
+    project_type: str | None = None
 
 
 def list_active_rules(db: Session) -> list[TicketAssignmentRule]:
@@ -51,6 +57,24 @@ def build_context(ticket: Ticket) -> TicketAssignmentContext:
     )
 
 
+def build_project_context(project: Project) -> TicketAssignmentContext:
+    """Build normalized context for project assignment rules (CRM parity)."""
+    raw_tags = project.tags if isinstance(project.tags, list) else []
+    tags = {str(value).strip().lower() for value in raw_tags if str(value).strip()}
+    return TicketAssignmentContext(
+        entity_type="project",
+        priority=str(project.priority or "").strip().lower() or None,
+        ticket_type=None,
+        project_type=str(project.project_type or "").strip().lower() or None,
+        region=str(project.region or "").strip().lower() or None,
+        source=None,
+        service_team_id=str(project.service_team_id)
+        if project.service_team_id
+        else None,
+        tags=tags,
+    )
+
+
 def matches_rule(rule: TicketAssignmentRule, ctx: TicketAssignmentContext) -> bool:
     """Return True when a rule's match_config accepts the ticket context."""
     config = rule.match_config if isinstance(rule.match_config, dict) else {}
@@ -58,7 +82,13 @@ def matches_rule(rule: TicketAssignmentRule, ctx: TicketAssignmentContext) -> bo
         return False
     if _not_in_list(config.get("priorities"), ctx.priority):
         return False
-    if _not_in_list(config.get("ticket_types"), ctx.ticket_type):
+    if ctx.entity_type == "ticket" and _not_in_list(
+        config.get("ticket_types"), ctx.ticket_type
+    ):
+        return False
+    if (ctx.entity_type == "project" or ctx.project_type) and _not_in_list(
+        config.get("project_types"), ctx.project_type
+    ):
         return False
     if _not_in_list(config.get("regions"), ctx.region):
         return False

@@ -1,0 +1,502 @@
+"""Native projects engine tests (Phase 3 PR 6).
+
+Covers the ported CRM semantics: fiber-stage seeding + SLA due computation,
+template instantiation (dependencies + date calculation), the task state
+machine, project lifecycle transitions, and the Phase 2 work-order guard.
+"""
+
+import uuid
+from datetime import UTC, datetime, timedelta
+
+import pytest
+from fastapi import HTTPException
+
+from app.models.notification import Notification, NotificationChannel
+from app.models.project import (
+    ProjectTask,
+    ProjectTaskDependency,
+    ProjectTemplate,
+    ProjectTemplateTask,
+    ProjectTemplateTaskDependency,
+    ProjectType,
+)
+from app.models.support import Ticket
+from app.models.ticket_workflow import SlaClock, SlaClockStatus, WorkflowEntityType
+from app.models.work_order_mirror import WorkOrderMirror
+from app.schemas.project import (
+    ProjectCreate,
+    ProjectTaskCreate,
+    ProjectTaskUpdate,
+    ProjectUpdate,
+)
+from app.services.projects import (
+    FIBER_INSTALLATION_STAGE_ORDER,
+    FIBER_INSTALLATION_STAGE_TITLES,
+    project_tasks,
+    projects,
+)
+
+
+def _create_fiber_project(db_session, subscriber, **overrides):
+    payload = ProjectCreate(
+        name=overrides.pop("name", "Fiber install"),
+        project_type=ProjectType.fiber_optics_installation,
+        subscriber_id=subscriber.id,
+        **overrides,
+    )
+    return projects.create(db_session, payload)
+
+
+def _tasks_for(db_session, project):
+    return (
+        db_session.query(ProjectTask)
+        .filter(ProjectTask.project_id == project.id)
+        .order_by(ProjectTask.created_at.asc())
+        .all()
+    )
+
+
+@pytest.fixture()
+def emitted_events(monkeypatch):
+    """Record lifecycle events at the service seam (the dispatcher persists
+    in a separate session invisible to the test transaction)."""
+    events: list[dict] = []
+
+    def _record(db, event_type, payload, **kwargs):
+        events.append(payload)
+
+    monkeypatch.setattr("app.services.projects.emit_event", _record)
+    return events
+
+
+def _utc(value):
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value
+
+
+class TestFiberStageEngine:
+    def test_create_seeds_six_stage_tasks(self, db_session, subscriber):
+        project = _create_fiber_project(db_session, subscriber)
+
+        tasks = _tasks_for(db_session, project)
+        assert len(tasks) == len(FIBER_INSTALLATION_STAGE_ORDER)
+        stage_keys = [t.metadata_["fiber_stage_key"] for t in tasks]
+        assert stage_keys == list(FIBER_INSTALLATION_STAGE_ORDER)
+        for task in tasks:
+            assert task.metadata_["fiber_sla_managed"] is True
+            assert (
+                task.metadata_["fiber_stage_title"]
+                == FIBER_INSTALLATION_STAGE_TITLES[task.metadata_["fiber_stage_key"]]
+            )
+            assert task.status == "todo"
+            assert task.due_at is not None
+
+        # Duration default for fiber installs: 14 days (CRM parity).
+        assert project.start_at is not None
+        assert project.due_at is not None
+        delta = project.due_at - project.start_at
+        assert delta == timedelta(days=14)
+
+    def test_seeded_tasks_open_sla_clocks(self, db_session, subscriber):
+        project = _create_fiber_project(db_session, subscriber)
+        tasks = _tasks_for(db_session, project)
+        task_ids = {t.id for t in tasks}
+        clocks = (
+            db_session.query(SlaClock)
+            .filter(
+                SlaClock.entity_type == WorkflowEntityType.project_task.value,
+                SlaClock.entity_id.in_(task_ids),
+            )
+            .all()
+        )
+        assert len(clocks) == len(tasks)
+        assert {c.status for c in clocks} == {SlaClockStatus.running.value}
+
+        project_clocks = (
+            db_session.query(SlaClock)
+            .filter(
+                SlaClock.entity_type == WorkflowEntityType.project.value,
+                SlaClock.entity_id == project.id,
+            )
+            .all()
+        )
+        assert len(project_clocks) == 1
+
+    def test_no_seed_for_non_fiber_types(self, db_session, subscriber):
+        payload = ProjectCreate(
+            name="Cable rerun",
+            project_type=ProjectType.cable_rerun,
+            subscriber_id=subscriber.id,
+        )
+        project = projects.create(db_session, payload)
+        assert _tasks_for(db_session, project) == []
+
+    def test_stage_due_recomputed_from_anchor(self, db_session, subscriber):
+        project = _create_fiber_project(db_session, subscriber)
+        tasks = {
+            t.metadata_["fiber_stage_key"]: t for t in _tasks_for(db_session, project)
+        }
+
+        plan = tasks["project_plan"]
+        project_tasks.update(db_session, str(plan.id), ProjectTaskUpdate(status="done"))
+        db_session.refresh(plan)
+        assert plan.completed_at is not None
+
+        survey = tasks["project_survey"]
+        project_tasks.update(
+            db_session, str(survey.id), ProjectTaskUpdate(status="in_progress")
+        )
+        db_session.refresh(survey)
+        # Survey due anchors on the completed plan stage + 24h.
+        assert survey.due_at == plan.completed_at + timedelta(hours=24)
+
+
+class TestTaskStateMachine:
+    def test_done_sets_completed_at_and_completes_clock(
+        self, db_session, subscriber, emitted_events
+    ):
+        project = _create_fiber_project(db_session, subscriber)
+        task = _tasks_for(db_session, project)[0]
+
+        updated = project_tasks.update(
+            db_session, str(task.id), ProjectTaskUpdate(status="done")
+        )
+        assert updated.status == "done"
+        assert updated.completed_at is not None
+
+        clock = (
+            db_session.query(SlaClock)
+            .filter(
+                SlaClock.entity_type == WorkflowEntityType.project_task.value,
+                SlaClock.entity_id == task.id,
+            )
+            .order_by(SlaClock.created_at.desc())
+            .first()
+        )
+        assert clock is not None
+        assert clock.status == SlaClockStatus.completed.value
+
+        assert "project_task.completed" in [e.get("name") for e in emitted_events]
+
+    def test_done_queues_customer_stage_email(self, db_session, subscriber):
+        project = _create_fiber_project(db_session, subscriber)
+        task = _tasks_for(db_session, project)[0]
+        project_tasks.update(db_session, str(task.id), ProjectTaskUpdate(status="done"))
+
+        emails = (
+            db_session.query(Notification)
+            .filter(Notification.channel == NotificationChannel.email)
+            .filter(Notification.recipient == subscriber.email)
+            .all()
+        )
+        assert any(n.subject == "Project Update - Stage Completed" for n in emails)
+
+    def test_assignee_sync_multi(self, db_session, subscriber):
+        project = _create_fiber_project(db_session, subscriber)
+        task = _tasks_for(db_session, project)[0]
+        first, second = uuid.uuid4(), uuid.uuid4()
+
+        updated = project_tasks.update(
+            db_session,
+            str(task.id),
+            ProjectTaskUpdate(assigned_to_person_ids=[first, second]),
+        )
+        assert updated.assigned_to_person_id == first
+        assert {a.person_id for a in updated.assignees} == {first, second}
+
+        updated = project_tasks.update(
+            db_session,
+            str(task.id),
+            ProjectTaskUpdate(assigned_to_person_ids=[second]),
+        )
+        assert updated.assigned_to_person_id == second
+        assert {a.person_id for a in updated.assignees} == {second}
+
+    def test_ticket_link_requires_existing_support_ticket(self, db_session, subscriber):
+        project = _create_fiber_project(db_session, subscriber)
+
+        with pytest.raises(HTTPException) as exc:
+            project_tasks.create(
+                db_session,
+                ProjectTaskCreate(
+                    project_id=project.id,
+                    title="Linked task",
+                    ticket_id=uuid.uuid4(),
+                ),
+            )
+        assert exc.value.status_code == 404
+
+        ticket = Ticket(title="Install issue", subscriber_id=subscriber.id)
+        db_session.add(ticket)
+        db_session.commit()
+        task = project_tasks.create(
+            db_session,
+            ProjectTaskCreate(
+                project_id=project.id,
+                title="Linked task",
+                ticket_id=ticket.id,
+            ),
+        )
+        assert task.ticket_id == ticket.id
+
+    def test_work_order_id_validated_against_phase2_mirror(
+        self, db_session, subscriber
+    ):
+        """§1.10/risk #5: WO ids stay plain UUIDs validated against
+        work_order_mirror.crm_work_order_id until the Phase 2 flip."""
+        project = _create_fiber_project(db_session, subscriber)
+        wo_id = uuid.uuid4()
+
+        with pytest.raises(HTTPException) as exc:
+            project_tasks.create(
+                db_session,
+                ProjectTaskCreate(
+                    project_id=project.id,
+                    title="WO task",
+                    work_order_id=wo_id,
+                ),
+            )
+        assert exc.value.status_code == 404
+
+        db_session.add(
+            WorkOrderMirror(
+                crm_work_order_id=str(wo_id),
+                subscriber_id=subscriber.id,
+                title="Install",
+                status="scheduled",
+            )
+        )
+        db_session.commit()
+        task = project_tasks.create(
+            db_session,
+            ProjectTaskCreate(
+                project_id=project.id,
+                title="WO task",
+                work_order_id=wo_id,
+            ),
+        )
+        assert task.work_order_id == wo_id
+
+
+class TestTemplateInstantiation:
+    def _template_with_tasks(self, db_session):
+        template = ProjectTemplate(name="Relocation flow")
+        db_session.add(template)
+        db_session.flush()
+        first = ProjectTemplateTask(
+            template_id=template.id,
+            title="Survey site",
+            sort_order=1,
+            effort_hours=4,
+        )
+        second = ProjectTemplateTask(
+            template_id=template.id,
+            title="Move equipment",
+            sort_order=2,
+            effort_hours=8,
+        )
+        db_session.add_all([first, second])
+        db_session.flush()
+        db_session.add(
+            ProjectTemplateTaskDependency(
+                template_task_id=second.id,
+                depends_on_template_task_id=first.id,
+            )
+        )
+        db_session.commit()
+        return template, first, second
+
+    def test_create_with_template_instantiates_tasks_and_dependencies(
+        self, db_session, subscriber
+    ):
+        template, first, second = self._template_with_tasks(db_session)
+        start_at = datetime(2026, 7, 1, 8, 0, tzinfo=UTC)
+        payload = ProjectCreate(
+            name="Relocation",
+            project_type=ProjectType.fiber_optics_relocation,
+            subscriber_id=subscriber.id,
+            project_template_id=template.id,
+            start_at=start_at,
+        )
+        project = projects.create(db_session, payload)
+
+        tasks = _tasks_for(db_session, project)
+        assert [t.title for t in tasks] == ["Survey site", "Move equipment"]
+        by_template = {t.template_task_id: t for t in tasks}
+        assert set(by_template) == {first.id, second.id}
+
+        deps = (
+            db_session.query(ProjectTaskDependency)
+            .filter(
+                ProjectTaskDependency.task_id.in_([t.id for t in tasks]),
+            )
+            .all()
+        )
+        assert len(deps) == 1
+        assert deps[0].task_id == by_template[second.id].id
+        assert deps[0].depends_on_task_id == by_template[first.id].id
+        assert deps[0].dependency_type == "finish_to_start"
+
+        # Date calculation: no-predecessor task starts at project start;
+        # dependent task starts at its predecessor's due date.
+        survey = by_template[first.id]
+        move = by_template[second.id]
+        assert _utc(survey.start_at) == start_at
+        assert _utc(survey.due_at) == start_at + timedelta(hours=4)
+        assert _utc(move.start_at) == _utc(survey.due_at)
+        assert _utc(move.due_at) == _utc(survey.due_at) + timedelta(hours=8)
+
+    def test_template_swap_replaces_template_tasks(self, db_session, subscriber):
+        template, _first, _second = self._template_with_tasks(db_session)
+        payload = ProjectCreate(
+            name="Relocation",
+            project_type=ProjectType.fiber_optics_relocation,
+            subscriber_id=subscriber.id,
+            project_template_id=template.id,
+        )
+        project = projects.create(db_session, payload)
+        assert len(_tasks_for(db_session, project)) == 2
+
+        projects.update(
+            db_session, str(project.id), ProjectUpdate(project_template_id=None)
+        )
+        assert _tasks_for(db_session, project) == []
+
+
+class TestProjectLifecycle:
+    def test_update_to_completed(self, db_session, subscriber, emitted_events):
+        project = _create_fiber_project(db_session, subscriber)
+
+        updated = projects.update(
+            db_session, str(project.id), ProjectUpdate(status="completed")
+        )
+        assert updated.status == "completed"
+        assert updated.completed_at is not None
+
+        clock = (
+            db_session.query(SlaClock)
+            .filter(
+                SlaClock.entity_type == WorkflowEntityType.project.value,
+                SlaClock.entity_id == project.id,
+            )
+            .order_by(SlaClock.created_at.desc())
+            .first()
+        )
+        assert clock is not None
+        assert clock.status == SlaClockStatus.completed.value
+
+        assert "project.completed" in [e.get("name") for e in emitted_events]
+
+        emails = (
+            db_session.query(Notification)
+            .filter(Notification.channel == NotificationChannel.email)
+            .filter(Notification.recipient == subscriber.email)
+            .all()
+        )
+        assert any(n.subject.startswith("Project completed:") for n in emails)
+
+    def test_update_status_kanban_move(self, db_session, subscriber):
+        project = _create_fiber_project(db_session, subscriber)
+        result = projects.update_status(db_session, str(project.id), "active")
+        assert result == {"status": "ok"}
+        db_session.refresh(project)
+        assert project.status == "active"
+
+        with pytest.raises(HTTPException) as exc:
+            projects.update_status(db_session, str(project.id), "not-a-status")
+        assert exc.value.status_code == 400
+
+    def test_soft_delete(self, db_session, subscriber):
+        project = _create_fiber_project(db_session, subscriber)
+        projects.delete(db_session, str(project.id))
+        db_session.refresh(project)
+        assert project.is_active is False
+
+    def test_chart_summary_shape(self, db_session, subscriber):
+        _create_fiber_project(db_session, subscriber)
+        summary = projects.chart_summary(db_session)
+        assert set(summary) == {"series"}
+        data = summary["series"][0]["data"]
+        assert {row["status"] for row in data} == {
+            "open",
+            "planned",
+            "active",
+            "on_hold",
+            "completed",
+            "canceled",
+        }
+
+    def test_kanban_and_gantt_views(self, db_session, subscriber):
+        project = _create_fiber_project(db_session, subscriber)
+        kanban = projects.kanban_view(db_session)
+        assert str(project.id) in {r["id"] for r in kanban["records"]}
+        assert {c["id"] for c in kanban["columns"]} >= {"open", "completed"}
+
+        gantt = projects.gantt_view(db_session)
+        item = next(i for i in gantt["items"] if i["id"] == str(project.id))
+        assert item["start_date"] is not None
+        assert item["due_date"] is not None
+
+    def test_get_missing_project_404(self, db_session):
+        with pytest.raises(HTTPException) as exc:
+            projects.get(db_session, str(uuid.uuid4()))
+        assert exc.value.status_code == 404
+
+    def test_list_filters_by_status_and_subscriber(self, db_session, subscriber):
+        project = _create_fiber_project(db_session, subscriber)
+        rows = projects.list(
+            db_session,
+            str(subscriber.id),
+            "open",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            "created_at",
+            "desc",
+            50,
+            0,
+        )
+        assert [r.id for r in rows] == [project.id]
+        assert (
+            projects.list(
+                db_session,
+                str(subscriber.id),
+                "completed",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                "created_at",
+                "desc",
+                50,
+                0,
+            )
+            == []
+        )
+
+    def test_list_response_shell(self, db_session, subscriber):
+        _create_fiber_project(db_session, subscriber)
+        shell = projects.list_response(
+            db_session,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            "created_at",
+            "desc",
+            50,
+            0,
+        )
+        assert set(shell) == {"items", "count", "limit", "offset"}
+        assert shell["count"] >= 1

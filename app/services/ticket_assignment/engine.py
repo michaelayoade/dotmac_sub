@@ -1,4 +1,4 @@
-"""CRM-style rule-based assignment engine for native support tickets."""
+"""CRM-style rule-based assignment engine for native tickets and projects."""
 
 from __future__ import annotations
 
@@ -7,11 +7,13 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.models.project import Project, ProjectTask, ProjectTaskAssignee
 from app.models.support import Ticket, TicketAssignee
 from app.models.ticket_workflow import TicketAssignmentRule, TicketAssignmentStrategy
 from app.services.common import coerce_uuid
 from app.services.ticket_assignment.rules import (
     build_context,
+    build_project_context,
     list_active_rules,
     matches_rule,
 )
@@ -26,6 +28,7 @@ from app.services.ticket_assignment.selectors import (
 class AssignmentResult:
     assigned: bool
     ticket_id: str | None = None
+    project_id: str | None = None
     rule_id: str | None = None
     rule_name: str | None = None
     strategy: str | None = None
@@ -39,6 +42,7 @@ class AssignmentResult:
         return {
             "assigned": self.assigned,
             "ticket_id": self.ticket_id,
+            "project_id": self.project_id,
             "rule_id": self.rule_id,
             "rule_name": self.rule_name,
             "strategy": self.strategy,
@@ -48,6 +52,177 @@ class AssignmentResult:
             "fallback_service_team_id": self.fallback_service_team_id,
             "reason": self.reason,
         }
+
+
+def find_authoritative_project_creation_rule(
+    db: Session, project: Project
+) -> TicketAssignmentRule | None:
+    """Return the first creation rule that owns initial assignment for a
+    project (Phase 3 §2.1 — CRM engine parity). Accepts a transient Project
+    probe (Projects.create builds one before INSERT)."""
+    ctx = build_project_context(project)
+    for rule in list_active_rules(db):
+        if (
+            matches_rule(rule, ctx)
+            and _assignee_person_id(rule) is None
+            and _has_authoritative_creation_scope(rule)
+        ):
+            return rule
+    return None
+
+
+def auto_assign_project(
+    db: Session,
+    project_id: str,
+    *,
+    trigger: str = "create",
+    actor_person_id: str | None = None,
+) -> list[AssignmentResult]:
+    """Apply active workflow assignment rules to a project (CRM parity)."""
+    del trigger
+    del actor_person_id
+
+    project = db.get(Project, coerce_uuid(project_id))
+    if not project or not project.is_active:
+        return [
+            AssignmentResult(
+                assigned=False,
+                project_id=project_id,
+                reason="project_not_found_or_inactive",
+            )
+        ]
+
+    ctx = build_project_context(project)
+    results: list[AssignmentResult] = []
+    for rule in list_active_rules(db):
+        if not matches_rule(rule, ctx):
+            continue
+        authoritative_result = _apply_authoritative_project_rule(
+            db, project=project, rule=rule
+        )
+        if authoritative_result:
+            results.append(authoritative_result)
+            continue
+        result = _apply_direct_project_assignment(db, project=project, rule=rule)
+        if result:
+            results.append(result)
+    if not results:
+        return [
+            AssignmentResult(
+                assigned=False,
+                project_id=str(project.id),
+                reason="no_matching_rule",
+            )
+        ]
+    return results
+
+
+def _apply_authoritative_project_rule(
+    db: Session,
+    *,
+    project: Project,
+    rule: TicketAssignmentRule,
+) -> AssignmentResult | None:
+    if _assignee_person_id(rule) or not _has_authoritative_creation_scope(rule):
+        return None
+
+    changed = False
+    if rule.team_id and project.service_team_id != rule.team_id:
+        project.service_team_id = rule.team_id
+        changed = True
+    if project.manager_person_id:
+        project.manager_person_id = None
+        changed = True
+    if project.project_manager_person_id:
+        project.project_manager_person_id = None
+        changed = True
+    if project.assistant_manager_person_id:
+        project.assistant_manager_person_id = None
+        changed = True
+
+    if changed:
+        db.flush()
+    return AssignmentResult(
+        assigned=bool(rule.team_id),
+        project_id=str(project.id),
+        rule_id=str(rule.id),
+        rule_name=rule.name,
+        strategy="group" if rule.team_id else None,
+        assignment_target="team" if rule.team_id else "rule_scope",
+        fallback_service_team_id=str(rule.team_id) if rule.team_id else None,
+        reason="group_assigned"
+        if rule.team_id
+        else "individual_assignment_suppressed_by_rule",
+    )
+
+
+def _apply_direct_project_assignment(
+    db: Session,
+    *,
+    project: Project,
+    rule: TicketAssignmentRule,
+) -> AssignmentResult | None:
+    assignee = _assignee_person_id(rule)
+    if not assignee:
+        return None
+    target = _assignment_target(rule)
+    assignee_uuid = coerce_uuid(assignee)
+
+    changed = False
+    if target == "technical_supervisor":
+        if not project.manager_person_id:
+            project.manager_person_id = assignee_uuid
+            changed = True
+        if not project.project_manager_person_id:
+            project.project_manager_person_id = assignee_uuid
+            changed = True
+    elif target == "site_coordinator":
+        # assistant_manager ≡ "Site Project Coordinator" (Phase 3 §1.2).
+        if not project.assistant_manager_person_id:
+            project.assistant_manager_person_id = assignee_uuid
+            changed = True
+    elif target == "technician":
+        tasks = (
+            db.query(ProjectTask)
+            .filter(ProjectTask.project_id == project.id)
+            .filter(ProjectTask.is_active.is_(True))
+            .all()
+        )
+        for task in tasks:
+            if not task.assigned_to_person_id:
+                task.assigned_to_person_id = assignee_uuid
+                changed = True
+            if not any(
+                str(existing.person_id) == assignee for existing in task.assignees
+            ):
+                task.assignees.append(
+                    ProjectTaskAssignee(task_id=task.id, person_id=assignee_uuid)
+                )
+                changed = True
+    else:
+        return AssignmentResult(
+            assigned=False,
+            project_id=str(project.id),
+            rule_id=str(rule.id),
+            rule_name=rule.name,
+            assignment_target=target,
+            assignee_person_id=assignee,
+            reason="unsupported_assignment_target",
+        )
+
+    if changed:
+        db.flush()
+    return AssignmentResult(
+        assigned=changed,
+        project_id=str(project.id),
+        rule_id=str(rule.id),
+        rule_name=rule.name,
+        strategy="direct",
+        assignment_target=target,
+        candidate_count=1,
+        assignee_person_id=assignee,
+        reason="assigned" if changed else "already_assigned",
+    )
 
 
 def auto_assign_ticket(
@@ -216,6 +391,7 @@ def _has_authoritative_creation_scope(rule: TicketAssignmentRule) -> bool:
     return bool(
         config.get("entity_types")
         or config.get("ticket_types")
+        or config.get("project_types")
         or config.get("regions")
         or config.get("service_team_ids")
         or config.get("tags_any")
