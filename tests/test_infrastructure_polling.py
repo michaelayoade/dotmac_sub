@@ -1,0 +1,249 @@
+"""Native infrastructure poller (Zabbix runtime cutover, Phase 1)."""
+
+from __future__ import annotations
+
+from app.celery_app import celery_app
+from app.models.network_monitoring import DeviceStatus, NetworkDevice
+from app.services import infrastructure_polling
+from app.services import web_network_core_runtime as runtime
+from app.services.topology.live_status import warm_topology_status
+
+TASK_NAME = "app.tasks.infrastructure_polling.run_infrastructure_poll"
+
+
+def _device(name, ip, **kw):
+    kw.setdefault("is_active", True)
+    kw.setdefault("ping_enabled", True)
+    kw.setdefault("source", "zabbix_reconcile")
+    return NetworkDevice(name=name, mgmt_ip=ip, **kw)
+
+
+def test_task_registered_routed_and_exported():
+    import app.tasks as tasks
+
+    assert TASK_NAME in celery_app.tasks
+    assert celery_app.conf.task_routes[TASK_NAME] == {"queue": "ingestion"}
+    assert "run_infrastructure_poll" in tasks.__all__
+    assert hasattr(tasks, "run_infrastructure_poll")
+
+
+def test_pollable_devices_selection(db_session):
+    included_ping = _device("ping-target", "10.80.0.1")
+    included_snmp = _device(
+        "snmp-target", None, ping_enabled=False, snmp_enabled=True, hostname="snmp-h"
+    )
+    db_session.add_all(
+        [
+            included_ping,
+            included_snmp,
+            # inactive -> excluded
+            _device("inactive", "10.80.0.2", is_active=False),
+            # no enabled check -> excluded
+            _device("no-checks", "10.80.0.3", ping_enabled=False, snmp_enabled=False),
+            # no address at all -> excluded
+            _device("no-address", None),
+        ]
+    )
+    db_session.flush()
+
+    names = {d.name for d in infrastructure_polling.pollable_devices(db_session)}
+    assert names == {"ping-target", "snmp-target"}
+
+
+def test_poll_infrastructure_delegates_to_stale_refresh(db_session, monkeypatch):
+    db_session.add(_device("sweep-me", "10.80.1.1"))
+    db_session.flush()
+    captured = {}
+
+    def _fake_refresh(db, devices, **kwargs):
+        captured["devices"] = list(devices)
+        captured["kwargs"] = kwargs
+        return {"checked": len(devices), "ping": len(devices), "snmp": 0}
+
+    monkeypatch.setattr(
+        infrastructure_polling, "refresh_stale_devices_health", _fake_refresh
+    )
+
+    result = infrastructure_polling.poll_infrastructure(
+        db_session, ping_interval_seconds=45, snmp_interval_seconds=200
+    )
+
+    assert [d.name for d in captured["devices"]] == ["sweep-me"]
+    assert captured["kwargs"]["ping_interval_seconds"] == 45
+    assert captured["kwargs"]["snmp_interval_seconds"] == 200
+    assert captured["kwargs"]["include_snmp"] is True
+    assert result == {
+        "checked": 1,
+        "ping": 1,
+        "snmp": 0,
+        "devices": 1,
+        "interface_devices": 0,
+        "interface_lines": 0,
+    }
+
+
+def test_ping_transitions_drive_device_status(db_session, monkeypatch):
+    device = _device("core-transition", "10.80.2.1")
+    db_session.add(device)
+    db_session.commit()
+
+    # up
+    monkeypatch.setattr(
+        runtime.ping_service, "run_ping", lambda host, timeout_seconds=4: (True, 3.0)
+    )
+    runtime.ping_device(db_session, str(device.id))
+    assert device.last_ping_ok is True
+    assert device.ping_down_since is None
+    assert device.status == DeviceStatus.online
+
+    # down (default notification delay 0 -> offline immediately)
+    monkeypatch.setattr(
+        runtime.ping_service, "run_ping", lambda host, timeout_seconds=4: (False, None)
+    )
+    runtime.ping_device(db_session, str(device.id))
+    assert device.last_ping_ok is False
+    assert device.ping_down_since is not None
+    assert device.status == DeviceStatus.offline
+
+    # recovery
+    monkeypatch.setattr(
+        runtime.ping_service, "run_ping", lambda host, timeout_seconds=4: (True, 2.0)
+    )
+    runtime.ping_device(db_session, str(device.id))
+    assert device.last_ping_ok is True
+    assert device.ping_down_since is None
+    assert device.status == DeviceStatus.online
+
+
+def test_fetch_interface_octets_parses_snmpget_output(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.services import snmp_probe
+
+    device = SimpleNamespace(
+        mgmt_ip="10.80.4.1",
+        hostname=None,
+        snmp_port=None,
+        snmp_version="2c",
+        snmp_community="enc",
+    )
+    monkeypatch.setattr(snmp_probe, "decrypt_credential", lambda value: "public")
+    monkeypatch.setattr(snmp_probe.shutil, "which", lambda name: "/usr/bin/snmpget")
+
+    captured = {}
+
+    def _fake_run(args, **kwargs):
+        captured["args"] = args
+        return SimpleNamespace(
+            returncode=0,
+            stdout=(
+                ".1.3.6.1.2.1.31.1.1.1.6.5 1500000\n"
+                ".1.3.6.1.2.1.31.1.1.1.10.5 900000\n"
+                ".1.3.6.1.2.1.31.1.1.1.6.7 No Such Instance currently exists\n"
+                ".1.3.6.1.2.1.31.1.1.1.10.7 42\n"
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(snmp_probe.subprocess, "run", _fake_run)
+
+    readings = snmp_probe.fetch_interface_octets(device, [5, 7])
+
+    assert "-v2c" in captured["args"]
+    assert readings[5].in_octets == 1500000
+    assert readings[5].out_octets == 900000
+    assert readings[7].in_octets is None  # noSuchInstance -> absent
+    assert readings[7].out_octets == 42
+
+
+def test_fetch_interface_octets_unqueryable_device_returns_none(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.services import snmp_probe
+
+    monkeypatch.setattr(snmp_probe.shutil, "which", lambda name: "/usr/bin/snmpget")
+    no_community = SimpleNamespace(
+        mgmt_ip="10.80.4.2",
+        hostname=None,
+        snmp_port=None,
+        snmp_version="2c",
+        snmp_community=None,
+    )
+    assert snmp_probe.fetch_interface_octets(no_community, [1]) is None
+
+
+def test_push_interface_counters_writes_prometheus_lines(db_session, monkeypatch):
+    from app.models.network_monitoring import DeviceInterface
+    from app.services.snmp_probe import InterfaceOctets
+
+    device = _device("counter-router", "10.80.5.1", snmp_enabled=True)
+    db_session.add(device)
+    db_session.flush()
+    iface = DeviceInterface(
+        device_id=device.id, name="sfp-sfpplus1", snmp_index=5, monitored=True
+    )
+    unmonitored = DeviceInterface(
+        device_id=device.id, name="ether2", snmp_index=6, monitored=False
+    )
+    db_session.add_all([iface, unmonitored])
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "app.services.snmp_probe.fetch_interface_octets",
+        lambda dev, indexes, **kw: {5: InterfaceOctets(1500000, 900000)},
+    )
+    written = {}
+
+    class _Writer:
+        def write_prometheus_lines(self, lines, **kwargs):
+            written["lines"] = lines
+            written["kwargs"] = kwargs
+
+    monkeypatch.setattr(infrastructure_polling, "_writer", lambda: _Writer())
+
+    result = infrastructure_polling.push_interface_counters(db_session)
+
+    assert result == {"interface_devices": 1, "interface_lines": 2}
+    assert len(written["lines"]) == 2
+    rx_line = next(line for line in written["lines"] if "in_octets" in line)
+    assert f'device_id="{device.id}"' in rx_line
+    assert f'interface_id="{iface.id}"' in rx_line
+    assert 'snmp_index="5"' in rx_line
+    assert " 1500000 " in rx_line
+
+
+def test_push_interface_counters_no_targets_is_noop(db_session, monkeypatch):
+    called = {"writer": False}
+    monkeypatch.setattr(
+        infrastructure_polling,
+        "_writer",
+        lambda: called.__setitem__("writer", True),
+    )
+
+    result = infrastructure_polling.push_interface_counters(db_session)
+
+    assert result == {"interface_devices": 0, "interface_lines": 0}
+    assert called["writer"] is False
+
+
+def test_poll_results_feed_live_status_warmer(db_session, monkeypatch):
+    # End-to-end seam check: a native ping failure surfaces as live_status
+    # "down" (what outage auto-detect reads), and recovery flips it back "up".
+    device = _device("edge-node", "10.80.3.1")
+    db_session.add(device)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        runtime.ping_service, "run_ping", lambda host, timeout_seconds=4: (False, None)
+    )
+    runtime.ping_device(db_session, str(device.id))
+    warm_topology_status(db_session)
+    assert device.live_status == "down"
+
+    monkeypatch.setattr(
+        runtime.ping_service, "run_ping", lambda host, timeout_seconds=4: (True, 1.5)
+    )
+    runtime.ping_device(db_session, str(device.id))
+    warm_topology_status(db_session)
+    assert device.live_status == "up"
+    assert device.live_status_at is not None

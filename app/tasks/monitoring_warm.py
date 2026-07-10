@@ -32,6 +32,10 @@ logger = logging.getLogger(__name__)
 def warm_monitoring_caches() -> dict[str, Any]:
     """Refresh the per-OLT Zabbix summary cache (ont-zabbix-summary:*)."""
     from app.services.network_monitoring import get_onu_status_summary
+    from app.services.zabbix import zabbix_configured
+
+    if not zabbix_configured():
+        return {"skipped": "zabbix_token_missing"}
 
     try:
         with db_session_adapter.session() as db:

@@ -59,10 +59,7 @@ def run_topology_reconcile() -> dict[str, Any]:
     time_limit=150,
 )
 def warm_topology_status() -> dict[str, Any]:
-    """Refresh cached live_status for reconciled topology nodes from Zabbix."""
-    if not zabbix_configured():
-        return {"skipped": "zabbix_token_missing"}
-
+    """Refresh cached live_status for topology nodes from native poll results."""
     from app.services.topology.live_status import (
         touch_warm_heartbeat,
     )
@@ -72,16 +69,12 @@ def warm_topology_status() -> dict[str, Any]:
 
     db = db_session_adapter.create_session()
     try:
-        result = _warm(db, ZabbixClient.from_env())
+        result = _warm(db)
         db.commit()
         # Stamp the heartbeat only after a successful refresh so a stalled/failing
         # warmer ages out and stops good states being trusted (see selfcare).
         touch_warm_heartbeat()
         return result
-    except ZabbixClientError as exc:
-        db.rollback()
-        logger.warning("topology_status_warm_failed: %s", exc)
-        return {"error": "zabbix_unavailable", "message": str(exc)}
     except SoftTimeLimitExceeded:
         db.rollback()
         logger.warning("topology_status_warm_timed_out")

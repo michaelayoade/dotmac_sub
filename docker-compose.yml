@@ -558,7 +558,12 @@ services:
     - python
     - -m
     - app.syslog
+  # Zabbix stack retired from the default runtime (native infrastructure
+  # polling + VictoriaMetrics cover monitoring). Start explicitly with
+  # `docker compose --profile zabbix up -d` if ever needed again.
   zabbix-db:
+    profiles:
+    - zabbix
     image: postgres:16-alpine
     container_name: dotmac_zabbix_db
     restart: unless-stopped
@@ -582,6 +587,8 @@ services:
       timeout: 5s
       retries: 5
   zabbix-server:
+    profiles:
+    - zabbix
     image: zabbix/zabbix-server-pgsql:7.0-alpine-latest
     container_name: dotmac_zabbix_server
     restart: unless-stopped
@@ -618,6 +625,8 @@ services:
       retries: 3
       start_period: 60s
   zabbix-web:
+    profiles:
+    - zabbix
     image: zabbix/zabbix-web-nginx-pgsql:7.0-alpine-latest
     container_name: dotmac_zabbix_web
     restart: unless-stopped
@@ -638,6 +647,8 @@ services:
     ports:
     - 8085:8080
   zabbix-agent:
+    profiles:
+    - zabbix
     image: zabbix/zabbix-agent2:7.0-alpine-latest
     container_name: dotmac_zabbix_agent
     restart: unless-stopped
@@ -666,8 +677,6 @@ services:
     - ./config/vmagent/config.yml:/etc/vmagent/config.yml:ro
     depends_on:
       victoriametrics:
-        condition: service_started
-      zabbix-server:
         condition: service_started
 volumes:
   zabbix_db_data: null

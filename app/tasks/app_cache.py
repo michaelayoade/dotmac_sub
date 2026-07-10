@@ -34,6 +34,11 @@ def refresh_dashboard_stats_cache_task() -> dict[str, object]:
     time_limit=150,
 )
 def refresh_ont_zabbix_snapshot_cache_task() -> dict[str, object]:
+    from app.services.zabbix import zabbix_configured
+
+    if not zabbix_configured():
+        return {"refreshed": False, "skipped": "zabbix_token_missing"}
+
     db = db_session_adapter.create_session()
     try:
         from app.services import zabbix_ont_status

@@ -1,76 +1,82 @@
-"""Topology live-status warmer (Phase 3, P3.2)."""
+"""Topology live-status warmer (native poll source, Zabbix cutover Phase 1)."""
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
-from app.models.network_monitoring import NetworkDevice
-from app.services.topology.live_status import warm_topology_status
-
-
-class _FakeClient:
-    def __init__(self, hosts, triggers, items=None):
-        self._hosts = hosts
-        self._triggers = triggers
-        self._items = items or []
-
-    def get_hosts(self, host_ids=None, **_kw):
-        return self._hosts
-
-    def get_triggers(self, host_ids=None, active_only=True, limit=100, **_kw):
-        return self._triggers
-
-    def get_items(self, host_ids=None, metric=None, limit=100000, **_kw):
-        if host_ids is None:
-            return self._items
-        wanted = {str(host_id) for host_id in host_ids}
-        return [item for item in self._items if str(item.get("hostid")) in wanted]
+from app.models.network_monitoring import DeviceStatus, NetworkDevice
+from app.services.topology.live_status import (
+    STALE_POLL_AFTER_SECONDS,
+    derive_live_status,
+    warm_topology_status,
+)
 
 
-def _node(hostid, name):
-    return NetworkDevice(
-        name=name,
-        source="zabbix_reconcile",
-        zabbix_hostid=hostid,
-        is_active=True,
-    )
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+_ip_counter = iter(range(1, 10_000))
+
+
+def _node(name, **kw):
+    kw.setdefault("source", "zabbix_reconcile")
+    kw.setdefault("is_active", True)
+    if "mgmt_ip" not in kw:
+        n = next(_ip_counter)
+        kw["mgmt_ip"] = f"10.77.{n // 250}.{n % 250 + 1}"
+    return NetworkDevice(name=name, **kw)
 
 
 def test_warm_sets_live_status_per_node(db_session):
+    now = _now()
     db_session.add_all(
         [
-            _node("1", "up-node"),
-            _node("2", "down-node"),
-            _node("3", "triggered-but-reachable-node"),
-            _node("4", "unknown-node"),
-            # not reconciled -> must be ignored by the warmer
-            NetworkDevice(name="other", source="splynx", is_active=True),
+            _node("up-node", ping_enabled=True, last_ping_ok=True, last_ping_at=now),
+            _node("down-node", ping_enabled=True, last_ping_ok=False, last_ping_at=now),
+            _node("unknown-node", ping_enabled=True),
+            # source-agnostic: a non-reconciled (e.g. admin-created) device with
+            # native poll data is warmed exactly like a reconciled node
+            _node(
+                "other-source",
+                source="splynx",
+                ping_enabled=True,
+                last_ping_ok=True,
+                last_ping_at=now,
+            ),
+            # unpollable (no mgmt_ip/hostname) -> untouched, keeps NULL so
+            # surfaces with their own fallbacks (linked-router status) apply
+            NetworkDevice(
+                name="unpollable",
+                source="zabbix_reconcile",
+                is_active=True,
+                ping_enabled=True,
+                last_ping_ok=True,
+                last_ping_at=now,
+            ),
+            # inactive -> untouched
+            _node(
+                "inactive",
+                is_active=False,
+                ping_enabled=True,
+                last_ping_ok=True,
+                last_ping_at=now,
+            ),
         ]
     )
     db_session.flush()
 
-    hosts = [
-        {"hostid": "1", "available": "1", "interfaces": []},
-        {"hostid": "2", "available": "2", "interfaces": []},
-        {"hostid": "3", "available": "1", "interfaces": []},
-        {"hostid": "4", "available": "0", "interfaces": []},
-    ]
-    triggers = [{"triggerid": "t1", "value": 1, "hosts": [{"hostid": "3"}]}]
-
-    result = warm_topology_status(db_session, _FakeClient(hosts, triggers))
+    result = warm_topology_status(db_session)
     assert result["nodes"] == 4
 
-    by_host = {
-        n.zabbix_hostid: n.live_status
-        for n in db_session.query(NetworkDevice)
-        .filter(NetworkDevice.zabbix_hostid.isnot(None))
-        .all()
-    }
-    assert by_host["1"] == "up"
-    assert by_host["2"] == "down"
-    assert by_host["3"] == "up"
-    assert by_host["4"] == "unknown"
-    # all warmed nodes got a timestamp
+    by_name = {n.name: n.live_status for n in db_session.query(NetworkDevice).all()}
+    assert by_name["up-node"] == "up"
+    assert by_name["down-node"] == "down"
+    assert by_name["unknown-node"] == "unknown"
+    assert by_name["other-source"] == "up"
+    assert by_name["unpollable"] is None
+    assert by_name["inactive"] is None
+
     warmed = (
         db_session.query(NetworkDevice)
         .filter(NetworkDevice.live_status.isnot(None))
@@ -80,144 +86,173 @@ def test_warm_sets_live_status_per_node(db_session):
     assert all(n.live_status_at is not None for n in warmed)
 
 
-def test_down_status_ignores_active_triggers(db_session):
-    # Active triggers no longer drive live_status; host availability does.
-    db_session.add(_node("9", "n9"))
-    db_session.flush()
-    hosts = [{"hostid": "9", "available": "2", "interfaces": []}]
-    triggers = [{"triggerid": "t", "value": 1, "hosts": [{"hostid": "9"}]}]
-    warm_topology_status(db_session, _FakeClient(hosts, triggers))
-    n = db_session.query(NetworkDevice).filter_by(zabbix_hostid="9").one()
-    assert n.live_status == "down"
-
-
-def test_interface_availability_fallback(db_session):
-    # No host-level 'available'; derive from the main interface.
-    db_session.add(_node("7", "n7"))
-    db_session.flush()
-    hosts = [
-        {
-            "hostid": "7",
-            "available": "0",
-            "interfaces": [{"main": "1", "available": "2"}],
-        }
-    ]
-    warm_topology_status(db_session, _FakeClient(hosts, []))
-    n = db_session.query(NetworkDevice).filter_by(zabbix_hostid="7").one()
-    assert n.live_status == "down"
-
-
-def test_icmp_fallback_when_snmp_availability_unknown(db_session):
-    db_session.add_all([_node("10", "ping-up"), _node("11", "ping-down")])
-    db_session.flush()
-    hosts = [
-        {"hostid": "10", "available": "0", "status": "0", "interfaces": []},
-        {"hostid": "11", "available": "0", "status": "0", "interfaces": []},
-    ]
-    items = [
-        {"hostid": "10", "key_": "icmpping", "lastvalue": "1"},
-        {"hostid": "11", "key_": "icmpping", "lastvalue": "0"},
-    ]
-
-    warm_topology_status(db_session, _FakeClient(hosts, [], items))
-
-    by_host = {
-        n.zabbix_hostid: n.live_status
-        for n in db_session.query(NetworkDevice)
-        .filter(NetworkDevice.zabbix_hostid.in_(["10", "11"]))
-        .all()
-    }
-    assert by_host["10"] == "up"
-    assert by_host["11"] == "down"
-
-
-def test_icmp_item_wins_over_snmp_availability(db_session):
-    db_session.add_all(
-        [_node("20", "snmp-up-icmp-down"), _node("21", "snmp-down-icmp-up")]
+def test_stale_ping_result_reads_unknown(db_session):
+    # A poll result older than the staleness window proves nothing: the poller
+    # stopped covering the device, so it degrades to unknown instead of
+    # freezing on its last state.
+    stale = _now() - timedelta(seconds=STALE_POLL_AFTER_SECONDS + 60)
+    db_session.add(
+        _node("stale-up", ping_enabled=True, last_ping_ok=True, last_ping_at=stale)
     )
     db_session.flush()
-    hosts = [
-        {"hostid": "20", "available": "1", "status": "0", "interfaces": []},
-        {"hostid": "21", "available": "2", "status": "0", "interfaces": []},
-    ]
-    items = [
-        {"hostid": "20", "key_": "icmpping", "lastvalue": "0"},
-        {"hostid": "21", "key_": "icmpping", "lastvalue": "1"},
-    ]
 
-    warm_topology_status(db_session, _FakeClient(hosts, [], items))
+    warm_topology_status(db_session)
 
-    by_host = {
-        n.zabbix_hostid: n.live_status
-        for n in db_session.query(NetworkDevice)
-        .filter(NetworkDevice.zabbix_hostid.in_(["20", "21"]))
-        .all()
-    }
-    assert by_host["20"] == "down"
-    assert by_host["21"] == "up"
-
-
-def test_any_failed_icmp_item_wins(db_session):
-    db_session.add(_node("23", "mixed-icmp"))
-    db_session.flush()
-    hosts = [{"hostid": "23", "available": "1", "status": "0", "interfaces": []}]
-    items = [
-        {"hostid": "23", "key_": "icmpping", "lastvalue": "1"},
-        {"hostid": "23", "key_": "icmpping", "lastvalue": "0"},
-        {"hostid": "23", "key_": "icmpping", "lastvalue": "1"},
-    ]
-
-    warm_topology_status(db_session, _FakeClient(hosts, [], items))
-
-    n = db_session.query(NetworkDevice).filter_by(zabbix_hostid="23").one()
-    assert n.live_status == "down"
-
-
-def test_snmp_availability_used_when_icmp_item_missing(db_session):
-    db_session.add(_node("22", "snmp-only"))
-    db_session.flush()
-    hosts = [{"hostid": "22", "available": "1", "status": "0", "interfaces": []}]
-
-    warm_topology_status(db_session, _FakeClient(hosts, [], items=[]))
-
-    n = db_session.query(NetworkDevice).filter_by(zabbix_hostid="22").one()
-    assert n.live_status == "up"
-
-
-def test_icmp_fallback_ignored_for_disabled_host(db_session):
-    db_session.add(_node("12", "disabled"))
-    db_session.flush()
-    hosts = [{"hostid": "12", "available": "0", "status": "1", "interfaces": []}]
-    items = [{"hostid": "12", "key_": "icmpping", "lastvalue": "1"}]
-
-    warm_topology_status(db_session, _FakeClient(hosts, [], items))
-
-    n = db_session.query(NetworkDevice).filter_by(zabbix_hostid="12").one()
+    n = db_session.query(NetworkDevice).filter_by(name="stale-up").one()
     assert n.live_status == "unknown"
 
 
-def test_icmp_failure_marks_disabled_host_down(db_session):
-    db_session.add(_node("13", "disabled-down"))
+def test_snmp_fills_in_for_ping_disabled_device(db_session):
+    now = _now()
+    db_session.add_all(
+        [
+            _node(
+                "snmp-up",
+                ping_enabled=False,
+                snmp_enabled=True,
+                last_snmp_ok=True,
+                last_snmp_at=now,
+            ),
+            _node(
+                "snmp-down",
+                ping_enabled=False,
+                snmp_enabled=True,
+                last_snmp_ok=False,
+                last_snmp_at=now,
+            ),
+        ]
+    )
     db_session.flush()
-    hosts = [{"hostid": "13", "available": "0", "status": "1", "interfaces": []}]
-    items = [{"hostid": "13", "key_": "icmpping", "lastvalue": "0"}]
 
-    warm_topology_status(db_session, _FakeClient(hosts, [], items))
+    warm_topology_status(db_session)
 
-    n = db_session.query(NetworkDevice).filter_by(zabbix_hostid="13").one()
+    by_name = {n.name: n.live_status for n in db_session.query(NetworkDevice).all()}
+    assert by_name["snmp-up"] == "up"
+    assert by_name["snmp-down"] == "down"
+
+
+def test_fresh_ping_wins_over_snmp(db_session):
+    # Ping is the authoritative reachability signal (same precedence the old
+    # Zabbix warmer gave icmpping over host availability).
+    now = _now()
+    db_session.add(
+        _node(
+            "ping-down-snmp-up",
+            ping_enabled=True,
+            last_ping_ok=False,
+            last_ping_at=now,
+            snmp_enabled=True,
+            last_snmp_ok=True,
+            last_snmp_at=now,
+        )
+    )
+    db_session.flush()
+
+    warm_topology_status(db_session)
+
+    n = db_session.query(NetworkDevice).filter_by(name="ping-down-snmp-up").one()
     assert n.live_status == "down"
+
+
+def test_stale_ping_falls_back_to_fresh_snmp(db_session):
+    now = _now()
+    stale = now - timedelta(seconds=STALE_POLL_AFTER_SECONDS + 60)
+    db_session.add(
+        _node(
+            "stale-ping-fresh-snmp",
+            ping_enabled=True,
+            last_ping_ok=False,
+            last_ping_at=stale,
+            snmp_enabled=True,
+            last_snmp_ok=True,
+            last_snmp_at=now,
+        )
+    )
+    db_session.flush()
+
+    warm_topology_status(db_session)
+
+    n = db_session.query(NetworkDevice).filter_by(name="stale-ping-fresh-snmp").one()
+    assert n.live_status == "up"
+
+
+def test_maintenance_device_is_unknown(db_session):
+    # An operator put the device into maintenance: a deliberate shutdown must
+    # not surface to customers as an outage, and a leftover "ok" must not read
+    # as monitored-healthy (mirrors the old Zabbix maintenance handling).
+    now = _now()
+    db_session.add_all(
+        [
+            _node(
+                "maint-down",
+                status=DeviceStatus.maintenance,
+                ping_enabled=True,
+                last_ping_ok=False,
+                last_ping_at=now,
+            ),
+            _node(
+                "maint-up",
+                status=DeviceStatus.maintenance,
+                ping_enabled=True,
+                last_ping_ok=True,
+                last_ping_at=now,
+            ),
+        ]
+    )
+    db_session.flush()
+
+    warm_topology_status(db_session)
+
+    by_name = {n.name: n.live_status for n in db_session.query(NetworkDevice).all()}
+    assert by_name["maint-down"] == "unknown"
+    assert by_name["maint-up"] == "unknown"
+
+
+def test_ping_disabled_result_not_trusted(db_session):
+    # ping_enabled=False means nobody is refreshing last_ping_*; a leftover
+    # value (however recent-looking) must not colour the node. The device is
+    # still pollable via SNMP, which has produced no result yet -> unknown.
+    db_session.add(
+        _node(
+            "ping-disabled",
+            ping_enabled=False,
+            snmp_enabled=True,
+            last_ping_ok=True,
+            last_ping_at=_now(),
+        )
+    )
+    db_session.flush()
+
+    warm_topology_status(db_session)
+
+    n = db_session.query(NetworkDevice).filter_by(name="ping-disabled").one()
+    assert n.live_status == "unknown"
+
+
+def test_naive_poll_timestamp_treated_as_utc():
+    # SQLite (and pre-tz rows) round-trip naive datetimes; freshness must not
+    # crash or misread them.
+    node = NetworkDevice(
+        name="naive",
+        source="zabbix_reconcile",
+        is_active=True,
+        ping_enabled=True,
+        last_ping_ok=True,
+        last_ping_at=datetime.now(UTC).replace(tzinfo=None),
+    )
+    assert derive_live_status(node) == "up"
 
 
 def test_live_status_at_stamped_only_on_change(db_session):
     # live_status_at must mark when the node ENTERED its current state (the
     # dwell clock the customer-facing debounce relies on) — not every poll.
-    db_session.add(_node("5", "n5"))
+    db_session.add(
+        _node("n5", ping_enabled=True, last_ping_ok=True, last_ping_at=_now())
+    )
     db_session.flush()
-    up = [{"hostid": "5", "available": "1", "interfaces": []}]
-    down = [{"hostid": "5", "available": "2", "interfaces": []}]
 
-    warm_topology_status(db_session, _FakeClient(up, []))
-    n = db_session.query(NetworkDevice).filter_by(zabbix_hostid="5").one()
+    warm_topology_status(db_session)
+    n = db_session.query(NetworkDevice).filter_by(name="n5").one()
     # Re-read from the DB so first_at is in the same representation the later
     # refreshed comparison uses — SQLite drops tzinfo on round-trip, so an
     # in-session aware value would never equal the refreshed naive one. We are
@@ -226,134 +261,17 @@ def test_live_status_at_stamped_only_on_change(db_session):
     first_at = n.live_status_at
 
     # same status next poll -> timestamp does NOT move
-    warm_topology_status(db_session, _FakeClient(up, []))
+    warm_topology_status(db_session)
     db_session.refresh(n)
     assert n.live_status == "up"
     assert n.live_status_at == first_at
 
     # a real status change DOES move it
+    n.last_ping_ok = False
+    n.last_ping_at = _now()
     n.live_status_at = datetime(2020, 1, 1, tzinfo=UTC)
     db_session.flush()
-    warm_topology_status(db_session, _FakeClient(down, []))
+    warm_topology_status(db_session)
     db_session.refresh(n)
     assert n.live_status == "down"
     assert n.live_status_at != datetime(2020, 1, 1, tzinfo=UTC)
-
-
-def test_disabled_or_maintenance_host_is_unknown(db_session):
-    # A host Zabbix isn't actively monitoring (disabled) or in maintenance must
-    # not surface as "up" off a stale availability — it reads unknown.
-    db_session.add_all([_node("10", "disabled"), _node("11", "maint")])
-    db_session.flush()
-    hosts = [
-        {"hostid": "10", "available": "1", "status": "1", "interfaces": []},
-        {
-            "hostid": "11",
-            "available": "1",
-            "maintenance_status": "1",
-            "interfaces": [],
-        },
-    ]
-    warm_topology_status(db_session, _FakeClient(hosts, []))
-    by_host = {
-        n.zabbix_hostid: n.live_status
-        for n in db_session.query(NetworkDevice).all()
-        if n.zabbix_hostid
-    }
-    assert by_host["10"] == "unknown"
-    assert by_host["11"] == "unknown"
-
-
-def test_trapper_only_uisp_host_active_is_up(db_session):
-    # A trapper-only UISP host: no polled interface, no icmpping, only a live
-    # uisp.status="active" trapper -> coloured UP off the trapper fallback.
-    db_session.add(_node("30", "onu-active"))
-    db_session.flush()
-    hosts = [{"hostid": "30", "available": "0", "status": "0", "interfaces": []}]
-    items = [{"hostid": "30", "key_": "uisp.status", "lastvalue": "active"}]
-
-    result = warm_topology_status(db_session, _FakeClient(hosts, [], items))
-
-    n = db_session.query(NetworkDevice).filter_by(zabbix_hostid="30").one()
-    assert n.live_status == "up"
-    assert result["via_uisp_status"] == 1
-
-
-def test_trapper_only_uisp_host_disconnected_is_down(db_session):
-    db_session.add(_node("31", "onu-disconnected"))
-    db_session.flush()
-    hosts = [{"hostid": "31", "available": "0", "status": "0", "interfaces": []}]
-    items = [{"hostid": "31", "key_": "uisp.status", "lastvalue": "disconnected"}]
-
-    result = warm_topology_status(db_session, _FakeClient(hosts, [], items))
-
-    n = db_session.query(NetworkDevice).filter_by(zabbix_hostid="31").one()
-    assert n.live_status == "down"
-    assert result["via_uisp_status"] == 1
-
-
-def test_trapper_only_uisp_host_unknown_or_empty_is_unknown(db_session):
-    # "unknown"/unauthorized/empty/other -> UNKNOWN, and NOT counted as a
-    # fallback colouring (the trapper supplied no usable colour).
-    db_session.add_all([_node("32", "onu-unknown"), _node("33", "onu-empty")])
-    db_session.flush()
-    hosts = [
-        {"hostid": "32", "available": "0", "status": "0", "interfaces": []},
-        {"hostid": "33", "available": "0", "status": "0", "interfaces": []},
-    ]
-    items = [
-        {"hostid": "32", "key_": "uisp.status", "lastvalue": "unknown"},
-        {"hostid": "33", "key_": "uisp.status", "lastvalue": ""},
-    ]
-
-    result = warm_topology_status(db_session, _FakeClient(hosts, [], items))
-
-    by_host = {
-        n.zabbix_hostid: n.live_status
-        for n in db_session.query(NetworkDevice)
-        .filter(NetworkDevice.zabbix_hostid.in_(["32", "33"]))
-        .all()
-    }
-    assert by_host["32"] == "unknown"
-    assert by_host["33"] == "unknown"
-    assert result["via_uisp_status"] == 0
-
-
-def test_polled_icmp_wins_over_uisp_trapper(db_session):
-    # Host with BOTH icmp=up AND a stale uisp.status="disconnected": polling is
-    # authoritative and real-time, so the node stays UP and the trapper does
-    # NOT override — nor is it counted as a fallback colouring.
-    db_session.add(_node("34", "station-icmp-up-uisp-down"))
-    db_session.flush()
-    hosts = [{"hostid": "34", "available": "0", "status": "0", "interfaces": []}]
-    items = [
-        {"hostid": "34", "key_": "icmpping", "lastvalue": "1"},
-        {"hostid": "34", "key_": "uisp.status", "lastvalue": "disconnected"},
-    ]
-
-    result = warm_topology_status(db_session, _FakeClient(hosts, [], items))
-
-    n = db_session.query(NetworkDevice).filter_by(zabbix_hostid="34").one()
-    assert n.live_status == "up"
-    assert result["via_uisp_status"] == 0
-
-
-def test_snmp_host_without_uisp_status_unchanged(db_session):
-    # An SNMP host with interface available=up and no uisp.status trapper is
-    # coloured exactly as before — the trapper arm never touches it.
-    db_session.add(_node("35", "snmp-up"))
-    db_session.flush()
-    hosts = [
-        {
-            "hostid": "35",
-            "available": "0",
-            "status": "0",
-            "interfaces": [{"main": "1", "available": "1"}],
-        }
-    ]
-
-    result = warm_topology_status(db_session, _FakeClient(hosts, [], items=[]))
-
-    n = db_session.query(NetworkDevice).filter_by(zabbix_hostid="35").one()
-    assert n.live_status == "up"
-    assert result["via_uisp_status"] == 0

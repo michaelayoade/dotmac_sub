@@ -273,6 +273,9 @@ def ingest_olt_signals_from_zabbix() -> dict[str, Any]:
 )
 def repair_stale_olt_signal_ingest() -> dict[str, Any]:
     """Run Zabbix ONT signal ingest when persisted status observations are stale."""
+    if not _zabbix_enabled():
+        return {"skipped": "zabbix_token_missing"}
+
     db = db_session_adapter.create_session()
     try:
         from sqlalchemy import func
