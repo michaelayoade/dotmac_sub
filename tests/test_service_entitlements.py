@@ -5,10 +5,14 @@ from app.models.billing import (
     Invoice,
     InvoiceLine,
     InvoiceStatus,
+    LedgerEntry,
+    LedgerEntryType,
+    LedgerSource,
     ServiceEntitlement,
 )
 from app.models.catalog import BillingMode, SubscriptionStatus
 from app.services.service_entitlements import (
+    ensure_prepaid_entitlement_for_wallet_debit,
     ensure_prepaid_entitlements_for_paid_invoice,
 )
 
@@ -111,3 +115,43 @@ def test_paid_invoice_with_balance_does_not_create_entitlement(
 
     assert created == []
     assert db_session.query(ServiceEntitlement).count() == 0
+
+
+def test_wallet_debit_entitlement_is_idempotent_by_ledger_entry(
+    db_session, subscriber_account, subscription
+):
+    subscription.billing_mode = BillingMode.prepaid
+    subscription.status = SubscriptionStatus.active
+    ledger_entry = LedgerEntry(
+        account_id=subscriber_account.id,
+        entry_type=LedgerEntryType.debit,
+        source=LedgerSource.invoice,
+        amount=Decimal("1000.00"),
+        currency="NGN",
+        memo="Prepaid service renewal",
+    )
+    db_session.add(ledger_entry)
+    db_session.flush()
+    starts_at = datetime(2026, 8, 1, tzinfo=UTC)
+    ends_at = datetime(2026, 9, 1, tzinfo=UTC)
+
+    first = ensure_prepaid_entitlement_for_wallet_debit(
+        db_session,
+        subscription=subscription,
+        ledger_entry=ledger_entry,
+        starts_at=starts_at,
+        ends_at=ends_at,
+    )
+    second = ensure_prepaid_entitlement_for_wallet_debit(
+        db_session,
+        subscription=subscription,
+        ledger_entry=ledger_entry,
+        starts_at=starts_at,
+        ends_at=ends_at,
+    )
+
+    assert first is not None
+    assert second is not None
+    assert second.id == first.id
+    assert first.source_ledger_entry_id == ledger_entry.id
+    assert db_session.query(ServiceEntitlement).count() == 1

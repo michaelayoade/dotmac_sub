@@ -842,6 +842,17 @@ class ServiceEntitlement(Base):
                 "status = 'active' AND source_invoice_line_id IS NOT NULL"
             ),
         ),
+        Index(
+            "uq_service_entitlements_active_ledger_entry",
+            "source_ledger_entry_id",
+            unique=True,
+            postgresql_where=text(
+                "status = 'active' AND source_ledger_entry_id IS NOT NULL"
+            ),
+            sqlite_where=text(
+                "status = 'active' AND source_ledger_entry_id IS NOT NULL"
+            ),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -858,6 +869,9 @@ class ServiceEntitlement(Base):
     )
     source_invoice_line_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("invoice_lines.id")
+    )
+    source_ledger_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ledger_entries.id")
     )
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -882,6 +896,7 @@ class ServiceEntitlement(Base):
     subscription = relationship("Subscription")
     source_invoice = relationship("Invoice")
     source_invoice_line = relationship("InvoiceLine")
+    source_ledger_entry = relationship("LedgerEntry")
 
 
 class TaxRate(Base):
