@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, func, or_, select
 
 from app.models.billing import Invoice, InvoiceLine
 from app.models.catalog import BillingMode, Subscription
 from app.models.subscriber import Subscriber
 from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
+
+_TRUTHY_METADATA_VALUES = ("1", "true", "yes", "on")
 
 
 def prepaid_non_ar_invoice_ids():
@@ -71,4 +73,10 @@ def prepaid_non_ar_invoice_ids():
 
 def collectible_ar_invoice_filter():
     """SQLAlchemy filter for invoices that may behave as collectible AR."""
-    return ~Invoice.id.in_(prepaid_non_ar_invoice_ids())
+    hold_text = func.lower(
+        func.coalesce(Invoice.metadata_["reconciliation_hold"].as_string(), "")
+    )
+    return ~Invoice.id.in_(prepaid_non_ar_invoice_ids()) & and_(
+        Invoice.metadata_["reconciliation_hold"].as_boolean().is_not(True),
+        hold_text.notin_(_TRUTHY_METADATA_VALUES),
+    )
