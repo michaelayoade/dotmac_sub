@@ -1,4 +1,4 @@
-"""Native field notes for CRM-synced work-order mirrors."""
+"""Native field notes for imported work-order mirrors."""
 
 from __future__ import annotations
 
