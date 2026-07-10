@@ -5,15 +5,25 @@ from __future__ import annotations
 import csv
 import logging
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models.billing import Invoice, InvoiceLine, InvoiceStatus
+from app.models.billing import (
+    CreditNoteApplication,
+    Invoice,
+    InvoiceLine,
+    InvoiceStatus,
+    LedgerEntry,
+    PaymentAllocation,
+)
 from app.models.catalog import (
+    AccessCredential,
     BillingMode,
     CatalogOffer,
     Subscription,
+    SubscriptionAddOn,
     SubscriptionStatus,
 )
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
@@ -26,9 +36,11 @@ from app.services.account_lifecycle import (
     resolve_locks_for_trigger,
     restore_subscription,
 )
+from app.services.billing._common import _recalculate_invoice_totals
 from app.services.billing_statuses import BILLABLE_SUBSCRIBER_STATUSES
 from app.services.collections import has_overdue_balance
 from app.services.common import coerce_uuid
+from app.services.radius import _external_password_row
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +50,15 @@ ANCHOR_REPAIR_STATUSES = (
     InvoiceStatus.issued,
     InvoiceStatus.partially_paid,
     InvoiceStatus.paid,
+    InvoiceStatus.overdue,
+)
+LINE_REPAIR_INVOICE_STATUSES = (
+    InvoiceStatus.draft,
+    InvoiceStatus.issued,
+    InvoiceStatus.overdue,
+)
+PREPAID_AR_REPAIR_STATUSES = (
+    InvoiceStatus.issued,
     InvoiceStatus.overdue,
 )
 
@@ -80,6 +101,38 @@ def _refuse(action: str, row: dict[str, str], reason: str) -> dict[str, Any]:
         "reason": reason,
         "row": row,
     }
+
+
+def _invoice_financial_activity(db: Session, invoice_id) -> dict[str, int]:
+    return {
+        "active_allocations": db.query(PaymentAllocation.id)
+        .filter(PaymentAllocation.invoice_id == invoice_id)
+        .filter(PaymentAllocation.is_active.is_(True))
+        .count(),
+        "ledger_entries": db.query(LedgerEntry.id)
+        .filter(LedgerEntry.invoice_id == invoice_id)
+        .filter(LedgerEntry.is_active.is_(True))
+        .count(),
+        "credit_note_applications": db.query(CreditNoteApplication.id)
+        .filter(CreditNoteApplication.invoice_id == invoice_id)
+        .count(),
+    }
+
+
+def _has_invoice_financial_activity(db: Session, invoice_id) -> bool:
+    return any(_invoice_financial_activity(db, invoice_id).values())
+
+
+def _metadata_with_cleanup_marker(
+    metadata: dict | None, marker: str, payload: dict[str, Any]
+) -> dict[str, Any]:
+    updated = dict(metadata or {})
+    updated[marker] = {
+        **payload,
+        "at": datetime.now(UTC).isoformat(),
+        "source": "billing_cleanup_remediation",
+    }
+    return updated
 
 
 def plan_stale_overdue_lock_row(db: Session, row: dict[str, str]) -> dict[str, Any]:
@@ -382,6 +435,325 @@ def plan_invoice_anchor_row(db: Session, row: dict[str, str]) -> dict[str, Any]:
     }
 
 
+def plan_disabled_service_line_row(db: Session, row: dict[str, str]) -> dict[str, Any]:
+    action = "deactivate_disabled_service_line"
+    if row.get("finding_type") != "disabled_service":
+        return _refuse(action, row, "not_disabled_service")
+    if row.get("proposed_disposition") not in {
+        "credit_or_void_required",
+        "deactivate_line",
+    }:
+        return _refuse(action, row, "not_reviewed_for_line_deactivation")
+    line_id = (row.get("invoice_line_id") or "").strip()
+    if not line_id:
+        return _refuse(action, row, "missing_invoice_line_id")
+    try:
+        line = db.get(InvoiceLine, coerce_uuid(line_id))
+    except Exception:
+        return _refuse(action, row, "bad_invoice_line_id")
+    if line is None or not line.is_active:
+        return _refuse(action, row, "line_missing_or_inactive")
+    invoice = db.get(Invoice, line.invoice_id)
+    if invoice is None or not invoice.is_active:
+        return _refuse(action, row, "invoice_missing_or_inactive")
+    subscription = db.get(Subscription, line.subscription_id)
+    if subscription is None:
+        return _refuse(action, row, "subscription_missing")
+    if row.get("invoice_id") and str(invoice.id) != row["invoice_id"]:
+        return _refuse(action, row, "invoice_id_changed")
+    if row.get("subscription_id") and str(subscription.id) != row["subscription_id"]:
+        return _refuse(action, row, "subscription_id_changed")
+    if row.get("invoice_status") and invoice.status.value != row["invoice_status"]:
+        return _refuse(action, row, "invoice_status_changed")
+    if subscription.status not in {
+        SubscriptionStatus.canceled,
+        SubscriptionStatus.expired,
+        SubscriptionStatus.disabled,
+    }:
+        return _refuse(action, row, "subscription_not_terminal")
+    ended_at = _as_utc(subscription.canceled_at or subscription.end_at)
+    period_start = _as_utc(invoice.billing_period_start)
+    if ended_at is None or period_start is None or period_start <= ended_at:
+        return _refuse(action, row, "line_no_longer_bills_after_end")
+    if invoice.status not in LINE_REPAIR_INVOICE_STATUSES:
+        return _refuse(action, row, "invoice_status_not_safe_for_line_deactivation")
+    activity = _invoice_financial_activity(db, invoice.id)
+    if any(activity.values()):
+        return {
+            **_refuse(action, row, "invoice_has_financial_activity"),
+            "activity": activity,
+        }
+    return {
+        "action": action,
+        "decision": "apply",
+        "invoice_line_id": str(line.id),
+        "invoice_id": str(invoice.id),
+        "subscription_id": str(subscription.id),
+        "before": {
+            "invoice_status": invoice.status.value,
+            "invoice_total": str(invoice.total or 0),
+            "invoice_balance_due": str(invoice.balance_due or 0),
+            "line_amount": str(line.amount or 0),
+        },
+    }
+
+
+def _plan_duplicate_group(
+    db: Session, group_key: str, rows: list[dict[str, str]]
+) -> list[dict[str, Any]]:
+    action = "deactivate_duplicate_period_line"
+    if len(rows) < 2:
+        return [_refuse(action, rows[0], "duplicate_group_has_single_row")]
+    loaded: list[tuple[dict[str, str], InvoiceLine, Invoice]] = []
+    for row in rows:
+        if row.get("finding_type") != "duplicate_period":
+            return [_refuse(action, row, "not_duplicate_period")]
+        if row.get("proposed_disposition") not in {
+            "duplicate_review",
+            "deactivate_duplicate_line",
+        }:
+            return [_refuse(action, row, "not_reviewed_for_duplicate_deactivation")]
+        line_id = (row.get("invoice_line_id") or "").strip()
+        try:
+            line = db.get(InvoiceLine, coerce_uuid(line_id))
+        except Exception:
+            return [_refuse(action, row, "bad_invoice_line_id")]
+        if line is None or not line.is_active:
+            return [_refuse(action, row, "line_missing_or_inactive")]
+        invoice = db.get(Invoice, line.invoice_id)
+        if invoice is None or not invoice.is_active:
+            return [_refuse(action, row, "invoice_missing_or_inactive")]
+        if row.get("invoice_status") and invoice.status.value != row["invoice_status"]:
+            return [_refuse(action, row, "invoice_status_changed")]
+        if invoice.status not in LINE_REPAIR_INVOICE_STATUSES:
+            return [
+                _refuse(action, row, "invoice_status_not_safe_for_line_deactivation")
+            ]
+        activity = _invoice_financial_activity(db, invoice.id)
+        if any(activity.values()):
+            item = _refuse(action, row, "invoice_has_financial_activity")
+            item["activity"] = activity
+            return [item]
+        current_key = "|".join(
+            [
+                str(line.subscription_id),
+                _iso(invoice.billing_period_start),
+                _iso(invoice.billing_period_end),
+                line.description or "",
+            ]
+        )
+        if current_key != group_key:
+            return [_refuse(action, row, "duplicate_group_changed")]
+        loaded.append((row, line, invoice))
+
+    loaded.sort(key=lambda item: (item[1].created_at, str(item[1].id)))
+    keep = loaded[0][1]
+    items: list[dict[str, Any]] = []
+    for row, line, invoice in loaded[1:]:
+        items.append(
+            {
+                "action": action,
+                "decision": "apply",
+                "duplicate_group_key": group_key,
+                "kept_invoice_line_id": str(keep.id),
+                "invoice_line_id": str(line.id),
+                "invoice_id": str(invoice.id),
+                "subscription_id": str(line.subscription_id),
+                "before": {
+                    "invoice_status": invoice.status.value,
+                    "invoice_total": str(invoice.total or 0),
+                    "invoice_balance_due": str(invoice.balance_due or 0),
+                    "line_amount": str(line.amount or 0),
+                },
+            }
+        )
+    return items
+
+
+def plan_orphan_addon_row(db: Session, row: dict[str, str]) -> dict[str, Any]:
+    action = "end_orphan_recurring_addon"
+    add_on_row_id = (row.get("subscription_add_on_id") or "").strip()
+    if not add_on_row_id:
+        return _refuse(action, row, "missing_subscription_add_on_id")
+    try:
+        sub_addon = db.get(SubscriptionAddOn, coerce_uuid(add_on_row_id))
+    except Exception:
+        return _refuse(action, row, "bad_subscription_add_on_id")
+    if sub_addon is None:
+        return _refuse(action, row, "subscription_add_on_missing")
+    subscription = db.get(Subscription, sub_addon.subscription_id)
+    if subscription is None:
+        return _refuse(action, row, "subscription_missing")
+    if row.get("subscription_id") and str(subscription.id) != row["subscription_id"]:
+        return _refuse(action, row, "subscription_id_changed")
+    if subscription.status not in {
+        SubscriptionStatus.canceled,
+        SubscriptionStatus.expired,
+        SubscriptionStatus.disabled,
+    }:
+        return _refuse(action, row, "parent_subscription_not_terminal")
+    target = _as_utc(subscription.canceled_at or subscription.end_at)
+    if target is None:
+        return _refuse(action, row, "parent_end_missing")
+    current_end = _as_utc(sub_addon.end_at)
+    if current_end is not None and current_end <= target:
+        return {
+            "action": action,
+            "decision": "skip",
+            "reason": "already_ended_at_or_before_parent_end",
+            "subscription_add_on_id": str(sub_addon.id),
+        }
+    reviewed_current = _parse_datetime(row.get("current_end_at"))
+    if reviewed_current is not None and not _same_datetime(
+        current_end, reviewed_current
+    ):
+        return _refuse(action, row, "addon_end_changed_since_audit")
+    return {
+        "action": action,
+        "decision": "apply",
+        "subscription_add_on_id": str(sub_addon.id),
+        "subscription_id": str(subscription.id),
+        "target_end_at": target.isoformat(),
+        "before": {"end_at": _iso(sub_addon.end_at)},
+    }
+
+
+def plan_missing_radius_row(db: Session, row: dict[str, str]) -> dict[str, Any]:
+    action = "sync_missing_radius_subscription"
+    subscription_id = (row.get("subscription_id") or "").strip()
+    if not subscription_id:
+        return _refuse(action, row, "missing_subscription_id")
+    try:
+        subscription = db.get(Subscription, coerce_uuid(subscription_id))
+    except Exception:
+        return _refuse(action, row, "bad_subscription_id")
+    if subscription is None:
+        return _refuse(action, row, "subscription_missing")
+    if subscription.status != SubscriptionStatus.active:
+        return _refuse(action, row, "subscription_not_active")
+    login = (subscription.login or "").strip()
+    if not login:
+        return _refuse(action, row, "subscription_login_missing")
+    if row.get("login") and row["login"] != login:
+        return _refuse(action, row, "login_changed_since_audit")
+    credential = (
+        db.query(AccessCredential)
+        .filter(AccessCredential.subscriber_id == subscription.subscriber_id)
+        .filter(AccessCredential.username == login)
+        .filter(AccessCredential.is_active.is_(True))
+        .first()
+    )
+    usable = (
+        credential is not None
+        and _external_password_row(
+            credential,
+            default_attribute="Cleartext-Password",
+            default_op=":=",
+        )
+        is not None
+    )
+    if not usable:
+        return _refuse(action, row, "credential_unusable_requires_password_reset")
+    return {
+        "action": action,
+        "decision": "apply",
+        "subscription_id": str(subscription.id),
+        "subscriber_id": str(subscription.subscriber_id),
+        "login": login,
+        "credential_id": str(credential.id),
+    }
+
+
+def plan_prepaid_collectible_ar_row(db: Session, row: dict[str, str]) -> dict[str, Any]:
+    action = "retire_unfunded_prepaid_ar"
+    invoice_id = (row.get("invoice_id") or "").strip()
+    if not invoice_id:
+        return _refuse(action, row, "missing_invoice_id")
+    try:
+        invoice = db.get(Invoice, coerce_uuid(invoice_id))
+    except Exception:
+        return _refuse(action, row, "bad_invoice_id")
+    if invoice is None or not invoice.is_active:
+        return _refuse(action, row, "invoice_missing_or_inactive")
+    if row.get("invoice_status") and invoice.status.value != row["invoice_status"]:
+        return _refuse(action, row, "invoice_status_changed")
+    if invoice.status == InvoiceStatus.partially_paid:
+        return _refuse(action, row, "partially_paid_requires_manual_review")
+    if invoice.status not in PREPAID_AR_REPAIR_STATUSES:
+        return _refuse(action, row, "invoice_status_not_repairable_prepaid_ar")
+    if _has_invoice_financial_activity(db, invoice.id):
+        return _refuse(action, row, "invoice_has_financial_activity")
+    account = db.get(Subscriber, invoice.account_id)
+    has_prepaid_subscription = (
+        db.query(Subscription.id)
+        .filter(Subscription.subscriber_id == invoice.account_id)
+        .filter(Subscription.billing_mode == BillingMode.prepaid)
+        .filter(
+            Subscription.status.in_(
+                [
+                    SubscriptionStatus.active,
+                    SubscriptionStatus.pending,
+                    SubscriptionStatus.suspended,
+                    SubscriptionStatus.blocked,
+                ]
+            )
+        )
+        .first()
+        is not None
+    )
+    if not (
+        account is not None
+        and (account.billing_mode == BillingMode.prepaid or has_prepaid_subscription)
+    ):
+        return _refuse(action, row, "account_no_longer_prepaid")
+    return {
+        "action": action,
+        "decision": "apply",
+        "invoice_id": str(invoice.id),
+        "subscriber_id": str(invoice.account_id),
+        "before": {
+            "invoice_status": invoice.status.value,
+            "balance_due": str(invoice.balance_due or 0),
+        },
+    }
+
+
+def plan_prepaid_overlap_row(db: Session, row: dict[str, str]) -> dict[str, Any]:
+    action = "void_safe_prepaid_overlap_invoice"
+    if row.get("action") != "void_unpaid_invoice":
+        return _refuse(action, row, "overlap_requires_manual_review")
+    invoice_id = (row.get("bad_invoice_id") or "").strip()
+    if not invoice_id:
+        return _refuse(action, row, "missing_bad_invoice_id")
+    try:
+        invoice = db.get(Invoice, coerce_uuid(invoice_id))
+    except Exception:
+        return _refuse(action, row, "bad_invoice_id")
+    if invoice is None or not invoice.is_active:
+        return _refuse(action, row, "invoice_missing_or_inactive")
+    if (
+        row.get("bad_invoice_status")
+        and invoice.status.value != row["bad_invoice_status"]
+    ):
+        return _refuse(action, row, "invoice_status_changed")
+    if _has_invoice_financial_activity(db, invoice.id):
+        return _refuse(action, row, "invoice_has_financial_activity")
+    if invoice.status == InvoiceStatus.paid:
+        return _refuse(action, row, "paid_invoice_not_voidable")
+    return {
+        "action": action,
+        "decision": "apply",
+        "invoice_id": str(invoice.id),
+        "subscriber_id": str(invoice.account_id),
+        "valid_paid_invoice_id": row.get("valid_paid_invoice_id") or "",
+        "paid_through": row.get("corrected_next_billing_at") or "",
+        "before": {
+            "invoice_status": invoice.status.value,
+            "balance_due": str(invoice.balance_due or 0),
+        },
+    }
+
+
 def plan_cleanup_remediation(
     db: Session,
     *,
@@ -389,12 +761,45 @@ def plan_cleanup_remediation(
     anchor_rows: list[dict[str, str]] | None = None,
     mode_rows: list[dict[str, str]] | None = None,
     invoice_anchor_rows: list[dict[str, str]] | None = None,
+    prepaid_ar_rows: list[dict[str, str]] | None = None,
+    prepaid_overlap_rows: list[dict[str, str]] | None = None,
+    disabled_line_rows: list[dict[str, str]] | None = None,
+    duplicate_line_rows: list[dict[str, str]] | None = None,
+    orphan_addon_rows: list[dict[str, str]] | None = None,
+    missing_radius_rows: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     items: list[dict[str, Any]] = []
     items.extend(plan_stale_overdue_lock_row(db, row) for row in stale_lock_rows or [])
     items.extend(plan_anchor_row(db, row) for row in anchor_rows or [])
     items.extend(plan_account_mode_row(db, row) for row in mode_rows or [])
     items.extend(plan_invoice_anchor_row(db, row) for row in invoice_anchor_rows or [])
+    items.extend(
+        plan_prepaid_collectible_ar_row(db, row) for row in prepaid_ar_rows or []
+    )
+    items.extend(
+        plan_prepaid_overlap_row(db, row) for row in prepaid_overlap_rows or []
+    )
+    items.extend(
+        plan_disabled_service_line_row(db, row) for row in disabled_line_rows or []
+    )
+    items.extend(plan_orphan_addon_row(db, row) for row in orphan_addon_rows or [])
+    items.extend(plan_missing_radius_row(db, row) for row in missing_radius_rows or [])
+
+    duplicate_groups: dict[str, list[dict[str, str]]] = {}
+    for row in duplicate_line_rows or []:
+        group_key = (row.get("duplicate_group_key") or "").strip()
+        if not group_key:
+            items.append(
+                _refuse(
+                    "deactivate_duplicate_period_line",
+                    row,
+                    "missing_duplicate_group_key",
+                )
+            )
+            continue
+        duplicate_groups.setdefault(group_key, []).append(row)
+    for group_key, rows in duplicate_groups.items():
+        items.extend(_plan_duplicate_group(db, group_key, rows))
 
     from collections import Counter
 
@@ -501,4 +906,112 @@ def _execute_item(db: Session, item: dict[str, Any]) -> dict[str, Any]:
         subscription.next_billing_at = target
         db.flush()
         return {"next_billing_at": _iso(subscription.next_billing_at)}
+    if item["action"] in {
+        "deactivate_disabled_service_line",
+        "deactivate_duplicate_period_line",
+    }:
+        line = db.get(InvoiceLine, coerce_uuid(item["invoice_line_id"]))
+        if line is None:
+            raise ValueError(f"invoice line missing: {item['invoice_line_id']}")
+        invoice = db.get(Invoice, line.invoice_id)
+        if invoice is None:
+            raise ValueError(f"invoice missing for line: {item['invoice_line_id']}")
+        marker = (
+            "disabled_service_line_cleanup"
+            if item["action"] == "deactivate_disabled_service_line"
+            else "duplicate_period_line_cleanup"
+        )
+        line.is_active = False
+        line.metadata_ = _metadata_with_cleanup_marker(
+            line.metadata_,
+            marker,
+            {
+                "action": item["action"],
+                "invoice_line_id": str(line.id),
+                "kept_invoice_line_id": item.get("kept_invoice_line_id", ""),
+            },
+        )
+        invoice.metadata_ = _metadata_with_cleanup_marker(
+            invoice.metadata_,
+            marker,
+            {"action": item["action"], "invoice_line_id": str(line.id)},
+        )
+        db.flush()
+        _recalculate_invoice_totals(db, invoice)
+        active_lines = (
+            db.query(InvoiceLine.id)
+            .filter(InvoiceLine.invoice_id == invoice.id)
+            .filter(InvoiceLine.is_active.is_(True))
+            .count()
+        )
+        if active_lines == 0:
+            invoice.status = InvoiceStatus.void
+            invoice.balance_due = Decimal("0.00")
+        db.flush()
+        return {
+            "invoice_status": invoice.status.value,
+            "invoice_subtotal": str(invoice.subtotal or 0),
+            "invoice_total": str(invoice.total or 0),
+            "invoice_balance_due": str(invoice.balance_due or 0),
+            "line_is_active": line.is_active,
+            "active_lines": active_lines,
+        }
+    if item["action"] == "end_orphan_recurring_addon":
+        sub_addon = db.get(
+            SubscriptionAddOn, coerce_uuid(item["subscription_add_on_id"])
+        )
+        if sub_addon is None:
+            raise ValueError(
+                f"subscription add-on missing: {item['subscription_add_on_id']}"
+            )
+        target = _parse_datetime(item["target_end_at"])
+        if target is None:
+            raise ValueError(f"bad target_end_at: {item['subscription_add_on_id']}")
+        sub_addon.end_at = target
+        db.flush()
+        return {"end_at": _iso(sub_addon.end_at)}
+    if item["action"] == "sync_missing_radius_subscription":
+        from app.services.radius import reconcile_subscription_connectivity
+
+        return dict(reconcile_subscription_connectivity(db, item["subscription_id"]))
+    if item["action"] == "retire_unfunded_prepaid_ar":
+        invoice = db.get(Invoice, coerce_uuid(item["invoice_id"]))
+        if invoice is None:
+            raise ValueError(f"invoice missing: {item['invoice_id']}")
+        invoice.status = InvoiceStatus.draft
+        invoice.due_at = None
+        invoice.metadata_ = _metadata_with_cleanup_marker(
+            invoice.metadata_,
+            "prepaid_phantom_ar_cleanup",
+            {"action": "draft_unfunded", "invoice_id": str(invoice.id)},
+        )
+        db.flush()
+        return {
+            "invoice_status": invoice.status.value,
+            "balance_due": str(invoice.balance_due or 0),
+            "due_at": _iso(invoice.due_at),
+        }
+    if item["action"] == "void_safe_prepaid_overlap_invoice":
+        invoice = db.get(Invoice, coerce_uuid(item["invoice_id"]))
+        if invoice is None:
+            raise ValueError(f"invoice missing: {item['invoice_id']}")
+        invoice.status = InvoiceStatus.void
+        invoice.balance_due = Decimal("0.00")
+        invoice.due_at = None
+        invoice.metadata_ = _metadata_with_cleanup_marker(
+            invoice.metadata_,
+            "prepaid_overlap_cleanup",
+            {
+                "action": "void_unpaid_invoice",
+                "invoice_id": str(invoice.id),
+                "valid_paid_invoice_id": item.get("valid_paid_invoice_id", ""),
+                "paid_through": item.get("paid_through", ""),
+            },
+        )
+        db.flush()
+        return {
+            "invoice_status": invoice.status.value,
+            "balance_due": str(invoice.balance_due or 0),
+            "due_at": _iso(invoice.due_at),
+        }
     raise ValueError(f"unknown cleanup action {item['action']}")
