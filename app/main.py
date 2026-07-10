@@ -20,6 +20,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy import inspect as sqlalchemy_inspect
+from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from starlette.responses import Response
@@ -52,6 +53,7 @@ install_brand_jinja_global()
 _AUDIT_SETTINGS_CACHE: dict | None = None
 _AUDIT_SETTINGS_CACHE_AT: float | None = None
 _AUDIT_SETTINGS_CACHE_TTL_SECONDS = 30.0
+_AUDIT_SETTINGS_REFRESH_TIMEOUT_MS = 1000
 _AUDIT_SETTINGS_LOCK = Lock()
 _AUDIT_ALWAYS_SKIP_EXACT_PATHS = {"/health", "/metrics"}
 _AUDIT_ALWAYS_SKIP_PATH_PREFIXES = (
@@ -586,17 +588,36 @@ async def grafana_webhook_sink(request: Request) -> Response:
     return Response(status_code=204)
 
 
-def _get_cached_audit_settings() -> dict | None:
-    """Return cached audit settings if valid, else None."""
+def _default_audit_settings() -> dict:
+    return {
+        "enabled": True,
+        "methods": {"POST", "PUT", "PATCH", "DELETE"},
+        "skip_paths": ["/static", "/web", "/health"],
+        "read_trigger_header": "x-audit-read",
+        "read_trigger_query": "audit",
+    }
+
+
+def _get_cached_audit_settings(*, allow_stale: bool = False) -> dict | None:
+    """Return cached audit settings when fresh, or stale when explicitly allowed."""
     with _AUDIT_SETTINGS_LOCK:
-        if (
-            _AUDIT_SETTINGS_CACHE
-            and _AUDIT_SETTINGS_CACHE_AT
-            and monotonic() - _AUDIT_SETTINGS_CACHE_AT
-            < _AUDIT_SETTINGS_CACHE_TTL_SECONDS
+        if not _AUDIT_SETTINGS_CACHE or not _AUDIT_SETTINGS_CACHE_AT:
+            return None
+        if allow_stale or (
+            monotonic() - _AUDIT_SETTINGS_CACHE_AT < _AUDIT_SETTINGS_CACHE_TTL_SECONDS
         ):
             return _AUDIT_SETTINGS_CACHE
     return None
+
+
+def _set_audit_settings_refresh_timeout(db: Session) -> None:
+    """Keep best-effort audit config refreshes from waiting behind DB pressure."""
+    bind = db.get_bind()
+    if bind.dialect.name != "postgresql":
+        return
+    db.execute(
+        text(f"SET LOCAL statement_timeout = '{_AUDIT_SETTINGS_REFRESH_TIMEOUT_MS}ms'")
+    )
 
 
 def _is_audit_always_skipped(path: str) -> bool:
@@ -637,18 +658,18 @@ async def audit_middleware(request: Request, call_next):
         try:
             audit_settings = _load_audit_settings(db)
         except SQLAlchemyError:
+            audit_settings = _get_cached_audit_settings(allow_stale=True)
             logger.warning(
                 "audit_settings_refresh_failed",
                 exc_info=True,
-                extra={"event": "audit_settings_refresh_failed"},
+                extra={
+                    "event": "audit_settings_refresh_failed",
+                    "using_stale_cache": audit_settings is not None,
+                },
             )
-            audit_settings = {
-                "enabled": False,
-                "methods": set(),
-                "skip_paths": [],
-                "read_trigger_header": "x-audit-read",
-                "read_trigger_query": "audit",
-            }
+            if audit_settings is None:
+                audit_settings = _default_audit_settings()
+                audit_settings["enabled"] = False
         finally:
             db.close()
     if not audit_settings["enabled"]:
@@ -1211,13 +1232,8 @@ def _load_audit_settings(db: Session):
             and now - _AUDIT_SETTINGS_CACHE_AT < _AUDIT_SETTINGS_CACHE_TTL_SECONDS
         ):
             return _AUDIT_SETTINGS_CACHE
-    defaults = {
-        "enabled": True,
-        "methods": {"POST", "PUT", "PATCH", "DELETE"},
-        "skip_paths": ["/static", "/web", "/health"],
-        "read_trigger_header": "x-audit-read",
-        "read_trigger_query": "audit",
-    }
+    defaults = _default_audit_settings()
+    _set_audit_settings_refresh_timeout(db)
     rows = (
         db.query(DomainSetting)
         .filter(DomainSetting.domain == SettingDomain.audit)
