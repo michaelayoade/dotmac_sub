@@ -24,6 +24,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import (
+    BigInteger,
     Column,
     DateTime,
     String,
@@ -103,6 +104,8 @@ def _radacct_table():
         Column("framedipv6prefix", String),
         Column("nasipaddress", String),
         Column("nasportid", String),
+        Column("acctinputoctets", BigInteger),
+        Column("acctoutputoctets", BigInteger),
         Column("acctstarttime", DateTime),
         Column("acctstoptime", DateTime),
         Column("acctupdatetime", DateTime),
@@ -141,6 +144,8 @@ def _read_open_sessions(
                         radacct.c.framedipv6prefix,
                         radacct.c.nasipaddress,
                         radacct.c.nasportid,
+                        radacct.c.acctinputoctets,
+                        radacct.c.acctoutputoctets,
                         radacct.c.acctstarttime,
                         radacct.c.acctupdatetime,
                     )
@@ -170,6 +175,8 @@ def _read_open_sessions(
                     "framed_ipv6_prefix": row.framedipv6prefix,
                     "nas_ip_address": _strip_inet_mask(row.nasipaddress),
                     "nas_port_id": row.nasportid,
+                    "bytes_in": int(row.acctinputoctets or 0),
+                    "bytes_out": int(row.acctoutputoctets or 0),
                     "acctstarttime": row.acctstarttime,
                     "acctupdatetime": row.acctupdatetime,
                 }
@@ -377,6 +384,8 @@ def reconcile_active_sessions_from_radacct(
                     framed_ipv6_prefix=s["framed_ipv6_prefix"],
                     calling_station_id=s["calling_station_id"],
                     nas_port_id=s["nas_port_id"],
+                    bytes_in=s["bytes_in"],
+                    bytes_out=s["bytes_out"],
                     session_start=s["acctstarttime"] or now,
                     last_update=now,
                 )
@@ -393,6 +402,8 @@ def reconcile_active_sessions_from_radacct(
             row.framed_ipv6_prefix = s["framed_ipv6_prefix"]
             row.calling_station_id = s["calling_station_id"]
             row.nas_port_id = s["nas_port_id"]
+            row.bytes_in = s["bytes_in"]
+            row.bytes_out = s["bytes_out"]
             row.last_update = now
             result["upserted_updated"] += 1
         result["ont_runtime_updated"] += _update_ont_runtime_from_radius(

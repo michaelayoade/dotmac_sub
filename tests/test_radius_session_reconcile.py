@@ -34,11 +34,12 @@ def _seed_radacct_sqlite(db_path, *, rows=()):
             "CREATE TABLE radacct ("
             "username TEXT, acctsessionid TEXT, callingstationid TEXT, "
             "framedipaddress TEXT, framedipv6prefix TEXT, nasipaddress TEXT, "
-            "nasportid TEXT, acctstarttime TIMESTAMP, acctstoptime TIMESTAMP, "
+            "nasportid TEXT, acctinputoctets INTEGER, acctoutputoctets INTEGER, "
+            "acctstarttime TIMESTAMP, acctstoptime TIMESTAMP, "
             "acctupdatetime TIMESTAMP)"
         )
         conn.executemany(
-            "INSERT INTO radacct VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows
+            "INSERT INTO radacct VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows
         )
         conn.commit()
     finally:
@@ -58,6 +59,8 @@ def _open_row(
     framed6=None,
     nasip="10.0.0.1",
     nasport="pppoe0",
+    input_octets=0,
+    output_octets=0,
     start=None,
     updated=None,
 ):
@@ -70,6 +73,8 @@ def _open_row(
         framed6,
         nasip,
         nasport,
+        input_octets,
+        output_octets,
         _dt(start or now - timedelta(minutes=30)),
         None,  # acctstoptime -> OPEN
         _dt(updated or now - timedelta(minutes=2)),
@@ -176,6 +181,53 @@ class TestActiveSessionReconcile:
         assert row.nas_device_id == nas.id
         assert row.framed_ip_address == "100.64.0.1"
         assert row.calling_station_id == "AA:BB:CC:DD:EE:FF"
+
+    def test_open_session_mirrors_radacct_octet_counters(
+        self, db_session, tmp_path, catalog_offer
+    ):
+        db_path = tmp_path / "radacct.db"
+        _seed_subscriber_with_login(
+            db_session,
+            login="100024583",
+            offer=catalog_offer,
+            status=SubscriptionStatus.active,
+        )
+        _seed_radacct_sqlite(
+            db_path,
+            rows=[
+                _open_row(
+                    username="100024583",
+                    sid="sess-counters",
+                    input_octets=2776,
+                    output_octets=6779,
+                )
+            ],
+        )
+
+        first = _run(db_session, db_path)
+
+        assert first["upserted_new"] == 1
+        row = db_session.query(RadiusActiveSession).one()
+        assert row.bytes_in == 2776
+        assert row.bytes_out == 6779
+
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute(
+                "UPDATE radacct SET acctinputoctets = ?, acctoutputoctets = ?, "
+                "acctupdatetime = ? WHERE acctsessionid = ?",
+                (5000, 9000, _dt(datetime.now(UTC)), "sess-counters"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        second = _run(db_session, db_path)
+
+        assert second["upserted_updated"] == 1
+        db_session.refresh(row)
+        assert row.bytes_in == 5000
+        assert row.bytes_out == 9000
 
     def test_open_session_updates_assigned_ont_runtime_from_radius(
         self, db_session, tmp_path, catalog_offer
