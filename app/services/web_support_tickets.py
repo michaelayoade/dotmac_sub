@@ -20,7 +20,7 @@ from app.schemas.support import (
     TicketMergeRequest,
     TicketUpdate,
 )
-from app.services import sla_assignment, ticket_mentions
+from app.services import sla_assignment, support_ticket_filters, ticket_mentions
 from app.services import support as support_service
 from app.services import support_ticket_settings as support_ticket_settings_service
 from app.services.file_storage import file_uploads
@@ -780,6 +780,7 @@ def build_tickets_list_context(
     page: int,
     per_page: int,
     visible_columns_cookie: str | None,
+    filters: str | None = None,
 ) -> dict:
     status_options = support_ticket_settings_service.list_status_options(db)
     priority_options = support_ticket_settings_service.list_priority_options(db)
@@ -794,6 +795,7 @@ def build_tickets_list_context(
         project_manager_person_id=project_manager_person_id,
         site_coordinator_person_id=site_coordinator_person_id,
         subscriber_id=subscriber_id,
+        filters=filters,
         order_by=order_by,
         order_dir=order_dir,
         limit=per_page + 1,
@@ -842,6 +844,14 @@ def build_tickets_list_context(
         "project_manager_person_id": project_manager_person_id or "",
         "site_coordinator_person_id": site_coordinator_person_id or "",
         "subscriber_id": subscriber_id or "",
+        "filters": filters or "",
+        "ticket_filter_schema": support_ticket_filters.serialize_ticket_filter_schema(
+            status_options=status_options,
+            priority_options=priority_options,
+            ticket_type_options=support_service.ticket_types(db),
+            staff_options=staff,
+            service_team_options=service_team_options(db),
+        ),
         "order_by": order_by,
         "order_dir": order_dir,
         "page": page,

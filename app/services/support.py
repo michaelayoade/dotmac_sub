@@ -50,8 +50,8 @@ from app.services import domain_settings as domain_settings_service
 from app.services import notification as notification_service
 from app.services import numbering as numbering_service
 from app.services import provisioning as provisioning_service
+from app.services import support_ticket_filters, ticket_validation
 from app.services import support_ticket_settings as support_ticket_settings_service
-from app.services import ticket_validation
 from app.services.audit_helpers import log_audit_event
 from app.services.common import apply_ordering, apply_pagination
 from app.services.customer_identity_resolution import (
@@ -63,6 +63,7 @@ from app.services.customer_identity_resolution import (
 from app.services.customer_notification_policy import (
     is_notification_enabled_for_subscriber,
 )
+from app.services.dynamic_filters import FilterValidationError
 from app.services.events import emit_event
 from app.services.events.types import EventType
 
@@ -626,6 +627,11 @@ class Tickets:
         order_dir: str = "desc",
         limit: int = 50,
         offset: int = 0,
+        priority: str | None = None,
+        channel: str | None = None,
+        created_by_person_id: str | None = None,
+        is_active: bool | None = None,
+        filters: str | None = None,
     ) -> dict[str, Any]:
         items = Tickets.list(
             db,
@@ -640,6 +646,11 @@ class Tickets:
             order_dir=order_dir,
             limit=limit,
             offset=offset,
+            priority=priority,
+            channel=channel,
+            created_by_person_id=created_by_person_id,
+            is_active=is_active,
+            filters=filters,
         )
         return {"items": items, "count": len(items), "limit": limit, "offset": offset}
 
@@ -1522,12 +1533,18 @@ class Tickets:
         order_dir: str = "desc",
         limit: int = 50,
         offset: int = 0,
+        priority: str | None = None,
+        channel: str | None = None,
+        created_by_person_id: str | None = None,
+        is_active: bool | None = None,
+        filters: str | None = None,
     ) -> list[Ticket]:
-        query = (
-            db.query(Ticket)
-            .options(selectinload(Ticket.assignees))
-            .filter(Ticket.is_active.is_(True))
-        )
+        query = db.query(Ticket).options(selectinload(Ticket.assignees))
+        # Default (None) keeps the legacy active-only behavior.
+        if is_active is None or is_active:
+            query = query.filter(Ticket.is_active.is_(True))
+        else:
+            query = query.filter(Ticket.is_active.is_(False))
         if search:
             like = f"%{search.strip()}%"
             query = query.filter(
@@ -1541,6 +1558,12 @@ class Tickets:
             query = query.filter(Ticket.status == str(status).strip())
         if ticket_type:
             query = query.filter(Ticket.ticket_type == ticket_type)
+        if priority:
+            query = query.filter(Ticket.priority == str(priority).strip())
+        if channel:
+            query = query.filter(Ticket.channel == str(channel).strip())
+        if created_by_person_id:
+            query = query.filter(Ticket.created_by_person_id == created_by_person_id)
         if assigned_to_person_id:
             query = query.filter(
                 or_(
@@ -1567,6 +1590,15 @@ class Tickets:
                     Ticket.customer_account_id == subscriber_id,
                 )
             )
+        if filters:
+            try:
+                filter_clause = support_ticket_filters.build_ticket_filter_clause(
+                    filters
+                )
+            except FilterValidationError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if filter_clause is not None:
+                query = query.filter(filter_clause)
 
         query = apply_ordering(
             query,
