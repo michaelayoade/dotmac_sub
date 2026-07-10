@@ -24,7 +24,9 @@ def _team(db_session, name: str = "Support") -> ServiceTeam:
     return team
 
 
-def _conversation(db_session, team: ServiceTeam, *, first_at: datetime) -> InboxConversation:
+def _conversation(
+    db_session, team: ServiceTeam, *, first_at: datetime
+) -> InboxConversation:
     conversation = InboxConversation(
         channel_type="email",
         status=InboxConversationStatus.open.value,

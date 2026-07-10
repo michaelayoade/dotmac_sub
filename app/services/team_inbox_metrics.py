@@ -138,13 +138,17 @@ def team_performance_metrics(
         else []
     )
     messages_by_conversation = _messages_by_conversation(db, conversation_ids)
-    active_assignments = {
-        row.conversation_id: row
-        for row in db.query(InboxConversationAssignment)
-        .filter(InboxConversationAssignment.conversation_id.in_(conversation_ids))
-        .filter(InboxConversationAssignment.is_active.is_(True))
-        .all()
-    } if conversation_ids else {}
+    active_assignments = (
+        {
+            row.conversation_id: row
+            for row in db.query(InboxConversationAssignment)
+            .filter(InboxConversationAssignment.conversation_id.in_(conversation_ids))
+            .filter(InboxConversationAssignment.is_active.is_(True))
+            .all()
+        }
+        if conversation_ids
+        else {}
+    )
 
     inbound_count = 0
     outbound_count = 0
@@ -155,15 +159,22 @@ def team_performance_metrics(
     for conversation in conversations:
         messages = messages_by_conversation.get(conversation.id, [])
         inbound_count += sum(
-            1 for message in messages if message.direction == InboxMessageDirection.inbound.value
+            1
+            for message in messages
+            if message.direction == InboxMessageDirection.inbound.value
         )
         outbound_count += sum(
-            1 for message in messages if message.direction == InboxMessageDirection.outbound.value
+            1
+            for message in messages
+            if message.direction == InboxMessageDirection.outbound.value
         )
         response_seconds = _first_response_seconds(messages)
         if response_seconds is not None:
             response_values.append(response_seconds)
-            if response_sla_seconds is not None and response_seconds > response_sla_seconds:
+            if (
+                response_sla_seconds is not None
+                and response_seconds > response_sla_seconds
+            ):
                 response_breaches += 1
         elif response_sla_seconds is not None:
             first_inbound = next(
@@ -184,7 +195,9 @@ def team_performance_metrics(
 
         assignment = active_assignments.get(conversation.id)
         if assignment is not None:
-            queue_wait = _seconds_between(conversation.first_message_at, assignment.assigned_at)
+            queue_wait = _seconds_between(
+                conversation.first_message_at, assignment.assigned_at
+            )
             if queue_wait is not None:
                 queue_wait_values.append(queue_wait)
 
@@ -194,7 +207,9 @@ def team_performance_metrics(
         if conversation.status != InboxConversationStatus.resolved.value
     ]
     assigned_open_count = sum(
-        1 for conversation in open_conversations if conversation.id in active_assignments
+        1
+        for conversation in open_conversations
+        if conversation.id in active_assignments
     )
     return InboxTeamPerformanceMetrics(
         service_team_id=str(team_uuid),
@@ -226,25 +241,35 @@ def agent_performance_metrics(
         .all()
     )
     conversation_ids = [assignment.conversation_id for assignment in assignments]
-    conversations = {
-        conversation.id: conversation
-        for conversation in db.query(InboxConversation)
-        .filter(InboxConversation.id.in_(conversation_ids))
-        .all()
-    } if conversation_ids else {}
+    conversations = (
+        {
+            conversation.id: conversation
+            for conversation in db.query(InboxConversation)
+            .filter(InboxConversation.id.in_(conversation_ids))
+            .all()
+        }
+        if conversation_ids
+        else {}
+    )
     queue_wait_values: list[float] = []
     for assignment in assignments:
         conversation = conversations.get(assignment.conversation_id)
         if conversation is None:
             continue
-        queue_wait = _seconds_between(conversation.first_message_at, assignment.assigned_at)
+        queue_wait = _seconds_between(
+            conversation.first_message_at, assignment.assigned_at
+        )
         if queue_wait is not None:
             queue_wait_values.append(queue_wait)
 
     return InboxAgentPerformanceMetrics(
         person_id=str(person_uuid),
         service_team_id=str(team_uuid),
-        active_assignment_count=sum(1 for assignment in assignments if assignment.is_active),
-        handled_conversation_count=len({assignment.conversation_id for assignment in assignments}),
+        active_assignment_count=sum(
+            1 for assignment in assignments if assignment.is_active
+        ),
+        handled_conversation_count=len(
+            {assignment.conversation_id for assignment in assignments}
+        ),
         average_queue_wait_seconds=_avg(queue_wait_values),
     )
