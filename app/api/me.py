@@ -323,13 +323,11 @@ def my_balance(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """The caller's wallet/credit balance (positive = credit on file)."""
-    from app.services.billing._common import get_account_credit_balance
+    """The caller's available customer balance (positive = credit on file)."""
+    from app.services.collections import get_available_balance
 
     account_id = _subscriber_id(principal)
-    return AccountBalanceResponse(
-        credit_balance=get_account_credit_balance(db, account_id)
-    )
+    return AccountBalanceResponse(credit_balance=get_available_balance(db, account_id))
 
 
 @router.get("/ledger", response_model=ListResponse[LedgerEntryRead])

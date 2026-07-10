@@ -51,6 +51,11 @@ def _as_utc(dt: datetime | None) -> datetime | None:
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
 
 
+def _isoformat_utc(dt: datetime | None) -> str | None:
+    value = _as_utc(dt)
+    return value.isoformat() if value is not None else None
+
+
 def _to_int(value: object) -> int | None:
     if value in (None, ""):
         return None
@@ -473,18 +478,14 @@ def technician_location(db: Session, subscriber_id: str, work_order_id: str) -> 
             "work_order_id": row.crm_work_order_id,
         }
 
-    last_location_at = _as_utc(presence.last_location_at)
-    estimated_arrival_at = _as_utc(row.estimated_arrival_at)
     return {
         "available": True,
         "work_order_id": row.crm_work_order_id,
         "latitude": presence.last_latitude,
         "longitude": presence.last_longitude,
         "accuracy_m": presence.last_location_accuracy_m,
-        "updated_at": last_location_at.isoformat() if last_location_at else None,
-        "estimated_arrival_at": estimated_arrival_at.isoformat()
-        if estimated_arrival_at
-        else None,
+        "updated_at": _isoformat_utc(presence.last_location_at),
+        "estimated_arrival_at": _isoformat_utc(row.estimated_arrival_at),
     }
 
 

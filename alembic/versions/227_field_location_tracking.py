@@ -1,7 +1,7 @@
 """Add field location tracking tables.
 
-Revision ID: 226_field_location_tracking
-Revises: 225_field_device_tokens
+Revision ID: 227_field_location_tracking
+Revises: 226_field_device_tokens
 Create Date: 2026-07-09
 """
 
@@ -13,8 +13,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "226_field_location_tracking"
-down_revision = "225_field_device_tokens"
+revision = "227_field_location_tracking"
+down_revision = "226_field_device_tokens"
 branch_labels = None
 depends_on = None
 
