@@ -1,7 +1,7 @@
 """Add native field fiber test results.
 
 Revision ID: 236_field_fiber_tests
-Revises: 235_field_movements
+Revises: 236_field_movements
 Create Date: 2026-07-09
 """
 
@@ -14,7 +14,7 @@ from sqlalchemy.dialects import postgresql
 from alembic import op
 
 revision = "236_field_fiber_tests"
-down_revision = "235_field_movements"
+down_revision = "236_field_movements"
 branch_labels = None
 depends_on = None
 
