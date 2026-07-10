@@ -60,18 +60,14 @@ def test_create_unknown_role_is_422(db_session):
 
 
 def test_deactivate_disables_account(db_session, staff_role):
-    created = create_staff_account(
-        _payload(email="leaver@dotmac.io"), db=db_session
-    )
+    created = create_staff_account(_payload(email="leaver@dotmac.io"), db=db_session)
     result = deactivate_staff_account(str(created.id), db=db_session)
     assert result.is_active is False
     assert db_session.get(SystemUser, created.id).is_active is False
 
 
 def test_get_by_email_and_404(db_session, staff_role):
-    created = create_staff_account(
-        _payload(email="lookup@dotmac.io"), db=db_session
-    )
+    created = create_staff_account(_payload(email="lookup@dotmac.io"), db=db_session)
     found = get_staff_account(email="lookup@dotmac.io", db=db_session)
     assert found.id == created.id
 

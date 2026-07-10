@@ -9,6 +9,7 @@ Auth: mounted with the standard user guard, so a scoped ``X-Api-Key``
 principal works. Routes require the same RBAC permission keys as the admin
 user-management UI (``rbac:assign`` to mutate, ``rbac:roles:read`` to read),
 so an integration key carries exactly those scopes and nothing else.
+Thin wrapper — logic lives in ``app/services/staff_provisioning.py``.
 """
 
 from __future__ import annotations
@@ -20,9 +21,8 @@ from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models.rbac import Role
 from app.models.system_user import SystemUser
-from app.services import web_system_user_mutations as user_mutations
+from app.services import staff_provisioning
 from app.services.auth_dependencies import require_permission
 
 router = APIRouter(prefix="/staff-accounts", tags=["staff-sync"])
@@ -45,7 +45,9 @@ class StaffAccountRead(BaseModel):
     invited: bool = False
 
 
-def _to_read(user: SystemUser, *, created: bool = False, invited: bool = False) -> StaffAccountRead:
+def _to_read(
+    user: SystemUser, *, created: bool = False, invited: bool = False
+) -> StaffAccountRead:
     return StaffAccountRead(
         id=user.id,
         email=user.email,
@@ -62,41 +64,19 @@ def _to_read(user: SystemUser, *, created: bool = False, invited: bool = False) 
     dependencies=[Depends(require_permission("rbac:assign"))],
 )
 def create_staff_account(payload: StaffAccountCreate, db: Session = Depends(get_db)):
-    """Create + invite a staff account. Idempotent on email.
-
-    If a SystemUser with this email already exists it is returned as-is
-    (``created=false``) — the caller decides whether to activate/deactivate
-    separately. Otherwise the user is created with the named role and a
-    must-change temp credential, and an invite (password-set) email is sent.
-    """
-    email = payload.email.strip().lower()
-    existing = db.query(SystemUser).filter(SystemUser.email == email).first()
-    if existing:
-        return _to_read(existing)
-
-    role = db.query(Role).filter(Role.name == payload.role).first()
-    if not role:
+    """Create + invite a staff account. Idempotent on email."""
+    try:
+        user, created, invited = staff_provisioning.create_staff_account(
+            db,
+            email=payload.email,
+            first_name=payload.first_name,
+            last_name=payload.last_name,
+            role=payload.role,
+            send_invite=payload.send_invite,
+        )
+    except staff_provisioning.UnknownRoleError:
         raise HTTPException(status_code=422, detail=f"Unknown role: {payload.role}")
-
-    user, _temp_password = user_mutations.create_user_with_role_and_password(
-        db,
-        first_name=payload.first_name.strip(),
-        last_name=payload.last_name.strip(),
-        email=email,
-        role_id=str(role.id),
-    )
-
-    invited = False
-    if payload.send_invite:
-        try:
-            user_mutations.send_user_invite_for_user(db, user_id=str(user.id))
-            invited = True
-        except Exception:
-            # Account creation stands even if the invite email fails; the
-            # caller (or an admin) can resend from the users screen.
-            invited = False
-
-    return _to_read(user, created=True, invited=invited)
+    return _to_read(user, created=created, invited=invited)
 
 
 @router.get(
@@ -106,11 +86,7 @@ def create_staff_account(payload: StaffAccountCreate, db: Session = Depends(get_
 )
 def get_staff_account(email: EmailStr = Query(...), db: Session = Depends(get_db)):
     """Look up a staff account by email (used by the ERP reconcile sweep)."""
-    user = (
-        db.query(SystemUser)
-        .filter(SystemUser.email == email.strip().lower())
-        .first()
-    )
+    user = staff_provisioning.find_by_email(db, email)
     if not user:
         raise HTTPException(status_code=404, detail="Staff account not found")
     return _to_read(user)
@@ -123,7 +99,9 @@ def get_staff_account(email: EmailStr = Query(...), db: Session = Depends(get_db
 )
 def activate_staff_account(user_id: str, db: Session = Depends(get_db)):
     try:
-        user = user_mutations.set_user_active(db, user_id=user_id, is_active=True)
+        user = staff_provisioning.set_staff_account_active(
+            db, user_id=user_id, is_active=True
+        )
     except ValueError:
         raise HTTPException(status_code=404, detail="Staff account not found")
     return _to_read(user)
@@ -137,7 +115,9 @@ def activate_staff_account(user_id: str, db: Session = Depends(get_db)):
 def deactivate_staff_account(user_id: str, db: Session = Depends(get_db)):
     """Disable a staff account: credentials off, live sessions revoked."""
     try:
-        user = user_mutations.set_user_active(db, user_id=user_id, is_active=False)
+        user = staff_provisioning.set_staff_account_active(
+            db, user_id=user_id, is_active=False
+        )
     except ValueError:
         raise HTTPException(status_code=404, detail="Staff account not found")
     return _to_read(user)
