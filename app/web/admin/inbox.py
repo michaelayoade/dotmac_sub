@@ -99,6 +99,7 @@ def team_inbox_queue(
     context.update(
         {
             "rows": result.items,
+            "queue_metrics": team_inbox_operations.queue_metrics(db),
             "count": result.count,
             "page": page,
             "per_page": per_page,
@@ -557,6 +558,26 @@ def team_inbox_message_retry(
 
 
 @router.post(
+    "/messages/retry-failed",
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def team_inbox_retry_failed_batch(
+    db: Session = Depends(get_db),
+):
+    result = team_inbox_operations.retry_failed_outbound_batch(db, limit=50)
+    db.commit()
+    retried = result.get("retried")
+    retry_count = len(retried) if isinstance(retried, list) else 0
+    return RedirectResponse(
+        url=(
+            "/admin/inbox/reports/outbox-failures"
+            f"?status=success&message={quote_plus(f'Retried {retry_count} failed messages.')}"
+        ),
+        status_code=303,
+    )
+
+
+@router.post(
     "/{conversation_id}/workflow",
     dependencies=[Depends(require_permission("support:ticket:update"))],
 )
@@ -825,6 +846,69 @@ def team_inbox_internal_note(
         conversation_id,
         status="success",
         message="Internal note saved.",
+    )
+
+
+@router.post(
+    "/{conversation_id}/comments",
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def team_inbox_comment_create(
+    conversation_id: UUID,
+    request: Request,
+    body_text: str = Form(...),
+    message_id: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+):
+    conversation = db.get(InboxConversation, conversation_id)
+    if conversation is None or not conversation.is_active:
+        return RedirectResponse(
+            url="/admin/inbox?status=error&message=Conversation%20not%20found",
+            status_code=303,
+        )
+    try:
+        team_inbox_operations.create_comment(
+            db,
+            conversation=conversation,
+            body=body_text,
+            message_id=message_id,
+            author_person_id=_actor_id_from_request(request),
+        )
+    except team_inbox_operations.InboxOperationError as exc:
+        return _detail_redirect(conversation_id, status="error", message=str(exc))
+    db.commit()
+    return _detail_redirect(
+        conversation_id,
+        status="success",
+        message="Comment saved.",
+    )
+
+
+@router.post(
+    "/comments/{comment_id}/resolve",
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def team_inbox_comment_resolve(
+    comment_id: UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    try:
+        comment = team_inbox_operations.resolve_comment(
+            db,
+            comment_id=comment_id,
+            resolved_by_person_id=_actor_id_from_request(request),
+        )
+    except team_inbox_operations.InboxOperationError as exc:
+        return RedirectResponse(
+            url=f"/admin/inbox?status=error&message={quote_plus(str(exc))}",
+            status_code=303,
+        )
+    db.commit()
+    return _detail_redirect(
+        comment.conversation_id,
+        status="success",
+        message="Comment resolved.",
     )
 
 

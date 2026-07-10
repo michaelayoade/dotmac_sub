@@ -11,7 +11,9 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.models.team_inbox import (
+    InboxComment,
     InboxConversation,
+    InboxConversationAssignment,
     InboxConversationLabel,
     InboxLabel,
     InboxMessage,
@@ -19,7 +21,7 @@ from app.models.team_inbox import (
     InboxReplyMacro,
     InboxSavedFilter,
 )
-from app.services import team_inbox_assignment
+from app.services import team_inbox_assignment, team_inbox_outbound
 from app.services.common import coerce_uuid
 
 _ALLOWED_LABEL_COLORS = {
@@ -77,6 +79,16 @@ class SavedFilterOption:
     filter_payload: dict[str, Any]
     is_shared: bool
     owner_person_id: str | None
+
+
+@dataclass(frozen=True)
+class InboxQueueMetrics:
+    total_open: int
+    needs_response: int
+    failed_outbound: int
+    unassigned_open: int
+    muted_open: int
+    snoozed_open: int
 
 
 def _slugify(value: str) -> str:
@@ -740,6 +752,51 @@ def delete_saved_filter(
     db.flush()
 
 
+def create_comment(
+    db: Session,
+    *,
+    conversation: InboxConversation,
+    body: str,
+    author_person_id: str | UUID | None = None,
+    message_id: str | UUID | None = None,
+    visibility: str = "internal",
+) -> InboxComment:
+    clean_body = str(body or "").strip()
+    clean_visibility = str(visibility or "internal").strip().lower()
+    if clean_visibility not in {"internal", "private"}:
+        clean_visibility = "internal"
+    if not clean_body:
+        raise InboxOperationError("Comment body is required.")
+    comment = InboxComment(
+        conversation_id=conversation.id,
+        message_id=coerce_uuid(message_id),
+        author_person_id=coerce_uuid(author_person_id),
+        body=clean_body,
+        visibility=clean_visibility,
+        is_resolved=False,
+        metadata_={"source": "team_inbox_comment"},
+    )
+    db.add(comment)
+    db.flush()
+    return comment
+
+
+def resolve_comment(
+    db: Session,
+    *,
+    comment_id: str | UUID,
+    resolved_by_person_id: str | UUID | None = None,
+) -> InboxComment:
+    comment = db.get(InboxComment, coerce_uuid(comment_id))
+    if comment is None:
+        raise InboxOperationError("Comment not found.")
+    comment.is_resolved = True
+    comment.resolved_by_person_id = coerce_uuid(resolved_by_person_id)
+    comment.resolved_at = datetime.now(UTC)
+    db.flush()
+    return comment
+
+
 def bulk_escalate(
     db: Session,
     *,
@@ -818,3 +875,83 @@ def list_failed_outbound_messages(
         if isinstance(row.metadata_, dict)
         and row.metadata_.get("delivery_status") == "failed"
     ][:limit]
+
+
+def retry_failed_outbound_batch(
+    db: Session,
+    *,
+    limit: int = 50,
+    max_retry_count: int = 5,
+) -> dict[str, object]:
+    retried: list[str] = []
+    skipped: list[dict[str, str]] = []
+    for message in list_failed_outbound_messages(db, limit=max(1, int(limit))):
+        metadata = dict(message.metadata_ or {})
+        retry_count = int(metadata.get("retry_count") or 0)
+        if retry_count >= max_retry_count:
+            skipped.append({"message_id": str(message.id), "reason": "max_retries"})
+            continue
+        result = team_inbox_outbound.retry_outbound_message(db, message=message)
+        if result.kind == "sent":
+            retried.append(str(message.id))
+        else:
+            skipped.append(
+                {
+                    "message_id": str(message.id),
+                    "reason": result.reason or result.kind,
+                }
+            )
+    db.flush()
+    return {"retried": retried, "skipped": skipped}
+
+
+def queue_metrics(db: Session) -> InboxQueueMetrics:
+    open_rows = (
+        db.query(InboxConversation)
+        .filter(InboxConversation.is_active.is_(True))
+        .filter(InboxConversation.status != "resolved")
+        .all()
+    )
+    open_ids = [row.id for row in open_rows]
+    latest_messages = (
+        {
+            message.conversation_id: message
+            for message in db.query(InboxMessage)
+            .filter(InboxMessage.conversation_id.in_(open_ids))
+            .order_by(InboxMessage.created_at.asc())
+            .all()
+            if message.direction != "internal"
+        }
+        if open_ids
+        else {}
+    )
+    active_assignment_ids = (
+        {
+            row[0]
+            for row in db.query(InboxConversationAssignment.conversation_id)
+            .filter(InboxConversationAssignment.conversation_id.in_(open_ids))
+            .filter(InboxConversationAssignment.is_active.is_(True))
+            .all()
+        }
+        if open_ids
+        else set()
+    )
+    return InboxQueueMetrics(
+        total_open=len(open_rows),
+        needs_response=sum(
+            1
+            for conversation in open_rows
+            if latest_messages.get(conversation.id) is not None
+            and latest_messages[conversation.id].direction == "inbound"
+        ),
+        failed_outbound=len(list_failed_outbound_messages(db, limit=1000)),
+        unassigned_open=sum(
+            1
+            for conversation in open_rows
+            if conversation.id not in active_assignment_ids
+        ),
+        muted_open=sum(1 for conversation in open_rows if conversation.is_muted),
+        snoozed_open=sum(
+            1 for conversation in open_rows if conversation.snoozed_until is not None
+        ),
+    )

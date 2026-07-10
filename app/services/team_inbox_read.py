@@ -9,12 +9,15 @@ from sqlalchemy.orm import Session
 
 from app.models.service_team import ServiceTeam
 from app.models.team_inbox import (
+    InboxComment,
     InboxConversation,
     InboxConversationAssignment,
     InboxConversationTeam,
+    InboxMediaAsset,
     InboxMessage,
     InboxMessageDirection,
 )
+from app.services import team_inbox_media
 
 
 @dataclass(frozen=True)
@@ -55,6 +58,20 @@ class InboxTimelineMessage:
 
 
 @dataclass(frozen=True)
+class InboxTimelineComment:
+    id: str
+    message_id: str | None
+    author_person_id: str | None
+    body: str
+    visibility: str
+    is_resolved: bool
+    resolved_by_person_id: str | None
+    resolved_at: datetime | None
+    created_at: datetime
+    metadata: dict | None
+
+
+@dataclass(frozen=True)
 class InboxConversationTimeline:
     id: str
     subscriber_id: str | None
@@ -75,6 +92,7 @@ class InboxConversationTimeline:
     teams: list[InboxTimelineTeam]
     assignments: list[InboxTimelineAssignment]
     messages: list[InboxTimelineMessage]
+    comments: list[InboxTimelineComment]
 
 
 @dataclass(frozen=True)
@@ -182,6 +200,26 @@ def _message_attachments(message: InboxMessage) -> list[dict]:
     return [item for item in attachments if isinstance(item, dict)]
 
 
+def _asset_attachment(asset: InboxMediaAsset) -> dict:
+    return {
+        "id": str(asset.id),
+        "type": asset.asset_type,
+        "filename": asset.file_name,
+        "file_name": asset.file_name,
+        "mime_type": asset.mime_type,
+        "file_size": asset.file_size,
+        "caption": asset.caption,
+        "url": asset.storage_url or asset.source_url,
+        "source_url": asset.source_url,
+        "storage_url": asset.storage_url,
+        "provider": asset.provider,
+        "provider_media_id": asset.provider_media_id,
+        "download_status": asset.download_status,
+        "download_error": asset.download_error,
+        "metadata": asset.metadata_,
+    }
+
+
 def list_conversations(
     db: Session,
     *,
@@ -208,11 +246,37 @@ def list_conversations(
     clean_search = (search or "").strip()
     if clean_search:
         like = f"%{clean_search}%"
+        matching_message_conversation_ids = [
+            row[0]
+            for row in db.query(InboxMessage.conversation_id)
+            .filter(
+                or_(
+                    InboxMessage.subject.ilike(like),
+                    InboxMessage.body.ilike(like),
+                    InboxMessage.from_address.ilike(like),
+                )
+            )
+            .distinct()
+            .limit(500)
+            .all()
+        ]
+        matching_comment_conversation_ids = [
+            row[0]
+            for row in db.query(InboxComment.conversation_id)
+            .filter(InboxComment.body.ilike(like))
+            .distinct()
+            .limit(500)
+            .all()
+        ]
         query = query.filter(
             or_(
                 InboxConversation.subject.ilike(like),
                 InboxConversation.contact_address.ilike(like),
                 InboxConversation.external_thread_id.ilike(like),
+                InboxConversation.id.in_(
+                    matching_message_conversation_ids
+                    + matching_comment_conversation_ids
+                ),
             )
         )
     if status:
@@ -390,6 +454,16 @@ def get_conversation_timeline(
         )
         .all()
     )
+    assets_by_message = team_inbox_media.assets_for_messages(
+        db,
+        [message.id for message in messages],
+    )
+    comments = (
+        db.query(InboxComment)
+        .filter(InboxComment.conversation_id == conversation.id)
+        .order_by(InboxComment.created_at.asc())
+        .all()
+    )
 
     return InboxConversationTimeline(
         id=str(conversation.id),
@@ -450,8 +524,33 @@ def get_conversation_timeline(
                 received_at=message.received_at,
                 created_at=message.created_at,
                 metadata=message.metadata_,
-                attachments=_message_attachments(message),
+                attachments=(
+                    [
+                        _asset_attachment(asset)
+                        for asset in assets_by_message.get(message.id, [])
+                    ]
+                    or _message_attachments(message)
+                ),
             )
             for message in messages
+        ],
+        comments=[
+            InboxTimelineComment(
+                id=str(comment.id),
+                message_id=str(comment.message_id) if comment.message_id else None,
+                author_person_id=str(comment.author_person_id)
+                if comment.author_person_id
+                else None,
+                body=comment.body,
+                visibility=comment.visibility,
+                is_resolved=comment.is_resolved,
+                resolved_by_person_id=str(comment.resolved_by_person_id)
+                if comment.resolved_by_person_id
+                else None,
+                resolved_at=comment.resolved_at,
+                created_at=comment.created_at,
+                metadata=comment.metadata_,
+            )
+            for comment in comments
         ],
     )

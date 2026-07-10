@@ -15,7 +15,7 @@ from app.models.team_inbox import (
     InboxMessage,
     InboxMessageDirection,
 )
-from app.services import team_inbox_routing
+from app.services import team_inbox_media, team_inbox_routing
 from app.services.common import coerce_uuid
 from app.services.customer_identity_normalization import (
     default_country_code,
@@ -406,6 +406,11 @@ def receive_inbound_channel(
     )
     db.add(message)
     db.flush()
+    team_inbox_media.promote_message_attachments(
+        db,
+        message=message,
+        provider=str(metadata.get("provider") or "") or None,
+    )
     conversation.last_message_at = received_at
     return InboundChannelReceiveResult(
         kind="received",

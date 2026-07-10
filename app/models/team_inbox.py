@@ -504,6 +504,100 @@ class InboxMessage(Base):
     conversation = relationship("InboxConversation", back_populates="messages")
 
 
+class InboxMediaAsset(Base):
+    __tablename__ = "inbox_media_assets"
+    __table_args__ = (
+        Index("ix_inbox_media_assets_conversation", "conversation_id", "created_at"),
+        Index("ix_inbox_media_assets_message", "message_id"),
+        Index("ix_inbox_media_assets_provider", "provider", "provider_media_id"),
+        Index("ix_inbox_media_assets_download_status", "download_status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("inbox_conversations.id"), nullable=False
+    )
+    message_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("inbox_messages.id")
+    )
+    channel_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    direction: Mapped[str] = mapped_column(String(40), nullable=False)
+    provider: Mapped[str | None] = mapped_column(String(80))
+    provider_media_id: Mapped[str | None] = mapped_column(String(255))
+    asset_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    file_name: Mapped[str | None] = mapped_column(String(255))
+    mime_type: Mapped[str | None] = mapped_column(String(160))
+    file_size: Mapped[int | None] = mapped_column(Integer)
+    caption: Mapped[str | None] = mapped_column(Text)
+    source_url: Mapped[str | None] = mapped_column(Text)
+    storage_url: Mapped[str | None] = mapped_column(Text)
+    checksum_sha256: Mapped[str | None] = mapped_column(String(64))
+    download_status: Mapped[str] = mapped_column(
+        String(40), default="metadata_only", nullable=False
+    )
+    download_error: Mapped[str | None] = mapped_column(Text)
+    metadata_: Mapped[dict | None] = mapped_column(
+        "metadata", MutableDict.as_mutable(JSON())
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    conversation = relationship("InboxConversation")
+    message = relationship("InboxMessage")
+
+
+class InboxComment(Base):
+    __tablename__ = "inbox_comments"
+    __table_args__ = (
+        Index("ix_inbox_comments_conversation", "conversation_id", "created_at"),
+        Index("ix_inbox_comments_message", "message_id"),
+        Index("ix_inbox_comments_author", "author_person_id", "created_at"),
+        Index("ix_inbox_comments_resolved", "is_resolved", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("inbox_conversations.id"), nullable=False
+    )
+    message_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("inbox_messages.id")
+    )
+    author_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    visibility: Mapped[str] = mapped_column(
+        String(40), default="internal", nullable=False
+    )
+    is_resolved: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    resolved_by_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    metadata_: Mapped[dict | None] = mapped_column(
+        "metadata", MutableDict.as_mutable(JSON())
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    conversation = relationship("InboxConversation")
+    message = relationship("InboxMessage")
+
+
 class InboxAgentPresence(Base):
     __tablename__ = "inbox_agent_presence"
     __table_args__ = (

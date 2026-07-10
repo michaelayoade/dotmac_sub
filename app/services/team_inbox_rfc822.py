@@ -13,7 +13,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.models.team_inbox import InboxMessage
-from app.services import team_inbox_receive
+from app.services import team_inbox_media, team_inbox_receive
 
 
 @dataclass(frozen=True)
@@ -194,5 +194,10 @@ def receive_rfc822_email(
             metadata = dict(message.metadata_ or {})
             metadata["attachments"] = parsed.attachments
             message.metadata_ = metadata
+            team_inbox_media.promote_message_attachments(
+                db,
+                message=message,
+                provider=source,
+            )
             db.flush()
     return result

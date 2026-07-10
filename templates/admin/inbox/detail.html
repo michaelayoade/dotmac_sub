@@ -173,6 +173,36 @@
             </div>
             {% endcall %}
 
+            {% call card("Collaboration", color="cyan") %}
+            <div class="space-y-4">
+                <form method="post" action="/admin/inbox/{{ timeline.id }}/comments" class="space-y-3">
+                    <label for="comment_body" class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Comment</label>
+                    <textarea id="comment_body" name="body_text" rows="4" required placeholder="Add a team comment" class="w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></textarea>
+                    <button type="submit" class="w-full rounded-lg border border-cyan-300 px-4 py-2 text-sm font-semibold text-cyan-800 hover:bg-cyan-50 dark:border-cyan-700 dark:text-cyan-200 dark:hover:bg-cyan-900/20">Save comment</button>
+                </form>
+                <div class="space-y-2 border-t border-slate-200 pt-4 dark:border-slate-700">
+                    {% for comment in timeline.comments %}
+                    <div class="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-700 dark:bg-slate-900/40">
+                        <div class="flex items-start justify-between gap-3">
+                            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">{{ comment.author_person_id or "System" }}</p>
+                            {% if comment.is_resolved %}
+                            {{ status_badge("Resolved", "success", size="sm") }}
+                            {% else %}
+                            <form method="post" action="/admin/inbox/comments/{{ comment.id }}/resolve">
+                                <button type="submit" class="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-white dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800">Resolve</button>
+                            </form>
+                            {% endif %}
+                        </div>
+                        <p class="mt-2 whitespace-pre-wrap text-slate-800 dark:text-slate-200">{{ comment.body }}</p>
+                        <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">{{ comment.created_at }}</p>
+                    </div>
+                    {% else %}
+                    <p class="text-sm text-slate-500 dark:text-slate-400">No comments yet.</p>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endcall %}
+
             {% call card("Labels & Macros", color="slate") %}
             <div class="space-y-4">
                 <form method="post" action="/admin/inbox/{{ timeline.id }}/labels/apply" class="space-y-2">
