@@ -36,6 +36,7 @@ from app.web.admin.customers import contacts_router
 from app.web.admin.customers import router as customers_router
 from app.web.admin.dashboard import router as dashboard_router
 from app.web.admin.design_system import router as design_system_router
+from app.web.admin.dispatch_work_orders import router as dispatch_work_orders_router
 from app.web.admin.drift import router as drift_router
 from app.web.admin.gis import router as gis_router
 from app.web.admin.integrations import router as integrations_router
@@ -157,6 +158,7 @@ def admin_nas_legacy_path_redirect(path: str):
 # Include all admin sub-routers
 router.include_router(dashboard_router)
 router.include_router(design_system_router)
+router.include_router(dispatch_work_orders_router)
 router.include_router(
     customers_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("customer"))],

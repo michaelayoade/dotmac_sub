@@ -109,6 +109,15 @@ def test_field_api_me_jobs_and_detail(db_session):
         "other",
     ]
 
+    location = client.patch(
+        "/api/v1/field/jobs/wo-field-api/location",
+        json={"latitude": 9.081, "longitude": 7.462},
+    )
+    assert location.status_code == 200
+    assert location.json()["latitude"] == 9.081
+    assert location.json()["longitude"] == 7.462
+    assert location.json()["source"] == "manual"
+
 
 def test_field_router_registered_as_self_scoped_surface():
     from app.main import _DEFERRED_API_ROUTER_SPECS
