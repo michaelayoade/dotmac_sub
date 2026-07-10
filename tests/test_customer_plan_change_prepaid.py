@@ -1168,6 +1168,112 @@ def test_plan_change_refreshes_unit_price(db_session, subscriber, monkeypatch):
     assert subscription.unit_price == Decimal("200.00")
 
 
+def test_admin_prepaid_upgrade_rejects_insufficient_balance(
+    db_session, subscriber, monkeypatch
+):
+    from app.schemas.catalog import SubscriptionUpdate
+    from app.services import catalog as catalog_service
+
+    current_offer = _make_offer(
+        db_session,
+        name="Admin Prepaid 100",
+        amount=Decimal("100.00"),
+        plan_family="unlimited",
+    )
+    target_offer = _make_offer(
+        db_session,
+        name="Admin Prepaid 200",
+        amount=Decimal("200.00"),
+        plan_family="unlimited",
+    )
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current_offer,
+        next_billing_at=datetime(2026, 6, 1, 0, 0, tzinfo=UTC),
+        start_at=datetime(2026, 5, 1, 0, 0, tzinfo=UTC),
+    )
+    _freeze_subscription_now(monkeypatch, datetime(2026, 5, 16, 12, 0, tzinfo=UTC))
+
+    with pytest.raises(HTTPException) as exc:
+        catalog_service.subscriptions.update(
+            db_session,
+            str(subscription.id),
+            SubscriptionUpdate(offer_id=target_offer.id),
+        )
+
+    db_session.refresh(subscription)
+    assert exc.value.status_code == 400
+    assert exc.value.detail["code"] == "insufficient_prepaid_balance"
+    assert exc.value.detail["required_amount"] == "50.00"
+    assert exc.value.detail["current_balance"] == "0.00"
+    assert subscription.offer_id == current_offer.id
+    assert (
+        db_session.query(LedgerEntry)
+        .filter(LedgerEntry.account_id == subscriber.id)
+        .filter(LedgerEntry.entry_type == LedgerEntryType.debit)
+        .count()
+        == 0
+    )
+
+
+def test_admin_prepaid_upgrade_with_balance_writes_wallet_debit(
+    db_session, subscriber, monkeypatch
+):
+    from app.schemas.catalog import SubscriptionUpdate
+    from app.services import catalog as catalog_service
+
+    _stub_plan_change_side_effects(monkeypatch)
+    current_offer = _make_offer(
+        db_session,
+        name="Admin Covered 100",
+        amount=Decimal("100.00"),
+        plan_family="unlimited",
+    )
+    target_offer = _make_offer(
+        db_session,
+        name="Admin Covered 200",
+        amount=Decimal("200.00"),
+        plan_family="unlimited",
+    )
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current_offer,
+        next_billing_at=datetime(2026, 6, 1, 0, 0, tzinfo=UTC),
+        start_at=datetime(2026, 5, 1, 0, 0, tzinfo=UTC),
+    )
+    _freeze_subscription_now(monkeypatch, datetime(2026, 5, 16, 12, 0, tzinfo=UTC))
+    db_session.add(
+        LedgerEntry(
+            account_id=subscriber.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.payment,
+            amount=Decimal("50.00"),
+            currency="NGN",
+            memo="Wallet top-up",
+        )
+    )
+    db_session.commit()
+
+    catalog_service.subscriptions.update(
+        db_session,
+        str(subscription.id),
+        SubscriptionUpdate(offer_id=target_offer.id),
+    )
+
+    db_session.refresh(subscription)
+    debits = (
+        db_session.query(LedgerEntry)
+        .filter(LedgerEntry.account_id == subscriber.id)
+        .filter(LedgerEntry.entry_type == LedgerEntryType.debit)
+        .all()
+    )
+    assert subscription.offer_id == target_offer.id
+    assert len(debits) == 1
+    assert debits[0].amount == Decimal("50.00")
+
+
 def _add_overdue_invoice(db_session, subscriber, amount: Decimal) -> None:
     from app.models.billing import Invoice, InvoiceStatus
 

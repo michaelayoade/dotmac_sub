@@ -42,6 +42,7 @@ from app.models.domain_settings import SettingDomain
 from app.models.scheduler import ScheduledTask
 from app.models.subscriber import Subscriber
 from app.services import settings_spec
+from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
 from app.services.billing_statuses import (
     BILLABLE_SUBSCRIBER_STATUS_VALUES,
     BILLABLE_SUBSCRIBER_STATUSES,
@@ -143,6 +144,12 @@ class BillingHealthSnapshot:
     # §6.1 billing-path coverage.
     unbilled_no_path: int = 0
     active_subs_on_terminal_account: int = 0
+    negative_prepaid_balance_count: int = 0
+    negative_prepaid_balance_total: Decimal = Decimal("0.00")
+    prepaid_balance_sweep_enabled: bool = False
+    negative_prepaid_with_sweep_disabled_count: int = 0
+    billing_profile_mismatch_count: int = 0
+    billing_profile_mixed_count: int = 0
     scan_min_ratio: float = SCAN_MIN_RATIO
     payment_volume_min_ratio: float = PAYMENT_VOLUME_MIN_RATIO
     payment_baseline_min_daily: float = PAYMENT_BASELINE_MIN_DAILY
@@ -166,6 +173,14 @@ class BillingHealthSnapshot:
             out.append("enforcement_covered_but_locked")
         if self.unbilled_no_path > 0:
             out.append("active_subs_without_billing_path")
+        if self.negative_prepaid_balance_count > 0:
+            out.append("negative_prepaid_balances")
+        if self.negative_prepaid_with_sweep_disabled_count > 0:
+            out.append("negative_prepaid_sweep_disabled")
+        if self.billing_profile_mismatch_count > 0:
+            out.append("billing_profile_mismatch")
+        if self.billing_profile_mixed_count > 0:
+            out.append("billing_profile_mixed_modes")
         return out
 
 
@@ -448,6 +463,76 @@ def billing_path_coverage(db: Session) -> tuple[int, int]:
     return int(no_path), int(terminal)
 
 
+def negative_prepaid_balance_exposure(db: Session) -> tuple[int, Decimal, bool, int]:
+    """Negative prepaid wallet exposure using the same balance as enforcement.
+
+    Returns ``(negative_count, negative_total_abs, sweep_enabled,
+    negative_count_if_sweep_disabled)``. This is a monitoring signal only; the
+    prepaid sweep owns any warning/suspension action after an operator enables
+    it.
+    """
+    from app.services import control_registry
+    from app.services.collections import get_available_balance
+
+    account_ids = (
+        db.execute(
+            select(Subscriber.id)
+            .join(Subscription, Subscription.subscriber_id == Subscriber.id)
+            .where(Subscription.billing_mode == BillingMode.prepaid)
+            .where(Subscription.status.in_(COLLECTIBLE_SERVICE_STATUSES))
+            .where(Subscriber.status.in_(BILLABLE_SUBSCRIBER_STATUSES))
+            .distinct()
+        )
+        .scalars()
+        .all()
+    )
+    count = 0
+    total = Decimal("0.00")
+    for account_id in account_ids:
+        balance = get_available_balance(db, str(account_id))
+        if balance < Decimal("0.00"):
+            count += 1
+            total += abs(balance)
+    sweep_enabled = control_registry.is_enabled(
+        db, "collections.prepaid_balance_enforcement"
+    )
+    return count, total, sweep_enabled, count if not sweep_enabled else 0
+
+
+def billing_profile_integrity(db: Session) -> tuple[int, int]:
+    """Return (account/subscription mismatch count, mixed subscription count)."""
+    rows = db.execute(
+        select(
+            Subscriber.id,
+            Subscriber.billing_mode,
+            Subscription.billing_mode,
+        )
+        .join(Subscription, Subscription.subscriber_id == Subscriber.id)
+        .where(Subscription.status.in_(COLLECTIBLE_SERVICE_STATUSES))
+        .where(Subscriber.status.in_(BILLABLE_SUBSCRIBER_STATUSES))
+    ).all()
+    account_modes: dict[object, BillingMode | None] = {}
+    subscription_modes: dict[object, set[BillingMode]] = {}
+    for account_id, account_mode, subscription_mode in rows:
+        account_modes[account_id] = account_mode
+        if subscription_mode is not None:
+            subscription_modes.setdefault(account_id, set()).add(subscription_mode)
+
+    mismatch = 0
+    mixed = 0
+    for account_id, modes in subscription_modes.items():
+        if len(modes) > 1:
+            mixed += 1
+            continue
+        only_mode = next(iter(modes))
+        if (
+            account_modes.get(account_id) is not None
+            and account_modes[account_id] != only_mode
+        ):
+            mismatch += 1
+    return mismatch, mixed
+
+
 def billing_health_snapshot(
     db: Session, now: datetime | None = None
 ) -> BillingHealthSnapshot:
@@ -458,6 +543,13 @@ def billing_health_snapshot(
     last_scanned, eligible, scan_ratio = invoice_scan_coverage(db)
     c24, avg7, ratio, collapsed = payment_volume(db, now=now)
     no_path, terminal = billing_path_coverage(db)
+    (
+        negative_prepaid_count,
+        negative_prepaid_total,
+        prepaid_sweep_enabled,
+        negative_prepaid_sweep_disabled,
+    ) = negative_prepaid_balance_exposure(db)
+    profile_mismatch_count, profile_mixed_count = billing_profile_integrity(db)
     return BillingHealthSnapshot(
         paid_with_balance_count=pwb_count,
         paid_with_balance_total=pwb_total,
@@ -472,6 +564,12 @@ def billing_health_snapshot(
         covered_but_locked=covered_but_locked(db),
         unbilled_no_path=no_path,
         active_subs_on_terminal_account=terminal,
+        negative_prepaid_balance_count=negative_prepaid_count,
+        negative_prepaid_balance_total=negative_prepaid_total,
+        prepaid_balance_sweep_enabled=prepaid_sweep_enabled,
+        negative_prepaid_with_sweep_disabled_count=negative_prepaid_sweep_disabled,
+        billing_profile_mismatch_count=profile_mismatch_count,
+        billing_profile_mixed_count=profile_mixed_count,
         scan_min_ratio=scan_min_ratio,
         payment_volume_min_ratio=payment_volume_min_ratio,
         payment_baseline_min_daily=payment_baseline_min_daily,

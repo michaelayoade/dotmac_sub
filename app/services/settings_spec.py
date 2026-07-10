@@ -3123,6 +3123,15 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.network_monitoring,
+        key="autodetect_incident_impact_ttl_hours",
+        label="Auto-detect Incident Customer-Impact TTL (hours)",
+        env_var="AUTODETECT_INCIDENT_IMPACT_TTL_HOURS",
+        value_type=SettingValueType.integer,
+        default=6,
+        min_value=1,
+    ),
+    SettingSpec(
+        domain=SettingDomain.network_monitoring,
         key="customer_impact_metrics_interval_seconds",
         label="Customer Impact Metrics Interval (seconds)",
         env_var="CUSTOMER_IMPACT_METRICS_INTERVAL_SECONDS",

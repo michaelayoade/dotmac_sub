@@ -53,6 +53,10 @@ from app.services.billing_statuses import BILLABLE_SUBSCRIBER_STATUSES
 from app.services.common import coerce_uuid, round_money
 from app.services.events import emit_event
 from app.services.events.types import EventType
+from app.services.service_entitlements import (
+    ensure_prepaid_entitlements_for_paid_invoice,
+    prepaid_entitlement_coverage_end,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -656,6 +660,13 @@ def _paid_coverage_end_for_subscription(
     not overlap a paid imported period just because ``next_billing_at`` drifted
     earlier than the actual paid-through date.
     """
+    entitlement_end = prepaid_entitlement_coverage_end(
+        db,
+        subscription_id=subscription_id,
+        account_id=account_id,
+        period_start=period_start,
+        period_end=period_end,
+    )
     row = (
         db.query(Invoice.billing_period_end)
         .join(InvoiceLine, InvoiceLine.invoice_id == Invoice.id)
@@ -667,14 +678,15 @@ def _paid_coverage_end_for_subscription(
         .filter(Invoice.balance_due <= Decimal("0.00"))
         .filter(Invoice.billing_period_start.isnot(None))
         .filter(Invoice.billing_period_end.isnot(None))
-        .filter(Invoice.billing_period_start < period_end)
+        .filter(Invoice.billing_period_start <= period_start)
         .filter(Invoice.billing_period_end > period_start)
         .order_by(Invoice.billing_period_end.desc())
         .first()
     )
-    if row is None:
-        return None
-    return _as_utc(row[0])
+    invoice_end = _as_utc(row[0]) if row is not None else None
+    entitlement_end = _as_utc(entitlement_end)
+    candidates = [end for end in (entitlement_end, invoice_end) if end is not None]
+    return max(candidates) if candidates else None
 
 
 def _activate_pending_subscription(
@@ -1200,6 +1212,7 @@ def run_invoice_cycle(
         "credit_applied": Decimal("0.00"),
         "credit_settled_invoices": 0,
         "accounts_restored": 0,
+        "zero_amount_advanced": 0,
     }
 
     for subscription in subscriptions:
@@ -1291,6 +1304,9 @@ def run_invoice_cycle(
             amount, period_start, period_end, usage_start, usage_end
         )
         if line_amount <= Decimal("0.00"):
+            if not dry_run:
+                subscription.next_billing_at = period_end
+            summary["zero_amount_advanced"] += 1
             summary["skipped"] += 1
             continue
 
@@ -1317,12 +1333,26 @@ def run_invoice_cycle(
             .first()
         )
         if existing_line_for_period:
-            # Ensure next_billing_at is consistent with existing invoice
-            if (
+            existing_invoice = existing_line_for_period.invoice
+            # Prepaid drafts are not service proof. Only paid prepaid invoices
+            # can advance service coverage; postpaid anchors keep the existing
+            # invoice idempotency behavior.
+            can_advance_anchor = subscription.billing_mode != BillingMode.prepaid or (
+                existing_invoice is not None
+                and existing_invoice.status == InvoiceStatus.paid
+                and (existing_invoice.balance_due or Decimal("0.00")) <= Decimal("0.00")
+            )
+            if can_advance_anchor and (
                 subscription.next_billing_at is None
                 or subscription.next_billing_at < period_end
             ):
                 subscription.next_billing_at = period_end
+            if (
+                subscription.billing_mode == BillingMode.prepaid
+                and existing_invoice is not None
+                and existing_invoice.status == InvoiceStatus.paid
+            ):
+                ensure_prepaid_entitlements_for_paid_invoice(db, existing_invoice)
             logger.debug(
                 "Skipping subscription %s: already billed for period %s - %s",
                 subscription.id,
@@ -1472,7 +1502,8 @@ def run_invoice_cycle(
             usage_end,
             tax_rate_id,
         )
-        subscription.next_billing_at = period_end
+        if subscription.billing_mode != BillingMode.prepaid:
+            subscription.next_billing_at = period_end
 
     if dry_run:
         summary["run_id"] = None
@@ -1542,6 +1573,26 @@ def run_invoice_cycle(
                     summary["prepaid_invoices_funded"] = (
                         summary.get("prepaid_invoices_funded", 0) + 1
                     )
+                    for entitlement in ensure_prepaid_entitlements_for_paid_invoice(
+                        db, invoice
+                    ):
+                        funded_subscription = db.get(
+                            Subscription, entitlement.subscription_id
+                        )
+                        entitlement_end = _as_utc(entitlement.ends_at)
+                        current_next_billing = (
+                            _as_utc(funded_subscription.next_billing_at)
+                            if funded_subscription is not None
+                            else None
+                        )
+                        if funded_subscription is not None and (
+                            entitlement_end is not None
+                            and (
+                                current_next_billing is None
+                                or current_next_billing < entitlement_end
+                            )
+                        ):
+                            funded_subscription.next_billing_at = entitlement.ends_at
             db.flush()
 
         # Inline credit settlement is DISABLED by default. It was found to be

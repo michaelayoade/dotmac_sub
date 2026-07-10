@@ -172,6 +172,9 @@ DEFAULT_PERMISSIONS = [
     # Operations - Technicians
     ("operations:technician:read", "View technicians"),
     ("operations:technician:write", "Manage technicians"),
+    # Operations - Field Expense Requests
+    ("operations:expense_request:read", "View field expense requests"),
+    ("operations:expense_request:write", "Approve or reject field expense requests"),
     # Support - Tickets
     ("support:ticket:read", "View tickets"),
     ("support:ticket:create", "Create tickets"),
@@ -322,6 +325,9 @@ ROLE_PERMISSIONS = {
         "subscription:read",
         "operations:work_order:read",
         "operations:work_order:update",
+        "operations:technician:read",
+        "operations:expense_request:read",
+        "operations:expense_request:write",
         "reports:network",
     ],
     "support": [

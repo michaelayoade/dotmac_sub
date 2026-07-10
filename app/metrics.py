@@ -264,6 +264,18 @@ class _BillingHealthCollector(Collector):
             "Active subscriptions that no enabled billing path covers",
             labels=["reason"],
         )
+        yield _gauge_description(
+            "billing_negative_prepaid_balance_accounts",
+            "Active/collectible prepaid accounts whose wallet balance is below zero",
+        )
+        yield _gauge_description(
+            "billing_negative_prepaid_balance_total",
+            "Absolute total negative prepaid wallet exposure",
+        )
+        yield _gauge_description(
+            "billing_negative_prepaid_sweep_disabled_accounts",
+            "Negative prepaid accounts while the prepaid balance sweep is disabled",
+        )
 
     def collect(self):  # noqa: ANN201 - prometheus collector protocol
         from prometheus_client.core import GaugeMetricFamily
@@ -329,6 +341,21 @@ class _BillingHealthCollector(Collector):
             "Accounts under a billing lock whose ledger balance is >= 0 "
             "(wrongful-suspension drift; should be 0)",
             snap.covered_but_locked,
+        )
+        yield gauge(
+            "billing_negative_prepaid_balance_accounts",
+            "Active/collectible prepaid accounts whose wallet balance is below zero",
+            snap.negative_prepaid_balance_count,
+        )
+        yield gauge(
+            "billing_negative_prepaid_balance_total",
+            "Absolute total negative prepaid wallet exposure",
+            snap.negative_prepaid_balance_total,
+        )
+        yield gauge(
+            "billing_negative_prepaid_sweep_disabled_accounts",
+            "Negative prepaid accounts while the prepaid balance sweep is disabled",
+            snap.negative_prepaid_with_sweep_disabled_count,
         )
 
         # §6.3 per-runner heartbeat freshness (label = task).

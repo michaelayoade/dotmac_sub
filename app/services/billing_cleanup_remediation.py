@@ -9,7 +9,13 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
+from app.models.billing import Invoice, InvoiceLine, InvoiceStatus
+from app.models.catalog import (
+    BillingMode,
+    CatalogOffer,
+    Subscription,
+    SubscriptionStatus,
+)
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.subscriber import Subscriber
 from app.services.account_lifecycle import (
@@ -20,6 +26,7 @@ from app.services.account_lifecycle import (
     resolve_locks_for_trigger,
     restore_subscription,
 )
+from app.services.billing_statuses import BILLABLE_SUBSCRIBER_STATUSES
 from app.services.collections import has_overdue_balance
 from app.services.common import coerce_uuid
 
@@ -27,6 +34,12 @@ logger = logging.getLogger(__name__)
 
 _RESOLVED_BY = "billing_cleanup_remediation"
 _LOCK_NOTES = "Cleared stale overdue lock from billing cleanup audit"
+ANCHOR_REPAIR_STATUSES = (
+    InvoiceStatus.issued,
+    InvoiceStatus.partially_paid,
+    InvoiceStatus.paid,
+    InvoiceStatus.overdue,
+)
 
 
 def load_cleanup_csv(path: str) -> list[dict[str, str]]:
@@ -54,6 +67,10 @@ def _parse_datetime(value: str | None) -> datetime | None:
         return datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+def _same_datetime(left: datetime | None, right: datetime | None) -> bool:
+    return _as_utc(left) == _as_utc(right)
 
 
 def _refuse(action: str, row: dict[str, str], reason: str) -> dict[str, Any]:
@@ -224,17 +241,160 @@ def plan_account_mode_row(db: Session, row: dict[str, str]) -> dict[str, Any]:
     }
 
 
+def discover_invoice_anchor_rows(
+    db: Session, *, run_at: datetime | None = None
+) -> list[dict[str, str]]:
+    """Find subscriptions whose anchor is behind active invoice-line coverage."""
+    effective_run_at = run_at or datetime.now(UTC)
+    rows = (
+        db.query(Subscription, Subscriber, CatalogOffer, Invoice, InvoiceLine)
+        .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
+        .outerjoin(CatalogOffer, CatalogOffer.id == Subscription.offer_id)
+        .join(InvoiceLine, InvoiceLine.subscription_id == Subscription.id)
+        .join(Invoice, Invoice.id == InvoiceLine.invoice_id)
+        .filter(Subscription.status == SubscriptionStatus.active)
+        .filter(Subscriber.status.in_(BILLABLE_SUBSCRIBER_STATUSES))
+        .filter(Subscription.next_billing_at.isnot(None))
+        .filter(Subscription.next_billing_at <= effective_run_at)
+        .filter(InvoiceLine.is_active.is_(True))
+        .filter(Invoice.is_active.is_(True))
+        .filter(Invoice.is_proforma.is_(False))
+        .filter(Invoice.status.in_(ANCHOR_REPAIR_STATUSES))
+        .filter(Invoice.billing_period_end.isnot(None))
+        .filter(Invoice.billing_period_end > Subscription.next_billing_at)
+        .order_by(
+            Subscription.id.asc(),
+            Invoice.billing_period_end.desc(),
+            Invoice.created_at.desc(),
+            Invoice.id.desc(),
+        )
+        .all()
+    )
+
+    latest_by_subscription: dict[str, dict[str, str]] = {}
+    for subscription, account, offer, invoice, _line in rows:
+        subscription_id = str(subscription.id)
+        if subscription_id in latest_by_subscription:
+            continue
+        account_name = getattr(account, "display_name", "") or ""
+        latest_by_subscription[subscription_id] = {
+            "issue": "invoice_anchor_behind_paid_through",
+            "account_id": str(account.id),
+            "account_name": account_name,
+            "account_status": account.status.value,
+            "subscription_id": subscription_id,
+            "subscription_status": subscription.status.value,
+            "subscription_mode": subscription.billing_mode.value,
+            "offer_id": str(subscription.offer_id),
+            "offer_name": offer.name if offer else "",
+            "current_next_billing_at": _iso(subscription.next_billing_at),
+            "paid_through": _iso(invoice.billing_period_end),
+            "latest_invoice_id": str(invoice.id),
+            "latest_invoice_number": invoice.invoice_number or "",
+            "latest_invoice_status": invoice.status.value,
+            "latest_invoice_period_start": _iso(invoice.billing_period_start),
+            "latest_invoice_period_end": _iso(invoice.billing_period_end),
+        }
+    return list(latest_by_subscription.values())
+
+
+def plan_invoice_anchor_row(db: Session, row: dict[str, str]) -> dict[str, Any]:
+    action = "advance_invoice_next_billing_at"
+    if row.get("issue") not in {
+        "",
+        None,
+        "invoice_anchor_behind_paid_through",
+    }:
+        return _refuse(action, row, "not_invoice_anchor_behind_paid_through")
+    subscription_id = (row.get("subscription_id") or "").strip()
+    target = _parse_datetime(row.get("paid_through"))
+    reviewed_current = _parse_datetime(row.get("current_next_billing_at"))
+    if not subscription_id:
+        return _refuse(action, row, "missing_subscription_id")
+    if target is None:
+        return _refuse(action, row, "bad_paid_through")
+    target_utc = _as_utc(target)
+    if target_utc is None:
+        return _refuse(action, row, "bad_paid_through")
+    try:
+        subscription = db.get(Subscription, coerce_uuid(subscription_id))
+    except Exception:
+        return _refuse(action, row, "bad_subscription_id")
+    if subscription is None:
+        return _refuse(action, row, "subscription_missing")
+    if row.get("account_id") and str(subscription.subscriber_id) != row["account_id"]:
+        return _refuse(action, row, "account_id_changed")
+    if (
+        row.get("subscription_mode")
+        and subscription.billing_mode.value != row["subscription_mode"]
+    ):
+        return _refuse(action, row, "subscription_mode_changed")
+    if (
+        row.get("subscription_status")
+        and subscription.status.value != row["subscription_status"]
+    ):
+        return _refuse(action, row, "subscription_status_changed")
+    current = _as_utc(subscription.next_billing_at)
+    if reviewed_current is not None and not _same_datetime(current, reviewed_current):
+        return _refuse(action, row, "next_billing_at_changed_since_audit")
+    if current is not None and current >= target_utc:
+        return {
+            "action": action,
+            "decision": "skip",
+            "reason": "already_at_or_after_paid_through",
+            "subscription_id": str(subscription.id),
+            "before": {"next_billing_at": _iso(subscription.next_billing_at)},
+        }
+
+    invoice_id = (row.get("latest_invoice_id") or "").strip()
+    if invoice_id:
+        try:
+            invoice = db.get(Invoice, coerce_uuid(invoice_id))
+        except Exception:
+            return _refuse(action, row, "bad_latest_invoice_id")
+        if invoice is None:
+            return _refuse(action, row, "latest_invoice_missing")
+        if (
+            not invoice.is_active
+            or invoice.is_proforma
+            or invoice.status not in ANCHOR_REPAIR_STATUSES
+            or not _same_datetime(invoice.billing_period_end, target)
+        ):
+            return _refuse(action, row, "latest_invoice_changed_since_audit")
+        active_line = (
+            db.query(InvoiceLine.id)
+            .filter(InvoiceLine.invoice_id == invoice.id)
+            .filter(InvoiceLine.subscription_id == subscription.id)
+            .filter(InvoiceLine.is_active.is_(True))
+            .first()
+        )
+        if active_line is None:
+            return _refuse(action, row, "latest_invoice_line_missing")
+
+    return {
+        "action": action,
+        "decision": "apply",
+        "subscription_id": str(subscription.id),
+        "subscriber_id": str(subscription.subscriber_id),
+        "target_next_billing_at": target_utc.isoformat(),
+        "latest_invoice_id": invoice_id,
+        "before": {"next_billing_at": _iso(subscription.next_billing_at)},
+    }
+
+
 def plan_cleanup_remediation(
     db: Session,
     *,
     stale_lock_rows: list[dict[str, str]] | None = None,
     anchor_rows: list[dict[str, str]] | None = None,
     mode_rows: list[dict[str, str]] | None = None,
+    invoice_anchor_rows: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     items: list[dict[str, Any]] = []
     items.extend(plan_stale_overdue_lock_row(db, row) for row in stale_lock_rows or [])
     items.extend(plan_anchor_row(db, row) for row in anchor_rows or [])
     items.extend(plan_account_mode_row(db, row) for row in mode_rows or [])
+    items.extend(plan_invoice_anchor_row(db, row) for row in invoice_anchor_rows or [])
 
     from collections import Counter
 
@@ -331,4 +491,14 @@ def _execute_item(db: Session, item: dict[str, Any]) -> dict[str, Any]:
         account.billing_mode = BillingMode(item["target_billing_mode"])
         db.flush()
         return {"account_billing_mode": account.billing_mode.value}
+    if item["action"] == "advance_invoice_next_billing_at":
+        subscription = db.get(Subscription, coerce_uuid(item["subscription_id"]))
+        if subscription is None:
+            raise ValueError(f"subscription missing: {item['subscription_id']}")
+        target = _parse_datetime(item["target_next_billing_at"])
+        if target is None:
+            raise ValueError(f"bad target_next_billing_at: {item['subscription_id']}")
+        subscription.next_billing_at = target
+        db.flush()
+        return {"next_billing_at": _iso(subscription.next_billing_at)}
     raise ValueError(f"unknown cleanup action {item['action']}")

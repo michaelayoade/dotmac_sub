@@ -649,3 +649,103 @@ class FieldFiberTestRead(BaseModel):
     notes: str | None = None
     client_ref: UUID | None = None
     created_at: datetime
+
+
+class FieldJobChatMessageCreate(BaseModel):
+    body: str = Field(min_length=1, max_length=4000)
+
+
+class FieldJobChatMessageRead(BaseModel):
+    id: UUID
+    body: str
+    direction: str
+    author_name: str | None = None
+    created_at: datetime
+    read_at: datetime | None = None
+
+
+class FieldJobChatThread(BaseModel):
+    available: bool
+    can_send: bool
+    conversation_id: str | None = None
+    customer_name: str | None = None
+    messages: list[FieldJobChatMessageRead] = Field(default_factory=list)
+
+
+class FieldManagerMeResponse(BaseModel):
+    person_id: str
+    name: str
+    roles: list[str] = Field(default_factory=list)
+    permissions: list[str] = Field(default_factory=list)
+    is_manager: bool = True
+
+
+class FieldManagerSummary(BaseModel):
+    technicians_total: int
+    technicians_live: int
+    technicians_sharing: int
+    open_jobs: int
+    unassigned_jobs: int
+    pending_expenses: int
+
+
+class FieldManagerActiveWorkOrder(BaseModel):
+    id: str
+    title: str
+    status: str
+
+
+class FieldManagerTechnician(BaseModel):
+    technician_id: UUID
+    person_id: UUID
+    person_label: str
+    title: str | None = None
+    region: str | None = None
+    status: str
+    location_sharing_enabled: bool
+    is_live: bool
+    last_latitude: float | None = None
+    last_longitude: float | None = None
+    accuracy_m: float | None = None
+    last_location_at: datetime | None = None
+    last_seen_at: datetime | None = None
+    active_work_order: FieldManagerActiveWorkOrder | None = None
+
+
+class FieldManagerTechniciansResponse(BaseModel):
+    items: list[FieldManagerTechnician] = Field(default_factory=list)
+    count: int
+    live_count: int
+    sharing_count: int
+    limit: int
+    offset: int
+
+
+class FieldManagerJob(BaseModel):
+    id: str
+    work_order_mirror_id: UUID
+    title: str
+    description: str | None = None
+    status: str
+    priority: str | None = None
+    work_type: str | None = None
+    scheduled_start: datetime | None = None
+    scheduled_end: datetime | None = None
+    assigned_to_person_id: UUID | None = None
+    assigned_to_label: str | None = None
+    subscriber_label: str | None = None
+    address_text: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    location_source: str | None = None
+
+
+class FieldManagerJobAssignRequest(BaseModel):
+    person_id: str = Field(min_length=1, max_length=64)
+    scheduled_start: datetime | None = None
+    scheduled_end: datetime | None = None
+    status: str | None = Field(default=None, max_length=20)
+
+
+class FieldManagerExpenseRejectRequest(BaseModel):
+    reason: str = Field(min_length=2, max_length=500)

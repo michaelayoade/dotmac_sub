@@ -79,13 +79,13 @@ def _run(coro):
     return box["result"]
 
 
-def _post(body: dict, event: str, signature: str | None):
+def _post(body: dict, event: str, signature: str | None, db=None):
     raw = json.dumps(body).encode()
     headers = {"X-Webhook-Event": event, "Content-Type": "application/json"}
     if signature is not None:
         headers["X-Webhook-Signature-256"] = signature
     try:
-        payload = _run(receive_crm_event(_FakeRequest(raw, headers)))
+        payload = _run(receive_crm_event(_FakeRequest(raw, headers), db))
     except HTTPException as exc:
         return _RouteResponse(exc.status_code, {"detail": exc.detail})
     return _RouteResponse(200, payload)
@@ -124,18 +124,90 @@ def _http_app(db_session) -> FastAPI:
     return app
 
 
-def test_valid_ticket_created_enqueues_sync():
+def test_valid_ticket_created_enqueues_sync(monkeypatch, db_session):
+    monkeypatch.setenv("CRM_TICKET_PULL_ENABLED", "true")
     body = {"ticket_id": "abc-123"}
     raw = json.dumps(body).encode()
     with (
         _with_secret(SECRET),
         patch("app.services.queue_adapter.enqueue_task") as enqueue,
     ):
-        resp = _post(body, "ticket.created", _sign(raw))
+        resp = _post(body, "ticket.created", _sign(raw), db_session)
     assert resp.status_code == 200
     assert resp.json()["status"] == "queued"
     enqueue.assert_called_once()
     assert enqueue.call_args.kwargs["args"] == ["abc-123"]
+
+
+def test_ticket_event_noop_when_pull_disabled(monkeypatch, db_session):
+    """Flip kill switch: crm.ticket_pull off -> 200 ack, nothing enqueued."""
+    monkeypatch.setenv("CRM_TICKET_PULL_ENABLED", "false")
+    body = {"ticket_id": "abc-123"}
+    raw = json.dumps(body).encode()
+    with (
+        _with_secret(SECRET),
+        patch("app.services.queue_adapter.enqueue_task") as enqueue,
+    ):
+        resp = _post(body, "ticket.created", _sign(raw), db_session)
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "ignored",
+        "reason": "ticket_pull_disabled",
+        "event": "ticket.created",
+    }
+    enqueue.assert_not_called()
+
+
+def test_ticket_event_noop_when_pull_setting_missing(monkeypatch, db_session):
+    """No env, no DB row -> the control's on_missing default (off) applies,
+    matching the scheduler beat entries' default."""
+    monkeypatch.delenv("CRM_TICKET_PULL_ENABLED", raising=False)
+    body = {"ticket_id": "abc-123"}
+    raw = json.dumps(body).encode()
+    with (
+        _with_secret(SECRET),
+        patch("app.services.queue_adapter.enqueue_task") as enqueue,
+    ):
+        resp = _post(body, "ticket.created", _sign(raw), db_session)
+    assert resp.status_code == 200
+    assert resp.json()["reason"] == "ticket_pull_disabled"
+    enqueue.assert_not_called()
+
+
+def test_ticket_branch_gated_by_scheduler_db_row(monkeypatch, db_session):
+    """The exact flip lever: the legacy scheduler.crm_ticket_pull_enabled DB row
+    turns the branch on and off (no env, no deploy)."""
+    from app.models.domain_settings import DomainSetting, SettingDomain
+
+    monkeypatch.delenv("CRM_TICKET_PULL_ENABLED", raising=False)
+    row = DomainSetting(
+        domain=SettingDomain.scheduler,
+        key="crm_ticket_pull_enabled",
+        value_text="true",
+    )
+    db_session.add(row)
+    db_session.commit()
+
+    body = {"ticket_id": "abc-123"}
+    raw = json.dumps(body).encode()
+    with (
+        _with_secret(SECRET),
+        patch("app.services.queue_adapter.enqueue_task") as enqueue,
+    ):
+        resp = _post(body, "ticket.created", _sign(raw), db_session)
+    assert resp.json()["status"] == "queued"
+    enqueue.assert_called_once()
+
+    row.value_text = "false"
+    db_session.commit()
+    with (
+        _with_secret(SECRET),
+        patch("app.services.queue_adapter.enqueue_task") as enqueue,
+    ):
+        resp = _post(body, "ticket.created", _sign(raw), db_session)
+    assert resp.status_code == 200
+    assert resp.json()["reason"] == "ticket_pull_disabled"
+    enqueue.assert_not_called()
 
 
 def test_bad_signature_rejected():
@@ -176,14 +248,15 @@ def test_unknown_event_acknowledged_without_enqueue():
     enqueue.assert_not_called()
 
 
-def test_missing_ticket_id_ignored():
+def test_missing_ticket_id_ignored(monkeypatch, db_session):
+    monkeypatch.setenv("CRM_TICKET_PULL_ENABLED", "true")
     body = {"title": "no id"}
     raw = json.dumps(body).encode()
     with (
         _with_secret(SECRET),
         patch("app.services.queue_adapter.enqueue_task") as enqueue,
     ):
-        resp = _post(body, "ticket.created", _sign(raw))
+        resp = _post(body, "ticket.created", _sign(raw), db_session)
     assert resp.status_code == 200
     assert resp.json()["status"] == "ignored"
     enqueue.assert_not_called()

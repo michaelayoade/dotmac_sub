@@ -43,6 +43,8 @@ from app.models.billing import (  # noqa: F401
     PaymentProviderEventStatus,
     PaymentProviderType,
     PaymentStatus,
+    ServiceEntitlement,
+    ServiceEntitlementStatus,
     TaxApplication,
     TaxRate,
     TopupIntent,
@@ -171,6 +173,7 @@ from app.models.fiber_change_request import (  # noqa: F401
     FiberChangeRequestStatus,
 )
 from app.models.field_attachment import FieldAttachment  # noqa: F401
+from app.models.field_chat import FieldJobChatMessage  # noqa: F401
 from app.models.field_expense import (  # noqa: F401
     FieldExpenseRequest,
     FieldExpenseRequestItem,

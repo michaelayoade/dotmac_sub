@@ -22,6 +22,7 @@ from app.schemas.support import (
     TicketUpdate,
 )
 from app.services import support as support_service
+from app.services import ticket_validation
 from app.services.auth_dependencies import require_permission, require_user_auth
 
 router = APIRouter(prefix="/support", tags=["support"])
@@ -105,6 +106,44 @@ def list_tickets(
         limit=limit,
         offset=offset,
     )
+
+
+@router.get(
+    "/tickets/duplicates",
+    dependencies=[Depends(require_permission("support:ticket:read"))],
+)
+def ticket_duplicate_lookup(
+    title: str | None = Query(default=None),
+    description: str | None = Query(default=None),
+    exclude_ticket_id: str | None = Query(default=None),
+    subscriber_id: str | None = Query(default=None),
+    customer_account_id: str | None = Query(default=None),
+    customer_person_id: str | None = Query(default=None),
+    lead_id: str | None = Query(default=None),
+    ticket_type: str | None = Query(default=None),
+    base_station_details: str | None = Query(default=None),
+    tags: str | None = Query(default=None),
+    region: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    """Live duplicate-candidate lookup backing the admin create-form warning."""
+    result = ticket_validation.find_duplicate_ticket_candidates(
+        db,
+        ticket_validation.TicketDuplicateInput(
+            title=title,
+            description=description,
+            exclude_ticket_id=exclude_ticket_id,
+            subscriber_id=subscriber_id,
+            customer_account_id=customer_account_id,
+            customer_person_id=customer_person_id,
+            lead_id=lead_id,
+            ticket_type=ticket_type,
+            base_station_details=base_station_details,
+            tags=[item.strip() for item in (tags or "").split(",") if item.strip()],
+            region=region,
+        ),
+    )
+    return result.as_dict()
 
 
 @router.get(

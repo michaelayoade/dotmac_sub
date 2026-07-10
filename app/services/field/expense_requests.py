@@ -177,6 +177,61 @@ class FieldExpenseRequests:
         return serialize_expense_request(request)
 
     @staticmethod
+    def list_all(
+        db: Session,
+        *,
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict]:
+        """Manager view: expense requests across all technicians."""
+        query = (
+            db.query(FieldExpenseRequest)
+            .options(selectinload(FieldExpenseRequest.items))
+            .filter(FieldExpenseRequest.is_active.is_(True))
+            .order_by(FieldExpenseRequest.created_at.desc())
+        )
+        if status:
+            query = query.filter(FieldExpenseRequest.status == _status(status))
+        return [
+            serialize_expense_request(request)
+            for request in apply_pagination(query, limit, offset).all()
+        ]
+
+    @staticmethod
+    def approve(db: Session, expense_request_id: str) -> dict:
+        request = _get_request(db, expense_request_id)
+        if request.status != "submitted":
+            raise HTTPException(
+                status_code=409, detail="Only submitted requests approve"
+            )
+        request.status = "approved"
+        request.approved_at = datetime.now(UTC)
+        request.rejection_reason = None
+        _mark_sub_authoritative(request.work_order_mirror)
+        db.commit()
+        db.refresh(request)
+        return serialize_expense_request(request)
+
+    @staticmethod
+    def reject(db: Session, expense_request_id: str, reason: str) -> dict:
+        request = _get_request(db, expense_request_id)
+        if request.status != "submitted":
+            raise HTTPException(
+                status_code=409, detail="Only submitted requests reject"
+            )
+        cleaned = (reason or "").strip()
+        if not cleaned:
+            raise HTTPException(status_code=422, detail="reason is required")
+        request.status = "rejected"
+        request.rejected_at = datetime.now(UTC)
+        request.rejection_reason = cleaned[:500]
+        _mark_sub_authoritative(request.work_order_mirror)
+        db.commit()
+        db.refresh(request)
+        return serialize_expense_request(request)
+
+    @staticmethod
     def cancel(db: Session, principal: dict[str, Any], expense_request_id: str) -> dict:
         request = _get_scoped_request(db, principal, expense_request_id)
         profile = _profile_from_principal(db, principal)
@@ -191,6 +246,19 @@ class FieldExpenseRequests:
         db.commit()
         db.refresh(request)
         return serialize_expense_request(request)
+
+
+def _get_request(db: Session, expense_request_id: str) -> FieldExpenseRequest:
+    request = (
+        db.query(FieldExpenseRequest)
+        .options(selectinload(FieldExpenseRequest.items))
+        .filter(FieldExpenseRequest.id == coerce_uuid(expense_request_id))
+        .filter(FieldExpenseRequest.is_active.is_(True))
+        .one_or_none()
+    )
+    if request is None:
+        raise HTTPException(status_code=404, detail="Expense request not found")
+    return request
 
 
 def _get_scoped_request(

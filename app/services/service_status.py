@@ -21,14 +21,19 @@ from decimal import Decimal
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.billing import Invoice, InvoiceStatus
+from app.models.billing import (
+    Invoice,
+    InvoiceStatus,
+)
 from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
 from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber
 from app.schemas.service_status import ServiceStatusItem, ServiceStatusResponse
 from app.services import settings_spec
+from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
 from app.services.collections import get_available_balance, has_overdue_balance
 from app.services.common import coerce_uuid
+from app.services.service_entitlements import current_prepaid_entitlement_end
 
 # Statuses the customer still has an operational relationship with (mirrors the
 # mobile `currentStatuses`); terminal/historical ones are excluded entirely.
@@ -53,14 +58,83 @@ _NEEDS_PAYMENT_STATUSES = frozenset(
 )
 
 
-def _prepaid_threshold(db: Session, account: Subscriber) -> Decimal:
-    """The min-balance threshold used by the prepaid enforcement gate."""
-    if account.min_balance is not None:
-        return Decimal(str(account.min_balance))
-    default = settings_spec.resolve_value(
-        db, SettingDomain.collections, "prepaid_default_min_balance"
+def _paid_prepaid_coverage_end(
+    db: Session, subscription: Subscription, now: datetime
+) -> datetime | None:
+    from app.models.billing import InvoiceLine
+
+    entitlement_end = current_prepaid_entitlement_end(
+        db,
+        subscription_id=subscription.id,
+        account_id=subscription.subscriber_id,
+        now=now,
     )
-    return Decimal(str(default)) if default is not None else Decimal("0.00")
+    if entitlement_end is not None:
+        return entitlement_end
+
+    # Legacy fallback while cutover-era invoices are reconciled into explicit
+    # entitlement rows.
+    return (
+        db.query(Invoice.billing_period_end)
+        .join(InvoiceLine, InvoiceLine.invoice_id == Invoice.id)
+        .filter(InvoiceLine.subscription_id == subscription.id)
+        .filter(InvoiceLine.is_active.is_(True))
+        .filter(Invoice.is_active.is_(True))
+        .filter(Invoice.status == InvoiceStatus.paid)
+        .filter(Invoice.billing_period_start.isnot(None))
+        .filter(Invoice.billing_period_start <= now)
+        .filter(Invoice.billing_period_end.isnot(None))
+        .filter(Invoice.billing_period_end > now)
+        .order_by(Invoice.billing_period_end.desc())
+        .limit(1)
+        .scalar()
+    )
+
+
+def _unfunded_prepaid_renewal_requirement(
+    db: Session, account: Subscriber, now: datetime
+) -> Decimal:
+    """Amount needed to fund prepaid services that lack current paid coverage."""
+    from app.services import billing_automation
+
+    required = Decimal("0.00")
+    subscriptions = (
+        db.query(Subscription)
+        .filter(Subscription.subscriber_id == account.id)
+        .filter(Subscription.billing_mode == BillingMode.prepaid)
+        .filter(Subscription.status.in_(COLLECTIBLE_SERVICE_STATUSES))
+        .all()
+    )
+    for subscription in subscriptions:
+        if _paid_prepaid_coverage_end(db, subscription, now):
+            continue
+        amount, _currency, _cycle = billing_automation._resolve_price(db, subscription)
+        if amount is None:
+            amount = subscription.unit_price
+        if amount is None:
+            continue
+        effective = billing_automation._effective_unit_price(subscription, amount, now)
+        if effective > Decimal("0.00"):
+            required += effective
+    return required
+
+
+def _prepaid_threshold(
+    db: Session, account: Subscriber, *, now: datetime | None = None
+) -> Decimal:
+    """The min-balance threshold used by the prepaid enforcement gate."""
+    effective_now = now or datetime.now(UTC)
+    if account.min_balance is not None:
+        configured = Decimal(str(account.min_balance))
+    else:
+        default = settings_spec.resolve_value(
+            db, SettingDomain.collections, "prepaid_default_min_balance"
+        )
+        configured = Decimal(str(default)) if default is not None else Decimal("0.00")
+    renewal_requirement = _unfunded_prepaid_renewal_requirement(
+        db, account, effective_now
+    )
+    return max(configured, renewal_requirement)
 
 
 def _grace_days(db: Session, account: Subscriber) -> int:
@@ -135,7 +209,7 @@ def build_service_status(db: Session, subscriber_id: str) -> ServiceStatusRespon
 
     if is_prepaid:
         balance = get_available_balance(db, subscriber_id)
-        threshold = _prepaid_threshold(db, account)
+        threshold = _prepaid_threshold(db, account, now=now)
         low = balance < threshold
         resp.balance = balance
         resp.min_balance = threshold

@@ -6,14 +6,26 @@ from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
-from app.models.billing import Invoice, InvoiceLine, InvoiceStatus, PaymentStatus
+from app.models.billing import (
+    Invoice,
+    InvoiceLine,
+    InvoiceStatus,
+    LedgerEntry,
+    LedgerEntryType,
+    LedgerSource,
+    Payment,
+    PaymentStatus,
+    ServiceEntitlement,
+)
 from app.models.catalog import (
     AccessType,
     BillingCycle,
     BillingMode,
     CatalogOffer,
+    OfferPrice,
     OfferStatus,
     PriceBasis,
+    PriceType,
     ServiceType,
     Subscription,
     SubscriptionStatus,
@@ -317,6 +329,14 @@ def test_lapsed_prepaid_invoice_payment_reanchors_period_to_payment_date(db_sess
     assert line.description.endswith("(2026-08-05 - 2026-09-05)")
     assert line.metadata_["billing_period_start"] == "2026-08-05T00:00:00+00:00"
     assert line.metadata_["billing_period_end"] == "2026-09-05T00:00:00+00:00"
+    entitlement = (
+        db_session.query(ServiceEntitlement)
+        .filter(ServiceEntitlement.subscription_id == subscription.id)
+        .one()
+    )
+    assert entitlement.source_invoice_id == invoice.id
+    assert entitlement.starts_at == _utc_naive(datetime(2026, 8, 5, tzinfo=UTC))
+    assert entitlement.ends_at == _utc_naive(datetime(2026, 9, 5, tzinfo=UTC))
 
 
 def test_lapsed_prepaid_payment_preserves_existing_extension_delta(db_session):
@@ -409,3 +429,70 @@ def test_current_prepaid_invoice_payment_keeps_existing_period_anchor(db_session
     assert invoice.billing_period_start == _utc_naive(period_start)
     assert invoice.billing_period_end == _utc_naive(period_end)
     assert subscription.next_billing_at == _utc_naive(period_end)
+    entitlement = (
+        db_session.query(ServiceEntitlement)
+        .filter(ServiceEntitlement.subscription_id == subscription.id)
+        .one()
+    )
+    assert entitlement.source_invoice_id == invoice.id
+    assert entitlement.starts_at == _utc_naive(period_start)
+    assert entitlement.ends_at == _utc_naive(period_end)
+
+
+def test_direct_prepaid_wallet_renewal_creates_entitlement(db_session):
+    from app.services.billing.payments import apply_prepaid_service_credit
+
+    subscriber = _make_subscriber(db_session, status=SubscriberStatus.active)
+    paid_at = datetime(2026, 8, 5, 14, 30, tzinfo=UTC)
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        status=SubscriptionStatus.active,
+        billing_mode=BillingMode.prepaid,
+        billing_cycle=BillingCycle.monthly,
+        next_billing_at=paid_at.replace(hour=0, minute=0, second=0, microsecond=0),
+    )
+    db_session.add(
+        OfferPrice(
+            offer_id=subscription.offer_id,
+            price_type=PriceType.recurring,
+            amount=Decimal("1000.00"),
+            currency="NGN",
+            billing_cycle=BillingCycle.monthly,
+            is_active=True,
+        )
+    )
+    payment = Payment(
+        account_id=subscriber.id,
+        amount=Decimal("1000.00"),
+        currency="NGN",
+        status=PaymentStatus.succeeded,
+        paid_at=paid_at,
+    )
+    db_session.add(payment)
+    db_session.flush()
+    db_session.add(
+        LedgerEntry(
+            account_id=subscriber.id,
+            payment_id=payment.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.payment,
+            amount=Decimal("1000.00"),
+            currency="NGN",
+            memo="wallet top-up",
+        )
+    )
+    db_session.commit()
+
+    assert apply_prepaid_service_credit(db_session, payment) is True
+    db_session.flush()
+
+    db_session.refresh(subscription)
+    entitlement = (
+        db_session.query(ServiceEntitlement)
+        .filter(ServiceEntitlement.subscription_id == subscription.id)
+        .one()
+    )
+    assert entitlement.amount_funded == Decimal("1000.00")
+    assert entitlement.starts_at == _utc_naive(datetime(2026, 8, 5, tzinfo=UTC))
+    assert entitlement.ends_at == subscription.next_billing_at
