@@ -105,7 +105,10 @@ def list_available_team_agents(
         presence = presences.get(member.person_id)
         if presence is None:
             continue
-        if _effective_presence_status(presence) != InboxAgentPresenceStatus.online.value:
+        if (
+            _effective_presence_status(presence)
+            != InboxAgentPresenceStatus.online.value
+        ):
             continue
         active_count = active_counts.get(member.person_id, 0)
         max_concurrent = (
@@ -123,9 +126,7 @@ def list_available_team_agents(
             )
         )
 
-    candidates.sort(
-        key=lambda item: (item.active_conversation_count, item.person_id)
-    )
+    candidates.sort(key=lambda item: (item.active_conversation_count, item.person_id))
     return candidates
 
 
