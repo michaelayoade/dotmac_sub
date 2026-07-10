@@ -432,6 +432,23 @@ from app.models.portal_message import (  # noqa: F401
     PortalMessageType,
     PortalOnboardingState,
 )
+from app.models.project import (  # noqa: F401
+    Project,
+    ProjectComment,
+    ProjectPriority,
+    ProjectStatus,
+    ProjectTask,
+    ProjectTaskAssignee,
+    ProjectTaskComment,
+    ProjectTaskDependency,
+    ProjectTaskDependencyType,
+    ProjectTaskPriority,
+    ProjectTaskStatus,
+    ProjectTemplate,
+    ProjectTemplateTask,
+    ProjectTemplateTaskDependency,
+    ProjectType,
+)
 from app.models.project_mirror import (  # noqa: F401
     ProjectMirror,
     ProjectSyncState,
@@ -495,6 +512,12 @@ from app.models.referral import (  # noqa: F401
     ReferralMirror,
     ReferralProgramCache,
 )
+from app.models.referral_native import (  # noqa: F401
+    Referral,
+    ReferralCode,
+    ReferralRewardStatus,
+    ReferralStatus,
+)
 from app.models.router_management import (  # noqa: F401
     JumpHost,
     Router,
@@ -509,6 +532,19 @@ from app.models.router_management import (  # noqa: F401
     RouterSnapshotSource,
     RouterStatus,
     RouterTemplateCategory,
+)
+from app.models.sales import (  # noqa: F401
+    Lead,
+    LeadStatus,
+    Pipeline,
+    PipelineStage,
+    Quote,
+    QuoteLineItem,
+    QuoteStatus,
+    SalesOrder,
+    SalesOrderLine,
+    SalesOrderPaymentStatus,
+    SalesOrderStatus,
 )
 from app.models.scheduler import ScheduledTask, ScheduleType  # noqa: F401
 from app.models.service_extension import (  # noqa: F401
@@ -653,6 +689,11 @@ from app.models.wireguard import (  # noqa: F401
     WireGuardPeer,
     WireGuardPeerStatus,
     WireGuardServer,
+)
+from app.models.work_link import (  # noqa: F401
+    WorkEntityType,
+    WorkLink,
+    WorkLinkType,
 )
 from app.models.work_order_mirror import (  # noqa: F401
     WorkOrderMirror,

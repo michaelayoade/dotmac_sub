@@ -415,8 +415,9 @@ def test_subscriber_party_columns_registered() -> None:
     assert subscribers.columns["party_status"].type.length == 20
     org_fks = list(subscribers.columns["organization_id"].foreign_keys)
     assert org_fks and org_fks[0].column.table.name == "organizations"
-    # Plain UUID until the expand-B migration lands sales_orders.
-    assert not list(subscribers.columns["sales_order_id"].foreign_keys)
+    # Real FK since the expand-B migration (244) landed sales_orders.
+    so_fks = list(subscribers.columns["sales_order_id"].foreign_keys)
+    assert so_fks and so_fks[0].column.table.name == "sales_orders"
 
 
 def test_migration_243_imports_and_targets_expected_revision() -> None:
