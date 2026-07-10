@@ -465,6 +465,107 @@ def _collect_infrastructure_findings(db: Session) -> list[AlertFinding]:
                 details=dict(task),
             )
         )
+    try:
+        findings.extend(_poll_health_findings(db))
+    except Exception:
+        logger.exception("Infrastructure poll health findings failed")
+    return findings
+
+
+def _poll_health_findings(db: Session) -> list[AlertFinding]:
+    """Dead-man switch for the native infrastructure poller.
+
+    With Zabbix retired this poller is the thing that notices device silence,
+    so its own silence must be noticed here: a stalled run, a stuck
+    single-flight lock, failing VictoriaMetrics writes, or ping data going
+    stale all raise an admin alert (and auto-resolve when healthy again).
+    """
+    from app.services.infrastructure_polling import poll_health_snapshot
+
+    snapshot = poll_health_snapshot(db)
+    interval = int(snapshot["poll_interval_seconds"])
+    stale_run_after = interval * 3
+    skip_streak_threshold = _int_setting(
+        db, "infrastructure_poll_skip_streak_threshold", 5
+    )
+    stale_ping_minutes = _int_setting(db, "infrastructure_poll_stale_ping_minutes", 10)
+    prefix = f"{INFRASTRUCTURE_ALERT_PREFIX}poll:"
+    findings: list[AlertFinding] = []
+
+    age = snapshot["last_success_age_seconds"]
+    if age is None or age > stale_run_after:
+        display = "never" if age is None else f"{int(age)}s ago"
+        findings.append(
+            AlertFinding(
+                fingerprint=f"{prefix}stalled",
+                category="infrastructure",
+                source="infrastructure-poll",
+                severity=AlertSeverity.critical,
+                title="Native infrastructure poll stalled",
+                summary=(
+                    f"Last successful poll run: {display} "
+                    f"(threshold {stale_run_after}s = 3x beat interval)."
+                ),
+                details=_json_safe(snapshot),
+            )
+        )
+
+    if snapshot["skip_streak"] >= skip_streak_threshold:
+        findings.append(
+            AlertFinding(
+                fingerprint=f"{prefix}lock-stuck",
+                category="infrastructure",
+                source="infrastructure-poll",
+                severity=AlertSeverity.critical,
+                title="Infrastructure poll runs repeatedly skipped",
+                summary=(
+                    f"{snapshot['skip_streak']} consecutive runs skipped with "
+                    "already_running — the single-flight advisory lock looks "
+                    "stuck (see pg_locks for objid 7235920)."
+                ),
+                details=_json_safe(snapshot),
+            )
+        )
+
+    if snapshot["interface_write_failed"]:
+        findings.append(
+            AlertFinding(
+                fingerprint=f"{prefix}vm-write-failed",
+                category="infrastructure",
+                source="infrastructure-poll",
+                severity=AlertSeverity.warning,
+                title="Interface counter push to VictoriaMetrics failing",
+                summary=(
+                    f"Last poll run failed to write "
+                    f"{snapshot['interface_write_failed']} counter lines — "
+                    "admin interface bandwidth graphs will go blank."
+                ),
+                details=_json_safe(snapshot),
+            )
+        )
+
+    ping_age = snapshot["newest_ping_age_seconds"]
+    if snapshot["pingable_devices"] and (
+        ping_age is None or ping_age > stale_ping_minutes * 60
+    ):
+        display = "never" if ping_age is None else f"{int(ping_age)}s ago"
+        findings.append(
+            AlertFinding(
+                fingerprint=f"{prefix}ping-stale",
+                category="infrastructure",
+                source="infrastructure-poll",
+                severity=AlertSeverity.critical,
+                title="No fresh device ping results",
+                summary=(
+                    f"Newest last_ping_at across "
+                    f"{snapshot['pingable_devices']} pingable devices: "
+                    f"{display} (threshold {stale_ping_minutes}m) — outage "
+                    "detection is flying blind."
+                ),
+                details=_json_safe(snapshot),
+            )
+        )
+
     return findings
 
 

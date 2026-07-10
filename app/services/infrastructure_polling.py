@@ -205,3 +205,112 @@ def push_interface_counters(
         "interface_lines": len(lines),
         "interface_write_failed": write_failed,
     }
+
+
+# ---------------------------------------------------------------------------
+# Heartbeat: the poll task records every outcome so the admin-alert evaluator
+# can notice silence. Zabbix's most important job was noticing when nothing
+# was being measured; this is its replacement's dead-man switch.
+# ---------------------------------------------------------------------------
+
+HEARTBEAT_KEY = "infrastructure_poll:last_success"
+SKIP_STREAK_KEY = "infrastructure_poll:skip_streak"
+_HEARTBEAT_TTL_SECONDS = 7 * 86_400
+
+
+def record_poll_success(result: dict, *, now: datetime | None = None) -> None:
+    """Stamp the heartbeat after a completed sweep (advisory, cache-only)."""
+    try:
+        from app.services.app_cache import set_json
+
+        stamp = {
+            "at": (now or datetime.now(UTC)).isoformat(),
+            "result": {k: v for k, v in result.items() if isinstance(v, int)},
+        }
+        set_json(HEARTBEAT_KEY, stamp, _HEARTBEAT_TTL_SECONDS)
+        set_json(SKIP_STREAK_KEY, 0, _HEARTBEAT_TTL_SECONDS)
+    except Exception:  # cache is advisory; never fail the sweep over it
+        logger.exception("infrastructure_poll_heartbeat_write_failed")
+
+
+def record_poll_skip() -> int:
+    """Count consecutive already_running skips; returns the current streak."""
+    try:
+        from app.services.app_cache import get_json, set_json
+
+        streak = int(get_json(SKIP_STREAK_KEY) or 0) + 1
+        set_json(SKIP_STREAK_KEY, streak, _HEARTBEAT_TTL_SECONDS)
+        return streak
+    except Exception:
+        logger.exception("infrastructure_poll_skip_streak_write_failed")
+        return 0
+
+
+def poll_health_snapshot(db: Session, *, now: datetime | None = None) -> dict:
+    """Everything the alert evaluator needs to judge poll health.
+
+    Returns plain scalars (no ORM objects):
+    ``last_success_age_seconds`` (None = no heartbeat recorded),
+    ``skip_streak``, ``interface_write_failed`` (from the last completed run),
+    ``newest_ping_age_seconds`` (None = no pingable device ever stamped),
+    ``pingable_devices``, ``poll_interval_seconds``.
+    """
+    from sqlalchemy import and_, func
+
+    now = now or datetime.now(UTC)
+
+    last_success_age: float | None = None
+    interface_write_failed = 0
+    skip_streak = 0
+    try:
+        from app.services.app_cache import get_json
+
+        heartbeat = get_json(HEARTBEAT_KEY)
+        if isinstance(heartbeat, dict) and heartbeat.get("at"):
+            recorded = datetime.fromisoformat(str(heartbeat["at"]))
+            if recorded.tzinfo is None:
+                recorded = recorded.replace(tzinfo=UTC)
+            last_success_age = max(0.0, (now - recorded).total_seconds())
+            result = heartbeat.get("result") or {}
+            interface_write_failed = int(result.get("interface_write_failed") or 0)
+        skip_streak = int(get_json(SKIP_STREAK_KEY) or 0)
+    except Exception:
+        logger.exception("infrastructure_poll_heartbeat_read_failed")
+
+    pingable = and_(
+        NetworkDevice.is_active.is_(True),
+        NetworkDevice.ping_enabled.is_(True),
+        NetworkDevice.mgmt_ip.isnot(None),
+    )
+    newest_ping_at, pingable_devices = db.execute(
+        select(func.max(NetworkDevice.last_ping_at), func.count()).where(pingable)
+    ).one()
+    newest_ping_age: float | None = None
+    if newest_ping_at is not None:
+        if newest_ping_at.tzinfo is None:
+            newest_ping_at = newest_ping_at.replace(tzinfo=UTC)
+        newest_ping_age = max(0.0, (now - newest_ping_at).total_seconds())
+
+    try:
+        from app.models.domain_settings import SettingDomain
+        from app.services.settings_spec import resolve_value
+
+        poll_interval = int(
+            resolve_value(
+                db,
+                SettingDomain.network_monitoring,
+                "infrastructure_poll_interval_seconds",
+            )
+            or 60
+        )
+    except Exception:
+        poll_interval = 60
+
+    return {
+        "last_success_age_seconds": last_success_age,
+        "skip_streak": skip_streak,
+        "interface_write_failed": interface_write_failed,
+        "newest_ping_age_seconds": newest_ping_age,
+        "pingable_devices": int(pingable_devices or 0),
+        "poll_interval_seconds": max(30, poll_interval),
+    }
