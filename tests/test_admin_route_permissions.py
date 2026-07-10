@@ -516,6 +516,18 @@ def test_team_inbox_routes_require_support_permissions():
         "GET",
         "support:ticket:read",
     )
+    assert _route_has_permission(
+        admin_inbox.router,
+        "/inbox/{conversation_id}",
+        "GET",
+        "support:ticket:read",
+    )
+    assert _route_has_permission(
+        admin_inbox.router,
+        "/inbox/{conversation_id}/reply",
+        "POST",
+        "support:ticket:update",
+    )
 
 
 # --- 2026-06-29 admin-web authz hardening (regression locks) -----------------

@@ -19,7 +19,7 @@ from app.models.team_inbox import (
     InboxTeamRole,
     InboxTeamSource,
 )
-from app.services import team_inbox_read
+from app.services import team_inbox_outbound, team_inbox_read
 from app.web.admin import inbox as admin_inbox
 
 
@@ -233,6 +233,71 @@ def test_admin_inbox_queue_renders_filtered_context(db_session, monkeypatch):
     assert context["search"] == "router"
     assert context["service_team_id"] == str(support.id)
     assert context["needs_response"] is True
+
+
+def test_admin_inbox_detail_renders_timeline(db_session, monkeypatch):
+    support = _team(db_session, "Support")
+    conversation = _conversation(db_session, support, subject="Router offline")
+    _message(
+        db_session,
+        conversation,
+        direction=InboxMessageDirection.inbound.value,
+        body="Down",
+        at=datetime(2026, 7, 10, 8, 0, tzinfo=UTC),
+    )
+    captured: dict[str, object] = {}
+
+    def _fake_template_response(template_name, context):
+        captured["template_name"] = template_name
+        captured["context"] = context
+        return context
+
+    monkeypatch.setattr(
+        admin_inbox.templates,
+        "TemplateResponse",
+        _fake_template_response,
+    )
+    db_session.commit()
+
+    context = admin_inbox.team_inbox_detail(
+        conversation.id,
+        request=SimpleNamespace(
+            state=SimpleNamespace(),
+            query_params={},
+        ),
+        db=db_session,
+    )
+
+    assert captured["template_name"] == "admin/inbox/detail.html"
+    assert context["timeline"].id == str(conversation.id)
+    assert context["timeline"].messages[0].body == "Down"
+
+
+def test_admin_inbox_detail_reply_sends_message(db_session, monkeypatch):
+    support = _team(db_session, "Support")
+    conversation = _conversation(db_session, support, subject="Router offline")
+    sent: dict[str, object] = {}
+    monkeypatch.setattr(
+        team_inbox_outbound.email_service,
+        "send_email",
+        lambda *args, **kwargs: sent.update(kwargs) or True,
+    )
+    db_session.commit()
+
+    response = admin_inbox.team_inbox_reply(
+        conversation.id,
+        request=SimpleNamespace(state=SimpleNamespace()),
+        body_text="We are checking this now.",
+        db=db_session,
+    )
+
+    assert response.status_code == 303
+    assert f"/admin/inbox/{conversation.id}" in response.headers["location"]
+    assert sent["to_email"] == "customer@example.com"
+    timeline = team_inbox_read.get_conversation_timeline(db_session, conversation.id)
+    assert timeline is not None
+    assert timeline.messages[-1].body == "<p>We are checking this now.</p>"
+    assert timeline.messages[-1].metadata["source_route"] == "admin_inbox_detail_reply"
 
 
 def test_conversation_timeline_returns_teams_assignments_and_messages(db_session):
