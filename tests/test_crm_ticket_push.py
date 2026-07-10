@@ -2,18 +2,34 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+import logging
+from contextlib import contextmanager
+from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
 
+from app.config import settings
 from app.models.support import Ticket, TicketComment
 from app.services import crm_ticket_push
 from app.services.crm_ticket_push import (
     TicketNotLinkedError,
+    enqueue_crm_comment_push,
+    enqueue_crm_ticket_push,
     push_comment,
     push_ticket,
 )
+
+
+@contextmanager
+def _with_crm_base_url(value: str):
+    """Temporarily override the frozen settings' CRM base URL."""
+    original = settings.crm_base_url
+    object.__setattr__(settings, "crm_base_url", value)
+    try:
+        yield
+    finally:
+        object.__setattr__(settings, "crm_base_url", original)
 
 
 def _local_ticket(db, subscriber, **overrides):
@@ -156,3 +172,39 @@ def test_push_comment_skips_internal(monkeypatch, db_session, subscriber):
 
     assert push_comment(db_session, str(comment.id)) == "internal_skipped"
     client.create_ticket_comment.assert_not_called()
+
+
+def test_enqueue_ticket_push_noops_silently_without_base_url(caplog):
+    """Flip kill switch: unset crm_base_url -> nothing enqueued, no log noise."""
+    with (
+        _with_crm_base_url(""),
+        patch("app.services.queue_adapter.enqueue_task") as enqueue,
+        caplog.at_level(logging.WARNING, logger="app.services.crm_ticket_push"),
+    ):
+        assert enqueue_crm_ticket_push(uuid4(), source="test") is None
+    enqueue.assert_not_called()
+    assert not caplog.records
+
+
+def test_enqueue_comment_push_noops_silently_without_base_url(caplog):
+    with (
+        _with_crm_base_url(""),
+        patch("app.services.queue_adapter.enqueue_task") as enqueue,
+        caplog.at_level(logging.WARNING, logger="app.services.crm_ticket_push"),
+    ):
+        assert enqueue_crm_comment_push(uuid4(), source="test") is None
+    enqueue.assert_not_called()
+    assert not caplog.records
+
+
+def test_enqueue_helpers_enqueue_when_base_url_set():
+    ticket_id, comment_id = uuid4(), uuid4()
+    with (
+        _with_crm_base_url("https://crm.example.test"),
+        patch("app.services.queue_adapter.enqueue_task") as enqueue,
+    ):
+        enqueue_crm_ticket_push(ticket_id, source="test")
+        enqueue_crm_comment_push(comment_id, source="test")
+    assert enqueue.call_count == 2
+    assert enqueue.call_args_list[0].kwargs["args"] == [str(ticket_id)]
+    assert enqueue.call_args_list[1].kwargs["args"] == [str(comment_id)]
