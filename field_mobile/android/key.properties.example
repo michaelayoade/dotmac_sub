@@ -1,0 +1,12 @@
+# Android release signing — copy to android/key.properties (git-ignored) on the
+# build/CI host and fill in with the real upload keystore. Do NOT commit the
+# filled-in file or the .jks keystore.
+#
+# Generate an upload keystore once (Play requires a fresh key since the app was delisted):
+#   keytool -genkey -v -keystore upload-keystore.jks -keyalg RSA -keysize 2048 \
+#     -validity 10000 -alias upload
+#
+storeFile=/absolute/path/to/upload-keystore.jks
+storePassword=CHANGE_ME
+keyAlias=upload
+keyPassword=CHANGE_ME
