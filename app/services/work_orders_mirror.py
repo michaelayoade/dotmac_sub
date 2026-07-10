@@ -129,6 +129,21 @@ def _rating_metadata(row: WorkOrderMirror) -> dict | None:
     return rating if isinstance(rating, dict) else None
 
 
+def is_sub_authoritative(row: WorkOrderMirror) -> bool:
+    """True when sub owns this row's field activity (Phase 2 SoT posture).
+
+    Two markers: native rows are born with a ``sub-`` public id
+    (dispatch.WorkOrderHeaders.create), and native field writes stamp
+    ``metadata.native_field_source == "sub"`` (field/source.py). CRM
+    reconcile/webhook ingest must not clobber status or activity timestamps
+    on such rows — the sub-pointed field app is the only writer there.
+    """
+    if str(row.crm_work_order_id or "").startswith("sub-"):
+        return True
+    metadata = row.metadata_ if isinstance(row.metadata_, dict) else {}
+    return metadata.get("native_field_source") == "sub"
+
+
 def _ensure_technician_profile(
     db: Session,
     *,
@@ -217,12 +232,25 @@ def _upsert_row(
             crm_work_order_id=crm_work_order_id, subscriber_id=subscriber_id
         )
         db.add(row)
+        protected = False
+    else:
+        # Clobber protection (Phase 2): when sub owns the row's field activity,
+        # CRM payloads must not overwrite status or activity timestamps — the
+        # sub-pointed field app is the only writer there. Harmless header
+        # fields still merge below.
+        protected = is_sub_authoritative(row)
+        if protected:
+            logger.info(
+                "work_order_upsert_native_precedence work_order_id=%s: "
+                "skipping CRM status/timestamps",
+                crm_work_order_id,
+            )
     row.subscriber_id = subscriber_id
     if title is not None:
         row.title = title
     if description is not None:
         row.description = description
-    if status:
+    if status and not protected:
         row.status = status
     if work_type is not None:
         row.work_type = work_type
@@ -250,15 +278,15 @@ def _upsert_row(
         row.estimated_arrival_at = estimated_arrival_at
     if estimated_duration_minutes is not None:
         row.estimated_duration_minutes = estimated_duration_minutes
-    if started_at is not None:
+    if started_at is not None and not protected:
         row.started_at = started_at
-    if paused_at is not None:
+    if paused_at is not None and not protected:
         row.paused_at = paused_at
-    if resumed_at is not None:
+    if resumed_at is not None and not protected:
         row.resumed_at = resumed_at
-    if completed_at is not None:
+    if completed_at is not None and not protected:
         row.completed_at = completed_at
-    if total_active_seconds is not None:
+    if total_active_seconds is not None and not protected:
         row.total_active_seconds = total_active_seconds
     if required_skills is not None:
         row.required_skills = required_skills
@@ -269,7 +297,12 @@ def _upsert_row(
     if is_active is not None:
         row.is_active = is_active
     if metadata_ is not None:
-        row.metadata_ = metadata_
+        if protected:
+            # Merge under the existing metadata so CRM payloads can never wipe
+            # the native_field_source marker or the native activity log.
+            row.metadata_ = {**metadata_, **(row.metadata_ or {})}
+        else:
+            row.metadata_ = metadata_
     if work_order_created_at is not None:
         row.work_order_created_at = work_order_created_at
     return row
@@ -404,28 +437,34 @@ def read_for_subscriber(
     refresh_ttl_seconds: int = _DEFAULT_REFRESH_TTL_SECONDS,
 ) -> dict:
     """Build the field-service payload from the mirror, lazily refreshing from
-    the CRM when the cache is missing or stale (best-effort)."""
+    the CRM when the cache is missing or stale (best-effort). With the
+    crm.work_order_pull kill switch off (Phase 2 flip: sub is the work-order
+    system-of-record) the CRM is never contacted — local rows only."""
+    from app.services import control_registry
+
     sub_uuid = coerce_uuid(str(subscriber_id))
-    sync = db.get(WorkOrderSyncState, sub_uuid)
-    cutoff = datetime.now(UTC) - timedelta(seconds=max(0, refresh_ttl_seconds))
-    synced = _as_utc(sync.synced_at) if sync else None
-    if sync is None or synced is None:
-        # Cold cache — fetch synchronously so the first load is populated.
-        try:
-            reconcile_subscriber(db, str(subscriber_id))
-        except CRMClientError as exc:
-            db.rollback()
-            logger.warning(
-                "work_order_lazy_refresh_failed subscriber=%s: %s", sub_uuid, exc
-            )
-    elif synced < cutoff:
-        # Warm but stale — serve the stale copy now and refresh in the background
-        # so the request doesn't block on a CRM round-trip. Optimistically stamp
-        # synced_at so concurrent reads within the TTL don't each enqueue
-        # (debounce); the refresh task re-stamps after pulling.
-        sync.synced_at = datetime.now(UTC)
-        db.commit()
-        _enqueue_lazy_refresh(str(subscriber_id))
+    if control_registry.is_enabled(db, "crm.work_order_pull"):
+        sync = db.get(WorkOrderSyncState, sub_uuid)
+        cutoff = datetime.now(UTC) - timedelta(seconds=max(0, refresh_ttl_seconds))
+        synced = _as_utc(sync.synced_at) if sync else None
+        if sync is None or synced is None:
+            # Cold cache — fetch synchronously so the first load is populated.
+            try:
+                reconcile_subscriber(db, str(subscriber_id))
+            except CRMClientError as exc:
+                db.rollback()
+                logger.warning(
+                    "work_order_lazy_refresh_failed subscriber=%s: %s", sub_uuid, exc
+                )
+        elif synced < cutoff:
+            # Warm but stale — serve the stale copy now and refresh in the
+            # background so the request doesn't block on a CRM round-trip.
+            # Optimistically stamp synced_at so concurrent reads within the TTL
+            # don't each enqueue (debounce); the refresh task re-stamps after
+            # pulling.
+            sync.synced_at = datetime.now(UTC)
+            db.commit()
+            _enqueue_lazy_refresh(str(subscriber_id))
 
     rows = db.scalars(
         select(WorkOrderMirror)
@@ -560,13 +599,18 @@ def apply_webhook(db: Session, event_type: str, body: dict) -> dict:
         )
         return {"status": "ignored", "reason": "unmapped_subscriber"}
 
-    # Prior status (before this event) so we push exactly once on the
-    # transition into in_progress — the "tech started / on the way" moment.
-    prev_status = db.scalar(
-        select(WorkOrderMirror.status).where(
+    # Prior row (before this event): status so we push exactly once on the
+    # transition into in_progress — the "tech started / on the way" moment —
+    # and the sub-authoritative marker so a CRM echo of a natively-run work
+    # order neither clobbers it (_upsert_row) nor re-notifies the customer
+    # (the native field transitions own that lifecycle).
+    prev_row = db.scalar(
+        select(WorkOrderMirror).where(
             WorkOrderMirror.crm_work_order_id == crm_work_order_id
         )
     )
+    prev_status = prev_row.status if prev_row is not None else None
+    protected = prev_row is not None and is_sub_authoritative(prev_row)
 
     completed_at = None
     if event_type == "work_order.completed":
@@ -614,6 +658,10 @@ def apply_webhook(db: Session, event_type: str, body: dict) -> dict:
     # tapping Start Work (→ in_progress): the live map goes active, so wake the
     # customer and deep-link straight to tracking. Dispatched/completed keep a
     # lighter notice. Each transition fires once (guarded by prev_status).
+    if protected:
+        # Status/timestamps were not applied; don't notify off a CRM echo.
+        return {"status": "ok", "event": event_type, "native_precedence": True}
+
     new_status = (body.get("status") or body.get("to_status") or "").strip().lower()
     started = (
         new_status == "in_progress" and (prev_status or "").lower() != "in_progress"

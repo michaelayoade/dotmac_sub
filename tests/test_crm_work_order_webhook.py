@@ -109,6 +109,84 @@ def test_valid_event_reaches_service(db_session):
     )
 
 
+def test_event_noop_when_pull_disabled(monkeypatch, db_session):
+    """Flip kill switch: crm.work_order_pull off -> 200 ack, mirror untouched."""
+    monkeypatch.setenv("CRM_WORK_ORDER_PULL_ENABLED", "false")
+    sub = _subscriber(db_session)
+    body = {
+        "subscriber_id": str(sub.id),
+        "work_order_id": "wo-killed",
+        "title": "Repair",
+        "status": "scheduled",
+    }
+    with _with_secret(SECRET), patch("app.services.push.send_push") as push:
+        code, resp = _post(db_session, body)
+    assert code == 200
+    assert resp == {
+        "status": "ignored",
+        "reason": "work_order_pull_disabled",
+        "event": "work_order.created",
+    }
+    push.assert_not_called()
+    assert (
+        db_session.query(WorkOrderMirror)
+        .filter_by(crm_work_order_id="wo-killed")
+        .count()
+        == 0
+    )
+
+
+def test_event_processes_when_setting_missing(monkeypatch, db_session):
+    """No env, no DB row -> the control's on_missing default (ON) applies:
+    the switch is inert until the Phase 2 flip deliberately turns it off."""
+    monkeypatch.delenv("CRM_WORK_ORDER_PULL_ENABLED", raising=False)
+    sub = _subscriber(db_session)
+    body = {
+        "subscriber_id": str(sub.id),
+        "work_order_id": "wo-default-on",
+        "title": "Repair",
+        "status": "scheduled",
+    }
+    with _with_secret(SECRET), patch("app.services.push.send_push"):
+        code, resp = _post(db_session, body)
+    assert code == 200
+    assert resp["status"] == "ok"
+
+
+def test_branch_gated_by_scheduler_db_row(monkeypatch, db_session):
+    """The exact flip lever: the legacy scheduler.crm_work_order_pull_enabled
+    DB row turns the branch on and off (no env, no deploy)."""
+    from app.models.domain_settings import DomainSetting, SettingDomain
+
+    monkeypatch.delenv("CRM_WORK_ORDER_PULL_ENABLED", raising=False)
+    row = DomainSetting(
+        domain=SettingDomain.scheduler,
+        key="crm_work_order_pull_enabled",
+        value_text="false",
+    )
+    db_session.add(row)
+    db_session.commit()
+
+    sub = _subscriber(db_session)
+    body = {
+        "subscriber_id": str(sub.id),
+        "work_order_id": "wo-row-gated",
+        "title": "Repair",
+        "status": "scheduled",
+    }
+    with _with_secret(SECRET), patch("app.services.push.send_push"):
+        code, resp = _post(db_session, body)
+    assert code == 200
+    assert resp["reason"] == "work_order_pull_disabled"
+
+    row.value_text = "true"
+    db_session.commit()
+    with _with_secret(SECRET), patch("app.services.push.send_push"):
+        code, resp = _post(db_session, body)
+    assert code == 200
+    assert resp["status"] == "ok"
+
+
 def test_bad_signature_rejected(db_session):
     body = {"subscriber_id": str(uuid.uuid4()), "work_order_id": "x"}
     with _with_secret(SECRET):

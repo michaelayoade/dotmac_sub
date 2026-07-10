@@ -1,8 +1,10 @@
 """CLI for the CRM duplicate-subscriber merge (see crm_duplicate_merge).
 
-DESTRUCTIVE on the CRM when run without --dry-run: re-points tickets/work
-orders from each erpnext alias record to the imported primary, then
-soft-deletes the alias. Start with --dry-run, then a small --limit canary.
+DESTRUCTIVE on the CRM when run without --dry-run: re-points tickets from
+each erpnext alias record to the imported primary, then soft-deletes the
+alias. Work orders are re-pointed natively in sub's work_order_mirror only
+(sub is the work-order system-of-record — CRM-side WO reassignment stopped at
+the Phase 2 flip). Start with --dry-run, then a small --limit canary.
 
 Usage:
     python -m scripts.one_off.merge_crm_duplicate_subscribers --dry-run

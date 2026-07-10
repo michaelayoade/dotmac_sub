@@ -313,6 +313,170 @@ def test_cold_read_stays_synchronous_and_does_not_enqueue(db_session):
     assert out["total"] == 1  # populated on first load
 
 
+def test_read_serves_local_only_when_pull_disabled(monkeypatch, db_session):
+    """Phase 2 flip: crm.work_order_pull off -> never contact the CRM (no cold
+    fetch, no lazy refresh) and serve whatever the local store holds."""
+    monkeypatch.setenv("CRM_WORK_ORDER_PULL_ENABLED", "false")
+    sub = _subscriber(db_session, crm_id=uuid.uuid4())
+    db_session.add(
+        WorkOrderMirror(
+            subscriber_id=sub.id,
+            crm_work_order_id="sub-native1",
+            title="Native install",
+            status="scheduled",
+        )
+    )
+    db_session.commit()
+
+    # Cold cache (no sync state) would normally fetch synchronously.
+    with (
+        patch("app.services.work_orders_mirror.reconcile_subscriber") as recon,
+        patch("app.services.queue_adapter.enqueue_task") as enq,
+    ):
+        out = work_orders_mirror.read_for_subscriber(db_session, str(sub.id))
+
+    recon.assert_not_called()
+    enq.assert_not_called()
+    assert out["total"] == 1
+    assert out["work_orders"][0]["id"] == "sub-native1"
+
+
+def test_upsert_protects_native_field_activity_from_crm_clobber(db_session):
+    """Reconcile-clobber protection: a CRM payload must not overwrite status or
+    activity timestamps on a row sub's field services own — harmless header
+    fields still merge and the native metadata marker survives."""
+    started = datetime(2026, 7, 9, 9, 0, tzinfo=UTC)
+    sub = _subscriber(db_session, crm_id=uuid.uuid4())
+    db_session.add(
+        WorkOrderMirror(
+            subscriber_id=sub.id,
+            crm_work_order_id="wo-native",
+            title="Repair",
+            status="in_progress",
+            started_at=started,
+            total_active_seconds=600,
+            metadata_={
+                "native_field_source": "sub",
+                "native_field_activity": {"start": {"source": "sub"}},
+            },
+        )
+    )
+    db_session.commit()
+
+    with (
+        patch(
+            "app.services.work_orders_mirror.get_crm_client",
+            return_value=MagicMock(
+                get_portal_work_orders=MagicMock(
+                    return_value={
+                        "work_orders": [
+                            {
+                                "id": "wo-native",
+                                "title": "Repair (CRM title)",
+                                "status": "scheduled",
+                                "address": "12 New St",
+                                "started_at": None,
+                                "completed_at": "2026-07-09T10:00:00+00:00",
+                                "total_active_seconds": 0,
+                                "metadata": {"crm_only_key": "x"},
+                            }
+                        ]
+                    }
+                )
+            ),
+        ),
+        patch(
+            "app.services.work_orders_mirror.resolve_crm_subscriber_id",
+            return_value="crm-1",
+        ),
+    ):
+        work_orders_mirror.reconcile_subscriber(db_session, str(sub.id))
+
+    row = (
+        db_session.query(WorkOrderMirror).filter_by(crm_work_order_id="wo-native").one()
+    )
+    # Protected: status + activity timestamps stay sub-owned.
+    assert row.status == "in_progress"
+    assert row.started_at.replace(tzinfo=UTC) == started
+    assert row.completed_at is None
+    assert row.total_active_seconds == 600
+    # Harmless header fields merge; native metadata survives a CRM metadata blob.
+    assert row.title == "Repair (CRM title)"
+    assert row.address == "12 New St"
+    assert row.metadata_["native_field_source"] == "sub"
+    assert row.metadata_["native_field_activity"] == {"start": {"source": "sub"}}
+    assert row.metadata_["crm_only_key"] == "x"
+
+
+def test_webhook_does_not_clobber_or_notify_on_native_row(db_session):
+    """A CRM echo for a natively-run work order neither applies status nor
+    re-pushes lifecycle notifications (the field transitions own that)."""
+    sub = _subscriber(db_session)
+    db_session.add(
+        WorkOrderMirror(
+            subscriber_id=sub.id,
+            crm_work_order_id="wo-echo",
+            title="Repair",
+            status="completed",
+            metadata_={"native_field_source": "sub"},
+        )
+    )
+    db_session.commit()
+
+    with patch("app.services.push.send_push") as push:
+        out = work_orders_mirror.apply_webhook(
+            db_session,
+            "work_order.updated",
+            {
+                "subscriber_id": str(sub.id),
+                "work_order_id": "wo-echo",
+                "to_status": "in_progress",
+            },
+        )
+
+    assert out == {
+        "status": "ok",
+        "event": "work_order.updated",
+        "native_precedence": True,
+    }
+    push.assert_not_called()
+    row = db_session.query(WorkOrderMirror).filter_by(crm_work_order_id="wo-echo").one()
+    assert row.status == "completed"
+
+
+def test_upsert_protects_sub_prefixed_rows_without_marker(db_session):
+    """Native rows are recognizable by their ``sub-`` public id alone (born via
+    dispatch.work_order_headers.create) even without the metadata marker."""
+    sub = _subscriber(db_session)
+    db_session.add(
+        WorkOrderMirror(
+            subscriber_id=sub.id,
+            crm_work_order_id="sub-abc123",
+            title="Native",
+            status="in_progress",
+        )
+    )
+    db_session.commit()
+
+    with patch("app.services.push.send_push"):
+        work_orders_mirror.apply_webhook(
+            db_session,
+            "work_order.canceled",
+            {
+                "subscriber_id": str(sub.id),
+                "work_order_id": "sub-abc123",
+                "status": "canceled",
+            },
+        )
+
+    row = (
+        db_session.query(WorkOrderMirror)
+        .filter_by(crm_work_order_id="sub-abc123")
+        .one()
+    )
+    assert row.status == "in_progress"
+
+
 def test_technician_location_uses_native_presence_for_owned_work_order(db_session):
     sub = _subscriber(db_session)
     profile = TechnicianProfile(

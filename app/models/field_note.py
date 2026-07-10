@@ -45,6 +45,10 @@ class FieldWorkOrderNote(Base):
     body: Mapped[str] = mapped_column(Text, nullable=False)
     is_internal: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     attachments: Mapped[list | None] = mapped_column(JSON)
+    # Provenance for imported notes (Phase 2 backfill): CRM-origin notes carry
+    # {"source": "crm", "crm_note_id": ..., ...} — crm_note_id doubles as the
+    # importer's dedupe marker. Native notes leave this NULL.
+    metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )

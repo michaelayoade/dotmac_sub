@@ -1380,6 +1380,18 @@ SETTINGS_SPECS: list[SettingSpec] = [
         label="CRM Ticket Pull Interval (minutes)",
     ),
     SettingSpec(
+        # Phase 2 flip lever: gates the CRM work-order webhook branch, the
+        # work_order_mirror_reconcile beat, and the lazy mirror refresh
+        # (crm.work_order_pull in the control registry). Default ON — inert
+        # until the work-order SoT flip deliberately turns it off.
+        domain=SettingDomain.scheduler,
+        key="crm_work_order_pull_enabled",
+        env_var="CRM_WORK_ORDER_PULL_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=True,
+        label="CRM Work-Order Pull Enabled",
+    ),
+    SettingSpec(
         domain=SettingDomain.scheduler,
         key="crm_billing_push_enabled",
         env_var="CRM_BILLING_PUSH_ENABLED",

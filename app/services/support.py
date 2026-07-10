@@ -35,7 +35,6 @@ from app.models.support import (
     TicketStatus,
 )
 from app.schemas.notification import NotificationCreate
-from app.schemas.provisioning import ServiceOrderCreate
 from app.schemas.support import (
     TicketBulkUpdateRequest,
     TicketCommentCreate,
@@ -49,7 +48,6 @@ from app.schemas.support import (
 from app.services import domain_settings as domain_settings_service
 from app.services import notification as notification_service
 from app.services import numbering as numbering_service
-from app.services import provisioning as provisioning_service
 from app.services import support_ticket_filters, ticket_validation
 from app.services import support_ticket_settings as support_ticket_settings_service
 from app.services.audit_helpers import log_audit_event
@@ -851,8 +849,17 @@ class Tickets:
 
     @staticmethod
     def _ensure_field_visit_work_order(db: Session, ticket: Ticket) -> None:
-        from app.models.catalog import Subscription, SubscriptionStatus
+        """Create the native dispatch work order backing a ``field_visit`` ticket.
 
+        Phase 2 (sub = work-order system-of-record): a field-visit ticket
+        births a real work-order header through
+        ``dispatch_service.work_order_headers.create`` so the job is visible
+        to dispatch, the assignment queue, and technicians in field_mobile.
+        Historically this created a bare provisioning ``ServiceOrder`` stub
+        that no field surface could see; pre-existing tickets that already
+        carry a ServiceOrder-backed ``metadata.work_order_id`` are honored for
+        dedupe and left as-is.
+        """
         tags = {
             str(tag).strip().lower() for tag in (ticket.tags or []) if str(tag).strip()
         }
@@ -861,30 +868,61 @@ class Tickets:
         if not ticket.subscriber_id:
             return
 
+        from app.models.work_order_mirror import WorkOrderMirror
+
         metadata = dict(ticket.metadata_ or {})
-        existing_order_id = metadata.get("work_order_id")
+        existing_order_id = str(metadata.get("work_order_id") or "").strip()
         if existing_order_id:
-            order = db.get(ServiceOrder, existing_order_id)
-            if order:
+            existing = (
+                db.query(WorkOrderMirror)
+                .filter(WorkOrderMirror.crm_work_order_id == existing_order_id)
+                .first()
+            )
+            if existing is not None:
+                return
+            legacy_uuid = _coerce_uuid(existing_order_id)
+            if legacy_uuid is not None and db.get(ServiceOrder, legacy_uuid):
+                # Legacy ServiceOrder-stub linkage from before the Phase 2
+                # cutover — don't double-create.
                 return
 
-        active_subscription = (
-            db.query(Subscription)
-            .filter(Subscription.subscriber_id == ticket.subscriber_id)
-            .filter(Subscription.status == SubscriptionStatus.active)
-            .order_by(Subscription.created_at.desc())
+        # Belt-and-braces dedupe on the ticket linkage itself (e.g. the ticket
+        # metadata was edited away but the work order exists).
+        linked = (
+            db.query(WorkOrderMirror)
+            .filter(WorkOrderMirror.crm_ticket_id == str(ticket.id))
             .first()
         )
+        if linked is not None:
+            metadata["work_order_id"] = linked.crm_work_order_id
+            ticket.metadata_ = metadata
+            return
 
-        order = provisioning_service.service_orders.create(
+        from app.schemas.dispatch import WorkOrderHeaderCreate
+        from app.services import dispatch as dispatch_service
+
+        ticket_title = (ticket.title or "").strip()
+        title = f"Field visit — {ticket_title}"[:200] if ticket_title else "Field visit"
+        order = dispatch_service.work_order_headers.create(
             db,
-            ServiceOrderCreate(
-                account_id=ticket.subscriber_id,
-                subscription_id=active_subscription.id if active_subscription else None,
-                notes=f"Auto-created from support ticket {ticket.number or ticket.id}",
+            WorkOrderHeaderCreate(
+                title=title,
+                subscriber_id=ticket.subscriber_id,
+                description=(
+                    f"Auto-created from support ticket {ticket.number or ticket.id}"
+                ),
+                work_type="repair",
+                priority=(ticket.priority or "normal"),
+                crm_ticket_id=str(ticket.id),
+                tags=["field_visit"],
+                metadata_={
+                    "created_from": "support_ticket",
+                    "ticket_id": str(ticket.id),
+                    "ticket_number": ticket.number,
+                },
             ),
         )
-        metadata["work_order_id"] = str(order.id)
+        metadata["work_order_id"] = order.crm_work_order_id
         ticket.metadata_ = metadata
 
     @staticmethod
@@ -1148,12 +1186,16 @@ class Tickets:
 
             sla_assignment.create_sla_clock_for_ticket(db, ticket)
         Tickets._apply_status_timestamp_rules(ticket, data)
-        Tickets._ensure_field_visit_work_order(db, ticket)
 
         from app.models.support import AutomationTrigger
         from app.services import support_automation
 
         support_automation.apply_rules(db, ticket, AutomationTrigger.ticket_created)
+
+        # After automation: an add_tag rule stamping "field_visit" births the
+        # native work order too (automation→WO hook, Phase 2 — there is no
+        # dedicated WO-creation automation action, the tag IS the trigger).
+        Tickets._ensure_field_visit_work_order(db, ticket)
 
         Tickets._queue_notifications_for_assignments(db, ticket, actor_id)
 

@@ -1,5 +1,6 @@
 import 'package:dotmac_field/app/app.dart';
 import 'package:dotmac_field/core/api/token_store.dart';
+import 'package:dotmac_field/core/location/map_coordinates.dart';
 import 'package:dotmac_field/core/location/location_source.dart';
 import 'package:dotmac_field/core/offline/database.dart';
 import 'package:dotmac_field/features/auth/auth_state.dart';
@@ -9,7 +10,7 @@ import 'package:dotmac_field/features/location/location_cadence.dart';
 import 'package:dotmac_field/features/location/location_ping_service.dart';
 import 'package:dotmac_field/features/manager/manager_providers.dart';
 import 'package:dotmac_field/features/profile/profile_screen.dart';
-import 'package:dotmac_field/features/vendor/vendor_providers.dart';
+import 'package:dotmac_field/features/vendor/vendor_map_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -126,15 +127,14 @@ void main() {
     expect(find.text('Schedule'), findsWidgets);
   });
 
-  testWidgets('vendor shell shows Projects, Map and Profile only', (
-    tester,
-  ) async {
+  testWidgets('vendor shell shows Map and Profile only', (tester) async {
     await tester.pumpWidget(
       _app(
         controller: _VendorController.new,
         extra: [
-          vendorProjectsProvider.overrideWith(
-            (ref) async => <VendorProjectListItem>[],
+          vendorNearbyPlantProvider.overrideWith(
+            (ref) async =>
+                const VendorMapData(center: defaultMapCenter, assets: []),
           ),
         ],
       ),
@@ -142,10 +142,11 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(NavigationBar), findsOneWidget);
-    expect(find.text('Projects'), findsWidgets);
+    expect(find.text('Nearby plant'), findsOneWidget);
     expect(find.text('Map'), findsOneWidget); // vendor-scoped nearby-plant map
     expect(find.text('Profile'), findsOneWidget);
     // The require_technician tabs stay hidden for vendors (would 403).
+    expect(find.text('Projects'), findsNothing);
     expect(find.text('Schedule'), findsNothing);
     expect(find.text('Materials'), findsNothing);
     expect(find.text('Customers'), findsNothing);
