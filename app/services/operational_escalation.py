@@ -28,12 +28,14 @@ def _participant_type(
     *,
     service_team_id: str | UUID | None = None,
     person_id: str | UUID | None = None,
+    subscriber_id: str | UUID | None = None,
     duty_role: str | None = None,
     external: bool = False,
 ) -> str:
     selected = [
         service_team_id is not None,
         person_id is not None,
+        subscriber_id is not None,
         bool(duty_role),
         external,
     ]
@@ -43,6 +45,8 @@ def _participant_type(
         return OperationalParticipantType.team
     if person_id is not None:
         return OperationalParticipantType.person
+    if subscriber_id is not None:
+        return OperationalParticipantType.subscriber
     if duty_role:
         return OperationalParticipantType.duty_role
     return OperationalParticipantType.external
@@ -109,6 +113,7 @@ def add_watcher(
     entity_id: str | UUID,
     service_team_id: str | UUID | None = None,
     person_id: str | UUID | None = None,
+    subscriber_id: str | UUID | None = None,
     duty_role: str | None = None,
     external: bool = False,
     role: str = OperationalWatcherRole.watcher,
@@ -119,6 +124,7 @@ def add_watcher(
     watcher_type = _participant_type(
         service_team_id=service_team_id,
         person_id=person_id,
+        subscriber_id=subscriber_id,
         duty_role=duty_role,
         external=external,
     )
@@ -130,6 +136,7 @@ def add_watcher(
         .filter(OperationalWatcher.watcher_type == watcher_type)
         .filter(OperationalWatcher.service_team_id == _uuid(service_team_id))
         .filter(OperationalWatcher.person_id == _uuid(person_id))
+        .filter(OperationalWatcher.subscriber_id == _uuid(subscriber_id))
         .filter(OperationalWatcher.duty_role == duty_role)
         .one_or_none()
     )
@@ -149,6 +156,7 @@ def add_watcher(
         role=role,
         service_team_id=_uuid(service_team_id),
         person_id=_uuid(person_id),
+        subscriber_id=_uuid(subscriber_id),
         duty_role=duty_role,
         source=source,
         reason=reason,

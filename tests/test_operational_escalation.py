@@ -8,11 +8,13 @@ from app.models.operational_escalation import (
     OperationalDeliveryStatus,
     OperationalEntityType,
     OperationalEscalationStatus,
+    OperationalNotificationChannel,
     OperationalOwner,
     OperationalParticipantType,
     OperationalRoomProvider,
 )
 from app.models.service_team import ServiceTeam, ServiceTeamType
+from app.models.subscriber import Subscriber
 from app.services import operational_escalation
 
 
@@ -100,6 +102,28 @@ def test_watcher_requires_exactly_one_target(db_session):
         )
 
 
+def test_customer_can_be_watcher(db_session):
+    subscriber = Subscriber(
+        first_name="Ada",
+        last_name="Nwosu",
+        email="ada-watcher@example.com",
+    )
+    db_session.add(subscriber)
+    db_session.flush()
+
+    watcher = operational_escalation.add_watcher(
+        db_session,
+        entity_type=OperationalEntityType.outage,
+        entity_id=uuid4(),
+        subscriber_id=subscriber.id,
+        source="affected_customer",
+        reason="VIP customer affected",
+    )
+
+    assert watcher.watcher_type == OperationalParticipantType.subscriber
+    assert watcher.subscriber_id == subscriber.id
+
+
 def test_link_room_is_idempotent(db_session):
     incident_id = uuid4()
 
@@ -149,7 +173,7 @@ def test_plan_delivery_dedupes_by_incident_level_channel_and_recipient(db_sessio
     first = operational_escalation.plan_delivery(
         db_session,
         event=event,
-        channel="whatsapp",
+        channel=OperationalNotificationChannel.whatsapp,
         recipient_type=OperationalParticipantType.person,
         recipient_id=uuid4(),
         recipient_address="+2348000000000",
@@ -158,7 +182,7 @@ def test_plan_delivery_dedupes_by_incident_level_channel_and_recipient(db_sessio
     duplicate = operational_escalation.plan_delivery(
         db_session,
         event=event,
-        channel="whatsapp",
+        channel=OperationalNotificationChannel.whatsapp,
         recipient_type=OperationalParticipantType.person,
         recipient_id=first.recipient_id,
         recipient_address="+2348000000000",
@@ -182,7 +206,7 @@ def test_acknowledge_event_marks_pending_deliveries_acknowledged(db_session):
     delivery = operational_escalation.plan_delivery(
         db_session,
         event=event,
-        channel="whatsapp",
+        channel=OperationalNotificationChannel.email,
         recipient_type=OperationalParticipantType.duty_role,
         recipient_id="noc_lead",
     )

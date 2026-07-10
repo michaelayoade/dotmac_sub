@@ -82,6 +82,7 @@ def upgrade() -> None:
             sa.Column("role", sa.String(length=40), nullable=False),
             sa.Column("service_team_id", postgresql.UUID(as_uuid=True)),
             sa.Column("person_id", postgresql.UUID(as_uuid=True)),
+            sa.Column("subscriber_id", postgresql.UUID(as_uuid=True)),
             sa.Column("duty_role", sa.String(length=80)),
             sa.Column("source", sa.String(length=80)),
             sa.Column("reason", sa.Text()),
@@ -90,12 +91,14 @@ def upgrade() -> None:
             sa.Column("created_at", sa.DateTime(timezone=True)),
             sa.Column("updated_at", sa.DateTime(timezone=True)),
             sa.ForeignKeyConstraint(["service_team_id"], ["service_teams.id"]),
+            sa.ForeignKeyConstraint(["subscriber_id"], ["subscribers.id"]),
             sa.UniqueConstraint(
                 "entity_type",
                 "entity_id",
                 "watcher_type",
                 "service_team_id",
                 "person_id",
+                "subscriber_id",
                 "duty_role",
                 name="uq_operational_watchers_target",
             ),
@@ -114,6 +117,11 @@ def upgrade() -> None:
             "ix_operational_watchers_person",
             "operational_watchers",
             ["person_id", "is_active"],
+        )
+        op.create_index(
+            "ix_operational_watchers_subscriber",
+            "operational_watchers",
+            ["subscriber_id", "is_active"],
         )
 
     if not _has_table("operational_room_links"):

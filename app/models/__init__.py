@@ -410,6 +410,7 @@ from app.models.operational_escalation import (  # noqa: F401
     OperationalEscalationEvent,
     OperationalEscalationPolicy,
     OperationalEscalationStatus,
+    OperationalNotificationChannel,
     OperationalOwner,
     OperationalOwnerRole,
     OperationalParticipantType,

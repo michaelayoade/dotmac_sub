@@ -20,13 +20,14 @@ Nextcloud Talk handles:
 - NOC, field, support, and management coordination
 - quick collaboration around an issue
 
-WhatsApp handles:
+Configured escalation channels handle:
 
 - urgent escalation only
-- action-oriented alerts to responsible people after policy thresholds are met
+- action-oriented alerts to responsible people, teams, or affected customers after policy thresholds are met
 - acknowledgement links/buttons that stop repeat escalation for that watcher
+- channel delivery through web, push, email, Nextcloud Talk, WhatsApp, SMS, or webhook based on policy
 
-WhatsApp must not be driven directly by raw outage/device events. The flow is:
+No escalation channel must be driven directly by raw outage/device events. The flow is:
 
 `event detected -> Sub timeline event -> policy evaluation -> escalation level -> channel delivery`
 
@@ -50,6 +51,10 @@ All primitives should attach to a generic entity reference:
 - optional `scope_type`
 - optional `scope_id`
 
+Watchers can be internal or customer-facing. A subscriber can be a watcher when a
+VIP/business customer or explicitly affected customer should receive controlled
+status updates or escalation communication.
+
 First consumers are outages and inbox conversations, but the model must also support
 tickets, work orders, projects, customers, POPs, OLTs, NAS devices, payment incidents,
 and provisioning failures.
@@ -57,7 +62,7 @@ and provisioning failures.
 ## Escalation levels
 
 - Level 1: owner/team web notification, Sub inbox, and linked Nextcloud room.
-- Level 2: WhatsApp owner or team lead after the first escalation window.
+- Level 2: configured urgent channel to owner or team lead after the first escalation window.
 - Level 3: manager escalation after the second window.
 - Level 4: executive/account-manager escalation for major or VIP/business impact.
 
@@ -84,9 +89,11 @@ Default watcher sources:
 - field team lead
 - support escalation lead
 - account manager only for VIP or business-impacting incidents
+- affected subscriber only when policy explicitly allows customer-facing updates
 
-Watchers should be team-based first and person-based second. Duty rosters resolve the
-current responsible person at delivery time.
+Watchers should be team-based first, person-based second, and subscriber-based only
+for customer-safe communication policies. Duty rosters resolve the current responsible
+person at delivery time.
 
 ## Customer-safe communication
 
@@ -99,7 +106,7 @@ Outage state must feed customer messaging rules:
 
 ## Fatigue controls
 
-- no WhatsApp for minor flaps
+- no urgent external channel delivery for minor flaps
 - dedupe child symptoms into parent incidents
 - cooldown by watcher, incident, and escalation level
 - resolved incidents cancel pending escalation
@@ -112,7 +119,7 @@ Outage state must feed customer messaging rules:
 1. Generic owners, watchers, room links, and escalation state primitives.
 2. Outage owners/watchers as the first consumer.
 3. Escalation policy evaluation plus acknowledgement endpoints.
-4. WhatsApp escalation delivery behind policy/cooldown state.
+4. Configurable channel delivery behind policy/cooldown state.
 5. Customer impact mapping and VIP/business-impact signals.
 6. Customer update timers and stale-update alerts.
 7. Incident grouping and deduplication.

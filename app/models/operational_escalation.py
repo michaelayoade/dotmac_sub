@@ -37,6 +37,7 @@ class OperationalParticipantType:
     person = "person"
     team = "team"
     duty_role = "duty_role"
+    subscriber = "subscriber"
     external = "external"
 
 
@@ -54,6 +55,16 @@ class OperationalWatcherRole:
 
 class OperationalRoomProvider:
     nextcloud_talk = "nextcloud_talk"
+
+
+class OperationalNotificationChannel:
+    web = "web"
+    email = "email"
+    push = "push"
+    nextcloud_talk = "nextcloud_talk"
+    whatsapp = "whatsapp"
+    sms = "sms"
+    webhook = "webhook"
 
 
 class OperationalEscalationStatus:
@@ -132,6 +143,7 @@ class OperationalWatcher(Base):
             "watcher_type",
             "service_team_id",
             "person_id",
+            "subscriber_id",
             "duty_role",
             name="uq_operational_watchers_target",
         ),
@@ -140,6 +152,7 @@ class OperationalWatcher(Base):
         ),
         Index("ix_operational_watchers_team", "service_team_id", "is_active"),
         Index("ix_operational_watchers_person", "person_id", "is_active"),
+        Index("ix_operational_watchers_subscriber", "subscriber_id", "is_active"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -155,6 +168,9 @@ class OperationalWatcher(Base):
         UUID(as_uuid=True), ForeignKey("service_teams.id")
     )
     person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id")
+    )
     duty_role: Mapped[str | None] = mapped_column(String(80))
     source: Mapped[str | None] = mapped_column(String(80))
     reason: Mapped[str | None] = mapped_column(Text)
@@ -172,6 +188,7 @@ class OperationalWatcher(Base):
     )
 
     service_team = relationship("ServiceTeam")
+    subscriber = relationship("Subscriber")
 
 
 class OperationalRoomLink(Base):
