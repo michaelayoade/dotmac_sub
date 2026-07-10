@@ -112,7 +112,7 @@ def test_plan_links_unlinked_subscriber_and_sets_person() -> None:
     assert merged["crm_person_id"] == "person-1"
 
 
-def test_plan_repoints_asymmetric_pair_and_keeps_old_as_alias() -> None:
+def test_plan_repoints_asymmetric_pair_and_keeps_old_as_previous() -> None:
     plan = build_plan(
         [_sub("sub-a", crm_subscriber_id="crm-stale")],
         [_crm("crm-1", "sub-a")],
@@ -122,7 +122,8 @@ def test_plan_repoints_asymmetric_pair_and_keeps_old_as_alias() -> None:
     update = plan.updates[0]
     assert update.crm_subscriber_id == "crm-1"
     merged = json.loads(update.metadata_json or "{}")
-    assert merged["crm_alias_ids"] == ["crm-stale"]
+    assert merged["crm_previous_ids"] == ["crm-stale"]
+    assert "crm_alias_ids" not in merged
 
 
 def test_plan_records_duplicate_losers_as_aliases_with_dedup() -> None:
@@ -147,6 +148,68 @@ def test_plan_records_duplicate_losers_as_aliases_with_dedup() -> None:
     assert plan.stats.alias_recorded == 1
     merged = json.loads(plan.updates[0].metadata_json or "{}")
     assert merged["crm_alias_ids"] == ["crm-loser-1", "crm-loser-2"]
+
+
+def test_plan_repairs_alias_claiming_anothers_primary() -> None:
+    # Earlier runs recorded repoint provenance in crm_alias_ids: sub-x holds
+    # crm-b with a stale alias claim on crm-a, which is sub-y's primary link.
+    # The repair moves it to crm_previous_ids; re-planning is then a no-op.
+    sub_rows = [
+        _sub(
+            "sub-x",
+            crm_subscriber_id="crm-b",
+            metadata={"crm_alias_ids": ["crm-a"]},
+            created_at=T1,
+        ),
+        _sub("sub-y", crm_subscriber_id="crm-a", created_at=T2),
+    ]
+    crm_rows = [_crm("crm-a", "sub-y"), _crm("crm-b", "sub-x")]
+
+    plan = build_plan(sub_rows, crm_rows)
+
+    assert plan.stats.alias_conflict_repaired == 1
+    assert plan.stats.repointed == 0
+    assert len(plan.updates) == 1
+    update = plan.updates[0]
+    assert update.subscriber_id == "sub-x"
+    assert update.crm_subscriber_id == "crm-b"
+    merged = json.loads(update.metadata_json or "{}")
+    assert merged["crm_previous_ids"] == ["crm-a"]
+    assert "crm_alias_ids" not in merged
+    assert plan.reports["alias_conflict_repaired"] == [
+        {
+            "subscriber_id": "sub-x",
+            "crm_subscriber_id": "crm-b",
+            "moved_to_previous_ids": "crm-a",
+        }
+    ]
+
+    second = build_plan(_apply_plan(sub_rows, plan), crm_rows)
+    assert second.stats.updates_planned == 0
+    assert second.stats.alias_conflict_repaired == 0
+
+
+def test_plan_repairs_alias_on_unmatched_row() -> None:
+    # A row with no CRM counterpart can still carry a polluted alias claim.
+    sub_rows = [
+        _sub("sub-x", metadata={"crm_alias_ids": ["crm-a"]}, created_at=T1),
+        _sub("sub-y", crm_subscriber_id="crm-a", created_at=T2),
+    ]
+    crm_rows = [_crm("crm-a", "sub-y")]
+
+    plan = build_plan(sub_rows, crm_rows)
+
+    assert plan.stats.alias_conflict_repaired == 1
+    assert plan.stats.unmatched == 1
+    update = plan.updates[0]
+    assert update.subscriber_id == "sub-x"
+    assert update.crm_subscriber_id is None
+    merged = json.loads(update.metadata_json or "{}")
+    assert merged["crm_previous_ids"] == ["crm-a"]
+    assert "crm_alias_ids" not in merged
+
+    second = build_plan(_apply_plan(sub_rows, plan), crm_rows)
+    assert second.stats.updates_planned == 0
 
 
 def test_plan_reports_dangling_link_untouched() -> None:
@@ -299,5 +362,6 @@ def test_plan_is_idempotent_after_apply() -> None:
     assert second.stats.linked == 0
     assert second.stats.repointed == 0
     assert second.stats.alias_recorded == 0
+    assert second.stats.alias_conflict_repaired == 0
     assert second.stats.person_linked == 0
     assert second.stats.collision == 0

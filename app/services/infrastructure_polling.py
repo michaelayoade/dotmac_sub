@@ -43,6 +43,12 @@ DEFAULT_MAX_DEVICES_PER_RUN = 300
 INTERFACE_IN_OCTETS_METRIC = "core_interface_in_octets_total"
 INTERFACE_OUT_OCTETS_METRIC = "core_interface_out_octets_total"
 
+# Per-probe ping results as VM series (degradation detection before outage
+# detection — rising latency shows up long before a device stops answering).
+# Latency only exists for successful probes; loss is 1/0 per probe.
+PING_LATENCY_METRIC = "device_ping_latency_ms"
+PING_LOSS_METRIC = "device_ping_loss"
+
 _vm_writer = None
 
 
@@ -98,6 +104,7 @@ def poll_infrastructure(
     One run probes at most ``max_devices`` (longest-unchecked first).
     """
     devices = pollable_devices(db)
+    sweep_started = datetime.now(UTC)
     totals = refresh_stale_devices_health(
         db,
         devices,
@@ -110,10 +117,66 @@ def poll_infrastructure(
     )
     totals["devices"] = len(devices)
     try:
+        totals.update(push_ping_metrics(db, since=sweep_started))
+    except Exception:  # metrics are additive; never fail the health sweep
+        logger.exception("ping_metric_push_failed")
+    try:
         totals.update(push_interface_counters(db))
     except Exception:  # counters are additive; never fail the health sweep
         logger.exception("interface_counter_push_failed")
     return totals
+
+
+def push_ping_metrics(db: Session, *, since: datetime) -> dict[str, int]:
+    """Push this sweep's ping probe results to VictoriaMetrics.
+
+    Reads the DeviceMetric rows the probe workers persisted after ``since``
+    (unit ``ping_ms`` for successes, ``ping_timeout`` for failures) and emits
+    ``device_ping_latency_ms`` (successes only) plus ``device_ping_loss``
+    (1/0 per probe). Labels carry the aggregation dimensions the dashboards
+    slice by: device_id, device_role, pop_site_id, matched_device_type.
+    """
+    from app.models.network_monitoring import DeviceMetric
+
+    rows = db.execute(
+        select(DeviceMetric, NetworkDevice)
+        .join(NetworkDevice, NetworkDevice.id == DeviceMetric.device_id)
+        .where(
+            DeviceMetric.unit.in_(("ping_ms", "ping_timeout")),
+            DeviceMetric.recorded_at >= since,
+        )
+    ).all()
+    if not rows:
+        return {"ping_metric_lines": 0, "ping_metric_write_failed": 0}
+
+    lines: list[str] = []
+    for metric, device in rows:
+        recorded_at = metric.recorded_at
+        if recorded_at.tzinfo is None:
+            recorded_at = recorded_at.replace(tzinfo=UTC)
+        ts_ms = int(recorded_at.timestamp() * 1000)
+        role = getattr(device.role, "value", device.role) or "unknown"
+        labels = (
+            f'device_id="{device.id}",device_role="{role}",'
+            f'pop_site_id="{device.pop_site_id or ""}",'
+            f'matched_device_type="{device.matched_device_type or ""}"'
+        )
+        success = metric.unit == "ping_ms"
+        if success:
+            lines.append(
+                f"{PING_LATENCY_METRIC}{{{labels}}} {float(metric.value)} {ts_ms}"
+            )
+        lines.append(f"{PING_LOSS_METRIC}{{{labels}}} {0 if success else 1} {ts_ms}")
+
+    write_result = _writer().write_prometheus_lines(
+        lines,
+        adapter="infrastructure.polling",
+        operation="ping_metrics",
+    )
+    return {
+        "ping_metric_lines": len(lines),
+        "ping_metric_write_failed": 0 if write_result.success else len(lines),
+    }
 
 
 def monitored_interface_targets(
@@ -204,4 +267,113 @@ def push_interface_counters(
         "interface_devices": devices_read,
         "interface_lines": len(lines),
         "interface_write_failed": write_failed,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Heartbeat: the poll task records every outcome so the admin-alert evaluator
+# can notice silence. Zabbix's most important job was noticing when nothing
+# was being measured; this is its replacement's dead-man switch.
+# ---------------------------------------------------------------------------
+
+HEARTBEAT_KEY = "infrastructure_poll:last_success"
+SKIP_STREAK_KEY = "infrastructure_poll:skip_streak"
+_HEARTBEAT_TTL_SECONDS = 7 * 86_400
+
+
+def record_poll_success(result: dict, *, now: datetime | None = None) -> None:
+    """Stamp the heartbeat after a completed sweep (advisory, cache-only)."""
+    try:
+        from app.services.app_cache import set_json
+
+        stamp = {
+            "at": (now or datetime.now(UTC)).isoformat(),
+            "result": {k: v for k, v in result.items() if isinstance(v, int)},
+        }
+        set_json(HEARTBEAT_KEY, stamp, _HEARTBEAT_TTL_SECONDS)
+        set_json(SKIP_STREAK_KEY, 0, _HEARTBEAT_TTL_SECONDS)
+    except Exception:  # cache is advisory; never fail the sweep over it
+        logger.exception("infrastructure_poll_heartbeat_write_failed")
+
+
+def record_poll_skip() -> int:
+    """Count consecutive already_running skips; returns the current streak."""
+    try:
+        from app.services.app_cache import get_json, set_json
+
+        streak = int(get_json(SKIP_STREAK_KEY) or 0) + 1
+        set_json(SKIP_STREAK_KEY, streak, _HEARTBEAT_TTL_SECONDS)
+        return streak
+    except Exception:
+        logger.exception("infrastructure_poll_skip_streak_write_failed")
+        return 0
+
+
+def poll_health_snapshot(db: Session, *, now: datetime | None = None) -> dict:
+    """Everything the alert evaluator needs to judge poll health.
+
+    Returns plain scalars (no ORM objects):
+    ``last_success_age_seconds`` (None = no heartbeat recorded),
+    ``skip_streak``, ``interface_write_failed`` (from the last completed run),
+    ``newest_ping_age_seconds`` (None = no pingable device ever stamped),
+    ``pingable_devices``, ``poll_interval_seconds``.
+    """
+    from sqlalchemy import and_, func
+
+    now = now or datetime.now(UTC)
+
+    last_success_age: float | None = None
+    interface_write_failed = 0
+    skip_streak = 0
+    try:
+        from app.services.app_cache import get_json
+
+        heartbeat = get_json(HEARTBEAT_KEY)
+        if isinstance(heartbeat, dict) and heartbeat.get("at"):
+            recorded = datetime.fromisoformat(str(heartbeat["at"]))
+            if recorded.tzinfo is None:
+                recorded = recorded.replace(tzinfo=UTC)
+            last_success_age = max(0.0, (now - recorded).total_seconds())
+            result = heartbeat.get("result") or {}
+            interface_write_failed = int(result.get("interface_write_failed") or 0)
+        skip_streak = int(get_json(SKIP_STREAK_KEY) or 0)
+    except Exception:
+        logger.exception("infrastructure_poll_heartbeat_read_failed")
+
+    pingable = and_(
+        NetworkDevice.is_active.is_(True),
+        NetworkDevice.ping_enabled.is_(True),
+        NetworkDevice.mgmt_ip.isnot(None),
+    )
+    newest_ping_at, pingable_devices = db.execute(
+        select(func.max(NetworkDevice.last_ping_at), func.count()).where(pingable)
+    ).one()
+    newest_ping_age: float | None = None
+    if newest_ping_at is not None:
+        if newest_ping_at.tzinfo is None:
+            newest_ping_at = newest_ping_at.replace(tzinfo=UTC)
+        newest_ping_age = max(0.0, (now - newest_ping_at).total_seconds())
+
+    try:
+        from app.models.domain_settings import SettingDomain
+        from app.services.settings_spec import resolve_value
+
+        poll_interval = int(
+            resolve_value(
+                db,
+                SettingDomain.network_monitoring,
+                "infrastructure_poll_interval_seconds",
+            )
+            or 60
+        )
+    except Exception:
+        poll_interval = 60
+
+    return {
+        "last_success_age_seconds": last_success_age,
+        "skip_streak": skip_streak,
+        "interface_write_failed": interface_write_failed,
+        "newest_ping_age_seconds": newest_ping_age,
+        "pingable_devices": int(pingable_devices or 0),
+        "poll_interval_seconds": max(30, poll_interval),
     }
