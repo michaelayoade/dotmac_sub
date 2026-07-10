@@ -470,10 +470,55 @@ def _collect_infrastructure_findings(db: Session) -> list[AlertFinding]:
     except Exception:
         logger.exception("Infrastructure poll health findings failed")
     try:
-        findings.extend(_radius_health_findings(db))
+        findings.extend(_stale_autodetect_incident_findings(db))
     except Exception:
-        logger.exception("RADIUS health findings failed")
+        logger.exception("Stale auto-detect incident findings failed")
     return findings
+
+
+def _stale_autodetect_incident_findings(db: Session) -> list[AlertFinding]:
+    """Guardrail: auto-detected incidents left open beyond the staleness bar.
+
+    The legacy auto-detect path opens operator-style incidents nothing
+    auto-resolves; once stale they keep suppressing billing notices and
+    inflating customer-impact counts (they once covered 97% of the fleet), so
+    lingering rows are an operational alarm, not background noise.
+    """
+    from datetime import timedelta
+
+    from app.models.network_monitoring import OutageIncident
+    from app.services.topology.outage import AUTO_DETECT_ACTOR, STALE_OPEN_HOURS
+
+    cutoff = datetime.now(UTC) - timedelta(hours=STALE_OPEN_HOURS)
+    stale = (
+        db.query(func.count(OutageIncident.id), func.min(OutageIncident.started_at))
+        .filter(
+            OutageIncident.status == "open",
+            OutageIncident.declared_by == AUTO_DETECT_ACTOR,
+            OutageIncident.started_at < cutoff,
+        )
+        .one()
+    )
+    count, oldest = int(stale[0] or 0), stale[1]
+    if not count:
+        return []
+    oldest_display = oldest.date().isoformat() if oldest else "unknown"
+    return [
+        AlertFinding(
+            fingerprint=f"{INFRASTRUCTURE_ALERT_PREFIX}outage:stale-autodetect",
+            category="infrastructure",
+            source="outage-hygiene",
+            severity=AlertSeverity.critical,
+            title="Stale auto-detected outage incidents left open",
+            summary=(
+                f"{count} system:outage-autodetect incidents have been open "
+                f"longer than {STALE_OPEN_HOURS}h (oldest {oldest_display}). "
+                "They no longer gate billing suppression (TTL) but must be "
+                "triaged/resolved — the auto-detect path never closes them."
+            ),
+            details={"count": count, "oldest_started_at": oldest},
+        )
+    ]
 
 
 def _radius_health_findings(db: Session) -> list[AlertFinding]:
