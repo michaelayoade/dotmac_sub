@@ -115,6 +115,8 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.crm_sales", "router", "api", "user"),
     ("app.api.sales", "router", "api", "user"),
     ("app.api.sales_orders", "router", "api", "user"),
+    # Native projects vertical (Phase 3 §2.4).
+    ("app.api.projects", "router", "api", "user"),
     ("app.api.dispatch", "router", "api", "perm:operations:dispatch"),
     ("app.api.field.config", "router", "api", "none"),
     ("app.api.field", "router", "api", "user"),
