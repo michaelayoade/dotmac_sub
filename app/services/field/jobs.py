@@ -63,11 +63,12 @@ def _annotate_vendor_membership(
     )
     if membership is None:
         return profile
-    profile._field_vendor_id = str(membership.vendor_id)
-    profile._field_vendor_user_id = str(membership.id)
-    profile._field_crm_vendor_user_id = membership.crm_vendor_user_id
+    annotated: Any = profile
+    annotated._field_vendor_id = str(membership.vendor_id)
+    annotated._field_vendor_user_id = str(membership.id)
+    annotated._field_crm_vendor_user_id = membership.crm_vendor_user_id
     if membership.vendor is not None:
-        profile._field_crm_vendor_id = membership.vendor.crm_vendor_id
+        annotated._field_crm_vendor_id = membership.vendor.crm_vendor_id
     return profile
 
 
