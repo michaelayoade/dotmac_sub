@@ -140,6 +140,51 @@ def _provider_message_id(result: dict[str, Any]) -> str | None:
     return None
 
 
+def apply_whatsapp_delivery_status(
+    db: Session, status_item: dict[str, Any]
+) -> dict[str, object]:
+    provider_message_id = str(status_item["message_id"])
+    message = (
+        db.query(InboxMessage)
+        .filter(InboxMessage.channel_type == InboxChannelType.whatsapp.value)
+        .filter(InboxMessage.direction == InboxMessageDirection.outbound.value)
+        .filter(InboxMessage.external_message_id == provider_message_id)
+        .order_by(InboxMessage.created_at.desc())
+        .first()
+    )
+    if message is None:
+        return {
+            "kind": "not_found",
+            "provider_message_id": provider_message_id,
+            "status": status_item["status"],
+        }
+
+    metadata = dict(message.metadata_ or {})
+    history = metadata.get("delivery_status_history")
+    if not isinstance(history, list):
+        history = []
+    event = {
+        "status": status_item["status"],
+        "timestamp": status_item.get("timestamp"),
+        "recipient_id": status_item.get("recipient_id"),
+        "errors": status_item.get("errors"),
+    }
+    history.append({key: value for key, value in event.items() if value is not None})
+    metadata["delivery_status"] = status_item["status"]
+    metadata["delivery_status_at"] = status_item.get("timestamp")
+    metadata["delivery_recipient_id"] = status_item.get("recipient_id")
+    if status_item.get("errors") is not None:
+        metadata["delivery_errors"] = status_item["errors"]
+    metadata["delivery_status_history"] = history[-20:]
+    message.metadata_ = metadata
+    return {
+        "kind": "updated",
+        "message_id": str(message.id),
+        "provider_message_id": provider_message_id,
+        "status": status_item["status"],
+    }
+
+
 def _send_whatsapp_reply(
     db: Session,
     *,
