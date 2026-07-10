@@ -5,7 +5,7 @@
 (~16 admin pages, ~40 services): invoices/ledger/tax, payments/gateways/proofs,
 dunning/collections/autopay, accounts/prepaid/reseller, customer pay portal,
 settings/integrity/reconcilers.
-**Status:** remediation review-ready on `audit/billing-remediation`. Companion to
+**Status:** remediated, merged as PR #523, and deployed. Companion to
 [NETWORKING_UX_POLISH_AUDIT.md](NETWORKING_UX_POLISH_AUDIT.md).
 
 > Note: recent money-state-machine PRs (#308 void/write-off/refund guards,
@@ -16,7 +16,7 @@ settings/integrity/reconcilers.
 ## Remediation status
 
 **Last updated:** 2026-06-30
-**Tracking branch:** `audit/billing-remediation`
+**Merged branch:** `audit/billing-remediation`
 
 ### Resolved in current draft
 
@@ -126,12 +126,26 @@ settings/integrity/reconcilers.
 
 ### Partially resolved
 
-- Currency display is improved across the touched admin/customer billing surfaces,
-  but this audit's broader `default_currency`/provider/settings cleanup remains
-  open for forms, adapters, Flutterwave, integrity SQL, and other untouched paths.
+- Currency display and default-currency handling are covered across the touched
+  admin/customer billing surfaces, forms, adapters, Flutterwave initialization,
+  billing-health integrity SQL, and payment import/manual payment defaults.
+  Broader multi-currency product behavior remains deferred where explicitly
+  listed in the appendix.
 - AR-aging is fixed for the admin UI builder and the older reporting helper; the
   remaining deferred AR-aging notes are period-selector breadth and timezone
   edge-case polish.
+
+### Audit trail verification
+
+- Billing money/configuration mutations emit `AuditEvent` rows through the shared
+  audit helpers with actor, action, entity type/id, success status, and metadata.
+- Verified billing coverage in code: invoice create/update/generate/bulk actions,
+  payment create/update/refund/import, billing account create/update, dunning
+  case actions, payment arrangement approval/installment payment, payment-proof
+  review, and billing/reminder/notification configuration changes.
+- Billing configuration pages also load recent audit activities for the relevant
+  entity types, with links to the full system audit page where templates expose
+  the activity panels.
 
 ### Still open
 
@@ -420,9 +434,10 @@ entry at all** → displayed default can diverge from consumer default.
 billing policy key once with authoritative default+range.
 
 **C-4. Currency hardcoded `NGN` despite an existing `default_currency` setting** —
-forms/adapters (`credit_form`, `collection_accounts`, `billing_consolidated`,
-`billing_adapter`), Flutterwave init (blocks non-NGN), integrity SQL, customer
-portal. Single-currency today → mostly defer, but seed from the setting.
+forms/adapters, Flutterwave init, billing-health integrity SQL, and the covered
+customer/admin payment surfaces now resolve invoice currency or
+`billing.default_currency`. Remaining multi-currency product behavior stays
+deferred where called out below.
 
 **C-5. Customer-facing controls to offer:** top-up presets `[1000…50000]` hardcoded
 → per-market setting (`app/services/customer_portal_flow_payments.py:1113`) [resolved in draft];
@@ -434,8 +449,8 @@ paperless/email-invoice opt-in.
 | Tier | Items |
 |------|-------|
 | **P0** | None remaining in draft; review recommended/deferred items below |
-| **P1** | **Partial-success + run observability** incl. autopay panel + health/integrity admin page (P-C); **currency/tz/status display** (P-D); **settings validation + settings_spec hygiene** (P-F, C-3); **thresholds → settings** (C-2) |
-| **P2** | currency-from-setting seeding (C-4), partial-pay + paperless (C-5), TTLs |
+| **P1** | Remaining bulk/scheduled money-job result history, reconcilers' last-run visibility, and deferred settings/spec hygiene |
+| **P2** | Multi-currency product expansion, optional partial-pay + paperless controls, and TTL tuning |
 
 ## Cross-audit observation
 
@@ -470,7 +485,7 @@ Format: `[POLISH|CONTROL] (severity) file:line — problem → recommendation [r
 - [POLISH] (Low) `app/services/web_billing_payments.py:726` — import result truncates `errors[:10]` while `total_errors` reports more → raise cap / "download full errors" [defer]
 - [CONTROL] (Med) `app/services/paystack.py:110,166,199,259` & `flutterwave.py:107,143` — gateway HTTP `timeout=30` hardcoded everywhere → `payment_provider_http_timeout_seconds` setting (default 30, 5-120) [resolved in draft]
 - [CONTROL] (Med) `app/services/payment_reconciliation.py:110-111` — stale-topup sweep `older_than_minutes=15, max_age_days=7` as defaults, task passes no args; paid-but-abandoned >1wk never recovered → settings (default 15min/7d, range to 90d) [resolved in draft]
-- [CONTROL] (Low) `app/services/flutterwave.py:96` — `"currency":"NGN"` hardcoded in init (Paystack infers) → drive from invoice currency/default [defer]
+- [CONTROL] (Low) `app/services/flutterwave.py:96` — `"currency":"NGN"` hardcoded in init (Paystack infers) → drive from invoice currency/default [resolved in draft]
 - [CONTROL] (Low) `app/services/web_billing_payments.py:915-961` — admin manual payment no min/max guard (top-ups have settings) → optional max-manual-payment threshold [defer]
 - Verified: proof verify/reject + refund have confirms+CSRF; reject requires reason; webhook dedupe via idempotency_key robust; bank-transfer instructions config-driven; import has loading/empty/partial-success.
 
@@ -524,7 +539,7 @@ Format: `[POLISH|CONTROL] (severity) file:line — problem → recommendation [r
 - [POLISH] (High) `templates/admin/system/config/billing.html:8-165` — single "Save" applies fleet-wide enforcement (auto_suspend, blocking/deactivation days, dunning schedule) with no preview/confirm → add confirm/diff gate "affects N customers" [resolved in draft]
 - [POLISH] (Med) `app/services/billing_integrity_audit.py:324` + `billing_health.py:342` — surfaced only as Prometheus gauges (only `app/tasks/billing.py:160`), no template → admin can't see launch_blocked/covered_but_locked/paid_with_balance or stale runners → billing health/integrity admin page with severity + empty/loading [resolved in draft]
 - [CONTROL] (Med) `app/services/crm_billing_push.py:54` — currency via `os.getenv("BILLING_DEFAULT_CURRENCY","NGN")`, bypassing settings_spec → resolve through settings_spec [defer]
-- [CONTROL] (Med) `app/services/billing_health.py:256-280,307-338` — currency `'NGN'` hardcoded inside integrity SQL; single-currency assumption baked into correctness checks → derive from default currency [defer]
+- [CONTROL] (Med) `app/services/billing_health.py:256-280,307-338` — currency `'NGN'` hardcoded inside integrity SQL; single-currency assumption baked into correctness checks → derive from default currency [resolved in draft]
 - [POLISH] (Med) `account_status_reconcile.py`, `stale_overdue_lock_reconcile.py`, `billing/unwall_paid_accounts.py`, `billing_remediation.py` — CLI-only, no last-run/result in admin → record + surface last-run/counts [defer]
 - [CONTROL] (Med) `app/services/stale_overdue_lock_reconcile.py:65-72` — when no min-balance, silently defaults `Decimal("0.00")`; zero-balance treated as covered, could auto-restore → explicit/configurable fallback + log when defaulting [defer]
 - [CONTROL] (Low) `app/services/billing_settings.py:75-101` (`check_billing_switch`) — `billing_enabled_expected` invariant read ad-hoc (DomainSetting→env→false), deliberately not a spec key, invisible in UI → register / surface next to `billing_enabled` [defer]

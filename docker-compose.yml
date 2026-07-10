@@ -382,9 +382,9 @@ services:
     image: freeradius/freeradius-server:3.2.7
     container_name: dotmac_sub_freeradius
     restart: unless-stopped
-    mem_limit: 256m
-    mem_reservation: 64m
-    cpus: 0.5
+    mem_limit: 512m
+    mem_reservation: 128m
+    cpus: 1.0
     pids_limit: 64
     logging: *id001
     ports:
@@ -478,7 +478,7 @@ services:
     restart: unless-stopped
     mem_limit: 256m
     mem_reservation: 64m
-    cpus: 0.5
+    cpus: 0.25
     pids_limit: 64
     volumes:
     - ./config/promtail/promtail-config.yml:/etc/promtail/config.yml:ro
@@ -492,7 +492,7 @@ services:
     restart: unless-stopped
     mem_limit: 512m
     mem_reservation: 256m
-    cpus: 1.0
+    cpus: 0.5
     pids_limit: 96
     logging: *id001
     extra_hosts: *observability_extra_hosts
@@ -564,7 +564,7 @@ services:
     restart: unless-stopped
     mem_limit: 1g
     mem_reservation: 512m
-    cpus: 1.0
+    cpus: 0.75
     pids_limit: 128
     environment:
       POSTGRES_DB: zabbix
@@ -587,7 +587,7 @@ services:
     restart: unless-stopped
     mem_limit: 5g
     mem_reservation: 1g
-    cpus: 2
+    cpus: 1.5
     pids_limit: 512
     logging: *id001
     depends_on:
