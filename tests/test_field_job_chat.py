@@ -113,7 +113,12 @@ def test_chat_thread_send_and_ordering(db_session):
         "Arrived on site",
     ]
     assert thread["conversation_id"] is not None
-    assert db_session.query(FieldJobChatMessage).count() == 2
+    stored = (
+        db_session.query(FieldJobChatMessage)
+        .filter(FieldJobChatMessage.crm_work_order_id == "wo-chat-flow")
+        .count()
+    )
+    assert stored == 2
 
 
 def test_chat_send_blocked_for_terminal_job_state(db_session):

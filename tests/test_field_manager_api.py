@@ -126,6 +126,11 @@ def _expense(db_session, tech_user, profile, work_order, status="submitted") -> 
 
 
 def test_manager_me_summary_and_technicians(db_session):
+    # Counts are asserted as deltas from a pre-seed baseline: the summary is
+    # global by design, and under xdist another worker-local test may have
+    # leaked committed rows into the shared engine before this test runs.
+    baseline = field_manager.summary(db_session)
+
     manager = _user(db_session)
     tech_user = _user(db_session, "Tech")
     profile = _profile(db_session, tech_user, crm_person_id="crm-mgr-tech")
@@ -148,17 +153,17 @@ def test_manager_me_summary_and_technicians(db_session):
     assert me["roles"] == ["admin"]
 
     summary = field_manager.summary(db_session)
-    assert summary["technicians_total"] == 1
-    assert summary["technicians_live"] == 1
-    assert summary["technicians_sharing"] == 1
-    assert summary["open_jobs"] == 2
-    assert summary["unassigned_jobs"] == 1
-    assert summary["pending_expenses"] == 1
+    assert summary["technicians_total"] == baseline["technicians_total"] + 1
+    assert summary["technicians_live"] == baseline["technicians_live"] + 1
+    assert summary["technicians_sharing"] == baseline["technicians_sharing"] + 1
+    assert summary["open_jobs"] == baseline["open_jobs"] + 2
+    assert summary["unassigned_jobs"] == baseline["unassigned_jobs"] + 1
+    assert summary["pending_expenses"] == baseline["pending_expenses"] + 1
 
     technicians = field_manager.list_technicians(db_session)
-    assert len(technicians) == 1
-    item = technicians[0]
-    assert item["person_id"] == profile.person_id
+    item = next(
+        entry for entry in technicians if entry["person_id"] == profile.person_id
+    )
     assert item["person_label"] == "Tech Staff"
     assert item["status"] == "on_shift"
     assert item["is_live"] is True
@@ -175,10 +180,9 @@ def test_manager_jobs_and_assign_flow(db_session):
     db_session.commit()
 
     jobs = field_manager.list_jobs(db_session)
-    assert len(jobs) == 1
-    assert jobs[0]["id"] == "wo-assign"
-    assert jobs[0]["assigned_to_person_id"] is None
-    assert subscriber.account_number in jobs[0]["subscriber_label"]
+    job = next(entry for entry in jobs if entry["id"] == "wo-assign")
+    assert job["assigned_to_person_id"] is None
+    assert subscriber.account_number in job["subscriber_label"]
 
     assigned = field_manager.assign_job(
         db_session,
@@ -205,13 +209,13 @@ def test_manager_jobs_and_assign_flow(db_session):
 
     # The technician now sees the job in their scoped list.
     mine = field_jobs.list(db_session, _auth(tech_user, roles=[]))
-    assert [job.id for job in mine] == ["wo-assign"]
+    assert "wo-assign" in [job.id for job in mine]
 
     # Filtering the manager board by the technician works both ways.
     filtered = field_manager.list_jobs(
         db_session, assigned_to_person_id=str(profile.person_id)
     )
-    assert [job["id"] for job in filtered] == ["wo-assign"]
+    assert "wo-assign" in [job["id"] for job in filtered]
 
 
 def test_manager_assign_queue_only_technician(db_session):
@@ -228,7 +232,7 @@ def test_manager_assign_queue_only_technician(db_session):
     assert assigned["assigned_to_person_id"] == profile.person_id
 
     mine = field_jobs.list(db_session, _auth(tech_user, roles=[]))
-    assert [job.id for job in mine] == ["wo-native-assign"]
+    assert "wo-native-assign" in [job.id for job in mine]
 
 
 def test_manager_assign_validation(db_session):
@@ -273,7 +277,7 @@ def test_manager_expense_approve_and_reject(db_session):
     db_session.commit()
 
     pending = field_expense_requests.list_all(db_session, status="submitted")
-    assert {str(item["id"]) for item in pending} == {
+    assert {str(item["id"]) for item in pending} >= {
         str(first["id"]),
         str(second["id"]),
     }
@@ -292,11 +296,27 @@ def test_manager_expense_approve_and_reject(db_session):
         field_expense_requests.approve(db_session, str(first["id"]))
     assert re_approve.value.status_code == 409
 
-    assert field_expense_requests.list_all(db_session, status="submitted") == []
+    still_pending = {
+        str(item["id"])
+        for item in field_expense_requests.list_all(db_session, status="submitted")
+    }
+    assert str(first["id"]) not in still_pending
+    assert str(second["id"]) not in still_pending
 
 
 def test_manager_api(db_session):
     manager = _user(db_session)
+
+    app = FastAPI()
+    app.include_router(router, prefix="/api/v1")
+    app.dependency_overrides[get_db] = lambda: db_session
+    app.dependency_overrides[require_user_auth] = lambda: _auth(manager)
+    client = TestClient(app)
+
+    # Baseline before seeding: global counts must be asserted as deltas (see
+    # test_manager_me_summary_and_technicians).
+    baseline = client.get("/api/v1/field/manager/summary").json()
+
     tech_user = _user(db_session, "Tech")
     profile = _profile(db_session, tech_user, crm_person_id="crm-api-tech")
     _presence(db_session, profile)
@@ -311,32 +331,29 @@ def test_manager_api(db_session):
     expense = _expense(db_session, tech_user, profile, work_order)
     db_session.commit()
 
-    app = FastAPI()
-    app.include_router(router, prefix="/api/v1")
-    app.dependency_overrides[get_db] = lambda: db_session
-    app.dependency_overrides[require_user_auth] = lambda: _auth(manager)
-    client = TestClient(app)
-
     me = client.get("/api/v1/field/manager/me")
     assert me.status_code == 200
     assert me.json()["is_manager"] is True
 
     summary = client.get("/api/v1/field/manager/summary")
     assert summary.status_code == 200
-    assert summary.json()["technicians_total"] == 1
-    assert summary.json()["pending_expenses"] == 1
+    assert summary.json()["technicians_total"] == baseline["technicians_total"] + 1
+    assert summary.json()["pending_expenses"] == baseline["pending_expenses"] + 1
 
     technicians = client.get("/api/v1/field/manager/technicians")
     assert technicians.status_code == 200
     body = technicians.json()
-    assert body["count"] == 1
-    assert body["live_count"] == 1
-    assert body["items"][0]["person_label"] == "Tech Staff"
-    assert body["items"][0]["active_work_order"]["id"] == "wo-mgr-api"
+    assert body["count"] == len(body["items"])
+    assert body["live_count"] >= 1
+    item = next(
+        entry for entry in body["items"] if entry["person_id"] == str(profile.person_id)
+    )
+    assert item["person_label"] == "Tech Staff"
+    assert item["active_work_order"]["id"] == "wo-mgr-api"
 
     jobs = client.get("/api/v1/field/manager/jobs")
     assert jobs.status_code == 200
-    assert jobs.json()["items"][0]["id"] == "wo-mgr-api"
+    assert "wo-mgr-api" in [entry["id"] for entry in jobs.json()["items"]]
 
     assigned = client.post(
         "/api/v1/field/manager/jobs/wo-mgr-api/assign",
@@ -347,7 +364,7 @@ def test_manager_api(db_session):
 
     expenses = client.get("/api/v1/field/manager/expenses")
     assert expenses.status_code == 200
-    assert expenses.json()["items"][0]["id"] == str(expense["id"])
+    assert str(expense["id"]) in [entry["id"] for entry in expenses.json()["items"]]
 
     approved = client.post(f"/api/v1/field/manager/expenses/{expense['id']}/approve")
     assert approved.status_code == 200
