@@ -469,6 +469,92 @@ def _collect_infrastructure_findings(db: Session) -> list[AlertFinding]:
         findings.extend(_poll_health_findings(db))
     except Exception:
         logger.exception("Infrastructure poll health findings failed")
+    try:
+        findings.extend(_radius_health_findings(db))
+    except Exception:
+        logger.exception("RADIUS health findings failed")
+    return findings
+
+
+def _radius_health_findings(db: Session) -> list[AlertFinding]:
+    """Customer-experience alarms from the RADIUS health task's heartbeat.
+
+    Reads the last completed run's counters (cache-only — never touches the
+    radius DB from the evaluator). Task staleness itself is covered by the
+    generic scheduled-task finding; these are the domain conditions:
+    accounting stopped flowing, radacct unreadable, or enforcement drift
+    (suspended customers still holding live sessions).
+    """
+    from app.services.radius_health import HEARTBEAT_TASK
+    from app.services.task_heartbeat import snapshot
+
+    beat = snapshot(HEARTBEAT_TASK)
+    if beat["last_success_age_seconds"] is None:
+        return []  # task has never run (fresh deploy) — staleness finding owns this
+    result = beat["result"]
+    prefix = f"{INFRASTRUCTURE_ALERT_PREFIX}radius:"
+    findings: list[AlertFinding] = []
+
+    freshness_alert_seconds = _int_setting(
+        db, "radius_acct_freshness_alert_seconds", 900
+    )
+    freshness = result.get("acct_freshness_seconds")
+    open_sessions = int(result.get("open_sessions") or 0)
+    if not result.get("radacct_read_ok"):
+        findings.append(
+            AlertFinding(
+                fingerprint=f"{prefix}radacct-unreachable",
+                category="infrastructure",
+                source="radius-health",
+                severity=AlertSeverity.critical,
+                title="RADIUS accounting DB unreadable",
+                summary=(
+                    "The last health pass could not read every configured "
+                    "radacct source — session state and usage accounting are "
+                    "flying blind."
+                ),
+                details=_json_safe(result),
+            )
+        )
+    elif open_sessions and (
+        freshness is None or float(freshness) > freshness_alert_seconds
+    ):
+        display = "no update seen" if freshness is None else f"{int(freshness)}s ago"
+        findings.append(
+            AlertFinding(
+                fingerprint=f"{prefix}acct-stale",
+                category="infrastructure",
+                source="radius-health",
+                severity=AlertSeverity.critical,
+                title="RADIUS accounting has stopped flowing",
+                summary=(
+                    f"Newest interim update across {open_sessions} open "
+                    f"sessions: {display} (threshold "
+                    f"{freshness_alert_seconds}s). NAS accounting or the "
+                    "radius DB path is broken."
+                ),
+                details=_json_safe(result),
+            )
+        )
+
+    suspended_active = int(result.get("suspended_with_session") or 0)
+    if suspended_active:
+        findings.append(
+            AlertFinding(
+                fingerprint=f"{prefix}enforcement-drift",
+                category="infrastructure",
+                source="radius-health",
+                severity=AlertSeverity.warning,
+                title="Suspended customers still hold live sessions",
+                summary=(
+                    f"{suspended_active} suspended/blocked subscriptions have "
+                    "an active RADIUS session — enforcement is not landing on "
+                    "the NAS (CoA/disconnect path)."
+                ),
+                details=_json_safe(result),
+            )
+        )
+
     return findings
 
 
