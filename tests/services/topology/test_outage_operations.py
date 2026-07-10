@@ -5,6 +5,9 @@ from datetime import UTC, datetime
 from app.models.network_monitoring import NetworkDevice
 from app.models.operational_escalation import (
     OperationalEntityType,
+    OperationalEscalationDelivery,
+    OperationalEscalationEvent,
+    OperationalNotificationChannel,
     OperationalOwner,
     OperationalParticipantType,
     OperationalRoomLink,
@@ -17,6 +20,7 @@ from app.services.topology.outage import (
     declare_outage,
     open_classifier_incident,
 )
+from app.services.topology.outage_operations import plan_outage_escalations
 
 
 def _team(db_session, name: str, team_type: str) -> ServiceTeam:
@@ -83,6 +87,8 @@ def test_declare_outage_creates_default_owner_watchers_and_room(db_session):
     assert room.provider == "nextcloud_talk"
     assert room.metadata_["provisioning_status"] == "planned"
     assert "GARKI-OLT" in room.room_id
+    assert db_session.query(OperationalEscalationEvent).count() == 0
+    assert db_session.query(OperationalEscalationDelivery).count() == 0
 
 
 def test_classifier_outage_creates_operations_state_only_when_confirmed(db_session):
@@ -136,3 +142,112 @@ def test_outage_operations_preserves_existing_primary_owner(db_session):
     )
     assert active_owners == [custom_owner]
     assert active_owners[0].service_team_id == teams["field"].id
+
+
+def test_declare_outage_plans_deliveries_from_matching_policy(db_session):
+    teams = _seed_ops_teams(db_session)
+    node = _node(db_session)
+    policy = operational_escalation.create_policy(
+        db_session,
+        name="High outage internal channels",
+        entity_type=OperationalEntityType.outage,
+        level=2,
+        channels=[OperationalNotificationChannel.email],
+        min_severity="high",
+        min_affected_customers=100,
+    )
+
+    incident = declare_outage(
+        db_session,
+        node=node,
+        severity="critical",
+        impact={"count": 184},
+    )
+
+    event = db_session.query(OperationalEscalationEvent).one()
+    deliveries = db_session.query(OperationalEscalationDelivery).all()
+    assert event.policy_id == policy.id
+    assert event.entity_id == str(incident.id)
+    assert event.trigger == "outage.created"
+    assert event.level == 2
+    assert event.affected_customer_count == 184
+    assert {delivery.recipient_id for delivery in deliveries} == {
+        str(teams["operations"].id),
+        str(teams["support"].id),
+        str(teams["field"].id),
+    }
+    assert {delivery.channel for delivery in deliveries} == {
+        OperationalNotificationChannel.email
+    }
+
+
+def test_outage_policy_threshold_prevents_delivery_noise(db_session):
+    _seed_ops_teams(db_session)
+    node = _node(db_session)
+    operational_escalation.create_policy(
+        db_session,
+        name="Major outage only",
+        entity_type=OperationalEntityType.outage,
+        channels=[OperationalNotificationChannel.email],
+        min_severity="high",
+        min_affected_customers=100,
+    )
+
+    declare_outage(
+        db_session,
+        node=node,
+        severity="medium",
+        impact={"count": 99},
+    )
+
+    assert db_session.query(OperationalEscalationEvent).count() == 0
+    assert db_session.query(OperationalEscalationDelivery).count() == 0
+
+
+def test_outage_policy_scope_matches_network_device(db_session):
+    _seed_ops_teams(db_session)
+    matching_node = _node(db_session)
+    other_node = NetworkDevice(name="Wuse OLT", is_active=True)
+    db_session.add(other_node)
+    db_session.flush()
+    operational_escalation.create_policy(
+        db_session,
+        name="Garki outage",
+        entity_type=OperationalEntityType.outage,
+        scope_type="network_device",
+        scope_id=str(matching_node.id),
+        channels=[OperationalNotificationChannel.email],
+        min_severity="high",
+    )
+
+    declare_outage(
+        db_session,
+        node=other_node,
+        severity="critical",
+        impact={"count": 200},
+    )
+
+    assert db_session.query(OperationalEscalationEvent).count() == 0
+
+
+def test_outage_escalation_planning_is_idempotent_for_same_trigger(db_session):
+    _seed_ops_teams(db_session)
+    node = _node(db_session)
+    operational_escalation.create_policy(
+        db_session,
+        name="High outage internal channels",
+        entity_type=OperationalEntityType.outage,
+        channels=[OperationalNotificationChannel.email],
+        min_severity="high",
+    )
+    incident = declare_outage(
+        db_session,
+        node=node,
+        severity="high",
+        impact={"count": 20},
+    )
+
+    plan_outage_escalations(db_session, incident, trigger="outage.created")
+
+    assert db_session.query(OperationalEscalationEvent).count() == 1
+    assert db_session.query(OperationalEscalationDelivery).count() == 3
