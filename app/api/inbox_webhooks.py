@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.domain_settings import SettingDomain
+from app.models.team_inbox import InboxChannelType, InboxMessage, InboxMessageDirection
 from app.services import team_inbox_channel_receive
 from app.services.credential_crypto import decrypt_credential
 from app.services.settings_spec import resolve_value
@@ -107,6 +108,80 @@ def _iter_meta_whatsapp_messages(payload: dict[str, Any]):
                 }
 
 
+def _iter_meta_whatsapp_statuses(payload: dict[str, Any]):
+    for entry in payload.get("entry") or []:
+        if not isinstance(entry, dict):
+            continue
+        for change in entry.get("changes") or []:
+            if not isinstance(change, dict):
+                continue
+            value = change.get("value")
+            if not isinstance(value, dict):
+                continue
+            raw_statuses = value.get("statuses")
+            statuses = raw_statuses if isinstance(raw_statuses, list) else []
+            for status_item in statuses:
+                if not isinstance(status_item, dict):
+                    continue
+                message_id = str(status_item.get("id") or "").strip()
+                status_text = str(status_item.get("status") or "").strip()
+                if not message_id or not status_text:
+                    continue
+                yield {
+                    "message_id": message_id,
+                    "status": status_text,
+                    "timestamp": status_item.get("timestamp"),
+                    "recipient_id": status_item.get("recipient_id"),
+                    "errors": status_item.get("errors"),
+                    "raw": status_item,
+                }
+
+
+def _apply_whatsapp_status(
+    db: Session, status_item: dict[str, Any]
+) -> dict[str, object]:
+    provider_message_id = str(status_item["message_id"])
+    message = (
+        db.query(InboxMessage)
+        .filter(InboxMessage.channel_type == InboxChannelType.whatsapp.value)
+        .filter(InboxMessage.direction == InboxMessageDirection.outbound.value)
+        .filter(InboxMessage.external_message_id == provider_message_id)
+        .order_by(InboxMessage.created_at.desc())
+        .first()
+    )
+    if message is None:
+        return {
+            "kind": "not_found",
+            "provider_message_id": provider_message_id,
+            "status": status_item["status"],
+        }
+
+    metadata = dict(message.metadata_ or {})
+    history = metadata.get("delivery_status_history")
+    if not isinstance(history, list):
+        history = []
+    event = {
+        "status": status_item["status"],
+        "timestamp": status_item.get("timestamp"),
+        "recipient_id": status_item.get("recipient_id"),
+        "errors": status_item.get("errors"),
+    }
+    history.append({key: value for key, value in event.items() if value is not None})
+    metadata["delivery_status"] = status_item["status"]
+    metadata["delivery_status_at"] = status_item.get("timestamp")
+    metadata["delivery_recipient_id"] = status_item.get("recipient_id")
+    if status_item.get("errors") is not None:
+        metadata["delivery_errors"] = status_item["errors"]
+    metadata["delivery_status_history"] = history[-20:]
+    message.metadata_ = metadata
+    return {
+        "kind": "updated",
+        "message_id": str(message.id),
+        "provider_message_id": provider_message_id,
+        "status": status_item["status"],
+    }
+
+
 @router.get("/meta")
 def verify_meta_webhook(
     mode: str | None = Query(default=None, alias="hub.mode"),
@@ -146,6 +221,7 @@ async def receive_meta_whatsapp_webhook(
         )
 
     results: list[dict[str, object]] = []
+    status_results: list[dict[str, object]] = []
     for item in _iter_meta_whatsapp_messages(payload):
         inbound_payload = {
             "message": item["message"],
@@ -168,6 +244,14 @@ async def receive_meta_whatsapp_webhook(
                 "reseller_id": result.reseller_id,
             }
         )
-    if results:
+    for item in _iter_meta_whatsapp_statuses(payload):
+        status_results.append(_apply_whatsapp_status(db, item))
+    if results or status_results:
         db.commit()
-    return {"status": "ok", "processed": len(results), "items": results}
+    return {
+        "status": "ok",
+        "processed": len(results),
+        "status_processed": len(status_results),
+        "items": results,
+        "status_items": status_results,
+    }

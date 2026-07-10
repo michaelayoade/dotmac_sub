@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import json
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -101,16 +102,42 @@ def _plain_text_reply(payload: InboxReplyPayload) -> str:
 
 
 def _provider_metadata(result: dict[str, Any]) -> dict[str, Any]:
+    provider_message_id = _provider_message_id(result)
     metadata = {
         "provider": result.get("provider"),
         "sent": result.get("sent"),
         "status_code": result.get("status_code"),
         "message": result.get("message"),
+        "provider_message_id": provider_message_id,
     }
     response = result.get("response")
     if response is not None:
         metadata["response"] = str(response)[:500]
     return {key: value for key, value in metadata.items() if value is not None}
+
+
+def _provider_message_id(result: dict[str, Any]) -> str | None:
+    for key in ("provider_message_id", "message_id", "id"):
+        value = str(result.get(key) or "").strip()
+        if value:
+            return value
+    raw_response = result.get("response")
+    if isinstance(raw_response, str):
+        try:
+            response = json.loads(raw_response)
+        except json.JSONDecodeError:
+            return None
+    else:
+        response = raw_response
+    if not isinstance(response, dict):
+        return None
+    messages = response.get("messages")
+    if isinstance(messages, list) and messages:
+        first = messages[0]
+        if isinstance(first, dict):
+            value = str(first.get("id") or "").strip()
+            return value or None
+    return None
 
 
 def _send_whatsapp_reply(
@@ -150,6 +177,7 @@ def _send_whatsapp_reply(
 
     sent_at = now or datetime.now(UTC)
     metadata = dict(payload.metadata or {})
+    provider_message_id = _provider_message_id(result)
     metadata.update(
         {
             "source": "team_inbox_reply",
@@ -166,6 +194,7 @@ def _send_whatsapp_reply(
         direction=InboxMessageDirection.outbound.value,
         subject=None,
         body=body_text,
+        external_message_id=provider_message_id,
         external_thread_id=conversation.external_thread_id,
         from_address=None,
         to_addresses=[recipient],

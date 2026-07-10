@@ -176,8 +176,12 @@ def test_send_inbox_reply_sends_whatsapp_text(db_session, monkeypatch):
     assert message.channel_type == "whatsapp"
     assert message.direction == InboxMessageDirection.outbound.value
     assert message.body == "We are checking this."
+    assert message.external_message_id == "wamid.outbound"
     assert message.to_addresses == ["+2348035550114"]
     assert message.metadata_["provider_result"]["provider"] == "meta_cloud_api"
+    assert (
+        message.metadata_["provider_result"]["provider_message_id"] == "wamid.outbound"
+    )
     assert conversation.last_message_at == datetime(2026, 7, 10, 8, 5)
 
 

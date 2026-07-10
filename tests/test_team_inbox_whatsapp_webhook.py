@@ -10,7 +10,7 @@ from starlette.requests import Request
 
 from app.api import inbox_webhooks
 from app.models.subscriber import Subscriber, SubscriberStatus
-from app.models.team_inbox import InboxConversation, InboxMessage
+from app.models.team_inbox import InboxConversation, InboxMessage, InboxMessageDirection
 
 META_TEST_SECRET = "meta-secret"  # pragma: allowlist secret
 
@@ -143,3 +143,109 @@ async def test_meta_whatsapp_webhook_creates_native_inbox_message(
     assert conversation.contact_address == "+2348035550114"
     assert message.external_message_id == "wamid.meta-1"
     assert message.body == "My internet is down"
+
+
+@pytest.mark.asyncio
+async def test_meta_whatsapp_webhook_updates_outbound_delivery_status(
+    db_session, monkeypatch
+):
+    monkeypatch.setattr(inbox_webhooks, "_app_secret", lambda db: META_TEST_SECRET)
+    conversation = InboxConversation(
+        channel_type="whatsapp",
+        contact_address="+2348035550114",
+        external_thread_id="whatsapp:+2348035550114",
+    )
+    db_session.add(conversation)
+    db_session.flush()
+    message = InboxMessage(
+        conversation_id=conversation.id,
+        channel_type="whatsapp",
+        direction=InboxMessageDirection.outbound.value,
+        body="We are checking this.",
+        external_message_id="wamid.outbound-1",
+        to_addresses=["+2348035550114"],
+        metadata_={"provider_result": {"provider_message_id": "wamid.outbound-1"}},
+    )
+    db_session.add(message)
+    db_session.commit()
+    payload = {
+        "object": "whatsapp_business_account",
+        "entry": [
+            {
+                "id": "waba-1",
+                "changes": [
+                    {
+                        "field": "messages",
+                        "value": {
+                            "messaging_product": "whatsapp",
+                            "statuses": [
+                                {
+                                    "id": "wamid.outbound-1",
+                                    "status": "delivered",
+                                    "timestamp": "1783670500",
+                                    "recipient_id": "2348035550114",
+                                }
+                            ],
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+    body = json.dumps(payload).encode("utf-8")
+    request = _request(body, {"X-Hub-Signature-256": _sign(body)})
+
+    response = await inbox_webhooks.receive_meta_whatsapp_webhook(request, db_session)
+
+    db_session.refresh(message)
+    assert response["processed"] == 0
+    assert response["status_processed"] == 1
+    assert response["status_items"][0]["kind"] == "updated"
+    assert message.metadata_["delivery_status"] == "delivered"
+    assert message.metadata_["delivery_status_at"] == "1783670500"
+    assert message.metadata_["delivery_recipient_id"] == "2348035550114"
+    assert message.metadata_["delivery_status_history"][-1]["status"] == "delivered"
+
+
+@pytest.mark.asyncio
+async def test_meta_whatsapp_webhook_acknowledges_unknown_status(
+    db_session, monkeypatch
+):
+    monkeypatch.setattr(inbox_webhooks, "_app_secret", lambda db: META_TEST_SECRET)
+    payload = {
+        "object": "whatsapp_business_account",
+        "entry": [
+            {
+                "id": "waba-1",
+                "changes": [
+                    {
+                        "field": "messages",
+                        "value": {
+                            "statuses": [
+                                {
+                                    "id": "wamid.missing",
+                                    "status": "failed",
+                                    "timestamp": "1783670600",
+                                    "recipient_id": "2348035550114",
+                                    "errors": [{"code": 131026}],
+                                }
+                            ]
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+    body = json.dumps(payload).encode("utf-8")
+    request = _request(body, {"X-Hub-Signature-256": _sign(body)})
+
+    response = await inbox_webhooks.receive_meta_whatsapp_webhook(request, db_session)
+
+    assert response["processed"] == 0
+    assert response["status_processed"] == 1
+    assert response["status_items"][0] == {
+        "kind": "not_found",
+        "provider_message_id": "wamid.missing",
+        "status": "failed",
+    }
+    assert db_session.query(InboxMessage).count() == 0
