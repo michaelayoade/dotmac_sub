@@ -94,6 +94,13 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.admin_alerts.evaluate_infrastructure_alerts": _c(
         "monitoring", SWEEP, IDEMP, HEALTH
     ),
+    "app.tasks.ai_operations.expire_stale_insights": _c(
+        "ai",
+        SWEEP,
+        IDEMP,
+        STATUS,
+        "Expires stale native AI insights; expired rows are skipped on re-run.",
+    ),
     "app.tasks.alert_evaluation.evaluate_alert_rules": _c(
         "monitoring", SWEEP, IDEMP, STATUS
     ),
@@ -141,6 +148,21 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         GUARDED,
         HEALTH,
         "Applying a scheduled plan change must be idempotent (apply() status guard).",
+    ),
+    "app.tasks.campaigns.process_due_campaigns": _c(
+        "campaigns",
+        SWEEP,
+        PER_ITEM,
+        STATUS,
+        "Builds recipients and sends due campaigns through native inbox channels; "
+        "recipient rows gate repeat sends.",
+    ),
+    "app.tasks.campaigns.send_campaign_batch": _c(
+        "campaigns",
+        ITEMS,
+        PER_ITEM,
+        STATUS,
+        "Sends pending campaign recipients only; terminal recipients are skipped.",
     ),
     "app.tasks.collections.prepaid_balance_sweep": _c(
         "collections",

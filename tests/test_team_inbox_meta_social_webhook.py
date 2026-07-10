@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from fastapi import HTTPException
@@ -12,6 +14,11 @@ from app.api import meta_inbox_webhooks
 from app.models.team_inbox import InboxChannelType, InboxConversation, InboxMessage
 
 META_TEST_SECRET = "meta-secret"  # pragma: allowlist secret
+
+
+def _run_async(awaitable):
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(asyncio.run, awaitable).result()
 
 
 def _request(body: bytes, headers: dict[str, str] | None = None) -> Request:
@@ -47,8 +54,7 @@ def test_meta_inbox_webhook_verify_returns_challenge(db_session, monkeypatch):
     assert response.body == b"challenge-123"
 
 
-@pytest.mark.asyncio
-async def test_meta_inbox_webhook_rejects_bad_signature(db_session, monkeypatch):
+def test_meta_inbox_webhook_rejects_bad_signature(db_session, monkeypatch):
     body = b'{"entry":[]}'
     request = _request(body, {"X-Hub-Signature-256": "sha256=bad"})
 
@@ -61,15 +67,12 @@ async def test_meta_inbox_webhook_rejects_bad_signature(db_session, monkeypatch)
     )
 
     with pytest.raises(HTTPException) as exc:
-        await meta_inbox_webhooks.receive_meta_inbox_webhook(request, db_session)
+        _run_async(meta_inbox_webhooks.receive_meta_inbox_webhook(request, db_session))
 
     assert exc.value.status_code == 401
 
 
-@pytest.mark.asyncio
-async def test_meta_inbox_webhook_creates_facebook_messenger_message(
-    db_session, monkeypatch
-):
+def test_meta_inbox_webhook_creates_facebook_messenger_message(db_session, monkeypatch):
     monkeypatch.setattr(
         meta_inbox_webhooks, "_verify_meta_signature", lambda db, body, sig: None
     )
@@ -95,7 +98,9 @@ async def test_meta_inbox_webhook_creates_facebook_messenger_message(
     body = json.dumps(payload).encode("utf-8")
     request = _request(body, {"X-Hub-Signature-256": _sign(body)})
 
-    response = await meta_inbox_webhooks.receive_meta_inbox_webhook(request, db_session)
+    response = _run_async(
+        meta_inbox_webhooks.receive_meta_inbox_webhook(request, db_session)
+    )
 
     conversation = db_session.query(InboxConversation).one()
     message = db_session.query(InboxMessage).one()
@@ -112,8 +117,7 @@ async def test_meta_inbox_webhook_creates_facebook_messenger_message(
     assert message.metadata_["platform"] == InboxChannelType.facebook_messenger.value
 
 
-@pytest.mark.asyncio
-async def test_meta_inbox_webhook_creates_instagram_dm_message(db_session, monkeypatch):
+def test_meta_inbox_webhook_creates_instagram_dm_message(db_session, monkeypatch):
     monkeypatch.setattr(
         meta_inbox_webhooks, "_verify_meta_signature", lambda db, body, sig: None
     )
@@ -139,7 +143,9 @@ async def test_meta_inbox_webhook_creates_instagram_dm_message(db_session, monke
     body = json.dumps(payload).encode("utf-8")
     request = _request(body, {"X-Hub-Signature-256": _sign(body)})
 
-    response = await meta_inbox_webhooks.receive_meta_inbox_webhook(request, db_session)
+    response = _run_async(
+        meta_inbox_webhooks.receive_meta_inbox_webhook(request, db_session)
+    )
 
     conversation = db_session.query(InboxConversation).one()
     message = db_session.query(InboxMessage).one()
@@ -151,10 +157,7 @@ async def test_meta_inbox_webhook_creates_instagram_dm_message(db_session, monke
     assert message.body == "Please check my account"
 
 
-@pytest.mark.asyncio
-async def test_meta_inbox_webhook_deduplicates_external_message_id(
-    db_session, monkeypatch
-):
+def test_meta_inbox_webhook_deduplicates_external_message_id(db_session, monkeypatch):
     monkeypatch.setattr(
         meta_inbox_webhooks, "_verify_meta_signature", lambda db, body, sig: None
     )
@@ -175,10 +178,14 @@ async def test_meta_inbox_webhook_deduplicates_external_message_id(
     }
     body = json.dumps(payload).encode("utf-8")
     request = _request(body, {"X-Hub-Signature-256": _sign(body)})
-    first = await meta_inbox_webhooks.receive_meta_inbox_webhook(request, db_session)
+    first = _run_async(
+        meta_inbox_webhooks.receive_meta_inbox_webhook(request, db_session)
+    )
     request = _request(body, {"X-Hub-Signature-256": _sign(body)})
 
-    second = await meta_inbox_webhooks.receive_meta_inbox_webhook(request, db_session)
+    second = _run_async(
+        meta_inbox_webhooks.receive_meta_inbox_webhook(request, db_session)
+    )
 
     assert first["items"][0]["kind"] == "received"
     assert second["items"][0]["kind"] == "duplicate"
@@ -186,10 +193,7 @@ async def test_meta_inbox_webhook_deduplicates_external_message_id(
     assert db_session.query(InboxMessage).count() == 1
 
 
-@pytest.mark.asyncio
-async def test_meta_inbox_webhook_preserves_attachment_messages(
-    db_session, monkeypatch
-):
+def test_meta_inbox_webhook_preserves_attachment_messages(db_session, monkeypatch):
     monkeypatch.setattr(
         meta_inbox_webhooks, "_verify_meta_signature", lambda db, body, sig: None
     )
@@ -219,7 +223,9 @@ async def test_meta_inbox_webhook_preserves_attachment_messages(
     body = json.dumps(payload).encode("utf-8")
     request = _request(body, {"X-Hub-Signature-256": _sign(body)})
 
-    response = await meta_inbox_webhooks.receive_meta_inbox_webhook(request, db_session)
+    response = _run_async(
+        meta_inbox_webhooks.receive_meta_inbox_webhook(request, db_session)
+    )
 
     message = db_session.query(InboxMessage).one()
     assert response["processed"] == 1

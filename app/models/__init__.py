@@ -1,5 +1,12 @@
 from app.models.admin_alert import AdminAlert, AdminNotification  # noqa: F401
 from app.models.admin_whats_new import AdminWhatsNewItem  # noqa: F401
+from app.models.ai_insight import (  # noqa: F401
+    AIInsight,
+    AIInsightStatus,
+    InsightDomain,
+    InsightSeverity,
+)
+from app.models.ai_intake import AiIntakeConfig  # noqa: F401
 from app.models.analytics import (  # noqa: F401
     KPIAggregate,
     KPIConfig,
@@ -105,6 +112,16 @@ from app.models.comms import (  # noqa: F401
     CustomerNotificationEvent,
     CustomerNotificationStatus,
     Survey,
+)
+from app.models.comms_campaign import (  # noqa: F401
+    Campaign,
+    CampaignChannel,
+    CampaignRecipient,
+    CampaignRecipientStatus,
+    CampaignSender,
+    CampaignStatus,
+    CampaignStep,
+    CampaignType,
 )
 from app.models.communication_log import (  # noqa: F401
     CommunicationChannel,
@@ -685,3 +702,4 @@ from app.models.work_order_mirror import (  # noqa: F401
     WorkOrderMirror,
     WorkOrderSyncState,
 )
+from app.models.workqueue import WorkqueueItemKind, WorkqueueSnooze  # noqa: F401
