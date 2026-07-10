@@ -209,3 +209,58 @@ def test_team_metadata_sender_key_overrides_reply_activity(db_session, monkeypat
     assert result.sender_key == "vip_support"
     assert result.from_address == "vip@dotmac.io"
     assert sent["sender_key"] == "vip_support"
+
+
+def test_owner_route_sender_metadata_overrides_team_sender(db_session, monkeypatch):
+    _smtp_sender(db_session, "team_support", from_email="support@dotmac.io")
+    _smtp_sender(db_session, "route_support", from_email="help@dotmac.io")
+    team = ServiceTeam(
+        name="Support",
+        team_type=ServiceTeamType.support.value,
+        metadata_={
+            team_outbound.OUTBOUND_EMAIL_SENDER_METADATA_KEY: "team_support",
+        },
+    )
+    db_session.add(team)
+    db_session.flush()
+    conversation = InboxConversation(
+        channel_type="email",
+        subject="Need help",
+        contact_address="customer@example.com",
+        primary_service_team_id=team.id,
+        status=InboxConversationStatus.open.value,
+    )
+    db_session.add(conversation)
+    db_session.flush()
+    db_session.add(
+        InboxConversationTeam(
+            conversation_id=conversation.id,
+            service_team_id=team.id,
+            role=InboxTeamRole.owner.value,
+            is_active=True,
+            metadata_={
+                team_outbound.OUTBOUND_EMAIL_SENDER_METADATA_KEY: "route_support",
+                team_outbound.OUTBOUND_EMAIL_ACTIVITY_METADATA_KEY: "support_ticket",
+                "route_email_address": "help@dotmac.io",
+            },
+        )
+    )
+    sent: dict[str, object] = {}
+    monkeypatch.setattr(
+        team_inbox_outbound.email_service,
+        "send_email",
+        lambda *args, **kwargs: sent.update(kwargs) or True,
+    )
+    db_session.commit()
+
+    result = team_inbox_outbound.send_inbox_reply(
+        db_session,
+        conversation=conversation,
+        payload=team_inbox_outbound.InboxReplyPayload(body_html="<p>Reply.</p>"),
+    )
+
+    assert result.kind == "sent"
+    assert result.sender_key == "route_support"
+    assert result.activity == "support_ticket"
+    assert result.from_address == "help@dotmac.io"
+    assert sent["sender_key"] == "route_support"

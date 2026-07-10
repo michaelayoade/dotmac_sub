@@ -53,13 +53,18 @@ def _coerce_uuid(value: str | UUID | None) -> UUID | None:
         return None
 
 
+def _owner_team_link(conversation: InboxConversation) -> InboxConversationTeam | None:
+    for link in conversation.team_links:
+        if link.is_active and link.role == InboxTeamRole.owner.value:
+            return link
+    return None
+
+
 def _owner_team_id(conversation: InboxConversation) -> UUID | None:
     if conversation.primary_service_team_id is not None:
         return conversation.primary_service_team_id
-    for link in conversation.team_links:
-        if link.is_active and link.role == InboxTeamRole.owner.value:
-            return link.service_team_id
-    return None
+    link = _owner_team_link(conversation)
+    return link.service_team_id if link is not None else None
 
 
 def _reply_subject(conversation: InboxConversation, explicit: str | None) -> str:
@@ -113,8 +118,9 @@ def send_inbox_reply(
             reason="Reply body is required",
         )
 
+    owner_link = _owner_team_link(conversation)
     service_team_id = _owner_team_id(conversation)
-    if service_team_id is None:
+    if owner_link is None and service_team_id is None:
         owner_link = (
             db.query(InboxConversationTeam)
             .filter(InboxConversationTeam.conversation_id == conversation.id)
@@ -127,6 +133,7 @@ def send_inbox_reply(
         db,
         service_team_id=service_team_id,
         fallback_activity="support_ticket",
+        metadata_override=owner_link.metadata_ if owner_link is not None else None,
     )
     config = sender.config
     subject = _reply_subject(conversation, payload.subject)

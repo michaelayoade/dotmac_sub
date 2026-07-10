@@ -59,7 +59,19 @@ def _metadata_string(metadata: dict[str, Any], key: str) -> str | None:
     return text or None
 
 
-def get_team_outbound_sender_key(team: ServiceTeam | None) -> str | None:
+def get_team_outbound_sender_key(
+    team: ServiceTeam | None,
+    *,
+    metadata_override: dict[str, Any] | None = None,
+) -> str | None:
+    metadata = metadata_override or {}
+    configured = _metadata_string(metadata, OUTBOUND_EMAIL_SENDER_METADATA_KEY)
+    if configured:
+        return configured.lower()
+    for key in LEGACY_EMAIL_SENDER_METADATA_KEYS:
+        configured = _metadata_string(metadata, key)
+        if configured:
+            return configured.lower()
     metadata = _metadata(team)
     configured = _metadata_string(metadata, OUTBOUND_EMAIL_SENDER_METADATA_KEY)
     if configured:
@@ -75,7 +87,12 @@ def get_team_outbound_activity(
     team: ServiceTeam | None,
     *,
     fallback_activity: str | None = None,
+    metadata_override: dict[str, Any] | None = None,
 ) -> str | None:
+    metadata = metadata_override or {}
+    configured = _metadata_string(metadata, OUTBOUND_EMAIL_ACTIVITY_METADATA_KEY)
+    if configured:
+        return configured
     metadata = _metadata(team)
     configured = _metadata_string(metadata, OUTBOUND_EMAIL_ACTIVITY_METADATA_KEY)
     if configured:
@@ -94,6 +111,7 @@ def resolve_team_email_sender(
     service_team_id: str | UUID | None = None,
     team: ServiceTeam | None = None,
     fallback_activity: str | None = None,
+    metadata_override: dict[str, Any] | None = None,
 ) -> TeamEmailSenderResolution:
     resolved_team = team
     if resolved_team is None:
@@ -101,9 +119,13 @@ def resolve_team_email_sender(
         if team_id is not None:
             resolved_team = db.get(ServiceTeam, team_id)
 
-    sender_key = get_team_outbound_sender_key(resolved_team)
+    sender_key = get_team_outbound_sender_key(
+        resolved_team, metadata_override=metadata_override
+    )
     activity = get_team_outbound_activity(
-        resolved_team, fallback_activity=fallback_activity
+        resolved_team,
+        fallback_activity=fallback_activity,
+        metadata_override=metadata_override,
     )
     config = email_service.get_smtp_config(
         db,

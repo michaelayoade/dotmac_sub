@@ -110,6 +110,32 @@ def test_team_metadata_sender_key_overrides_type_activity(db_session):
     assert resolved.config["host"] == "smtp.vip.local"
 
 
+def test_route_metadata_sender_key_overrides_team_metadata(db_session):
+    _smtp_sender(db_session, "team_support", host="smtp.team.local")
+    _smtp_sender(db_session, "route_support", host="smtp.route.local")
+    team = ServiceTeam(
+        name="Support",
+        team_type=ServiceTeamType.support.value,
+        metadata_={"outbound_email_sender_key": "team_support"},
+    )
+    db_session.add(team)
+    db_session.commit()
+
+    resolved = team_outbound.resolve_team_email_sender(
+        db_session,
+        team=team,
+        metadata_override={
+            team_outbound.OUTBOUND_EMAIL_SENDER_METADATA_KEY: "route_support",
+            team_outbound.OUTBOUND_EMAIL_ACTIVITY_METADATA_KEY: "support_ticket",
+        },
+    )
+
+    assert resolved.sender_key == "route_support"
+    assert resolved.activity == "support_ticket"
+    assert resolved.config["sender_key"] == "route_support"
+    assert resolved.config["host"] == "smtp.route.local"
+
+
 def test_unknown_team_uses_fallback_activity(db_session):
     _smtp_sender(db_session, "ops", host="smtp.ops.local")
     _activity_sender(db_session, "operations", "ops")

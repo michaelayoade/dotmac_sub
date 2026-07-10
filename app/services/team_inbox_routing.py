@@ -13,6 +13,7 @@ from app.models.team_inbox import (
     InboxTeamSource,
     TeamInboxEmailRoute,
 )
+from app.services import team_outbound
 
 
 @dataclass(frozen=True)
@@ -22,6 +23,7 @@ class EmailTeamRecipientMatch:
     recipient_kind: str
     is_primary_route: bool
     priority: int
+    metadata: dict
 
 
 @dataclass(frozen=True)
@@ -99,6 +101,7 @@ def build_email_team_routing_plan(
             recipient_kind="to" if route.email_address in to_normalized else "cc",
             is_primary_route=route.is_primary,
             priority=route.priority,
+            metadata=route.metadata_ if isinstance(route.metadata_, dict) else {},
         )
         for route in routes
     ]
@@ -135,7 +138,11 @@ def apply_email_routing_plan(
     conversation: InboxConversation,
     plan: EmailTeamRoutingPlan,
 ) -> InboxConversation:
-    primary_team_id = _coerce_uuid(plan.primary_service_team_id)
+    primary_team_id = (
+        str(conversation.primary_service_team_id)
+        if conversation.primary_service_team_id is not None
+        else _coerce_uuid(plan.primary_service_team_id)
+    )
     if primary_team_id:
         conversation.primary_service_team_id = UUID(primary_team_id)
 
@@ -164,6 +171,11 @@ def apply_email_routing_plan(
             if match and match.recipient_kind == "cc"
             else InboxTeamSource.routing_rule.value
         )
+        metadata = dict(match.metadata) if match and match.metadata else {}
+        if match:
+            metadata["route_email_address"] = match.email_address
+            metadata["route_recipient_kind"] = match.recipient_kind
+        metadata = _outbound_metadata(metadata)
         link = (
             db.query(InboxConversationTeam)
             .filter(InboxConversationTeam.conversation_id == conversation.id)
@@ -178,11 +190,25 @@ def apply_email_routing_plan(
                     role=role,
                     source=source,
                     is_active=True,
+                    metadata_=metadata or None,
                 )
             )
             continue
         link.role = role
         link.source = source
         link.is_active = True
+        if metadata:
+            link.metadata_ = {**(link.metadata_ or {}), **metadata}
     db.flush()
     return conversation
+
+
+def _outbound_metadata(metadata: dict) -> dict:
+    allowed = {
+        team_outbound.OUTBOUND_EMAIL_ACTIVITY_METADATA_KEY,
+        team_outbound.OUTBOUND_EMAIL_SENDER_METADATA_KEY,
+        "route_email_address",
+        "route_recipient_kind",
+        *team_outbound.LEGACY_EMAIL_SENDER_METADATA_KEYS,
+    }
+    return {key: value for key, value in metadata.items() if key in allowed and value}

@@ -145,10 +145,14 @@ def test_receive_inbound_email_reply_reuses_referenced_thread(db_session):
     assert reply.conversation_id == first.conversation_id
     assert db_session.query(InboxConversation).count() == 1
     assert db_session.query(InboxMessage).count() == 2
-    assert conversation.primary_service_team_id == billing.id
+    assert conversation.primary_service_team_id == support.id
     assert {str(link.service_team_id) for link in links} == {
         str(support.id),
         str(billing.id),
+    }
+    assert {(str(link.service_team_id), link.role) for link in links} == {
+        (str(support.id), "owner"),
+        (str(billing.id), "participant"),
     }
 
 

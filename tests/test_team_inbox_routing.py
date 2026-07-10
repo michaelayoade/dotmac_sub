@@ -25,6 +25,7 @@ def _route(
     *,
     priority: int = 100,
     is_primary: bool = False,
+    metadata: dict | None = None,
 ) -> None:
     db_session.add(
         TeamInboxEmailRoute(
@@ -33,6 +34,7 @@ def _route(
             priority=priority,
             is_primary=is_primary,
             is_active=True,
+            metadata_=metadata,
         )
     )
     db_session.flush()
@@ -130,6 +132,88 @@ def test_apply_routing_plan_sets_one_owner_and_participating_teams(db_session):
             InboxTeamSource.recipient_to.value,
         ),
     ]
+
+
+def test_apply_routing_plan_preserves_existing_owner_on_follow_up(db_session):
+    support = _team(db_session, "Support", ServiceTeamType.support.value)
+    billing = _team(db_session, "Finance", ServiceTeamType.billing.value)
+    _route(db_session, support, "support@dotmac.io", priority=10)
+    _route(db_session, billing, "billing@dotmac.io", priority=20)
+    conversation = InboxConversation(
+        channel_type="email",
+        subject="Need help",
+        contact_address="customer@example.com",
+        primary_service_team_id=support.id,
+    )
+    db_session.add(conversation)
+    db_session.flush()
+    db_session.add(
+        InboxConversationTeam(
+            conversation_id=conversation.id,
+            service_team_id=support.id,
+            role=InboxTeamRole.owner.value,
+            source=InboxTeamSource.recipient_to.value,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    plan = team_inbox_routing.build_email_team_routing_plan(
+        db_session,
+        to_addresses=["billing@dotmac.io"],
+    )
+    team_inbox_routing.apply_email_routing_plan(
+        db_session, conversation=conversation, plan=plan
+    )
+    db_session.commit()
+
+    links = (
+        db_session.query(InboxConversationTeam)
+        .filter(InboxConversationTeam.conversation_id == conversation.id)
+        .all()
+    )
+
+    assert conversation.primary_service_team_id == support.id
+    assert {(str(link.service_team_id), link.role) for link in links} == {
+        (str(support.id), InboxTeamRole.owner.value),
+        (str(billing.id), InboxTeamRole.participant.value),
+    }
+
+
+def test_apply_routing_plan_copies_route_sender_metadata_to_team_link(db_session):
+    support = _team(db_session, "Support", ServiceTeamType.support.value)
+    _route(
+        db_session,
+        support,
+        "help@dotmac.io",
+        metadata={
+            "outbound_email_sender_key": "support_helpdesk",
+            "outbound_email_activity": "support_ticket",
+            "ignored": "not copied",
+        },
+    )
+    conversation = InboxConversation(
+        channel_type="email",
+        subject="Need help",
+        contact_address="customer@example.com",
+    )
+    db_session.add(conversation)
+    db_session.commit()
+
+    plan = team_inbox_routing.build_email_team_routing_plan(
+        db_session,
+        to_addresses=["help@dotmac.io"],
+    )
+    team_inbox_routing.apply_email_routing_plan(
+        db_session, conversation=conversation, plan=plan
+    )
+    db_session.commit()
+
+    [link] = conversation.team_links
+    assert link.metadata_["outbound_email_sender_key"] == "support_helpdesk"
+    assert link.metadata_["outbound_email_activity"] == "support_ticket"
+    assert link.metadata_["route_email_address"] == "help@dotmac.io"
+    assert "ignored" not in link.metadata_
 
 
 def test_email_routing_uses_fallback_team_when_no_address_matches(db_session):
