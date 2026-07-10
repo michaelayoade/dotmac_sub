@@ -1,17 +1,10 @@
-# vmagent configuration for scraping Zabbix metrics
-# These metrics are forwarded to VictoriaMetrics
+# vmagent configuration: scrape app/infra metrics into VictoriaMetrics
 
 global:
   scrape_interval: 60s
   scrape_timeout: 30s
 
 scrape_configs:
-  # NOTE 2026-05-15: Removed zabbix-server (port 10051) and zabbix-agent (port 10050)
-  # scrape jobs. Those are Zabbix binary protocol ports, not HTTP/Prometheus
-  # endpoints, so they always returned up==0 and triggered ServiceDown alerts
-  # since 2026-05-12. To re-enable real Zabbix metrics, deploy a zabbix_exporter
-  # (e.g. adubkov/zabbix_exporter) and add a scrape job pointing at its HTTP port.
-
   # DotMac app health endpoint
   - job_name: 'dotmac-app'
     metrics_path: /metrics
