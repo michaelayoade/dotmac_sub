@@ -114,9 +114,9 @@ def _maybe_trigger_olt_retry(
 
 def _bounded_max_workers(max_workers: int) -> int:
     try:
-        configured = int(os.getenv("NETWORK_MONITORING_MAX_WORKERS", ""))
+        configured = int(os.getenv("NETWORK_MONITORING_MAX_WORKERS", "4"))
     except ValueError:
-        configured = 0
+        configured = 4
     effective = configured or max_workers
     return max(1, min(effective, 12))
 
@@ -134,7 +134,7 @@ def refresh_devices_health(
     devices: list[NetworkDevice],
     *,
     include_snmp: bool = False,
-    max_workers: int = 12,
+    max_workers: int = 4,
 ) -> dict[str, int]:
     """Refresh ping and vendor-backed monitoring health for a list of devices.
 
@@ -160,6 +160,10 @@ def refresh_devices_health(
         return totals
 
     workers = max(1, min(_bounded_max_workers(max_workers), len(targets)))
+    # The caller's session is only used to build the primitive target list.
+    # Release the read transaction before the long ping/SNMP fan-out; each
+    # worker opens and commits its own short-lived session.
+    db.rollback()
     pool = ThreadPoolExecutor(max_workers=workers)
     try:
         futures = [
@@ -189,7 +193,7 @@ def refresh_stale_devices_health(
     snmp_interval_seconds: int,
     include_snmp: bool = True,
     force: bool = False,
-    max_workers: int = 12,
+    max_workers: int = 4,
     max_devices: int | None = None,
 ) -> dict[str, int]:
     """Refresh only devices whose ping or vendor-backed monitoring checks are stale.

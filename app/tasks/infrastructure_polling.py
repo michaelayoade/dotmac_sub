@@ -74,6 +74,11 @@ def run_infrastructure_poll() -> dict[str, Any]:
                 DEFAULT_SNMP_INTERVAL_SECONDS,
                 floor=30,
             )
+            # The session-level advisory lock survives commit because the lock
+            # helper pins one connection. End the settings-read transaction
+            # before the long threaded poll so Postgres' idle-in-transaction
+            # timeout does not kill the lock connection mid-run.
+            db.commit()
             result = poll_infrastructure(
                 db,
                 ping_interval_seconds=ping_interval,
