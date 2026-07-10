@@ -55,6 +55,7 @@ from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.service_entitlements import (
     ensure_prepaid_entitlements_for_paid_invoice,
+    prepaid_entitlement_coverage_end,
 )
 
 logger = logging.getLogger(__name__)
@@ -659,6 +660,13 @@ def _paid_coverage_end_for_subscription(
     not overlap a paid imported period just because ``next_billing_at`` drifted
     earlier than the actual paid-through date.
     """
+    entitlement_end = prepaid_entitlement_coverage_end(
+        db,
+        subscription_id=subscription_id,
+        account_id=account_id,
+        period_start=period_start,
+        period_end=period_end,
+    )
     row = (
         db.query(Invoice.billing_period_end)
         .join(InvoiceLine, InvoiceLine.invoice_id == Invoice.id)
@@ -670,14 +678,15 @@ def _paid_coverage_end_for_subscription(
         .filter(Invoice.balance_due <= Decimal("0.00"))
         .filter(Invoice.billing_period_start.isnot(None))
         .filter(Invoice.billing_period_end.isnot(None))
-        .filter(Invoice.billing_period_start < period_end)
+        .filter(Invoice.billing_period_start <= period_start)
         .filter(Invoice.billing_period_end > period_start)
         .order_by(Invoice.billing_period_end.desc())
         .first()
     )
-    if row is None:
-        return None
-    return _as_utc(row[0])
+    invoice_end = _as_utc(row[0]) if row is not None else None
+    entitlement_end = _as_utc(entitlement_end)
+    candidates = [end for end in (entitlement_end, invoice_end) if end is not None]
+    return max(candidates) if candidates else None
 
 
 def _activate_pending_subscription(

@@ -87,22 +87,18 @@ def ensure_prepaid_entitlement_for_wallet_debit(
     if ledger_entry.source != LedgerSource.invoice or not ledger_entry.is_active:
         return None
     metadata = ledger_entry.memo or ""
-    candidates = (
+    existing = (
         db.query(ServiceEntitlement)
-        .filter(ServiceEntitlement.subscription_id == subscription.id)
+        .filter(ServiceEntitlement.source_ledger_entry_id == ledger_entry.id)
         .filter(ServiceEntitlement.status == ServiceEntitlementStatus.active)
-        .filter(ServiceEntitlement.starts_at == starts_at)
-        .filter(ServiceEntitlement.ends_at == ends_at)
-        .all()
+        .first()
     )
-    for candidate in candidates:
-        if (candidate.metadata_ or {}).get("source_ledger_entry_id") == str(
-            ledger_entry.id
-        ):
-            return candidate
+    if existing is not None:
+        return existing
     entitlement = ServiceEntitlement(
         account_id=subscription.subscriber_id,
         subscription_id=subscription.id,
+        source_ledger_entry_id=ledger_entry.id,
         starts_at=starts_at,
         ends_at=ends_at,
         amount_funded=round_money(to_decimal(ledger_entry.amount)),
@@ -117,6 +113,51 @@ def ensure_prepaid_entitlement_for_wallet_debit(
     db.add(entitlement)
     db.flush()
     return entitlement
+
+
+def prepaid_entitlement_coverage_end(
+    db: Session,
+    *,
+    subscription_id: object,
+    account_id: object,
+    period_start: datetime,
+    period_end: datetime,
+) -> datetime | None:
+    """Return entitlement paid-through coverage from the proposed period start."""
+
+    row = (
+        db.query(ServiceEntitlement.ends_at)
+        .filter(ServiceEntitlement.account_id == account_id)
+        .filter(ServiceEntitlement.subscription_id == subscription_id)
+        .filter(ServiceEntitlement.status == ServiceEntitlementStatus.active)
+        .filter(ServiceEntitlement.starts_at <= period_start)
+        .filter(ServiceEntitlement.ends_at > period_start)
+        .order_by(ServiceEntitlement.ends_at.desc())
+        .first()
+    )
+    return row[0] if row is not None else None
+
+
+def current_prepaid_entitlement_end(
+    db: Session,
+    *,
+    subscription_id: object,
+    account_id: object,
+    now: datetime,
+) -> datetime | None:
+    """Return the current funded entitlement end, if now is inside its interval."""
+
+    row = (
+        db.query(ServiceEntitlement.ends_at)
+        .filter(ServiceEntitlement.account_id == account_id)
+        .filter(ServiceEntitlement.subscription_id == subscription_id)
+        .filter(ServiceEntitlement.status == ServiceEntitlementStatus.active)
+        .filter(ServiceEntitlement.starts_at <= now)
+        .filter(ServiceEntitlement.ends_at > now)
+        .order_by(ServiceEntitlement.ends_at.desc())
+        .first()
+    )
+    return row[0] if row is not None else None
 
 
 def _base_subscription_lines(lines: list[InvoiceLine]) -> list[InvoiceLine]:

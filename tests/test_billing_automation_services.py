@@ -3050,6 +3050,84 @@ class TestPrepaidDraftUntilFunded:
         assert entitlement.starts_at == run_at
         assert entitlement.ends_at == subscription.next_billing_at
 
+    def test_wallet_entitlement_overlap_skips_duplicate_prepaid_invoice(
+        self, db_session, subscription, subscriber_account
+    ):
+        from app.models.billing import (
+            Invoice,
+            ServiceEntitlement,
+            ServiceEntitlementStatus,
+        )
+
+        run_at = self._setup_prepaid_monthly(
+            db_session, subscription, subscriber_account
+        )
+        entitlement_end = run_at + timedelta(days=30)
+        db_session.add(
+            ServiceEntitlement(
+                account_id=subscriber_account.id,
+                subscription_id=subscription.id,
+                starts_at=run_at,
+                ends_at=entitlement_end,
+                amount_funded=Decimal("100.00"),
+                currency="NGN",
+                status=ServiceEntitlementStatus.active,
+                metadata_={"source": "wallet_prepaid_renewal"},
+            )
+        )
+        db_session.commit()
+
+        summary = billing_automation.run_invoice_cycle(db_session, run_at=run_at)
+
+        assert summary["skipped"] >= 1
+        assert (
+            db_session.query(Invoice)
+            .filter(Invoice.account_id == subscriber_account.id)
+            .count()
+            == 0
+        )
+        db_session.refresh(subscription)
+        assert subscription.next_billing_at == entitlement_end
+
+    def test_future_wallet_entitlement_does_not_skip_current_prepaid_invoice(
+        self, db_session, subscription, subscriber_account
+    ):
+        from app.models.billing import (
+            Invoice,
+            InvoiceStatus,
+            ServiceEntitlement,
+            ServiceEntitlementStatus,
+        )
+
+        run_at = self._setup_prepaid_monthly(
+            db_session, subscription, subscriber_account
+        )
+        db_session.add(
+            ServiceEntitlement(
+                account_id=subscriber_account.id,
+                subscription_id=subscription.id,
+                starts_at=run_at + timedelta(days=5),
+                ends_at=run_at + timedelta(days=35),
+                amount_funded=Decimal("100.00"),
+                currency="NGN",
+                status=ServiceEntitlementStatus.active,
+                metadata_={"source": "wallet_prepaid_renewal"},
+            )
+        )
+        db_session.commit()
+
+        summary = billing_automation.run_invoice_cycle(db_session, run_at=run_at)
+
+        assert summary["invoices_created"] == 1
+        invoice = (
+            db_session.query(Invoice)
+            .filter(Invoice.account_id == subscriber_account.id)
+            .one()
+        )
+        assert invoice.status == InvoiceStatus.draft
+        db_session.refresh(subscription)
+        assert subscription.next_billing_at == run_at
+
     def test_partial_credit_left_draft_no_allocation(
         self, db_session, subscription, subscriber_account
     ):

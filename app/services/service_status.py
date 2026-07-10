@@ -24,8 +24,6 @@ from sqlalchemy.orm import Session, selectinload
 from app.models.billing import (
     Invoice,
     InvoiceStatus,
-    ServiceEntitlement,
-    ServiceEntitlementStatus,
 )
 from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
 from app.models.domain_settings import SettingDomain
@@ -35,6 +33,7 @@ from app.services import settings_spec
 from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
 from app.services.collections import get_available_balance, has_overdue_balance
 from app.services.common import coerce_uuid
+from app.services.service_entitlements import current_prepaid_entitlement_end
 
 # Statuses the customer still has an operational relationship with (mirrors the
 # mobile `currentStatuses`); terminal/historical ones are excluded entirely.
@@ -64,14 +63,11 @@ def _paid_prepaid_coverage_end(
 ) -> datetime | None:
     from app.models.billing import InvoiceLine
 
-    entitlement_end = (
-        db.query(ServiceEntitlement.ends_at)
-        .filter(ServiceEntitlement.subscription_id == subscription.id)
-        .filter(ServiceEntitlement.status == ServiceEntitlementStatus.active)
-        .filter(ServiceEntitlement.ends_at > now)
-        .order_by(ServiceEntitlement.ends_at.desc())
-        .limit(1)
-        .scalar()
+    entitlement_end = current_prepaid_entitlement_end(
+        db,
+        subscription_id=subscription.id,
+        account_id=subscription.subscriber_id,
+        now=now,
     )
     if entitlement_end is not None:
         return entitlement_end
@@ -85,6 +81,8 @@ def _paid_prepaid_coverage_end(
         .filter(InvoiceLine.is_active.is_(True))
         .filter(Invoice.is_active.is_(True))
         .filter(Invoice.status == InvoiceStatus.paid)
+        .filter(Invoice.billing_period_start.isnot(None))
+        .filter(Invoice.billing_period_start <= now)
         .filter(Invoice.billing_period_end.isnot(None))
         .filter(Invoice.billing_period_end > now)
         .order_by(Invoice.billing_period_end.desc())
