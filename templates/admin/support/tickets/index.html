@@ -119,7 +119,7 @@
             </div>
         </div>
 
-        <details class="rounded-xl border border-slate-200/80 bg-slate-50/70 p-3 dark:border-slate-600/70 dark:bg-slate-700/30">
+        <details class="rounded-xl border border-slate-200/80 bg-slate-50/70 p-3 dark:border-slate-600/70 dark:bg-slate-700/30" {% if filters %}open{% endif %}>
             <summary class="cursor-pointer text-sm font-medium text-slate-700 dark:text-slate-200">Advanced Filters</summary>
             <div class="mt-3 grid gap-2 md:grid-cols-3">
                 <div>
@@ -144,6 +144,101 @@
                     </select>
                 </div>
             </div>
+
+            {# ── Condition builder: field/operator/value rows with AND/OR grouping, serialized into the `filters` param ── #}
+            <div class="mt-4 space-y-3 border-t border-slate-200/80 pt-3 dark:border-slate-600/70"
+                 x-data="ticketFilterBuilder()"
+                 data-filter-schema='{{ ticket_filter_schema | tojson | e }}'
+                 data-initial-filters='{{ filters | tojson | e }}'
+                 data-doctype="Ticket">
+                <input type="hidden" name="filters" x-bind:value="filtersJson">
+                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Filter Conditions</p>
+                <template x-for="(row, index) in rows" :key="row.id">
+                    <div class="grid grid-cols-1 gap-2 md:grid-cols-12">
+                        <div class="md:col-span-3">
+                            <select x-model="row.field"
+                                    x-on:change="onFieldChange(index)"
+                                    class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                                <template x-for="field in schema" :key="field.field">
+                                    <option :value="field.field" x-text="field.label"></option>
+                                </template>
+                            </select>
+                        </div>
+                        <div class="md:col-span-2">
+                            <select x-model="row.operator"
+                                    x-on:change="onOperatorChange(index)"
+                                    class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                                <template x-for="operator in operatorOptions(row.field)" :key="operator.value">
+                                    <option :value="operator.value" x-text="operator.label"></option>
+                                </template>
+                            </select>
+                        </div>
+                        <div class="md:col-span-4">
+                            <template x-if="row.operator === 'between'">
+                                <div class="grid grid-cols-2 gap-2">
+                                    <input :type="inputType(row.field)"
+                                           x-model="row.value[0]"
+                                           x-on:change="syncFilters()"
+                                           class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                                    <input :type="inputType(row.field)"
+                                           x-model="row.value[1]"
+                                           x-on:change="syncFilters()"
+                                           class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                                </div>
+                            </template>
+                            <template x-if="row.operator !== 'between'">
+                                <div>
+                                    <template x-if="selectOptions(row.field).length > 0">
+                                        <select x-model="row.value"
+                                                x-on:change="syncFilters()"
+                                                class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                                            <option value="">Select value</option>
+                                            <template x-for="option in selectOptions(row.field)" :key="option.value">
+                                                <option :value="option.value" x-text="option.label"></option>
+                                            </template>
+                                        </select>
+                                    </template>
+                                    <template x-if="selectOptions(row.field).length === 0">
+                                        <input :type="inputType(row.field)"
+                                               x-model="row.value"
+                                               x-on:input="syncFilters()"
+                                               placeholder="Value"
+                                               class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 placeholder-slate-400 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white dark:placeholder-slate-500">
+                                    </template>
+                                </div>
+                            </template>
+                        </div>
+                        <div class="md:col-span-2">
+                            <select x-model="row.group"
+                                    x-on:change="syncFilters()"
+                                    class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                                <option value="and">AND</option>
+                                <option value="or">OR</option>
+                            </select>
+                        </div>
+                        <div class="md:col-span-1">
+                            <button type="button"
+                                    x-on:click="removeRow(index)"
+                                    class="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
+                                Remove
+                            </button>
+                        </div>
+                    </div>
+                </template>
+                <div class="flex flex-wrap items-center gap-2">
+                    <button type="button"
+                            x-on:click="addRow()"
+                            class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+                        Add Condition
+                    </button>
+                    <button type="button"
+                            x-on:click="clearRows()"
+                            class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+                        Clear
+                    </button>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">AND conditions must all match; OR conditions match any. Use Apply to run.</p>
+                </div>
+            </div>
         </details>
     </form>
     </div>
@@ -154,6 +249,204 @@
 </div>
 
 <script>
+function ticketFilterBuilder() {
+    return {
+        schema: [],
+        doctype: 'Ticket',
+        rows: [],
+        filtersJson: '',
+
+        init() {
+            const el = this.$el;
+            this.schema = this.parseJsonAttribute(el.getAttribute('data-filter-schema'), []);
+            this.doctype = el.getAttribute('data-doctype') || 'Ticket';
+            const initialFilters = this.parseJsonAttribute(el.getAttribute('data-initial-filters'), null);
+            this.rows = this.parseInitialFilters(initialFilters);
+            if (this.rows.length === 0) {
+                this.addRow();
+            }
+            this.syncFilters();
+        },
+
+        parseJsonAttribute(rawValue, fallbackValue) {
+            if (!rawValue || rawValue === 'null') return fallbackValue;
+            try {
+                return JSON.parse(rawValue);
+            } catch (_error) {
+                return fallbackValue;
+            }
+        },
+
+        parseInitialFilters(initialFilters) {
+            if (!initialFilters) return [];
+            try {
+                const parsed = typeof initialFilters === 'string' ? JSON.parse(initialFilters) : initialFilters;
+                const rows = [];
+                const andRows = Array.isArray(parsed) ? parsed : (Array.isArray(parsed.and) ? parsed.and : []);
+                const orRows = parsed && Array.isArray(parsed.or) ? parsed.or : [];
+                andRows.forEach((item) => {
+                    if (Array.isArray(item) && item.length === 4) {
+                        rows.push(this.rowFromPayload(item, 'and'));
+                    } else if (item && typeof item === 'object' && Array.isArray(item.or)) {
+                        item.or.forEach((groupRow) => {
+                            if (Array.isArray(groupRow) && groupRow.length === 4) {
+                                rows.push(this.rowFromPayload(groupRow, 'or'));
+                            }
+                        });
+                    }
+                });
+                orRows.forEach((item) => {
+                    if (Array.isArray(item) && item.length === 4) {
+                        rows.push(this.rowFromPayload(item, 'or'));
+                    }
+                });
+                return rows;
+            } catch (_error) {
+                return [];
+            }
+        },
+
+        rowFromPayload(item, group) {
+            const fieldEntry = this.schema.find((entry) => entry.field === item[1]);
+            const field = (fieldEntry && fieldEntry.field) ? fieldEntry.field : this.defaultField();
+            const operator = item[2] || this.defaultOperator(field);
+            let value = item[3];
+            if (operator === 'between' && !Array.isArray(value)) {
+                value = ['', ''];
+            }
+            return { id: this.newId(), field, operator, value, group };
+        },
+
+        newId() {
+            if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+                return window.crypto.randomUUID();
+            }
+            return `${Date.now()}-${Math.random()}`;
+        },
+
+        defaultField() {
+            if (this.schema.length > 0 && this.schema[0] && this.schema[0].field) {
+                return this.schema[0].field;
+            }
+            return 'status';
+        },
+
+        defaultOperator(field) {
+            const operators = this.operatorOptions(field);
+            if (operators.length > 0 && operators[0] && operators[0].value) {
+                return operators[0].value;
+            }
+            return '=';
+        },
+
+        operatorOptions(field) {
+            const fieldEntry = this.schema.find((entry) => entry.field === field);
+            return fieldEntry && fieldEntry.operators ? fieldEntry.operators : [{ value: '=', label: 'Equals' }];
+        },
+
+        selectOptions(field) {
+            const fieldEntry = this.schema.find((entry) => entry.field === field);
+            return fieldEntry && fieldEntry.options ? fieldEntry.options : [];
+        },
+
+        fieldType(field) {
+            const fieldEntry = this.schema.find((entry) => entry.field === field);
+            return fieldEntry && fieldEntry.type ? fieldEntry.type : 'text';
+        },
+
+        inputType(field) {
+            const type = this.fieldType(field);
+            if (type === 'number') return 'number';
+            if (type === 'date') return 'date';
+            if (type === 'datetime') return 'datetime-local';
+            return 'text';
+        },
+
+        addRow() {
+            const field = this.defaultField();
+            this.rows.push({
+                id: this.newId(),
+                field,
+                operator: this.defaultOperator(field),
+                value: '',
+                group: 'and',
+            });
+            this.syncFilters();
+        },
+
+        removeRow(index) {
+            this.rows.splice(index, 1);
+            if (this.rows.length === 0) {
+                this.addRow();
+                return;
+            }
+            this.syncFilters();
+        },
+
+        clearRows() {
+            this.rows = [];
+            this.addRow();
+        },
+
+        onFieldChange(index) {
+            const row = this.rows[index];
+            const options = this.operatorOptions(row.field).map((item) => item.value);
+            if (!options.includes(row.operator)) {
+                row.operator = this.defaultOperator(row.field);
+            }
+            if (row.operator === 'between' && !Array.isArray(row.value)) {
+                row.value = ['', ''];
+            }
+            if (row.operator !== 'between' && Array.isArray(row.value)) {
+                row.value = '';
+            }
+            this.syncFilters();
+        },
+
+        onOperatorChange(index) {
+            const row = this.rows[index];
+            if (row.operator === 'between' && !Array.isArray(row.value)) {
+                row.value = ['', ''];
+            }
+            if (row.operator !== 'between' && Array.isArray(row.value)) {
+                row.value = '';
+            }
+            this.syncFilters();
+        },
+
+        isRowComplete(row) {
+            if (!row || !row.field || !row.operator) return false;
+            if (row.operator === 'between') {
+                return Array.isArray(row.value)
+                    && row.value.length === 2
+                    && row.value[0] !== '' && row.value[0] !== null && row.value[0] !== undefined
+                    && row.value[1] !== '' && row.value[1] !== null && row.value[1] !== undefined;
+            }
+            if ((row.operator === 'is' || row.operator === 'is not') && this.fieldType(row.field) !== 'boolean') {
+                return true;
+            }
+            return row.value !== '' && row.value !== null && row.value !== undefined;
+        },
+
+        syncFilters() {
+            const andRows = [];
+            const orRows = [];
+            this.rows.forEach((row) => {
+                if (!this.isRowComplete(row)) return;
+                const payload = [this.doctype, row.field, row.operator, row.value];
+                if (row.group === 'or') {
+                    orRows.push(payload);
+                } else {
+                    andRows.push(payload);
+                }
+            });
+            this.filtersJson = (andRows.length === 0 && orRows.length === 0)
+                ? ''
+                : JSON.stringify({ and: andRows, or: orRows });
+        },
+    };
+}
+
 function ticketColumnPicker() {
     return {
         open: false,

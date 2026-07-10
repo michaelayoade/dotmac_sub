@@ -360,7 +360,11 @@ def _row_matches_filter_query(row: dict[str, Any], filter_query: FilterQuery) ->
             _row_matches_condition(row, condition)
             for condition in filter_query.or_filters
         )
-    return and_match and or_match
+    group_match = all(
+        any(_row_matches_condition(row, condition) for condition in group)
+        for group in filter_query.or_groups
+    )
+    return and_match and or_match and group_match
 
 
 def _sort_field_name(order_by: str | None) -> str:
@@ -557,10 +561,14 @@ def _legacy_filters(
 def _merge_filter_queries(*queries: FilterQuery) -> FilterQuery:
     and_filters: list[FilterCondition] = []
     or_filters: list[FilterCondition] = []
+    or_groups: list[list[FilterCondition]] = []
     for query in queries:
         and_filters.extend(query.and_filters)
         or_filters.extend(query.or_filters)
-    return FilterQuery(and_filters=and_filters, or_filters=or_filters)
+        or_groups.extend(query.or_groups)
+    return FilterQuery(
+        and_filters=and_filters, or_filters=or_filters, or_groups=or_groups
+    )
 
 
 def _serialize_filter_schema(db: Session) -> list[dict[str, object]]:
