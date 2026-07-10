@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from uuid import uuid4
 
 from app.api import analytics as analytics_api
@@ -445,3 +446,47 @@ def test_inbox_escalation_report_is_visible_from_reports_hub():
         "url": "/admin/reports/inbox-escalations",
         "description": "Conversations that need supervisor attention",
     } in links
+
+
+def test_inbox_escalation_report_action_auto_assigns_candidate(db_session):
+    team = _team(db_session)
+    person_id = uuid4()
+    db_session.add(
+        ServiceTeamMember(team_id=team.id, person_id=person_id, is_active=True)
+    )
+    db_session.add(
+        InboxAgentPresence(
+            person_id=person_id,
+            status=InboxAgentPresenceStatus.online.value,
+            max_concurrent_conversations=3,
+        )
+    )
+    base = datetime(2026, 1, 1, 8, 0, tzinfo=UTC)
+    conversation = _conversation(db_session, team, first_at=base)
+    _message(
+        db_session,
+        conversation,
+        direction=InboxMessageDirection.inbound.value,
+        at=base,
+    )
+    db_session.commit()
+
+    response = admin_reports.reports_inbox_escalation_action(
+        str(conversation.id),
+        request=SimpleNamespace(state=SimpleNamespace()),
+        service_team_id=str(team.id),
+        action="auto_assign",
+        reason="Admin escalation report",
+        next="/admin/reports/inbox-escalations?response_sla_seconds=300",
+        db=db_session,
+    )
+
+    assignment = db_session.query(InboxConversationAssignment).one()
+    db_session.refresh(conversation)
+    assert response.status_code == 303
+    assert "status=success" in response.headers["location"]
+    assert assignment.person_id == person_id
+    assert assignment.is_active is True
+    assert conversation.metadata_["last_inbox_escalation"]["reason"] == (
+        "Admin escalation report"
+    )

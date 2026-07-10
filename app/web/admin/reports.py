@@ -3,15 +3,20 @@
 import csv
 from datetime import UTC, datetime, time
 from io import StringIO
+from urllib.parse import quote_plus
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi import APIRouter, Depends, Form, Query, Request
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.catalog import SubscriptionStatus
+from app.models.service_team import ServiceTeam
+from app.models.team_inbox import InboxConversation, InboxConversationStatus
 from app.services import ncc_subscriber_report as ncc_report_service
+from app.services import team_inbox_assignment
 from app.services import team_inbox_metrics as team_inbox_metrics_service
 from app.services import ticket_sla_reports as ticket_sla_reports_service
 from app.services import web_reports as web_reports_service
@@ -608,6 +613,30 @@ def _inbox_escalation_rows(
     ]
 
 
+def _active_service_team_options(db: Session):
+    return (
+        db.query(ServiceTeam)
+        .filter(ServiceTeam.is_active.is_(True))
+        .order_by(ServiceTeam.name.asc())
+        .all()
+    )
+
+
+def _inbox_escalation_return_url(
+    next_url: str | None,
+    *,
+    status: str,
+    message: str,
+) -> str:
+    target = str(next_url or "").strip()
+    if not target.startswith("/admin/reports/inbox-escalations"):
+        target = "/admin/reports/inbox-escalations"
+    separator = "&" if "?" in target else "?"
+    return (
+        f"{target}{separator}status={quote_plus(status)}&message={quote_plus(message)}"
+    )
+
+
 @router.get(
     "/inbox-performance",
     response_class=HTMLResponse,
@@ -720,6 +749,7 @@ def reports_inbox_escalations(
         "queue_sla_seconds": queue_sla_seconds,
         "include_inactive": include_inactive,
         "rows": rows,
+        "service_team_options": _active_service_team_options(db),
         "candidate_count": len(rows),
         "response_breach_count": sum(
             "response_sla_breached" in row["reason_keys"] for row in rows
@@ -733,6 +763,94 @@ def reports_inbox_escalations(
         "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
     }
     return templates.TemplateResponse("admin/reports/inbox_escalations.html", context)
+
+
+@router.post(
+    "/inbox-escalations/{conversation_id}/action",
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def reports_inbox_escalation_action(
+    conversation_id: str,
+    request: Request,
+    service_team_id: str = Form(...),
+    action: str = Form("auto_assign"),
+    reason: str = Form(""),
+    next: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+):
+    from app.services import web_admin as web_admin_service
+
+    try:
+        conversation_uuid = UUID(str(conversation_id))
+        team_uuid = UUID(str(service_team_id))
+    except ValueError:
+        return RedirectResponse(
+            _inbox_escalation_return_url(
+                next,
+                status="error",
+                message="Invalid conversation or team.",
+            ),
+            status_code=303,
+        )
+
+    conversation = db.get(InboxConversation, conversation_uuid)
+    if conversation is None or not conversation.is_active:
+        return RedirectResponse(
+            _inbox_escalation_return_url(
+                next,
+                status="error",
+                message="Conversation not found.",
+            ),
+            status_code=303,
+        )
+    if conversation.status == InboxConversationStatus.resolved.value:
+        return RedirectResponse(
+            _inbox_escalation_return_url(
+                next,
+                status="error",
+                message="Resolved conversations cannot be escalated.",
+            ),
+            status_code=303,
+        )
+
+    actor_id = web_admin_service.get_actor_id(request)
+    clean_reason = reason.strip() or None
+    if action == "queue":
+        result = team_inbox_assignment.queue_conversation_for_team(
+            db,
+            conversation=conversation,
+            service_team_id=team_uuid,
+            assigned_by_person_id=actor_id,
+            reason=clean_reason,
+        )
+    else:
+        result = team_inbox_assignment.assign_conversation_to_available_agent(
+            db,
+            conversation=conversation,
+            service_team_id=team_uuid,
+            assigned_by_person_id=actor_id,
+            reason=clean_reason,
+        )
+
+    if result.kind == "invalid_team":
+        return RedirectResponse(
+            _inbox_escalation_return_url(
+                next,
+                status="error",
+                message=result.reason or "Invalid target team.",
+            ),
+            status_code=303,
+        )
+
+    db.commit()
+    if result.kind == "assigned":
+        message = "Conversation assigned to an available agent."
+    else:
+        message = "Conversation moved to the target team queue."
+    return RedirectResponse(
+        _inbox_escalation_return_url(next, status="success", message=message),
+        status_code=303,
+    )
 
 
 @router.get(
