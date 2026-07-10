@@ -582,6 +582,26 @@ def _radius_health_findings(db: Session) -> list[AlertFinding]:
             )
         )
 
+    if int(result.get("probe_configured") or 0) and not int(
+        result.get("probe_responded") or 0
+    ):
+        findings.append(
+            AlertFinding(
+                fingerprint=f"{prefix}auth-probe-failed",
+                category="infrastructure",
+                source="radius-health",
+                severity=AlertSeverity.critical,
+                title="RADIUS auth probe not answering",
+                summary=(
+                    "The synthetic Access-Request probe got no response from "
+                    "FreeRADIUS (timeouts on every attempt) — new customer auth "
+                    "attempts are likely failing even if accounting still looks "
+                    "fresh."
+                ),
+                details=_json_safe(result),
+            )
+        )
+
     suspended_active = int(result.get("suspended_with_session") or 0)
     if suspended_active:
         findings.append(
