@@ -120,5 +120,7 @@ def test_assign_conversation_queues_when_no_agent_available(db_session):
     assert result.kind == "queued"
     assert result.reason == "no_available_agent"
     assert conversation.primary_service_team_id == team.id
-    assert db_session.query(InboxConversationTeam).one().role == InboxTeamRole.owner.value
+    assert (
+        db_session.query(InboxConversationTeam).one().role == InboxTeamRole.owner.value
+    )
     assert db_session.query(InboxConversationAssignment).count() == 0

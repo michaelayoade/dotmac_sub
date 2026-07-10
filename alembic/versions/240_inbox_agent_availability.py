@@ -61,7 +61,9 @@ def upgrade() -> None:
             sa.Column("person_id", postgresql.UUID(as_uuid=True), nullable=False),
             sa.Column("assigned_by_person_id", postgresql.UUID(as_uuid=True)),
             sa.Column("assigned_at", sa.DateTime(timezone=True), nullable=False),
-            sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
+            sa.Column(
+                "is_active", sa.Boolean(), nullable=False, server_default=sa.true()
+            ),
             sa.Column("metadata", postgresql.JSONB(astext_type=sa.Text())),
             sa.Column("created_at", sa.DateTime(timezone=True)),
             sa.Column("updated_at", sa.DateTime(timezone=True)),
