@@ -128,19 +128,19 @@ def _send_to_target(
     if channel == OperationalNotificationChannel.whatsapp:
         from app.services.integrations.connectors import whatsapp as whatsapp_connector
 
-        result = whatsapp_connector.send_text_message(
+        whatsapp_result = whatsapp_connector.send_text_message(
             db,
             recipient=target.address,
             body=body,
             dry_run=False,
         )
         return {
-            "ok": bool(result.get("ok")),
+            "ok": bool(whatsapp_result.get("ok")),
             "channel": channel,
             "recipient": target.address,
-            "provider": result.get("provider"),
-            "response": result.get("response"),
-            "status_code": result.get("status_code"),
+            "provider": whatsapp_result.get("provider"),
+            "response": whatsapp_result.get("response"),
+            "status_code": whatsapp_result.get("status_code"),
         }
 
     if channel == OperationalNotificationChannel.push:
@@ -154,7 +154,7 @@ def _send_to_target(
     )
     from app.services.notification_adapter import send_notification
 
-    result = send_notification(
+    notification_result = send_notification(
         adapter_channel,
         target.address,
         body,
@@ -164,12 +164,12 @@ def _send_to_target(
         idempotency_key=delivery.dedup_key,
     )
     return {
-        "ok": bool(result.success),
+        "ok": bool(notification_result.success),
         "channel": channel,
         "recipient": target.address,
-        "message": result.message,
-        "status": result.status.value,
-        "error": result.error,
+        "message": notification_result.message,
+        "status": notification_result.status.value,
+        "error": notification_result.error,
     }
 
 
