@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 
 class SkillBase(BaseModel):
@@ -216,6 +216,107 @@ class DispatchRuleRead(DispatchRuleBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
+    created_at: datetime
+    updated_at: datetime
+
+
+class WorkOrderHeaderBase(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    title: str = Field(min_length=1, max_length=200)
+    subscriber_id: UUID
+    description: str | None = None
+    status: str = Field(default="draft", max_length=20)
+    priority: str | None = Field(default="normal", max_length=20)
+    work_type: str | None = Field(default="install", max_length=20)
+    crm_ticket_id: str | None = Field(default=None, max_length=64)
+    crm_project_id: str | None = Field(default=None, max_length=64)
+    assigned_to_crm_person_id: str | None = Field(default=None, max_length=64)
+    assigned_to_name: str | None = Field(default=None, max_length=160)
+    technician_name: str | None = Field(default=None, max_length=160)
+    technician_phone: str | None = Field(default=None, max_length=40)
+    address: str | None = Field(default=None, max_length=255)
+    scheduled_start: datetime | None = None
+    scheduled_end: datetime | None = None
+    estimated_arrival_at: datetime | None = None
+    estimated_duration_minutes: int | None = Field(default=None, ge=0)
+    required_skills: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    access_notes: str | None = Field(default=None, max_length=2000)
+    metadata_: dict | None = Field(
+        default=None,
+        validation_alias=AliasChoices("metadata_", "metadata"),
+        serialization_alias="metadata",
+    )
+    is_active: bool = True
+
+    @model_validator(mode="after")
+    def _valid_schedule(self) -> WorkOrderHeaderBase:
+        if (
+            self.scheduled_start is not None
+            and self.scheduled_end is not None
+            and self.scheduled_end <= self.scheduled_start
+        ):
+            raise ValueError("scheduled_end must be after scheduled_start")
+        return self
+
+
+class WorkOrderHeaderCreate(WorkOrderHeaderBase):
+    public_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        description="Optional stable work-order id; generated as sub-<uuid> when omitted.",
+    )
+
+
+class WorkOrderHeaderUpdate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    subscriber_id: UUID | None = None
+    description: str | None = None
+    status: str | None = Field(default=None, max_length=20)
+    priority: str | None = Field(default=None, max_length=20)
+    work_type: str | None = Field(default=None, max_length=20)
+    crm_ticket_id: str | None = Field(default=None, max_length=64)
+    crm_project_id: str | None = Field(default=None, max_length=64)
+    assigned_to_crm_person_id: str | None = Field(default=None, max_length=64)
+    assigned_to_name: str | None = Field(default=None, max_length=160)
+    technician_name: str | None = Field(default=None, max_length=160)
+    technician_phone: str | None = Field(default=None, max_length=40)
+    address: str | None = Field(default=None, max_length=255)
+    scheduled_start: datetime | None = None
+    scheduled_end: datetime | None = None
+    estimated_arrival_at: datetime | None = None
+    estimated_duration_minutes: int | None = Field(default=None, ge=0)
+    required_skills: list[str] | None = None
+    tags: list[str] | None = None
+    access_notes: str | None = Field(default=None, max_length=2000)
+    metadata_: dict | None = Field(
+        default=None,
+        validation_alias=AliasChoices("metadata_", "metadata"),
+        serialization_alias="metadata",
+    )
+    is_active: bool | None = None
+
+    @model_validator(mode="after")
+    def _valid_schedule(self) -> WorkOrderHeaderUpdate:
+        if (
+            self.scheduled_start is not None
+            and self.scheduled_end is not None
+            and self.scheduled_end <= self.scheduled_start
+        ):
+            raise ValueError("scheduled_end must be after scheduled_start")
+        return self
+
+
+class WorkOrderHeaderRead(WorkOrderHeaderBase):
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    id: UUID
+    crm_work_order_id: str
+    work_order_created_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 

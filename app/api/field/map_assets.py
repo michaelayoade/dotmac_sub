@@ -5,7 +5,11 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.schemas.common import ListResponse
-from app.schemas.field import FieldMapAsset, FieldMapSearchResponse
+from app.schemas.field import (
+    FieldMapAsset,
+    FieldMapAssetLocationUpdate,
+    FieldMapSearchResponse,
+)
 from app.services.auth_dependencies import require_user_auth
 from app.services.field.map_assets import field_map_assets
 from app.services.field.map_search import field_map_search
@@ -60,4 +64,47 @@ def list_nearby_field_map_assets(
         radius_m=radius_m,
         asset_types=asset_type,
         limit=limit,
+    )
+
+
+@router.patch(
+    "/map-assets/{asset_type}/{asset_id}/location", response_model=FieldMapAsset
+)
+def update_field_map_asset_location(
+    asset_type: str,
+    asset_id: str,
+    payload: FieldMapAssetLocationUpdate,
+    auth: dict = Depends(require_user_auth),
+    db: Session = Depends(get_db),
+):
+    return field_map_assets.update_location(
+        db,
+        asset_type=asset_type,
+        asset_id=asset_id,
+        latitude=payload.latitude,
+        longitude=payload.longitude,
+        actor_id=str(auth.get("principal_id") or auth.get("person_id") or "") or None,
+        expected_updated_at=payload.expected_updated_at,
+        source=payload.source,
+        accuracy_m=payload.accuracy_m,
+        client_ref=str(payload.client_ref) if payload.client_ref else None,
+        force=payload.force,
+    )
+
+
+@router.post(
+    "/map-assets/{asset_type}/{asset_id}/revert-location",
+    response_model=FieldMapAsset,
+)
+def revert_field_map_asset_location(
+    asset_type: str,
+    asset_id: str,
+    auth: dict = Depends(require_user_auth),
+    db: Session = Depends(get_db),
+):
+    return field_map_assets.revert_location(
+        db,
+        asset_type=asset_type,
+        asset_id=asset_id,
+        actor_id=str(auth.get("principal_id") or auth.get("person_id") or "") or None,
     )

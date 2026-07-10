@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import builtins
 from datetime import UTC, datetime
-from typing import Any, TypeAlias
+from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -38,11 +38,13 @@ from app.schemas.field import (
 )
 from app.services.common import apply_pagination, coerce_uuid
 from app.services.field.map_assets import field_map_assets
+from app.services.field.source import mark_sub_authoritative
 
 TERMINAL_STATUSES = frozenset({"completed", "canceled", "cancelled"})
 OPEN_STATUSES = frozenset({"scheduled", "dispatched", "in_progress", "paused"})
-DestinationPayload: TypeAlias = dict[str, Any]
-DestinationPayloadList: TypeAlias = list[DestinationPayload]
+FieldJobSummaries = list[FieldJobSummary]
+FieldJobDestinationPayload = dict[str, Any]
+FieldJobDestinationPayloads = list[FieldJobDestinationPayload]
 
 
 def _string_list(value: Any) -> list[str]:
@@ -155,22 +157,40 @@ def _customer(
 
 def _location(row: WorkOrderMirror) -> FieldJobLocation:
     metadata = row.metadata_ or {}
-    latitude = metadata.get("latitude") or metadata.get("lat")
-    longitude = metadata.get("longitude") or metadata.get("lng")
+    latitude = _first_present(metadata, "latitude", "lat")
+    longitude = _first_present(metadata, "longitude", "lng")
+    source = "cached"
     if isinstance(metadata.get("location"), dict):
         location = metadata["location"]
-        latitude = latitude or location.get("latitude") or location.get("lat")
-        longitude = longitude or location.get("longitude") or location.get("lng")
+        latitude = (
+            latitude
+            if latitude is not None
+            else _first_present(location, "latitude", "lat")
+        )
+        longitude = (
+            longitude
+            if longitude is not None
+            else _first_present(location, "longitude", "lng")
+        )
+        source = str(location.get("source") or source)
     parsed_latitude = latitude if isinstance(latitude, int | float) else None
     parsed_longitude = longitude if isinstance(longitude, int | float) else None
     return FieldJobLocation(
         latitude=parsed_latitude,
         longitude=parsed_longitude,
         address_text=row.address,
-        source="cached"
+        source=source
         if parsed_latitude is not None and parsed_longitude is not None
         else "address_only",
     )
+
+
+def _first_present(mapping: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = mapping.get(key)
+        if value is not None:
+            return value
+    return None
 
 
 _ASSET_DESTINATION_TYPES = {
@@ -246,7 +266,7 @@ class FieldJobs:
         date_to: datetime | None = None,
         limit: int = 50,
         offset: int = 0,
-    ) -> list[FieldJobSummary]:
+    ) -> FieldJobSummaries:
         profile = _profile_from_principal(db, principal)
         query = _scoped_query(db, profile)
         if status:
@@ -296,57 +316,30 @@ class FieldJobs:
         from app.services.field.transitions import field_transitions
         from app.services.field.worklogs import field_worklogs
 
-        notes = [
-            FieldNoteRead(**note)
-            for note in field_notes.list_for_job(db, principal, crm_work_order_id)
-        ]
-        attachments = [
-            FieldAttachmentRead(**attachment)
-            for attachment in field_attachments.list(
-                db, principal, crm_work_order_id=crm_work_order_id
-            )
-        ]
-        worklogs = [
-            FieldWorkLogRead(**worklog)
-            for worklog in field_worklogs.list_for_job(db, principal, crm_work_order_id)
-        ]
-        events = [
-            FieldJobEventRead(**event)
-            for event in field_transitions.list_for_job(
-                db, principal, crm_work_order_id
-            )
-        ]
-        materials = [
-            FieldMaterialRead(**material)
-            for material in field_materials.list_for_job(
-                db, principal, crm_work_order_id
-            )
-        ]
-        material_requests = [
-            FieldMaterialRequestRead(**material_request)
-            for material_request in field_material_requests.list_mine(
-                db,
-                principal,
-                crm_work_order_id=crm_work_order_id,
-                limit=50,
-                offset=0,
-            )
-        ]
-        expense_requests = [
-            FieldExpenseRequestRead(**expense_request)
-            for expense_request in field_expense_requests.list_mine(
-                db,
-                principal,
-                crm_work_order_id=crm_work_order_id,
-                limit=50,
-                offset=0,
-            )
-        ]
-        movements = [
-            FieldMovementRead(**movement) for movement in list_movements(db, row)
-        ]
+        materials = field_materials.list_for_job(db, principal, crm_work_order_id)
+        material_requests = field_material_requests.list_mine(
+            db,
+            principal,
+            crm_work_order_id=crm_work_order_id,
+            limit=50,
+            offset=0,
+        )
+        expense_requests = field_expense_requests.list_mine(
+            db,
+            principal,
+            crm_work_order_id=crm_work_order_id,
+            limit=50,
+            offset=0,
+        )
+        notes = field_notes.list_for_job(db, principal, crm_work_order_id)
+        attachments = field_attachments.list(
+            db, principal, crm_work_order_id=crm_work_order_id
+        )
+        worklogs = field_worklogs.list_for_job(db, principal, crm_work_order_id)
+        events = field_transitions.list_for_job(db, principal, crm_work_order_id)
+        movements = list_movements(db, row)
         equipment = field_equipment.current_for_job(db, principal, crm_work_order_id)
-        equipment_read = FieldEquipmentRead(**equipment) if equipment else None
+
         return FieldJobDetail(
             job=_summary(row),
             customer=_customer(row, subscriber),
@@ -354,15 +347,25 @@ class FieldJobs:
             ticket_ref=row.crm_ticket_id,
             project_id=row.crm_project_id,
             access_notes=row.access_notes,
-            notes=notes,
-            attachments=attachments,
-            materials=materials,
-            material_requests=material_requests,
-            expense_requests=expense_requests,
-            worklogs=worklogs,
-            events=events,
-            movements=movements,
-            equipment=equipment_read,
+            materials=[FieldMaterialRead.model_validate(item) for item in materials],
+            material_requests=[
+                FieldMaterialRequestRead.model_validate(item)
+                for item in material_requests
+            ],
+            expense_requests=[
+                FieldExpenseRequestRead.model_validate(item)
+                for item in expense_requests
+            ],
+            notes=[FieldNoteRead.model_validate(item) for item in notes],
+            attachments=[
+                FieldAttachmentRead.model_validate(item) for item in attachments
+            ],
+            worklogs=[FieldWorkLogRead.model_validate(item) for item in worklogs],
+            events=[FieldJobEventRead.model_validate(item) for item in events],
+            movements=[FieldMovementRead.model_validate(item) for item in movements],
+            equipment=FieldEquipmentRead.model_validate(equipment)
+            if equipment is not None
+            else None,
             history=[],
         )
 
@@ -371,7 +374,7 @@ class FieldJobs:
         db: Session,
         principal: dict[str, Any],
         crm_work_order_id: str,
-    ) -> DestinationPayloadList:
+    ) -> FieldJobDestinationPayloads:
         profile = _profile_from_principal(db, principal)
         row = (
             _scoped_query(db, profile)
@@ -382,7 +385,7 @@ class FieldJobs:
             raise HTTPException(status_code=404, detail="Job not found")
 
         location = _location(row)
-        items: list[DestinationPayload] = [
+        items: FieldJobDestinationPayloads = [
             {
                 "destination_type": "customer",
                 "destination_id": str(row.subscriber_id) if row.subscriber_id else None,
@@ -425,6 +428,44 @@ class FieldJobs:
             }
         )
         return items
+
+    @staticmethod
+    def update_location(
+        db: Session,
+        principal: dict[str, Any],
+        crm_work_order_id: str,
+        *,
+        latitude: float,
+        longitude: float,
+    ) -> FieldJobLocation:
+        profile = _profile_from_principal(db, principal)
+        row = (
+            _scoped_query(db, profile)
+            .filter(WorkOrderMirror.crm_work_order_id == crm_work_order_id)
+            .with_for_update()
+            .one_or_none()
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        metadata = dict(row.metadata_ or {})
+        metadata["location"] = {
+            "lat": float(latitude),
+            "lng": float(longitude),
+            "latitude": float(latitude),
+            "longitude": float(longitude),
+            "address_text": row.address,
+            "source": "manual",
+        }
+        row.metadata_ = metadata
+        mark_sub_authoritative(
+            row,
+            "location",
+            details={"latitude": float(latitude), "longitude": float(longitude)},
+        )
+        db.commit()
+        db.refresh(row)
+        return _location(row)
 
 
 field_jobs = FieldJobs()

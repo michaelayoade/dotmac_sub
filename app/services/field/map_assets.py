@@ -2,21 +2,36 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from math import asin, cos, radians, sin, sqrt
-from typing import Any, Protocol, TypeAlias, cast
+from typing import Any, Protocol, cast
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.models.audit import AuditActorType, AuditEvent
+from app.models.field_map import FieldMapAssetLocationProvenance
 from app.models.gis import ServiceBuilding
 from app.models.network import FdhCabinet, FiberAccessPoint, FiberSpliceClosure
 from app.models.wireless_mast import WirelessMast
+from app.services.common import coerce_uuid
 
 _EARTH_RADIUS_M = 6_371_000.0
 _METERS_PER_DEGREE = 111_320.0
+AssetPayload = dict[str, Any]
+AssetPayloads = list[AssetPayload]
+AssetTypeFilter = list[str] | None
+_CONFIDENCE = {
+    None: 0,
+    "unknown": 0,
+    "gps": 10,
+    "mobile": 10,
+    "manual": 20,
+    "revert": 30,
+    "survey": 40,
+}
 
 
 class _MapAssetModel(Protocol):
@@ -24,10 +39,6 @@ class _MapAssetModel(Protocol):
     latitude: Any
     longitude: Any
     updated_at: Any
-
-
-MapAssetPayload: TypeAlias = dict[str, Any]
-MapAssetPayloadList: TypeAlias = list[MapAssetPayload]
 
 
 @dataclass(frozen=True)
@@ -57,6 +68,31 @@ def _status(row: Any) -> str | None:
     if active is None:
         return None
     return "active" if active else "inactive"
+
+
+def _point_wkt(latitude: float, longitude: float) -> str:
+    return f"SRID=4326;POINT({longitude} {latitude})"
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _confidence(source: str | None) -> int:
+    return _CONFIDENCE.get((source or "unknown").casefold(), 0)
+
+
+def _actor_uuid(actor_id: str | None):
+    if not actor_id:
+        return None
+    try:
+        return coerce_uuid(actor_id)
+    except ValueError:
+        return None
 
 
 def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -118,7 +154,7 @@ _ASSETS: dict[str, _AssetConfig] = {
 }
 
 
-def _configs(asset_types: Sequence[str] | None) -> list[_AssetConfig]:
+def _configs(asset_types: AssetTypeFilter) -> list[_AssetConfig]:
     if not asset_types:
         return list(_ASSETS.values())
     unknown = sorted(set(asset_types) - set(_ASSETS))
@@ -140,12 +176,29 @@ def _base_query(db: Session, config: _AssetConfig):
     )
 
 
+def _asset_row(db: Session, asset_type: str, asset_id: str) -> tuple[_AssetConfig, Any]:
+    config = _ASSETS.get(asset_type)
+    if config is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported map asset type: {asset_type}",
+        )
+    try:
+        asset_uuid = coerce_uuid(asset_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid asset id") from exc
+    row = db.get(config.model, asset_uuid)
+    if row is None or getattr(row, "is_active", True) is False:
+        raise HTTPException(status_code=404, detail="Map asset not found")
+    return config, row
+
+
 def _serialize(
     row: Any,
     config: _AssetConfig,
     *,
     distance_m: float | None = None,
-) -> MapAssetPayload:
+) -> AssetPayload:
     return {
         "id": row.id,
         "type": config.asset_type,
@@ -164,12 +217,12 @@ class FieldMapAssets:
     def list(
         db: Session,
         *,
-        asset_types: list[str] | None = None,
+        asset_types: AssetTypeFilter = None,
         updated_since: datetime | None = None,
         limit: int = 1000,
         offset: int = 0,
-    ) -> list[MapAssetPayload]:
-        items: list[MapAssetPayload] = []
+    ) -> AssetPayloads:
+        items: AssetPayloads = []
         for config in _configs(asset_types):
             model = config.model
             query = _base_query(db, config)
@@ -188,11 +241,11 @@ class FieldMapAssets:
         latitude: float,
         longitude: float,
         radius_m: float = 500.0,
-        asset_types: Sequence[str] | None = None,
+        asset_types: AssetTypeFilter = None,
         limit: int = 50,
-    ) -> MapAssetPayloadList:
+    ) -> AssetPayloads:
         min_lat, max_lat, min_lng, max_lng = _bounds(latitude, longitude, radius_m)
-        items: list[MapAssetPayload] = []
+        items: AssetPayloads = []
         for config in _configs(asset_types):
             model = config.model
             rows = (
@@ -219,14 +272,14 @@ class FieldMapAssets:
         db: Session,
         query: str,
         *,
-        asset_types: Sequence[str] | None = None,
+        asset_types: AssetTypeFilter = None,
         limit: int = 20,
-    ) -> MapAssetPayloadList:
+    ) -> AssetPayloads:
         term = query.strip().casefold()
         if not term:
             return []
 
-        items: list[MapAssetPayload] = []
+        items: AssetPayloads = []
         for config in _configs(asset_types):
             for row in _base_query(db, config).all():
                 payload = _serialize(row, config)
@@ -246,6 +299,146 @@ class FieldMapAssets:
 
         items.sort(key=lambda item: (item["type"], item["title"]))
         return items[:limit]
+
+    @staticmethod
+    def update_location(
+        db: Session,
+        *,
+        asset_type: str,
+        asset_id: str,
+        latitude: float,
+        longitude: float,
+        actor_id: str | None = None,
+        expected_updated_at: datetime | None = None,
+        source: str | None = None,
+        accuracy_m: float | None = None,
+        client_ref: str | None = None,
+        force: bool = False,
+        audit_context: dict[str, Any] | None = None,
+    ) -> AssetPayload:
+        config, row = _asset_row(db, asset_type, asset_id)
+        current_updated_at = _as_utc(getattr(row, "updated_at", None))
+        if (
+            expected_updated_at is not None
+            and current_updated_at is not None
+            and current_updated_at != _as_utc(expected_updated_at)
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Map asset was modified since it was loaded",
+            )
+
+        asset_uuid = coerce_uuid(asset_id)
+        provenance = (
+            db.query(FieldMapAssetLocationProvenance)
+            .filter(
+                FieldMapAssetLocationProvenance.asset_type == asset_type,
+                FieldMapAssetLocationProvenance.asset_id == asset_uuid,
+            )
+            .one_or_none()
+        )
+        if (
+            not force
+            and provenance is not None
+            and _confidence(source) < _confidence(provenance.source)
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Refusing to overwrite a higher-confidence map asset "
+                    "location; pass force=true to override"
+                ),
+            )
+
+        previous = {
+            "latitude": float(row.latitude) if row.latitude is not None else None,
+            "longitude": float(row.longitude) if row.longitude is not None else None,
+        }
+        row.latitude = float(latitude)
+        row.longitude = float(longitude)
+        if hasattr(row, "geom"):
+            row.geom = _point_wkt(float(latitude), float(longitude))
+
+        db.add(
+            AuditEvent(
+                actor_type=AuditActorType.user if actor_id else AuditActorType.system,
+                actor_id=actor_id,
+                action="field:map_asset:update_location",
+                entity_type=config.model.__name__,
+                entity_id=str(asset_uuid),
+                status_code=200,
+                is_success=True,
+                metadata_={
+                    "asset_type": asset_type,
+                    "from": previous,
+                    "to": {"latitude": float(latitude), "longitude": float(longitude)},
+                    "source": source,
+                    "accuracy_m": accuracy_m,
+                    "client_ref": client_ref,
+                    "forced": bool(force),
+                    **(audit_context or {}),
+                },
+            )
+        )
+
+        actor_uuid = _actor_uuid(actor_id)
+        if provenance is None:
+            db.add(
+                FieldMapAssetLocationProvenance(
+                    asset_type=asset_type,
+                    asset_id=asset_uuid,
+                    source=source,
+                    accuracy_m=accuracy_m,
+                    updated_by_principal_id=actor_uuid,
+                )
+            )
+        else:
+            provenance.source = source
+            provenance.accuracy_m = accuracy_m
+            provenance.updated_by_principal_id = actor_uuid
+
+        db.commit()
+        db.refresh(row)
+        return _serialize(row, config)
+
+    @staticmethod
+    def revert_location(
+        db: Session,
+        *,
+        asset_type: str,
+        asset_id: str,
+        actor_id: str | None = None,
+    ) -> AssetPayload:
+        config, row = _asset_row(db, asset_type, asset_id)
+        last = (
+            db.query(AuditEvent)
+            .filter(AuditEvent.action == "field:map_asset:update_location")
+            .filter(AuditEvent.entity_type == config.model.__name__)
+            .filter(AuditEvent.entity_id == str(row.id))
+            .order_by(AuditEvent.occurred_at.desc())
+            .first()
+        )
+        if last is None or not last.metadata_:
+            raise HTTPException(status_code=404, detail="No location change to revert")
+        previous = (last.metadata_ or {}).get("from") or {}
+        prev_latitude = previous.get("latitude")
+        prev_longitude = previous.get("longitude")
+        if prev_latitude is None or prev_longitude is None:
+            raise HTTPException(
+                status_code=422,
+                detail="The previous location was empty; nothing to revert to",
+            )
+        return FieldMapAssets.update_location(
+            db,
+            asset_type=asset_type,
+            asset_id=asset_id,
+            latitude=float(prev_latitude),
+            longitude=float(prev_longitude),
+            actor_id=actor_id,
+            source="revert",
+            force=True,
+            audit_context={"revert_of": str(last.id)},
+        )
 
 
 field_map_assets = FieldMapAssets()

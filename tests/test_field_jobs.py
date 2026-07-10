@@ -181,6 +181,63 @@ def test_field_job_detail_returns_customer_and_location(db_session):
     assert detail.access_notes == "Call on arrival"
 
 
+def test_field_job_update_location_is_sub_authoritative(db_session):
+    user = _user(db_session)
+    _profile(db_session, user, crm_person_id="crm-tech-1")
+    subscriber = _subscriber(db_session)
+    row = _work_order(
+        db_session,
+        subscriber,
+        crm_work_order_id="wo-location",
+        assigned_to_crm_person_id="crm-tech-1",
+        metadata_={"location": {"lat": 9.07, "lng": 7.49}},
+    )
+    db_session.commit()
+
+    location = field_jobs.update_location(
+        db_session,
+        _auth(user),
+        "wo-location",
+        latitude=9.081,
+        longitude=7.462,
+    )
+
+    assert location.latitude == 9.081
+    assert location.longitude == 7.462
+    assert location.source == "manual"
+    db_session.refresh(row)
+    assert row.metadata_["location"]["source"] == "manual"
+    assert row.metadata_["native_field_source"] == "sub"
+    assert row.metadata_["native_field_activity"]["location"]["source"] == "sub"
+
+
+def test_field_job_update_location_404_does_not_leak_unassigned_jobs(db_session):
+    user = _user(db_session)
+    _profile(db_session, user, crm_person_id="crm-tech-1")
+    other_user = _user(db_session, "Other")
+    _profile(db_session, other_user, crm_person_id="crm-tech-2")
+    subscriber = _subscriber(db_session)
+    _work_order(
+        db_session,
+        subscriber,
+        crm_work_order_id="wo-hidden-location",
+        assigned_to_crm_person_id="crm-tech-2",
+    )
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        field_jobs.update_location(
+            db_session,
+            _auth(user),
+            "wo-hidden-location",
+            latitude=9.081,
+            longitude=7.462,
+        )
+
+    assert exc.value.status_code == 404
+    assert exc.value.detail == "Job not found"
+
+
 def test_field_job_destinations_include_customer_nearby_assets_and_other(db_session):
     user = _user(db_session)
     _profile(db_session, user, crm_person_id="crm-tech-1")
