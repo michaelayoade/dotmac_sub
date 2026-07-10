@@ -39,7 +39,6 @@ from app.schemas.network_monitoring import (
 from app.services import monitoring_metrics as monitoring_metrics_service
 from app.services import network_monitoring as monitoring_service
 from app.services import web_network_monitoring as web_network_monitoring_service
-from app.services import zabbix_ont_status
 from app.services.network import olt_polling_metrics as olt_polling_metrics_service
 from app.tasks import alert_evaluation as alert_evaluation_task
 
@@ -159,60 +158,9 @@ def test_onu_auth_trend_returns_json_safe_series(db_session):
     json.dumps(trend["values"])
 
 
-def test_get_onu_status_summary_uses_zabbix_directly(db_session, monkeypatch):
-    olt = OLTDevice(
-        name="Status Summary OLT",
-        vendor="Huawei",
-        model="MA5608T",
-        zabbix_host_id="10101",
-    )
-    db_session.add(olt)
-    db_session.flush()
-    db_session.add_all(
-        [
-            OntUnit(
-                serial_number="ONT-SUM-1",
-                olt_device_id=olt.id,
-            ),
-            OntUnit(
-                serial_number="ONT-SUM-2",
-                olt_device_id=olt.id,
-            ),
-            OntUnit(
-                serial_number="ONT-SUM-3",
-                olt_device_id=olt.id,
-            ),
-        ]
-    )
-    db_session.commit()
-
-    def _fake_zabbix_summary(olt, onts=None, **_kwargs):
-        return {
-            "total_count": len(onts or []),
-            "online_count": 2,
-            "offline_count": 1,
-            "low_signal_count": 1,
-        }
-
-    monkeypatch.setattr(
-        zabbix_ont_status,
-        "get_olt_ont_summary_from_zabbix",
-        _fake_zabbix_summary,
-    )
-
-    summary = monitoring_service.get_onu_status_summary(db_session)
-
-    assert summary["total"] == 3
-    assert summary["online"] == 2
-    assert summary["offline"] == 1
-    assert summary["low_signal"] == 1
-
-
-def test_get_onu_status_summary_cold_cache_counts_onts_as_offline(
-    db_session, monkeypatch
-):
-    """On a cold per-OLT cache (request path), the OLT's ONTs must be counted as
-    offline via unmonitored_total — not silently dropped from the totals."""
+def test_get_onu_status_summary_counts_unmonitored_onts_as_offline(db_session):
+    """The live per-OLT status source was retired: every non-UISP active ONT
+    rolls up as offline via unmonitored_total — not silently dropped."""
     olt = OLTDevice(
         name="Cold Cache OLT",
         vendor="Huawei",
@@ -225,25 +173,6 @@ def test_get_onu_status_summary_cold_cache_counts_onts_as_offline(
         [OntUnit(serial_number=f"ONT-COLD-{i}", olt_device_id=olt.id) for i in range(3)]
     )
     db_session.commit()
-
-    def _cold_cache(olt, onts=None, **_kwargs):
-        return {
-            "total_count": 0,
-            "online_count": 0,
-            "offline_count": 0,
-            "low_signal_count": 0,
-            "cache_miss": True,
-        }
-
-    def _no_live_walk(*_args, **_kwargs):
-        raise AssertionError("request path must not do a live snapshot walk")
-
-    monkeypatch.setattr(
-        zabbix_ont_status, "get_olt_ont_summary_from_zabbix", _cold_cache
-    )
-    monkeypatch.setattr(
-        zabbix_ont_status, "get_olt_ont_snapshot_from_zabbix", _no_live_walk
-    )
 
     summary = monitoring_service.get_onu_status_summary(db_session)
 
@@ -297,7 +226,7 @@ def test_get_onu_status_summary_uisp_managed_onts_not_dumped_offline(db_session)
     assert summary["total"] == 3
 
 
-def test_get_onu_olt_status_summary_has_no_unknown_bucket(db_session, monkeypatch):
+def test_get_onu_olt_status_summary_has_no_unknown_bucket(db_session):
     olt = OLTDevice(
         name="OLT Link Summary OLT",
         vendor="Huawei",
@@ -315,29 +244,19 @@ def test_get_onu_olt_status_summary_has_no_unknown_bucket(db_session, monkeypatc
     )
     db_session.commit()
 
-    def _fake_zabbix_summary(olt, onts=None, **_kwargs):
-        return {
-            "total_count": len(onts or []),
-            "online_count": 1,
-            "offline_count": 2,
-            "low_signal_count": 0,
-        }
-
-    monkeypatch.setattr(
-        zabbix_ont_status,
-        "get_olt_ont_summary_from_zabbix",
-        _fake_zabbix_summary,
-    )
-
     summary = monitoring_service.get_onu_olt_status_summary(db_session)
 
+    # Degraded rollup: every ONT reads offline; still binary (no "unknown").
     assert summary["total"] == 3
-    assert summary["online"] == 1
-    assert summary["offline"] == 2
+    assert summary["online"] == 0
+    assert summary["offline"] == 3
     assert "unknown" not in summary
 
 
-def test_get_pon_outage_summary_only_flags_fully_offline_ports(db_session, monkeypatch):
+def test_get_pon_outage_summary_flags_ports_with_assignments(db_session):
+    """The live ONT snapshot source was retired: no ONT ever reads online in
+    this summary, so every port with assignments reports as fully offline
+    (the same result the permanently-cold cache already produced)."""
     olt = OLTDevice(name="SPDC Huawei OLT", vendor="Huawei", model="MA5608T")
     db_session.add(olt)
     db_session.commit()
@@ -390,29 +309,17 @@ def test_get_pon_outage_summary_only_flags_fully_offline_ports(db_session, monke
     )
     db_session.commit()
 
-    def _fake_snapshots(db, onts, **_):
-        return {
-            str(ont.id): zabbix_ont_status.OntSignalData(
-                online=ont.serial_number.startswith("PARTIAL-ONLINE")
-            )
-            for ont in onts
-        }
-
-    monkeypatch.setattr(
-        zabbix_ont_status,
-        "get_ont_snapshots_from_zabbix",
-        _fake_snapshots,
-    )
-
     summary = monitoring_service.get_pon_outage_summary(db_session)
 
-    assert len(summary) == 1
-    assert summary[0]["pon_port_name"] == "pon-0/1/1"
-    assert summary[0]["offline_count"] == 2
-    assert summary[0]["total_count"] == 2
+    by_name = {item["pon_port_name"]: item for item in summary}
+    assert set(by_name) == {"pon-0/1/1", "pon-0/1/2"}
+    assert by_name["pon-0/1/1"]["offline_count"] == 2
+    assert by_name["pon-0/1/1"]["total_count"] == 2
+    assert by_name["pon-0/1/2"]["offline_count"] == 2
+    assert by_name["pon-0/1/2"]["total_count"] == 2
 
 
-def test_get_onu_status_trend_uses_current_zabbix_summary(db_session, monkeypatch):
+def test_get_onu_status_trend_uses_current_summary(db_session, monkeypatch):
     monkeypatch.setattr(
         monitoring_service,
         "get_onu_status_summary",
@@ -427,7 +334,7 @@ def test_get_onu_status_trend_uses_current_zabbix_summary(db_session, monkeypatc
     assert trend["olt_online"] == [5.0]
     assert trend["olt_offline"] == [2.0]
     assert trend["low_signal"] == [1.0]
-    assert trend["source"] == "zabbix"
+    assert trend["source"] == "inventory"
 
 
 def test_push_signal_metrics_does_not_emit_ont_status_counts(db_session, monkeypatch):

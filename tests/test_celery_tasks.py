@@ -236,8 +236,11 @@ class TestOltProfileSyncTask:
         from app.celery_app import celery_app
 
         assert "app.tasks.app_cache.refresh_dashboard_stats_cache" in celery_app.tasks
+        # The ONT snapshot cache refresh task was retired with the native
+        # monitoring cutover.
         assert (
-            "app.tasks.app_cache.refresh_ont_zabbix_snapshot_cache" in celery_app.tasks
+            "app.tasks.app_cache.refresh_ont_zabbix_snapshot_cache"
+            not in celery_app.tasks
         )
 
     def test_execute_due_profile_sync_tasks_success(self):

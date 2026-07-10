@@ -72,7 +72,7 @@ def test_olt_stale_direct_falls_back_to_linked_zabbix():
         now=NOW,
     )
     assert op.status == UP
-    assert op.reason == "zabbix_up_linked"
+    assert op.reason == "observed_up_linked"
 
 
 def test_olt_fresh_direct_beats_linked_zabbix():

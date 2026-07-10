@@ -12,7 +12,6 @@ class TestCustomerPortalUsagePage:
         customer = {"subscription_id": str(subscription.id)}
 
         with (
-            patch("app.services.zabbix_engine.get_zabbix_engine") as get_engine,
             patch(
                 "app.services.customer_portal_flow_services._daily_bandwidth_usage"
             ) as daily_bandwidth_usage,
@@ -23,8 +22,6 @@ class TestCustomerPortalUsagePage:
                 "app.services.customer_portal_flow_services._get_fup_status"
             ) as get_fup_status,
         ):
-            get_engine.return_value.get_cached_customer_usage.return_value = None
-
             page = get_usage_page(
                 db_session,
                 customer,
@@ -181,7 +178,6 @@ class TestCustomerPortalUsagePage:
         ]
 
         with (
-            patch("app.services.zabbix_engine.get_zabbix_engine") as get_engine,
             patch(
                 "app.services.customer_portal_flow_services._daily_bandwidth_usage_records",
                 return_value=chart_source_records,
@@ -200,8 +196,6 @@ class TestCustomerPortalUsagePage:
                 return_value=None,
             ),
         ):
-            get_engine.return_value.get_cached_customer_usage.return_value = None
-
             page = get_usage_page(
                 db_session,
                 customer,
@@ -253,7 +247,6 @@ class TestCustomerPortalUsagePage:
         ]
 
         with (
-            patch("app.services.zabbix_engine.get_zabbix_engine") as get_engine,
             patch(
                 "app.services.customer_portal_flow_services._daily_bandwidth_usage_records",
                 return_value=chart_source_records,
@@ -285,7 +278,6 @@ class TestCustomerPortalUsagePage:
             set(usage_summary_stats.call_args.kwargs["subscription_ids"])
             == expected_ids
         )
-        get_engine.assert_not_called()
         assert page["usage_source"] == "postgres"
         assert page["chart_records"][0]["value"] == 5.0
 

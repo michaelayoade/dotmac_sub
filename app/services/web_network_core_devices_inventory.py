@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
 def _network_device_is_olt_candidate(device: NetworkDevice) -> bool:
     """Treat monitoring devices with names ending in OLT as OLT list members."""
     return device.name.strip().lower().endswith("olt")
@@ -577,7 +578,9 @@ def olts_list_page_data(
                 "runtime_snmp_state": snmp_state,
                 "runtime_source": runtime_health.get("runtime_source", "Local"),
                 "runtime_last_seen_at": runtime_health.get("runtime_last_seen_at"),
-                "runtime_trigger_summary": runtime_health.get("runtime_trigger_summary"),
+                "runtime_trigger_summary": runtime_health.get(
+                    "runtime_trigger_summary"
+                ),
                 "runtime_ont_online": runtime_health.get("runtime_ont_online"),
                 "runtime_ont_offline": runtime_health.get("runtime_ont_offline"),
                 "runtime_ont_total": runtime_health.get("runtime_ont_total"),

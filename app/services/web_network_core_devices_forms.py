@@ -78,9 +78,7 @@ def _status_value(device: NetworkDevice) -> str:
     return device.status.value if device.status else DeviceStatus.offline.value
 
 
-def _display_status_value(
-    device: NetworkDevice, *, live_status_available: bool
-) -> str:
+def _display_status_value(device: NetworkDevice, *, live_status_available: bool) -> str:
     if device.status == DeviceStatus.maintenance:
         return DeviceStatus.maintenance.value
     if live_status_available:
