@@ -79,6 +79,8 @@ def test_poll_infrastructure_delegates_to_stale_refresh(db_session, monkeypatch)
         "ping": 1,
         "snmp": 0,
         "devices": 1,
+        "ping_metric_lines": 0,
+        "ping_metric_write_failed": 0,
         "interface_devices": 0,
         "interface_lines": 0,
         "interface_write_failed": 0,
@@ -139,6 +141,111 @@ def test_unstampable_devices_never_count_as_stale(db_session, monkeypatch):
 
     assert totals["checked"] == 1
     assert probed == [str(real.id)]
+
+
+def test_push_ping_metrics_emits_latency_and_loss(db_session, monkeypatch):
+    from datetime import UTC, datetime, timedelta
+    from uuid import uuid4
+
+    from app.models.network_monitoring import (
+        DeviceMetric,
+        DeviceRole,
+        MetricType,
+        PopSite,
+    )
+
+    site = PopSite(name=f"site-{uuid4().hex[:6]}")
+    db_session.add(site)
+    db_session.flush()
+    up = NetworkDevice(
+        name="lat-up",
+        mgmt_ip="10.82.0.1",
+        is_active=True,
+        ping_enabled=True,
+        role=DeviceRole.core,
+        pop_site_id=site.id,
+        matched_device_type="nas",
+    )
+    down = NetworkDevice(
+        name="lat-down", mgmt_ip="10.82.0.2", is_active=True, ping_enabled=True
+    )
+    db_session.add_all([up, down])
+    db_session.flush()
+    now = datetime.now(UTC)
+    db_session.add_all(
+        [
+            DeviceMetric(
+                device_id=up.id,
+                metric_type=MetricType.custom,
+                value=12,
+                unit="ping_ms",
+                recorded_at=now,
+            ),
+            DeviceMetric(
+                device_id=down.id,
+                metric_type=MetricType.custom,
+                value=-1,
+                unit="ping_timeout",
+                recorded_at=now,
+            ),
+            # outside the sweep window -> excluded
+            DeviceMetric(
+                device_id=up.id,
+                metric_type=MetricType.custom,
+                value=99,
+                unit="ping_ms",
+                recorded_at=now - timedelta(minutes=30),
+            ),
+        ]
+    )
+    db_session.commit()
+
+    written = {}
+
+    class _Writer:
+        def write_prometheus_lines(self, lines, **kwargs):
+            written["lines"] = lines
+            written["kwargs"] = kwargs
+            return SimpleNamespace(success=True, written=len(lines))
+
+    monkeypatch.setattr(infrastructure_polling, "_writer", lambda: _Writer())
+
+    result = infrastructure_polling.push_ping_metrics(
+        db_session, since=now - timedelta(seconds=60)
+    )
+
+    assert result == {"ping_metric_lines": 3, "ping_metric_write_failed": 0}
+    latency = [ln for ln in written["lines"] if ln.startswith("device_ping_latency_ms")]
+    loss = [ln for ln in written["lines"] if ln.startswith("device_ping_loss")]
+    assert len(latency) == 1 and len(loss) == 2
+    assert f'device_id="{up.id}"' in latency[0]
+    assert 'device_role="core"' in latency[0]
+    assert f'pop_site_id="{site.id}"' in latency[0]
+    assert 'matched_device_type="nas"' in latency[0]
+    assert " 12.0 " in latency[0]
+    down_loss = next(ln for ln in loss if f'device_id="{down.id}"' in ln)
+    assert " 1 " in down_loss
+    up_loss = next(ln for ln in loss if f'device_id="{up.id}"' in ln)
+    assert " 0 " in up_loss
+    assert written["kwargs"]["operation"] == "ping_metrics"
+
+
+def test_push_ping_metrics_no_rows_is_noop(db_session, monkeypatch):
+    from datetime import UTC, datetime
+
+    called = {"writer": False}
+    monkeypatch.setattr(
+        infrastructure_polling,
+        "_writer",
+        lambda: called.__setitem__("writer", True),
+    )
+
+    result = infrastructure_polling.push_ping_metrics(
+        db_session, since=datetime.now(UTC)
+    )
+
+    assert result == {"ping_metric_lines": 0, "ping_metric_write_failed": 0}
+    assert called["writer"] is False
 
 
 def test_counter_targets_skip_ping_down_devices(db_session):
