@@ -28,7 +28,9 @@ class SmtpInboundResult:
     reason: str | None = None
 
 
-def normalize_recipient_set(values: set[str] | list[str] | tuple[str, ...] | None) -> set[str] | None:
+def normalize_recipient_set(
+    values: set[str] | list[str] | tuple[str, ...] | None,
+) -> set[str] | None:
     normalized = {
         address
         for address in (
