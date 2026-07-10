@@ -210,7 +210,12 @@ def refresh_stale_devices_health(
         ping_stale = False
         snmp_stale = False
 
-        if device.ping_enabled:
+        # A check that can never produce a result must not count as stale:
+        # ping_device early-returns without stamping last_ping_at when there
+        # is no mgmt_ip, so a ping-enabled hostname-only device stays "stale"
+        # forever — and under a max_devices cap those permanently-stale
+        # devices monopolise every batch and starve the real ones.
+        if device.ping_enabled and device.mgmt_ip:
             if force or device.last_ping_at is None:
                 ping_stale = True
             else:
@@ -221,7 +226,7 @@ def refresh_stale_devices_health(
                     now - last_ping_at
                 ).total_seconds() >= ping_interval_seconds
 
-        if include_snmp and device.snmp_enabled:
+        if include_snmp and device.snmp_enabled and (device.mgmt_ip or device.hostname):
             if force or device.last_snmp_at is None:
                 snmp_stale = True
             else:
