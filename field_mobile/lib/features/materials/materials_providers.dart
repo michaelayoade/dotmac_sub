@@ -75,20 +75,17 @@ class MaterialsRepository {
         .dio
         .post(
           '/api/v1/field/material-requests',
-          data: {
-            'priority': priority,
-            if (notes != null && notes.trim().isNotEmpty) 'notes': notes.trim(),
-            if (workOrderId != null && workOrderId.trim().isNotEmpty)
-              'work_order_id': workOrderId.trim(),
-            if (projectId != null && projectId.trim().isNotEmpty)
-              'project_id': projectId.trim(),
-            if (ticketId != null && ticketId.trim().isNotEmpty)
-              'ticket_id': ticketId.trim(),
-            'source_location_id': ?sourceLocationId,
-            'destination_location_id': ?destinationLocationId,
-            'items': items.map((item) => item.toJson()).toList(),
-            'submit': submit,
-          },
+          data: buildMaterialRequestPayload(
+            priority: priority,
+            notes: notes,
+            workOrderId: workOrderId,
+            projectId: projectId,
+            ticketId: ticketId,
+            sourceLocationId: sourceLocationId,
+            destinationLocationId: destinationLocationId,
+            items: items,
+            submit: submit,
+          ),
         );
     return MaterialRequest.fromJson(
       (response.data as Map).cast<String, dynamic>(),
@@ -105,6 +102,31 @@ class MaterialsRepository {
     );
   }
 }
+
+Map<String, dynamic> buildMaterialRequestPayload({
+  required String priority,
+  required List<MaterialRequestItemDraft> items,
+  String? notes,
+  String? workOrderId,
+  String? projectId,
+  String? ticketId,
+  String? sourceLocationId,
+  String? destinationLocationId,
+  bool submit = true,
+}) => {
+  'priority': priority,
+  if (notes != null && notes.trim().isNotEmpty) 'notes': notes.trim(),
+  if (workOrderId != null && workOrderId.trim().isNotEmpty)
+    'work_order_id': workOrderId.trim(),
+  if (projectId != null && projectId.trim().isNotEmpty)
+    'project_id': projectId.trim(),
+  if (ticketId != null && ticketId.trim().isNotEmpty)
+    'ticket_id': ticketId.trim(),
+  'source_location_id': ?sourceLocationId,
+  'destination_location_id': ?destinationLocationId,
+  'items': items.map((item) => item.toJson()).toList(),
+  'submit': submit,
+};
 
 List<Map<String, dynamic>> _items(Object? data) {
   if (data is Map && data['items'] is List) {

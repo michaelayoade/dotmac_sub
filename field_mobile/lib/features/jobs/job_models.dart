@@ -55,25 +55,34 @@ class JobSummary {
 
 class JobCustomer {
   const JobCustomer({
+    this.subscriberId,
     this.name,
     this.phone,
+    this.email,
     this.addressText,
     this.servicePlan,
     this.accountNumber,
+    this.status,
   });
 
+  final String? subscriberId;
   final String? name;
   final String? phone;
+  final String? email;
   final String? addressText;
   final String? servicePlan;
   final String? accountNumber;
+  final String? status;
 
   factory JobCustomer.fromJson(Map<String, dynamic> json) => JobCustomer(
+    subscriberId: json['subscriber_id']?.toString(),
     name: json['name'] as String?,
     phone: json['phone'] as String?,
+    email: json['email'] as String?,
     addressText: json['address_text'] as String?,
     servicePlan: json['service_plan'] as String?,
     accountNumber: json['account_number'] as String?,
+    status: json['status'] as String?,
   );
 }
 
@@ -146,6 +155,17 @@ class JobDestination {
     addressText: json['address_text'] as String?,
   );
 
+  bool get hasCoordinates => isValidMapCoordinate(latitude, longitude);
+
+  Uri? get mapsUri {
+    if (hasCoordinates) {
+      return Uri.parse('geo:$latitude,$longitude?q=$latitude,$longitude');
+    }
+    final address = addressText;
+    if (address == null || address.isEmpty) return null;
+    return Uri.parse('geo:0,0?q=${Uri.encodeComponent(address)}');
+  }
+
   Map<String, dynamic> toTransitionPayload() => {
     'destination_type': destinationType,
     'destination_id': ?destinationId,
@@ -155,15 +175,138 @@ class JobDestination {
   };
 }
 
+class JobSiteContact {
+  const JobSiteContact({this.name, this.phone, this.email, this.relationship});
+
+  final String? name;
+  final String? phone;
+  final String? email;
+  final String? relationship;
+
+  factory JobSiteContact.fromJson(Map<String, dynamic> json) => JobSiteContact(
+    name: json['name'] as String?,
+    phone: json['phone'] as String?,
+    email: json['email'] as String?,
+    relationship: json['relationship'] as String?,
+  );
+}
+
+class JobVisitHistoryItem {
+  const JobVisitHistoryItem({
+    required this.workOrderId,
+    required this.title,
+    this.workType,
+    this.status,
+    this.completedAt,
+  });
+
+  final String workOrderId;
+  final String title;
+  final String? workType;
+  final String? status;
+  final DateTime? completedAt;
+
+  factory JobVisitHistoryItem.fromJson(Map<String, dynamic> json) =>
+      JobVisitHistoryItem(
+        workOrderId: json['work_order_id']?.toString() ?? '',
+        title: json['title'] as String? ?? 'Previous visit',
+        workType: json['work_type'] as String?,
+        status: json['status'] as String?,
+        completedAt: _date(json['completed_at']),
+      );
+}
+
+class JobOpenTicketItem {
+  const JobOpenTicketItem({
+    required this.id,
+    this.ref,
+    this.subject,
+    this.status,
+  });
+
+  final String id;
+  final String? ref;
+  final String? subject;
+  final String? status;
+
+  factory JobOpenTicketItem.fromJson(Map<String, dynamic> json) =>
+      JobOpenTicketItem(
+        id: json['id']?.toString() ?? '',
+        ref: json['ref'] as String?,
+        subject: json['subject'] as String?,
+        status: json['status'] as String?,
+      );
+}
+
+class JobChatMessage {
+  const JobChatMessage({
+    required this.id,
+    required this.body,
+    required this.direction,
+    this.authorName,
+    required this.createdAt,
+    this.readAt,
+  });
+
+  final String id;
+  final String body;
+  final String direction;
+  final String? authorName;
+  final DateTime createdAt;
+  final DateTime? readAt;
+
+  bool get isCustomer => direction == 'customer';
+
+  factory JobChatMessage.fromJson(Map<String, dynamic> json) => JobChatMessage(
+    id: json['id'].toString(),
+    body: json['body'] as String? ?? '',
+    direction: json['direction'] as String? ?? 'staff',
+    authorName: json['author_name'] as String?,
+    createdAt: _date(json['created_at']) ?? DateTime.now().toUtc(),
+    readAt: _date(json['read_at']),
+  );
+}
+
+class JobChatThread {
+  const JobChatThread({
+    required this.available,
+    this.canSend = false,
+    this.conversationId,
+    this.customerName,
+    this.messages = const [],
+  });
+
+  final bool available;
+  final bool canSend;
+  final String? conversationId;
+  final String? customerName;
+  final List<JobChatMessage> messages;
+
+  factory JobChatThread.fromJson(Map<String, dynamic> json) => JobChatThread(
+    available: json['available'] as bool? ?? false,
+    canSend: json['can_send'] as bool? ?? false,
+    conversationId: json['conversation_id']?.toString(),
+    customerName: json['customer_name'] as String?,
+    messages: _typedList(json['messages'], JobChatMessage.fromJson),
+  );
+}
+
 class JobDetail {
   const JobDetail({
     required this.job,
     required this.location,
     this.customer,
     this.ticketRef,
+    this.projectId,
+    this.accessNotes,
+    this.additionalContacts = const [],
+    this.recentVisits = const [],
+    this.openTickets = const [],
     this.notes = const [],
+    this.attachments = const [],
     this.materials = const [],
     this.materialRequests = const [],
+    this.worklogs = const [],
     this.history = const [],
   });
 
@@ -171,9 +314,16 @@ class JobDetail {
   final JobLocation location;
   final JobCustomer? customer;
   final String? ticketRef;
+  final String? projectId;
+  final String? accessNotes;
+  final List<JobSiteContact> additionalContacts;
+  final List<JobVisitHistoryItem> recentVisits;
+  final List<JobOpenTicketItem> openTickets;
   final List<Map<String, dynamic>> notes;
+  final List<Map<String, dynamic>> attachments;
   final List<Map<String, dynamic>> materials;
   final List<Map<String, dynamic>> materialRequests;
+  final List<Map<String, dynamic>> worklogs;
   final List<Map<String, dynamic>> history;
 
   factory JobDetail.fromJson(Map<String, dynamic> json) => JobDetail(
@@ -187,9 +337,22 @@ class JobDetail {
           )
         : null,
     ticketRef: json['ticket_ref'] as String?,
+    projectId: json['project_id']?.toString(),
+    accessNotes: json['access_notes'] as String?,
+    additionalContacts: _typedList(
+      json['additional_contacts'],
+      JobSiteContact.fromJson,
+    ),
+    recentVisits: _typedList(
+      json['recent_visits'],
+      JobVisitHistoryItem.fromJson,
+    ),
+    openTickets: _typedList(json['open_tickets'], JobOpenTicketItem.fromJson),
     notes: _mapList(json['notes']),
+    attachments: _mapList(json['attachments']),
     materials: _mapList(json['materials']),
     materialRequests: _mapList(json['material_requests']),
+    worklogs: _mapList(json['worklogs']),
     history: _mapList(json['history']),
   );
 }
@@ -242,4 +405,8 @@ List<Map<String, dynamic>> _mapList(Object? value) {
     for (final item in items)
       if (item is Map) item.cast<String, dynamic>(),
   ];
+}
+
+List<T> _typedList<T>(Object? value, T Function(Map<String, dynamic>) build) {
+  return [for (final item in _mapList(value)) build(item)];
 }

@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:intl/intl.dart';
 
+import '../../app/theme.dart';
 import '../jobs/jobs_providers.dart';
+import '../jobs/job_models.dart';
 import '../jobs/widgets/job_card.dart';
 import '../location/location_tracking_controller.dart';
 import '../profile/profile_screen.dart';
@@ -22,9 +25,19 @@ class TodayScreen extends ConsumerWidget {
     final me = ref.watch(meProvider);
     final jobs = ref.watch(todayJobsProvider);
     final filter = ref.watch(jobsFilterProvider);
+    final isDark = AppColors.dark(context);
 
     return Scaffold(
-      body: SafeArea(
+      body: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: isDark
+                ? const [Color(0xFF11140F), Color(0xFF1A1F18)]
+                : const [Color(0xFFF7F5EC), Color(0xFFEDE9DC)],
+          ),
+        ),
         child: RefreshIndicator(
           onRefresh: () async {
             ref.invalidate(meProvider);
@@ -34,37 +47,20 @@ class TodayScreen extends ConsumerWidget {
             physics: const AlwaysScrollableScrollPhysics(),
             slivers: [
               SliverPadding(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                padding: EdgeInsets.fromLTRB(
+                  18,
+                  MediaQuery.paddingOf(context).top + 18,
+                  18,
+                  8,
+                ),
                 sliver: SliverToBoxAdapter(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       me.when(
-                        data: (data) => Text(
-                          'Hello, ${data.name.split(' ').first}',
-                          style: Theme.of(context).textTheme.headlineSmall
-                              ?.copyWith(fontWeight: FontWeight.w700),
-                        ),
-                        loading: () => const SizedBox(height: 32),
-                        error: (_, _) => const SizedBox(height: 32),
-                      ),
-                      const SizedBox(height: 12),
-                      me.when(
-                        data: (data) => Row(
-                          children: [
-                            _MetricTile(
-                              value: '${data.openJobs}',
-                              label: 'open',
-                            ),
-                            const SizedBox(width: 12),
-                            _MetricTile(
-                              value: '${data.completedToday}',
-                              label: 'done today',
-                            ),
-                          ],
-                        ),
-                        loading: () => const SizedBox.shrink(),
-                        error: (_, _) => const SizedBox.shrink(),
+                        data: (data) => _TodayHeader(me: data),
+                        loading: () => const _TodayHeaderSkeleton(),
+                        error: (_, _) => const _TodayHeaderSkeleton(),
                       ),
                       const SizedBox(height: 12),
                       const SyncStatusBar(),
@@ -73,23 +69,22 @@ class TodayScreen extends ConsumerWidget {
                       if (jobs.value?.fromCache ?? false)
                         const _OfflineBanner(),
                       const SizedBox(height: 16),
-                      SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: Row(
-                          children: [
-                            for (final (value, label) in _filters) ...[
-                              FilterChip(
-                                label: Text(label),
-                                selected: filter == value,
-                                onSelected: (_) =>
-                                    ref
-                                            .read(jobsFilterProvider.notifier)
-                                            .state =
-                                        value,
-                              ),
-                              const SizedBox(width: 8),
-                            ],
-                          ],
+                      _FilterRail(
+                        selected: filter,
+                        onSelected: (value) =>
+                            ref.read(jobsFilterProvider.notifier).state = value,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Today route',
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(fontWeight: FontWeight.w800),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Field jobs, live work status, and offline-safe updates.',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: AppColors.subdued(context),
                         ),
                       ),
                     ],
@@ -105,11 +100,19 @@ class TodayScreen extends ConsumerWidget {
                     : SliverPadding(
                         padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
                         sliver: SliverList.separated(
-                          itemCount: list.jobs.length,
+                          itemCount: list.jobs.length + 1,
                           separatorBuilder: (_, _) =>
                               const SizedBox(height: 12),
                           itemBuilder: (context, index) {
-                            final job = list.jobs[index];
+                            if (index == 0) {
+                              final job = _preferredJob(list.jobs);
+                              return _LiveJobPanel(
+                                job: job,
+                                onOpen: () => context.push('/jobs/${job.id}'),
+                                onMap: () => context.go('/map'),
+                              );
+                            }
+                            final job = list.jobs[index - 1];
                             return JobCard(
                               job: job,
                               onTap: () => context.push('/jobs/${job.id}'),
@@ -142,6 +145,243 @@ class TodayScreen extends ConsumerWidget {
   }
 }
 
+String _firstName(String name) {
+  final trimmed = name.trim();
+  if (trimmed.isEmpty) return 'Technician';
+  return trimmed.split(RegExp(r'\s+')).first;
+}
+
+JobSummary _preferredJob(List<JobSummary> jobs) {
+  return jobs.firstWhere(
+    (job) => job.status != 'completed' && job.status != 'canceled',
+    orElse: () => jobs.first,
+  );
+}
+
+class _TodayHeader extends StatelessWidget {
+  const _TodayHeader({required this.me});
+
+  final MeSummary me;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const _DotmacWordmark(),
+            const Spacer(),
+            Flexible(
+              flex: 2,
+              child: Text(
+                'Hello, ${_firstName(me.name)}',
+                textAlign: TextAlign.right,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.text(context),
+                ),
+              ),
+            ),
+            const SizedBox(width: 14),
+            Icon(Icons.notifications_none, color: AppColors.text(context)),
+          ],
+        ),
+        const SizedBox(height: 22),
+        const _ShiftToggle(),
+        const SizedBox(height: 18),
+        _ConnectionStrip(
+          openJobs: me.openJobs,
+          completedToday: me.completedToday,
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            _MetricTile(value: '${me.openJobs}', label: 'open'),
+            const SizedBox(width: 10),
+            _MetricTile(value: '${me.completedToday}', label: 'done today'),
+            const SizedBox(width: 10),
+            const _MetricTile(value: 'Live', label: 'status'),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _TodayHeaderSkeleton extends StatelessWidget {
+  const _TodayHeaderSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            _DotmacWordmark(),
+            Spacer(),
+            SizedBox(width: 92, height: 24),
+            SizedBox(width: 14),
+            Icon(Icons.notifications_none, color: AppColors.ink),
+          ],
+        ),
+        SizedBox(height: 22),
+        _ShiftToggle(),
+      ],
+    );
+  }
+}
+
+class _DotmacWordmark extends StatelessWidget {
+  const _DotmacWordmark();
+
+  @override
+  Widget build(BuildContext context) {
+    return RichText(
+      text: const TextSpan(
+        text: 'DOTMAC',
+        style: TextStyle(
+          color: AppColors.green,
+          fontFamily: 'Georgia',
+          fontSize: 25,
+          fontWeight: FontWeight.w800,
+        ),
+        children: [
+          TextSpan(
+            text: '▪',
+            style: TextStyle(color: AppColors.accent, fontSize: 18),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ShiftToggle extends StatelessWidget {
+  const _ShiftToggle();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 74,
+      padding: const EdgeInsets.all(5),
+      decoration: BoxDecoration(
+        color: AppColors.dark(context)
+            ? const Color(0xFF242A22)
+            : const Color(0xFFE9E6DC),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Container(
+              height: double.infinity,
+              decoration: BoxDecoration(
+                color: AppColors.surface(context),
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x1F272722),
+                    blurRadius: 10,
+                    offset: Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.circle, size: 18, color: AppColors.text(context)),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Active',
+                    style: TextStyle(
+                      color: AppColors.text(context),
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          Expanded(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: const [
+                Icon(Icons.schedule, size: 18, color: AppColors.muted),
+                SizedBox(width: 8),
+                Text(
+                  'Onboarding',
+                  style: TextStyle(
+                    color: AppColors.muted,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ConnectionStrip extends StatelessWidget {
+  const _ConnectionStrip({
+    required this.openJobs,
+    required this.completedToday,
+  });
+
+  final int openJobs;
+  final int completedToday;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+      decoration: BoxDecoration(
+        color: AppColors.softGreen(context),
+        borderRadius: BorderRadius.circular(17),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 22,
+            height: 22,
+            decoration: BoxDecoration(
+              color: AppColors.green,
+              borderRadius: BorderRadius.circular(999),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x24367332),
+                  spreadRadius: 8,
+                  blurRadius: 0,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              'Connected · $openJobs open · $completedToday done',
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: AppColors.green,
+                fontSize: 19,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _MetricTile extends StatelessWidget {
   const _MetricTile({required this.value, required this.label});
 
@@ -151,24 +391,328 @@ class _MetricTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Expanded(
-      child: Card(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 14),
-          child: Column(
-            children: [
-              Text(
-                value,
-                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
+        decoration: BoxDecoration(
+          color: AppColors.surface(context),
+          border: Border.all(color: AppColors.border(context), width: 1.5),
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              value,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                color: value == 'Live'
+                    ? AppColors.green
+                    : AppColors.text(context),
+                fontWeight: FontWeight.w900,
               ),
-              Text(label, style: Theme.of(context).textTheme.bodySmall),
-            ],
-          ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              label,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: AppColors.subdued(context),
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
+}
+
+class _FilterRail extends StatelessWidget {
+  const _FilterRail({required this.selected, required this.onSelected});
+
+  final String? selected;
+  final ValueChanged<String?> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          for (final (value, label) in _filters) ...[
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: ChoiceChip(
+                label: Text(label),
+                selected: selected == value,
+                showCheckmark: false,
+                onSelected: (_) => onSelected(value),
+                labelStyle: TextStyle(
+                  color: selected == value
+                      ? AppColors.text(context)
+                      : AppColors.subdued(context),
+                  fontWeight: FontWeight.w800,
+                ),
+                side: BorderSide(
+                  color: selected == value
+                      ? AppColors.surface(context)
+                      : AppColors.border(context),
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(15),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _LiveJobPanel extends StatelessWidget {
+  const _LiveJobPanel({
+    required this.job,
+    required this.onOpen,
+    required this.onMap,
+  });
+
+  final JobSummary job;
+  final VoidCallback onOpen;
+  final VoidCallback onMap;
+
+  @override
+  Widget build(BuildContext context) {
+    final time = job.scheduledStart != null
+        ? DateFormat.Hm().format(job.scheduledStart!.toLocal())
+        : 'Any time';
+    return Container(
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: AppColors.surface(context),
+        border: Border.all(color: AppColors.primary, width: 2),
+        borderRadius: BorderRadius.circular(AppRadii.feature),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x1A2D8898),
+            blurRadius: 34,
+            offset: Offset(0, 16),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(22, 22, 22, 16),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.only(top: 7),
+                  child: Icon(
+                    Icons.engineering_outlined,
+                    color: AppColors.primary,
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Next service job',
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.w900,
+                          color: AppColors.text(context),
+                        ),
+                      ),
+                      const SizedBox(height: 5),
+                      Text(
+                        '$time · ${job.title}',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                          color: AppColors.subdued(context),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 10),
+                _LiveBadge(label: statusLabel(job.status)),
+              ],
+            ),
+          ),
+          _RoutePreview(surfaceColor: AppColors.surface(context)),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+            child: Row(
+              children: [
+                Expanded(
+                  flex: 3,
+                  child: FilledButton.icon(
+                    onPressed: onOpen,
+                    icon: const Icon(Icons.play_arrow_rounded),
+                    label: const Text('Open job'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  flex: 2,
+                  child: OutlinedButton.icon(
+                    onPressed: onMap,
+                    icon: const Icon(Icons.map_outlined),
+                    label: const Text('Map'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppColors.text(context),
+                      side: BorderSide(
+                        color: AppColors.border(context),
+                        width: 1.5,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LiveBadge extends StatelessWidget {
+  const _LiveBadge({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: AppColors.softTeal(context),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              color: AppColors.primary,
+              borderRadius: BorderRadius.circular(999),
+            ),
+          ),
+          const SizedBox(width: 7),
+          Text(
+            label.toUpperCase(),
+            style: TextStyle(
+              color: AppColors.dark(context)
+                  ? AppColors.tealSoft
+                  : const Color(0xFF1F6573),
+              fontSize: 12,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RoutePreview extends StatelessWidget {
+  const _RoutePreview({required this.surfaceColor});
+
+  final Color surfaceColor;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 156,
+      width: double.infinity,
+      child: CustomPaint(painter: _RoutePreviewPainter(surfaceColor)),
+    );
+  }
+}
+
+class _RoutePreviewPainter extends CustomPainter {
+  const _RoutePreviewPainter(this.surfaceColor);
+
+  final Color surfaceColor;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final grid = Paint()
+      ..color = const Color(0x29829A88)
+      ..strokeWidth = 1;
+    for (double x = 0; x <= size.width; x += 38) {
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), grid);
+    }
+    for (double y = 0; y <= size.height; y += 38) {
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), grid);
+    }
+
+    final route = Path()
+      ..moveTo(size.width * 0.09, size.height * 0.72)
+      ..cubicTo(
+        size.width * 0.25,
+        size.height * 0.62,
+        size.width * 0.34,
+        size.height * 0.55,
+        size.width * 0.48,
+        size.height * 0.60,
+      )
+      ..cubicTo(
+        size.width * 0.62,
+        size.height * 0.65,
+        size.width * 0.62,
+        size.height * 0.32,
+        size.width * 0.78,
+        size.height * 0.38,
+      )
+      ..cubicTo(
+        size.width * 0.85,
+        size.height * 0.42,
+        size.width * 0.91,
+        size.height * 0.32,
+        size.width * 0.95,
+        size.height * 0.27,
+      );
+    canvas.drawPath(
+      route,
+      Paint()
+        ..color = AppColors.primary
+        ..strokeWidth = 5
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round,
+    );
+
+    void point(Offset center, Color color, double halo) {
+      canvas.drawCircle(
+        center,
+        17,
+        Paint()..color = color.withValues(alpha: halo),
+      );
+      canvas.drawCircle(center, 12, Paint()..color = surfaceColor);
+      canvas.drawCircle(center, 8, Paint()..color = color);
+    }
+
+    point(
+      Offset(size.width * 0.35, size.height * 0.55),
+      AppColors.primary,
+      0.18,
+    );
+    point(Offset(size.width * 0.95, size.height * 0.27), AppColors.green, 0.16);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 /// Compact sync state: queued work + items needing review, tap → Profile.
