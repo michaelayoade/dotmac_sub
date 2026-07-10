@@ -2250,6 +2250,25 @@ def build_beat_schedule() -> dict:
             interval_seconds=max(monitoring_inventory_sync_interval, 300),
         )
 
+        # Device-metric retention: the task existed but was never scheduled,
+        # so device_metrics grew unbounded — and the native infrastructure
+        # poller now writes a row per ping probe, making it the table's
+        # biggest writer. Postgres keeps current state; history belongs to
+        # VictoriaMetrics (see docs/designs/OPERATIONS_MEASUREMENT_STRATEGY).
+        device_metrics_cleanup_hours = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "device_metrics_cleanup_interval_hours",
+            6,
+        )
+        _sync_scheduled_task(
+            session,
+            name="device_metrics_cleanup",
+            task_name="app.tasks.monitoring_cleanup.cleanup_old_device_metrics",
+            enabled=True,
+            interval_seconds=max(device_metrics_cleanup_hours, 1) * 3600,
+        )
+
         # Event old cleanup - removes old completed events
         event_old_cleanup_enabled = _effective_bool(
             session,
