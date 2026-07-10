@@ -64,6 +64,11 @@ REPORT_HUB_SECTIONS: list[dict] = [
                 "url": "/admin/reports/inbox-performance",
                 "description": "Team response SLA, queue load, and agent assignments",
             },
+            {
+                "name": "Inbox Escalations",
+                "url": "/admin/reports/inbox-escalations",
+                "description": "Conversations that need supervisor attention",
+            },
         ],
     },
     {
@@ -558,6 +563,51 @@ def _inbox_agent_rows(db: Session):
     ]
 
 
+_ESCALATION_REASON_LABELS = {
+    "response_sla_breached": "Response SLA breached",
+    "unassigned_queue_breached": "Unassigned queue breached",
+    "no_available_agent": "No available agent",
+}
+
+
+def _reason_label(reason: str) -> str:
+    return _ESCALATION_REASON_LABELS.get(reason, reason.replace("_", " ").title())
+
+
+def _inbox_escalation_rows(
+    db: Session,
+    response_sla_seconds: int,
+    queue_sla_seconds: int,
+    include_inactive: bool,
+):
+    rows = team_inbox_metrics_service.escalation_candidates(
+        db,
+        response_sla_seconds=response_sla_seconds,
+        queue_sla_seconds=queue_sla_seconds,
+        include_inactive=include_inactive,
+    )
+    return [
+        {
+            "conversation_id": row.conversation_id,
+            "service_team_id": row.service_team_id,
+            "service_team_name": row.service_team_name,
+            "service_team_type": row.service_team_type,
+            "subject": row.subject or "(No subject)",
+            "contact_address": row.contact_address or "-",
+            "status": row.status,
+            "reasons": [_reason_label(reason) for reason in row.reasons],
+            "reason_keys": list(row.reasons),
+            "response_sla": _seconds_label(row.response_sla_seconds),
+            "queue_sla": _seconds_label(row.queue_sla_seconds),
+            "pending_response": _seconds_label(row.pending_response_seconds),
+            "queue_wait": _seconds_label(row.queue_wait_seconds),
+            "assigned_person_id": row.assigned_person_id or "-",
+            "available_agent_count": row.available_agent_count,
+        }
+        for row in rows
+    ]
+
+
 @router.get(
     "/inbox-performance",
     response_class=HTMLResponse,
@@ -637,6 +687,97 @@ def reports_inbox_performance_export(
         output.getvalue(),
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=inbox-performance.csv"},
+    )
+
+
+@router.get(
+    "/inbox-escalations",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("provisioning:read"))],
+)
+def reports_inbox_escalations(
+    request: Request,
+    response_sla_seconds: int = Query(default=900, ge=60, le=86400),
+    queue_sla_seconds: int = Query(default=600, ge=60, le=86400),
+    include_inactive: bool = False,
+    db: Session = Depends(get_db),
+):
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    rows = _inbox_escalation_rows(
+        db,
+        response_sla_seconds,
+        queue_sla_seconds,
+        include_inactive,
+    )
+    context = {
+        "request": request,
+        "active_page": "reports-inbox-escalations",
+        "active_menu": "reports",
+        "current_user": get_current_user(request),
+        "sidebar_stats": get_sidebar_stats(db),
+        "response_sla_seconds": response_sla_seconds,
+        "queue_sla_seconds": queue_sla_seconds,
+        "include_inactive": include_inactive,
+        "rows": rows,
+        "candidate_count": len(rows),
+        "response_breach_count": sum(
+            "response_sla_breached" in row["reason_keys"] for row in rows
+        ),
+        "queue_breach_count": sum(
+            "unassigned_queue_breached" in row["reason_keys"] for row in rows
+        ),
+        "no_agent_count": sum(
+            "no_available_agent" in row["reason_keys"] for row in rows
+        ),
+        "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
+    }
+    return templates.TemplateResponse("admin/reports/inbox_escalations.html", context)
+
+
+@router.get(
+    "/inbox-escalations/export",
+    dependencies=[Depends(require_permission("provisioning:read"))],
+)
+def reports_inbox_escalations_export(
+    response_sla_seconds: int = Query(default=900, ge=60, le=86400),
+    queue_sla_seconds: int = Query(default=600, ge=60, le=86400),
+    include_inactive: bool = False,
+    db: Session = Depends(get_db),
+):
+    output = StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=[
+            "conversation_id",
+            "service_team_name",
+            "service_team_type",
+            "subject",
+            "contact_address",
+            "status",
+            "reasons",
+            "response_sla",
+            "queue_sla",
+            "pending_response",
+            "queue_wait",
+            "assigned_person_id",
+            "available_agent_count",
+        ],
+    )
+    writer.writeheader()
+    for row in _inbox_escalation_rows(
+        db,
+        response_sla_seconds,
+        queue_sla_seconds,
+        include_inactive,
+    ):
+        export_row = {field: row[field] for field in writer.fieldnames}
+        export_row["reasons"] = "; ".join(row["reasons"])
+        writer.writerow(export_row)
+    return Response(
+        output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=inbox-escalations.csv"},
     )
 
 

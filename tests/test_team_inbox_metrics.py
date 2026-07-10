@@ -18,6 +18,7 @@ from app.models.team_inbox import (
     InboxTeamSource,
 )
 from app.services import team_inbox_metrics
+from app.web.admin import reports as admin_reports
 
 
 def _team(db_session, name: str = "Support") -> ServiceTeam:
@@ -400,3 +401,47 @@ def test_analytics_api_returns_escalation_candidates(db_session):
     assert item.service_team_id == team.id
     assert "response_sla_breached" in item.reasons
     assert "unassigned_queue_breached" in item.reasons
+
+
+def test_inbox_escalation_report_export_returns_candidates(db_session):
+    team = _team(db_session)
+    base = datetime(2026, 1, 1, 8, 0, tzinfo=UTC)
+    conversation = _conversation(db_session, team, first_at=base)
+    conversation.subject = "Router offline"
+    conversation.contact_address = "customer@example.com"
+    _message(
+        db_session,
+        conversation,
+        direction=InboxMessageDirection.inbound.value,
+        at=base,
+    )
+    db_session.commit()
+
+    response = admin_reports.reports_inbox_escalations_export(
+        response_sla_seconds=300,
+        queue_sla_seconds=300,
+        db=db_session,
+    )
+    content = response.body.decode()
+
+    assert (
+        "attachment; filename=inbox-escalations.csv"
+        in response.headers["Content-Disposition"]
+    )
+    assert "Router offline" in content
+    assert "Response SLA breached" in content
+    assert "Unassigned queue breached" in content
+
+
+def test_inbox_escalation_report_is_visible_from_reports_hub():
+    links = [
+        link
+        for section in admin_reports.REPORT_HUB_SECTIONS
+        for link in section["links"]
+    ]
+
+    assert {
+        "name": "Inbox Escalations",
+        "url": "/admin/reports/inbox-escalations",
+        "description": "Conversations that need supervisor attention",
+    } in links
