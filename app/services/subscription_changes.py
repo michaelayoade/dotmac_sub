@@ -17,6 +17,12 @@ from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
 
+SCHEDULED_CHANGE_TARGET_STATUSES = {
+    SubscriptionStatus.pending,
+    SubscriptionStatus.active,
+    SubscriptionStatus.suspended,
+}
+
 
 class SubscriptionChangeRequests(ListResponseMixin):
     """Service for subscription change request CRUD operations."""
@@ -396,6 +402,25 @@ class SubscriptionChangeRequests(ListResponseMixin):
         if not subscription:
             raise HTTPException(status_code=404, detail="Subscription not found")
 
+        if str(subscription.offer_id) == str(request.requested_offer_id):
+            request.status = SubscriptionChangeStatus.applied
+            request.applied_at = datetime.now(UTC)
+            request.notes = _append_note(
+                request.notes,
+                "Idempotently marked applied: subscription is already on the "
+                "requested offer.",
+            )
+            db.commit()
+            db.refresh(request)
+            logger.info(
+                "Idempotently marked subscription change %s applied: "
+                "subscription %s is already on offer %s",
+                request_id,
+                subscription.id,
+                request.requested_offer_id,
+            )
+            return request
+
         # Route all plan changes through the shared subscription update path so
         # validation, RADIUS refresh, events, and proration stay consistent.
         from app.schemas.catalog import SubscriptionUpdate
@@ -537,9 +562,32 @@ class SubscriptionChangeRequests(ListResponseMixin):
             .all()
         )
         applied = 0
+        canceled_ids: list[str] = []
         failed_ids: list[str] = []
         for request in due:
             try:
+                subscription = db.get(Subscription, request.subscription_id)
+                if subscription is None:
+                    raise HTTPException(
+                        status_code=404, detail="Subscription not found"
+                    )
+                if subscription.status not in SCHEDULED_CHANGE_TARGET_STATUSES:
+                    request.status = SubscriptionChangeStatus.canceled
+                    request.notes = _append_note(
+                        request.notes,
+                        "Auto-canceled: scheduled change target subscription is "
+                        f"{subscription.status.value}.",
+                    )
+                    db.commit()
+                    canceled_ids.append(str(request.id))
+                    logger.info(
+                        "Auto-canceled scheduled subscription change %s: "
+                        "target subscription %s is %s",
+                        request.id,
+                        subscription.id,
+                        subscription.status.value,
+                    )
+                    continue
                 cls.apply(db, str(request.id), skip_proration_artifacts=True)
                 applied += 1
             except Exception as exc:
@@ -550,7 +598,15 @@ class SubscriptionChangeRequests(ListResponseMixin):
                     request.id,
                     exc,
                 )
-        return {"applied": applied, "failed_ids": failed_ids}
+        return {
+            "applied": applied,
+            "canceled_ids": canceled_ids,
+            "failed_ids": failed_ids,
+        }
 
 
 subscription_change_requests = SubscriptionChangeRequests()
+
+
+def _append_note(existing: str | None, note: str) -> str:
+    return f"{existing}\n{note}" if existing else note
