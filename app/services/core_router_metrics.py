@@ -39,6 +39,11 @@ _IN_METRIC = "core_interface_in_octets_total"
 _OUT_METRIC = "core_interface_out_octets_total"
 
 
+class MetricsQueryError(RuntimeError):
+    """A VictoriaMetrics response that isn't a usable query result (non-success
+    status or malformed JSON) — distinct from transport failures (httpx)."""
+
+
 @dataclass(frozen=True)
 class InterfaceBandwidth:
     """Latest snapshot for a single monitored interface."""
@@ -93,7 +98,13 @@ def _query_bps(device_id: str, metric: str) -> dict[str, tuple[float, int]]:
         f"{VICTORIAMETRICS_URL}/api/v1/query", params={"query": query}
     )
     response.raise_for_status()
-    payload: dict[str, Any] = response.json()
+    try:
+        payload: dict[str, Any] = response.json()
+    except ValueError as exc:
+        raise MetricsQueryError(f"malformed VictoriaMetrics response: {exc}") from exc
+    if not isinstance(payload, dict) or payload.get("status") != "success":
+        status = payload.get("status") if isinstance(payload, dict) else type(payload)
+        raise MetricsQueryError(f"VictoriaMetrics query status: {status}")
     results: dict[str, tuple[float, int]] = {}
     for series in (payload.get("data") or {}).get("result") or []:
         interface_id = (series.get("metric") or {}).get("interface_id")
@@ -140,7 +151,7 @@ def get_interface_bandwidth(
     try:
         rx_by_iface = _query_bps(str(device.id), _IN_METRIC)
         tx_by_iface = _query_bps(str(device.id), _OUT_METRIC)
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, MetricsQueryError) as exc:
         logger.info("Live bandwidth fetch failed for %s: %s", device.name, exc)
         return CoreRouterBandwidth(
             by_interface_id={},

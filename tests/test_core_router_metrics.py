@@ -32,7 +32,7 @@ def _make_device(name: str = "Abuja Core | Garki", mgmt_ip: str = "10.0.0.1"):
 def _vm_response(series: list[dict]):
     response = MagicMock()
     response.raise_for_status.return_value = None
-    response.json.return_value = {"data": {"result": series}}
+    response.json.return_value = {"status": "success", "data": {"result": series}}
     return response
 
 
@@ -105,6 +105,34 @@ def test_no_series_at_all_returns_explanatory_error():
     with patch.object(core_router_metrics, "_get_client", return_value=fake_client):
         result = get_interface_bandwidth(MagicMock(), device, [iface])
     assert result.error == "Interface counters not enabled in monitoring"
+    assert result.by_interface_id == {}
+
+
+def test_vm_status_error_renders_as_unavailable():
+    device = _make_device()
+    iface = _make_iface("eth1", 1)
+    response = MagicMock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {"status": "error", "error": "cannot parse query"}
+    fake_client = MagicMock()
+    fake_client.get.return_value = response
+    with patch.object(core_router_metrics, "_get_client", return_value=fake_client):
+        result = get_interface_bandwidth(MagicMock(), device, [iface])
+    assert result.error == "Live monitoring unavailable"
+    assert result.by_interface_id == {}
+
+
+def test_malformed_json_renders_as_unavailable():
+    device = _make_device()
+    iface = _make_iface("eth1", 1)
+    response = MagicMock()
+    response.raise_for_status.return_value = None
+    response.json.side_effect = ValueError("not json")
+    fake_client = MagicMock()
+    fake_client.get.return_value = response
+    with patch.object(core_router_metrics, "_get_client", return_value=fake_client):
+        result = get_interface_bandwidth(MagicMock(), device, [iface])
+    assert result.error == "Live monitoring unavailable"
     assert result.by_interface_id == {}
 
 

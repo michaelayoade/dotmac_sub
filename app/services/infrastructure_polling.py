@@ -139,7 +139,11 @@ def push_interface_counters(
 
     targets = monitored_interface_targets(db)
     if not targets:
-        return {"interface_devices": 0, "interface_lines": 0}
+        return {
+            "interface_devices": 0,
+            "interface_lines": 0,
+            "interface_write_failed": 0,
+        }
 
     ts_ms = int((now or datetime.now(UTC)).timestamp() * 1000)
     lines: list[str] = []
@@ -171,10 +175,19 @@ def push_interface_counters(
                     f"{INTERFACE_OUT_OCTETS_METRIC}{{{labels}}} "
                     f"{reading.out_octets} {ts_ms}"
                 )
+    write_failed = 0
     if lines:
-        _writer().write_prometheus_lines(
+        write_result = _writer().write_prometheus_lines(
             lines,
             adapter="infrastructure.polling",
             operation="interface_counters",
         )
-    return {"interface_devices": devices_read, "interface_lines": len(lines)}
+        # The writer already logs and bumps the VM failure counter; surface
+        # the failure in the task result too so ops can see it in task output.
+        if not write_result.success:
+            write_failed = len(lines)
+    return {
+        "interface_devices": devices_read,
+        "interface_lines": len(lines),
+        "interface_write_failed": write_failed,
+    }

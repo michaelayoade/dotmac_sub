@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from app.celery_app import celery_app
 from app.models.network_monitoring import DeviceStatus, NetworkDevice
 from app.services import infrastructure_polling
@@ -79,6 +81,7 @@ def test_poll_infrastructure_delegates_to_stale_refresh(db_session, monkeypatch)
         "devices": 1,
         "interface_devices": 0,
         "interface_lines": 0,
+        "interface_write_failed": 0,
     }
 
 
@@ -198,12 +201,17 @@ def test_push_interface_counters_writes_prometheus_lines(db_session, monkeypatch
         def write_prometheus_lines(self, lines, **kwargs):
             written["lines"] = lines
             written["kwargs"] = kwargs
+            return SimpleNamespace(success=True, written=len(lines))
 
     monkeypatch.setattr(infrastructure_polling, "_writer", lambda: _Writer())
 
     result = infrastructure_polling.push_interface_counters(db_session)
 
-    assert result == {"interface_devices": 1, "interface_lines": 2}
+    assert result == {
+        "interface_devices": 1,
+        "interface_lines": 2,
+        "interface_write_failed": 0,
+    }
     assert len(written["lines"]) == 2
     rx_line = next(line for line in written["lines"] if "in_octets" in line)
     assert f'device_id="{device.id}"' in rx_line
@@ -222,8 +230,41 @@ def test_push_interface_counters_no_targets_is_noop(db_session, monkeypatch):
 
     result = infrastructure_polling.push_interface_counters(db_session)
 
-    assert result == {"interface_devices": 0, "interface_lines": 0}
+    assert result == {
+        "interface_devices": 0,
+        "interface_lines": 0,
+        "interface_write_failed": 0,
+    }
     assert called["writer"] is False
+
+
+def test_push_interface_counters_surfaces_write_failure(db_session, monkeypatch):
+    from app.models.network_monitoring import DeviceInterface
+    from app.services.snmp_probe import InterfaceOctets
+
+    device = _device("counter-router-fail", "10.80.5.2", snmp_enabled=True)
+    db_session.add(device)
+    db_session.flush()
+    db_session.add(
+        DeviceInterface(device_id=device.id, name="sfp1", snmp_index=5, monitored=True)
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "app.services.snmp_probe.fetch_interface_octets",
+        lambda dev, indexes, **kw: {5: InterfaceOctets(100, 200)},
+    )
+
+    class _Writer:
+        def write_prometheus_lines(self, lines, **kwargs):
+            return SimpleNamespace(success=False, written=0, error="boom")
+
+    monkeypatch.setattr(infrastructure_polling, "_writer", lambda: _Writer())
+
+    result = infrastructure_polling.push_interface_counters(db_session)
+
+    assert result["interface_lines"] == 2
+    assert result["interface_write_failed"] == 2
 
 
 def test_poll_results_feed_live_status_warmer(db_session, monkeypatch):
