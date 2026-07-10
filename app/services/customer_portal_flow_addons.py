@@ -31,7 +31,8 @@ from app.models.catalog import (
 )
 from app.models.idempotency import IdempotencyKey
 from app.services import catalog as catalog_service
-from app.services.billing._common import get_account_credit_balance, lock_account
+from app.services.billing._common import lock_account
+from app.services.collections import get_available_balance
 from app.services.common import coerce_uuid, round_money, to_decimal
 
 
@@ -140,7 +141,7 @@ def list_available_addons(
         for sa, add_on in active_rows
     ]
 
-    balance = get_account_credit_balance(db, str(subscription.subscriber_id))
+    balance = get_available_balance(db, str(subscription.subscriber_id))
     return {
         "available": options,
         "active": active,
@@ -185,9 +186,7 @@ def get_addon_quote(
         db, subscription, add_on_id, quantity
     )
     charge = round_money(unit_amount * quantity)
-    balance = round_money(
-        get_account_credit_balance(db, str(subscription.subscriber_id))
-    )
+    balance = round_money(get_available_balance(db, str(subscription.subscriber_id)))
     shortfall = charge - balance
     shortfall = shortfall if shortfall > Decimal("0.00") else Decimal("0.00")
     return {
@@ -267,9 +266,7 @@ def purchase_addon(
         db, subscription, add_on_id, quantity
     )
     charge = round_money(unit_amount * quantity)
-    balance = round_money(
-        get_account_credit_balance(db, str(subscription.subscriber_id))
-    )
+    balance = round_money(get_available_balance(db, str(subscription.subscriber_id)))
 
     if charge > Decimal("0.00") and charge > balance:
         shortfall = round_money(charge - balance)
@@ -336,7 +333,7 @@ def purchase_addon(
         raise
     db.refresh(sub_add_on)
     new_balance = round_money(
-        get_account_credit_balance(db, str(subscription.subscriber_id))
+        get_available_balance(db, str(subscription.subscriber_id))
     )
     return {
         "success": True,

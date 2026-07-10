@@ -349,6 +349,7 @@
             <div class="space-y-6">
                 <!-- CRM Sync Status -->
                 {% set crm_status = crm_sync_status|default({}) %}
+                {% set identity = identity_profile|default({}) %}
                 <div class="rounded-2xl border {% if crm_status.status == 'failed' %}border-rose-200/70{% elif crm_status.status == 'linked' %}border-emerald-200/70{% else %}border-amber-200/70{% endif %} bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
                     <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
                         <h3 class="font-semibold text-slate-900 dark:text-white">CRM Sync</h3>
@@ -385,6 +386,30 @@
                                 <a href="/admin/integrations" class="shrink-0 text-xs font-semibold text-rose-700 hover:text-rose-800 dark:text-rose-300 dark:hover:text-rose-200">View</a>
                             </div>
                         </div>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <div class="rounded-2xl border {% if identity.complete %}border-emerald-200/70{% else %}border-amber-200/70{% endif %} bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                    <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
+                        <h3 class="font-semibold text-slate-900 dark:text-white">Identity Profile</h3>
+                        <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold {% if identity.complete %}bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300{% else %}bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300{% endif %}">
+                            {{ identity.completed_count or 0 }}/{{ identity.total_count or 0 }} complete
+                        </span>
+                    </div>
+                    <div class="space-y-3 p-5">
+                        <div class="grid gap-3 sm:grid-cols-2">
+                            <div class="min-w-0 rounded-xl border border-slate-200/80 bg-slate-50/60 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/30">
+                                <p class="text-xs font-medium text-slate-500 dark:text-slate-400">NIN</p>
+                                <p class="mt-1 text-sm font-semibold text-slate-900 dark:text-white">{{ identity.nin_masked or 'Not provided' }}</p>
+                            </div>
+                            <div class="min-w-0 rounded-xl border border-slate-200/80 bg-slate-50/60 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/30">
+                                <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Verification</p>
+                                <p class="mt-1 text-sm font-semibold text-slate-900 dark:text-white">{{ 'Verified' if identity.nin_verified else 'Unverified' }}</p>
+                            </div>
+                        </div>
+                        {% if identity.missing_labels %}
+                        <p class="text-xs text-amber-700 dark:text-amber-300">Missing: {{ identity.missing_labels }}</p>
                         {% endif %}
                     </div>
                 </div>
@@ -438,6 +463,15 @@
                                 {% else %}
                                 <p class="text-sm text-slate-400 dark:text-slate-500">Not provided</p>
                                 {% endif %}
+                            </div>
+                        </div>
+                        <div class="flex items-start gap-3">
+                            <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-violet-50 text-violet-600 dark:bg-violet-900/30 dark:text-violet-400">
+                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6M7 4h10a2 2 0 012 2v12a2 2 0 01-2 2H7a2 2 0 01-2-2V6a2 2 0 012-2z"/></svg>
+                            </div>
+                            <div>
+                                <p class="text-xs font-medium text-slate-500 dark:text-slate-400">NIN</p>
+                                <p class="text-sm font-medium text-slate-900 dark:text-white">{{ identity.nin_masked or 'Not provided' }}</p>
                             </div>
                         </div>
                         <div class="flex items-start gap-3">
