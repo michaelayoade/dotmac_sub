@@ -61,6 +61,9 @@ class InboxConversationTimeline:
     primary_service_team_id: str | None
     channel_type: str
     status: str
+    priority: int
+    is_muted: bool
+    snoozed_until: datetime | None
     subject: str | None
     contact_address: str | None
     external_thread_id: str | None
@@ -83,6 +86,10 @@ class InboxConversationListRow:
     primary_service_team_type: str | None
     channel_type: str
     status: str
+    priority: int
+    is_muted: bool
+    snoozed_until: datetime | None
+    is_snoozed: bool
     subject: str | None
     contact_address: str | None
     first_message_at: datetime | None
@@ -185,6 +192,9 @@ def list_conversations(
     assigned_person_id: str | UUID | None = None,
     needs_response: bool = False,
     contact_resolution_status: str | None = None,
+    priority_at_most: int | None = None,
+    muted: bool | None = None,
+    snoozed: bool | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> InboxConversationListResult:
@@ -209,6 +219,15 @@ def list_conversations(
         query = query.filter(InboxConversation.status == status)
     if channel_type:
         query = query.filter(InboxConversation.channel_type == channel_type)
+    if priority_at_most is not None:
+        query = query.filter(InboxConversation.priority <= int(priority_at_most))
+    if muted is not None:
+        query = query.filter(InboxConversation.is_muted.is_(bool(muted)))
+    if snoozed is not None:
+        if snoozed:
+            query = query.filter(InboxConversation.snoozed_until.isnot(None))
+        else:
+            query = query.filter(InboxConversation.snoozed_until.is_(None))
 
     team_uuid = _optional_uuid(service_team_id)
     if team_uuid is not None:
@@ -231,6 +250,7 @@ def list_conversations(
         )
 
     ordered_query = query.order_by(
+        InboxConversation.priority.asc(),
         InboxConversation.last_message_at.desc().nullslast(),
         InboxConversation.created_at.desc(),
     )
@@ -298,6 +318,10 @@ def list_conversations(
                 primary_service_team_type=team.team_type if team is not None else None,
                 channel_type=conversation.channel_type,
                 status=conversation.status,
+                priority=conversation.priority,
+                is_muted=conversation.is_muted,
+                snoozed_until=conversation.snoozed_until,
+                is_snoozed=conversation.snoozed_until is not None,
                 subject=conversation.subject,
                 contact_address=conversation.contact_address,
                 first_message_at=conversation.first_message_at,
@@ -377,6 +401,9 @@ def get_conversation_timeline(
         else None,
         channel_type=conversation.channel_type,
         status=conversation.status,
+        priority=conversation.priority,
+        is_muted=conversation.is_muted,
+        snoozed_until=conversation.snoozed_until,
         subject=conversation.subject,
         contact_address=conversation.contact_address,
         external_thread_id=conversation.external_thread_id,

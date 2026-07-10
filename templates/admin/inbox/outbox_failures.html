@@ -1,0 +1,62 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, table_head, table_row, status_badge, animation_styles %}
+
+{% block title %}Inbox Outbox Failures - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("rose", "slate") }}
+
+<div class="relative space-y-6">
+    {% call(content) page_header(
+        title="Inbox Outbox Failures",
+        subtitle="Retryable failed outbound customer messages",
+        icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/></svg>',
+        color="rose",
+        color2="slate",
+        breadcrumbs=[
+            {"label": "Team Inbox", "href": "/admin/inbox"},
+            {"label": "Outbox Failures"}
+        ]
+    ) %}
+        <a href="/admin/inbox" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Back</a>
+    {% endcall %}
+
+    {% call card("Failed Messages", color="rose", padding=False) %}
+    {% if messages %}
+    <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+            {{ table_head([
+                {"label": "Message"},
+                {"label": "Channel"},
+                {"label": "Recipient"},
+                {"label": "Error"},
+                {"label": "Retry"},
+            ]) }}
+            <tbody class="divide-y divide-slate-100 bg-white dark:divide-slate-700/50 dark:bg-slate-800">
+                {% for message in messages %}
+                {% call table_row(color="rose") %}
+                <td class="min-w-[18rem] px-6 py-4">
+                    <p class="line-clamp-2 text-sm text-slate-900 dark:text-white">{{ message.body or "-" }}</p>
+                    <p class="mt-1 font-mono text-[11px] text-slate-400">{{ message.id }}</p>
+                </td>
+                <td class="whitespace-nowrap px-6 py-4">{{ status_badge(message.channel_type | replace('_', ' ') | title, "info", size="sm") }}</td>
+                <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-700 dark:text-slate-300">{{ message.to_addresses | join(', ') if message.to_addresses else "-" }}</td>
+                <td class="min-w-[16rem] px-6 py-4 text-sm text-rose-700 dark:text-rose-200">{{ message.metadata_.get('send_error') if message.metadata_ else "-" }}</td>
+                <td class="whitespace-nowrap px-6 py-4">
+                    <form method="post" action="/admin/inbox/messages/{{ message.id }}/retry">
+                        <button type="submit" class="rounded-lg bg-rose-700 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-800">Retry</button>
+                    </form>
+                </td>
+                {% endcall %}
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="px-6 py-8 text-center text-sm text-slate-500 dark:text-slate-400">No failed outbound inbox messages.</div>
+    {% endif %}
+    {% endcall %}
+</div>
+
+{{ animation_styles() }}
+{% endblock %}

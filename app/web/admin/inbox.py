@@ -61,6 +61,9 @@ def team_inbox_queue(
     assigned_person_id: str | None = Query(default=None),
     needs_response: bool = Query(default=False),
     contact_resolution_status: str | None = Query(default=None),
+    priority_at_most: int | None = Query(default=None, ge=0, le=999),
+    muted: bool | None = Query(default=None),
+    snoozed: bool | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     per_page: int = Query(default=25, ge=10, le=100),
     db: Session = Depends(get_db),
@@ -71,6 +74,11 @@ def team_inbox_queue(
         and contact_resolution_status.strip()
         else None
     )
+    clean_priority_at_most = (
+        priority_at_most if isinstance(priority_at_most, int) else None
+    )
+    clean_muted = muted if isinstance(muted, bool) else None
+    clean_snoozed = snoozed if isinstance(snoozed, bool) else None
     offset = (page - 1) * per_page
     result = team_inbox_read.list_conversations(
         db,
@@ -81,6 +89,9 @@ def team_inbox_queue(
         assigned_person_id=assigned_person_id,
         needs_response=needs_response,
         contact_resolution_status=clean_contact_resolution_status,
+        priority_at_most=clean_priority_at_most,
+        muted=clean_muted,
+        snoozed=clean_snoozed,
         limit=per_page,
         offset=offset,
     )
@@ -100,10 +111,16 @@ def team_inbox_queue(
             "assigned_person_id": assigned_person_id or "",
             "needs_response": needs_response,
             "contact_resolution_status": clean_contact_resolution_status or "",
+            "priority_at_most": clean_priority_at_most,
+            "muted": clean_muted,
+            "snoozed": clean_snoozed,
             "service_team_options": team_inbox_metrics.active_service_team_options(db),
             "status_options": [item.value for item in InboxConversationStatus],
             "channel_options": [item.value for item in InboxChannelType],
             "label_options": team_inbox_operations.list_labels(db),
+            "saved_filters": team_inbox_operations.list_saved_filters(
+                db, person_id=_actor_id_from_request(request)
+            ),
         }
     )
     return templates.TemplateResponse("admin/inbox/index.html", context)
@@ -540,6 +557,107 @@ def team_inbox_message_retry(
 
 
 @router.post(
+    "/{conversation_id}/workflow",
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def team_inbox_workflow_action(
+    conversation_id: UUID,
+    request: Request,
+    priority: int | None = Form(default=None),
+    is_muted: bool | None = Form(default=None),
+    snooze_minutes: int | None = Form(default=None),
+    db: Session = Depends(get_db),
+):
+    conversation = db.get(InboxConversation, conversation_id)
+    if conversation is None or not conversation.is_active:
+        return RedirectResponse(
+            url="/admin/inbox?status=error&message=Conversation%20not%20found",
+            status_code=303,
+        )
+    team_inbox_operations.update_conversation_workflow(
+        db,
+        conversation=conversation,
+        priority=priority,
+        is_muted=is_muted,
+        snooze_minutes=snooze_minutes,
+        actor_person_id=_actor_id_from_request(request),
+    )
+    db.commit()
+    return _detail_redirect(
+        conversation_id,
+        status="success",
+        message="Conversation workflow updated.",
+    )
+
+
+@router.post(
+    "/filters/save",
+    dependencies=[Depends(require_permission("support:ticket:read"))],
+)
+def team_inbox_saved_filter_create(
+    request: Request,
+    name: str = Form(...),
+    search: str | None = Form(default=None),
+    status_value: str | None = Form(default=None),
+    channel_type: str | None = Form(default=None),
+    service_team_id: str | None = Form(default=None),
+    needs_response: bool = Form(default=False),
+    contact_resolution_status: str | None = Form(default=None),
+    priority_at_most: int | None = Form(default=None),
+    muted: bool | None = Form(default=None),
+    snoozed: bool | None = Form(default=None),
+    is_shared: bool = Form(default=False),
+    db: Session = Depends(get_db),
+):
+    try:
+        team_inbox_operations.save_filter(
+            db,
+            name=name,
+            filter_payload={
+                "search": search,
+                "status": status_value,
+                "channel_type": channel_type,
+                "service_team_id": service_team_id,
+                "needs_response": needs_response,
+                "contact_resolution_status": contact_resolution_status,
+                "priority_at_most": priority_at_most,
+                "muted": muted,
+                "snoozed": snoozed,
+            },
+            owner_person_id=_actor_id_from_request(request),
+            is_shared=is_shared,
+        )
+    except team_inbox_operations.InboxOperationError as exc:
+        return RedirectResponse(
+            url=f"/admin/inbox?status=error&message={quote_plus(str(exc))}",
+            status_code=303,
+        )
+    db.commit()
+    return RedirectResponse(
+        url="/admin/inbox?status=success&message=Saved%20filter%20created",
+        status_code=303,
+    )
+
+
+@router.get(
+    "/reports/outbox-failures",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("support:ticket:read"))],
+)
+def team_inbox_outbox_failures(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    context = _ctx(request, db)
+    context.update(
+        {
+            "messages": team_inbox_operations.list_failed_outbound_messages(db),
+        }
+    )
+    return templates.TemplateResponse("admin/inbox/outbox_failures.html", context)
+
+
+@router.post(
     "/bulk",
     dependencies=[Depends(require_permission("support:ticket:update"))],
 )
@@ -549,6 +667,9 @@ def team_inbox_bulk_action(
     action: str = Form(...),
     status_value: str | None = Form(default=None),
     label_id: str | None = Form(default=None),
+    service_team_id: str | None = Form(default=None),
+    assigned_person_id: str | None = Form(default=None),
+    auto_assign: bool = Form(default=True),
     db: Session = Depends(get_db),
 ):
     if not conversation_ids:
@@ -577,6 +698,19 @@ def team_inbox_bulk_action(
             updated = result.get("updated")
             updated_count = len(updated) if isinstance(updated, list) else 0
             message = f"Applied label to {updated_count} conversations."
+        elif action == "escalate":
+            result = team_inbox_operations.bulk_escalate(
+                db,
+                conversation_ids=conversation_ids,
+                service_team_id=service_team_id or "",
+                assigned_person_id=assigned_person_id or None,
+                auto_assign=auto_assign,
+                actor_person_id=_actor_id_from_request(request),
+                reason="Bulk inbox escalation",
+            )
+            updated = result.get("updated")
+            updated_count = len(updated) if isinstance(updated, list) else 0
+            message = f"Escalated {updated_count} conversations."
         else:
             return RedirectResponse(
                 url="/admin/inbox?status=error&message=Unsupported%20bulk%20action",

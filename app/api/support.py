@@ -259,6 +259,9 @@ def list_inbox_conversations(
     assigned_person_id: str | None = Query(default=None),
     needs_response: bool = Query(default=False),
     contact_resolution_status: str | None = Query(default=None),
+    priority_at_most: int | None = Query(default=None, ge=0, le=999),
+    muted: bool | None = Query(default=None),
+    snoozed: bool | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -269,6 +272,11 @@ def list_inbox_conversations(
         and contact_resolution_status.strip()
         else None
     )
+    clean_priority_at_most = (
+        priority_at_most if isinstance(priority_at_most, int) else None
+    )
+    clean_muted = muted if isinstance(muted, bool) else None
+    clean_snoozed = snoozed if isinstance(snoozed, bool) else None
     result = team_inbox_read.list_conversations(
         db,
         search=search,
@@ -278,6 +286,9 @@ def list_inbox_conversations(
         assigned_person_id=assigned_person_id,
         needs_response=needs_response,
         contact_resolution_status=clean_contact_resolution_status,
+        priority_at_most=clean_priority_at_most,
+        muted=clean_muted,
+        snoozed=clean_snoozed,
         limit=limit,
         offset=offset,
     )

@@ -133,6 +133,9 @@ class InboxConversation(Base):
     status: Mapped[str] = mapped_column(
         String(40), default=InboxConversationStatus.open.value, nullable=False
     )
+    priority: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    is_muted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    snoozed_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     subject: Mapped[str | None] = mapped_column(String(200))
     contact_address: Mapped[str | None] = mapped_column(String(255))
     external_thread_id: Mapped[str | None] = mapped_column(String(255))
@@ -167,6 +170,35 @@ class InboxConversation(Base):
         "InboxConversationAssignment",
         back_populates="conversation",
         cascade="all, delete-orphan",
+    )
+
+
+class InboxSavedFilter(Base):
+    __tablename__ = "inbox_saved_filters"
+    __table_args__ = (
+        Index("ix_inbox_saved_filters_owner_active", "owner_person_id", "is_active"),
+        Index("ix_inbox_saved_filters_shared_active", "is_shared", "is_active"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    owner_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    filter_payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    is_shared: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    metadata_: Mapped[dict | None] = mapped_column(
+        "metadata", MutableDict.as_mutable(JSON())
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
 

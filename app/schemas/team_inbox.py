@@ -102,6 +102,9 @@ class InboxConversationTimelineRead(BaseModel):
     primary_service_team_id: UUID | None = None
     channel_type: str
     status: str
+    priority: int = 100
+    is_muted: bool = False
+    snoozed_until: datetime | None = None
     subject: str | None = None
     contact_address: str | None = None
     external_thread_id: str | None = None
@@ -123,6 +126,10 @@ class InboxConversationListItemRead(BaseModel):
     primary_service_team_type: str | None = None
     channel_type: str
     status: str
+    priority: int = 100
+    is_muted: bool = False
+    snoozed_until: datetime | None = None
+    is_snoozed: bool = False
     subject: str | None = None
     contact_address: str | None = None
     first_message_at: datetime | None = None

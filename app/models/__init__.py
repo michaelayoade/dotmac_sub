@@ -615,6 +615,7 @@ from app.models.team_inbox import (  # noqa: F401
     InboxMessageDirection,
     InboxMessageTemplate,
     InboxReplyMacro,
+    InboxSavedFilter,
     InboxTeamRole,
     InboxTeamSource,
     TeamInboxEmailRoute,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -13,9 +14,12 @@ from app.models.team_inbox import (
     InboxConversation,
     InboxConversationLabel,
     InboxLabel,
+    InboxMessage,
     InboxMessageTemplate,
     InboxReplyMacro,
+    InboxSavedFilter,
 )
+from app.services import team_inbox_assignment
 from app.services.common import coerce_uuid
 
 _ALLOWED_LABEL_COLORS = {
@@ -64,6 +68,15 @@ class MessageTemplateOption:
     subject: str | None
     body_text: str
     body_html: str | None
+
+
+@dataclass(frozen=True)
+class SavedFilterOption:
+    id: str
+    name: str
+    filter_payload: dict[str, Any]
+    is_shared: bool
+    owner_person_id: str | None
 
 
 def _slugify(value: str) -> str:
@@ -608,3 +621,200 @@ def bulk_apply_label(
         updated.append(str(conversation.id))
     db.flush()
     return {"updated": updated, "skipped": skipped, "label_id": str(label.id)}
+
+
+def update_conversation_workflow(
+    db: Session,
+    *,
+    conversation: InboxConversation,
+    priority: int | None = None,
+    is_muted: bool | None = None,
+    snooze_minutes: int | None = None,
+    actor_person_id: str | UUID | None = None,
+) -> InboxConversation:
+    metadata = dict(conversation.metadata_ or {})
+    history = metadata.get("workflow_history")
+    if not isinstance(history, list):
+        history = []
+    event: dict[str, Any] = {
+        "at": _now_iso(),
+        "actor_id": str(coerce_uuid(actor_person_id))
+        if coerce_uuid(actor_person_id)
+        else None,
+        "source": "team_inbox_workflow",
+    }
+    if priority is not None:
+        clean_priority = max(0, min(int(priority), 999))
+        event["priority"] = {"from": conversation.priority, "to": clean_priority}
+        conversation.priority = clean_priority
+    if is_muted is not None:
+        event["is_muted"] = {"from": conversation.is_muted, "to": bool(is_muted)}
+        conversation.is_muted = bool(is_muted)
+    if snooze_minutes is not None:
+        if int(snooze_minutes) <= 0:
+            target = None
+        else:
+            target = datetime.now(UTC) + timedelta(minutes=int(snooze_minutes))
+        event["snoozed_until"] = {
+            "from": conversation.snoozed_until.isoformat()
+            if conversation.snoozed_until
+            else None,
+            "to": target.isoformat() if target else None,
+        }
+        conversation.snoozed_until = target
+        if target is not None:
+            conversation.status = "snoozed"
+    history.append(event)
+    metadata["workflow_history"] = history[-50:]
+    conversation.metadata_ = metadata
+    db.flush()
+    return conversation
+
+
+def save_filter(
+    db: Session,
+    *,
+    name: str,
+    filter_payload: dict[str, Any],
+    owner_person_id: str | UUID | None = None,
+    is_shared: bool = False,
+) -> InboxSavedFilter:
+    clean_name = str(name or "").strip()
+    if not clean_name:
+        raise InboxOperationError("Filter name is required.")
+    saved_filter = InboxSavedFilter(
+        name=clean_name[:120],
+        filter_payload={
+            key: value
+            for key, value in filter_payload.items()
+            if value not in (None, "")
+        },
+        owner_person_id=coerce_uuid(owner_person_id),
+        is_shared=bool(is_shared),
+        is_active=True,
+    )
+    db.add(saved_filter)
+    db.flush()
+    return saved_filter
+
+
+def list_saved_filters(
+    db: Session,
+    *,
+    person_id: str | UUID | None = None,
+) -> list[SavedFilterOption]:
+    person_uuid = coerce_uuid(person_id)
+    query = db.query(InboxSavedFilter).filter(InboxSavedFilter.is_active.is_(True))
+    if person_uuid is not None:
+        query = query.filter(
+            or_(
+                InboxSavedFilter.is_shared.is_(True),
+                InboxSavedFilter.owner_person_id == person_uuid,
+            )
+        )
+    else:
+        query = query.filter(InboxSavedFilter.is_shared.is_(True))
+    return [
+        SavedFilterOption(
+            id=str(row.id),
+            name=row.name,
+            filter_payload=dict(row.filter_payload or {}),
+            is_shared=row.is_shared,
+            owner_person_id=str(row.owner_person_id) if row.owner_person_id else None,
+        )
+        for row in query.order_by(func.lower(InboxSavedFilter.name).asc())
+        .limit(100)
+        .all()
+    ]
+
+
+def delete_saved_filter(
+    db: Session,
+    *,
+    filter_id: str | UUID,
+) -> None:
+    saved_filter = db.get(InboxSavedFilter, coerce_uuid(filter_id))
+    if saved_filter is None:
+        raise InboxOperationError("Saved filter not found.")
+    saved_filter.is_active = False
+    db.flush()
+
+
+def bulk_escalate(
+    db: Session,
+    *,
+    conversation_ids: Sequence[str | UUID],
+    service_team_id: str | UUID,
+    assigned_person_id: str | UUID | None = None,
+    auto_assign: bool = True,
+    actor_person_id: str | UUID | None = None,
+    reason: str | None = None,
+) -> dict[str, object]:
+    updated: list[str] = []
+    skipped: list[dict[str, str]] = []
+    for raw_id in conversation_ids:
+        conversation = db.get(InboxConversation, coerce_uuid(raw_id))
+        if conversation is None or not conversation.is_active:
+            skipped.append({"conversation_id": str(raw_id), "reason": "not_found"})
+            continue
+        if conversation.status == "resolved":
+            skipped.append(
+                {"conversation_id": str(conversation.id), "reason": "resolved"}
+            )
+            continue
+        if assigned_person_id:
+            result = team_inbox_assignment.assign_conversation_to_agent(
+                db,
+                conversation=conversation,
+                service_team_id=service_team_id,
+                person_id=assigned_person_id,
+                assigned_by_person_id=actor_person_id,
+                reason=reason,
+            )
+        elif auto_assign:
+            result = team_inbox_assignment.assign_conversation_to_available_agent(
+                db,
+                conversation=conversation,
+                service_team_id=service_team_id,
+                assigned_by_person_id=actor_person_id,
+                reason=reason,
+            )
+        else:
+            result = team_inbox_assignment.queue_conversation_for_team(
+                db,
+                conversation=conversation,
+                service_team_id=service_team_id,
+                assigned_by_person_id=actor_person_id,
+                reason=reason,
+            )
+        if result.kind in {"assigned", "queued"}:
+            updated.append(str(conversation.id))
+        else:
+            skipped.append(
+                {
+                    "conversation_id": str(conversation.id),
+                    "reason": result.reason or result.kind,
+                }
+            )
+    db.flush()
+    return {"updated": updated, "skipped": skipped}
+
+
+def list_failed_outbound_messages(
+    db: Session,
+    *,
+    limit: int = 100,
+) -> list[InboxMessage]:
+    rows = (
+        db.query(InboxMessage)
+        .filter(InboxMessage.direction == "outbound")
+        .order_by(InboxMessage.created_at.desc())
+        .limit(limit * 5)
+        .all()
+    )
+    return [
+        row
+        for row in rows
+        if isinstance(row.metadata_, dict)
+        and row.metadata_.get("delivery_status") == "failed"
+    ][:limit]
