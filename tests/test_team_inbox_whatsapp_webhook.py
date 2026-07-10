@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from fastapi import HTTPException
@@ -14,6 +15,13 @@ from app.models.subscriber import Subscriber, SubscriberStatus
 from app.models.team_inbox import InboxConversation, InboxMessage, InboxMessageDirection
 
 META_TEST_SECRET = "meta-secret"  # pragma: allowlist secret
+
+
+def _run_async(coro):
+    # Run the webhook coroutine on its own loop to avoid suite-level loop reuse.
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(asyncio.run, coro)
+        return future.result()
 
 
 def _request(body: bytes, headers: dict[str, str] | None = None) -> Request:
@@ -83,7 +91,7 @@ def test_meta_whatsapp_webhook_rejects_bad_signature(db_session, monkeypatch):
     request = _request(body, {"X-Hub-Signature-256": "sha256=bad"})
 
     with pytest.raises(HTTPException) as exc:
-        asyncio.run(inbox_webhooks.receive_meta_whatsapp_webhook(request, db_session))
+        _run_async(inbox_webhooks.receive_meta_whatsapp_webhook(request, db_session))
 
     assert exc.value.status_code == 401
 
@@ -129,7 +137,7 @@ def test_meta_whatsapp_webhook_creates_native_inbox_message(db_session, monkeypa
     body = json.dumps(payload).encode("utf-8")
     request = _request(body, {"X-Hub-Signature-256": _sign(body)})
 
-    response = asyncio.run(
+    response = _run_async(
         inbox_webhooks.receive_meta_whatsapp_webhook(request, db_session)
     )
 
@@ -144,7 +152,9 @@ def test_meta_whatsapp_webhook_creates_native_inbox_message(db_session, monkeypa
     assert message.body == "My internet is down"
 
 
-def test_meta_whatsapp_webhook_updates_outbound_delivery_status(db_session, monkeypatch):
+def test_meta_whatsapp_webhook_updates_outbound_delivery_status(
+    db_session, monkeypatch
+):
     monkeypatch.setattr(inbox_webhooks, "_app_secret", lambda db: META_TEST_SECRET)
     conversation = InboxConversation(
         channel_type="whatsapp",
@@ -191,7 +201,7 @@ def test_meta_whatsapp_webhook_updates_outbound_delivery_status(db_session, monk
     body = json.dumps(payload).encode("utf-8")
     request = _request(body, {"X-Hub-Signature-256": _sign(body)})
 
-    response = asyncio.run(
+    response = _run_async(
         inbox_webhooks.receive_meta_whatsapp_webhook(request, db_session)
     )
 
@@ -234,7 +244,7 @@ def test_meta_whatsapp_webhook_acknowledges_unknown_status(db_session, monkeypat
     body = json.dumps(payload).encode("utf-8")
     request = _request(body, {"X-Hub-Signature-256": _sign(body)})
 
-    response = asyncio.run(
+    response = _run_async(
         inbox_webhooks.receive_meta_whatsapp_webhook(request, db_session)
     )
 

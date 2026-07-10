@@ -10,7 +10,6 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.domain_settings import SettingDomain
-from app.models.team_inbox import InboxChannelType
 from app.services import team_inbox_channel_receive, team_inbox_outbound
 from app.services.credential_crypto import decrypt_credential
 from app.services.settings_spec import resolve_value
@@ -200,7 +199,9 @@ async def receive_meta_whatsapp_webhook(
             }
         )
     for item in _iter_meta_whatsapp_statuses(payload):
-        status_results.append(team_inbox_outbound.apply_whatsapp_delivery_status(db, item))
+        status_results.append(
+            team_inbox_outbound.apply_whatsapp_delivery_status(db, item)
+        )
     if results or status_results:
         db.commit()
     return {
