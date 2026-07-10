@@ -53,6 +53,12 @@ _AUDIT_SETTINGS_CACHE: dict | None = None
 _AUDIT_SETTINGS_CACHE_AT: float | None = None
 _AUDIT_SETTINGS_CACHE_TTL_SECONDS = 30.0
 _AUDIT_SETTINGS_LOCK = Lock()
+_AUDIT_ALWAYS_SKIP_EXACT_PATHS = {"/health", "/metrics"}
+_AUDIT_ALWAYS_SKIP_PATH_PREFIXES = (
+    "/static/",
+    "/api/v1/webhooks/",
+    "/api/v1/alerts/",
+)
 _DEFERRED_ROUTER_TASK = None
 _DEFERRED_STARTUP_TASK = None
 
@@ -579,16 +585,56 @@ def _get_cached_audit_settings() -> dict | None:
     return None
 
 
+def _is_audit_always_skipped(path: str) -> bool:
+    return path in _AUDIT_ALWAYS_SKIP_EXACT_PATHS or any(
+        path.startswith(prefix) for prefix in _AUDIT_ALWAYS_SKIP_PATH_PREFIXES
+    )
+
+
+def _try_log_audit_request(request: Request, response: Response) -> None:
+    db = SessionLocal()
+    try:
+        audit_service.audit_events.log_request(db, request, response)
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        logger.warning(
+            "audit_log_request_failed",
+            exc_info=True,
+            extra={"event": "audit_log_request_failed"},
+        )
+    finally:
+        db.close()
+
+
 @app.middleware("http")
 async def audit_middleware(request: Request, call_next):
     response: Response
     path = request.url.path
+    if _is_audit_always_skipped(path):
+        return await call_next(request)
+
     # Check cache first to avoid unnecessary session creation
     audit_settings = _get_cached_audit_settings()
     if audit_settings is None:
         db = SessionLocal()
         try:
             audit_settings = _load_audit_settings(db)
+        except SQLAlchemyError:
+            logger.warning(
+                "audit_settings_refresh_failed",
+                exc_info=True,
+                extra={"event": "audit_settings_refresh_failed"},
+            )
+            audit_settings = {
+                "enabled": False,
+                "methods": set(),
+                "skip_paths": [],
+                "read_trigger_header": "x-audit-read",
+                "read_trigger_query": "audit",
+            }
         finally:
             db.close()
     if not audit_settings["enabled"]:
@@ -604,20 +650,10 @@ async def audit_middleware(request: Request, call_next):
         response = await call_next(request)
     except Exception:
         if should_log:
-            db = SessionLocal()
-            try:
-                audit_service.audit_events.log_request(
-                    db, request, Response(status_code=500)
-                )
-            finally:
-                db.close()
+            _try_log_audit_request(request, Response(status_code=500))
         raise
     if should_log:
-        db = SessionLocal()
-        try:
-            audit_service.audit_events.log_request(db, request, response)
-        finally:
-            db.close()
+        _try_log_audit_request(request, response)
     return response
 
 
@@ -683,6 +719,10 @@ def _get_cached_domain_routing(*, allow_stale: bool = False) -> dict[str, str] |
 @app.middleware("http")
 async def domain_routing_middleware(request: Request, call_next):
     """Apply lightweight host-aware routing for the selfcare domain."""
+    path = request.url.path
+    if path not in {"", "/"}:
+        return await call_next(request)
+
     host = (request.headers.get("host") or "").split(":")[0].lower()
     if not host:
         return await call_next(request)
@@ -710,13 +750,8 @@ async def domain_routing_middleware(request: Request, call_next):
     if not selfcare or host != selfcare:
         return await call_next(request)
 
-    path = request.url.path
-
     # Keep the selfcare host convenient by redirecting only the bare root
     # to the configured portal landing page. All other paths stay reachable.
-    if path not in {"", "/"}:
-        return await call_next(request)
-
     redirect_target = str(routing.get("redirect", "/portal/"))
     from starlette.responses import RedirectResponse as StarletteRedirect
 
