@@ -7,6 +7,7 @@ from sqlalchemy.engine import Connection
 
 import scripts.migration.check_crm_ticket_drift as drift_mod
 from scripts.migration.check_crm_ticket_drift import (
+    CRM_TITLE_MAX_LENGTH,
     CRM_TO_SUB_STATUS,
     DEFAULT_EXCLUDE_TITLE_REGEX,
     TERMINAL_STATUSES,
@@ -16,6 +17,7 @@ from scripts.migration.check_crm_ticket_drift import (
     expected_sub_status,
     in_live_window,
     status_diff_terminal_precedence,
+    title_matches_crm_truncation,
 )
 
 NOW = datetime(2026, 7, 10, 12, 0, 0, tzinfo=UTC)
@@ -177,6 +179,7 @@ def test_compare_identical_ticket_has_no_diffs() -> None:
     comparison = compare_ticket_fields(_crm_ticket(), _sub_row(), subscriber_map={})
 
     assert comparison.diffs == ()
+    assert comparison.enrichments == ()
     assert comparison.unresolved_subscriber_reason is None
 
 
@@ -188,6 +191,47 @@ def test_compare_title_default_matches_importer_fallback() -> None:
     )
 
     assert comparison.diffs == ()
+
+
+def test_title_truncation_tolerance_pure_rules() -> None:
+    long_title = "x" * (CRM_TITLE_MAX_LENGTH + 55)
+
+    # Exactly sub's title cut at CRM's String(200) cap.
+    assert title_matches_crm_truncation(long_title[:CRM_TITLE_MAX_LENGTH], long_title)
+    # Equal after strip.
+    assert title_matches_crm_truncation("Slow browsing", "Slow browsing  ")
+    # Genuine differences stay drift.
+    assert not title_matches_crm_truncation("Different title", long_title)
+    assert not title_matches_crm_truncation(
+        long_title[: CRM_TITLE_MAX_LENGTH - 1], long_title
+    )
+    # Sub titles at or under the cap get no truncation allowance.
+    assert not title_matches_crm_truncation("Slow", "Slow browsing")
+
+
+def test_compare_title_crm_truncation_is_enrichment_not_drift() -> None:
+    sub_title = "Customer reports intermittent drops " * 8  # > 200 chars
+    crm_title = sub_title[:CRM_TITLE_MAX_LENGTH]
+
+    comparison = compare_ticket_fields(
+        _crm_ticket(title=crm_title),
+        _sub_row(title=sub_title),
+        subscriber_map={},
+    )
+
+    assert comparison.diffs == ()
+    assert comparison.enrichments == (FieldDiff("title", crm_title, sub_title),)
+
+
+def test_compare_genuine_title_difference_stays_gating() -> None:
+    comparison = compare_ticket_fields(
+        _crm_ticket(title="Slow browsing"),
+        _sub_row(title="No connectivity"),
+        subscriber_map={},
+    )
+
+    assert comparison.diffs == (FieldDiff("title", "Slow browsing", "No connectivity"),)
+    assert comparison.enrichments == ()
 
 
 def test_compare_priority_default_matches_importer_fallback() -> None:
@@ -282,14 +326,28 @@ def test_compare_unmapped_subscriber_counts_unresolved_not_drift() -> None:
     assert comparison.unresolved_subscriber_reason == "unmapped_closed_history"
 
 
-def test_compare_sub_only_subscriber_is_drift() -> None:
+def test_compare_sub_only_subscriber_is_enrichment_not_drift() -> None:
+    # CRM empty + sub linked = desired sub enrichment (94 prod rows), never
+    # gating; it surfaces in the informational sub_enrichment class.
     comparison = compare_ticket_fields(
         _crm_ticket(subscriber_id=None),
         _sub_row(subscriber_id="local-sub-1"),
         subscriber_map={},
     )
 
-    assert comparison.diffs == (FieldDiff("subscriber_id", None, "local-sub-1"),)
+    assert comparison.diffs == ()
+    assert comparison.enrichments == (FieldDiff("subscriber_id", None, "local-sub-1"),)
+
+
+def test_compare_crm_subscriber_set_sub_empty_stays_gating() -> None:
+    comparison = compare_ticket_fields(
+        _crm_ticket(subscriber_id="crm-sub-1"),
+        _sub_row(subscriber_id=None),
+        subscriber_map={"crm-sub-1": "local-sub-1"},
+    )
+
+    assert comparison.diffs == (FieldDiff("subscriber_id", "local-sub-1", None),)
+    assert comparison.enrichments == ()
 
 
 def test_compare_timestamps_normalize_zulu_and_offset() -> None:
@@ -355,6 +413,7 @@ def test_run_drift_check_classifies_window_probe_orphan_and_gates(
             id="t-probe",
             title="Codex production Selfcare webhook probe b73fd71d",
         ),
+        _crm_ticket(id="t-enriched", subscriber_id=None),
     ]
     sub_rows = [
         _sub_row(support_ticket_id="l-ok", crm_ticket_id="t-ok"),
@@ -365,6 +424,11 @@ def test_run_drift_check_classifies_window_probe_orphan_and_gates(
             updated_at=NOW - timedelta(minutes=5),
         ),
         _sub_row(support_ticket_id="l-orphan", crm_ticket_id="t-gone"),
+        _sub_row(
+            support_ticket_id="l-enriched",
+            crm_ticket_id="t-enriched",
+            subscriber_id="local-sub-1",
+        ),
     ]
 
     monkeypatch.setattr(
@@ -420,5 +484,16 @@ def test_run_drift_check_classifies_window_probe_orphan_and_gates(
     assert summary["classes"]["children_count_mismatch"] == {"rows": 1, "drift": 1}
     assert classes["children_count_mismatch"][0]["child"] == "comments"
 
+    # t-enriched: sub linked a subscriber CRM lacks — informational only.
+    assert summary["classes"]["sub_enrichment"] == {"rows": 1, "drift": 0}
+    assert classes["sub_enrichment"][0] == {
+        "crm_ticket_id": "t-enriched",
+        "support_ticket_id": "l-enriched",
+        "number": "TCK-100",
+        "field": "subscriber_id",
+        "crm_value": None,
+        "sub_value": "local-sub-1",
+    }
+
     assert summary["drift_total"] == 3
-    assert summary["totals"] == {"crm_tickets": 4, "sub_marker_rows": 3, "joined": 2}
+    assert summary["totals"] == {"crm_tickets": 5, "sub_marker_rows": 4, "joined": 3}
