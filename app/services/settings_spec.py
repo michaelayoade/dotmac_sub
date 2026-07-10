@@ -3123,6 +3123,15 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.network_monitoring,
+        key="customer_impact_metrics_interval_seconds",
+        label="Customer Impact Metrics Interval (seconds)",
+        env_var="CUSTOMER_IMPACT_METRICS_INTERVAL_SECONDS",
+        value_type=SettingValueType.integer,
+        default=300,
+        min_value=120,
+    ),
+    SettingSpec(
+        domain=SettingDomain.network_monitoring,
         key="outage_scan_interval_seconds",
         label="Outage Auto-detect Scan Interval (seconds)",
         env_var="OUTAGE_SCAN_INTERVAL_SECONDS",
