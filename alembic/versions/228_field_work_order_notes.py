@@ -1,7 +1,7 @@
 """Add native field work-order notes.
 
-Revision ID: 227_field_work_order_notes
-Revises: 226_field_location_tracking
+Revision ID: 228_field_work_order_notes
+Revises: 227_field_location_tracking
 Create Date: 2026-07-09
 """
 
@@ -13,8 +13,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "227_field_work_order_notes"
-down_revision = "226_field_location_tracking"
+revision = "228_field_work_order_notes"
+down_revision = "227_field_location_tracking"
 branch_labels = None
 depends_on = None
 

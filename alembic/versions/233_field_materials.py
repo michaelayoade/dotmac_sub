@@ -1,7 +1,7 @@
 """Add native field material allocation tables.
 
-Revision ID: 232_field_materials
-Revises: 231_field_ont_assignment_work_order
+Revision ID: 233_field_materials
+Revises: 232_field_ont_assignment_work_order
 Create Date: 2026-07-09
 """
 
@@ -13,8 +13,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "232_field_materials"
-down_revision = "231_field_ont_assignment_work_order"
+revision = "233_field_materials"
+down_revision = "232_field_ont_assignment_work_order"
 branch_labels = None
 depends_on = None
 
