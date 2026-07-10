@@ -157,6 +157,92 @@ def test_audit_middleware_fails_open_when_settings_refresh_fails(monkeypatch):
     assert response.body == b"ok"
 
 
+def test_audit_middleware_uses_stale_settings_when_refresh_fails(monkeypatch):
+    monkeypatch.setattr(
+        main,
+        "_AUDIT_SETTINGS_CACHE",
+        {
+            "enabled": True,
+            "methods": {"POST"},
+            "skip_paths": [],
+            "read_trigger_header": "x-audit-read",
+            "read_trigger_query": "audit",
+        },
+    )
+    monkeypatch.setattr(
+        main,
+        "_AUDIT_SETTINGS_CACHE_AT",
+        monotonic() - main._AUDIT_SETTINGS_CACHE_TTL_SECONDS - 1,
+    )
+    monkeypatch.setattr(main, "SessionLocal", lambda: _DummySession())
+
+    def _raise_operational_error(_db):
+        raise OperationalError("select 1", {}, RuntimeError("too many clients"))
+
+    audit_calls = []
+
+    monkeypatch.setattr(main, "_load_audit_settings", _raise_operational_error)
+    monkeypatch.setattr(
+        main,
+        "_try_log_audit_request",
+        lambda request, response: audit_calls.append(
+            (request.url.path, response.status_code)
+        ),
+    )
+
+    response = _run_async(
+        main.audit_middleware(
+            _request(path="/portal/payments", method="POST"),
+            _downstream_response,
+        )
+    )
+
+    assert response.status_code == 200
+    assert response.body == b"ok"
+    assert audit_calls == [("/portal/payments", 200)]
+
+
+class _PostgresBind:
+    class dialect:
+        name = "postgresql"
+
+
+class _AuditSettingsQuery:
+    def filter(self, *_args, **_kwargs):
+        return self
+
+    def all(self):
+        return []
+
+
+class _AuditSettingsSession:
+    def __init__(self):
+        self.statements = []
+
+    def get_bind(self):
+        return _PostgresBind()
+
+    def execute(self, statement):
+        self.statements.append(str(statement))
+
+    def query(self, *_args, **_kwargs):
+        return _AuditSettingsQuery()
+
+
+def test_load_audit_settings_sets_short_postgres_statement_timeout(monkeypatch):
+    monkeypatch.setattr(main, "_AUDIT_SETTINGS_CACHE", None)
+    monkeypatch.setattr(main, "_AUDIT_SETTINGS_CACHE_AT", None)
+    db = _AuditSettingsSession()
+
+    settings = main._load_audit_settings(db)
+
+    assert settings["enabled"] is True
+    assert any(
+        f"statement_timeout = '{main._AUDIT_SETTINGS_REFRESH_TIMEOUT_MS}ms'" in item
+        for item in db.statements
+    )
+
+
 def test_grafana_webhook_sink_accepts_alert_posts():
     async def _receive():
         return {"type": "http.request", "body": b"{}", "more_body": False}
