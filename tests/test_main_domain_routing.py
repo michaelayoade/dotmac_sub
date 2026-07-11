@@ -157,7 +157,7 @@ def test_audit_middleware_fails_open_when_settings_refresh_fails(monkeypatch):
     assert response.body == b"ok"
 
 
-def test_audit_middleware_uses_stale_settings_when_refresh_fails(monkeypatch):
+def test_audit_middleware_uses_stale_settings_without_db_refresh(monkeypatch):
     monkeypatch.setattr(
         main,
         "_AUDIT_SETTINGS_CACHE",
@@ -174,14 +174,16 @@ def test_audit_middleware_uses_stale_settings_when_refresh_fails(monkeypatch):
         "_AUDIT_SETTINGS_CACHE_AT",
         monotonic() - main._AUDIT_SETTINGS_CACHE_TTL_SECONDS - 1,
     )
-    monkeypatch.setattr(main, "SessionLocal", lambda: _DummySession())
-
-    def _raise_operational_error(_db):
-        raise OperationalError("select 1", {}, RuntimeError("too many clients"))
+    monkeypatch.setattr(
+        main,
+        "SessionLocal",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("stale audit settings should not refresh through DB")
+        ),
+    )
 
     audit_calls = []
 
-    monkeypatch.setattr(main, "_load_audit_settings", _raise_operational_error)
     monkeypatch.setattr(
         main,
         "_try_log_audit_request",
