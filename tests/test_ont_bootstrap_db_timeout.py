@@ -1,4 +1,5 @@
 from app.services.network.ont_provision_steps import _bootstrap_poll_error_result
+from app.tasks.tr069 import _bootstrap_wait_idempotency_key
 
 
 def test_idle_transaction_timeout_is_retryable() -> None:
@@ -23,3 +24,12 @@ def test_other_bootstrap_poll_errors_remain_terminal() -> None:
     assert result.waiting is False
     assert result.critical is True
     assert result.data == {"failure_class": "acs_bootstrap_poll_error"}
+
+
+def test_bootstrap_retry_attempts_have_distinct_idempotency_keys() -> None:
+    first = _bootstrap_wait_idempotency_key("ont-1", "op-1", 0)
+    retry = _bootstrap_wait_idempotency_key("ont-1", "op-1", 1)
+
+    assert first == "ont-1:op-1:0"
+    assert retry == "ont-1:op-1:1"
+    assert first != retry
