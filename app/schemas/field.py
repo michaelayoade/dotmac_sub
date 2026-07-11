@@ -279,6 +279,45 @@ class FieldEquipmentRead(BaseModel):
     notes: str | None = None
 
 
+class FieldEquipmentCustodyRead(BaseModel):
+    id: UUID
+    asset_source: str
+    asset_id: UUID
+    technician_id: UUID
+    system_user_id: UUID | None = None
+    status: str
+    issued_at: datetime
+    returned_at: datetime | None = None
+    condition_on_issue: str | None = None
+    condition_on_return: str | None = None
+    notes: str | None = None
+    asset_label: str | None = None
+    asset_identifier: str | None = None
+    assigned_to: str | None = None
+
+
+class FieldEquipmentIssueRequest(BaseModel):
+    asset_source: Literal[
+        "field_inventory",
+        "field_asset",
+        "ont",
+        "cpe",
+        "olt",
+        "network_device",
+        "router",
+    ]
+    asset_id: UUID
+    technician_id: UUID
+    condition_on_issue: str | None = Field(default=None, max_length=80)
+    notes: str | None = Field(default=None, max_length=2000)
+
+
+class FieldEquipmentReturnRequest(BaseModel):
+    condition_on_return: str | None = Field(default=None, max_length=80)
+    status: Literal["returned", "lost", "damaged"] = "returned"
+    notes: str | None = Field(default=None, max_length=2000)
+
+
 class FieldMaterialRead(BaseModel):
     id: UUID
     crm_work_order_id: str
@@ -345,6 +384,10 @@ class FieldMaterialRequestRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     items: list[FieldMaterialRequestItemRead] = Field(default_factory=list)
+
+
+class FieldManagerMaterialRejectRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=500)
 
 
 class FieldInventoryItemRead(BaseModel):

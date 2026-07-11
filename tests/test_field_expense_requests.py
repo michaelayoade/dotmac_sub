@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from app.api.field import router
 from app.db import get_db
 from app.models.dispatch import TechnicianProfile
+from app.models.field_erp import FieldErpSyncEvent
 from app.models.field_expense import FieldExpenseRequest
 from app.models.stored_file import StoredFile
 from app.models.subscriber import Subscriber, UserType
@@ -260,6 +261,36 @@ def test_expense_request_scope_and_receipt_attachment_validation(
         items=_expense_items(receipt_attachment_id=receipt["id"]),
     )
     assert created["items"][0]["receipt_attachment_id"] == receipt["id"]
+
+
+def test_approve_expense_enqueues_erp_claim(db_session):
+    user = _user(db_session)
+    _profile(db_session, user)
+    subscriber = _subscriber(db_session)
+    _work_order(db_session, subscriber, crm_work_order_id="wo-expense-erp")
+    db_session.commit()
+    created = field_expense_requests.create(
+        db_session,
+        _auth(user),
+        crm_work_order_id="wo-expense-erp",
+        purpose="Transport",
+        expense_date=date.today(),
+        currency="NGN",
+        notes="Pickup materials",
+        client_ref=None,
+        items=_expense_items(amount="3200.00"),
+    )
+    field_expense_requests.submit(db_session, _auth(user), str(created["id"]))
+
+    approved = field_expense_requests.approve(db_session, str(created["id"]))
+
+    assert approved["status"] == "approved"
+    event = db_session.query(FieldErpSyncEvent).one()
+    assert event.entity_type == "field_expense_request"
+    assert event.action == "approve"
+    assert event.status == "pending"
+    assert event.payload["purpose"] == "Transport"
+    assert event.payload["items"][0]["claimed_amount"] == "3200.00"
 
 
 def test_expense_request_api(db_session):

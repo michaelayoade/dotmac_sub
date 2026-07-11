@@ -10,7 +10,12 @@ from fastapi.testclient import TestClient
 from app.api.field import router
 from app.db import get_db
 from app.models.dispatch import TechnicianProfile
-from app.models.field_material import FieldInventoryItem, FieldMaterialRequest
+from app.models.field_erp import FieldErpSyncEvent
+from app.models.field_material import (
+    FieldInventoryItem,
+    FieldMaterialRequest,
+    FieldWorkOrderMaterial,
+)
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.models.work_order_mirror import WorkOrderMirror
@@ -205,6 +210,44 @@ def test_only_requesting_technician_can_submit(db_session):
         field_material_requests.submit(db_session, _auth(other), str(created["id"]))
 
     assert exc.value.status_code == 404
+
+
+def test_manager_material_lifecycle_allocates_and_enqueues_erp(db_session):
+    user = _user(db_session)
+    _profile(db_session, user)
+    subscriber = _subscriber(db_session)
+    _work_order(db_session, subscriber, crm_work_order_id="wo-material-manager")
+    item = _item(db_session, sku="DROP-250", name="Drop cable")
+    db_session.commit()
+    created = field_material_requests.create(
+        db_session,
+        _auth(user),
+        crm_work_order_id="wo-material-manager",
+        priority="medium",
+        notes="Need cable",
+        items=[{"item_id": item.id, "quantity": 10}],
+    )
+    field_material_requests.submit(db_session, _auth(user), str(created["id"]))
+
+    approved = field_material_requests.approve(db_session, str(created["id"]))
+    assert approved["status"] == "approved"
+    issued = field_material_requests.issue(db_session, str(created["id"]))
+    assert issued["status"] == "issued"
+    fulfilled = field_material_requests.fulfill(db_session, str(created["id"]))
+    assert fulfilled["status"] == "fulfilled"
+
+    allocation = db_session.query(FieldWorkOrderMaterial).one()
+    assert allocation.item_id == item.id
+    assert allocation.allocated_quantity == 10
+    events = (
+        db_session.query(FieldErpSyncEvent)
+        .filter(FieldErpSyncEvent.entity_type == "field_material_request")
+        .order_by(FieldErpSyncEvent.action)
+        .all()
+    )
+    assert {event.action for event in events} == {"approve", "fulfill", "issue"}
+    assert all(event.status == "pending" for event in events)
+    assert events[0].payload["items"][0]["item_code"] == "DROP-250"
 
 
 def test_material_request_api(db_session):

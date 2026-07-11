@@ -17,6 +17,7 @@ from app.models.field_expense import (
 )
 from app.models.work_order_mirror import WorkOrderMirror
 from app.services.common import apply_pagination, coerce_uuid
+from app.services.field.erp_outbox import enqueue_expense_request_sync
 from app.services.field.jobs import _profile_from_principal, _scoped_query
 from app.services.field.source import (
     mark_sub_authoritative as _mark_source_authoritative,
@@ -208,6 +209,7 @@ class FieldExpenseRequests:
         request.status = "approved"
         request.approved_at = datetime.now(UTC)
         request.rejection_reason = None
+        enqueue_expense_request_sync(db, request, action="approve")
         _mark_sub_authoritative(request.work_order_mirror)
         db.commit()
         db.refresh(request)

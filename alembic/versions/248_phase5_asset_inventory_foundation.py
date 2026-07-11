@@ -149,8 +149,62 @@ def upgrade() -> None:
             postgresql_where=sa.text("status = 'issued'"),
         )
 
+    if not _has_table("field_erp_sync_events"):
+        op.create_table(
+            "field_erp_sync_events",
+            sa.Column("id", uuid_type, primary_key=True),
+            sa.Column("entity_type", sa.String(length=80), nullable=False),
+            sa.Column("entity_id", uuid_type, nullable=False),
+            sa.Column("action", sa.String(length=80), nullable=False),
+            sa.Column(
+                "status",
+                sa.String(length=40),
+                nullable=False,
+                server_default="pending",
+            ),
+            sa.Column("idempotency_key", sa.String(length=180), nullable=False),
+            sa.Column("payload", json_type, nullable=False),
+            sa.Column("attempts", sa.Integer(), nullable=False, server_default="0"),
+            sa.Column("remote_id", sa.String(length=120)),
+            sa.Column("remote_number", sa.String(length=120)),
+            sa.Column("remote_status", sa.String(length=80)),
+            sa.Column("last_error", sa.Text()),
+            sa.Column("last_attempt_at", sa.DateTime(timezone=True)),
+            sa.Column("synced_at", sa.DateTime(timezone=True)),
+            sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+            sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+            sa.UniqueConstraint(
+                "idempotency_key",
+                name="uq_field_erp_sync_events_key",
+            ),
+            sa.CheckConstraint(
+                "status IN ('pending', 'processing', 'synced', 'failed', 'canceled')",
+                name="ck_field_erp_sync_events_status",
+            ),
+        )
+        op.create_index(
+            "ix_field_erp_sync_events_status",
+            "field_erp_sync_events",
+            ["status", "created_at"],
+        )
+        op.create_index(
+            "ix_field_erp_sync_events_entity",
+            "field_erp_sync_events",
+            ["entity_type", "entity_id", "action"],
+        )
+
 
 def downgrade() -> None:
+    if _has_table("field_erp_sync_events"):
+        op.drop_index(
+            "ix_field_erp_sync_events_entity",
+            table_name="field_erp_sync_events",
+        )
+        op.drop_index(
+            "ix_field_erp_sync_events_status",
+            table_name="field_erp_sync_events",
+        )
+        op.drop_table("field_erp_sync_events")
     if _has_table("field_asset_custody"):
         op.drop_index(
             "uq_field_asset_custody_issued_asset",
