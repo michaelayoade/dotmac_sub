@@ -203,6 +203,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "Read-only ERP status poll for in-flight expense claims; re-run safe, "
         "refreshes erp_claim_status on the source row.",
     ),
+    "app.tasks.dotmac_erp_outbox.refresh_material_request_statuses": _c(
+        "integration",
+        SWEEP,
+        IDEMP,
+        STATUS,
+        "Read-only ERP status poll for in-flight material requests; re-run safe, "
+        "refreshes erp_material_status on the source row.",
+    ),
     "app.tasks.enforcement.cleanup_subscription_block_sessions": _c(
         "enforcement", SWEEP, IDEMP, HEALTH
     ),

@@ -342,6 +342,70 @@ class DotMacERPClient:
         items = result.get("items")
         return items if isinstance(items, list) else []
 
+    # ============ Material request surface (PR 3) ============
+    #
+    # Thin flow-specific wrappers over the generic post/get, mirroring the paths
+    # and shapes of ``dotmac_crm/app/services/dotmac_erp/client.py`` verbatim so
+    # ERP sees an identical client. The money write path is
+    # ``push_material_request`` (idempotent create-and-issue); the two GETs are
+    # read-only reconcile / serial-pick aids.
+
+    def push_material_request(
+        self, payload: dict, idempotency_key: str | None = None
+    ) -> dict:
+        """POST an approved field material request to ERP as an ISSUE.
+
+        ``POST /sync/crm/material-requests`` — idempotent create-and-issue: an
+        identical resend of the same ``omni_id`` returns the existing request
+        (200); a first create returns 201. The ``idempotency_key`` is sent as the
+        ``Idempotency-Key`` header so re-delivery of a row ERP already saw is a
+        no-op on the ERP side. Returns the ERP body
+        (``request_id``/``request_number``/``status``/``omni_id``).
+        """
+        return self.post(
+            "/sync/crm/material-requests",
+            payload,
+            idempotency_key=idempotency_key,
+            expected_status_codes={200, 201},
+        )
+
+    def get_material_request_status(self, omni_id: str) -> dict | None:
+        """Poll ERP for a material request's fulfillment/stock status.
+
+        ``GET /sync/crm/material-requests/{omni_id}`` where ``omni_id`` is sub's
+        ``FieldMaterialRequest.id``. Returns the status body, or ``None`` when the
+        request is not (yet) known to ERP (404) — callers degrade rather than
+        error.
+        """
+        try:
+            return self.get(f"/sync/crm/material-requests/{omni_id}")
+        except DotMacERPNotFoundError:
+            return None
+
+    def list_available_serials(
+        self,
+        *,
+        item_code: str,
+        warehouse_code: str,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict:
+        """List available ERP serials for one item in one warehouse.
+
+        ``GET /sync/crm/inventory/serials/available`` — read-only serial-pick aid
+        for building a serialized ISSUE payload. Ports CRM's
+        ``list_available_serials``. Returns the ERP body (``{}`` when absent).
+        """
+        return self.get(
+            "/sync/crm/inventory/serials/available",
+            params={
+                "item_code": item_code,
+                "warehouse_code": warehouse_code,
+                "limit": limit,
+                "offset": offset,
+            },
+        )
+
 
 def build_erp_client(db) -> DotMacERPClient:
     """Build a DotMac ERP client from the ``integration`` settings domain.

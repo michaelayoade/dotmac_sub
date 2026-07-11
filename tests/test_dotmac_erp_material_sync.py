@@ -1,0 +1,413 @@
+"""ERP re-home PR 3 — material-request ISSUE flow (map + enqueue + write-back +
+reconcile).
+
+Everything runs against a MOCKED ERP: the outbox uses a fake client, and the
+status reconcile is fed a canned response. The flow is proven end-to-end WITHOUT
+a live ERP and, crucially, WITHOUT flipping ownership in prod — tests set
+``sync_flow_ownership.material_request = sub`` in-test only. The default (crm)
+path is asserted to send nothing (the inert guarantee).
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from uuid import uuid4
+
+import app.models  # noqa: F401 — registers every model on Base.metadata
+from app.models.dispatch import TechnicianProfile
+from app.models.field_erp_sync import (
+    FieldErpSyncEvent,
+    FieldErpSyncFlow,
+    FieldErpSyncStatus,
+    SyncFlowOwner,
+    SyncFlowOwnership,
+)
+from app.models.field_material import FieldInventoryItem, FieldMaterialRequest
+from app.models.subscriber import Subscriber, UserType
+from app.models.system_user import SystemUser
+from app.models.work_order_mirror import WorkOrderMirror
+from app.services.dotmac_erp import material_sync, outbox
+from app.services.field import material_requests as material_requests_module
+from app.services.field.material_requests import field_material_requests
+
+# ---------------------------------------------------------------------------
+# Fixtures / helpers
+# ---------------------------------------------------------------------------
+
+
+def _seed_ownership(db, *, sub_flows: set[str] | None = None) -> None:
+    sub_flows = sub_flows or set()
+    for flow in FieldErpSyncFlow:
+        owner = (
+            SyncFlowOwner.sub.value
+            if flow.value in sub_flows
+            else SyncFlowOwner.crm.value
+        )
+        db.add(SyncFlowOwnership(flow=flow.value, owner=owner))
+    db.flush()
+
+
+def _user(db, name: str = "Material") -> SystemUser:
+    user = SystemUser(
+        first_name=name,
+        last_name="Tech",
+        display_name=f"{name} Tech",
+        email=f"{name.lower()}-{uuid4().hex[:8]}@example.com",
+        user_type=UserType.system_user,
+    )
+    db.add(user)
+    db.flush()
+    return user
+
+
+def _profile(
+    db, user: SystemUser, crm_person_id: str = "crm-material-tech"
+) -> TechnicianProfile:
+    profile = TechnicianProfile(
+        person_id=user.id,
+        system_user_id=user.id,
+        crm_person_id=crm_person_id,
+        title="Installer",
+    )
+    db.add(profile)
+    db.flush()
+    return profile
+
+
+def _subscriber(db) -> Subscriber:
+    subscriber = Subscriber(
+        first_name="Material",
+        last_name="Customer",
+        email=f"material-{uuid4().hex[:8]}@example.com",
+    )
+    db.add(subscriber)
+    db.flush()
+    return subscriber
+
+
+def _work_order(db, subscriber: Subscriber, **overrides) -> WorkOrderMirror:
+    row = WorkOrderMirror(
+        crm_work_order_id=overrides.pop("crm_work_order_id", "wo-material"),
+        subscriber_id=subscriber.id,
+        title=overrides.pop("title", "Field material"),
+        status=overrides.pop("status", "in_progress"),
+        assigned_to_crm_person_id=overrides.pop(
+            "assigned_to_crm_person_id", "crm-material-tech"
+        ),
+        crm_ticket_id=overrides.pop("crm_ticket_id", "crm-ticket-77"),
+        crm_project_id=overrides.pop("crm_project_id", "crm-project-88"),
+        scheduled_start=overrides.pop("scheduled_start", datetime.now(UTC)),
+        **overrides,
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
+def _inventory_item(db, *, sku="RJ45-CAT6", name="RJ45 Connector", unit="PCS"):
+    item = FieldInventoryItem(sku=sku, name=name, unit=unit)
+    db.add(item)
+    db.flush()
+    return item
+
+
+def _auth(user: SystemUser) -> dict:
+    return {
+        "principal_id": str(user.id),
+        "person_id": str(user.id),
+        "subscriber_id": str(user.id),
+        "principal_type": "system_user",
+        "roles": [],
+        "scopes": [],
+    }
+
+
+def _make_approved_request(
+    db, *, crm_work_order_id="wo-mat", enqueue=False, monkeypatch=None
+) -> FieldMaterialRequest:
+    """Create → submit → approve a request via the real service.
+
+    When ``enqueue`` is False the master ERP flag stays off (default), so approve
+    enqueues nothing. When True, ``_erp_sync_enabled`` is patched on so approve
+    enqueues the outbox intent (used by the delivery tests).
+    """
+    crm_person_id = f"crm-tech-{uuid4().hex[:8]}"
+    user = _user(db)
+    _profile(db, user, crm_person_id=crm_person_id)
+    subscriber = _subscriber(db)
+    _work_order(
+        db,
+        subscriber,
+        crm_work_order_id=crm_work_order_id,
+        assigned_to_crm_person_id=crm_person_id,
+    )
+    item = _inventory_item(db)
+    db.commit()
+    created = field_material_requests.create(
+        db,
+        _auth(user),
+        crm_work_order_id=crm_work_order_id,
+        priority="high",
+        notes="Need connectors for the drop",
+        items=[{"item_id": str(item.id), "quantity": 5, "notes": "cat6"}],
+    )
+    field_material_requests.submit(db, _auth(user), str(created["id"]))
+    if enqueue and monkeypatch is not None:
+        monkeypatch.setattr(
+            material_requests_module, "_erp_sync_enabled", lambda db: True
+        )
+    field_material_requests.approve(db, str(created["id"]))
+    return db.get(FieldMaterialRequest, created["id"])
+
+
+class _FakeERPClient:
+    """Mocked ERP client for outbox + reconcile: canned responses in order."""
+
+    def __init__(self, post_outcomes=None, status_outcomes=None):
+        self._post = list(post_outcomes or [])
+        self._status = list(status_outcomes or [])
+        self.posts: list[dict] = []
+        self.status_calls: list[str] = []
+        self.closed = False
+
+    def post(self, path, payload, idempotency_key=None, expected_status_codes=None):
+        self.posts.append(
+            {"path": path, "payload": payload, "idempotency_key": idempotency_key}
+        )
+        outcome = self._post.pop(0) if self._post else {}
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    def get_material_request_status(self, omni_id):
+        self.status_calls.append(omni_id)
+        outcome = self._status.pop(0) if self._status else None
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    def close(self):
+        self.closed = True
+
+
+# ---------------------------------------------------------------------------
+# Payload mapping fidelity (vs CRM's _map_material_request shape)
+# ---------------------------------------------------------------------------
+
+
+def test_payload_mapping_matches_crm_shape(db_session):
+    request = _make_approved_request(db_session)
+    payload = material_sync.build_material_request_payload(request)
+
+    assert payload["omni_id"] == str(request.id)
+    assert payload["request_type"] == "ISSUE"
+    assert payload["status"] == "issued"
+    assert payload["requested_by_email"] == request.requested_by_system_user.email
+    # ticket id comes off the work-order mirror (sub has no direct FK).
+    assert payload["ticket_crm_id"] == "crm-ticket-77"
+    assert payload["remarks"] == "Need connectors for the drop"
+    assert payload["schedule_date"] == request.approved_at.date().isoformat()
+
+    assert len(payload["items"]) == 1
+    line = payload["items"][0]
+    assert line["item_code"] == "RJ45-CAT6"
+    assert line["quantity"] == 5
+    assert line["uom"] == "PCS"
+    # No warehouse tracking in sub → None (ERP requires it; see gap note).
+    assert line["from_warehouse_code"] is None
+    # No serials tracked → key omitted.
+    assert "serial_numbers" not in line
+
+
+def test_payload_sources_serials_and_warehouse_from_metadata(db_session):
+    request = _make_approved_request(db_session)
+    # Best-effort: serials on the item metadata, warehouse on the request metadata.
+    request.metadata_ = {"from_warehouse_code": "WH-LAGOS"}
+    request.items[0].metadata_ = {"serial_numbers": ["SN-1", " SN-2 ", ""]}
+    db_session.flush()
+
+    line = material_sync.build_material_request_payload(request)["items"][0]
+    assert line["from_warehouse_code"] == "WH-LAGOS"
+    assert line["serial_numbers"] == ["SN-1", "SN-2"]
+
+
+def test_idempotency_key_is_stable_across_reapprove(db_session):
+    request = _make_approved_request(db_session)
+    key1 = material_sync.material_request_idempotency_key(request)
+    key2 = material_sync.material_request_idempotency_key(request)
+    assert key1 == key2 == f"mr-{request.id}-approve-v1"
+
+
+def test_eligibility_requires_approved_items_and_email(db_session):
+    request = _make_approved_request(db_session)
+    assert material_sync.material_request_eligibility_error(request) is None
+
+    request.status = "submitted"
+    assert "cannot be synced" in material_sync.material_request_eligibility_error(
+        request
+    )
+
+
+# ---------------------------------------------------------------------------
+# Enqueue on approve — gated by dotmac_erp_sync_enabled
+# ---------------------------------------------------------------------------
+
+
+def _outbox_rows(db, request) -> list[FieldErpSyncEvent]:
+    return (
+        db.query(FieldErpSyncEvent)
+        .filter(FieldErpSyncEvent.entity_id == request.id)
+        .all()
+    )
+
+
+def test_approve_does_not_enqueue_when_flag_off(db_session):
+    # Default: dotmac_erp_sync_enabled resolves False → flow inert, no outbox row.
+    request = _make_approved_request(db_session)
+    assert _outbox_rows(db_session, request) == []
+
+
+def test_approve_enqueues_when_flag_on(db_session, monkeypatch):
+    request = _make_approved_request(db_session, enqueue=True, monkeypatch=monkeypatch)
+
+    rows = _outbox_rows(db_session, request)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.flow == FieldErpSyncFlow.material_request.value
+    assert row.idempotency_key == f"mr-{request.id}-approve-v1"
+    assert row.status == FieldErpSyncStatus.pending.value
+    assert row.payload["omni_id"] == str(request.id)
+    assert row.payload["request_type"] == "ISSUE"
+
+
+def test_reenqueue_reuses_the_same_outbox_row(db_session):
+    request = _make_approved_request(db_session)
+    # Re-enqueue directly with the same (stable) key → idempotent, no duplicate.
+    first = material_sync.enqueue_material_request(db_session, request)
+    second = material_sync.enqueue_material_request(db_session, request)
+    assert first.id == second.id
+    assert len(_outbox_rows(db_session, request)) == 1
+
+
+# ---------------------------------------------------------------------------
+# Outbox delivery → write-back onto the source row
+# ---------------------------------------------------------------------------
+
+
+def test_delivery_accepted_writes_erp_fields_back(db_session, monkeypatch):
+    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.material_request.value})
+    request = _make_approved_request(db_session, enqueue=True, monkeypatch=monkeypatch)
+    client = _FakeERPClient(
+        post_outcomes=[
+            {
+                "request_id": "ERP-MR-1",
+                "status": "issued",
+                "omni_id": str(request.id),
+            }
+        ]
+    )
+
+    result = outbox.deliver_pending(db_session, client=client)
+
+    db_session.refresh(request)
+    assert result.accepted == 1
+    assert request.erp_material_request_id == "ERP-MR-1"
+    assert request.erp_material_status == "issued"
+    # Non-terminal ERP status leaves the sub row in approved.
+    assert request.status == "approved"
+    assert client.posts[0]["path"] == "/sync/crm/material-requests"
+
+
+def test_delivery_fulfilled_maps_terminal_status(db_session, monkeypatch):
+    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.material_request.value})
+    request = _make_approved_request(db_session, enqueue=True, monkeypatch=monkeypatch)
+    client = _FakeERPClient(
+        post_outcomes=[{"request_id": "ERP-MR-2", "status": "fulfilled"}]
+    )
+
+    outbox.deliver_pending(db_session, client=client)
+
+    db_session.refresh(request)
+    assert request.erp_material_status == "fulfilled"
+    assert request.status == "fulfilled"
+    assert request.fulfilled_at is not None
+
+
+def test_delivery_rejected_records_erp_status(db_session, monkeypatch):
+    _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.material_request.value})
+    request = _make_approved_request(db_session, enqueue=True, monkeypatch=monkeypatch)
+    client = _FakeERPClient(post_outcomes=[{"status": "rejected"}])
+
+    result = outbox.deliver_pending(db_session, client=client)
+
+    db_session.refresh(request)
+    row = _outbox_rows(db_session, request)[0]
+    assert result.rejected == 1
+    assert row.status == FieldErpSyncStatus.rejected.value
+    assert request.erp_material_status == "rejected"
+    # Material has no rejected write-back mapping → source status unchanged.
+    assert request.status == "approved"
+
+
+# ---------------------------------------------------------------------------
+# Ownership guard — the inert guarantee
+# ---------------------------------------------------------------------------
+
+
+def test_delivery_refused_when_flow_owned_by_crm(db_session, monkeypatch):
+    # material_request left at the seeded default (crm) — must NOT be sent.
+    _seed_ownership(db_session)
+    request = _make_approved_request(db_session, enqueue=True, monkeypatch=monkeypatch)
+    client = _FakeERPClient(post_outcomes=[{"request_id": "SHOULD-NOT-HAPPEN"}])
+
+    result = outbox.deliver_pending(db_session, client=client)
+
+    db_session.refresh(request)
+    assert result.skipped_not_owned == 1
+    assert client.posts == []
+    assert request.erp_material_request_id is None
+    row = _outbox_rows(db_session, request)[0]
+    assert row.status == FieldErpSyncStatus.pending.value
+    assert row.attempts == 0
+
+
+# ---------------------------------------------------------------------------
+# Status reconcile
+# ---------------------------------------------------------------------------
+
+
+def test_refresh_updates_status_for_in_flight_request(db_session):
+    request = _make_approved_request(db_session)
+    request.erp_material_request_id = "ERP-MR-9"
+    request.erp_material_status = "issued"
+    request.status = "issued"
+    db_session.commit()
+
+    client = _FakeERPClient(
+        status_outcomes=[{"request_id": "ERP-MR-9", "status": "fulfilled"}]
+    )
+    result = material_sync.refresh_material_request_statuses(db_session, client=client)
+
+    db_session.refresh(request)
+    assert result["processed"] == 1
+    assert result["updated"] == 1
+    assert client.status_calls == [str(request.id)]
+    assert request.erp_material_status == "fulfilled"
+    assert request.status == "fulfilled"
+
+
+def test_refresh_skips_unsynced_and_terminal_requests(db_session):
+    # Not synced yet (no erp id) → excluded.
+    unsynced = _make_approved_request(db_session, crm_work_order_id="wo-a")
+    # Synced but already fulfilled (terminal) → excluded from the in-flight poll.
+    fulfilled = _make_approved_request(db_session, crm_work_order_id="wo-b")
+    fulfilled.erp_material_request_id = "ERP-DONE"
+    fulfilled.status = "fulfilled"
+    db_session.commit()
+
+    client = _FakeERPClient(status_outcomes=[])
+    result = material_sync.refresh_material_request_statuses(db_session, client=client)
+
+    assert result["processed"] == 0
+    assert client.status_calls == []
+    assert unsynced.erp_material_request_id is None

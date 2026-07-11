@@ -266,6 +266,17 @@ def _dispatch_flow_writeback(db: Session, row: FieldErpSyncEvent) -> None:
                 row.flow,
                 row.id,
             )
+    elif row.flow == FieldErpSyncFlow.material_request.value:
+        try:
+            from app.services.dotmac_erp.material_sync import apply_erp_response
+
+            apply_erp_response(db, row)
+        except Exception:  # noqa: BLE001 — write-back must not fail delivery
+            logger.exception(
+                "field_erp_sync: write-back failed for %s event %s",
+                row.flow,
+                row.id,
+            )
 
 
 def _apply_response(
