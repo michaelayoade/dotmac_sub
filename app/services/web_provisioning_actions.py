@@ -85,7 +85,7 @@ def _notify_tagged_users(
         if actor_subscriber_id and str(subscriber.id) == actor_subscriber_id:
             continue
 
-        notification_service.notifications.create(
+        notification_service.notifications.create_customer_notification(
             db,
             NotificationCreate(
                 channel=NotificationChannel.push,
@@ -96,7 +96,7 @@ def _notify_tagged_users(
                 sent_at=datetime.now(UTC),
             ),
         )
-        notification_service.notifications.create(
+        notification_service.notifications.create_customer_notification(
             db,
             NotificationCreate(
                 channel=NotificationChannel.email,

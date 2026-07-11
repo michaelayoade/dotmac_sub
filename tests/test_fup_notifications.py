@@ -1,6 +1,8 @@
 """Customer FUP notifications emitted by the periodic FUP evaluation task."""
 
+from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.notification import Notification, NotificationChannel
+from app.models.subscription_engine import SettingValueType
 from app.tasks.usage import _build_fup_notification, _emit_fup_notifications
 
 
@@ -72,6 +74,46 @@ def test_emit_approaching_is_push_only(db_session, subscriber):
         .all()
     )
     assert [n.channel for n in notes] == [NotificationChannel.push]
+
+
+def test_emit_fup_notifications_uses_channel_policy(db_session, subscriber):
+    subscriber.email = "fup-policy@example.com"
+    subscriber.phone = "+2348012340001"
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.notification,
+            key="notification_channel_policy",
+            value_type=SettingValueType.json,
+            value_json={"events": {"fup_throttled": ["whatsapp", "push"]}},
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    sent = _emit_fup_notifications(
+        db_session,
+        [
+            {
+                "subscriber_id": subscriber.id,
+                "kind": "throttled",
+                "rule_name": "Monthly 100GB cap",
+                "threshold_gb": 100,
+                "used_gb": 120,
+            }
+        ],
+    )
+
+    notes = (
+        db_session.query(Notification)
+        .filter(Notification.subscriber_id == subscriber.id)
+        .filter(Notification.event_type == "fup_throttled")
+        .all()
+    )
+    assert sent == 1
+    assert {n.channel for n in notes} == {
+        NotificationChannel.whatsapp,
+        NotificationChannel.push,
+    }
 
 
 def test_emit_fup_notifications_skips_unknown_subscriber(db_session):

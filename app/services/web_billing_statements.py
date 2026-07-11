@@ -215,7 +215,7 @@ def queue_account_statement_email(
         raise HTTPException(
             status_code=400, detail="No recipient email set for this account"
         )
-    notification_service.notifications.create(
+    notification_service.notifications.create_customer_notification(
         db,
         NotificationCreate(
             channel=NotificationChannel.email,

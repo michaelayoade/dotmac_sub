@@ -117,7 +117,7 @@ def _notify(db: Session, subscriber: Subscriber) -> None:
         )
         for channel in (NotificationChannel.push, NotificationChannel.email):
             try:
-                notifications_svc.create(
+                notifications_svc.create_customer_notification(
                     db,
                     NotificationCreate(
                         channel=channel,

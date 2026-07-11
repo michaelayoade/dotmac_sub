@@ -632,6 +632,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=True,
     ),
     SettingSpec(
+        domain=SettingDomain.notification,
+        key="notification_channel_policy",
+        env_var=None,
+        value_type=SettingValueType.json,
+        default={},
+        label="Notification channel policy: {default: [], categories: {}, events: {}}",
+    ),
+    SettingSpec(
         domain=SettingDomain.usage,
         key="usage_rating_enabled",
         env_var="USAGE_RATING_ENABLED",

@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription
 from app.models.subscriber import Subscriber, UserType
-from app.services.customer_service_state import active_customer_subscription_filters
+from app.services.access_resolution import active_customer_service_filters
 
 
 def customer_account_filters(subscriber_model) -> tuple:
@@ -23,7 +23,7 @@ def active_customer_subscription_query():
         .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
         .where(
             *customer_account_filters(Subscriber),
-            *active_customer_subscription_filters(Subscription, Subscriber),
+            *active_customer_service_filters(Subscription, Subscriber),
         )
     )
 

@@ -18,7 +18,6 @@ from app.models.team_inbox import (
     InboxConversation,
     InboxConversationStatus,
     InboxMessage,
-    InboxMessageDirection,
 )
 from app.services import (
     team_inbox_contact_links,
@@ -772,18 +771,12 @@ def team_inbox_internal_note(
             url="/admin/inbox?status=error&message=Conversation%20not%20found",
             status_code=303,
         )
-    note = InboxMessage(
-        conversation_id=conversation.id,
-        channel_type=conversation.channel_type,
-        direction=InboxMessageDirection.internal.value,
+    team_inbox_operations.create_internal_note(
+        db,
+        conversation=conversation,
         body=clean_body,
-        from_address="internal",
-        metadata_={
-            "source": "admin_inbox_internal_note",
-            "actor_id": web_admin_service.get_actor_id(request),
-        },
+        actor_person_id=web_admin_service.get_actor_id(request),
     )
-    db.add(note)
     db.commit()
     return _detail_redirect(
         conversation_id,

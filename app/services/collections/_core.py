@@ -681,11 +681,9 @@ def _create_throttle_notification(
     db: Session, account_id: str, days_overdue: int
 ) -> None:
     """Create email notification that account has been throttled."""
-    from app.models.notification import (
-        Notification,
-        NotificationChannel,
-        NotificationStatus,
-    )
+    from app.models.notification import NotificationChannel
+    from app.schemas.notification import NotificationCreate
+    from app.services.notification import notifications as notifications_svc
 
     email = _get_account_email(db, account_id)
     if not email:
@@ -694,17 +692,19 @@ def _create_throttle_notification(
         )
         return
 
-    notification = Notification(
-        channel=NotificationChannel.email,
-        event_type="account_throttled",
-        category="billing",
-        recipient=email,
-        subject="Service Speed Reduced - Payment Overdue",
-        body=f"Your internet speed has been reduced due to payment being {days_overdue} days overdue. "
-        "Please make a payment to restore full speed.",
-        status=NotificationStatus.queued,
+    notifications_svc.queue_customer_notification(
+        db,
+        NotificationCreate(
+            subscriber_id=coerce_uuid(account_id),
+            channel=NotificationChannel.email,
+            event_type="account_throttled",
+            category="billing",
+            recipient=email,
+            subject="Service Speed Reduced - Payment Overdue",
+            body=f"Your internet speed has been reduced due to payment being {days_overdue} days overdue. "
+            "Please make a payment to restore full speed.",
+        ),
     )
-    db.add(notification)
     logger.info(f"Created throttle notification for account {account_id}")
 
 
@@ -738,11 +738,9 @@ def _create_suspension_warning_notification(
 
 def _create_suspension_notification(db: Session, account_id: str) -> None:
     """Create email notification that account has been suspended."""
-    from app.models.notification import (
-        Notification,
-        NotificationChannel,
-        NotificationStatus,
-    )
+    from app.models.notification import Notification, NotificationChannel
+    from app.schemas.notification import NotificationCreate
+    from app.services.notification import notifications as notifications_svc
 
     email = _get_account_email(db, account_id)
     if not email:
@@ -770,16 +768,18 @@ def _create_suspension_notification(db: Session, account_id: str) -> None:
         )
         return
 
-    notification = Notification(
-        channel=NotificationChannel.email,
-        event_type="account_suspended",
-        category="billing",
-        recipient=email,
-        subject="Account Suspended",
-        body="Your account has been suspended due to non-payment. Please make a payment to restore service.",
-        status=NotificationStatus.queued,
+    notifications_svc.queue_customer_notification(
+        db,
+        NotificationCreate(
+            subscriber_id=coerce_uuid(account_id),
+            channel=NotificationChannel.email,
+            event_type="account_suspended",
+            category="billing",
+            recipient=email,
+            subject="Account Suspended",
+            body="Your account has been suspended due to non-payment. Please make a payment to restore service.",
+        ),
     )
-    db.add(notification)
     logger.info(f"Created suspension notification for account {account_id}")
 
 

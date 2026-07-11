@@ -22,7 +22,6 @@ from sqlalchemy import (
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from app.metrics import observe_job
 from app.models.catalog import (
     AccessCredential,
     NasDevice,
@@ -57,6 +56,7 @@ from app.services.common import (
     validate_enum,
 )
 from app.services.credential_crypto import decrypt_credential, encrypt_credential
+from app.services.observability import record_task_run
 from app.services.response import ListResponseMixin
 from app.services.secrets import resolve_secret
 
@@ -1631,8 +1631,10 @@ class RadiusSyncJobs(ListResponseMixin):
             run.details = details
             job.last_run_at = finished_at
             db.commit()
-            observe_job(
-                "radius_sync", status.value, (finished_at - started_at).total_seconds()
+            record_task_run(
+                "radius_sync",
+                status=status.value,
+                duration_seconds=(finished_at - started_at).total_seconds(),
             )
             db.refresh(run)
         return run

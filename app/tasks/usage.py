@@ -799,9 +799,9 @@ def _build_fup_notification(
     )
 
 
-# Channels per event kind. Enforcement (throttled/blocked) is important enough
-# to email as well as push; the soft "approaching" heads-up is push/in-app only.
-_FUP_NOTIFICATION_CHANNELS = {
+# Default channels per event kind. The shared notification channel policy can
+# override these by event code (fup_blocked) or category (fup).
+_FUP_NOTIFICATION_DEFAULT_CHANNELS = {
     "approaching": ("push",),
     "throttled": ("push", "email"),
     "blocked": ("push", "email"),
@@ -821,6 +821,7 @@ def _emit_fup_notifications(session, pending: list[dict]) -> int:
     from app.models.subscriber import Subscriber
     from app.schemas.notification import NotificationCreate
     from app.services.notification import notifications as notifications_svc
+    from app.services.notification_channel_policy import resolve_notification_channels
 
     sent = 0
     for n in pending:
@@ -834,25 +835,43 @@ def _emit_fup_notifications(session, pending: list[dict]) -> int:
                 n.get("used_gb"),
                 n.get("cap_resets_at"),
             )
-            channels = _FUP_NOTIFICATION_CHANNELS.get(n["kind"], ("push",))
+            event_type = f"fup_{n['kind']}"
+            default_channels = tuple(
+                NotificationChannel(raw)
+                for raw in _FUP_NOTIFICATION_DEFAULT_CHANNELS.get(
+                    n["kind"],
+                    ("push",),
+                )
+            )
+            channels = resolve_notification_channels(
+                session,
+                template_code=event_type,
+                event_type=event_type,
+                category="fup",
+                default_channels=default_channels,
+            )
             created_any = False
             for channel in channels:
-                # A missing email only disqualifies the email channel; push
-                # is addressed by subscriber_id (recipient is informational).
-                if channel == "email" and not email:
+                if channel == NotificationChannel.email:
+                    recipient = email
+                elif channel in {NotificationChannel.sms, NotificationChannel.whatsapp}:
+                    recipient = getattr(subscriber, "phone", None)
+                else:
+                    # Push is addressed by subscriber_id; recipient is informational.
+                    recipient = str(n["subscriber_id"])
+                if not recipient:
                     continue
-                recipient = email or str(n["subscriber_id"])
                 try:
-                    notifications_svc.create(
+                    notifications_svc.create_customer_notification(
                         session,
                         NotificationCreate(
-                            channel=NotificationChannel(channel),
+                            channel=channel,
                             subscriber_id=n["subscriber_id"],
                             recipient=recipient,
                             subject=subject,
                             body=body,
                             category="fup",
-                            event_type=f"fup_{n['kind']}",
+                            event_type=event_type,
                         ),
                     )
                     created_any = True

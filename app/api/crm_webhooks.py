@@ -28,14 +28,13 @@ import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db import get_db
-from app.models.crm_webhook_delivery import CrmWebhookDelivery
 from app.services import (
     crm_native_sync,
+    crm_webhook_deliveries,
     projects_mirror,
     quotes_mirror,
     referrals_mirror,
@@ -71,43 +70,6 @@ def _delivery_uuid(request: Request) -> uuid.UUID:
             pass
     signature = request.headers.get(SIGNATURE_HEADER) or ""
     return uuid.uuid5(_DELIVERY_NAMESPACE, signature)
-
-
-def _claim_delivery(
-    db: Session,
-    delivery_id: uuid.UUID,
-    event_type: str,
-    *,
-    event_id: str | None = None,
-) -> bool:
-    """Record this delivery as processed; return False if already recorded.
-
-    Check-first (the common case for a sequential redelivery), with the unique
-    primary key as a concurrency backstop: a simultaneous delivery that loses the
-    race raises IntegrityError and is likewise treated as a duplicate. Fails OPEN
-    (returns True) on any other store error — a dedup-store outage must never drop
-    a real event. Mirrors the idempotency used for CRM payments (C1).
-    """
-    try:
-        if db.get(CrmWebhookDelivery, delivery_id) is not None:
-            return False
-        db.add(
-            CrmWebhookDelivery(
-                delivery_id=delivery_id,
-                event_id=event_id,
-                event_type=event_type or "unknown",
-                status="processed",
-            )
-        )
-        db.commit()
-        return True
-    except IntegrityError:
-        db.rollback()
-        return False
-    except SQLAlchemyError:
-        db.rollback()
-        logger.exception("crm_webhook_dedup_store_error event=%s", event_type)
-        return True
 
 
 # CRM ticket events that should refresh the local copy.
@@ -277,7 +239,9 @@ async def receive_crm_chat_event(
         payload = {}
 
     # Dedup: a redelivered chat push must not wake the device twice.
-    if not _claim_delivery(db, _delivery_uuid(request), event_type):
+    if not crm_webhook_deliveries.claim_delivery(
+        db, _delivery_uuid(request), event_type
+    ):
         return {"status": "ignored", "reason": "duplicate", "event": event_type}
 
     # The CRM wraps event data under "payload" (event envelope); tolerate a flat
@@ -353,7 +317,9 @@ async def receive_crm_referral_event(
 
     # Dedup: a redelivered referral event must not re-fire the "reward added"
     # push. The credit itself is already idempotent on the referral id.
-    if not _claim_delivery(db, _delivery_uuid(request), event_type):
+    if not crm_webhook_deliveries.claim_delivery(
+        db, _delivery_uuid(request), event_type
+    ):
         return {"status": "ignored", "reason": "duplicate", "event": event_type}
 
     result = referrals_mirror.apply_webhook(db, event_type, body)
@@ -393,7 +359,9 @@ async def receive_crm_project_event(
     # or re-apply the delta (a redelivery of an older event can otherwise revert
     # a newer status). The periodic reconcile is the backstop for the rare
     # claim-then-fail case.
-    if not _claim_delivery(db, _delivery_uuid(request), event_type):
+    if not crm_webhook_deliveries.claim_delivery(
+        db, _delivery_uuid(request), event_type
+    ):
         return {"status": "ignored", "reason": "duplicate", "event": event_type}
 
     inner = payload.get("payload")
@@ -452,7 +420,9 @@ async def receive_crm_work_order_event(
     # or re-apply the delta (a redelivery of an older event can otherwise revert
     # a newer status). The periodic reconcile is the backstop for the rare
     # claim-then-fail case.
-    if not _claim_delivery(db, _delivery_uuid(request), event_type):
+    if not crm_webhook_deliveries.claim_delivery(
+        db, _delivery_uuid(request), event_type
+    ):
         return {"status": "ignored", "reason": "duplicate", "event": event_type}
 
     inner = payload.get("payload")
@@ -490,7 +460,9 @@ async def receive_crm_quote_event(
     # or re-apply the delta (a redelivery of an older event can otherwise revert
     # a newer status). The periodic reconcile is the backstop for the rare
     # claim-then-fail case.
-    if not _claim_delivery(db, _delivery_uuid(request), event_type):
+    if not crm_webhook_deliveries.claim_delivery(
+        db, _delivery_uuid(request), event_type
+    ):
         return {"status": "ignored", "reason": "duplicate", "event": event_type}
 
     inner = payload.get("payload")

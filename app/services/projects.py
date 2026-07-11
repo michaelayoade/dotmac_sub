@@ -49,11 +49,6 @@ from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.models.domain_settings import SettingDomain
-from app.models.notification import (
-    Notification,
-    NotificationChannel,
-    NotificationStatus,
-)
 from app.models.project import (
     Project,
     ProjectComment,
@@ -106,6 +101,7 @@ from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.numbering import generate_number
 from app.services.response import ListResponseMixin
+from app.services.staff_notifications import queue_staff_email, queue_staff_push
 
 logger = logging.getLogger(__name__)
 
@@ -505,30 +501,22 @@ def _apply_fiber_stage_defaults(db: Session, task: ProjectTask) -> None:
 def _queue_in_app_notification(
     db: Session, recipient: str, subject: str, body: str
 ) -> None:
-    now = datetime.now(UTC)
-    db.add(
-        Notification(
-            channel=NotificationChannel.push,
-            recipient=recipient,
-            subject=subject,
-            body=body,
-            status=NotificationStatus.delivered,
-            sent_at=now,
-        )
+    queue_staff_push(
+        db,
+        recipient=recipient,
+        subject=subject,
+        body=body,
     )
 
 
 def _queue_email_notification(
     db: Session, recipient: str, subject: str, body: str
 ) -> None:
-    db.add(
-        Notification(
-            channel=NotificationChannel.email,
-            recipient=recipient,
-            subject=subject,
-            body=body,
-            status=NotificationStatus.queued,
-        )
+    queue_staff_email(
+        db,
+        recipient=recipient,
+        subject=subject,
+        body=body,
     )
 
 
@@ -864,8 +852,6 @@ def _notify_project_roles_created_in_app(db: Session, project: Project) -> None:
     site = (project.customer_address or project.region or "").strip()
 
     subject = f"New Project Assignment: {project.name}"
-    now = datetime.now(UTC)
-
     # De-dupe by recipient email so one person with multiple roles gets one
     # notification.
     created_for: set[str] = set()
@@ -884,15 +870,11 @@ def _notify_project_roles_created_in_app(db: Session, project: Project) -> None:
             body_lines.append(f"Site: {site}.")
         body_lines.append(f"Open: {project_url}")
 
-        db.add(
-            Notification(
-                channel=NotificationChannel.push,
-                recipient=recipient,
-                subject=subject,
-                body="\n".join(body_lines),
-                status=NotificationStatus.delivered,
-                sent_at=now,
-            )
+        queue_staff_push(
+            db,
+            recipient=recipient,
+            subject=subject,
+            body="\n".join(body_lines),
         )
 
     db.commit()
@@ -1151,14 +1133,12 @@ def _notify_project_task_assigned(
             body_text=None,
             track=True,
         )
-        db.add(
-            Notification(
-                channel=NotificationChannel.push,
-                recipient=assigned_to.email,
-                subject=subject,
-                body=f"You have been assigned a project task: {task.title or 'Task'}",
-                status=NotificationStatus.queued,
-            )
+        queue_staff_push(
+            db,
+            recipient=assigned_to.email,
+            subject=subject,
+            body=f"You have been assigned a project task: {task.title or 'Task'}",
+            delivered=False,
         )
         db.flush()
     except Exception as exc:  # noqa: BLE001 - notification must not break writes

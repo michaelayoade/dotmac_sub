@@ -13,7 +13,6 @@ from sqlalchemy.orm import Session
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.notification import (
     DeliveryStatus,
-    Notification,
     NotificationChannel,
     NotificationDelivery,
     NotificationStatus,
@@ -22,6 +21,7 @@ from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
 from app.services.branding_config import get_brand
 from app.services.domain_settings import notification_settings
+from app.services.notification import notifications as notification_records
 from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
@@ -856,27 +856,16 @@ def send_email(
         tracked_body = html_to_text(body_html)
 
     notification = None
-    if notification_id and db is not None:
-        notification = db.get(Notification, notification_id)
-    if notification is None and track and db:
-        notification = Notification(
+    if db is not None and (notification_id or track):
+        notification = notification_records.record_transport_attempt(
+            db,
+            notification_id=notification_id,
             channel=NotificationChannel.email,
             recipient=to_email,
             subject=subject,
             body=tracked_body,
-            status=NotificationStatus.sending,
+            commit=True,
         )
-        db.add(notification)
-        db.commit()
-        db.refresh(notification)
-    elif notification is not None and db is not None:
-        notification.channel = NotificationChannel.email
-        notification.recipient = to_email
-        notification.subject = subject
-        notification.body = tracked_body
-        notification.status = NotificationStatus.sending
-        notification.last_error = None
-        db.commit()
 
     provider_name = f"smtp:{config.get('sender_key', 'default')}"
 

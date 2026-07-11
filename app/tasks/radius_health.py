@@ -28,6 +28,7 @@ _LOCK_TIMEOUT_MS = 30_000
 )
 def run_radius_health_check() -> dict[str, Any]:
     """Run one RADIUS health pass; push metrics and stamp the heartbeat."""
+    from app.services.observability import record_task_run, record_task_skip
     from app.services.radius_health import (
         ADVISORY_LOCK_KEY,
         DEFAULT_STALE_SESSION_SECONDS,
@@ -35,13 +36,12 @@ def run_radius_health_check() -> dict[str, Any]:
         collect_radius_health,
         push_radius_metrics,
     )
-    from app.services.task_heartbeat import record_skip, record_success
 
     with db_session_adapter.advisory_lock(
         ADVISORY_LOCK_KEY, timeout_ms=_LOCK_TIMEOUT_MS
     ) as (db, acquired):
         if not acquired:
-            streak = record_skip(HEARTBEAT_TASK)
+            streak = record_task_skip(HEARTBEAT_TASK, reason="already_running")
             logger.info(
                 "radius_health_skipped: previous run still in progress (streak=%d)",
                 streak,
@@ -68,13 +68,23 @@ def run_radius_health_check() -> dict[str, Any]:
             )
             db.rollback()  # read-only pass; release snapshots promptly
             health.update(push_radius_metrics(health))
-            record_success(HEARTBEAT_TASK, health)
+            record_task_run(HEARTBEAT_TASK, status="success", counters=health)
             return health
         except SoftTimeLimitExceeded:
             db.rollback()
             logger.warning("radius_health_timed_out")
+            record_task_run(
+                HEARTBEAT_TASK,
+                status="error",
+                counters={"error": "radius_health_timed_out"},
+            )
             return {"error": "radius_health_timed_out"}
         except Exception as exc:  # noqa: BLE001 - report and roll back
             db.rollback()
             logger.exception("radius_health_failed")
+            record_task_run(
+                HEARTBEAT_TASK,
+                status="error",
+                counters={"error": str(exc)},
+            )
             return {"error": str(exc)}

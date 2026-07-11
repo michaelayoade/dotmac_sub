@@ -5,9 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.models.catalog import AccessState
-from app.services.customer_service_state import (
+from app.services.access_resolution import (
     CustomerBillingAccessState,
-    resolve_customer_billing_access_state,
+    resolve_customer_access,
 )
 
 
@@ -38,10 +38,11 @@ def plan_radius_projection(
     *,
     captive_redirect_enabled: bool,
 ) -> RadiusProjectionPlan:
-    state = resolve_customer_billing_access_state(
+    decision = resolve_customer_access(
         subscription,
         captive_redirect_enabled=captive_redirect_enabled,
     )
+    state = decision.state
     mode = state.radius_mode
     return RadiusProjectionPlan(
         mode=mode,

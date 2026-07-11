@@ -580,6 +580,18 @@ CUSTOMER_IDENTITY_RESOLUTION_TOTAL = Counter(
     ["result", "identity_type", "match_source", "confidence", "inbound_channel"],
 )
 
+OBSERVABILITY_EVENTS_TOTAL = Counter(
+    "observability_events_total",
+    "Shared observability events recorded by domain and signal",
+    ["domain", "signal", "status"],
+)
+
+NOTIFICATION_QUEUE_OUTCOMES_TOTAL = Counter(
+    "notification_queue_outcomes_total",
+    "Notification queue processing outcomes",
+    ["outcome"],
+)
+
 
 def observe_job(task_name: str, status: str, duration: float) -> None:
     JOB_DURATION.labels(task=task_name, status=status).observe(duration)
