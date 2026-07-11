@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
@@ -22,6 +23,8 @@ from app.services.field.source import (
     mark_sub_authoritative as _mark_source_authoritative,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def serialize_material_request(request: FieldMaterialRequest) -> dict:
     return {
@@ -33,6 +36,9 @@ def serialize_material_request(request: FieldMaterialRequest) -> dict:
         "status": request.status,
         "priority": request.priority,
         "notes": request.notes,
+        "erp_material_request_id": request.erp_material_request_id,
+        "erp_material_status": request.erp_material_status,
+        "client_ref": request.client_ref,
         "submitted_at": request.submitted_at,
         "approved_at": request.approved_at,
         "rejected_at": request.rejected_at,
@@ -163,6 +169,44 @@ class FieldMaterialRequests:
         db.refresh(request)
         return serialize_material_request(request)
 
+    @staticmethod
+    def approve(db: Session, material_request_id: str) -> dict:
+        """Manager approval of a submitted material request (ISSUE trigger).
+
+        This is where CRM pushes the ISSUE to ERP; the sub mirror enqueues the ERP
+        material-request outbox intent here too. Best-effort + flag-gated, so it is
+        inert until cutover and never fails the approval.
+        """
+        request = _get_request(db, material_request_id)
+        if request.status != "submitted":
+            raise HTTPException(
+                status_code=409, detail="Only submitted requests approve"
+            )
+        request.status = "approved"
+        request.approved_at = datetime.now(UTC)
+        _mark_sub_authoritative(request.work_order_mirror)
+        db.commit()
+        db.refresh(request)
+        _maybe_enqueue_erp_sync(db, request)
+        return serialize_material_request(request)
+
+
+def _get_request(db: Session, material_request_id: str) -> FieldMaterialRequest:
+    request = (
+        db.query(FieldMaterialRequest)
+        .options(
+            selectinload(FieldMaterialRequest.items).selectinload(
+                FieldMaterialRequestItem.item
+            )
+        )
+        .filter(FieldMaterialRequest.id == coerce_uuid(material_request_id))
+        .filter(FieldMaterialRequest.is_active.is_(True))
+        .one_or_none()
+    )
+    if request is None:
+        raise HTTPException(status_code=404, detail="Material request not found")
+    return request
+
 
 def _get_scoped_request(
     db: Session,
@@ -246,6 +290,48 @@ def _status(value: str) -> str:
 
 def _mark_sub_authoritative(row: WorkOrderMirror) -> None:
     _mark_source_authoritative(row, "material_requests")
+
+
+def _erp_sync_enabled(db: Session) -> bool:
+    """Master ERP-sync kill-switch (integration domain, default OFF).
+
+    The switch that keeps the material-request flow INERT until cutover: when off,
+    approve does not enqueue an ERP outbox row at all, so nothing can accumulate
+    (or, at cutover, double-post against CRM's separate id-space). Ownership of
+    the ``material_request`` flow (``sync_flow_ownership``, seeded ``crm``) is the
+    second, per-flow gate enforced inside outbox delivery.
+    """
+    from app.models.domain_settings import SettingDomain
+    from app.services import settings_spec
+
+    return bool(
+        settings_spec.resolve_value(
+            db, SettingDomain.integration, "dotmac_erp_sync_enabled"
+        )
+    )
+
+
+def _maybe_enqueue_erp_sync(db: Session, request: FieldMaterialRequest) -> None:
+    """Enqueue the ERP material-request outbox intent on approve (best-effort).
+
+    Gated by ``dotmac_erp_sync_enabled`` so the flow is inert pre-cutover. Never
+    raises into the approve path: a queueing hiccup must not fail an approval —
+    the row simply is not enqueued (and no ERP write happens).
+    """
+    try:
+        if not _erp_sync_enabled(db):
+            return
+        from app.services.dotmac_erp.material_sync import enqueue_material_request
+
+        enqueue_material_request(db, request)
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.warning(
+            "field material %s: ERP outbox enqueue failed (approve still succeeded)",
+            request.id,
+            exc_info=True,
+        )
 
 
 field_material_requests = FieldMaterialRequests()

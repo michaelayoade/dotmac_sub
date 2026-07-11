@@ -449,14 +449,15 @@ def test_migration_249_revision_chain():
     assert callable(module.downgrade)
 
 
-def test_migration_249_is_single_alembic_head():
+def test_single_alembic_head():
+    # PR 3 (material-request ERP fields, revision 250) advances the head off 249.
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ["249_field_erp_sync_outbox"]
+    assert script.get_heads() == ["250_field_material_request_erp_fields"]
 
 
 def test_migration_249_adds_integration_settingdomain():

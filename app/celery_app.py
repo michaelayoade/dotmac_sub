@@ -121,6 +121,7 @@ celery_app.conf.task_routes = {
     # never blocks the default queue.
     "app.tasks.dotmac_erp_outbox.deliver_erp_sync_events": {"queue": "crm"},
     "app.tasks.dotmac_erp_outbox.refresh_expense_claim_statuses": {"queue": "crm"},
+    "app.tasks.dotmac_erp_outbox.refresh_material_request_statuses": {"queue": "crm"},
     # Daily business runners must not sit behind the default queue's backlog —
     # a buried invoice cycle is a missed billing day (the 2026-06-10 00:55
     # dispatch sat unexecuted behind ~6.6k queued default-queue tasks).

@@ -75,3 +75,39 @@ def refresh_expense_claim_statuses() -> dict:
 
     logger.info("REFRESH_EXPENSE_CLAIM_STATUSES_COMPLETE %s", results)
     return results
+
+
+@celery_app.task(name="app.tasks.dotmac_erp_outbox.refresh_material_request_statuses")
+def refresh_material_request_statuses() -> dict:
+    """Poll ERP for in-flight material-request statuses and refresh mirror fields.
+
+    Read-only reconcile: for each synced FieldMaterialRequest still awaiting ERP
+    fulfillment, GET the request status and write it back (flipping the sub row to
+    fulfilled when ERP reports it). Gated at the scheduler by
+    ``dotmac_erp_sync_enabled`` (default off), so it is inert until cutover; a
+    no-op when nothing is in flight. Idempotent — safe to re-run.
+    """
+    from app.metrics import observe_job
+
+    start = time.monotonic()
+    status = "success"
+    logger.info("REFRESH_MATERIAL_REQUEST_STATUSES_START")
+    results: dict[str, object] = {}
+    try:
+        from app.db import task_session
+        from app.services.dotmac_erp.material_sync import (
+            refresh_material_request_statuses,
+        )
+
+        with task_session() as db:
+            results = refresh_material_request_statuses(db)
+    except Exception:
+        status = "error"
+        raise
+    finally:
+        observe_job(
+            "refresh_material_request_statuses", status, time.monotonic() - start
+        )
+
+    logger.info("REFRESH_MATERIAL_REQUEST_STATUSES_COMPLETE %s", results)
+    return results
