@@ -155,7 +155,7 @@ prod-logs: ## Tail production Docker logs
 	$(PROD_COMPOSE) logs -f --tail=100
 
 prod-restart: ## Recreate prod app + worker services from the current image (APP_IMAGE)
-	$(PROD_COMPOSE) up -d app celery-worker celery-worker-bandwidth celery-worker-billing celery-worker-tr069 celery-beat bandwidth-poller syslog-listener
+	$(PROD_COMPOSE) up -d app celery-worker celery-worker-bandwidth celery-worker-ingestion celery-worker-billing celery-worker-tr069 celery-beat bandwidth-poller syslog-listener
 
 prod-migrate: ## Apply DB migrations in the prod stack (alembic baked into the image)
 	$(PROD_COMPOSE) run --rm app alembic upgrade heads
