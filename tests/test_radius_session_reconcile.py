@@ -468,10 +468,10 @@ class TestActiveSessionReconcile:
 
         @contextmanager
         def _not_acquired(*args, **kwargs):
-            yield (object(), False)
+            yield False
 
         with (
-            patch("app.tasks.radius.db_session_adapter.advisory_lock", _not_acquired),
+            patch("app.tasks.radius.postgres_session_advisory_lock", _not_acquired),
             patch(
                 "app.services.radius_session_reconcile."
                 "reconcile_active_sessions_from_radacct"

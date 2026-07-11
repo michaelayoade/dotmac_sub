@@ -623,6 +623,12 @@ _RADACCT_OPTIONAL_COLUMNS = (
 )
 
 
+def _release_postgres_read_transaction(db: Session) -> None:
+    bind = db.get_bind()
+    if bind.dialect.name.startswith("postgres"):
+        db.rollback()
+
+
 def _radacct_select_list(conn) -> str:
     try:
         available = {c["name"] for c in sa_inspect(conn).get_columns("radacct")}
@@ -683,13 +689,14 @@ def _refresh_open_sessions_from_radacct(
     if not candidates:
         return 0, 0
 
-    db.query(RadiusAccountingSession).filter(
-        RadiusAccountingSession.id.in_([row_id for row_id, _, _ in candidates])
-    ).update({"refresh_attempted_at": now}, synchronize_session=False)
-
+    candidate_ids = [row_id for row_id, _, _ in candidates]
     session_ids = sorted({sid for _, sid, _ in candidates})
     usernames = sorted({username for _, _, username in candidates if username})
+    _release_postgres_read_transaction(db)
     if not usernames:
+        db.query(RadiusAccountingSession).filter(
+            RadiusAccountingSession.id.in_(candidate_ids)
+        ).update({"refresh_attempted_at": now}, synchronize_session=False)
         return len(candidates), 0
     stmt = text(
         f"""
@@ -704,9 +711,13 @@ def _refresh_open_sessions_from_radacct(
         bindparam("usernames", expanding=True),
     )
     result = conn.execute(stmt, {"session_ids": session_ids, "usernames": usernames})
+    rows = [dict(row._mapping) for row in result]
+    db.query(RadiusAccountingSession).filter(
+        RadiusAccountingSession.id.in_(candidate_ids)
+    ).update({"refresh_attempted_at": now}, synchronize_session=False)
     updated = 0
-    for row in result:
-        if _upsert_accounting_row(db, dict(row._mapping)):
+    for row in rows:
+        if _upsert_accounting_row(db, row):
             updated += 1
     return len(candidates), updated
 
@@ -722,6 +733,7 @@ def import_radius_accounting(
 
     batch_size = max(limit or 500, 1)
     last_radacctid = _get_radius_accounting_cursor(db)
+    _release_postgres_read_transaction(db)
     processed = 0
     created_or_updated = 0
     refreshed = 0
@@ -747,15 +759,15 @@ def import_radius_accounting(
             if _upsert_accounting_row(db, row):
                 created_or_updated += 1
             cursor = max(cursor, int(row.get("radacctid") or 0))
+        if cursor > last_radacctid:
+            _set_radius_accounting_cursor(db, cursor)
+        db.commit()
         # New rows first (a fresh Stop may close a session and shrink the
         # refresh set), then re-read radacct for whatever is still open.
-        db.flush()
         refresh_checked, refreshed = _refresh_open_sessions_from_radacct(
             db, conn, select_list, batch=_RADIUS_REFRESH_BATCH
         )
 
-    if cursor > last_radacctid:
-        _set_radius_accounting_cursor(db, cursor)
     db.commit()
     if refreshed:
         logger.info(

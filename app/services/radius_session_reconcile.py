@@ -59,6 +59,12 @@ _MIN_WINDOW_SECONDS = 300
 _CHUNK = 1000
 
 
+def _release_postgres_read_transaction(db: Session) -> None:
+    bind = db.get_bind()
+    if bind.dialect.name.startswith("postgres"):
+        db.rollback()
+
+
 def _strip_inet_mask(value: object) -> str | None:
     """Normalize a radacct ``inet`` value to a bare host IP.
 
@@ -127,6 +133,7 @@ def _read_open_sessions(
         logger.warning("active-session reconcile: no external RADIUS config available")
         result["errors"] += 1
         return {}, False
+    _release_postgres_read_transaction(db)
 
     by_sid: dict[str, dict[str, Any]] = {}
     complete = True

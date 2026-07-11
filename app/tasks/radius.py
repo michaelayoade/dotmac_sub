@@ -3,6 +3,7 @@ import logging
 from app.celery_app import celery_app
 from app.services import radius as radius_service
 from app.services.db_session_adapter import db_session_adapter
+from app.tasks._postgres_lock import postgres_session_advisory_lock
 
 logger = logging.getLogger(__name__)
 SessionLocal = db_session_adapter.create_session
@@ -37,19 +38,24 @@ def reconcile_active_sessions(window_seconds: int | None = None) -> dict:
         reconcile_active_sessions_from_radacct,
     )
 
-    with db_session_adapter.advisory_lock(ADVISORY_LOCK_KEY) as (session, acquired):
+    with postgres_session_advisory_lock(ADVISORY_LOCK_KEY) as acquired:
         if not acquired:
             logger.info(
                 "reconcile_active_sessions skipped: previous run still in progress"
             )
             return {"skipped": "already_running"}
+        session = SessionLocal()
         try:
-            return reconcile_active_sessions_from_radacct(
+            result = reconcile_active_sessions_from_radacct(
                 session, window_seconds=window_seconds
             )
+            session.commit()
+            return result
         except Exception:
             session.rollback()
             raise
+        finally:
+            session.close()
 
 
 @celery_app.task(name="app.tasks.radius.run_radius_sync_job")
