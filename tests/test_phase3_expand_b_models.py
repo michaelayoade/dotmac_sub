@@ -411,7 +411,7 @@ def test_migration_244_revision_chain():
     assert callable(module.downgrade)
 
 
-def test_migration_244_is_single_alembic_head():
+def test_repo_has_single_alembic_head():
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
@@ -419,7 +419,7 @@ def test_migration_244_is_single_alembic_head():
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
     heads = script.get_heads()
-    assert heads == ["247_merge_phase3_inbox_heads"]
+    assert heads == ["248_phase5_asset_inventory"]
 
 
 def test_migration_244_source_recreates_leads_partial_unique():
