@@ -275,9 +275,7 @@ def compare_fields(
         sub_subscriber_id = _norm_uuid(sub_row.get("subscriber_id"))
         if crm_subscriber_id is None:
             if sub_subscriber_id is not None:
-                enrichments.append(
-                    FieldDiff("subscriber_id", None, sub_subscriber_id)
-                )
+                enrichments.append(FieldDiff("subscriber_id", None, sub_subscriber_id))
         else:
             mapped = subscriber_map.get(crm_subscriber_id)
             if mapped:
@@ -351,9 +349,7 @@ _FIELD_SELECT: dict[str, str] = {
     "proposed_route_revisions": (
         "id::text, quote_id::text, revision_number, status::text, length_meters"
     ),
-    "installation_project_notes": (
-        "id::text, project_id::text, is_internal, body"
-    ),
+    "installation_project_notes": ("id::text, project_id::text, is_internal, body"),
 }
 
 # route_geom read as EWKT (SRID inline) on both sides for a deterministic diff.

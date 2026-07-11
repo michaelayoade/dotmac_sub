@@ -152,7 +152,9 @@ def test_resolve_nullable_native_hit_miss_and_none() -> None:
     present = {"seg-1"}
     assert resolve_nullable_native("SEG-1", present) == NativeRef("SEG-1", "resolved")
     miss = resolve_nullable_native("seg-9", present)
-    assert miss.value is None and miss.action == "null" and miss.reason == "absent_in_sub"
+    assert (
+        miss.value is None and miss.action == "null" and miss.reason == "absent_in_sub"
+    )
     empty = resolve_nullable_native(None, present)
     assert empty.value is None and empty.action == "null" and empty.reason is None
 

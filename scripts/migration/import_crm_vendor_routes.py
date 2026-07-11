@@ -192,9 +192,7 @@ def build_upsert_sql(spec: TableSpec) -> str:
         for column in spec.columns
         if column not in spec.conflict_columns and column not in spec.immutable_columns
     ]
-    update_sql = ",\n    ".join(
-        f"{column} = EXCLUDED.{column}" for column in updatable
-    )
+    update_sql = ",\n    ".join(f"{column} = EXCLUDED.{column}" for column in updatable)
     return (
         f"INSERT INTO {spec.table} ({columns_sql})\n"
         f"VALUES ({values_sql})\n"
@@ -409,7 +407,12 @@ TABLE_SPECS: dict[str, TableSpec] = {
             "created_at",
         ),
         uuid_columns=frozenset(
-            {"quote_id", "submitted_by_person_id", "reviewed_by_person_id", "fiber_segment_id"}
+            {
+                "quote_id",
+                "submitted_by_person_id",
+                "reviewed_by_person_id",
+                "fiber_segment_id",
+            }
         ),
         geom_columns=frozenset({"route_geom"}),
     ),
@@ -565,9 +568,7 @@ class NativeRef:
     reason: str | None = None
 
 
-def resolve_project_id(
-    crm_project_id: str | None, project_ids: set[str]
-) -> NativeRef:
+def resolve_project_id(crm_project_id: str | None, project_ids: set[str]) -> NativeRef:
     """installation_projects.project_id -> native ``projects`` (NOT NULL FK).
 
     Phase 3 carried CRM project UUIDs verbatim, so this is a direct membership
@@ -581,9 +582,7 @@ def resolve_project_id(
     return NativeRef(None, "block", "project_absent_in_sub")
 
 
-def resolve_nullable_native(
-    crm_id: str | None, present: set[str]
-) -> NativeRef:
+def resolve_nullable_native(crm_id: str | None, present: set[str]) -> NativeRef:
     """buildout_project_id / fiber_segment_id: keep if native, else NULL."""
     key = _uuid_or_none(crm_id)
     if not key:
@@ -762,7 +761,8 @@ def _import_installation_projects(
             ctx.stats.bump(step, "dangling_vendor")
             assigned_vendor_id = None
         ctx.note_staff(
-            "installation_projects", "created_by_person_id",
+            "installation_projects",
+            "created_by_person_id",
             row.get("created_by_person_id"),
         )
         # approved_quote_id deferred to the finalize pass.
@@ -801,9 +801,7 @@ def _import_installation_projects(
     )
 
 
-def _import_project_quotes(
-    sub: Connection, crm: Connection, ctx: RunContext
-) -> None:
+def _import_project_quotes(sub: Connection, crm: Connection, ctx: RunContext) -> None:
     step = "project_quotes"
     rows = _fetch(
         crm,
@@ -856,7 +854,9 @@ def _import_project_quotes(
                 "valid_until": row.get("valid_until"),
                 "submitted_at": row.get("submitted_at"),
                 "reviewed_at": row.get("reviewed_at"),
-                "reviewed_by_person_id": _uuid_or_none(row.get("reviewed_by_person_id")),
+                "reviewed_by_person_id": _uuid_or_none(
+                    row.get("reviewed_by_person_id")
+                ),
                 "review_notes": row.get("review_notes"),
                 "created_by_person_id": _uuid_or_none(row.get("created_by_person_id")),
                 "is_active": bool(row.get("is_active")),
@@ -864,9 +864,7 @@ def _import_project_quotes(
                 "updated_at": row["updated_at"],
             }
         )
-    _execute_upserts(
-        sub, ctx, step, TABLE_SPECS["project_quotes"], payloads, existing
-    )
+    _execute_upserts(sub, ctx, step, TABLE_SPECS["project_quotes"], payloads, existing)
 
 
 def _import_project_quote_line_items(
@@ -927,15 +925,13 @@ def _import_project_quote_line_items(
     )
 
 
-def _import_as_built_routes(
-    sub: Connection, crm: Connection, ctx: RunContext
-) -> None:
+def _import_as_built_routes(sub: Connection, crm: Connection, ctx: RunContext) -> None:
     step = "as_built_routes"
     rows = _fetch(
         crm,
         f"""
         SELECT id::text, project_id::text, proposed_revision_id::text,
-               status::text, {geom_read_expr('route_geom')}, actual_length_meters,
+               status::text, {geom_read_expr("route_geom")}, actual_length_meters,
                submitted_at, submitted_by_person_id::text, reviewed_at,
                reviewed_by_person_id::text, review_notes, fiber_segment_id::text,
                report_file_path, report_file_name, report_generated_at,
@@ -997,9 +993,13 @@ def _import_as_built_routes(
                 "route_geom": row.get("route_geom"),
                 "actual_length_meters": row.get("actual_length_meters"),
                 "submitted_at": row.get("submitted_at"),
-                "submitted_by_person_id": _uuid_or_none(row.get("submitted_by_person_id")),
+                "submitted_by_person_id": _uuid_or_none(
+                    row.get("submitted_by_person_id")
+                ),
                 "reviewed_at": row.get("reviewed_at"),
-                "reviewed_by_person_id": _uuid_or_none(row.get("reviewed_by_person_id")),
+                "reviewed_by_person_id": _uuid_or_none(
+                    row.get("reviewed_by_person_id")
+                ),
                 "review_notes": row.get("review_notes"),
                 "fiber_segment_id": fiber_ref.value,
                 "report_file_path": row.get("report_file_path"),
@@ -1016,9 +1016,7 @@ def _import_as_built_routes(
                 "updated_at": row["updated_at"],
             }
         )
-    _execute_upserts(
-        sub, ctx, step, TABLE_SPECS["as_built_routes"], payloads, existing
-    )
+    _execute_upserts(sub, ctx, step, TABLE_SPECS["as_built_routes"], payloads, existing)
 
 
 def _import_as_built_line_items(
@@ -1084,7 +1082,7 @@ def _import_proposed_route_revisions(
         crm,
         f"""
         SELECT id::text, quote_id::text, revision_number, status::text,
-               {geom_read_expr('route_geom')}, length_meters, submitted_at,
+               {geom_read_expr("route_geom")}, length_meters, submitted_at,
                submitted_by_person_id::text, reviewed_at,
                reviewed_by_person_id::text, review_notes, fiber_segment_id::text,
                created_at
@@ -1134,9 +1132,13 @@ def _import_proposed_route_revisions(
                 "route_geom": row.get("route_geom"),
                 "length_meters": row.get("length_meters"),
                 "submitted_at": row.get("submitted_at"),
-                "submitted_by_person_id": _uuid_or_none(row.get("submitted_by_person_id")),
+                "submitted_by_person_id": _uuid_or_none(
+                    row.get("submitted_by_person_id")
+                ),
                 "reviewed_at": row.get("reviewed_at"),
-                "reviewed_by_person_id": _uuid_or_none(row.get("reviewed_by_person_id")),
+                "reviewed_by_person_id": _uuid_or_none(
+                    row.get("reviewed_by_person_id")
+                ),
                 "review_notes": row.get("review_notes"),
                 "fiber_segment_id": fiber_ref.value,
                 "created_at": row["created_at"],
@@ -1179,7 +1181,8 @@ def _import_installation_project_notes(
             )
             continue
         ctx.note_staff(
-            "installation_project_notes", "author_person_id",
+            "installation_project_notes",
+            "author_person_id",
             row.get("author_person_id"),
         )
         payloads.append(

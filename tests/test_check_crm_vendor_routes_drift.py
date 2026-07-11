@@ -39,10 +39,20 @@ def test_gating_and_info_classes_are_disjoint() -> None:
 
 
 def test_vendor_field_drift_detected() -> None:
-    crm = {"id": "v1", "name": "Fibre Co", "code": "FC", "contact_email": "a@x",
-           "is_active": True}
-    sub = {"id": "v1", "name": "Fibre Co", "code": "FC", "contact_email": "a@x",
-           "is_active": True}
+    crm = {
+        "id": "v1",
+        "name": "Fibre Co",
+        "code": "FC",
+        "contact_email": "a@x",
+        "is_active": True,
+    }
+    sub = {
+        "id": "v1",
+        "name": "Fibre Co",
+        "code": "FC",
+        "contact_email": "a@x",
+        "is_active": True,
+    }
     assert compare_fields("vendors", crm, sub, subscriber_map={}).diffs == ()
     sub_drift = {**sub, "name": "Renamed"}
     diffs = compare_fields("vendors", crm, sub_drift, subscriber_map={}).diffs
@@ -51,21 +61,41 @@ def test_vendor_field_drift_detected() -> None:
 
 
 def test_project_quote_decimal_drift() -> None:
-    crm = {"id": "q1", "project_id": "p1", "vendor_id": "v1", "status": "approved",
-           "currency": "NGN", "subtotal": Decimal("100.00"),
-           "tax_total": Decimal("7.50"), "total": Decimal("107.50"), "is_active": True}
+    crm = {
+        "id": "q1",
+        "project_id": "p1",
+        "vendor_id": "v1",
+        "status": "approved",
+        "currency": "NGN",
+        "subtotal": Decimal("100.00"),
+        "tax_total": Decimal("7.50"),
+        "total": Decimal("107.50"),
+        "is_active": True,
+    }
     sub = {**crm, "total": Decimal("108.00")}
     diffs = compare_fields("project_quotes", crm, sub, subscriber_map={}).diffs
     assert [d.field for d in diffs] == ["total"]
 
 
 def test_installation_project_subscriber_link_resolves_and_matches() -> None:
-    crm = {"id": "ip1", "project_id": "p1", "subscriber_id": "crm-sub-1",
-           "assigned_vendor_id": "v1", "assignment_type": "direct",
-           "status": "approved", "is_active": True}
-    sub = {"id": "ip1", "project_id": "p1", "subscriber_id": "sub-1",
-           "assigned_vendor_id": "v1", "assignment_type": "direct",
-           "status": "approved", "is_active": True}
+    crm = {
+        "id": "ip1",
+        "project_id": "p1",
+        "subscriber_id": "crm-sub-1",
+        "assigned_vendor_id": "v1",
+        "assignment_type": "direct",
+        "status": "approved",
+        "is_active": True,
+    }
+    sub = {
+        "id": "ip1",
+        "project_id": "p1",
+        "subscriber_id": "sub-1",
+        "assigned_vendor_id": "v1",
+        "assignment_type": "direct",
+        "status": "approved",
+        "is_active": True,
+    }
     comparison = compare_fields(
         "installation_projects", crm, sub, subscriber_map=SUBSCRIBER_MAP
     )
@@ -74,9 +104,15 @@ def test_installation_project_subscriber_link_resolves_and_matches() -> None:
 
 
 def test_installation_project_subscriber_mismatch_is_drift() -> None:
-    crm = {"id": "ip1", "project_id": "p1", "subscriber_id": "crm-sub-1",
-           "assigned_vendor_id": None, "assignment_type": None,
-           "status": "draft", "is_active": True}
+    crm = {
+        "id": "ip1",
+        "project_id": "p1",
+        "subscriber_id": "crm-sub-1",
+        "assigned_vendor_id": None,
+        "assignment_type": None,
+        "status": "draft",
+        "is_active": True,
+    }
     sub = {**crm, "subscriber_id": "sub-2"}
     comparison = compare_fields(
         "installation_projects", crm, sub, subscriber_map=SUBSCRIBER_MAP
@@ -87,9 +123,15 @@ def test_installation_project_subscriber_mismatch_is_drift() -> None:
 
 
 def test_installation_project_subscriber_enrichment_when_crm_null() -> None:
-    crm = {"id": "ip1", "project_id": "p1", "subscriber_id": None,
-           "assigned_vendor_id": None, "assignment_type": None,
-           "status": "draft", "is_active": True}
+    crm = {
+        "id": "ip1",
+        "project_id": "p1",
+        "subscriber_id": None,
+        "assigned_vendor_id": None,
+        "assignment_type": None,
+        "status": "draft",
+        "is_active": True,
+    }
     sub = {**crm, "subscriber_id": "sub-9"}
     comparison = compare_fields(
         "installation_projects", crm, sub, subscriber_map=SUBSCRIBER_MAP
@@ -99,9 +141,15 @@ def test_installation_project_subscriber_enrichment_when_crm_null() -> None:
 
 
 def test_installation_project_unmapped_subscriber_flagged() -> None:
-    crm = {"id": "ip1", "project_id": "p1", "subscriber_id": "crm-sub-unknown",
-           "assigned_vendor_id": None, "assignment_type": None,
-           "status": "draft", "is_active": True}
+    crm = {
+        "id": "ip1",
+        "project_id": "p1",
+        "subscriber_id": "crm-sub-unknown",
+        "assigned_vendor_id": None,
+        "assignment_type": None,
+        "status": "draft",
+        "is_active": True,
+    }
     sub = {**crm, "subscriber_id": None}
     comparison = compare_fields(
         "installation_projects", crm, sub, subscriber_map=SUBSCRIBER_MAP
@@ -111,11 +159,20 @@ def test_installation_project_unmapped_subscriber_flagged() -> None:
 
 def test_route_geom_ewkt_drift_detected() -> None:
     geom = "SRID=4326;LINESTRING(3.1 6.2,3.2 6.3)"
-    crm = {"id": "r1", "project_id": "p1", "status": "accepted",
-           "variation_type": None, "actual_length_meters": Decimal("120.0"),
-           "version": 1, "route_geom": geom, "is_active": True}
+    crm = {
+        "id": "r1",
+        "project_id": "p1",
+        "status": "accepted",
+        "variation_type": None,
+        "actual_length_meters": Decimal("120.0"),
+        "version": 1,
+        "route_geom": geom,
+        "is_active": True,
+    }
     sub_same = {**crm}
-    assert compare_fields("as_built_routes", crm, sub_same, subscriber_map={}).diffs == ()
+    assert (
+        compare_fields("as_built_routes", crm, sub_same, subscriber_map={}).diffs == ()
+    )
     sub_drift = {**crm, "route_geom": "SRID=4326;LINESTRING(9.9 9.9,1.0 1.0)"}
     diffs = compare_fields("as_built_routes", crm, sub_drift, subscriber_map={}).diffs
     assert [d.field for d in diffs] == ["route_geom"]
@@ -152,10 +209,16 @@ def test_classify_missing_other_table_is_generic() -> None:
 
 
 def test_children_count_and_amount_sum_mismatch() -> None:
-    crm: dict[str, Any] = {"lines": 3, "lines_amount_sum": Decimal("300.00"),
-                           "route_revisions": 2}
-    sub: dict[str, Any] = {"lines": 3, "lines_amount_sum": Decimal("250.00"),
-                           "route_revisions": 1}
+    crm: dict[str, Any] = {
+        "lines": 3,
+        "lines_amount_sum": Decimal("300.00"),
+        "route_revisions": 2,
+    }
+    sub: dict[str, Any] = {
+        "lines": 3,
+        "lines_amount_sum": Decimal("250.00"),
+        "route_revisions": 1,
+    }
     mismatches = compare_children_counts(
         crm, sub, ("lines", "lines_amount_sum", "route_revisions")
     )
