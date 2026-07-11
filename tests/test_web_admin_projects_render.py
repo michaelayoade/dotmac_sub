@@ -1,0 +1,195 @@
+"""Render smoke for the admin projects templates (Phase 3 PR 10).
+
+Renders every projects page through the same Jinja environment the routes
+use, with contexts produced by the real builders — catches template/context
+drift that a compile-only check misses.
+"""
+
+import pytest
+
+from app.schemas.project import ProjectCreate, ProjectTaskCreate
+from app.services import web_projects
+from app.services.projects import project_tasks, projects
+from app.web.admin.projects import templates
+
+
+class _State:
+    csrf_token = "test-csrf-token"
+    auth: dict = {}
+
+
+class _URL:
+    path = "/admin/projects"
+
+    def __str__(self) -> str:
+        return self.path
+
+
+class DummyRequest:
+    state = _State()
+    query_params: dict = {}
+    headers: dict = {}
+    cookies: dict = {}
+    url = _URL()
+    session: dict = {}
+    client = None
+    scope: dict = {}
+
+    def url_for(self, *args, **kwargs) -> str:
+        return "/"
+
+
+@pytest.fixture()
+def base_context():
+    return {
+        "request": DummyRequest(),
+        "active_page": "projects",
+        "active_menu": "operations",
+        "current_user": {"name": "Test Admin", "email": "admin@example.com"},
+        "sidebar_stats": {},
+    }
+
+
+@pytest.fixture()
+def fiber_project(db_session, subscriber):
+    return projects.create(
+        db_session,
+        ProjectCreate(
+            name="Fiber install render",
+            project_type="fiber_optics_installation",
+            subscriber_id=subscriber.id,
+            region="Abuja",
+        ),
+    )
+
+
+def _render(name: str, base: dict, extra: dict) -> str:
+    context = dict(base)
+    context.update(extra)
+    html = templates.env.get_template(name).render(**context)
+    assert html.strip()
+    return html
+
+
+def test_render_index_and_table(db_session, base_context, fiber_project):
+    context = web_projects.build_projects_list_context(
+        db_session,
+        search=None,
+        status=None,
+        project_type=None,
+        priority=None,
+        region=None,
+        filters=None,
+        order_by="created_at",
+        order_dir="desc",
+        page=1,
+        per_page=25,
+    )
+    html = _render("admin/projects/index.html", base_context, context)
+    assert "Fiber install render" in html
+    assert "/api/v1/projects/kanban" in html
+    assert "/api/v1/projects/gantt" in html
+    _render("admin/projects/_table.html", base_context, context)
+
+
+def test_render_project_detail_with_stages(db_session, base_context, fiber_project):
+    context = web_projects.build_project_detail_context(
+        db_session, project=fiber_project
+    )
+    html = _render("admin/projects/project_detail.html", base_context, context)
+    assert "Fiber Installation Stages" in html
+    assert "Project Plan" in html
+
+
+def test_render_project_forms(db_session, base_context, fiber_project):
+    create_ctx = web_projects.build_project_form_context(db_session)
+    create_ctx.update({"page_title": "New Project", "form_mode": "create"})
+    _render("admin/projects/project_form.html", base_context, create_ctx)
+
+    edit_ctx = web_projects.build_project_form_context(
+        db_session, project=fiber_project
+    )
+    edit_ctx.update({"page_title": "Edit Project", "form_mode": "edit"})
+    html = _render("admin/projects/project_form.html", base_context, edit_ctx)
+    assert "Fiber install render" in html
+
+
+def test_render_tasks_pages(db_session, base_context, fiber_project):
+    task = project_tasks.create(
+        db_session,
+        ProjectTaskCreate(project_id=fiber_project.id, title="Render task"),
+    )
+    list_ctx = web_projects.build_tasks_list_context(
+        db_session,
+        project_id=None,
+        status=None,
+        priority=None,
+        assigned_to_me=False,
+        actor_id=None,
+        filters=None,
+        page=1,
+        per_page=25,
+    )
+    list_ctx["assigned"] = ""
+    html = _render("admin/projects/tasks.html", base_context, list_ctx)
+    assert "Render task" in html
+
+    detail_ctx = web_projects.build_task_detail_context(db_session, task=task)
+    _render("admin/projects/project_task_detail.html", base_context, detail_ctx)
+
+    form_ctx = web_projects.build_task_form_context(db_session)
+    form_ctx.update({"page_title": "New Task", "form_mode": "create"})
+    _render("admin/projects/project_task_form.html", base_context, form_ctx)
+
+
+def test_render_template_admin_pages(db_session, base_context):
+    template = web_projects.create_template_from_form(
+        db_session, name="Render template"
+    )
+    web_projects.save_template_tasks_from_editor(
+        db_session,
+        template_id=str(template.id),
+        tasks_json=(
+            '[{"client_id": "a", "title": "Alpha", "description": "",'
+            ' "effort_hours": 2, "dependencies": []},'
+            ' {"client_id": "b", "title": "Beta", "description": "",'
+            ' "effort_hours": null, "dependencies": ["a"]}]'
+        ),
+    )
+
+    _render(
+        "admin/projects/project_templates.html",
+        base_context,
+        web_projects.build_templates_list_context(db_session),
+    )
+    detail_html = _render(
+        "admin/projects/project_template_detail.html",
+        base_context,
+        web_projects.build_template_detail_context(
+            db_session, template_id=str(template.id)
+        ),
+    )
+    assert "Alpha" in detail_html
+
+    form_ctx = web_projects.build_template_form_context(db_session)
+    form_ctx.update({"page_title": "New Template", "form_mode": "create"})
+    _render("admin/projects/project_template_form.html", base_context, form_ctx)
+
+    task_form_ctx = web_projects.build_template_task_form_context(
+        db_session, template=template
+    )
+    task_form_ctx.update({"page_title": "New Template Task", "form_mode": "create"})
+    _render(
+        "admin/projects/project_template_task_form.html", base_context, task_form_ctx
+    )
+
+    editor_ctx = {
+        "template": template,
+        "tasks_payload": web_projects.build_template_tasks_editor_payload(
+            db_session, str(template.id)
+        ),
+    }
+    editor_html = _render(
+        "admin/projects/project_template_tasks_editor.html", base_context, editor_ctx
+    )
+    assert "templateTasksEditor" in editor_html

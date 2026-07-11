@@ -1,0 +1,357 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import action_button, icon_plus, icon_filter %}
+{% from "admin/projects/_components.html" import filter_condition_rows %}
+{% block title %}Projects{% endblock %}
+
+{% block content %}
+<div class="space-y-4" x-data="{ activeView: 'table' }">
+    <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+            <h1 class="font-display text-xl font-bold tracking-tight text-slate-900 dark:text-white">Projects</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Plan, track, and deliver installation and network projects.</p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+            <a href="/admin/projects/tasks"
+               class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+                Tasks
+            </a>
+            <a href="/admin/projects/templates"
+               class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/></svg>
+                Templates
+            </a>
+            {{ action_button('New Project', '/admin/projects/new', icon_plus(), 'primary', 'emerald', 'teal', 'sm') }}
+        </div>
+    </div>
+
+    <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white p-1 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="flex min-w-max items-center gap-1 md:min-w-0">
+            {% for card in status_summary_cards %}
+            {% set is_current_status = status == card.value %}
+            <a href="{{ card.href }}"
+               class="flex min-w-32 flex-1 items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition {% if is_current_status %}bg-emerald-500 text-white shadow-sm{% else %}text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-700/60{% endif %}">
+                <span>{{ card.label }}</span>
+                <span class="rounded-full px-2 py-0.5 text-xs tabular-nums {% if is_current_status %}bg-white/20 text-white{% else %}bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-300{% endif %}">{{ card.count }}</span>
+            </a>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <form method="get"
+              action="/admin/projects"
+              id="project-filter-form"
+              hx-get="/admin/projects"
+              hx-target="#projects-table"
+              hx-swap="innerHTML"
+              hx-push-url="true"
+              class="space-y-3">
+            <div class="grid gap-2 lg:grid-cols-12">
+                <div class="lg:col-span-3">
+                    <label class="sr-only" for="project-search">Search</label>
+                    <div class="relative">
+                        <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+                            <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                            </svg>
+                        </div>
+                        <input id="project-search"
+                               type="text"
+                               name="search"
+                               value="{{ search }}"
+                               placeholder="Search projects..."
+                               class="block w-full rounded-lg border border-slate-200 bg-white py-1.5 pl-9 pr-3 text-sm text-slate-900 placeholder-slate-400 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white dark:placeholder-slate-500"
+                               hx-trigger="keyup changed delay:250ms" />
+                    </div>
+                </div>
+                <div class="lg:col-span-2">
+                    <label class="sr-only">Status</label>
+                    <select name="status" hx-trigger="change" class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                        <option value="">All Statuses</option>
+                        {% for s in all_statuses %}
+                        <option value="{{ s }}" {% if status == s %}selected{% endif %}>{{ s|replace('_', ' ')|title }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="lg:col-span-2">
+                    <label class="sr-only">Project Type</label>
+                    <select name="project_type" hx-trigger="change" class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                        <option value="">All Types</option>
+                        {% for t in project_type_options %}
+                        <option value="{{ t }}" {% if project_type == t %}selected{% endif %}>{{ t|replace('_', ' ')|title }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="lg:col-span-2">
+                    <label class="sr-only">Region</label>
+                    <select name="region" hx-trigger="change" class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                        <option value="">All Regions</option>
+                        {% for r in region_options %}
+                        <option value="{{ r }}" {% if region == r %}selected{% endif %}>{{ r }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="flex gap-2 lg:col-span-1">
+                    <button type="submit" class="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-gradient-to-r from-emerald-500 to-teal-600 px-3 py-1.5 text-sm font-semibold text-white shadow-sm shadow-emerald-500/20 transition hover:shadow-md">
+                        {{ icon_filter('h-4 w-4') }}
+                        <span class="hidden xl:inline">Apply</span>
+                    </button>
+                </div>
+                <div class="lg:col-span-1">
+                    <a href="/admin/projects/export.csv{% if request.query_params %}?{{ request.query_params }}{% endif %}"
+                       class="inline-flex h-full w-full items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
+                        Export
+                    </a>
+                </div>
+                <div class="lg:col-span-1">
+                    <div class="inline-flex h-full w-full items-center justify-center gap-0.5 rounded-lg border border-slate-200 p-0.5 dark:border-slate-600" role="tablist" aria-label="View switcher">
+                        <button type="button" @click="activeView = 'table'"
+                                :class="activeView === 'table' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300' : 'text-slate-500 hover:bg-slate-50 dark:text-slate-400 dark:hover:bg-slate-700/50'"
+                                class="rounded-md p-1.5" title="Table view" aria-label="Table view">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M3 14h18M3 18h18M3 6h18"/></svg>
+                        </button>
+                        <button type="button" @click="activeView = 'kanban'; $dispatch('projects-kanban-load')"
+                                :class="activeView === 'kanban' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300' : 'text-slate-500 hover:bg-slate-50 dark:text-slate-400 dark:hover:bg-slate-700/50'"
+                                class="rounded-md p-1.5" title="Kanban view" aria-label="Kanban view">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2"/></svg>
+                        </button>
+                        <button type="button" @click="activeView = 'gantt'; $dispatch('projects-gantt-load')"
+                                :class="activeView === 'gantt' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300' : 'text-slate-500 hover:bg-slate-50 dark:text-slate-400 dark:hover:bg-slate-700/50'"
+                                class="rounded-md p-1.5" title="Gantt view" aria-label="Gantt view">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h8m-8 4h12M8 15h4"/></svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <details class="rounded-xl border border-slate-200/80 bg-slate-50/70 p-3 dark:border-slate-600/70 dark:bg-slate-700/30" {% if filters %}open{% endif %}>
+                <summary class="cursor-pointer text-sm font-medium text-slate-700 dark:text-slate-200">Advanced Filters</summary>
+                {{ filter_condition_rows(project_filter_schema, filters, 'Project') }}
+            </details>
+        </form>
+    </div>
+
+    {# ── Table view ── #}
+    <div x-show="activeView === 'table'" id="projects-table" class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        {% include "admin/projects/_table.html" %}
+    </div>
+
+    {# ── Kanban view: columns per status, HTML5 drag to move (POST /api/v1/projects/kanban/move) ── #}
+    <div x-show="activeView === 'kanban'" x-cloak
+         x-data="projectsKanban()"
+         @projects-kanban-load.window="load()"
+         class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <p x-show="loading" class="py-8 text-center text-sm text-slate-500 dark:text-slate-400">Loading board...</p>
+        <p x-show="error" x-text="error" class="py-8 text-center text-sm text-red-600 dark:text-red-400"></p>
+        <div x-show="!loading && !error" class="overflow-x-auto">
+            <div class="flex min-w-max gap-3 pb-2">
+                <template x-for="column in columns" :key="column.id">
+                    <div class="w-64 shrink-0 rounded-xl bg-slate-50 p-2 dark:bg-slate-900/40"
+                         @dragover.prevent
+                         @drop.prevent="dropCard(column.id)">
+                        <div class="flex items-center justify-between px-2 py-1.5">
+                            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400" x-text="column.title"></p>
+                            <span class="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-bold tabular-nums text-slate-600 dark:bg-slate-700 dark:text-slate-300" x-text="cardsFor(column.id).length"></span>
+                        </div>
+                        <div class="mt-1 space-y-2">
+                            <template x-for="card in cardsFor(column.id)" :key="card.id">
+                                <a :href="'/admin/projects/' + card.id"
+                                   draggable="true"
+                                   @dragstart="dragCard = card.id"
+                                   class="block cursor-grab rounded-lg border border-slate-200 bg-white p-3 shadow-sm transition hover:shadow-md dark:border-slate-600 dark:bg-slate-800">
+                                    <p class="text-sm font-semibold text-slate-800 dark:text-slate-100" x-text="card.name"></p>
+                                    <p class="mt-1 text-[11px] text-slate-500 dark:text-slate-400" x-text="(card.project_type || '').replace(/_/g, ' ')"></p>
+                                    <p class="mt-1 text-[11px] font-medium text-slate-600 dark:text-slate-300" x-show="card.due_date" x-text="'Due ' + card.due_date"></p>
+                                </a>
+                            </template>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+    </div>
+
+    {# ── Gantt view: proportional bars over the project date range; due-date
+         edits POST /api/v1/projects/gantt/due-date ── #}
+    <div x-show="activeView === 'gantt'" x-cloak
+         x-data="projectsGantt()"
+         @projects-gantt-load.window="load()"
+         class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <p x-show="loading" class="py-8 text-center text-sm text-slate-500 dark:text-slate-400">Loading timeline...</p>
+        <p x-show="error" x-text="error" class="py-8 text-center text-sm text-red-600 dark:text-red-400"></p>
+        <div x-show="!loading && !error && items.length === 0" class="py-8 text-center text-sm text-slate-500 dark:text-slate-400">No active projects to plot.</div>
+        <div x-show="!loading && !error && items.length > 0" class="overflow-x-auto">
+            <div class="min-w-[640px] space-y-1.5">
+                <div class="flex items-center gap-3 px-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">
+                    <span class="w-48 shrink-0">Project</span>
+                    <span class="flex-1" x-text="rangeLabel"></span>
+                    <span class="w-36 shrink-0 text-right">Due date</span>
+                </div>
+                <template x-for="item in items" :key="item.id">
+                    <div class="flex items-center gap-3 rounded-lg px-1 py-1 hover:bg-slate-50 dark:hover:bg-slate-700/40">
+                        <a :href="'/admin/projects/' + item.id" class="w-48 shrink-0 truncate text-sm font-medium text-emerald-700 hover:underline dark:text-emerald-400" x-text="item.name"></a>
+                        <div class="relative h-5 flex-1 rounded bg-slate-100 dark:bg-slate-700/60">
+                            <div class="absolute inset-y-0 rounded bg-gradient-to-r from-emerald-400 to-teal-500"
+                                 :style="barStyle(item)"></div>
+                        </div>
+                        <input type="date"
+                               class="w-36 shrink-0 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
+                               :value="item.due_date"
+                               @change="updateDueDate(item, $event.target.value)">
+                    </div>
+                </template>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% include "admin/projects/_filter_builder.html" %}
+<script>
+function projectsCsrfToken() {
+    const match = document.cookie.match(/(^|;\s*)csrf_token=([^;]*)/);
+    return match ? decodeURIComponent(match[2]) : '';
+}
+
+function projectsKanban() {
+    return {
+        loading: false,
+        loaded: false,
+        error: '',
+        columns: [],
+        records: [],
+        dragCard: null,
+
+        async load(force = false) {
+            if (this.loaded && !force) return;
+            this.loading = true;
+            this.error = '';
+            try {
+                const resp = await fetch('/api/v1/projects/kanban');
+                if (!resp.ok) throw new Error('Failed to load kanban board');
+                const data = await resp.json();
+                this.columns = data.columns || [];
+                this.records = data.records || [];
+                this.loaded = true;
+            } catch (err) {
+                this.error = err.message || 'Failed to load kanban board';
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        cardsFor(columnId) {
+            return this.records.filter((record) => record.status === columnId);
+        },
+
+        async dropCard(columnId) {
+            const cardId = this.dragCard;
+            this.dragCard = null;
+            if (!cardId) return;
+            const record = this.records.find((item) => item.id === cardId);
+            if (!record || record.status === columnId) return;
+            const previous = record.status;
+            record.status = columnId;
+            try {
+                const resp = await fetch('/api/v1/projects/kanban/move', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRF-Token': projectsCsrfToken(),
+                    },
+                    body: JSON.stringify({ id: cardId, from: previous, to: columnId }),
+                });
+                if (!resp.ok) throw new Error('Move failed');
+            } catch (_err) {
+                record.status = previous;
+                this.error = 'Could not move the project. Try again.';
+            }
+        },
+    };
+}
+
+function projectsGantt() {
+    return {
+        loading: false,
+        loaded: false,
+        error: '',
+        items: [],
+        rangeStart: null,
+        rangeEnd: null,
+        rangeLabel: '',
+
+        async load(force = false) {
+            if (this.loaded && !force) return;
+            this.loading = true;
+            this.error = '';
+            try {
+                const resp = await fetch('/api/v1/projects/gantt');
+                if (!resp.ok) throw new Error('Failed to load timeline');
+                const data = await resp.json();
+                this.items = (data.items || []).filter((item) => item.start_date);
+                this.computeRange();
+                this.loaded = true;
+            } catch (err) {
+                this.error = err.message || 'Failed to load timeline';
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        computeRange() {
+            const dates = [];
+            this.items.forEach((item) => {
+                if (item.start_date) dates.push(new Date(item.start_date));
+                if (item.due_date) dates.push(new Date(item.due_date));
+            });
+            if (!dates.length) {
+                this.rangeStart = null;
+                this.rangeEnd = null;
+                this.rangeLabel = '';
+                return;
+            }
+            this.rangeStart = new Date(Math.min.apply(null, dates));
+            this.rangeEnd = new Date(Math.max.apply(null, dates));
+            if (this.rangeEnd - this.rangeStart < 86400000) {
+                this.rangeEnd = new Date(this.rangeStart.getTime() + 86400000);
+            }
+            this.rangeLabel = this.rangeStart.toISOString().slice(0, 10)
+                + '  →  ' + this.rangeEnd.toISOString().slice(0, 10);
+        },
+
+        barStyle(item) {
+            if (!this.rangeStart || !this.rangeEnd || !item.start_date) {
+                return 'left:0%;width:0%';
+            }
+            const total = this.rangeEnd - this.rangeStart;
+            const start = new Date(item.start_date) - this.rangeStart;
+            const end = (item.due_date ? new Date(item.due_date) : new Date(item.start_date)) - this.rangeStart;
+            const left = Math.max(0, Math.min(100, (start / total) * 100));
+            const width = Math.max(1.5, Math.min(100 - left, ((end - start) / total) * 100));
+            return `left:${left}%;width:${width}%`;
+        },
+
+        async updateDueDate(item, value) {
+            if (!value) return;
+            const previous = item.due_date;
+            item.due_date = value;
+            try {
+                const resp = await fetch('/api/v1/projects/gantt/due-date', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRF-Token': projectsCsrfToken(),
+                    },
+                    body: JSON.stringify({ id: item.id, field: 'due_date', value: value }),
+                });
+                if (!resp.ok) throw new Error('Update failed');
+                this.computeRange();
+            } catch (_err) {
+                item.due_date = previous;
+                this.error = 'Could not update the due date. Try again.';
+            }
+        },
+    };
+}
+</script>
+{% endblock %}
