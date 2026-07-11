@@ -1,6 +1,7 @@
 """Credit note management services."""
 
 import logging
+from datetime import datetime
 
 from fastapi import HTTPException
 from sqlalchemy.exc import SQLAlchemyError
@@ -120,6 +121,8 @@ class CreditNotes(ListResponseMixin):
         order_dir: str,
         limit: int,
         offset: int,
+        *,
+        updated_since: datetime | None = None,
     ):
         query = db.query(CreditNote).options(
             selectinload(CreditNote.lines),
@@ -137,12 +140,22 @@ class CreditNotes(ListResponseMixin):
             query = query.filter(CreditNote.is_active.is_(True))
         else:
             query = query.filter(CreditNote.is_active == is_active)
+        # Incremental-sync watermark (see Invoices.list); backed by
+        # ix_credit_notes_is_active_updated_at.
+        if updated_since is not None:
+            query = query.filter(CreditNote.updated_at >= updated_since)
         query = apply_ordering(
             query,
             order_by,
             order_dir,
-            {"created_at": CreditNote.created_at, "status": CreditNote.status},
+            {
+                "created_at": CreditNote.created_at,
+                "updated_at": CreditNote.updated_at,
+                "status": CreditNote.status,
+            },
         )
+        # Stable, keyset-friendly tiebreaker for deterministic forward paging.
+        query = query.order_by(CreditNote.id.asc())
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod

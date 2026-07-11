@@ -1,6 +1,7 @@
 """Invoice and invoice line management services."""
 
 import logging
+from datetime import datetime
 from decimal import Decimal
 
 from fastapi import HTTPException
@@ -297,6 +298,8 @@ class Invoices(ListResponseMixin):
         order_dir: str,
         limit: int,
         offset: int,
+        *,
+        updated_since: datetime | None = None,
     ):
         query = db.query(Invoice).options(
             selectinload(Invoice.lines),
@@ -312,17 +315,26 @@ class Invoices(ListResponseMixin):
             query = query.filter(Invoice.is_active.is_(True))
         else:
             query = query.filter(Invoice.is_active == is_active)
+        # Incremental-sync watermark: only rows modified at/after the cutoff.
+        # Backed by ix_invoices_is_active_updated_at so the ERP AR sync stops
+        # re-listing every invoice each cycle (pool-starvation incident).
+        if updated_since is not None:
+            query = query.filter(Invoice.updated_at >= updated_since)
         query = apply_ordering(
             query,
             order_by,
             order_dir,
             {
                 "created_at": Invoice.created_at,
+                "updated_at": Invoice.updated_at,
                 "due_at": Invoice.due_at,
                 "issued_at": Invoice.issued_at,
                 "status": Invoice.status,
             },
         )
+        # Stable, keyset-friendly tiebreaker so forward paging over a watermark
+        # is deterministic (e.g. order_by=updated_at&order_dir=asc from the sync).
+        query = query.order_by(Invoice.id.asc())
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
