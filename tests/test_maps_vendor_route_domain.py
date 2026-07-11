@@ -297,8 +297,7 @@ def test_migration_248_is_single_alembic_head():
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
     # 248 is a single link in the chain; the current head advances as later PRs
-    # stack on top (billing incremental-sync PR added 252_billing_updated_since_indexes).
-    assert script.get_heads() == ["252_billing_updated_since_indexes"]
+    assert script.get_heads() == ["253_billing_updated_since_indexes"]
 
 
 def test_migration_248_creates_geometry_gist_indexes():

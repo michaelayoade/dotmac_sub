@@ -4,11 +4,9 @@ Handles retry of failed events and cleanup of old event records.
 """
 
 import logging
-from datetime import UTC, datetime, timedelta
-
-from sqlalchemy import text
 
 from app.celery_app import celery_app
+from app.services import event_store as event_store_service
 from app.services.db_session_adapter import db_session_adapter
 
 logger = logging.getLogger(__name__)
@@ -31,7 +29,6 @@ def retry_failed_events():
     Events are retried up to MAX_RETRIES times within MAX_EVENT_AGE_HOURS.
     Uses advisory lock to prevent concurrent runs.
     """
-    from app.models.event_store import EventStatus, EventStore
     from app.services.events.dispatcher import get_dispatcher
 
     with db_session_adapter.advisory_lock(_EVENT_RETRY_LOCK_KEY) as (
@@ -41,17 +38,11 @@ def retry_failed_events():
         if not lock_acquired:
             logger.debug("Skipping event retry: previous run still in progress")
             return {"skipped_due_to_lock": 1}
-        cutoff = datetime.now(UTC) - timedelta(hours=MAX_EVENT_AGE_HOURS)
-
-        failed_events = (
-            session.query(EventStore)
-            .filter(EventStore.status == EventStatus.failed)
-            .filter(EventStore.retry_count < MAX_RETRIES)
-            .filter(EventStore.created_at > cutoff)
-            .filter(EventStore.is_active.is_(True))
-            .order_by(EventStore.created_at.asc())
-            .limit(BATCH_SIZE)
-            .all()
+        failed_events = event_store_service.list_retryable_failed_events(
+            session,
+            max_retries=MAX_RETRIES,
+            max_age_hours=MAX_EVENT_AGE_HOURS,
+            limit=BATCH_SIZE,
         )
 
         if not failed_events:
@@ -100,41 +91,18 @@ def cleanup_old_events(retention_days: int = 30):
     This task removes completed events older than retention_days.
     Failed events are kept longer for debugging purposes.
     """
-    from app.models.event_store import EventStatus, EventStore
-
     with db_session_adapter.session() as session:
-        cutoff = datetime.now(UTC) - timedelta(days=retention_days)
-
-        old_completed_event_ids = (
-            session.query(EventStore.id)
-            .filter(EventStore.status == EventStatus.completed)
-            .filter(EventStore.created_at < cutoff)
-            .scalar_subquery()
-        )
-        deleted_attempts = session.execute(
-            text(
-                "delete from event_handler_attempts "
-                "where event_store_id in (select id from event_store "
-                "where status = 'completed' and created_at < :cutoff)"
-            ),
-            {"cutoff": cutoff},
-        )
-        deleted_attempt_count = int(getattr(deleted_attempts, "rowcount", 0) or 0)
-        deleted_count = (
-            session.query(EventStore)
-            .filter(EventStore.id.in_(old_completed_event_ids))
-            .delete(synchronize_session=False)
+        result = event_store_service.cleanup_completed_events(
+            session,
+            retention_days=retention_days,
         )
 
         logger.info(
             "Cleaned up %s old completed events and %s handler attempts",
-            deleted_count,
-            deleted_attempt_count,
+            result["deleted"],
+            result["handler_attempts_deleted"],
         )
-        return {
-            "deleted": deleted_count,
-            "handler_attempts_deleted": deleted_attempt_count,
-        }
+        return result
 
 
 @celery_app.task(name="app.tasks.events.mark_stale_processing_events")
@@ -148,8 +116,6 @@ def mark_stale_processing_events(stale_minutes: int = 30):
     Args:
         stale_minutes: Minutes after which processing events are considered stuck
     """
-    from app.models.event_store import EventStatus, EventStore
-
     with db_session_adapter.advisory_lock(_EVENT_STALE_LOCK_KEY) as (
         session,
         lock_acquired,
@@ -157,23 +123,10 @@ def mark_stale_processing_events(stale_minutes: int = 30):
         if not lock_acquired:
             logger.debug("Skipping stale event marking: previous run still in progress")
             return {"skipped_due_to_lock": 1}
-        cutoff = datetime.now(UTC) - timedelta(minutes=stale_minutes)
-
-        # Find and mark stuck processing events
-        stuck_events = (
-            session.query(EventStore)
-            .filter(EventStore.status == EventStatus.processing)
-            .filter(EventStore.updated_at < cutoff)
-            .filter(EventStore.is_active.is_(True))
-            .all()
+        marked_failed = event_store_service.mark_stale_processing_events(
+            session,
+            stale_minutes=stale_minutes,
         )
 
-        for event_record in stuck_events:
-            event_record.status = EventStatus.failed
-            event_record.error = "Event processing timed out (marked as stale)"
-            logger.warning(
-                f"Marked stale processing event as failed: {event_record.event_id}"
-            )
-
-        logger.info("Marked %s stale processing events as failed", len(stuck_events))
-        return {"marked_failed": len(stuck_events)}
+        logger.info("Marked %s stale processing events as failed", marked_failed)
+        return {"marked_failed": marked_failed}

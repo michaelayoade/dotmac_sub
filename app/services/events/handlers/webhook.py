@@ -6,16 +6,11 @@ Celery tasks for HTTP delivery.
 
 import logging
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.webhook import (
-    WebhookDelivery,
-    WebhookDeliveryStatus,
-    WebhookEventType,
-    WebhookSubscription,
-)
+from app.models.webhook import WebhookEventType
 from app.services.events.types import Event, EventType
+from app.services.webhook_deliveries import create_for_event, queue_deliveries
 
 logger = logging.getLogger(__name__)
 
@@ -94,60 +89,22 @@ class WebhookHandler:
             logger.debug(f"No webhook event type mapping for {event.event_type.value}")
             return
 
-        # Find active subscriptions for this event type
-        subscriptions = list(
-            db.scalars(
-                select(WebhookSubscription)
-                .where(WebhookSubscription.event_type == webhook_event_type)
-                .where(WebhookSubscription.is_active.is_(True))
-            ).all()
+        deliveries = create_for_event(
+            db,
+            event=event,
+            webhook_event_type=webhook_event_type,
         )
-
-        if not subscriptions:
+        if not deliveries:
             logger.debug(
                 f"No webhook subscriptions for event type {webhook_event_type.value}"
             )
             return
 
-        # Create delivery records
-        delivery_ids = []
-        for subscription in subscriptions:
-            # Verify endpoint is active
-            if not subscription.endpoint or not subscription.endpoint.is_active:
-                logger.debug(
-                    f"Skipping inactive endpoint for subscription {subscription.id}"
-                )
-                continue
-
-            delivery = WebhookDelivery(
-                subscription_id=subscription.id,
-                endpoint_id=subscription.endpoint_id,
-                event_type=webhook_event_type,
-                status=WebhookDeliveryStatus.pending,
-                payload=event.to_dict(),
-            )
-            db.add(delivery)
-            db.flush()  # Get the ID
-            delivery_ids.append(str(delivery.id))
-
-        if not delivery_ids:
-            return
-
         # Queue Celery task for delivery
         try:
-            from app.services.queue_adapter import enqueue_task
-            from app.tasks.webhooks import deliver_webhook
-
-            for delivery_id in delivery_ids:
-                enqueue_task(
-                    deliver_webhook,
-                    args=[delivery_id],
-                    correlation_id=f"webhook_event:{event.event_id}",
-                    source="event_webhook_handler",
-                )
-
+            queue_deliveries(deliveries, event=event)
             logger.info(
-                f"Queued {len(delivery_ids)} webhook deliveries for "
+                f"Queued {len(deliveries)} webhook deliveries for "
                 f"event {event.event_type.value}"
             )
         except Exception as exc:

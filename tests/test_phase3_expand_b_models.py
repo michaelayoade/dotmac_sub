@@ -419,9 +419,7 @@ def test_migration_244_is_single_alembic_head():
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
     heads = script.get_heads()
-    # The chain keeps advancing as later PRs stack on; the billing
-    # incremental-sync PR added 252_billing_updated_since_indexes.
-    assert heads == ["252_billing_updated_since_indexes"]
+    assert heads == ["253_billing_updated_since_indexes"]
 
 
 def test_migration_244_source_recreates_leads_partial_unique():

@@ -9,6 +9,7 @@ from app.models.audit import AuditActorType, AuditEvent
 from app.schemas.audit import AuditEventCreate
 from app.services.common import apply_ordering, apply_pagination
 from app.services.response import ListResponseMixin
+from app.services.session_hooks import run_after_commit
 
 logger = logging.getLogger(__name__)
 
@@ -43,20 +44,28 @@ class AuditEvents(ListResponseMixin):
         db: Session,
         payload: AuditEventCreate,
         *,
-        defer_until_commit: bool = False,
+        defer_until_commit: bool = True,
     ) -> AuditEvent:
         """Record an audit event. Alias for create with optional deferred commit."""
         data = payload.model_dump()
         if payload.occurred_at is None:
             data.pop("occurred_at", None)
-        event = AuditEvent(**data)
-        db.add(event)
         if not defer_until_commit:
+            event = AuditEvent(**data)
+            db.add(event)
             db.commit()
             db.refresh(event)
-        else:
-            db.flush()
-        return event
+            return event
+
+        pending_event = AuditEvent(**data)
+
+        def _persist(callback_db: Session) -> None:
+            event = AuditEvent(**data)
+            callback_db.add(event)
+            callback_db.commit()
+
+        run_after_commit(db, _persist)
+        return pending_event
 
     @staticmethod
     def get(db: Session, event_id: str):
@@ -118,6 +127,13 @@ class AuditEvents(ListResponseMixin):
 
     @staticmethod
     def log_request(db: Session, request: Request, response: Response):
+        payload = AuditEvents.build_request_payload(request, response)
+        event = AuditEvent(**payload.model_dump())
+        db.add(event)
+        db.commit()
+
+    @staticmethod
+    def build_request_payload(request: Request, response: Response) -> AuditEventCreate:
         actor_type = request.headers.get("x-actor-type")
         actor_id = request.headers.get("x-actor-id")
         if not actor_type:
@@ -138,9 +154,13 @@ class AuditEvents(ListResponseMixin):
             query_params = dict(request.query_params)
         except KeyError:
             query_params = {}
+        sensitive = {"token", "password", "secret", "api_key", "api_token"}
         metadata = {
             "path": request.url.path,
-            "query": query_params,
+            "query": {
+                key: "<redacted>" if key.lower() in sensitive else value
+                for key, value in query_params.items()
+            },
         }
         person = getattr(request.state, "user", None)
         if person:
@@ -177,9 +197,7 @@ class AuditEvents(ListResponseMixin):
             request_id=request_id,
             metadata_=metadata,
         )
-        event = AuditEvent(**payload.model_dump())
-        db.add(event)
-        db.commit()
+        return payload
 
     @staticmethod
     def delete(db: Session, event_id: str):

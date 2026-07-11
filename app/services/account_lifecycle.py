@@ -43,13 +43,19 @@ from sqlalchemy import select
 from app.models.catalog import Subscription, SubscriptionAddOn, SubscriptionStatus
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.subscriber import Subscriber, SubscriberStatus
-from app.services.events import emit_event
+from app.services.events import emit_event as _emit_event
 from app.services.events.types import EventType
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
+
+
+def emit_event(db, event_type, payload, **kwargs):  # noqa: ANN001, ANN201
+    kwargs.setdefault("defer_until_commit", False)
+    return _emit_event(db, event_type, payload, **kwargs)
+
 
 # ---------------------------------------------------------------------------
 # Allowed restorer triggers per enforcement reason

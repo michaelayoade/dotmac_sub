@@ -30,8 +30,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision = "252_billing_updated_since_indexes"
-down_revision = "251_native_read_path_indexes"
+revision = "253_billing_updated_since_indexes"
+down_revision = "252_native_read_path_indexes"
 branch_labels = None
 depends_on = None
 
