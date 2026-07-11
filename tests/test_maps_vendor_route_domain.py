@@ -297,8 +297,8 @@ def test_migration_248_is_single_alembic_head():
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
     # 248 is a single link in the chain; the current head advances as later PRs
-    # stack on top (ONT confirmation added 254_waiting_bulk_item_status).
-    assert script.get_heads() == ["254_waiting_bulk_item_status"]
+    # stack on top (Phase 5 asset inventory is the current head).
+    assert script.get_heads() == ["255_phase5_asset_inventory"]
 
 
 def test_migration_248_creates_geometry_gist_indexes():

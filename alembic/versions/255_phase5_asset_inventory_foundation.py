@@ -1,7 +1,7 @@
 """Phase 5 asset inventory foundation.
 
-Revision ID: 248_phase5_asset_inventory
-Revises: 247_merge_phase3_inbox_heads
+Revision ID: 255_phase5_asset_inventory
+Revises: 254_waiting_bulk_item_status
 Create Date: 2026-07-11
 """
 
@@ -13,8 +13,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "248_phase5_asset_inventory"
-down_revision = "247_merge_phase3_inbox_heads"
+revision = "255_phase5_asset_inventory"
+down_revision = "254_waiting_bulk_item_status"
 branch_labels = None
 depends_on = None
 

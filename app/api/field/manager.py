@@ -4,17 +4,24 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_db
 from app.schemas.common import ListResponse
 from app.schemas.field import (
+    FieldEquipmentCustodyRead,
+    FieldEquipmentIssueRequest,
+    FieldEquipmentReturnRequest,
     FieldExpenseRequestRead,
     FieldManagerExpenseRejectRequest,
     FieldManagerJob,
     FieldManagerJobAssignRequest,
+    FieldManagerMaterialRejectRequest,
     FieldManagerMeResponse,
     FieldManagerSummary,
     FieldManagerTechniciansResponse,
+    FieldMaterialRequestRead,
 )
 from app.services.auth_dependencies import require_any_permission, require_permission
+from app.services.field.equipment_custody import field_equipment_custody
 from app.services.field.expense_requests import field_expense_requests
 from app.services.field.manager import field_manager
+from app.services.field.material_requests import field_material_requests
 
 router = APIRouter(prefix="/manager", tags=["field-manager"])
 
@@ -36,6 +43,22 @@ _dispatch_write = require_any_permission(
 )
 _expense_read = require_permission("operations:expense_request:read")
 _expense_write = require_permission("operations:expense_request:write")
+_material_read = require_any_permission(
+    "operations:material_request:read",
+    "inventory:read",
+)
+_material_write = require_any_permission(
+    "operations:material_request:write",
+    "inventory:write",
+)
+_asset_custody_read = require_any_permission(
+    "operations:asset_custody:read",
+    "inventory:read",
+)
+_asset_custody_write = require_any_permission(
+    "operations:asset_custody:write",
+    "inventory:write",
+)
 
 
 @router.get("/me", response_model=FieldManagerMeResponse)
@@ -148,3 +171,134 @@ def field_manager_reject_expense(
     db: Session = Depends(get_db),
 ):
     return field_expense_requests.reject(db, expense_request_id, payload.reason)
+
+
+@router.get("/materials", response_model=ListResponse[FieldMaterialRequestRead])
+def field_manager_material_requests(
+    status_filter: str | None = Query(default="submitted", alias="status"),
+    crm_work_order_id: str | None = None,
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    auth: dict = Depends(_material_read),
+    db: Session = Depends(get_db),
+):
+    items = field_material_requests.list_all(
+        db,
+        status=status_filter,
+        crm_work_order_id=crm_work_order_id,
+        limit=limit,
+        offset=offset,
+    )
+    return {"items": items, "count": len(items), "limit": limit, "offset": offset}
+
+
+@router.post(
+    "/materials/{material_request_id}/approve",
+    response_model=FieldMaterialRequestRead,
+)
+def field_manager_approve_material_request(
+    material_request_id: str,
+    auth: dict = Depends(_material_write),
+    db: Session = Depends(get_db),
+):
+    return field_material_requests.approve(db, material_request_id)
+
+
+@router.post(
+    "/materials/{material_request_id}/reject",
+    response_model=FieldMaterialRequestRead,
+)
+def field_manager_reject_material_request(
+    material_request_id: str,
+    payload: FieldManagerMaterialRejectRequest,
+    auth: dict = Depends(_material_write),
+    db: Session = Depends(get_db),
+):
+    return field_material_requests.reject(db, material_request_id, payload.reason)
+
+
+@router.post(
+    "/materials/{material_request_id}/issue",
+    response_model=FieldMaterialRequestRead,
+)
+def field_manager_issue_material_request(
+    material_request_id: str,
+    auth: dict = Depends(_material_write),
+    db: Session = Depends(get_db),
+):
+    return field_material_requests.issue(db, material_request_id)
+
+
+@router.post(
+    "/materials/{material_request_id}/fulfill",
+    response_model=FieldMaterialRequestRead,
+)
+def field_manager_fulfill_material_request(
+    material_request_id: str,
+    auth: dict = Depends(_material_write),
+    db: Session = Depends(get_db),
+):
+    return field_material_requests.fulfill(db, material_request_id)
+
+
+@router.get(
+    "/equipment-custody",
+    response_model=ListResponse[FieldEquipmentCustodyRead],
+)
+def field_manager_equipment_custody(
+    technician_id: str | None = None,
+    asset_source: str | None = None,
+    status_filter: str = Query(default="issued", alias="status"),
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    auth: dict = Depends(_asset_custody_read),
+    db: Session = Depends(get_db),
+):
+    items = field_equipment_custody.list_all(
+        db,
+        technician_id=technician_id,
+        asset_source=asset_source,
+        status=status_filter,
+        limit=limit,
+        offset=offset,
+    )
+    return {"items": items, "count": len(items), "limit": limit, "offset": offset}
+
+
+@router.post(
+    "/equipment-custody",
+    response_model=FieldEquipmentCustodyRead,
+    status_code=201,
+)
+def field_manager_issue_equipment(
+    payload: FieldEquipmentIssueRequest,
+    auth: dict = Depends(_asset_custody_write),
+    db: Session = Depends(get_db),
+):
+    return field_equipment_custody.issue(
+        db,
+        asset_source=payload.asset_source,
+        asset_id=str(payload.asset_id),
+        technician_id=str(payload.technician_id),
+        condition_on_issue=payload.condition_on_issue,
+        notes=payload.notes,
+    )
+
+
+@router.post(
+    "/equipment-custody/{custody_id}/return",
+    response_model=FieldEquipmentCustodyRead,
+)
+def field_manager_return_equipment(
+    custody_id: str,
+    payload: FieldEquipmentReturnRequest,
+    auth: dict = Depends(_asset_custody_write),
+    db: Session = Depends(get_db),
+):
+    return field_equipment_custody.return_asset(
+        db,
+        custody_id,
+        status=payload.status,
+        condition_on_return=payload.condition_on_return,
+        notes=payload.notes,
+    )
