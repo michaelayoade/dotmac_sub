@@ -32,8 +32,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision = "251_native_read_path_indexes"
-down_revision = "250_field_material_request_erp_fields"
+revision = "252_native_read_path_indexes"
+down_revision = "251_event_handler_attempts"
 branch_labels = None
 depends_on = None
 

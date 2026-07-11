@@ -108,6 +108,12 @@ def detection_source(incident: OutageIncident) -> str:
     return "auto" if incident.declared_by == AUTO_DETECT_ACTOR else "manual"
 
 
+def _match_timestamp_style(value: datetime, reference: datetime | None) -> datetime:
+    if reference is not None and reference.tzinfo is None and value.tzinfo is not None:
+        return value.replace(tzinfo=None)
+    return value
+
+
 def _emit_outage_event(session: Session, incident: OutageIncident, kind: str) -> None:
     """Fan an incident lifecycle change into the event system.
 
@@ -165,6 +171,7 @@ def _emit_outage_event(session: Session, incident: OutageIncident, kind: str) ->
                 else None,
             },
             actor=incident.declared_by or "system",
+            defer_until_commit=False,
         )
     except Exception:  # noqa: BLE001 - webhook fan-out must never break the write
         logger.exception("outage_event_emit_failed")
@@ -410,7 +417,7 @@ def resolve_classifier_incident(
     """clearing -> resolved (recovery sustained past W_resolve). Stamps
     resolved_at; MTTR = resolved_at - confirmed_at."""
     incident.status = "resolved"
-    incident.resolved_at = now
+    incident.resolved_at = _match_timestamp_style(now, incident.confirmed_at)
     session.flush()
     operational_escalation.cancel_entity_events(
         session,

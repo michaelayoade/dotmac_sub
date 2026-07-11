@@ -7,22 +7,13 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from app.models.catalog import Subscription, SubscriptionStatus
-from app.models.lifecycle import LifecycleEventType, SubscriptionLifecycleEvent
+from app.models.catalog import Subscription
+from app.models.lifecycle import LifecycleEventType
 from app.services.connectivity_reconciler import connectivity_shadow_diff
 from app.services.events.types import SUBSCRIPTION_LIFECYCLE_MAP, Event
+from app.services.subscription_lifecycle_events import create_from_event
 
 logger = logging.getLogger(__name__)
-
-
-def _parse_subscription_status(value: str | None) -> SubscriptionStatus | None:
-    """Convert a string status to SubscriptionStatus enum, or None if invalid."""
-    if value is None:
-        return None
-    try:
-        return SubscriptionStatus(value)
-    except ValueError:
-        return None
 
 
 class LifecycleHandler:
@@ -83,32 +74,7 @@ class LifecycleHandler:
             logger.warning(f"Unknown lifecycle type: {lifecycle_type_str}")
             return
 
-        # Extract status transition from payload and convert to enums
-        from_status_str = event.payload.get("from_status")
-        to_status_str = event.payload.get("to_status")
-        from_status = _parse_subscription_status(from_status_str)
-        to_status = _parse_subscription_status(to_status_str)
-        reason = event.payload.get("reason")
-        notes = event.payload.get("notes")
-
-        # Create lifecycle event
-        lifecycle_event = SubscriptionLifecycleEvent(
-            subscription_id=event.subscription_id,
-            event_type=lifecycle_type,
-            from_status=from_status,
-            to_status=to_status,
-            reason=reason,
-            notes=notes,
-            metadata_={
-                "event_id": str(event.event_id),
-                "payload": event.payload,
-            },
-            actor=event.actor,
-        )
-        db.add(lifecycle_event)
-        # Flush the audit record before the read-only shadow observation so the
-        # savepoint in _observe_connectivity_shadow_diff cannot roll it back.
-        db.flush()
+        create_from_event(db, event, lifecycle_type=lifecycle_type)
         self._observe_connectivity_shadow_diff(db, event)
 
         logger.info(

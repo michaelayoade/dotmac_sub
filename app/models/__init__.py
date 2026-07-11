@@ -160,6 +160,7 @@ from app.models.enforcement_lock import (  # noqa: F401
     EnforcementReason,
 )
 from app.models.event_store import (  # noqa: F401
+    EventHandlerAttempt,
     EventStatus,
     EventStore,
 )
