@@ -4,15 +4,27 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from app.models.billing import Invoice, InvoiceLine, InvoiceStatus
+from app.models.billing import (
+    Invoice,
+    InvoiceLine,
+    InvoiceStatus,
+    LedgerEntry,
+    LedgerEntryType,
+    LedgerSource,
+)
 from app.models.catalog import (
+    AccessCredential,
     AccessType,
+    AddOn,
+    AddOnPrice,
     BillingCycle,
     BillingMode,
     CatalogOffer,
     PriceBasis,
+    PriceType,
     ServiceType,
     Subscription,
+    SubscriptionAddOn,
     SubscriptionStatus,
 )
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
@@ -23,7 +35,12 @@ from app.services.billing_cleanup_remediation import (
     plan_account_mode_row,
     plan_anchor_row,
     plan_cleanup_remediation,
+    plan_disabled_service_line_row,
     plan_invoice_anchor_row,
+    plan_missing_radius_row,
+    plan_orphan_addon_row,
+    plan_prepaid_collectible_ar_row,
+    plan_prepaid_overlap_row,
     plan_stale_overdue_lock_row,
 )
 
@@ -75,6 +92,50 @@ def _subscription(
     db.add(subscription)
     db.flush()
     return subscription
+
+
+def _invoice(
+    db,
+    account,
+    *,
+    status=InvoiceStatus.issued,
+    amount="100.00",
+    start=None,
+    end=None,
+):
+    amount_decimal = Decimal(amount)
+    invoice = Invoice(
+        account_id=account.id,
+        invoice_number=f"INV-{uuid.uuid4().hex[:8]}",
+        status=status,
+        currency="NGN",
+        subtotal=amount_decimal,
+        tax_total=Decimal("0.00"),
+        total=amount_decimal,
+        balance_due=amount_decimal,
+        billing_period_start=start,
+        billing_period_end=end,
+        due_at=start,
+        is_active=True,
+    )
+    db.add(invoice)
+    db.flush()
+    return invoice
+
+
+def _line(db, invoice, subscription, *, amount="100.00", description="Cleanup line"):
+    line = InvoiceLine(
+        invoice_id=invoice.id,
+        subscription_id=subscription.id,
+        description=description,
+        quantity=Decimal("1.000"),
+        unit_price=Decimal(amount),
+        amount=Decimal(amount),
+        is_active=True,
+    )
+    db.add(line)
+    db.flush()
+    return line
 
 
 def test_resolves_stale_overdue_lock_and_restores_subscription(db_session):
@@ -369,6 +430,320 @@ def test_account_mode_plan_refuses_mixed_live_modes(db_session):
 
     assert item["decision"] == "refuse"
     assert item["reason"] == "mixed_or_changed_live_subscription_modes"
+
+
+def test_deactivates_disabled_service_line_and_voids_empty_invoice(db_session):
+    account = _account(db_session, mode=BillingMode.postpaid)
+    ended_at = datetime(2026, 6, 1, tzinfo=UTC)
+    subscription = _subscription(
+        db_session,
+        account,
+        mode=BillingMode.postpaid,
+        status=SubscriptionStatus.canceled,
+    )
+    subscription.canceled_at = ended_at
+    invoice = _invoice(
+        db_session,
+        account,
+        start=datetime(2026, 7, 1, tzinfo=UTC),
+        end=datetime(2026, 8, 1, tzinfo=UTC),
+    )
+    line = _line(db_session, invoice, subscription)
+    db_session.commit()
+
+    item = plan_disabled_service_line_row(
+        db_session,
+        {
+            "finding_type": "disabled_service",
+            "proposed_disposition": "credit_or_void_required",
+            "invoice_id": str(invoice.id),
+            "invoice_status": InvoiceStatus.issued.value,
+            "invoice_line_id": str(line.id),
+            "subscription_id": str(subscription.id),
+        },
+    )
+
+    assert item["decision"] == "apply"
+    result = apply_cleanup_remediation(db_session, {"items": [item]}, dry_run=False)
+
+    db_session.refresh(line)
+    db_session.refresh(invoice)
+    assert result["applied_count"] == 1
+    assert line.is_active is False
+    assert invoice.status == InvoiceStatus.void
+    assert invoice.total == Decimal("0.00")
+    assert invoice.balance_due == Decimal("0.00")
+
+
+def test_disabled_service_line_refuses_invoice_with_ledger_activity(db_session):
+    account = _account(db_session, mode=BillingMode.postpaid)
+    subscription = _subscription(
+        db_session,
+        account,
+        mode=BillingMode.postpaid,
+        status=SubscriptionStatus.canceled,
+    )
+    subscription.canceled_at = datetime(2026, 6, 1, tzinfo=UTC)
+    invoice = _invoice(
+        db_session,
+        account,
+        start=datetime(2026, 7, 1, tzinfo=UTC),
+        end=datetime(2026, 8, 1, tzinfo=UTC),
+    )
+    line = _line(db_session, invoice, subscription)
+    db_session.add(
+        LedgerEntry(
+            account_id=account.id,
+            invoice_id=invoice.id,
+            entry_type=LedgerEntryType.debit,
+            source=LedgerSource.invoice,
+            amount=Decimal("100.00"),
+            currency="NGN",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    item = plan_disabled_service_line_row(
+        db_session,
+        {
+            "finding_type": "disabled_service",
+            "proposed_disposition": "credit_or_void_required",
+            "invoice_id": str(invoice.id),
+            "invoice_status": InvoiceStatus.issued.value,
+            "invoice_line_id": str(line.id),
+            "subscription_id": str(subscription.id),
+        },
+    )
+
+    assert item["decision"] == "refuse"
+    assert item["reason"] == "invoice_has_financial_activity"
+
+
+def test_duplicate_period_group_deactivates_newer_duplicate_line(db_session):
+    account = _account(db_session, mode=BillingMode.postpaid)
+    subscription = _subscription(db_session, account, mode=BillingMode.postpaid)
+    start = datetime(2026, 7, 1, tzinfo=UTC)
+    end = datetime(2026, 8, 1, tzinfo=UTC)
+    invoice = _invoice(db_session, account, amount="200.00", start=start, end=end)
+    keep = _line(db_session, invoice, subscription, description="Same period")
+    duplicate = _line(db_session, invoice, subscription, description="Same period")
+    db_session.commit()
+    db_session.refresh(invoice)
+    group_key = "|".join(
+        [
+            str(subscription.id),
+            invoice.billing_period_start.isoformat(),
+            invoice.billing_period_end.isoformat(),
+            "Same period",
+        ]
+    )
+
+    plan = plan_cleanup_remediation(
+        db_session,
+        duplicate_line_rows=[
+            {
+                "finding_type": "duplicate_period",
+                "proposed_disposition": "duplicate_review",
+                "invoice_status": InvoiceStatus.issued.value,
+                "invoice_line_id": str(keep.id),
+                "duplicate_group_key": group_key,
+            },
+            {
+                "finding_type": "duplicate_period",
+                "proposed_disposition": "duplicate_review",
+                "invoice_status": InvoiceStatus.issued.value,
+                "invoice_line_id": str(duplicate.id),
+                "duplicate_group_key": group_key,
+            },
+        ],
+    )
+
+    assert plan["counts"]["apply"] == 1
+    apply_cleanup_remediation(db_session, plan, dry_run=False)
+
+    db_session.refresh(keep)
+    db_session.refresh(duplicate)
+    db_session.refresh(invoice)
+    assert keep.is_active is True
+    assert duplicate.is_active is False
+    assert invoice.total == Decimal("100.00")
+    assert invoice.balance_due == Decimal("100.00")
+
+
+def test_orphan_recurring_addon_is_ended_at_parent_end(db_session):
+    account = _account(db_session, mode=BillingMode.postpaid)
+    parent_end = datetime(2026, 7, 1, tzinfo=UTC)
+    subscription = _subscription(
+        db_session,
+        account,
+        mode=BillingMode.postpaid,
+        status=SubscriptionStatus.canceled,
+    )
+    subscription.canceled_at = parent_end
+    addon = AddOn(name="Static IP", is_active=True)
+    db_session.add(addon)
+    db_session.flush()
+    db_session.add(
+        AddOnPrice(
+            add_on_id=addon.id,
+            price_type=PriceType.recurring,
+            amount=Decimal("1000.00"),
+            currency="NGN",
+            is_active=True,
+        )
+    )
+    sub_addon = SubscriptionAddOn(
+        subscription_id=subscription.id,
+        add_on_id=addon.id,
+        start_at=datetime(2026, 6, 1, tzinfo=UTC),
+        end_at=None,
+    )
+    db_session.add(sub_addon)
+    db_session.commit()
+
+    item = plan_orphan_addon_row(
+        db_session,
+        {
+            "subscription_add_on_id": str(sub_addon.id),
+            "subscription_id": str(subscription.id),
+            "current_end_at": "",
+        },
+    )
+
+    assert item["decision"] == "apply"
+    apply_cleanup_remediation(db_session, {"items": [item]}, dry_run=False)
+
+    db_session.refresh(sub_addon)
+    assert sub_addon.end_at.replace(tzinfo=UTC) == parent_end
+
+
+def test_missing_radius_refuses_unusable_credential(db_session):
+    account = _account(db_session, mode=BillingMode.prepaid)
+    subscription = _subscription(db_session, account, mode=BillingMode.prepaid)
+    subscription.login = "missing-user"
+    db_session.add(
+        AccessCredential(
+            subscriber_id=account.id,
+            username="missing-user",
+            secret_hash="",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    item = plan_missing_radius_row(
+        db_session,
+        {"subscription_id": str(subscription.id), "login": "missing-user"},
+    )
+
+    assert item["decision"] == "refuse"
+    assert item["reason"] == "credential_unusable_requires_password_reset"
+
+
+def test_missing_radius_syncs_when_credential_is_usable(db_session, monkeypatch):
+    account = _account(db_session, mode=BillingMode.prepaid)
+    subscription = _subscription(db_session, account, mode=BillingMode.prepaid)
+    subscription.login = "sync-user"
+    db_session.add(
+        AccessCredential(
+            subscriber_id=account.id,
+            username="sync-user",
+            secret_hash="plain:test123",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    def fake_reconcile(db, subscription_id):
+        assert subscription_id == str(subscription.id)
+        return {"ok": True, "radius_users_changed": 1}
+
+    monkeypatch.setattr(
+        "app.services.radius.reconcile_subscription_connectivity",
+        fake_reconcile,
+    )
+    item = plan_missing_radius_row(
+        db_session,
+        {"subscription_id": str(subscription.id), "login": "sync-user"},
+    )
+
+    assert item["decision"] == "apply"
+    result = apply_cleanup_remediation(db_session, {"items": [item]}, dry_run=False)
+    assert result["applied"][0]["after"]["radius_users_changed"] == 1
+
+
+def test_prepaid_collectible_ar_drafts_unfunded_untouched_invoice(db_session):
+    account = _account(db_session, mode=BillingMode.prepaid)
+    _subscription(db_session, account, mode=BillingMode.prepaid)
+    invoice = _invoice(db_session, account, status=InvoiceStatus.overdue)
+    db_session.commit()
+
+    item = plan_prepaid_collectible_ar_row(
+        db_session,
+        {"invoice_id": str(invoice.id), "invoice_status": InvoiceStatus.overdue.value},
+    )
+
+    assert item["decision"] == "apply"
+    apply_cleanup_remediation(db_session, {"items": [item]}, dry_run=False)
+
+    db_session.refresh(invoice)
+    assert invoice.status == InvoiceStatus.draft
+    assert invoice.due_at is None
+    assert "prepaid_phantom_ar_cleanup" in (invoice.metadata_ or {})
+
+
+def test_prepaid_collectible_ar_refuses_partially_paid_invoice(db_session):
+    account = _account(db_session, mode=BillingMode.prepaid)
+    _subscription(db_session, account, mode=BillingMode.prepaid)
+    invoice = _invoice(db_session, account, status=InvoiceStatus.partially_paid)
+    db_session.commit()
+
+    item = plan_prepaid_collectible_ar_row(
+        db_session,
+        {
+            "invoice_id": str(invoice.id),
+            "invoice_status": InvoiceStatus.partially_paid.value,
+        },
+    )
+
+    assert item["decision"] == "refuse"
+    assert item["reason"] == "partially_paid_requires_manual_review"
+
+
+def test_prepaid_overlap_voids_only_safe_unpaid_candidate(db_session):
+    account = _account(db_session, mode=BillingMode.prepaid)
+    invoice = _invoice(db_session, account, status=InvoiceStatus.issued)
+    db_session.commit()
+
+    item = plan_prepaid_overlap_row(
+        db_session,
+        {
+            "action": "void_unpaid_invoice",
+            "bad_invoice_id": str(invoice.id),
+            "bad_invoice_status": InvoiceStatus.issued.value,
+            "valid_paid_invoice_id": str(uuid.uuid4()),
+            "corrected_next_billing_at": datetime(2026, 8, 1, tzinfo=UTC).isoformat(),
+        },
+    )
+
+    assert item["decision"] == "apply"
+    apply_cleanup_remediation(db_session, {"items": [item]}, dry_run=False)
+
+    db_session.refresh(invoice)
+    assert invoice.status == InvoiceStatus.void
+    assert invoice.balance_due == Decimal("0.00")
+    assert "prepaid_overlap_cleanup" in (invoice.metadata_ or {})
+
+
+def test_prepaid_overlap_refuses_manual_review_candidate(db_session):
+    item = plan_prepaid_overlap_row(
+        db_session,
+        {"action": "hold_for_manual_review", "bad_invoice_id": str(uuid.uuid4())},
+    )
+
+    assert item["decision"] == "refuse"
+    assert item["reason"] == "overlap_requires_manual_review"
 
 
 def test_plan_cleanup_remediation_combines_counts(db_session):
