@@ -70,8 +70,11 @@ def test_push_relays_when_flag_on(db_session, subscriber, monkeypatch):
     )
     fake = MagicMock()
     fake.post_signed_webhook.return_value = _resp(200)
-    with _settings(crm_webhook_secret="testsecret"), patch.object(
-        relay, "get_crm_client", return_value=fake
+    with (
+        _settings(crm_webhook_secret="testsecret"),
+        patch.object(  # pragma: allowlist secret
+            relay, "get_crm_client", return_value=fake
+        ),
     ):
         assert relay.push_project_stub(db_session, str(project.id)) == "relayed"
 
@@ -149,8 +152,11 @@ def test_push_is_idempotent(db_session, subscriber, monkeypatch):
     )
     fake = MagicMock()
     fake.post_signed_webhook.return_value = _resp(200)
-    with _settings(crm_webhook_secret="s"), patch.object(
-        relay, "get_crm_client", return_value=fake
+    with (
+        _settings(crm_webhook_secret="s"),
+        patch.object(  # pragma: allowlist secret
+            relay, "get_crm_client", return_value=fake
+        ),
     ):
         first = relay.push_project_stub(db_session, str(project.id))
         second = relay.push_project_stub(db_session, str(project.id))
@@ -180,10 +186,13 @@ def _set_handler_flag(monkeypatch, value):
 def test_handler_enqueues_for_vendor_project(db_session, subscriber, monkeypatch):
     project = _project(db_session, subscriber)
     _set_handler_flag(monkeypatch, True)
-    with _settings(crm_base_url="https://crm.example"), patch(
-        "app.services.queue_adapter.enqueue_task"
-    ) as enq:
-        VendorProjectRelayHandler().handle(db_session, _event("project.created", project.id))
+    with (
+        _settings(crm_base_url="https://crm.example"),
+        patch("app.services.queue_adapter.enqueue_task") as enq,
+    ):
+        VendorProjectRelayHandler().handle(
+            db_session, _event("project.created", project.id)
+        )
     assert enq.called
     assert enq.call_args.args[0].name == (
         "app.tasks.vendor_project_relay.relay_project_stub_to_crm"
@@ -194,35 +203,47 @@ def test_handler_enqueues_for_vendor_project(db_session, subscriber, monkeypatch
 def test_handler_skips_when_flag_off(db_session, subscriber, monkeypatch):
     project = _project(db_session, subscriber)
     _set_handler_flag(monkeypatch, False)
-    with _settings(crm_base_url="https://crm.example"), patch(
-        "app.services.queue_adapter.enqueue_task"
-    ) as enq:
-        VendorProjectRelayHandler().handle(db_session, _event("project.updated", project.id))
+    with (
+        _settings(crm_base_url="https://crm.example"),
+        patch("app.services.queue_adapter.enqueue_task") as enq,
+    ):
+        VendorProjectRelayHandler().handle(
+            db_session, _event("project.updated", project.id)
+        )
     enq.assert_not_called()
 
 
 def test_handler_skips_non_vendor_project(db_session, subscriber, monkeypatch):
     project = _project(db_session, subscriber, project_type="cross_connect")
     _set_handler_flag(monkeypatch, True)
-    with _settings(crm_base_url="https://crm.example"), patch(
-        "app.services.queue_adapter.enqueue_task"
-    ) as enq:
-        VendorProjectRelayHandler().handle(db_session, _event("project.created", project.id))
+    with (
+        _settings(crm_base_url="https://crm.example"),
+        patch("app.services.queue_adapter.enqueue_task") as enq,
+    ):
+        VendorProjectRelayHandler().handle(
+            db_session, _event("project.created", project.id)
+        )
     enq.assert_not_called()
 
 
 def test_handler_ignores_unrelated_events(db_session, subscriber, monkeypatch):
     project = _project(db_session, subscriber)
     _set_handler_flag(monkeypatch, True)
-    with _settings(crm_base_url="https://crm.example"), patch(
-        "app.services.queue_adapter.enqueue_task"
-    ) as enq:
+    with (
+        _settings(crm_base_url="https://crm.example"),
+        patch("app.services.queue_adapter.enqueue_task") as enq,
+    ):
         # Wrong custom name.
-        VendorProjectRelayHandler().handle(db_session, _event("ticket.created", project.id))
+        VendorProjectRelayHandler().handle(
+            db_session, _event("ticket.created", project.id)
+        )
         # Wrong event type entirely.
         VendorProjectRelayHandler().handle(
             db_session,
-            Event(event_type=EventType.subscriber_created, payload={"name": "project.created"}),
+            Event(
+                event_type=EventType.subscriber_created,
+                payload={"name": "project.created"},
+            ),
         )
     enq.assert_not_called()
 
