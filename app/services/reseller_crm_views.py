@@ -55,9 +55,16 @@ def quotes_for_reseller(db: Session, reseller_id: str) -> dict:
         quotes = selfserve_service.selfserve_quotes.list_for_subscribers(
             db, [str(s) for s in names]
         )
+        # H1: batch-resolve install-project ids for the whole subtree in one
+        # query instead of a per-quote metadata scan.
+        project_ids = selfserve_service._find_project_ids_for_quotes(
+            db, [q.id for q in quotes]
+        )
         native_items: list[dict] = []
         for q in quotes:
-            item = selfserve_service.build_portal_quote_payload(db, q)
+            item = selfserve_service.build_portal_quote_payload(
+                db, q, project_id=project_ids.get(str(q.id))
+            )
             item["account_id"] = str(q.subscriber_id)
             item["account_name"] = names.get(q.subscriber_id)
             native_items.append(item)

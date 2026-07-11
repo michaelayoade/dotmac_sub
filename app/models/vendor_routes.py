@@ -206,12 +206,12 @@ class InstallationProject(Base):
     )
     # Customer party → sub subscriber.
     subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscribers.id")
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), index=True
     )
     # CRM address UUID — no sub correspondence, plain UUID (CRM dropped its FK).
     address_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     assigned_vendor_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("vendors.id")
+        UUID(as_uuid=True), ForeignKey("vendors.id"), index=True
     )
     assignment_type: Mapped[str | None] = mapped_column(String(20))
     status: Mapped[str] = mapped_column(
@@ -260,10 +260,13 @@ class ProjectQuote(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     project_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("installation_projects.id"), nullable=False
+        UUID(as_uuid=True),
+        ForeignKey("installation_projects.id"),
+        nullable=False,
+        index=True,
     )
     vendor_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("vendors.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("vendors.id"), nullable=False, index=True
     )
     status: Mapped[str] = mapped_column(
         String(40), default=ProjectQuoteStatus.draft.value, nullable=False
@@ -379,7 +382,10 @@ class AsBuiltRoute(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     project_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("installation_projects.id"), nullable=False
+        UUID(as_uuid=True),
+        ForeignKey("installation_projects.id"),
+        nullable=False,
+        index=True,
     )
     proposed_revision_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("proposed_route_revisions.id")
@@ -462,7 +468,10 @@ class InstallationProjectNote(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     project_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("installation_projects.id"), nullable=False
+        UUID(as_uuid=True),
+        ForeignKey("installation_projects.id"),
+        nullable=False,
+        index=True,
     )
     # Staff person — no FK, plain UUID.
     author_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))

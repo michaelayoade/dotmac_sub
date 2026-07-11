@@ -172,6 +172,13 @@ def _nearest_fiber_access_point(db: Session, latitude: float, longitude: float):
     logic can be unit-tested without a spatial database.
     """
     point = ST_SetSRID(ST_MakePoint(longitude, latitude), 4326)
+    # Order by the KNN nearest-neighbour operator on the RAW 4326 geom so the
+    # GiST index ``idx_fiber_access_points_geom`` is usable: wrapping the geom
+    # in ``ST_Transform(..., 3857)`` (as the old query did, for a metre
+    # distance) made the index unusable and forced a full scan + sort. The
+    # ``<->`` bound-box KNN drives the index; the metre ``distance_m`` value is
+    # still computed by the *same* EPSG:3857 transform, but now only for the
+    # single winning row the LIMIT keeps — so the returned value is unchanged.
     distance = func.ST_Distance(
         func.ST_Transform(FiberAccessPoint.geom, 3857),
         func.ST_Transform(point, 3857),
@@ -180,7 +187,7 @@ def _nearest_fiber_access_point(db: Session, latitude: float, longitude: float):
         db.query(FiberAccessPoint, distance)
         .filter(FiberAccessPoint.is_active.is_(True))
         .filter(FiberAccessPoint.geom.isnot(None))
-        .order_by(distance)
+        .order_by(FiberAccessPoint.geom.op("<->")(point))
         .first()
     )
     if row is None:
@@ -335,6 +342,39 @@ def _quote_status(quote: Quote) -> str:
     return getattr(quote.status, "value", quote.status)
 
 
+def _find_project_ids_for_quotes(db: Session, quote_ids) -> dict[str, str]:
+    """Batch-resolve the install project id for a whole set of quotes.
+
+    One query for the entire quote set (``WHERE metadata->>'quote_id' IN (…)``)
+    instead of the per-quote JSON scan the list read paths used to issue — the
+    N+1 fixed in H1. Keyed by ``str(quote_id)`` → ``str(project.id)``; quotes
+    with no native install project are simply absent from the map.
+
+    The old ``.first()`` had no ``ORDER BY``, so a quote referenced by more than
+    one active project resolved to an arbitrary row. We make the pick
+    deterministic here (earliest ``created_at``, then ``id``) and route the
+    single-quote helper through this same resolver, so both paths agree — the
+    common no-project / one-project cases are unaffected.
+    """
+    ids = [str(q) for q in quote_ids]
+    if not ids:
+        return {}
+    key = Project.metadata_["quote_id"].as_string()
+    rows = (
+        db.query(key.label("quote_id"), Project.id, Project.created_at)
+        .filter(key.in_(ids))
+        .filter(Project.is_active.is_(True))
+        .order_by(Project.created_at.asc(), Project.id.asc())
+        .all()
+    )
+    mapping: dict[str, str] = {}
+    for quote_id, project_id, _created_at in rows:
+        # Rows arrive earliest-first; keep the first (earliest) per quote.
+        if quote_id is not None and quote_id not in mapping:
+            mapping[quote_id] = str(project_id)
+    return mapping
+
+
 def _find_project_id_for_quote(db: Session, quote_id) -> str | None:
     """Resolve the install project created from this quote.
 
@@ -343,18 +383,19 @@ def _find_project_id_for_quote(db: Session, quote_id) -> str | None:
     ``Project.metadata_["quote_id"]`` — the same key sub's native project
     pipeline stamps. Quotes whose install project predates the native wiring
     carry ``project_id: None`` (the mobile/web schemas treat it as optional).
+
+    Thin wrapper over the batch resolver (batch of one) so the single-quote and
+    list paths share identical selection + tie-break semantics.
     """
-    project = (
-        db.query(Project)
-        .filter(Project.metadata_["quote_id"].as_string() == str(quote_id))
-        .filter(Project.is_active.is_(True))
-        .first()
-    )
-    return str(project.id) if project else None
+    return _find_project_ids_for_quotes(db, [quote_id]).get(str(quote_id))
 
 
 # Mirror parity: quotes_mirror.read_for_subscriber counts these as closed.
 _PORTAL_CLOSED_QUOTE_STATUSES = ("accepted", "rejected", "expired")
+
+# Sentinel for build_portal_quote_payload's optional pre-resolved project id —
+# distinct from ``None`` (a resolved "no install project" answer).
+_UNSET_PROJECT_ID = "__unset__"
 
 
 def native_read_enabled(db: Session) -> bool:
@@ -426,7 +467,13 @@ class SelfServeQuotes:
         PR8 repoints the customer read surfaces here behind
         ``quotes_native_read_enabled``."""
         rows = SelfServeQuotes.list_for_subscribers(db, subscriber_id)
-        items = [build_portal_quote_payload(db, q) for q in rows]
+        # H1: resolve every quote's install-project id in ONE query, then pass
+        # each in — no per-quote metadata->>'quote_id' scan.
+        project_ids = _find_project_ids_for_quotes(db, [q.id for q in rows])
+        items = [
+            build_portal_quote_payload(db, q, project_id=project_ids.get(str(q.id)))
+            for q in rows
+        ]
         open_count = sum(
             1 for i in items if i["status"] not in _PORTAL_CLOSED_QUOTE_STATUSES
         )
@@ -594,7 +641,11 @@ def _record_deposit_on_sales_order(
 
 
 def build_portal_quote_payload(
-    db: Session, quote: Quote, *, already_accepted: bool = False
+    db: Session,
+    quote: Quote,
+    *,
+    already_accepted: bool = False,
+    project_id: str | None = _UNSET_PROJECT_ID,
 ) -> dict:
     """Serialize a quote for the portal surface — the exact shape
     ``QuoteMirror.payload`` cached and mobile parses (§2.2 step 5, §2.5):
@@ -615,7 +666,13 @@ def build_portal_quote_payload(
     )
 
     sales_order = db.query(SalesOrder).filter(SalesOrder.quote_id == quote.id).first()
-    project_id = _find_project_id_for_quote(db, quote.id)
+    # ``project_id`` may be pre-resolved by a batch caller (H1: the list read
+    # paths resolve the whole set in one query and pass it in). The sentinel
+    # distinguishes "not supplied" from a resolved ``None`` (no install project)
+    # so we never fall back to the per-quote scan for a quote we already know
+    # has no project.
+    if project_id is _UNSET_PROJECT_ID:
+        project_id = _find_project_id_for_quote(db, quote.id)
 
     line_items = [
         {
