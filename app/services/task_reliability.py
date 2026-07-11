@@ -195,6 +195,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "sync_flow_ownership; transient rows stay pending, permanent/budget-"
         "exhausted rows dead-letter in field_erp_sync_events.",
     ),
+    "app.tasks.dotmac_erp_outbox.refresh_expense_claim_statuses": _c(
+        "integration",
+        SWEEP,
+        IDEMP,
+        STATUS,
+        "Read-only ERP status poll for in-flight expense claims; re-run safe, "
+        "refreshes erp_claim_status on the source row.",
+    ),
     "app.tasks.enforcement.cleanup_subscription_block_sessions": _c(
         "enforcement", SWEEP, IDEMP, HEALTH
     ),

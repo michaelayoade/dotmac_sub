@@ -2435,6 +2435,25 @@ def build_beat_schedule() -> dict:
             interval_seconds=dotmac_erp_outbox_interval,
         )
 
+        # Expense-claim status reconcile (ERP re-home, PR 2). Polls ERP for
+        # in-flight claims and refreshes erp_claim_status on the source row.
+        # Same master gate (dotmac_erp_sync_enabled, default OFF) → inert until
+        # cutover; read-only against ERP, so re-running is always safe.
+        dotmac_erp_expense_refresh_interval = _effective_int(
+            session,
+            SettingDomain.integration,
+            "dotmac_erp_expense_status_refresh_interval_seconds",
+            "DOTMAC_ERP_EXPENSE_STATUS_REFRESH_INTERVAL_SECONDS",
+            300,
+        )
+        _sync_scheduled_task(
+            session,
+            name="dotmac_erp_expense_status_refresh",
+            task_name="app.tasks.dotmac_erp_outbox.refresh_expense_claim_statuses",
+            enabled=dotmac_erp_sync_enabled,
+            interval_seconds=max(dotmac_erp_expense_refresh_interval, 120),
+        )
+
         # NOTE: the OLT deferred-operations queue + SSH circuit-breaker
         # subsystem was removed (it was never wired — the queue had no
         # producers and the real write paths bypassed the breaker, so it gave

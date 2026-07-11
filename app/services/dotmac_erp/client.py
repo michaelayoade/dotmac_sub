@@ -294,6 +294,54 @@ class DotMacERPClient:
         )
         return result if isinstance(result, dict) else {}
 
+    # ============ Expense claim surface (PR 2) ============
+    #
+    # Thin flow-specific wrappers over the generic post/get, mirroring the paths
+    # and shapes of ``dotmac_crm/app/services/dotmac_erp/client.py`` verbatim so
+    # ERP sees an identical client. The money write path is ``push_expense_claim``
+    # (idempotent create-and-submit); the two GETs are read-only reconcile aids.
+
+    def push_expense_claim(
+        self, payload: dict, idempotency_key: str | None = None
+    ) -> dict:
+        """POST a field expense request to ERP as an expense claim.
+
+        ``POST /sync/crm/expense-claims`` — idempotent create-and-submit: an
+        identical resend of the same ``omni_id`` returns the existing claim
+        (200); a first create returns 201. The ``idempotency_key`` is sent as the
+        ``Idempotency-Key`` header so re-delivery of a row ERP already saw is a
+        no-op on the ERP side. Returns the ERP body
+        (``claim_id``/``claim_number``/``status``/``omni_id``).
+        """
+        return self.post(
+            "/sync/crm/expense-claims",
+            payload,
+            idempotency_key=idempotency_key,
+            expected_status_codes={200, 201},
+        )
+
+    def get_expense_claim_status(self, omni_id: str) -> dict | None:
+        """Poll ERP for an expense claim's approval/payment status.
+
+        ``GET /sync/crm/expense-claims/{omni_id}`` where ``omni_id`` is sub's
+        ``FieldExpenseRequest.id``. Returns the status body, or ``None`` when the
+        claim is not (yet) known to ERP (404) — callers degrade rather than error.
+        """
+        try:
+            return self.get(f"/sync/crm/expense-claims/{omni_id}")
+        except DotMacERPNotFoundError:
+            return None
+
+    def get_expense_categories(self) -> list[dict]:
+        """List active ERP expense categories for field expense capture.
+
+        ``GET /sync/crm/expense-categories`` → unwraps the ``items`` envelope to a
+        plain list (empty when absent).
+        """
+        result = self.get("/sync/crm/expense-categories")
+        items = result.get("items")
+        return items if isinstance(items, list) else []
+
 
 def build_erp_client(db) -> DotMacERPClient:
     """Build a DotMac ERP client from the ``integration`` settings domain.
