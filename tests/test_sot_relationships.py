@@ -44,6 +44,11 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     assert sot_relationships.dependencies_for(
         "communications.notification_service"
     ) == ("communications.channel_policy", "communications.event_policy")
+    assert sot_relationships.dependencies_for("communications.team_inbox") == (
+        "customer.identity_scope",
+        "communications.channel_policy",
+        "communications.notification_service",
+    )
     assert sot_relationships.dependencies_for("sessions.enforcement") == (
         "financial.access_resolution",
         "sessions.radius_resolution",

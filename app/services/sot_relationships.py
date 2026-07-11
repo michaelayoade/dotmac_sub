@@ -342,8 +342,17 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             SOTService(
                 name="communications.team_inbox",
                 module="app.services.team_inbox_operations",
-                owns=("conversation collaboration", "conversation assignment"),
-                depends_on=("customer.identity_scope",),
+                owns=(
+                    "conversation collaboration",
+                    "conversation assignment",
+                    "inbox reply and contact-link workflows",
+                    "inbound channel ingestion",
+                ),
+                depends_on=(
+                    "customer.identity_scope",
+                    "communications.channel_policy",
+                    "communications.notification_service",
+                ),
             ),
         ),
         entrypoints=(

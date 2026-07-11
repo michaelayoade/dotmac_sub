@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.domain_settings import SettingDomain
-from app.services import team_inbox_channel_receive, team_inbox_outbound
+from app.services import team_inbox_channel_receive
 from app.services.credential_crypto import decrypt_credential
 from app.services.settings_spec import resolve_value
 
@@ -214,37 +214,28 @@ async def receive_meta_whatsapp_webhook(
             detail="Invalid JSON payload.",
         )
 
-    results: list[dict[str, object]] = []
-    status_results: list[dict[str, object]] = []
+    inbound_payloads: list[dict[str, Any]] = []
+    status_items: list[dict[str, Any]] = []
     for item in _iter_meta_whatsapp_messages(payload):
-        inbound_payload = {
-            "message": item["message"],
-            "contact_name": item.get("contact_name"),
-            "metadata": item.get("metadata"),
-            "attachments": item.get("attachments"),
-            "raw": item.get("raw_message"),
-        }
-        result = team_inbox_channel_receive.receive_whatsapp_webhook(
-            db,
-            provider="meta_cloud_api",
-            payload=inbound_payload,
-        )
-        results.append(
+        inbound_payloads.append(
             {
-                "kind": result.kind,
-                "conversation_id": result.conversation_id,
-                "message_id": result.message_id,
-                "resolution_status": result.resolution_status,
-                "subscriber_id": result.subscriber_id,
-                "reseller_id": result.reseller_id,
+                "message": item["message"],
+                "contact_name": item.get("contact_name"),
+                "metadata": item.get("metadata"),
+                "attachments": item.get("attachments"),
+                "raw": item.get("raw_message"),
             }
         )
     for item in _iter_meta_whatsapp_statuses(payload):
-        status_results.append(
-            team_inbox_outbound.apply_whatsapp_delivery_status(db, item)
+        status_items.append(item)
+    results, status_results = (
+        team_inbox_channel_receive.receive_whatsapp_webhook_batch_committed(
+            db,
+            provider="meta_cloud_api",
+            payloads=inbound_payloads,
+            status_items=status_items,
         )
-    if results or status_results:
-        db.commit()
+    )
     return {
         "status": "ok",
         "processed": len(results),

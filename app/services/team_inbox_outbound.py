@@ -3,9 +3,10 @@ from __future__ import annotations
 import html
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, TypeVar
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -25,6 +26,17 @@ from app.services.customer_identity_normalization import normalize_phone_identif
 from app.services.integrations.connectors import whatsapp as whatsapp_connector
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
+T = TypeVar("T")
+
+
+def _commit(db: Session, action: Callable[[], T]) -> T:
+    try:
+        result = action()
+        db.commit()
+        return result
+    except Exception:
+        db.rollback()
+        raise
 
 
 @dataclass(frozen=True)
@@ -469,6 +481,51 @@ def send_inbox_reply(
         activity=sender.activity,
         from_address=config.get("from_email"),
         to_email=to_email,
+    )
+
+
+def send_inbox_reply_for_conversation(
+    db: Session,
+    *,
+    conversation_id: str | UUID,
+    payload: InboxReplyPayload,
+    now: datetime | None = None,
+    record_failure: bool = False,
+) -> InboxReplyResult:
+    conversation_uuid = _coerce_uuid(conversation_id)
+    conversation = db.get(InboxConversation, conversation_uuid) if conversation_uuid else None
+    if conversation is None:
+        return InboxReplyResult(
+            kind="conversation_not_found",
+            conversation_id=str(conversation_id),
+            reason="Conversation not found",
+        )
+    return send_inbox_reply(
+        db,
+        conversation=conversation,
+        payload=payload,
+        now=now,
+        record_failure=record_failure,
+    )
+
+
+def send_inbox_reply_for_conversation_committed(
+    db: Session,
+    *,
+    conversation_id: str | UUID,
+    payload: InboxReplyPayload,
+    now: datetime | None = None,
+    record_failure: bool = False,
+) -> InboxReplyResult:
+    return _commit(
+        db,
+        lambda: send_inbox_reply_for_conversation(
+            db,
+            conversation_id=conversation_id,
+            payload=payload,
+            now=now,
+            record_failure=record_failure,
+        ),
     )
 
 

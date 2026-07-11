@@ -156,10 +156,9 @@ async def receive_meta_inbox_webhook(
             detail="Invalid JSON payload.",
         )
 
-    results: list[dict[str, object]] = []
+    inbound_payloads: list[team_inbox_channel_receive.InboundChannelPayload] = []
     for item in _iter_meta_social_messages(payload):
-        result = team_inbox_channel_receive.receive_inbound_channel(
-            db,
+        inbound_payloads.append(
             team_inbox_channel_receive.InboundChannelPayload(
                 channel_type=str(item["channel_type"]),
                 contact_address=str(item["sender_id"]),
@@ -169,18 +168,10 @@ async def receive_meta_inbox_webhook(
                 metadata=item.get("metadata"),
             ),
         )
-        results.append(
-            {
-                "kind": result.kind,
-                "conversation_id": result.conversation_id,
-                "message_id": result.message_id,
-                "resolution_status": result.resolution_status,
-                "subscriber_id": result.subscriber_id,
-                "reseller_id": result.reseller_id,
-            }
-        )
-    if results:
-        db.commit()
+    results = team_inbox_channel_receive.receive_inbound_channel_batch_committed(
+        db,
+        inbound_payloads,
+    )
     return {
         "status": "ok",
         "processed": len(results),

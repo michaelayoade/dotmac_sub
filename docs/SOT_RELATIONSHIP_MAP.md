@@ -57,7 +57,8 @@ services instead of rebuilding customer joins.
    suppression.
 3. Notification service owns notification rows and delivery lifecycle.
 4. Staff notification service owns internal/admin notification creation.
-5. Team inbox services own conversation notes, assignment, and collaboration.
+5. Team inbox services own conversation notes, assignment, replies,
+   contact-linking, widget writes, inbound-channel ingestion, and collaboration.
 
 Rule: domain services request a notification outcome; they should not construct
 notification rows or choose email/SMS/WhatsApp directly.
