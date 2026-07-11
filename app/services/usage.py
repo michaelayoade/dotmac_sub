@@ -51,8 +51,8 @@ from app.schemas.usage import (
     UsageRecordCreate,
     UsageRecordUpdate,
 )
+from app.services import control_registry, settings_spec
 from app.services import domain_settings as domain_settings_service
-from app.services import settings_spec
 from app.services.common import apply_ordering, apply_pagination, validate_enum
 from app.services.events import emit_event
 from app.services.events.types import EventType
@@ -1057,15 +1057,7 @@ def _emit_usage_events(
     previous_used: Decimal,
     new_used: Decimal,
 ) -> None:
-    warning_enabled = settings_spec.resolve_value(
-        db, SettingDomain.usage, "usage_warning_enabled"
-    )
-    if warning_enabled is not None and str(warning_enabled).lower() in {
-        "0",
-        "false",
-        "no",
-        "off",
-    }:
+    if not control_registry.is_enabled(db, "usage.warnings"):
         return
     included = Decimal(str(bucket.included_gb or 0))
     if included <= 0:

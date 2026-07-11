@@ -26,7 +26,7 @@ from app.models.catalog import (
 from app.models.domain_settings import SettingDomain
 from app.models.radius import RadiusClient
 from app.models.usage import AccountingStatus, RadiusAccountingSession
-from app.services import settings_spec
+from app.services import control_registry, settings_spec
 from app.services.common import coerce_uuid
 from app.services.credential_crypto import decrypt_credential
 from app.services.nas import DeviceProvisioner
@@ -72,7 +72,7 @@ def _radius_timeout_sec(db: Session) -> float:
 
 
 def _coa_enabled(db: Session) -> bool:
-    return _setting_bool(db, SettingDomain.radius, "coa_enabled", True)
+    return control_registry.is_enabled(db, "access.radius_coa")
 
 
 def _coa_retries(db: Session) -> int:
@@ -151,19 +151,15 @@ def reset_coa_cache(nas_id: Any = None) -> None:
 
 
 def _mikrotik_kill_enabled(db: Session) -> bool:
-    return _setting_bool(
-        db, SettingDomain.network, "mikrotik_session_kill_enabled", True
-    )
+    return control_registry.is_enabled(db, "access.mikrotik_session_kill")
 
 
 def _mikrotik_api_session_kick_enabled(db: Session) -> bool:
-    return _setting_bool(
-        db, SettingDomain.network, "mikrotik_api_session_kick_enabled", True
-    )
+    return control_registry.is_enabled(db, "access.mikrotik_api_session_kick")
 
 
 def _address_list_block_enabled(db: Session) -> bool:
-    return _setting_bool(db, SettingDomain.network, "address_list_block_enabled", True)
+    return control_registry.is_enabled(db, "access.address_list_block")
 
 
 def _default_address_list(db: Session) -> str | None:

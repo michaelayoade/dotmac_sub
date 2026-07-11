@@ -42,6 +42,9 @@ from app.services.customer_portal_flow_common import (
     _compute_total_pages,
     _resolve_next_billing_date,
 )
+from app.services.network.radius_sessions import (
+    latest_open_accounting_session_for_subscription,
+)
 from app.services.web_network_ont_actions import config_setters as ont_config_setters
 from app.services.web_network_ont_actions import device_actions as ont_device_actions
 
@@ -75,17 +78,7 @@ def _radius_connection_status(
             "framed_ip_address": None,
         }
 
-    session = (
-        db.query(RadiusAccountingSession)
-        .filter(RadiusAccountingSession.subscription_id == subscription.id)
-        .filter(RadiusAccountingSession.session_end.is_(None))
-        .order_by(
-            RadiusAccountingSession.last_update_at.desc().nullslast(),
-            RadiusAccountingSession.session_start.desc().nullslast(),
-            RadiusAccountingSession.created_at.desc(),
-        )
-        .first()
-    )
+    session = latest_open_accounting_session_for_subscription(db, subscription.id)
     if not session:
         return {
             "state": "offline",

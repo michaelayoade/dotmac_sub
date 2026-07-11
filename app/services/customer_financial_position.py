@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.models.billing import Invoice
 from app.services.invoice_collectibility import (
+    collection_blocking_balance,
     due_invoice_balance,
     list_open_invoices,
     open_invoice_balance,
@@ -29,6 +30,7 @@ class CustomerFinancialPosition:
     open_invoice_balance: Decimal
     due_invoice_balance: Decimal
     overdue_debt_balance: Decimal
+    collection_blocking_balance: Decimal
     overdue_invoice_count: int
     prepaid_available_balance: Decimal
     oldest_due_invoice: Invoice | None
@@ -46,6 +48,10 @@ class CustomerFinancialPosition:
     @property
     def has_overdue_debt(self) -> bool:
         return self.overdue_debt_balance > Decimal("0.00")
+
+    @property
+    def has_collection_blocking_debt(self) -> bool:
+        return self.collection_blocking_balance > Decimal("0.00")
 
     @property
     def net_prepaid_position(self) -> Decimal:
@@ -67,6 +73,7 @@ def get_customer_financial_position(
         open_invoice_balance=open_invoice_balance(db, account_id),
         due_invoice_balance=due_invoice_balance(db, account_id, now=now),
         overdue_debt_balance=overdue_debt_balance(db, account_id, now=now),
+        collection_blocking_balance=collection_blocking_balance(db, account_id),
         overdue_invoice_count=overdue_status_count(db, account_id),
         prepaid_available_balance=(
             prepaid_available_balance(db, account_id)

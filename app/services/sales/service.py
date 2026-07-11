@@ -48,7 +48,7 @@ from app.models.sales import (
     QuoteStatus,
 )
 from app.models.subscriber import PartyStatus, Subscriber
-from app.services import settings_spec
+from app.services import control_registry, settings_spec
 from app.services.common import (
     apply_ordering,
     apply_pagination,
@@ -271,12 +271,7 @@ def _infer_lead_source(
 
 
 def _lead_dedup_enabled(db: Session) -> bool:
-    value = settings_spec.resolve_value(
-        db, SettingDomain.subscriber, "lead_dedup_enabled"
-    )
-    if value is None:
-        return True  # default on: one open lead per subscriber
-    return str(value).strip().lower() in ("1", "true", "yes", "on")
+    return control_registry.is_enabled(db, "sales.lead_dedup")
 
 
 def _default_currency(db: Session) -> str | None:

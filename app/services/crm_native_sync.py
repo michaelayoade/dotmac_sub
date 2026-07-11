@@ -32,21 +32,18 @@ from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
-from app.models.domain_settings import SettingDomain
 from app.models.project import Project, ProjectStatus
 from app.models.referral_native import Referral, ReferralRewardStatus, ReferralStatus
 from app.models.sales import Quote, QuoteStatus
-from app.services import settings_spec
+from app.services import control_registry
 from app.services.common import coerce_uuid
 
 logger = logging.getLogger(__name__)
 
-FLAG_KEY = "crm_phase3_native_sync_enabled"
-
 
 def is_enabled(db: Session) -> bool:
     """Phase 3 sync-window flag: adapt CRM events into native rows."""
-    return bool(settings_spec.resolve_value(db, SettingDomain.projects, FLAG_KEY))
+    return control_registry.is_enabled(db, "crm.phase3_native_sync")
 
 
 # ── parsing helpers (mirror conventions) ────────────────────────────────────

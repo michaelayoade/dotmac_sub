@@ -50,7 +50,7 @@ from app.models.referral_native import (
 )
 from app.models.sales import Lead, LeadStatus
 from app.models.subscriber import PartyStatus, Subscriber, SubscriberStatus
-from app.services import settings_spec
+from app.services import control_registry, settings_spec
 from app.services.common import coerce_uuid, get_or_404, validate_enum
 from app.services.customer_identity_normalization import (
     default_country_code,
@@ -128,11 +128,7 @@ def native_read_enabled(db: Session) -> bool:
     alongside ``quotes_native_write_enabled``), not with the five
     ``referral_*`` program keys (``SettingDomain.subscriber``).
     """
-    return bool(
-        settings_spec.resolve_value(
-            db, SettingDomain.projects, "referrals_native_read_enabled"
-        )
-    )
+    return control_registry.is_enabled(db, "referrals.native_read")
 
 
 def share_url(code: str) -> str:

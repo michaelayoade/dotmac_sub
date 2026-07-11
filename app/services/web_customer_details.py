@@ -7,7 +7,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -57,7 +57,6 @@ from app.models.subscriber import (
     UserType,
 )
 from app.models.support import Ticket
-from app.models.usage import RadiusAccountingSession
 from app.schemas.geocoding import GeocodePreviewRequest
 from app.services import catalog as catalog_service
 from app.services import geocoding as geocoding_service
@@ -82,6 +81,9 @@ from app.services.invoice_collectibility import (
     overdue_debt_filters_for_accounts,
 )
 from app.services.network._common import decode_huawei_hex_serial
+from app.services.network.radius_sessions import (
+    latest_open_accounting_sessions_by_subscription,
+)
 from app.services.nin_matching import mask_nin
 from app.services.subscription_lifecycle_policy import (
     is_customer_impact_service_status,
@@ -89,6 +91,9 @@ from app.services.subscription_lifecycle_policy import (
 )
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from app.models.usage import RadiusAccountingSession
 
 _RADIUS_CONNECTED_FRESH_SECONDS = 15 * 60
 
@@ -1220,23 +1225,7 @@ def _build_network_connection_snapshot(
     db: Session, subscriptions: list[Subscription]
 ) -> tuple[dict[str, object], dict[str, dict[str, object]]]:
     sub_ids = [sub.id for sub in subscriptions if getattr(sub, "id", None)]
-    sessions_by_sub: dict[UUID, RadiusAccountingSession] = {}
-    if sub_ids:
-        rows = (
-            db.query(RadiusAccountingSession)
-            .filter(RadiusAccountingSession.subscription_id.in_(sub_ids))
-            .filter(RadiusAccountingSession.session_end.is_(None))
-            .order_by(
-                RadiusAccountingSession.subscription_id.asc(),
-                RadiusAccountingSession.last_update_at.desc().nullslast(),
-                RadiusAccountingSession.session_start.desc().nullslast(),
-                RadiusAccountingSession.created_at.desc(),
-            )
-            .all()
-        )
-        for row in rows:
-            if row.subscription_id and row.subscription_id not in sessions_by_sub:
-                sessions_by_sub[row.subscription_id] = row
+    sessions_by_sub = latest_open_accounting_sessions_by_subscription(db, sub_ids)
 
     by_subscription: dict[str, dict[str, object]] = {}
     for sub in subscriptions:

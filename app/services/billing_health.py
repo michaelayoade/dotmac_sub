@@ -40,7 +40,7 @@ from app.models.catalog import (
 from app.models.domain_settings import SettingDomain
 from app.models.scheduler import ScheduledTask
 from app.models.subscriber import Subscriber
-from app.services import settings_spec
+from app.services import control_registry, settings_spec
 from app.services.access_resolution import (
     postpaid_billing_filters,
     prepaid_enforcement_filters,
@@ -397,14 +397,7 @@ def covered_but_locked(db: Session) -> int:
 
 def _prepaid_monthly_enabled(db: Session) -> bool:
     """Same resolution as billing_automation's invoice cycle."""
-    value = settings_spec.resolve_value(
-        db, SettingDomain.billing, "prepaid_monthly_invoicing_enabled"
-    )
-    if value is None:
-        return False
-    if isinstance(value, bool):
-        return value
-    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+    return control_registry.is_enabled(db, "billing.prepaid_monthly_invoicing")
 
 
 def billing_path_coverage(db: Session) -> tuple[int, int]:

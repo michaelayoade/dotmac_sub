@@ -56,6 +56,22 @@ def test_customer_context_optional_helpers_return_none_when_unresolved(db_sessio
     assert optional_customer_subscriber_id(db_session, customer) is None
 
 
+def test_customer_context_resolves_explicit_scope_without_db(subscriber):
+    customer = {
+        "subscriber_id": str(subscriber.id),
+        "account_id": str(subscriber.id),
+        "username": subscriber.email,
+    }
+
+    context = resolve_customer_context(None, customer)
+
+    assert context.subscriber_id == str(subscriber.id)
+    assert context.account_id == str(subscriber.id)
+    assert context.allowed_account_ids == (str(subscriber.id),)
+    assert context.require_account_id() == str(subscriber.id)
+    assert require_customer_account_id(None, customer) == str(subscriber.id)
+
+
 def test_customer_context_falls_back_from_subscriber_to_active_subscription(
     db_session, subscriber
 ):

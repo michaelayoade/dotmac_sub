@@ -106,6 +106,39 @@ class TestPortalNotificationsPage:
         assert preview["has_recent_notifications"] is True
         assert len(preview["recent_notifications"]) == 1
 
+    def test_notifications_page_resolves_account_id_only_session(
+        self, db_session, subscriber
+    ) -> None:
+        from app.models.notification import (
+            Notification,
+            NotificationChannel,
+            NotificationStatus,
+        )
+        from app.services.customer_portal_notifications import get_notifications_page
+
+        db_session.add(
+            Notification(
+                subscriber_id=subscriber.id,
+                channel=NotificationChannel.email,
+                recipient=subscriber.email,
+                event_type="invoice_sent",
+                category="billing",
+                body="Account-scoped session notice",
+                status=NotificationStatus.delivered,
+            )
+        )
+        db_session.commit()
+
+        page = get_notifications_page(
+            db_session,
+            {"account_id": str(subscriber.id)},
+            page=1,
+            per_page=10,
+        )
+
+        assert page["total"] == 1
+        assert page["notifications"][0].message == "Account-scoped session notice"
+
     def test_mark_notifications_read_updates_page_and_preview_counts(
         self, db_session, subscriber
     ) -> None:

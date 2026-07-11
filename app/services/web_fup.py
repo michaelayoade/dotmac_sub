@@ -12,7 +12,6 @@ from fastapi import HTTPException, Request
 from sqlalchemy import func
 from starlette.datastructures import FormData
 
-from app.models.domain_settings import SettingDomain
 from app.models.fup import (
     FupAction,
     FupConsumptionPeriod,
@@ -21,9 +20,9 @@ from app.models.fup import (
     FupRule,
 )
 from app.services import catalog as catalog_service
+from app.services import control_registry
 from app.services.common import coerce_uuid, validate_enum
 from app.services.fup import _threshold_gb, fup_policies, simulate_fup
-from app.services.settings_spec import resolve_value
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -221,8 +220,7 @@ def _guard_submonthly_period(db: Session, consumption_period: str) -> None:
     """
     if consumption_period not in _SUBMONTHLY_PERIODS:
         return
-    raw = resolve_value(db, SettingDomain.usage, "fup_submonthly_rules_enabled")
-    if raw is None or str(raw).lower() not in {"true", "1", "on", "yes"}:
+    if not control_registry.is_enabled(db, "usage.fup_submonthly_rules"):
         raise HTTPException(
             status_code=400,
             detail=(

@@ -28,8 +28,8 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models.domain_settings import SettingDomain
 from app.models.project import Project
+from app.services import control_registry
 from app.services.crm_client import get_crm_client
 
 logger = logging.getLogger(__name__)
@@ -66,13 +66,7 @@ def relay_enabled(db: Session) -> bool:
     (``projects_native_read_enabled`` …). OFF — nothing is relayed; ON —
     vendor-relevant project create/update pushes a stub into CRM ``projects``.
     """
-    from app.services import settings_spec
-
-    return bool(
-        settings_spec.resolve_value(
-            db, SettingDomain.projects, "vendor_project_relay_enabled"
-        )
-    )
+    return control_registry.is_enabled(db, "projects.vendor_project_relay")
 
 
 def is_vendor_relevant(project: Project) -> bool:

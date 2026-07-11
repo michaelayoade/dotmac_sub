@@ -262,7 +262,7 @@ def _evaluate_fup_rules_locked(
     from app.models.domain_settings import SettingDomain
     from app.models.fup import FupPolicy
     from app.models.fup_state import FupActionStatus, FupState
-    from app.services import settings_spec
+    from app.services import control_registry, settings_spec
     from app.services.events import emit_event
     from app.services.events.types import EventType
     from app.services.fup import evaluate_rules
@@ -286,13 +286,7 @@ def _evaluate_fup_rules_locked(
         # (usage_warning_enabled / usage_warning_thresholds, e.g. "0.8,0.9") so
         # the percentage is operator-controlled, not hardcoded. We warn at the
         # lowest configured threshold.
-        _warn_raw = settings_spec.resolve_value(
-            session, SettingDomain.usage, "usage_warning_enabled"
-        )
-        warn_enabled = not (
-            _warn_raw is not None
-            and str(_warn_raw).lower() in {"0", "false", "no", "off"}
-        )
+        warn_enabled = control_registry.is_enabled(session, "usage.warnings")
         _thr_raw = settings_spec.resolve_value(
             session, SettingDomain.usage, "usage_warning_thresholds"
         )
@@ -817,17 +811,13 @@ def _emit_fup_notifications(session, pending: list[dict]) -> int:
     was created."""
     if not pending:
         return 0
-    from app.models.notification import NotificationChannel
     from app.models.subscriber import Subscriber
-    from app.schemas.notification import NotificationCreate
     from app.services.notification import notifications as notifications_svc
-    from app.services.notification_channel_policy import resolve_notification_channels
 
     sent = 0
     for n in pending:
         try:
             subscriber = session.get(Subscriber, n["subscriber_id"])
-            email = getattr(subscriber, "email", None)
             subject, body = _build_fup_notification(
                 n["kind"],
                 n.get("rule_name"),
@@ -836,53 +826,20 @@ def _emit_fup_notifications(session, pending: list[dict]) -> int:
                 n.get("cap_resets_at"),
             )
             event_type = f"fup_{n['kind']}"
-            default_channels = tuple(
-                NotificationChannel(raw)
-                for raw in _FUP_NOTIFICATION_DEFAULT_CHANNELS.get(
-                    n["kind"],
-                    ("push",),
-                )
-            )
-            channels = resolve_notification_channels(
+            created = notifications_svc.queue_customer_notifications_for_policy(
                 session,
+                subscriber=subscriber,
                 template_code=event_type,
                 event_type=event_type,
                 category="fup",
-                default_channels=default_channels,
+                default_channels=_FUP_NOTIFICATION_DEFAULT_CHANNELS.get(
+                    n["kind"],
+                    ("push",),
+                ),
+                subject=subject,
+                body=body,
             )
-            created_any = False
-            for channel in channels:
-                if channel == NotificationChannel.email:
-                    recipient = email
-                elif channel in {NotificationChannel.sms, NotificationChannel.whatsapp}:
-                    recipient = getattr(subscriber, "phone", None)
-                else:
-                    # Push is addressed by subscriber_id; recipient is informational.
-                    recipient = str(n["subscriber_id"])
-                if not recipient:
-                    continue
-                try:
-                    notifications_svc.create_customer_notification(
-                        session,
-                        NotificationCreate(
-                            channel=channel,
-                            subscriber_id=n["subscriber_id"],
-                            recipient=recipient,
-                            subject=subject,
-                            body=body,
-                            category="fup",
-                            event_type=event_type,
-                        ),
-                    )
-                    created_any = True
-                except Exception:
-                    logger.warning(
-                        "Failed to emit FUP %s notification on %s",
-                        n["kind"],
-                        channel,
-                        exc_info=True,
-                    )
-            if created_any:
+            if created:
                 sent += 1
         except Exception:
             logger.warning("Failed to emit FUP notification", exc_info=True)
