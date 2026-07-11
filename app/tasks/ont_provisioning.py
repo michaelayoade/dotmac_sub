@@ -60,6 +60,18 @@ def _queue_post_authorization_bootstrap_follow_up(
                 NetworkOperation.status.in_(active_statuses),
             )
         ).first()
+        if (
+            existing is not None
+            and parent_operation_id
+            and str(existing.parent_id or "") != parent_operation_id
+        ):
+            return {
+                "queued": False,
+                "operation_id": str(existing.id),
+                "task_id": None,
+                "duplicate": True,
+                "error": "Bootstrap verification is already owned by another operation",
+            }
         return {
             "queued": existing is not None,
             "operation_id": str(existing.id) if existing else None,
@@ -68,7 +80,15 @@ def _queue_post_authorization_bootstrap_follow_up(
             "error": None if existing is not None else "existing follow-up not found",
         }
 
-    # Commit the pending operation before publishing to the queue so the worker
+    # The command phase is complete. The child now represents device
+    # confirmation, so expose it as waiting while it sits in the queue.
+    network_operations.mark_waiting(
+        db,
+        str(op.id),
+        "Waiting for the ONT to register and confirm service state through ACS.",
+    )
+
+    # Commit the waiting operation before publishing to the queue so the worker
     # can load it immediately when it starts.
     db.commit()
 
@@ -193,9 +213,9 @@ def authorize_ont(
                         output_payload=payload,
                     )
                 else:
-                    network_operations.mark_succeeded(
-                        db, operation_id, output_payload=payload
-                    )
+                    parent = network_operations.update_parent_status(db, operation_id)
+                    parent.output_payload = payload
+                    db.flush()
             elif result.partial_success:
                 network_operations.mark_warning(
                     db,
@@ -259,7 +279,8 @@ def provision_ont(
     retained for backward-compatible task payloads and intentionally ignored.
     """
     del wait_for_acs, apply_acs_config
-    del initiated_by  # Reserved for audit propagation when needed.
+    operation_id: str | None = None
+    effective_correlation = correlation_key or f"provision:{ont_id}"
     with db_session_adapter.session() as db:
         if bulk_item_id:
             from app.services.network.bulk_provisioning import mark_bulk_item_running
@@ -268,14 +289,85 @@ def provision_ont(
             db.commit()
 
         try:
+            from fastapi import HTTPException
+            from sqlalchemy import select
+
+            from app.models.network_operation import (
+                NetworkOperation,
+                NetworkOperationStatus,
+                NetworkOperationTargetType,
+                NetworkOperationType,
+            )
             from app.services.network.ont_provision_steps import (
                 apply_authorization_baseline,
             )
             from app.services.network.provisioning_events import (
                 provisioning_correlation,
             )
+            from app.services.network_operations import network_operations
 
-            effective_correlation = correlation_key or f"provision:{ont_id}"
+            if not dry_run:
+                try:
+                    op = network_operations.start(
+                        db,
+                        NetworkOperationType.ont_provision,
+                        NetworkOperationTargetType.ont,
+                        ont_id,
+                        correlation_key=effective_correlation,
+                        input_payload={
+                            "ont_id": ont_id,
+                            "dry_run": dry_run,
+                            "bulk_run_id": bulk_run_id,
+                            "bulk_item_id": bulk_item_id,
+                            "allow_low_optical_margin": allow_low_optical_margin,
+                        },
+                        initiated_by=initiated_by or "system",
+                    )
+                    operation_id = str(op.id)
+                    network_operations.mark_running(db, operation_id)
+                    db.commit()
+                except HTTPException as exc:
+                    if exc.status_code != 409:
+                        raise
+                    active_statuses = (
+                        NetworkOperationStatus.pending,
+                        NetworkOperationStatus.running,
+                        NetworkOperationStatus.waiting,
+                    )
+                    existing = db.scalars(
+                        select(NetworkOperation).where(
+                            NetworkOperation.correlation_key == effective_correlation,
+                            NetworkOperation.status.in_(active_statuses),
+                        )
+                    ).first()
+                    message = (
+                        "Provisioning is already waiting for device confirmation."
+                        if existing
+                        and existing.status == NetworkOperationStatus.waiting
+                        else "Provisioning is already in progress."
+                    )
+                    if bulk_item_id:
+                        from app.services.network.bulk_provisioning import (
+                            mark_bulk_item_failed,
+                        )
+
+                        mark_bulk_item_failed(db, bulk_item_id, message)
+                        db.commit()
+                    return {
+                        "success": False,
+                        "message": message,
+                        "ont_id": ont_id,
+                        "operation_id": str(existing.id) if existing else None,
+                        "bulk_run_id": bulk_run_id,
+                        "bulk_item_id": bulk_item_id,
+                        "correlation_key": effective_correlation,
+                        "waiting": bool(
+                            existing
+                            and existing.status == NetworkOperationStatus.waiting
+                        ),
+                        "conflict": True,
+                    }
+
             with provisioning_correlation(effective_correlation):
                 result = apply_authorization_baseline(
                     db,
@@ -292,7 +384,59 @@ def provision_ont(
                 "bulk_run_id": bulk_run_id,
                 "bulk_item_id": bulk_item_id,
                 "correlation_key": effective_correlation,
+                "operation_id": operation_id,
+                "waiting": result.waiting,
+                "data": result.data,
             }
+            if operation_id:
+                if result.waiting:
+                    waiting_reason = (result.data or {}).get(
+                        "waiting_reason"
+                    ) or result.message
+                    op = network_operations.mark_waiting(
+                        db, operation_id, str(waiting_reason)
+                    )
+                    op.output_payload = payload
+                    db.flush()
+                    follow_up = _queue_post_authorization_bootstrap_follow_up(
+                        db,
+                        ont_id=ont_id,
+                        parent_operation_id=operation_id,
+                        initiated_by=initiated_by,
+                    )
+                    payload["follow_up_operation_id"] = follow_up.get("operation_id")
+                    payload["follow_up_task_id"] = follow_up.get("task_id")
+                    payload["follow_up_queued"] = bool(follow_up.get("queued"))
+                    payload["follow_up_duplicate"] = bool(follow_up.get("duplicate"))
+                    if follow_up.get("queued"):
+                        parent = network_operations.update_parent_status(
+                            db, operation_id
+                        )
+                        parent.output_payload = payload
+                        db.flush()
+                    else:
+                        payload["success"] = False
+                        payload["waiting"] = False
+                        payload["partial_success"] = True
+                        payload["message"] = (
+                            f"{result.message} Bootstrap verification could not be "
+                            f"queued: {follow_up.get('error') or 'unknown queue error'}"
+                        )
+                        network_operations.mark_warning(
+                            db,
+                            operation_id,
+                            str(payload["message"]),
+                            output_payload=payload,
+                        )
+                elif result.success:
+                    network_operations.mark_succeeded(
+                        db, operation_id, output_payload=payload
+                    )
+                else:
+                    network_operations.mark_failed(
+                        db, operation_id, result.message, output_payload=payload
+                    )
+                db.commit()
             if bulk_item_id:
                 from app.services.network.bulk_provisioning import (
                     mark_bulk_item_completed,
@@ -303,6 +447,15 @@ def provision_ont(
             return payload
         except Exception as exc:
             logger.exception("ONT provisioning task failed for %s", ont_id)
+            if operation_id:
+                try:
+                    from app.services.network_operations import network_operations
+
+                    db.rollback()
+                    network_operations.mark_failed(db, operation_id, str(exc))
+                    db.commit()
+                except Exception:
+                    logger.exception("Failed to mark ONT provision operation failed")
             if bulk_item_id:
                 from app.services.network.bulk_provisioning import mark_bulk_item_failed
 
@@ -314,7 +467,8 @@ def provision_ont(
                 "ont_id": ont_id,
                 "bulk_run_id": bulk_run_id,
                 "bulk_item_id": bulk_item_id,
-                "correlation_key": correlation_key,
+                "correlation_key": effective_correlation,
+                "operation_id": operation_id,
             }
 
 
@@ -368,9 +522,6 @@ def queue_bulk_provisioning(
     errors = 0
     failed_results = 0
 
-    from app.services.network.ont_provision_steps import apply_authorization_baseline
-    from app.services.network.provisioning_events import provisioning_correlation
-
     for ont_id in unique_ont_ids:
         bulk_item = bulk_items_by_ont_id.get(ont_id)
         item_correlation_key = (
@@ -379,46 +530,26 @@ def queue_bulk_provisioning(
             else f"bulk_provision:{ont_id}"
         )
         try:
-            with db_session_adapter.session() as db:
-                if bulk_item is not None:
-                    from app.services.network.bulk_provisioning import (
-                        mark_bulk_item_completed,
-                        mark_bulk_item_running,
-                    )
-
-                    mark_bulk_item_running(db, bulk_item.id)
-                    db.flush()
-
-                with provisioning_correlation(item_correlation_key):
-                    result = apply_authorization_baseline(
-                        db,
-                        ont_id,
-                        dry_run=dry_run,
-                        allow_low_optical_margin=allow_low_optical_margin,
-                    )
-                payload = {
-                    "success": result.success,
-                    "message": result.message,
-                    "ont_id": ont_id,
-                    "duration_ms": result.duration_ms,
-                    "bulk_run_id": bulk_run_id,
-                    "bulk_item_id": str(bulk_item.id)
-                    if bulk_item is not None
-                    else None,
-                    "correlation_key": item_correlation_key,
-                }
-                if bulk_item is not None:
-                    mark_bulk_item_completed(db, bulk_item.id, payload)
-                db.commit()
-            if not result.success:
+            payload = provision_ont.run(
+                ont_id,
+                dry_run=dry_run,
+                initiated_by=initiated_by,
+                correlation_key=item_correlation_key,
+                bulk_run_id=bulk_run_id,
+                bulk_item_id=(str(bulk_item.id) if bulk_item is not None else None),
+                allow_low_optical_margin=allow_low_optical_margin,
+            )
+            if not payload.get("success") and not payload.get("waiting"):
                 failed_results += 1
             tasks.append(
                 {
                     "ont_id": ont_id,
                     "bulk_item_id": str(bulk_item.id) if bulk_item is not None else "",
                     "correlation_key": item_correlation_key,
-                    "success": result.success,
-                    "message": result.message,
+                    "operation_id": payload.get("operation_id"),
+                    "success": bool(payload.get("success")),
+                    "waiting": bool(payload.get("waiting")),
+                    "message": str(payload.get("message") or ""),
                 }
             )
         except Exception as exc:

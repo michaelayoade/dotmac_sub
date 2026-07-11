@@ -38,6 +38,52 @@ def _is_psycopg_autocommit_state_error(exc: ProgrammingError) -> bool:
     return "can't change 'autocommit' now" in str(exc).lower()
 
 
+def _sync_bootstrap_parent(
+    db,
+    *,
+    operation_id: str,
+    ont_id: str,
+    payload: dict[str, object],
+) -> None:
+    """Project a bootstrap verifier outcome onto its parent and bulk item."""
+    from app.services.network_operations import network_operations
+
+    operation = network_operations.get(db, operation_id)
+    if not operation.parent_id:
+        return
+
+    parent = network_operations.update_parent_status(db, str(operation.parent_id))
+    parent.output_payload = {
+        **(parent.output_payload or {}),
+        "device_confirmation": payload,
+        "waiting": parent.status.value in {"pending", "running", "waiting"},
+    }
+    bulk_item_id = (parent.input_payload or {}).get("bulk_item_id")
+    if not bulk_item_id or parent.status.value not in {
+        "succeeded",
+        "warning",
+        "failed",
+    }:
+        return
+
+    from app.services.network.bulk_provisioning import mark_bulk_item_completed
+
+    confirmed = parent.status.value == "succeeded"
+    mark_bulk_item_completed(
+        db,
+        str(bulk_item_id),
+        {
+            "success": confirmed,
+            "waiting": False,
+            "message": str(payload.get("message") or ""),
+            "ont_id": ont_id,
+            "operation_id": str(parent.id),
+            "confirmation_operation_id": operation_id,
+            "device_confirmation": payload,
+        },
+    )
+
+
 @celery_app.task(name="app.tasks.tr069.sync_all_acs_devices")
 def sync_all_acs_devices() -> dict[str, int]:
     """Periodic sync of devices from all active ACS servers.
@@ -234,13 +280,26 @@ def wait_for_ont_bootstrap(
                     countdown,
                 )
 
-                enqueue_task(
+                dispatch = enqueue_task(
                     "app.tasks.tr069.wait_for_ont_bootstrap",
                     args=[ont_id, operation_id, service_retry_count + 1],
                     correlation_id=f"tr069_bootstrap:{ont_id}",
                     source="ont_provision_step_retry",
                     countdown=countdown,
                 )
+                if not dispatch.queued:
+                    payload["waiting"] = False
+                    payload["success"] = False
+                    payload["message"] = (
+                        "TR-069 verification retry could not be queued: "
+                        f"{dispatch.error or 'unknown queue error'}"
+                    )
+                    network_operations.mark_failed(
+                        db,
+                        operation_id,
+                        str(payload["message"]),
+                        output_payload=payload,
+                    )
             else:
                 network_operations.mark_failed(
                     db,
@@ -248,6 +307,12 @@ def wait_for_ont_bootstrap(
                     str(payload["message"]),
                     output_payload=payload,
                 )
+            _sync_bootstrap_parent(
+                db,
+                operation_id=operation_id,
+                ont_id=ont_id,
+                payload=payload,
+            )
             db.commit()
         else:
             db.rollback()
@@ -258,6 +323,16 @@ def wait_for_ont_bootstrap(
         if operation_id:
             try:
                 network_operations.mark_failed(db, operation_id, str(exc))
+                _sync_bootstrap_parent(
+                    db,
+                    operation_id=operation_id,
+                    ont_id=ont_id,
+                    payload={
+                        "success": False,
+                        "waiting": False,
+                        "message": str(exc),
+                    },
+                )
                 db.commit()
             except Exception:
                 db.rollback()

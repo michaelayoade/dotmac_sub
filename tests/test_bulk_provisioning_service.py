@@ -5,7 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 
-def test_bulk_provision_onts_records_run_items_and_executes_synchronously(
+def test_bulk_provision_onts_records_run_items_and_queues_orchestrator(
     db_session,
     monkeypatch,
 ) -> None:
@@ -25,17 +25,11 @@ def test_bulk_provision_onts_records_run_items_and_executes_synchronously(
     db_session.refresh(ont_ok)
     db_session.refresh(ont_other)
 
-    def fake_provision(db, ont_id, **kwargs):  # type: ignore[no-untyped-def]
-        return SimpleNamespace(
-            success=True,
-            message=f"provisioned {ont_id}",
-            duration_ms=1,
-            step_name="authorization_baseline",
-        )
-
     monkeypatch.setattr(
-        "app.services.network.ont_provision_steps.apply_authorization_baseline",
-        fake_provision,
+        "app.services.queue_adapter.enqueue_task",
+        lambda *args, **kwargs: SimpleNamespace(
+            queued=True, task_id="bulk-task-1", error=None
+        ),
     )
 
     missing_ont_id = "11111111-1111-1111-1111-111111111111"
@@ -48,11 +42,11 @@ def test_bulk_provision_onts_records_run_items_and_executes_synchronously(
         step_data={"wait_for_acs": False},
     )
 
-    assert result.status == BulkProvisioningRunStatus.partial
+    assert result.status == BulkProvisioningRunStatus.running
     assert result.total == 4
     assert result.processed == 2
     assert result.skipped == 2
-    assert result.orchestrator_task_id is None
+    assert result.orchestrator_task_id == "bulk-task-1"
 
     run = db_session.get(BulkProvisioningRun, result.run_id)
     assert run is not None
@@ -68,7 +62,7 @@ def test_bulk_provision_onts_records_run_items_and_executes_synchronously(
     )
     assert len(items) == 3
     assert (
-        sum(1 for item in items if item.status == BulkProvisioningItemStatus.succeeded)
+        sum(1 for item in items if item.status == BulkProvisioningItemStatus.pending)
         == 2
     )
     assert (
@@ -105,23 +99,11 @@ def test_bulk_item_completion_finalizes_run_and_events_are_queryable(
     db_session.refresh(ont_ok)
     db_session.refresh(ont_fail)
 
-    provision_results = {
-        str(ont_ok.id): {"success": True, "message": "ok"},
-        str(ont_fail.id): {"success": False, "message": "boom"},
-    }
-
-    def fake_provision(db, ont_id, **kwargs):  # type: ignore[no-untyped-def]
-        result = provision_results[str(ont_id)]
-        return SimpleNamespace(
-            success=result["success"],
-            message=result["message"],
-            duration_ms=1,
-            step_name="authorization_baseline",
-        )
-
     monkeypatch.setattr(
-        "app.services.network.ont_provision_steps.apply_authorization_baseline",
-        fake_provision,
+        "app.services.queue_adapter.enqueue_task",
+        lambda *args, **kwargs: SimpleNamespace(
+            queued=True, task_id="bulk-task-2", error=None
+        ),
     )
 
     result = bulk_provisioning.bulk_provision_onts(
@@ -138,6 +120,16 @@ def test_bulk_item_completion_finalizes_run_and_events_are_queryable(
 
     ok_item = item_by_ont[ont_ok.id]
     fail_item = item_by_ont[ont_fail.id]
+    bulk_provisioning.mark_bulk_item_completed(
+        db_session,
+        ok_item.id,
+        {"success": True, "waiting": False, "message": "ok"},
+    )
+    bulk_provisioning.mark_bulk_item_completed(
+        db_session,
+        fail_item.id,
+        {"success": False, "waiting": False, "message": "boom"},
+    )
 
     with provisioning_correlation(ok_item.correlation_key):
         record_ont_provisioning_event(
@@ -174,3 +166,43 @@ def test_bulk_item_completion_finalizes_run_and_events_are_queryable(
         fail_item.correlation_key,
     }
     assert db_session.query(OntProvisioningEvent).count() == 2
+
+
+def test_waiting_bulk_item_keeps_run_open(db_session):
+    from app.models.network import (
+        BulkProvisioningItem,
+        BulkProvisioningItemStatus,
+        BulkProvisioningRun,
+        BulkProvisioningRunStatus,
+        OntUnit,
+    )
+    from app.services.network.bulk_provisioning import mark_bulk_item_completed
+
+    ont = OntUnit(serial_number="BULK-WAITING")
+    run = BulkProvisioningRun(
+        status=BulkProvisioningRunStatus.running,
+        correlation_key="bulk-waiting",
+        total_count=1,
+    )
+    db_session.add_all([ont, run])
+    db_session.flush()
+    item = BulkProvisioningItem(
+        run_id=run.id,
+        requested_ont_id=str(ont.id),
+        ont_unit_id=ont.id,
+        status=BulkProvisioningItemStatus.running,
+        correlation_key=f"bulk-waiting:ont:{ont.id}",
+    )
+    db_session.add(item)
+    db_session.flush()
+
+    mark_bulk_item_completed(
+        db_session,
+        item.id,
+        {"success": True, "waiting": True, "message": "waiting for ACS"},
+    )
+
+    assert item.status == BulkProvisioningItemStatus.waiting
+    assert item.completed_at is None
+    assert run.status == BulkProvisioningRunStatus.running
+    assert run.completed_at is None

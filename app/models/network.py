@@ -259,6 +259,7 @@ class BulkProvisioningRunStatus(enum.Enum):
 class BulkProvisioningItemStatus(enum.Enum):
     pending = "pending"
     running = "running"
+    waiting = "waiting"
     succeeded = "succeeded"
     failed = "failed"
     skipped = "skipped"

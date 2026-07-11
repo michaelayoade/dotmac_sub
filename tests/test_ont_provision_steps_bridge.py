@@ -88,6 +88,13 @@ def test_provision_bridge_configures_native_vlan(monkeypatch) -> None:
         vlan_id=203,
     )
     assert "native_vlan_203_eth_1" in result.data["steps_completed"]
+    timings = result.data["command_timings"]
+    assert [timing["command"] for timing in timings[:2]] == [
+        "create_internet_service_port",
+        "configure_bridge_native_vlan",
+    ]
+    assert all(isinstance(timing["duration_ms"], int) for timing in timings)
+    assert all("message" not in timing for timing in timings)
 
 
 def test_provision_bridge_native_vlan_failure_rolls_back_created_port(
@@ -122,6 +129,9 @@ def test_provision_bridge_native_vlan_failure_rolls_back_created_port(
     assert result.success is False
     assert "Bridge native VLAN failed" in result.message
     adapter.delete_service_port.assert_called_once_with(700)
+    assert result.data["command_timings"][-1]["command"] == (
+        "rollback_internet_service_port"
+    )
 
 
 def test_provision_fails_before_writes_when_dependency_audit_fails(monkeypatch) -> None:
