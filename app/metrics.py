@@ -23,6 +23,11 @@ REQUEST_ERRORS = Counter(
     "Total HTTP 5xx responses",
     ["method", "path", "status"],
 )
+API_SYNC_PRESSURE_LIMITED = Counter(
+    "api_sync_pressure_limited_total",
+    "API sync requests rejected before they could acquire DB resources",
+    ["bucket", "scope"],
+)
 
 JOB_DURATION = Histogram(
     "job_duration_seconds",
@@ -126,6 +131,124 @@ class _SuspensionAuditCollector(Collector):
 
 
 REGISTRY.register(_SuspensionAuditCollector())
+
+
+class _DatabasePressureCollector(Collector):
+    """Exports SQLAlchemy pool and PostgreSQL session pressure.
+
+    This catches the failure mode behind the selfcare 504 incident: long-lived
+    app transactions and pool saturation under API sync/admin traffic. The
+    collector is fail-soft so /metrics remains available even if the DB is sick.
+    """
+
+    def describe(self):  # noqa: ANN201 - prometheus collector protocol
+        yield _gauge_description(
+            "sqlalchemy_pool_checked_out",
+            "Connections currently checked out from the app SQLAlchemy pool",
+        )
+        yield _gauge_description(
+            "sqlalchemy_pool_size",
+            "Configured size of the app SQLAlchemy pool",
+        )
+        yield _gauge_description(
+            "sqlalchemy_pool_overflow",
+            "Current SQLAlchemy pool overflow connection count",
+        )
+        yield _gauge_description(
+            "postgres_activity_connections",
+            "PostgreSQL session counts by state for the application database",
+            labels=["state"],
+        )
+        yield _gauge_description(
+            "postgres_connection_utilization_pct",
+            "PostgreSQL connection utilization percentage",
+        )
+        yield _gauge_description(
+            "postgres_max_idle_in_transaction_seconds",
+            "Oldest idle-in-transaction PostgreSQL session age in seconds",
+        )
+        yield _gauge_description(
+            "postgres_waiting_on_lock",
+            "PostgreSQL sessions waiting on locks",
+        )
+
+    def collect(self):  # noqa: ANN201 - prometheus collector protocol
+        from prometheus_client.core import GaugeMetricFamily
+
+        try:
+            from app.db import _engine
+
+            pool = _engine.pool
+            for name, help_text, value in (
+                (
+                    "sqlalchemy_pool_checked_out",
+                    "Connections currently checked out from the app SQLAlchemy pool",
+                    getattr(pool, "checkedout", lambda: 0)(),
+                ),
+                (
+                    "sqlalchemy_pool_size",
+                    "Configured size of the app SQLAlchemy pool",
+                    getattr(pool, "size", lambda: 0)(),
+                ),
+                (
+                    "sqlalchemy_pool_overflow",
+                    "Current SQLAlchemy pool overflow connection count",
+                    getattr(pool, "overflow", lambda: 0)(),
+                ),
+            ):
+                gauge = GaugeMetricFamily(name, help_text)
+                gauge.add_metric([], float(value or 0))
+                yield gauge
+        except Exception:
+            pass
+
+        try:
+            from app.services.db_session_adapter import db_session_adapter
+            from app.services.infrastructure_health import _postgres_activity_snapshot
+
+            with db_session_adapter.read_session() as db:
+                activity = _postgres_activity_snapshot(db)
+        except Exception:
+            return
+
+        connections = GaugeMetricFamily(
+            "postgres_activity_connections",
+            "PostgreSQL session counts by state for the application database",
+            labels=["state"],
+        )
+        for key, label in (
+            ("total_connections", "total"),
+            ("active_connections", "active"),
+            ("idle_connections", "idle"),
+            ("idle_in_transaction", "idle_in_transaction"),
+            ("idle_in_transaction_over_60s", "idle_in_transaction_over_60s"),
+        ):
+            connections.add_metric([label], float(activity.get(key) or 0))
+        yield connections
+
+        for name, help_text, key in (
+            (
+                "postgres_connection_utilization_pct",
+                "PostgreSQL connection utilization percentage",
+                "connection_utilization_pct",
+            ),
+            (
+                "postgres_max_idle_in_transaction_seconds",
+                "Oldest idle-in-transaction PostgreSQL session age in seconds",
+                "max_idle_in_transaction_seconds",
+            ),
+            (
+                "postgres_waiting_on_lock",
+                "PostgreSQL sessions waiting on locks",
+                "waiting_on_lock",
+            ),
+        ):
+            gauge = GaugeMetricFamily(name, help_text)
+            gauge.add_metric([], float(activity.get(key) or 0))
+            yield gauge
+
+
+REGISTRY.register(_DatabasePressureCollector())
 
 
 class _IpConsistencyAuditCollector(Collector):
