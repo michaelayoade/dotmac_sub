@@ -419,7 +419,9 @@ def test_migration_244_is_single_alembic_head():
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
     heads = script.get_heads()
-    assert heads == ["253_billing_updated_since_indexes"]
+    # The chain keeps advancing as later PRs stack on; ONT confirmation added
+    # 254_waiting_bulk_item_status as the current single head.
+    assert heads == ["254_waiting_bulk_item_status"]
 
 
 def test_migration_244_source_recreates_leads_partial_unique():

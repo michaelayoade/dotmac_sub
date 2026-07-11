@@ -1,14 +1,14 @@
 """Add waiting status to bulk provisioning items.
 
-Revision ID: 220_add_waiting_bulk_provisioning_status
-Revises: 219_add_drift_finding_evidence
+Revision ID: 254_waiting_bulk_item_status
+Revises: 253_billing_updated_since_indexes
 Create Date: 2026-07-11
 """
 
 from alembic import op
 
-revision = "220_add_waiting_bulk_provisioning_status"
-down_revision = "219_add_drift_finding_evidence"
+revision = "254_waiting_bulk_item_status"
+down_revision = "253_billing_updated_since_indexes"
 branch_labels = None
 depends_on = None
 
