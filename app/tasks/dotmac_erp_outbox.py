@@ -44,3 +44,34 @@ def deliver_erp_sync_events() -> dict:
 
     logger.info("DELIVER_ERP_SYNC_EVENTS_COMPLETE %s", results)
     return results
+
+
+@celery_app.task(name="app.tasks.dotmac_erp_outbox.refresh_expense_claim_statuses")
+def refresh_expense_claim_statuses() -> dict:
+    """Poll ERP for in-flight expense-claim statuses and refresh mirror fields.
+
+    Read-only reconcile: for each synced FieldExpenseRequest still awaiting an ERP
+    decision, GET the claim status and write it back. Gated at the scheduler by
+    ``dotmac_erp_sync_enabled`` (default off), so it is inert until cutover; a
+    no-op when nothing is in flight. Idempotent — safe to re-run.
+    """
+    from app.metrics import observe_job
+
+    start = time.monotonic()
+    status = "success"
+    logger.info("REFRESH_EXPENSE_CLAIM_STATUSES_START")
+    results: dict[str, object] = {}
+    try:
+        from app.db import task_session
+        from app.services.dotmac_erp.expense_sync import refresh_expense_claim_statuses
+
+        with task_session() as db:
+            results = refresh_expense_claim_statuses(db)
+    except Exception:
+        status = "error"
+        raise
+    finally:
+        observe_job("refresh_expense_claim_statuses", status, time.monotonic() - start)
+
+    logger.info("REFRESH_EXPENSE_CLAIM_STATUSES_COMPLETE %s", results)
+    return results

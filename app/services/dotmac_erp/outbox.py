@@ -236,12 +236,36 @@ def deliver_pending(
                 continue
 
             _apply_response(row, response, result)
+            _dispatch_flow_writeback(db, row)
             db.commit()
     finally:
         if created_client and owned_client is not None:
             owned_client.close()
 
     return result
+
+
+def _dispatch_flow_writeback(db: Session, row: FieldErpSyncEvent) -> None:
+    """Write a delivered event's ERP response back onto its source row, per flow.
+
+    The outbox stays flow-agnostic: it classifies the response and stores it on
+    the event, then dispatches to the owning flow module so the money link (ERP
+    claim id / number / status) lands on the source entity. Handlers are looked up
+    lazily to keep the outbox free of flow-module import cycles, and any handler
+    failure is logged, never allowed to fail the delivery (the event's terminal
+    outcome is already recorded).
+    """
+    if row.flow == FieldErpSyncFlow.expense_claim.value:
+        try:
+            from app.services.dotmac_erp.expense_sync import apply_erp_response
+
+            apply_erp_response(db, row)
+        except Exception:  # noqa: BLE001 — write-back must not fail delivery
+            logger.exception(
+                "field_erp_sync: write-back failed for %s event %s",
+                row.flow,
+                row.id,
+            )
 
 
 def _apply_response(
