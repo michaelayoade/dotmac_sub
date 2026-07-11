@@ -116,6 +116,10 @@ celery_app.conf.task_routes = {
     "app.tasks.crm_billing_push.push_crm_billing_snapshots": {"queue": "crm"},
     "app.tasks.crm_sync.push_subscriber_change": {"queue": "crm"},
     "app.tasks.vendor_project_relay.relay_project_stub_to_crm": {"queue": "crm"},
+    # ERP outbox delivery paces against an external API (erp.dotmac.io) like the
+    # CRM push tasks; share the externally-paced integration queue so a slow ERP
+    # never blocks the default queue.
+    "app.tasks.dotmac_erp_outbox.deliver_erp_sync_events": {"queue": "crm"},
     # Daily business runners must not sit behind the default queue's backlog —
     # a buried invoice cycle is a missed billing day (the 2026-06-10 00:55
     # dispatch sat unexecuted behind ~6.6k queued default-queue tasks).

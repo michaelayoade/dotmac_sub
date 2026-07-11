@@ -296,7 +296,9 @@ def test_migration_248_is_single_alembic_head():
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ["248_maps_vendor_route_domain"]
+    # 248 is a single link in the chain; the current head advances as later PRs
+    # stack on top (ERP re-home PR 1 added 249_field_erp_sync_outbox).
+    assert script.get_heads() == ["249_field_erp_sync_outbox"]
 
 
 def test_migration_248_creates_geometry_gist_indexes():

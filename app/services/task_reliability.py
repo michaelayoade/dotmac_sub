@@ -185,6 +185,16 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         STATUS,
         "Read-only; findings deduped by fingerprint.",
     ),
+    "app.tasks.dotmac_erp_outbox.deliver_erp_sync_events": _c(
+        "integration",
+        STATE,
+        GUARDED,
+        DEAD,
+        "ERP outbox delivery (money path). Per-row DB state machine; stored + "
+        "sent idempotency key makes re-delivery safe; single-writer gated by "
+        "sync_flow_ownership; transient rows stay pending, permanent/budget-"
+        "exhausted rows dead-letter in field_erp_sync_events.",
+    ),
     "app.tasks.enforcement.cleanup_subscription_block_sessions": _c(
         "enforcement", SWEEP, IDEMP, HEALTH
     ),

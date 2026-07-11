@@ -9,6 +9,7 @@ from app.models.subscription_engine import SettingValueType
 from app.services import domain_settings as settings_service
 from app.services.response import ListResponseMixin
 from app.services.settings_cache import SettingsCache
+from app.services.settings_specs.integration import build_integration_specs
 from app.services.settings_specs.provisioning import build_provisioning_specs
 from app.timezone import APP_TIMEZONE_NAME
 
@@ -4005,6 +4006,8 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     # ============== Provisioning Domain ==============
     *build_provisioning_specs(SettingSpec),
+    # ============== Integration Domain (DotMac ERP edge) ==============
+    *build_integration_specs(SettingSpec),
     SettingSpec(
         domain=SettingDomain.snmp,
         key="interface_walk_interval_seconds",
@@ -4242,6 +4245,7 @@ DOMAIN_SETTINGS_SERVICE = {
     SettingDomain.gis: settings_service.gis_settings,
     SettingDomain.scheduler: settings_service.scheduler_settings,
     SettingDomain.vas: settings_service.vas_settings,
+    SettingDomain.integration: settings_service.integration_settings,
 }
 
 

@@ -58,6 +58,48 @@ def build_health_data(db) -> dict[str, object]:
         "worker_health": _build_worker_health(infrastructure_services),
         "replication_health": _build_replication_health(db),
         "task_activity": _build_task_activity(db),
+        "erp_sync_ownership": _build_erp_sync_ownership(db),
+    }
+
+
+def _build_erp_sync_ownership(db) -> dict[str, object]:
+    """Surface the single-writer flow ownership for the ERP re-home.
+
+    Makes "which flows may sub write to ERP" visible on the deploy/health
+    surface — the deploy-check half of the "enforced by code + deploy checks"
+    control. Sub owns a flow only when its row reads ``sub``; every flow defaults
+    to CRM until explicitly cut over.
+    """
+    try:
+        from app.models.domain_settings import SettingDomain
+        from app.models.field_erp_sync import SyncFlowOwner, get_flow_ownership
+
+        ownership = get_flow_ownership(db)
+        sync_enabled = bool(
+            settings_spec.resolve_value(
+                db, SettingDomain.integration, "dotmac_erp_sync_enabled"
+            )
+        )
+    except Exception as exc:
+        logger.debug("ERP sync ownership surface unavailable", exc_info=True)
+        return {
+            "status": "unknown",
+            "sync_enabled": False,
+            "flows": {},
+            "sub_owned_flows": [],
+            "error": str(exc)[:200],
+        }
+
+    sub_owned = sorted(
+        flow for flow, owner in ownership.items() if owner == SyncFlowOwner.sub.value
+    )
+    return {
+        # The master switch is off until cutover; sub owning nothing is the
+        # expected steady state pre-cutover, so that reads as "ok".
+        "status": "ok",
+        "sync_enabled": sync_enabled,
+        "flows": ownership,
+        "sub_owned_flows": sub_owned,
     }
 
 
