@@ -38,7 +38,7 @@ def _active_subscription(db_session, subscriber, name: str):
 
 
 def test_collect_counts_outage_ticket_and_union(db_session, subscriber, monkeypatch):
-    from app.models.subscriber import Subscriber
+    from app.models.subscriber import Subscriber, SubscriberStatus
 
     outage_sub = _active_subscription(db_session, subscriber, "CIM Outage")
     other = Subscriber(
@@ -48,6 +48,25 @@ def test_collect_counts_outage_ticket_and_union(db_session, subscriber, monkeypa
     db_session.commit()
     ticket_sub = _active_subscription(db_session, other, "CIM Ticket")
     _clean = _active_subscription(db_session, subscriber, "CIM Clean")
+
+    disabled = Subscriber(
+        first_name="Impact",
+        last_name="Disabled",
+        email="cim-disabled@example.com",
+        status=SubscriberStatus.disabled,
+        is_active=True,
+    )
+    inactive = Subscriber(
+        first_name="Impact",
+        last_name="Inactive",
+        email="cim-inactive@example.com",
+        status=SubscriberStatus.active,
+        is_active=False,
+    )
+    db_session.add_all([disabled, inactive])
+    db_session.commit()
+    disabled_sub = _active_subscription(db_session, disabled, "CIM Disabled")
+    inactive_sub = _active_subscription(db_session, inactive, "CIM Inactive")
 
     db_session.add(
         Ticket(
@@ -62,7 +81,7 @@ def test_collect_counts_outage_ticket_and_union(db_session, subscriber, monkeypa
 
     monkeypatch.setattr(
         "app.services.customer_service_state.active_outage_subscription_ids",
-        lambda session: {outage_sub.id},
+        lambda session: {outage_sub.id, disabled_sub.id, inactive_sub.id},
     )
 
     impact = customer_impact_metrics.collect_customer_impact(db_session)

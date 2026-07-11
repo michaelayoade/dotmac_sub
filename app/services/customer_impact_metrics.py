@@ -38,14 +38,19 @@ def _writer():
 def collect_customer_impact(db: Session) -> dict[str, int]:
     """Count active subscriptions by current infrastructure-fault exposure."""
     from app.models.catalog import Subscription, SubscriptionStatus
+    from app.models.subscriber import Subscriber, SubscriberStatus
     from app.services.customer_service_state import (
         active_outage_subscription_ids,
         subscribers_with_open_infrastructure_down_tickets,
     )
 
     active = db.execute(
-        select(Subscription.id, Subscription.subscriber_id).where(
-            Subscription.status == SubscriptionStatus.active
+        select(Subscription.id, Subscription.subscriber_id)
+        .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
+        .where(
+            Subscription.status == SubscriptionStatus.active,
+            Subscriber.status == SubscriberStatus.active,
+            Subscriber.is_active.is_(True),
         )
     ).all()
     active_ids = {row.id for row in active}
