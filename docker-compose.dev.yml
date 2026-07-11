@@ -39,6 +39,11 @@ services:
     volumes:
       - ./app:/app/app
 
+  celery-worker-ingestion:
+    build: .
+    volumes:
+      - ./app:/app/app
+
   celery-worker-billing:
     build: .
     volumes:

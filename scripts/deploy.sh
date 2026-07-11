@@ -29,8 +29,9 @@ HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8001/health}"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-180}"
 IMAGE_RETAIN_COUNT="${IMAGE_RETAIN_COUNT:-5}"
 # Every service that runs the app image and must be recreated on a new build.
-APP_SERVICES=(app celery-worker celery-worker-bandwidth celery-worker-billing \
-  celery-worker-tr069 celery-beat bandwidth-poller syslog-listener)
+APP_SERVICES=(app celery-worker celery-worker-bandwidth celery-worker-ingestion \
+  celery-worker-billing celery-worker-tr069 celery-beat bandwidth-poller \
+  syslog-listener)
 
 log() { printf '\n==> %s\n' "$*"; }
 
