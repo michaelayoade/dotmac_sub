@@ -22,6 +22,12 @@ from sqlalchemy.sql import ColumnElement
 from app.models.subscriber import Subscriber
 from app.models.support import Ticket, TicketStatus
 from app.schemas.support import TicketCreate
+from app.services.customer_support_links import (
+    ticket_customer_any_link_filter,
+    ticket_has_customer_link,
+    ticket_links_customer,
+    ticket_unlinked_customer_filter,
+)
 
 _OPEN_STATUSES = {
     TicketStatus.new.value,
@@ -159,26 +165,21 @@ def build_pre_create_context(db: Session, payload: TicketCreate) -> dict[str, An
 
 
 def _open_tickets_for_payload(db: Session, payload: TicketCreate) -> list[Ticket]:
-    filters = []
-    if payload.customer_person_id:
-        filters.append(Ticket.customer_person_id == payload.customer_person_id)
-    if payload.subscriber_id:
-        filters.append(Ticket.subscriber_id == payload.subscriber_id)
-    if payload.customer_account_id:
-        filters.append(Ticket.customer_account_id == payload.customer_account_id)
-    if not filters:
+    customer_ids = (
+        payload.subscriber_id,
+        payload.customer_account_id,
+        payload.customer_person_id,
+    )
+    if not any(customer_ids):
         return []
 
-    query = (
+    return (
         db.query(Ticket)
         .filter(Ticket.is_active.is_(True))
         .filter(Ticket.status.in_(_OPEN_STATUSES))
+        .filter(ticket_customer_any_link_filter(Ticket, customer_ids))
+        .all()
     )
-    if len(filters) == 1:
-        query = query.filter(filters[0])
-    else:
-        query = query.filter(or_(*filters))
-    return query.all()
 
 
 def _normalize_ticket_type(ticket_type: str | None) -> str:
@@ -345,18 +346,15 @@ def find_duplicate_ticket_candidates(
     lead_id = _coerce_optional_uuid(payload.lead_id)
 
     identity_filters: list[ColumnElement[bool]] = []
-    if subscriber_id:
-        identity_filters.append(Ticket.subscriber_id == subscriber_id)
-    if customer_account_id:
-        identity_filters.append(Ticket.customer_account_id == customer_account_id)
-    if customer_person_id:
-        identity_filters.append(Ticket.customer_person_id == customer_person_id)
+    customer_identity_filter = ticket_customer_any_link_filter(
+        Ticket, (subscriber_id, customer_account_id, customer_person_id)
+    )
+    if subscriber_id or customer_account_id or customer_person_id:
+        identity_filters.append(customer_identity_filter)
     if lead_id:
         identity_filters.append(Ticket.lead_id == lead_id)
     unassigned_issue_filters: list[ColumnElement[bool]] = [
-        Ticket.subscriber_id.is_(None),
-        Ticket.customer_account_id.is_(None),
-        Ticket.customer_person_id.is_(None),
+        ticket_unlinked_customer_filter(Ticket),
         Ticket.lead_id.is_(None),
     ]
     if payload.ticket_type:
@@ -403,12 +401,7 @@ def find_duplicate_ticket_candidates(
     for ticket in candidates:
         score = 0
         reasons: list[str] = []
-        ticket_has_identity = bool(
-            ticket.subscriber_id
-            or ticket.customer_account_id
-            or ticket.customer_person_id
-            or ticket.lead_id
-        )
+        ticket_has_identity = ticket_has_customer_link(ticket) or bool(ticket.lead_id)
         existing_base_station = _normalize_duplicate_location(
             _ticket_base_station_details(ticket)
         )
@@ -470,9 +463,10 @@ def find_duplicate_ticket_candidates(
 
         score += 10
         reasons.append("ticket is still active")
-        subscriber_match = (
-            subscriber_id and ticket.subscriber_id == subscriber_id
-        ) or (customer_account_id and ticket.customer_account_id == customer_account_id)
+        subscriber_match = any(
+            ticket_links_customer(ticket, customer_id)
+            for customer_id in (subscriber_id, customer_account_id, customer_person_id)
+        )
         if subscriber_match and score < DUPLICATE_WARNING_THRESHOLD:
             score = DUPLICATE_WARNING_THRESHOLD
             reasons.append("subscriber already has an active ticket")

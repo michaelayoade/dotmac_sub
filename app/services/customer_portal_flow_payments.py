@@ -31,8 +31,8 @@ from app.services.billing._common import lock_account
 from app.services.billing_adapter import PaymentIntent, billing_adapter
 from app.services.collections import get_available_balance, restore_account_services
 from app.services.common import round_money, to_decimal
+from app.services.customer_context import customer_can_access_account
 from app.services.customer_portal_context import (
-    get_allowed_account_ids,
     get_invoice_billing_contact,
 )
 from app.services.payment_gateway_adapter import payment_gateway_adapter
@@ -509,12 +509,9 @@ def get_payment_page(
     invoice_id: str,
 ) -> dict | None:
     """Build context for the online payment page."""
-    allowed_account_ids = get_allowed_account_ids(customer, db)
-
     invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
-    if not invoice or (
-        allowed_account_ids
-        and str(getattr(invoice, "account_id", "")) not in allowed_account_ids
+    if not invoice or not customer_can_access_account(
+        db, customer, getattr(invoice, "account_id", None)
     ):
         return None
 
@@ -826,11 +823,9 @@ def create_invoice_payment_intent(
     :func:`verify_and_record_payment`, which reads ``invoice_id`` back from the
     gateway metadata.
     """
-    allowed_account_ids = get_allowed_account_ids(customer, db)
     invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
-    if not invoice or (
-        allowed_account_ids
-        and str(getattr(invoice, "account_id", "")) not in allowed_account_ids
+    if not invoice or not customer_can_access_account(
+        db, customer, getattr(invoice, "account_id", None)
     ):
         raise ValueError("Invoice not found or access denied")
     if invoice.status in (
@@ -1033,11 +1028,9 @@ def verify_and_record_payment(
             **summary,
         }
 
-    allowed_account_ids = get_allowed_account_ids(customer, db)
     invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
-    if not invoice or (
-        allowed_account_ids
-        and str(getattr(invoice, "account_id", "")) not in allowed_account_ids
+    if not invoice or not customer_can_access_account(
+        db, customer, getattr(invoice, "account_id", None)
     ):
         raise ValueError("Invoice not found or access denied")
 

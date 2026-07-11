@@ -310,13 +310,16 @@ def run_enforcement_reconciler() -> dict[str, int]:
         from sqlalchemy import select
 
         from app.models.catalog import Subscription, SubscriptionStatus
-        from app.models.subscriber import Subscriber, SubscriberStatus
+        from app.models.subscriber import Subscriber
+        from app.services.subscriber_access_policy import (
+            RADIUS_BLOCKING_SUBSCRIBER_STATUSES,
+        )
 
         blocked_subscriber_ids = {
             sid
             for (sid,) in db.execute(
                 select(Subscriber.id).where(
-                    Subscriber.status == SubscriberStatus.blocked
+                    Subscriber.status.in_(RADIUS_BLOCKING_SUBSCRIBER_STATUSES)
                 )
             ).all()
         }

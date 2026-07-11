@@ -21,10 +21,8 @@ from app.models.catalog import (
 )
 from app.models.provisioning import AppointmentStatus, InstallAppointment, ServiceOrder
 from app.models.subscriber import (
-    AccountStatus,
     Subscriber,
     SubscriberCategory,
-    SubscriberStatus,
 )
 from app.models.support import Ticket
 from app.services import billing as billing_service
@@ -34,6 +32,13 @@ from app.services.bandwidth import bandwidth_samples
 from app.services.billing.invoice_classification import collectible_ar_invoice_filter
 from app.services.collections import get_available_balance
 from app.services.common import coerce_uuid
+from app.services.customer_context import (
+    RESTRICTED_CUSTOMER_STATUSES,
+    allowed_customer_account_ids,
+    allowed_customer_subscriber_ids,
+    customer_is_restricted,
+    resolve_customer_account_ids,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -78,11 +83,7 @@ def resolve_subscriber_id(session: dict) -> str:
 
 def resolve_allowed_subscriber_ids(session: dict, db: Session) -> list[str]:
     """Resolve all customer-visible subscriber/account IDs for access checks."""
-    allowed = get_allowed_account_ids(session, db)
-    if allowed:
-        return [str(item) for item in allowed if item]
-    fallback = resolve_subscriber_id(session)
-    return [fallback] if fallback else []
+    return allowed_customer_subscriber_ids(db, session)
 
 
 def resolve_customer_subscription(db: Session, session: dict) -> Subscription | None:
@@ -419,11 +420,7 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
     }
 
 
-_RESTRICTED_STATUSES = {
-    SubscriberStatus.blocked,
-    SubscriberStatus.suspended,
-    SubscriberStatus.disabled,
-}
+_RESTRICTED_STATUSES = RESTRICTED_CUSTOMER_STATUSES
 
 STATUS_DISPLAY = {
     "blocked": "Blocked — Non-payment",
@@ -452,10 +449,7 @@ def get_total_outstanding_balance(db: Session, account_id: object) -> float:
 
 def is_subscriber_restricted(db: Session, subscriber_id: object) -> bool:
     """Check if a subscriber should see the restricted portal view."""
-    subscriber = db.get(Subscriber, coerce_uuid(subscriber_id))
-    if not subscriber:
-        return False
-    return subscriber.status in _RESTRICTED_STATUSES
+    return customer_is_restricted(db, subscriber_id)
 
 
 def get_restricted_dashboard_context(db: Session, session: dict) -> dict:
@@ -542,33 +536,7 @@ def resolve_customer_account(
     Returns:
         Tuple of (account_id_str, subscription_id_str)
     """
-    account_id = customer.get("account_id")
-    subscription_id = customer.get("subscription_id")
-    account_id_str = str(account_id) if account_id else None
-    subscription_id_str = str(subscription_id) if subscription_id else None
-    if account_id_str or subscription_id_str:
-        return account_id_str, subscription_id_str
-
-    subscriber_id = customer.get("subscriber_id")
-    if not subscriber_id:
-        return None, None
-    accounts = subscriber_service.accounts.list(
-        db=db,
-        subscriber_id=str(subscriber_id),
-        reseller_id=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=10,
-        offset=0,
-    )
-    if not accounts:
-        return None, subscription_id_str
-    active_account = next(
-        (account for account in accounts if account.status == AccountStatus.active),
-        None,
-    )
-    account = active_account or accounts[0]
-    return str(account.id), subscription_id_str
+    return resolve_customer_account_ids(db, customer)
 
 
 def get_allowed_account_ids(customer: dict, db: Session) -> list[str]:
@@ -581,21 +549,7 @@ def get_allowed_account_ids(customer: dict, db: Session) -> list[str]:
     Returns:
         List of account ID strings
     """
-    account_id = customer.get("account_id")
-    account_id_str = str(account_id) if account_id else None
-
-    subscriber = None
-    subscriber_id = customer.get("subscriber_id")
-    if subscriber_id:
-        subscriber = db.get(Subscriber, subscriber_id)
-
-    allowed_account_ids = []
-    if subscriber:
-        allowed_account_ids = [str(subscriber.id)]
-    if account_id_str and account_id_str not in allowed_account_ids:
-        allowed_account_ids.append(account_id_str)
-
-    return allowed_account_ids
+    return allowed_customer_account_ids(db, customer)
 
 
 def get_invoice_billing_contact(db: Session, invoice, customer: dict) -> dict:

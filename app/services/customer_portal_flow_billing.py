@@ -24,8 +24,8 @@ from app.services import billing as billing_service
 from app.services.collections import get_available_balance
 from app.services.common import coerce_uuid
 from app.services.common import validate_enum as _validate_enum
+from app.services.customer_context import customer_can_access_account
 from app.services.customer_portal_context import (
-    get_allowed_account_ids,
     get_invoice_billing_contact,
     get_outstanding_balance,
 )
@@ -319,7 +319,6 @@ def get_new_arrangement_page(
         outstanding_balance = balance_data["outstanding_balance"]
 
     selected_invoice = None
-    allowed_account_ids = get_allowed_account_ids(customer, db)
     if invoice_id:
         try:
             candidate_invoice = billing_service.invoices.get(
@@ -327,9 +326,8 @@ def get_new_arrangement_page(
             )
         except Exception:
             candidate_invoice = None
-        if candidate_invoice and (
-            not allowed_account_ids
-            or str(getattr(candidate_invoice, "account_id", "")) in allowed_account_ids
+        if candidate_invoice and customer_can_access_account(
+            db, customer, getattr(candidate_invoice, "account_id", None)
         ):
             selected_invoice = candidate_invoice
 
@@ -508,12 +506,9 @@ def get_invoice_detail(
     invoice_id: str,
 ) -> dict | None:
     """Get invoice detail data for the customer portal."""
-    allowed_account_ids = get_allowed_account_ids(customer, db)
-
     invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
-    if not invoice or (
-        allowed_account_ids
-        and str(getattr(invoice, "account_id", "")) not in allowed_account_ids
+    if not invoice or not customer_can_access_account(
+        db, customer, getattr(invoice, "account_id", None)
     ):
         return None
 

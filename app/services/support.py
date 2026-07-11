@@ -61,6 +61,7 @@ from app.services.customer_identity_resolution import (
 from app.services.customer_notification_policy import (
     is_notification_enabled_for_subscriber,
 )
+from app.services.customer_support_links import ticket_customer_link_filter
 from app.services.dynamic_filters import FilterValidationError
 from app.services.events import emit_event
 from app.services.events.types import EventType
@@ -1630,12 +1631,7 @@ class Tickets:
                 Ticket.site_coordinator_person_id == site_coordinator_person_id
             )
         if subscriber_id:
-            query = query.filter(
-                or_(
-                    Ticket.subscriber_id == subscriber_id,
-                    Ticket.customer_account_id == subscriber_id,
-                )
-            )
+            query = query.filter(ticket_customer_link_filter(Ticket, subscriber_id))
         if filters:
             try:
                 filter_clause = support_ticket_filters.build_ticket_filter_clause(

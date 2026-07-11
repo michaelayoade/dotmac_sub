@@ -95,6 +95,34 @@ def test_customer_has_open_ticket_condition(db_session):
     )
 
 
+def test_customer_has_open_ticket_condition_matches_customer_person_link(db_session):
+    subscriber = _subscriber(db_session, suffix="PersonLink")
+    conditions = {
+        "all": [
+            {
+                "field": "customer_has_open_ticket",
+                "operator": "=",
+                "value": True,
+            }
+        ]
+    }
+
+    db_session.add(
+        Ticket(
+            customer_person_id=subscriber.id,
+            title="Open issue",
+            status="open",
+            priority="normal",
+        )
+    )
+    db_session.flush()
+
+    assert (
+        conditions_match(db_session, subscriber_id=subscriber.id, conditions=conditions)
+        is True
+    )
+
+
 def test_invalid_condition_field_is_rejected():
     with pytest.raises(NotificationTemplateConditionError):
         validate_conditions(

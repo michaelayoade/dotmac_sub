@@ -29,6 +29,7 @@ from app.services import customer_portal_context
 from app.services import provisioning as provisioning_service
 from app.services.common import coerce_uuid
 from app.services.common import validate_enum as _validate_enum
+from app.services.customer_network_context import resolve_active_customer_ont_assignment
 from app.services.customer_portal_flow_changes import (
     get_offer_price_summary,
     get_plan_change_copy,
@@ -1286,17 +1287,7 @@ def _resolve_customer_subscription_assignment(
     subscription: Subscription,
 ) -> OntAssignment | None:
     """Resolve the active ONT assignment for a subscription's subscriber."""
-    if not subscription.subscriber_id:
-        return None
-    return db.scalars(
-        select(OntAssignment)
-        .join(OntUnit, OntUnit.id == OntAssignment.ont_unit_id)
-        .where(OntAssignment.subscriber_id == subscription.subscriber_id)
-        .where(OntAssignment.active.is_(True))
-        .where(OntUnit.is_active.is_(True))
-        .order_by(OntAssignment.assigned_at.desc().nullslast())
-        .limit(1)
-    ).first()
+    return resolve_active_customer_ont_assignment(db, subscription.subscriber_id)
 
 
 def get_service_orders_page(

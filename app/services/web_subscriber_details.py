@@ -5,9 +5,9 @@ import math
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import String, cast, func, or_, select
+from sqlalchemy import func
 from sqlalchemy.exc import ProgrammingError
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 
 from app.models.billing import CreditNoteStatus, Invoice, InvoiceStatus, Payment
 from app.models.catalog import (
@@ -16,12 +16,7 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
-from app.models.network import (
-    CPEDevice,
-    FdhCabinet,
-    FiberSpliceClosure,
-    OntAssignment,
-)
+from app.models.network import FdhCabinet, FiberSpliceClosure
 from app.models.network_monitoring import SpeedTestResult
 from app.models.provisioning import ServiceOrder
 from app.models.subscriber import (
@@ -45,8 +40,14 @@ from app.services.audit_helpers import (
     load_audit_actor_subscribers,
     resolve_actor_name,
 )
+from app.services.customer_network_context import get_customer_network_context
+from app.services.customer_support_links import ticket_customer_link_filter
 
 logger = logging.getLogger(__name__)
+
+
+def _enum_value(value) -> str:
+    return str(getattr(value, "value", value) or "")
 
 
 def _format_attachment_size(size_bytes: object) -> str:
@@ -226,18 +227,9 @@ def build_subscriber_geocode_target(primary_address):
 def _build_equipment_snapshot(db: Session, subscriber_id) -> dict[str, object]:
     """Collect ONT/CPE devices and direct management links for subscriber detail."""
     equipment: list[dict[str, object]] = []
+    context = get_customer_network_context(db, subscriber_id)
     try:
-        ont_assignments = (
-            db.query(OntAssignment)
-            .options(joinedload(OntAssignment.ont_unit))
-            .filter(
-                OntAssignment.subscriber_id == subscriber_id,
-                OntAssignment.active.is_(True),
-            )
-            .order_by(OntAssignment.created_at.desc())
-            .all()
-        )
-        for assignment in ont_assignments:
+        for assignment in context.ont_assignments:
             ont = assignment.ont_unit
             if not ont:
                 continue
@@ -262,22 +254,9 @@ def _build_equipment_snapshot(db: Session, subscriber_id) -> dict[str, object]:
         db.rollback()
 
     try:
-        cpe_rows = db.execute(
-            select(
-                CPEDevice.id,
-                cast(CPEDevice.device_type, String).label("device_type"),
-                cast(CPEDevice.status, String).label("status"),
-                CPEDevice.model,
-                CPEDevice.vendor,
-                CPEDevice.serial_number,
-                CPEDevice.mac_address,
-            )
-            .where(CPEDevice.subscriber_id == subscriber_id)
-            .order_by(CPEDevice.created_at.desc())
-        ).all()
-        for cpe in cpe_rows:
-            cpe_type = str(getattr(cpe, "device_type", "") or "CPE")
-            status_value = str(getattr(cpe, "status", "") or "").strip().lower()
+        for cpe in context.cpe_devices:
+            cpe_type = _enum_value(getattr(cpe, "device_type", None)) or "CPE"
+            status_value = _enum_value(getattr(cpe, "status", None)).lower()
             equipment.append(
                 {
                     "type": cpe_type.upper(),
@@ -726,13 +705,7 @@ def build_subscriber_timeline(db: Session, subscriber_id):
     )
     tickets = (
         db.query(Ticket)
-        .filter(
-            or_(
-                Ticket.subscriber_id == subscriber_id,
-                Ticket.customer_account_id == subscriber_id,
-                Ticket.customer_person_id == subscriber_id,
-            )
-        )
+        .filter(ticket_customer_link_filter(Ticket, subscriber_id))
         .order_by(func.coalesce(Ticket.updated_at, Ticket.created_at).desc())
         .limit(8)
         .all()

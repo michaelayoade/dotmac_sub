@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 from app.models.catalog import AccessCredential, Subscription, SubscriptionStatus
-from app.models.subscriber import Subscriber
+from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services.radius_reconciliation import audit_suspension_enforcement
 
 
@@ -62,11 +62,14 @@ def _fake_config(db_path):
     }
 
 
-def _seed_subscriber(db_session, *, username, statuses, offer):
+def _seed_subscriber(
+    db_session, *, username, statuses, offer, account_status=SubscriberStatus.active
+):
     subscriber = Subscriber(
         first_name="Audit",
         last_name="Case",
         email=f"{username}@example.com",
+        status=account_status,
     )
     db_session.add(subscriber)
     db_session.flush()
@@ -172,6 +175,40 @@ class TestAuditSuspensionEnforcement:
         result = _run_audit(db_session, db_path)
         assert result["counts"]["open_access"] == 0
         assert result["ok"] is True
+
+    def test_parent_blocked_active_subscription_is_audited(
+        self, db_session, tmp_path, catalog_offer
+    ):
+        db_path = tmp_path / "radius.db"
+        _seed_radius_sqlite(
+            db_path,
+            radcheck=[("disabled-active-user", "Cleartext-Password", "pw")],
+            radusergroup=[("disabled-active-user", "dotmac-active")],
+            radacct=[
+                (
+                    "disabled-active-user",
+                    None,
+                    _ts(datetime.now(UTC) - timedelta(minutes=10)),
+                )
+            ],
+        )
+        _seed_subscriber(
+            db_session,
+            username="disabled-active-user",
+            statuses=[SubscriptionStatus.active],
+            offer=catalog_offer,
+            account_status=SubscriberStatus.disabled,
+        )
+
+        result = _run_audit(db_session, db_path)
+
+        assert result["checked_usernames"] == 1
+        assert result["counts"] == {
+            "open_access": 1,
+            "in_active_group": 1,
+            "open_session": 1,
+        }
+        assert result["ok"] is False
 
     def test_walled_garden_marker_is_by_design(
         self, db_session, tmp_path, catalog_offer

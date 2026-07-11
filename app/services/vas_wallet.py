@@ -630,20 +630,13 @@ def wallet_overview(db: Session, subscriber_id: str, *, limit: int = 20) -> dict
 
 
 def _open_invoice_balance(db: Session, subscriber_id) -> Decimal:
-    from app.models.billing import Invoice, InvoiceStatus
+    from app.services.customer_financial_position import get_customer_financial_position
 
-    today = datetime.now(UTC)
-    total = db.query(
-        func.coalesce(func.sum(Invoice.balance_due), Decimal("0.00"))
-    ).filter(
-        Invoice.account_id == subscriber_id,
-        Invoice.is_active.is_(True),
-        Invoice.status.in_(
-            [InvoiceStatus.issued, InvoiceStatus.partially_paid, InvoiceStatus.overdue]
-        ),
-        Invoice.due_at <= today,
-    ).scalar() or Decimal("0.00")
-    return Decimal(str(total))
+    return get_customer_financial_position(
+        db,
+        subscriber_id,
+        include_prepaid_balance=False,
+    ).due_invoice_balance
 
 
 def run_auto_deduct_sweep(db: Session) -> dict:
