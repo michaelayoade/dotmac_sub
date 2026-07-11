@@ -31,7 +31,6 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
-from app.models.subscriber import SubscriberStatus
 from app.services.credential_crypto import (
     decrypt_credential_with_key,
     get_encryption_key,
@@ -41,20 +40,14 @@ from app.services.radius_address_lists import (
     suspended_address_list,
 )
 from app.services.radius_dsn import radius_dsn_libpq
+from app.services.subscriber_access_policy import (
+    RADIUS_BLOCKING_SUBSCRIBER_STATUSES,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
 ACCT_INTERIM_SECONDS = 300  # 5 min Acct-Interim-Update cadence
-RADIUS_BLOCKING_SUBSCRIBER_STATUSES = frozenset(
-    {
-        SubscriberStatus.blocked,
-        SubscriberStatus.suspended,
-        SubscriberStatus.disabled,
-        SubscriberStatus.canceled,
-        SubscriberStatus.new,
-    }
-)
 SUSPENDED_ADDRESS_LIST = DEFAULT_SUSPENDED_ADDRESS_LIST
 
 
