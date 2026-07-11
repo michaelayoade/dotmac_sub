@@ -158,14 +158,25 @@ def get_mikrotik_live_bandwidth(
     subscription = db.get(Subscription, subscription_id)
     if not subscription:
         raise HTTPException(status_code=404, detail="Subscription not found")
-    if not subscription.provisioning_nas_device:
+    nas_device = subscription.provisioning_nas_device
+    if not nas_device:
         raise HTTPException(
             status_code=400, detail="Subscription has no provisioning NAS device"
         )
-    return get_mikrotik_pppoe_live_bandwidth(
-        subscription.provisioning_nas_device,
-        login=subscription.login or "",
-    )
+    login = subscription.login or ""
+
+    # Release the pooled DB connection BEFORE the blocking RouterOS network call.
+    # get_mikrotik_pppoe_live_bandwidth() opens a live API session to the customer's
+    # MikroTik and can block for minutes on an unreachable/slow router; holding the
+    # request-scoped session across it leaves a connection idle-in-transaction and
+    # starves the pool under aggressive polling. Mirror the /live SSE endpoint below.
+    # The RouterOS call only reads already-loaded plain columns off the NAS device
+    # (_mikrotik_routeros_auth + id/name), so detaching it is safe.
+    db.expunge(nas_device)
+    db.rollback()
+    db.close()
+
+    return get_mikrotik_pppoe_live_bandwidth(nas_device, login=login)
 
 
 @router.get("/live/{subscription_id}")
