@@ -53,9 +53,11 @@ services instead of rebuilding customer joins.
 ## Notifications and Communications
 
 1. Notification channel policy owns channel eligibility and preferences.
-2. Notification service owns notification rows and delivery lifecycle.
-3. Staff notification service owns internal/admin notification creation.
-4. Team inbox services own conversation notes, assignment, and collaboration.
+2. Event notification policy owns event enablement and balance-notification
+   suppression.
+3. Notification service owns notification rows and delivery lifecycle.
+4. Staff notification service owns internal/admin notification creation.
+5. Team inbox services own conversation notes, assignment, and collaboration.
 
 Rule: domain services request a notification outcome; they should not construct
 notification rows or choose email/SMS/WhatsApp directly.
@@ -198,9 +200,11 @@ control plane. Task bodies execute work and report status.
 Network access:
 
 1. `access.control_resolution`: owns desired service access outcomes.
-2. `access.radius_state`: maps desired access to RADIUS groups/profiles.
-3. `access.radius_reject`: owns reject IP lifecycle.
-4. `access.session_enforcement`: applies CoA/disconnect outcomes.
+2. `access.event_policy`: owns event-driven enforcement settings, FUP action
+   policy, and overdue suspension policy reads.
+3. `access.radius_state`: maps desired access to RADIUS groups/profiles.
+4. `access.radius_reject`: owns reject IP lifecycle.
+5. `access.session_enforcement`: applies CoA/disconnect outcomes.
 
 Rule: billing, FUP, and admin actions resolve the desired access outcome once,
 map it to RADIUS state once, and let enforcement apply the network-side change.

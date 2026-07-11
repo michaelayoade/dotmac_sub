@@ -295,10 +295,22 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("customer.identity_scope",),
             ),
             SOTService(
+                name="communications.event_policy",
+                module="app.services.event_notification_policy",
+                owns=(
+                    "event notification enablement",
+                    "balance notification suppression",
+                ),
+                depends_on=("communications.channel_policy",),
+            ),
+            SOTService(
                 name="communications.notification_service",
                 module="app.services.notification",
                 owns=("notification row lifecycle", "delivery state"),
-                depends_on=("communications.channel_policy",),
+                depends_on=(
+                    "communications.channel_policy",
+                    "communications.event_policy",
+                ),
             ),
             SOTService(
                 name="communications.staff_notifications",
@@ -589,10 +601,20 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("financial.billing_profile",),
             ),
             SOTService(
+                name="access.event_policy",
+                module="app.services.enforcement_event_policy",
+                owns=(
+                    "event-driven enforcement feature policy",
+                    "FUP enforcement action settings",
+                    "overdue suspension event policy",
+                ),
+                depends_on=("control.settings_spec",),
+            ),
+            SOTService(
                 name="access.radius_state",
                 module="app.services.radius_access_state",
                 owns=("desired RADIUS state mapping", "RADIUS group/profile actions"),
-                depends_on=("access.control_resolution",),
+                depends_on=("access.control_resolution", "access.event_policy"),
             ),
             SOTService(
                 name="access.radius_reject",

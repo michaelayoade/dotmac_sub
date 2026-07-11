@@ -37,7 +37,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     )
     assert sot_relationships.dependencies_for(
         "communications.notification_service"
-    ) == ("communications.channel_policy",)
+    ) == ("communications.channel_policy", "communications.event_policy")
     assert sot_relationships.dependencies_for("sessions.enforcement") == (
         "financial.access_resolution",
         "sessions.radius_resolution",
@@ -56,6 +56,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     )
     assert sot_relationships.dependencies_for("access.radius_state") == (
         "access.control_resolution",
+        "access.event_policy",
     )
     assert sot_relationships.dependencies_for("service_intent.catalog_to_network") == (
         "service_intent.catalog_policy",

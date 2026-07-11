@@ -10,12 +10,12 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.notification import (
     NotificationChannel,
     NotificationTemplate,
 )
 from app.schemas.notification import NotificationCreate
+from app.services import event_notification_policy
 from app.services.customer_notification_policy import (
     channel_disabled_in_config,
     resolve_subscriber_id_for_recipient,
@@ -39,39 +39,11 @@ CHANNEL_TEMPLATE_SUFFIXES: dict[NotificationChannel, str] = {
     NotificationChannel.webhook: "webhook",
 }
 
-_DISABLED_VALUES = {"false", "0", "no", "off", "disabled"}
-_ENABLED_VALUES = {"1", "true", "yes", "on", "enabled"}
 _UNRESOLVED_TEMPLATE_RE = re.compile(r"\{\{?\s*[a-zA-Z0-9_]+\s*\}?\}")
 
 
 def _channel_disabled_in_config(db: Session, channel: NotificationChannel) -> bool:
     return channel_disabled_in_config(db, channel)
-
-
-def _notification_setting_value(db: Session, key: str) -> str | None:
-    setting = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.notification)
-        .filter(DomainSetting.key == key)
-        .filter(DomainSetting.is_active.is_(True))
-        .first()
-    )
-    if not setting:
-        return None
-    if setting.value_text is not None:
-        return str(setting.value_text)
-    if setting.value_json is not None:
-        return str(setting.value_json)
-    return None
-
-
-def _event_enabled(db: Session, template_code: str) -> bool:
-    value = _notification_setting_value(
-        db, f"notification_event_{template_code}_enabled"
-    )
-    if value is None:
-        return True
-    return value.strip().lower() in _ENABLED_VALUES
 
 
 def _event_channels(
@@ -492,17 +464,6 @@ EVENT_TYPE_TO_TEMPLATE = {
     for event_type, spec in EVENT_NOTIFICATION_SPECS.items()
 }
 
-BALANCE_NOTIFICATION_EVENTS: set[EventType] = {
-    EventType.invoice_created,
-    EventType.invoice_sent,
-    EventType.invoice_overdue,
-    EventType.subscription_suspension_warning,
-    EventType.arrangement_defaulted,
-}
-
-BILLING_SUSPENSION_REASONS = {"overdue", "dunning", "invoice_overdue"}
-
-
 class NotificationHandler:
     """Handler that queues customer notifications."""
 
@@ -510,7 +471,9 @@ class NotificationHandler:
         spec = EVENT_NOTIFICATION_SPECS.get(event.event_type)
         if spec is None:
             return
-        if not _event_enabled(db, spec.template_code):
+        if not event_notification_policy.event_notifications_enabled(
+            db, spec.template_code
+        ):
             logger.info(
                 "Suppressed notification for event %s: event disabled by settings",
                 event.event_type.value,
@@ -530,7 +493,9 @@ class NotificationHandler:
             )
             return
 
-        if self._customer_balance_notifications_suppressed(db, event):
+        if event_notification_policy.customer_balance_notifications_suppressed(
+            db, event
+        ):
             logger.info(
                 "Suppressed customer balance notification for event %s",
                 event.event_type.value,
@@ -652,41 +617,6 @@ class NotificationHandler:
                 channel.value,
                 recipient,
             )
-
-    def _customer_balance_notifications_suppressed(
-        self, db: Session, event: Event
-    ) -> bool:
-        """Suppress customer-facing balance/debt notifications when disabled."""
-        from app.models.domain_settings import SettingDomain
-        from app.services import settings_spec
-
-        enabled = settings_spec.resolve_value(
-            db, SettingDomain.billing, "customer_balance_notifications_enabled"
-        )
-        if enabled is not False and str(enabled).lower() not in {
-            "0",
-            "false",
-            "no",
-            "off",
-            "",
-        }:
-            return False
-
-        if event.event_type in BALANCE_NOTIFICATION_EVENTS:
-            return True
-        return self._is_billing_suspension_event(event)
-
-    def _is_billing_suspension_event(self, event: Event) -> bool:
-        if event.event_type != EventType.subscription_suspended:
-            return False
-
-        reason = str(event.payload.get("reason") or "").strip().lower()
-        source = str(event.payload.get("source") or "").strip().lower()
-        return (
-            reason in BILLING_SUSPENSION_REASONS
-            or source in BILLING_SUSPENSION_REASONS
-            or source.startswith("invoice:")
-        )
 
     def _load_templates(
         self,
