@@ -1,0 +1,174 @@
+{% extends "layouts/admin.html" %}
+{% from "admin/projects/_components.html" import project_card %}
+{% block title %}{{ page_title or 'Project' }}{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-3xl space-y-4">
+    <div>
+        <nav class="mb-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+            <a href="/admin/projects" class="hover:text-emerald-600 dark:hover:text-emerald-400">Projects</a>
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <span class="text-slate-900 dark:text-white">{{ page_title or 'Project' }}</span>
+        </nav>
+        <h1 class="font-display text-xl font-bold tracking-tight text-slate-900 dark:text-white">{{ page_title or 'Project' }}</h1>
+        {% if form_mode == 'create' %}
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Choosing an installation type auto-picks its template; template tasks are instantiated on save.</p>
+        {% endif %}
+    </div>
+
+    {% if error %}
+    <div class="rounded-2xl border border-red-200 bg-red-50/90 p-4 text-sm text-red-800 dark:border-red-800 dark:bg-red-900/25 dark:text-red-100">{{ error }}</div>
+    {% endif %}
+
+    {% call project_card() %}
+    <form method="post"
+          action="{% if form_mode == 'edit' and project %}/admin/projects/{{ project.number or project.id }}/edit{% else %}/admin/projects{% endif %}"
+          class="space-y-5"
+          x-data='{ templateMap: {{ project_template_map | tojson }} }'>
+        <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+
+        <div class="grid gap-4 sm:grid-cols-2">
+            <div class="sm:col-span-2">
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Name <span class="text-red-500">*</span></label>
+                <input type="text" name="name" required value="{{ prefill.name }}"
+                       class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div>
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Code</label>
+                <input type="text" name="code" value="{{ prefill.code }}"
+                       class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div>
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Project Type</label>
+                <select name="project_type"
+                        x-on:change="const tpl = templateMap[$event.target.value]; if (tpl) { $refs.templateSelect.value = tpl; }"
+                        class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">— None —</option>
+                    {% for t in project_types %}
+                    <option value="{{ t }}" {% if prefill.project_type == t %}selected{% endif %}>{{ t|replace('_', ' ')|title }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="sm:col-span-2">
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Template</label>
+                <select name="project_template_id" x-ref="templateSelect"
+                        class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">— No template —</option>
+                    {% for template in project_templates %}
+                    <option value="{{ template.id }}" {% if prefill.project_template_id == template.id|string %}selected{% endif %}>{{ template.name }}{% if template.project_type %} ({{ template.project_type|replace('_', ' ')|title }}){% endif %}</option>
+                    {% endfor %}
+                </select>
+                <p class="mt-1 text-xs text-slate-400 dark:text-slate-500">Selecting a template instantiates its tasks (with dependencies and scheduled dates){% if form_mode == 'edit' %}; changing it replaces open template tasks{% endif %}.</p>
+            </div>
+            <div class="sm:col-span-2">
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Description</label>
+                <textarea name="description" rows="3"
+                          class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ prefill.description }}</textarea>
+            </div>
+            <div>
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Status</label>
+                <select name="status" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    {% for s in project_statuses %}
+                    <option value="{{ s }}" {% if prefill.status == s %}selected{% endif %}>{{ s|replace('_', ' ')|title }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Priority</label>
+                <select name="priority" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    {% for p in project_priorities %}
+                    <option value="{{ p }}" {% if prefill.priority == p %}selected{% endif %}>{{ p|title }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+
+        <div class="border-t border-slate-200/70 pt-4 dark:border-slate-700/70">
+            <p class="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Customer</p>
+            <div class="grid gap-4 sm:grid-cols-2">
+                <div>
+                    <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Subscriber</label>
+                    <select name="subscriber_id" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">— None —</option>
+                        {% for person in subscriber_options %}
+                        <option value="{{ person.id }}" {% if prefill.subscriber_id == person.id|string %}selected{% endif %}>{{ person.label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Region</label>
+                    <select name="region" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">— None —</option>
+                        {% for r in region_options %}
+                        <option value="{{ r }}" {% if prefill.region == r %}selected{% endif %}>{{ r }}</option>
+                        {% endfor %}
+                    </select>
+                    <p class="mt-1 text-xs text-slate-400 dark:text-slate-500">Regions with a configured PM assignment auto-fill the manager on save.</p>
+                </div>
+                <div class="sm:col-span-2">
+                    <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Customer Address</label>
+                    <textarea name="customer_address" rows="2"
+                              class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ prefill.customer_address }}</textarea>
+                </div>
+            </div>
+        </div>
+
+        <div class="border-t border-slate-200/70 pt-4 dark:border-slate-700/70">
+            <p class="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Assignments</p>
+            <div class="grid gap-4 sm:grid-cols-2">
+                {% for field, label in [
+                    ('owner_person_id', 'Owner'),
+                    ('manager_person_id', 'Manager'),
+                    ('project_manager_person_id', 'Project Manager'),
+                    ('assistant_manager_person_id', 'Site Project Coordinator'),
+                ] %}
+                <div>
+                    <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">{{ label }}</label>
+                    <select name="{{ field }}" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">— Unassigned —</option>
+                        {% for person in staff_options %}
+                        <option value="{{ person.id }}" {% if prefill[field] == person.id|string %}selected{% endif %}>{{ person.label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="border-t border-slate-200/70 pt-4 dark:border-slate-700/70">
+            <p class="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Schedule</p>
+            <div class="grid gap-4 sm:grid-cols-2">
+                <div>
+                    <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Start</label>
+                    <input type="datetime-local" name="start_at" value="{{ prefill.start_at }}"
+                           class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Due</label>
+                    <input type="datetime-local" name="due_at" value="{{ prefill.due_at }}"
+                           class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+            </div>
+        </div>
+
+        <div class="flex items-center justify-between border-t border-slate-200/70 pt-4 dark:border-slate-700/70">
+            <label class="inline-flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+                <input type="hidden" name="is_active" value="{{ 'true' if prefill.is_active else 'false' }}"
+                       x-ref="activeFlag">
+                <input type="checkbox" class="rounded border-slate-300 text-emerald-600"
+                       {% if prefill.is_active %}checked{% endif %}
+                       @change="$refs.activeFlag.value = $event.target.checked ? 'true' : 'false'">
+                Active
+            </label>
+            <div class="flex items-center gap-2">
+                <a href="{% if form_mode == 'edit' and project %}/admin/projects/{{ project.number or project.id }}{% else %}/admin/projects{% endif %}"
+                   class="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Cancel</a>
+                <button class="rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 px-4 py-2 text-sm font-semibold text-white shadow-sm shadow-emerald-500/20 transition hover:shadow-md">
+                    {% if form_mode == 'edit' %}Save Changes{% else %}Create Project{% endif %}
+                </button>
+            </div>
+        </div>
+    </form>
+    {% endcall %}
+</div>
+{% endblock %}

@@ -16,7 +16,9 @@ from sqlalchemy.sql.elements import ClauseElement, ColumnElement
 
 from app.models.project import Project, ProjectTask, ProjectTaskAssignee
 from app.services.dynamic_filters import (
+    DEFAULT_OPERATORS_BY_TYPE,
     NULL_TOKENS,
+    OPERATOR_LABELS,
     FilterFieldSpec,
     FilterValidationError,
     _coerce_list,
@@ -287,4 +289,153 @@ def build_project_task_filter_clause(
         filter_query,
         doctype=PROJECT_TASK_DOCTYPE,
         field_specs=PROJECT_TASK_FILTER_SPECS,
+    )
+
+
+# ── Filter-schema serializers (admin filter-builder UI; deferred from PR 6) ──
+
+PROJECT_FILTER_LABELS: dict[str, str] = {
+    "name": "Name",
+    "code": "Code",
+    "number": "Number",
+    "status": "Status",
+    "priority": "Priority",
+    "project_type": "Project Type",
+    "region": "Region",
+    "customer_address": "Customer Address",
+    "subscriber_id": "Subscriber",
+    "lead_id": "Lead",
+    "service_team_id": "Service Team",
+    "project_template_id": "Template",
+    "created_by_person_id": "Created By",
+    "owner_person_id": "Owner",
+    "manager_person_id": "Manager",
+    "project_manager_person_id": "Project Manager",
+    "assistant_manager_person_id": "Site Project Coordinator",
+    "tags": "Tags",
+    "start_at": "Start At",
+    "due_at": "Due At",
+    "completed_at": "Completed At",
+    "created_at": "Created At",
+    "updated_at": "Updated At",
+    "is_active": "Is Active",
+}
+
+PROJECT_TASK_FILTER_LABELS: dict[str, str] = {
+    "title": "Title",
+    "number": "Number",
+    "status": "Status",
+    "priority": "Priority",
+    "project_id": "Project",
+    "parent_task_id": "Parent Task",
+    "template_task_id": "Template Task",
+    "assigned_to_person_id": "Assignee",
+    "created_by_person_id": "Created By",
+    "ticket_id": "Ticket",
+    "work_order_id": "Work Order",
+    "effort_hours": "Effort Hours",
+    "tags": "Tags",
+    "start_at": "Start At",
+    "due_at": "Due At",
+    "completed_at": "Completed At",
+    "created_at": "Created At",
+    "updated_at": "Updated At",
+    "is_active": "Is Active",
+}
+
+_ACTIVE_OPTIONS = [
+    {"value": "true", "label": "Active"},
+    {"value": "false", "label": "Archived"},
+]
+
+
+def _select_options(values: list[str]) -> list[dict[str, str]]:
+    return [
+        {"value": value, "label": value.replace("_", " ").title()} for value in values
+    ]
+
+
+def _people_options(options: list[dict[str, str]]) -> list[dict[str, str]]:
+    return [
+        {"value": str(item.get("id", "")), "label": str(item.get("label", ""))}
+        for item in options
+        if item.get("id")
+    ]
+
+
+def _serialize_schema(
+    field_specs: dict[str, FilterFieldSpec],
+    labels: dict[str, str],
+    options_map: dict[str, list[dict[str, str]]],
+) -> list[dict[str, object]]:
+    schema: list[dict[str, object]] = []
+    for field_name, spec in field_specs.items():
+        operators = (
+            sorted(spec.operators)
+            if spec.operators is not None
+            else sorted(DEFAULT_OPERATORS_BY_TYPE.get(spec.field_type, {"="}))
+        )
+        schema.append(
+            {
+                "field": field_name,
+                "label": labels.get(field_name, field_name.replace("_", " ").title()),
+                "type": spec.field_type,
+                "operators": [
+                    {
+                        "value": operator,
+                        "label": OPERATOR_LABELS.get(operator, operator),
+                    }
+                    for operator in operators
+                    if operator in OPERATOR_LABELS
+                ],
+                "options": options_map.get(field_name, []),
+            }
+        )
+    return schema
+
+
+def serialize_project_filter_schema(
+    *,
+    status_options: list[str],
+    priority_options: list[str],
+    project_type_options: list[str],
+    staff_options: list[dict[str, str]],
+    template_options: list[dict[str, str]] | None = None,
+) -> list[dict[str, object]]:
+    """Field/operator/option metadata for the admin projects filter builder."""
+    staff = _people_options(staff_options)
+    options_map: dict[str, list[dict[str, str]]] = {
+        "status": _select_options(status_options),
+        "priority": _select_options(priority_options),
+        "project_type": _select_options(project_type_options),
+        "is_active": list(_ACTIVE_OPTIONS),
+        "created_by_person_id": staff,
+        "owner_person_id": staff,
+        "manager_person_id": staff,
+        "project_manager_person_id": staff,
+        "assistant_manager_person_id": staff,
+        "project_template_id": _people_options(template_options or []),
+    }
+    return _serialize_schema(PROJECT_FILTER_SPECS, PROJECT_FILTER_LABELS, options_map)
+
+
+def serialize_project_task_filter_schema(
+    *,
+    status_options: list[str],
+    priority_options: list[str],
+    staff_options: list[dict[str, str]],
+    project_options: list[dict[str, str]] | None = None,
+) -> list[dict[str, object]]:
+    """Field/operator/option metadata for the admin project-tasks filter builder."""
+    staff = _people_options(staff_options)
+    options_map: dict[str, list[dict[str, str]]] = {
+        "status": _select_options(status_options),
+        "priority": _select_options(priority_options),
+        "is_active": list(_ACTIVE_OPTIONS),
+        "assigned_to_person_id": staff,
+        "created_by_person_id": staff,
+        "project_id": _people_options(project_options or []),
+    }
+    return _serialize_schema(
+        PROJECT_TASK_FILTER_SPECS, PROJECT_TASK_FILTER_LABELS, options_map
     )

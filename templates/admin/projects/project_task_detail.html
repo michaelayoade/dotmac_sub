@@ -1,0 +1,164 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, action_button, detail_header, icon_clipboard, icon_edit %}
+{% from "admin/projects/_components.html" import project_card, task_status_badge, project_priority_badge, staff_name %}
+{% block title %}Task {{ task.number or task.id }}{% endblock %}
+
+{% block content %}
+{{ ambient_background('emerald', 'teal') }}
+<div class="relative z-10 space-y-6">
+    {% call detail_header(
+        title=task.number or task.id,
+        subtitle=task.title,
+        icon=icon_clipboard('h-7 w-7 text-white'),
+        color='emerald',
+        color2='teal',
+        back_href='/admin/projects/tasks',
+        status=task_status_badge(task.status)
+    ) %}
+        {{ project_priority_badge(task.priority) }}
+        {% if task_is_breached %}
+        <span class="inline-flex items-center rounded-lg bg-red-100 px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-red-700 dark:bg-red-900/30 dark:text-red-300">SLA breached</span>
+        {% endif %}
+        {{ action_button('Edit Task', '/admin/projects/tasks/' ~ (task.number or task.id) ~ '/edit', icon_edit(), 'secondary', 'emerald') }}
+    {% endcall %}
+
+    <div class="grid gap-6 xl:grid-cols-12">
+        <div class="space-y-6 xl:col-span-8">
+            {% call project_card(title='Description', subtitle='Task scope and notes.', icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 8h10M7 12h6m-6 4h10M5 21h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>') %}
+            <p class="whitespace-pre-wrap text-sm text-slate-700 dark:text-slate-200">{{ task.description or 'No description provided.' }}</p>
+            {% endcall %}
+
+            {% if dependencies.blocked_by or dependencies.blocks %}
+            {% call project_card(title='Dependencies', subtitle='Sequencing from the project template (edit on the template).', icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 010 5.656l-4 4a4 4 0 01-5.656-5.656l1.102-1.101m12.905-3.032l1.101-1.102a4 4 0 10-5.656-5.656l-4 4a4 4 0 000 5.656"/></svg>') %}
+            <div class="grid gap-4 sm:grid-cols-2">
+                <div>
+                    <p class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Blocked By</p>
+                    <div class="space-y-2">
+                        {% for dep in dependencies.blocked_by %}
+                        <div class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs dark:border-slate-600 dark:bg-slate-700/40">
+                            {% if dep.url %}<a href="{{ dep.url }}" class="font-semibold text-emerald-700 hover:underline dark:text-emerald-400">{{ dep.title }}</a>{% else %}<span class="font-semibold">{{ dep.title }}</span>{% endif %}
+                            <p class="mt-1 text-slate-500 dark:text-slate-300">{{ dep.ref }} · {{ (dep.status or '-')|replace('_', ' ') }} · {{ dep.dependency_type|replace('_', ' ') }}{% if dep.lag_days %} (+{{ dep.lag_days }}d lag){% endif %}</p>
+                        </div>
+                        {% else %}
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Nothing blocks this task.</p>
+                        {% endfor %}
+                    </div>
+                </div>
+                <div>
+                    <p class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Blocks</p>
+                    <div class="space-y-2">
+                        {% for dep in dependencies.blocks %}
+                        <div class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs dark:border-slate-600 dark:bg-slate-700/40">
+                            {% if dep.url %}<a href="{{ dep.url }}" class="font-semibold text-emerald-700 hover:underline dark:text-emerald-400">{{ dep.title }}</a>{% else %}<span class="font-semibold">{{ dep.title }}</span>{% endif %}
+                            <p class="mt-1 text-slate-500 dark:text-slate-300">{{ dep.ref }} · {{ (dep.status or '-')|replace('_', ' ') }} · {{ dep.dependency_type|replace('_', ' ') }}{% if dep.lag_days %} (+{{ dep.lag_days }}d lag){% endif %}</p>
+                        </div>
+                        {% else %}
+                        <p class="text-xs text-slate-500 dark:text-slate-400">No downstream tasks.</p>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+            {% endcall %}
+            {% endif %}
+
+            {% call project_card(title='Comments', subtitle='Task discussion thread.', icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-4 4v-4z"/></svg>') %}
+            <div class="space-y-3">
+                {% for comment in comments %}
+                <article class="rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-600 dark:bg-slate-700/30">
+                    <div class="mb-2 flex items-center gap-2">
+                        {% set author_label = staff_name(staff_lookup, comment.author_person_id) if comment.author_person_id else 'System' %}
+                        <div class="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-xs font-semibold text-slate-700 dark:bg-slate-700 dark:text-slate-200">{{ author_label[:2]|upper }}</div>
+                        <div>
+                            <p class="text-xs font-semibold text-slate-800 dark:text-slate-100">{{ author_label }}</p>
+                            <p class="text-[11px] text-slate-500 dark:text-slate-400">{{ comment.created_at.strftime('%Y-%m-%d %H:%M UTC') if comment.created_at else '' }}</p>
+                        </div>
+                    </div>
+                    <p class="whitespace-pre-wrap text-sm text-slate-700 dark:text-slate-200">{{ comment.body }}</p>
+                </article>
+                {% else %}
+                <p class="text-sm text-slate-500 dark:text-slate-400">No comments yet.</p>
+                {% endfor %}
+            </div>
+            <form method="post" action="/admin/projects/tasks/{{ task.number or task.id }}/comments" class="mt-5 space-y-3 rounded-xl border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-600 dark:bg-slate-700/30">
+                <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+                <textarea name="body" rows="3" required placeholder="Add a comment..." class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></textarea>
+                <div class="flex justify-end">
+                    <button class="rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 px-4 py-2 text-xs font-semibold text-white shadow-sm shadow-emerald-500/20">Add Comment</button>
+                </div>
+            </form>
+            {% endcall %}
+
+            {% call project_card(title='Activity Timeline', subtitle='Audit and workflow events.', icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>') %}
+            <div class="space-y-3">
+                {% for item in activities %}
+                <div class="flex gap-3">
+                    <div class="mt-1 h-2.5 w-2.5 rounded-full bg-emerald-500"></div>
+                    <div class="flex-1 rounded-xl border border-slate-200 bg-slate-50/80 p-3 text-xs dark:border-slate-600 dark:bg-slate-700/40">
+                        <p class="font-semibold text-slate-800 dark:text-slate-100">{{ item.title }}</p>
+                        <p class="mt-1 text-slate-600 dark:text-slate-300">{{ item.description }}</p>
+                        <p class="mt-1 text-[11px] text-slate-400">{{ item.occurred_at.strftime('%Y-%m-%d %H:%M UTC') if item.occurred_at else '' }}</p>
+                    </div>
+                </div>
+                {% else %}
+                <p class="text-sm text-slate-500 dark:text-slate-400">No recorded activity yet.</p>
+                {% endfor %}
+            </div>
+            {% endcall %}
+        </div>
+
+        <aside class="space-y-6 xl:col-span-4">
+            {% call project_card(title='Task Details', subtitle='State and assignment controls.') %}
+            <form method="post" action="/admin/projects/tasks/{{ task.number or task.id }}/status" class="mb-3">
+                <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+                <label class="block text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</label>
+                <div class="mt-1 flex gap-2">
+                    <select name="status" class="flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% for s in task_statuses %}
+                        <option value="{{ s }}" {% if task.status == s %}selected{% endif %}>{{ s|replace('_', ' ')|title }}</option>
+                        {% endfor %}
+                    </select>
+                    <button class="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">Set</button>
+                </div>
+            </form>
+
+            <dl class="space-y-2 text-xs">
+                <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Project</dt><dd class="text-right"><a href="{{ project_href }}" class="font-semibold text-emerald-700 hover:underline dark:text-emerald-400">{{ project.name }}</a></dd></div>
+                {% if fiber_stage_title %}
+                <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Fiber Stage</dt><dd class="text-right text-slate-800 dark:text-slate-100">{{ fiber_stage_title }}</dd></div>
+                {% endif %}
+                <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Assignees</dt><dd class="break-all text-right text-slate-800 dark:text-slate-100">
+                    {% if task.assignees %}
+                    <ul class="space-y-0.5">
+                        {% for assignee in task.assignees %}
+                        <li>{{ staff_name(staff_lookup, assignee.person_id) }}</li>
+                        {% endfor %}
+                    </ul>
+                    {% elif task.assigned_to_person_id %}
+                    {{ staff_name(staff_lookup, task.assigned_to_person_id) }}
+                    {% else %}-{% endif %}
+                </dd></div>
+                <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Created By</dt><dd class="break-all text-right text-slate-800 dark:text-slate-100">{{ staff_name(staff_lookup, task.created_by_person_id) }}</dd></div>
+                <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Start</dt><dd class="text-right text-slate-800 dark:text-slate-100">{{ task.start_at.strftime('%Y-%m-%d %H:%M UTC') if task.start_at else '-' }}</dd></div>
+                <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Due</dt><dd class="text-right {% if task_is_breached %}text-red-700 dark:text-red-300{% else %}text-slate-800 dark:text-slate-100{% endif %}">{{ task.due_at.strftime('%Y-%m-%d %H:%M UTC') if task.due_at else '-' }}</dd></div>
+                <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Completed</dt><dd class="text-right text-slate-800 dark:text-slate-100">{{ task.completed_at.strftime('%Y-%m-%d %H:%M UTC') if task.completed_at else '-' }}</dd></div>
+                <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Effort</dt><dd class="text-right text-slate-800 dark:text-slate-100">{{ task.effort_hours ~ 'h' if task.effort_hours is not none else '-' }}</dd></div>
+                {% if task.ticket_id %}
+                <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Ticket</dt><dd class="text-right"><a href="/admin/support/tickets/{{ task.ticket_id }}" class="text-emerald-700 hover:underline dark:text-emerald-400">{{ task.ticket_id }}</a></dd></div>
+                {% endif %}
+                {% if task.work_order_id %}
+                <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Work Order</dt><dd class="break-all text-right text-slate-800 dark:text-slate-100">{{ task.work_order_id }}</dd></div>
+                {% endif %}
+                <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Created</dt><dd class="text-right text-slate-800 dark:text-slate-100">{{ task.created_at.strftime('%Y-%m-%d %H:%M UTC') if task.created_at else '-' }}</dd></div>
+                <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Updated</dt><dd class="text-right text-slate-800 dark:text-slate-100">{{ task.updated_at.strftime('%Y-%m-%d %H:%M UTC') if task.updated_at else '-' }}</dd></div>
+            </dl>
+            <div class="mt-4 flex flex-wrap gap-2">
+                <form method="post" action="/admin/projects/tasks/{{ task.number or task.id }}/delete" onsubmit="return confirm('Archive task?')">
+                    <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+                    <button class="rounded-xl border border-red-200 px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-50 dark:border-red-700 dark:text-red-300 dark:hover:bg-red-900/30">Delete</button>
+                </form>
+            </div>
+            {% endcall %}
+        </aside>
+    </div>
+</div>
+{% endblock %}

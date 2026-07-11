@@ -80,6 +80,7 @@ from app.web.admin.network_vendor_capabilities import (
 from app.web.admin.network_weathermap import router as network_weathermap_router
 from app.web.admin.network_zones import router as network_zones_router
 from app.web.admin.notifications import router as notifications_router
+from app.web.admin.projects import router as projects_router
 from app.web.admin.provisioning import router as provisioning_router
 from app.web.admin.reports import router as reports_router
 from app.web.admin.resellers import router as resellers_router
@@ -382,6 +383,7 @@ router.include_router(support_tickets_router)
 router.include_router(sales_router)
 router.include_router(support_automation_router)
 router.include_router(support_assignment_rules_router)
+router.include_router(projects_router)
 router.include_router(
     wireguard_router,
     prefix="/network",

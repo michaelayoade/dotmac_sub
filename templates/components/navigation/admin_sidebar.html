@@ -11,6 +11,7 @@
     'sales': 'sales', 'sales-leads': 'sales', 'sales-pipelines': 'sales',
     'sales-quotes': 'sales', 'sales-orders': 'sales',
     'referrals': 'referrals',
+    'projects': 'projects', 'project-tasks': 'projects', 'project-templates': 'projects',
     'billing': 'billing', 'accounts': 'billing', 'invoices': 'billing', 'payments': 'billing',
     'credits': 'billing', 'ar-aging': 'billing', 'dunning': 'billing', 'billing-cache': 'billing',
     'payment_arrangements': 'billing', 'payment_proofs': 'billing', 'payment_providers': 'billing', 'payment_channels': 'billing',
@@ -136,6 +137,9 @@
 {% set icon_referrals %}
 <svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v13m0-13V6a2 2 0 112 2h-2zm0 0V5.5A2.5 2.5 0 109.5 8H12zm-7 4h14M5 12a2 2 0 110-4h14a2 2 0 110 4M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7"/></svg>
 {% endset %}
+{% set icon_projects %}
+<svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+{% endset %}
 {% set icon_billing %}
 <svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>
 {% endset %}
@@ -183,6 +187,7 @@
     {{ nav_link("Referrals", "/admin/referrals", icon_referrals, "referrals") }}
 
     {{ section_label("Operations") }}
+    {{ nav_link("Projects", "/admin/projects", icon_projects, "projects") }}
     {% if module_states.get('billing', True) %}
     {{ nav_link("Billing", "/admin/billing", icon_billing, "billing", badge=overdue_count, tour_id="nav-billing") }}
     {% endif %}
