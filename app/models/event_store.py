@@ -8,9 +8,9 @@ import enum
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
 
@@ -34,6 +34,12 @@ class EventStore(Base):
     """
 
     __tablename__ = "event_store"
+
+    def __init__(self, **kwargs):
+        if kwargs.get("handler_attempts") is None:
+            kwargs.pop("handler_attempts", None)
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -62,6 +68,11 @@ class EventStore(Base):
 
     # Tracking handlers that failed
     failed_handlers: Mapped[list[dict[str, str]] | None] = mapped_column(JSONB)
+    handler_attempts: Mapped[list["EventHandlerAttempt"]] = relationship(
+        "EventHandlerAttempt",
+        back_populates="event_store",
+        cascade="all, delete-orphan",
+    )
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(
@@ -74,3 +85,31 @@ class EventStore(Base):
     )
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class EventHandlerAttempt(Base):
+    """Per-handler processing attempts for an EventStore row."""
+
+    __tablename__ = "event_handler_attempts"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    event_store_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("event_store.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    handler_name: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    error: Mapped[str | None] = mapped_column(Text)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    attempted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+
+    event_store: Mapped[EventStore] = relationship(
+        "EventStore",
+        back_populates="handler_attempts",
+    )
