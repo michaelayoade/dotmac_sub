@@ -50,6 +50,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.hybrid import hybrid_property
@@ -153,7 +154,11 @@ class Lead(Base):
     backfill (§1.3)."""
 
     __tablename__ = "leads"
-    __table_args__ = (Index("ix_leads_campaign_id", "campaign_id"),)
+    __table_args__ = (
+        Index("ix_leads_campaign_id", "campaign_id"),
+        # Native lead scans by subscriber (migration 251).
+        Index("ix_leads_subscriber_id", "subscriber_id"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -236,6 +241,15 @@ class Quote(Base):
     ``metadata.subscriber_external_id`` key is provenance only post-import."""
 
     __tablename__ = "quotes"
+    __table_args__ = (
+        # Native /me/quotes (+ reseller subtree) subscriber scan — partial on
+        # is_active (migration 251). postgresql_where is ignored on sqlite.
+        Index(
+            "ix_quotes_subscriber_id",
+            "subscriber_id",
+            postgresql_where=text("is_active"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -303,7 +317,7 @@ class QuoteLineItem(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     quote_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("quotes.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("quotes.id"), nullable=False, index=True
     )
     # CRM inventory-item UUID carried verbatim — inventory is Phase 5, no FK.
     inventory_item_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
@@ -334,6 +348,8 @@ class SalesOrder(Base):
     __table_args__ = (
         UniqueConstraint("order_number", name="uq_sales_orders_order_number"),
         UniqueConstraint("quote_id", name="uq_sales_orders_quote_id"),
+        # Native sales-order scans by subscriber (migration 251).
+        Index("ix_sales_orders_subscriber_id", "subscriber_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -403,7 +419,7 @@ class SalesOrderLine(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     sales_order_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("sales_orders.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("sales_orders.id"), nullable=False, index=True
     )
     # CRM inventory-item UUID carried verbatim — inventory is Phase 5, no FK.
     inventory_item_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))

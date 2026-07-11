@@ -297,8 +297,7 @@ def test_migration_248_is_single_alembic_head():
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
     # 248 is a single link in the chain; the current head advances as later PRs
-    # stack on top (event handler attempts added 251_event_handler_attempts).
-    assert script.get_heads() == ["251_event_handler_attempts"]
+    assert script.get_heads() == ["252_native_read_path_indexes"]
 
 
 def test_migration_248_creates_geometry_gist_indexes():

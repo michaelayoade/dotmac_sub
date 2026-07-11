@@ -37,10 +37,12 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.mutable import MutableDict
@@ -135,6 +137,23 @@ class ProjectTemplate(Base):
 
 class Project(Base):
     __tablename__ = "projects"
+    __table_args__ = (
+        # Native /me/projects (+ reseller subtree) subscriber scan — partial on
+        # is_active (see migration 251). The functional index backs the H1
+        # quote→project lookup; its expression matches SQLAlchemy's
+        # metadata_['quote_id'].as_string() (CAST(... AS VARCHAR)) so the
+        # planner uses it. postgresql_where is ignored on sqlite create_all.
+        Index(
+            "ix_projects_subscriber_id",
+            "subscriber_id",
+            postgresql_where=text("is_active"),
+        ),
+        Index(
+            "ix_projects_metadata_quote_id",
+            text("CAST((metadata ->> 'quote_id') AS VARCHAR)"),
+            postgresql_where=text("is_active"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -212,7 +231,7 @@ class ProjectTask(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     project_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False, index=True
     )
     parent_task_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("project_tasks.id")
