@@ -31,6 +31,7 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
+from app.models.subscriber import SubscriberStatus
 from app.services.credential_crypto import (
     decrypt_credential_with_key,
     get_encryption_key,
@@ -45,6 +46,15 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 ACCT_INTERIM_SECONDS = 300  # 5 min Acct-Interim-Update cadence
+RADIUS_BLOCKING_SUBSCRIBER_STATUSES = frozenset(
+    {
+        SubscriberStatus.blocked,
+        SubscriberStatus.suspended,
+        SubscriberStatus.disabled,
+        SubscriberStatus.canceled,
+        SubscriberStatus.new,
+    }
+)
 SUSPENDED_ADDRESS_LIST = DEFAULT_SUSPENDED_ADDRESS_LIST
 
 
@@ -227,7 +237,7 @@ def populate(dry_run: bool = True) -> dict[str, int]:
     db = SessionLocal()
     try:
         suspended_list_name = suspended_address_list(db)
-        from app.models.subscriber import Subscriber, SubscriberStatus
+        from app.models.subscriber import Subscriber
 
         # Active, blocked, or suspended subs with a login — blocked/suspended
         # subs get a walled-garden radreply so suspension actually takes
@@ -281,13 +291,15 @@ def populate(dry_run: bool = True) -> dict[str, int]:
             p.id: p for p in db.scalars(select(RadiusProfile)).all()
         }
 
-        # Pre-fetch blocked subscriber IDs. Customer-level block triggers
-        # blocked RADIUS treatment regardless of subscription status.
+        # Pre-fetch subscriber IDs whose account-level state must not get
+        # normal active RADIUS service even if a stale child subscription row is
+        # still marked active. Delinquent is intentionally excluded: it is a
+        # pre-suspension state where service may still be running.
         blocked_subscriber_ids: set = {
             sid
             for (sid,) in db.execute(
                 select(Subscriber.id).where(
-                    Subscriber.status == SubscriberStatus.blocked
+                    Subscriber.status.in_(RADIUS_BLOCKING_SUBSCRIBER_STATUSES)
                 )
             ).all()
         }

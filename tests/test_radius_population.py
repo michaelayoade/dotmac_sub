@@ -3,8 +3,22 @@
 import types
 
 from app.models.catalog import SubscriptionStatus
-from app.models.subscriber import SubscriberCategory, UserType
-from app.services.radius_population import _captive_redirect_allowed, _radreply_attrs
+from app.models.subscriber import SubscriberCategory, SubscriberStatus, UserType
+from app.services.radius_population import (
+    RADIUS_BLOCKING_SUBSCRIBER_STATUSES,
+    _captive_redirect_allowed,
+    _radreply_attrs,
+)
+
+
+def test_account_level_radius_blocking_statuses():
+    assert SubscriberStatus.blocked in RADIUS_BLOCKING_SUBSCRIBER_STATUSES
+    assert SubscriberStatus.suspended in RADIUS_BLOCKING_SUBSCRIBER_STATUSES
+    assert SubscriberStatus.disabled in RADIUS_BLOCKING_SUBSCRIBER_STATUSES
+    assert SubscriberStatus.canceled in RADIUS_BLOCKING_SUBSCRIBER_STATUSES
+    assert SubscriberStatus.new in RADIUS_BLOCKING_SUBSCRIBER_STATUSES
+    assert SubscriberStatus.active not in RADIUS_BLOCKING_SUBSCRIBER_STATUSES
+    assert SubscriberStatus.delinquent not in RADIUS_BLOCKING_SUBSCRIBER_STATUSES
 
 
 def _sub(ipv4="10.0.0.5", status=SubscriptionStatus.active):
