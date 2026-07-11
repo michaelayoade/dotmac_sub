@@ -1,0 +1,55 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Vendor Routes - Admin{% endblock %}
+
+{% block content %}
+<div class="relative space-y-6">
+    <div class="flex items-center gap-4">
+        <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-orange-500 to-amber-600 shadow-lg shadow-orange-500/25">
+            <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>
+        </div>
+        <div>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Vendor Routes</h1>
+            <p class="mt-0.5 text-sm text-slate-500 dark:text-slate-400">Installation projects with proposed or as-built fiber route geometry</p>
+        </div>
+    </div>
+
+    <div class="overflow-hidden rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        {% if projects %}
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="border-b border-slate-200/60 bg-slate-50/60 text-left text-xs uppercase tracking-wide text-slate-400 dark:border-slate-700/60 dark:bg-slate-800/40 dark:text-slate-500">
+                        <th class="px-6 py-3 font-semibold">Project</th>
+                        <th class="px-6 py-3 font-semibold">Vendor</th>
+                        <th class="px-6 py-3 font-semibold">Status</th>
+                        <th class="px-6 py-3 font-semibold">Routes</th>
+                        <th class="px-6 py-3"></th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-700/60">
+                    {% for project in projects %}
+                    <tr class="hover:bg-slate-50/60 dark:hover:bg-slate-800/40">
+                        <td class="px-6 py-3 font-medium text-slate-900 dark:text-white">{{ project.label }}</td>
+                        <td class="px-6 py-3 text-slate-600 dark:text-slate-300">{{ project.vendor or '—' }}</td>
+                        <td class="px-6 py-3"><span class="rounded-lg bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ project.status | replace('_', ' ') }}</span></td>
+                        <td class="px-6 py-3">
+                            {% if project.has_proposed %}<span class="mr-1 rounded-lg bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-700 dark:bg-violet-900/30 dark:text-violet-300">Proposed</span>{% endif %}
+                            {% if project.has_as_built %}<span class="rounded-lg bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">As-built</span>{% endif %}
+                        </td>
+                        <td class="px-6 py-3 text-right">
+                            <a href="/admin/vendors/routes/{{ project.id }}" class="inline-flex items-center gap-1 text-sm font-medium text-orange-600 hover:text-orange-700 dark:text-orange-400">View route &rarr;</a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="px-6 py-16 text-center">
+            <p class="text-sm text-slate-500 dark:text-slate-400">No installation projects have saved route geometry yet.</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

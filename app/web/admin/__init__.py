@@ -39,6 +39,7 @@ from app.web.admin.dashboard import router as dashboard_router
 from app.web.admin.design_system import router as design_system_router
 from app.web.admin.dispatch_work_orders import router as dispatch_work_orders_router
 from app.web.admin.drift import router as drift_router
+from app.web.admin.field_maps import router as field_maps_router
 from app.web.admin.gis import router as gis_router
 from app.web.admin.inbox import router as inbox_router
 from app.web.admin.integrations import router as integrations_router
@@ -96,6 +97,7 @@ from app.web.admin.system_whats_new import router as system_whats_new_router
 from app.web.admin.usage import legacy_router as usage_legacy_router
 from app.web.admin.usage import router as usage_router
 from app.web.admin.vas import router as vas_router
+from app.web.admin.vendor_routes import router as vendor_routes_router
 from app.web.admin.wireguard import legacy_router as wireguard_legacy_router
 from app.web.admin.wireguard import router as wireguard_router
 from app.web.auth.dependencies import require_admin_web_auth
@@ -166,6 +168,8 @@ def admin_nas_legacy_path_redirect(path: str):
 router.include_router(dashboard_router)
 router.include_router(design_system_router)
 router.include_router(dispatch_work_orders_router)
+router.include_router(field_maps_router)
+router.include_router(vendor_routes_router)
 router.include_router(crm_referrals_router)
 router.include_router(
     customers_router,
