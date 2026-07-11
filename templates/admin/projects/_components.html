@@ -1,0 +1,176 @@
+{% macro project_card(title="", subtitle="", icon="", actions="", padded=True, class_name="") %}
+<div class="rounded-2xl border border-slate-200/70 bg-white shadow-sm dark:border-slate-700/70 dark:bg-slate-800 {{ class_name }}">
+    {% if title or subtitle or icon or actions %}
+    <div class="flex items-start justify-between gap-4 border-b border-slate-200/70 px-5 py-4 dark:border-slate-700/70">
+        <div class="flex items-start gap-3">
+            {% if icon %}
+            <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-100 to-teal-100 text-emerald-600 dark:from-emerald-900/30 dark:to-teal-900/20 dark:text-emerald-300">
+                {{ icon|safe }}
+            </div>
+            {% endif %}
+            <div>
+                {% if title %}<h2 class="text-sm font-semibold text-slate-900 dark:text-white">{{ title }}</h2>{% endif %}
+                {% if subtitle %}<p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ subtitle }}</p>{% endif %}
+            </div>
+        </div>
+        {% if actions %}<div class="shrink-0">{{ actions|safe }}</div>{% endif %}
+    </div>
+    {% endif %}
+    <div class="{% if padded %}p-5{% endif %}">
+        {{ caller() }}
+    </div>
+</div>
+{% endmacro %}
+
+{% macro project_status_badge(status) %}
+{% set value = status.value if status and status.value is defined else status %}
+{% set color_classes = {
+    'open': 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300',
+    'planned': 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300',
+    'active': 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300',
+    'on_hold': 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300',
+    'completed': 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200',
+    'canceled': 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300',
+} %}
+<span class="inline-flex items-center rounded-lg px-2.5 py-1 text-xs font-semibold uppercase tracking-wide {{ color_classes.get(value, 'bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-200') }}">{{ (value or 'open')|replace('_', ' ') }}</span>
+{% endmacro %}
+
+{% macro task_status_badge(status) %}
+{% set value = status.value if status and status.value is defined else status %}
+{% set color_classes = {
+    'backlog': 'bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-200',
+    'todo': 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300',
+    'in_progress': 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300',
+    'blocked': 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300',
+    'done': 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200',
+    'canceled': 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300',
+} %}
+<span class="inline-flex items-center rounded-lg px-2.5 py-1 text-xs font-semibold uppercase tracking-wide {{ color_classes.get(value, 'bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-200') }}">{{ (value or 'todo')|replace('_', ' ') }}</span>
+{% endmacro %}
+
+{% macro project_priority_badge(priority) %}
+{% set value = priority.value if priority and priority.value is defined else priority %}
+{% if value == 'urgent' %}
+<span class="inline-flex items-center rounded-lg bg-gradient-to-r from-rose-500 to-red-600 px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-white shadow-sm shadow-rose-500/20">urgent</span>
+{% elif value == 'high' %}
+<span class="inline-flex items-center rounded-lg bg-orange-100 px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-orange-700 dark:bg-orange-900/30 dark:text-orange-300">high</span>
+{% elif value in ['normal', 'medium'] %}
+<span class="inline-flex items-center rounded-lg bg-sky-100 px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-sky-700 dark:bg-sky-900/30 dark:text-sky-300">{{ value }}</span>
+{% else %}
+<span class="inline-flex items-center rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-slate-700 dark:bg-slate-700 dark:text-slate-200">{{ value or 'normal' }}</span>
+{% endif %}
+{% endmacro %}
+
+{% macro stage_dot(status) %}
+{% if status == 'done' %}
+<span class="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-500 text-white">
+    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg>
+</span>
+{% elif status == 'in_progress' %}
+<span class="flex h-6 w-6 items-center justify-center rounded-full border-2 border-emerald-500 bg-emerald-50 dark:bg-emerald-900/30">
+    <span class="h-2 w-2 rounded-full bg-emerald-500"></span>
+</span>
+{% else %}
+<span class="flex h-6 w-6 items-center justify-center rounded-full border-2 border-slate-300 bg-white dark:border-slate-600 dark:bg-slate-800"></span>
+{% endif %}
+{% endmacro %}
+
+{% macro staff_name(lookup, person_id) %}{{ lookup.get(person_id|string, person_id or '-') if lookup is defined and person_id else (person_id or '-') }}{% endmacro %}
+
+{% macro filter_condition_rows(schema, filters, doctype) %}
+{# Condition builder rows: field/operator/value with AND/OR grouping,
+   serialized into the hidden `filters` input by projectFilterBuilder(). #}
+<div class="mt-4 space-y-3 border-t border-slate-200/80 pt-3 dark:border-slate-600/70"
+     x-data="projectFilterBuilder()"
+     data-filter-schema='{{ schema | tojson | e }}'
+     data-initial-filters='{{ filters | tojson | e }}'
+     data-doctype="{{ doctype }}">
+    <input type="hidden" name="filters" x-bind:value="filtersJson">
+    <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Filter Conditions</p>
+    <template x-for="(row, index) in rows" :key="row.id">
+        <div class="grid grid-cols-1 gap-2 md:grid-cols-12">
+            <div class="md:col-span-3">
+                <select x-model="row.field"
+                        x-on:change="onFieldChange(index)"
+                        class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                    <template x-for="field in schema" :key="field.field">
+                        <option :value="field.field" x-text="field.label"></option>
+                    </template>
+                </select>
+            </div>
+            <div class="md:col-span-2">
+                <select x-model="row.operator"
+                        x-on:change="onOperatorChange(index)"
+                        class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                    <template x-for="operator in operatorOptions(row.field)" :key="operator.value">
+                        <option :value="operator.value" x-text="operator.label"></option>
+                    </template>
+                </select>
+            </div>
+            <div class="md:col-span-4">
+                <template x-if="row.operator === 'between'">
+                    <div class="grid grid-cols-2 gap-2">
+                        <input :type="inputType(row.field)"
+                               x-model="row.value[0]"
+                               x-on:change="syncFilters()"
+                               class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                        <input :type="inputType(row.field)"
+                               x-model="row.value[1]"
+                               x-on:change="syncFilters()"
+                               class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                    </div>
+                </template>
+                <template x-if="row.operator !== 'between'">
+                    <div>
+                        <template x-if="selectOptions(row.field).length > 0">
+                            <select x-model="row.value"
+                                    x-on:change="syncFilters()"
+                                    class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                                <option value="">Select value</option>
+                                <template x-for="option in selectOptions(row.field)" :key="option.value">
+                                    <option :value="option.value" x-text="option.label"></option>
+                                </template>
+                            </select>
+                        </template>
+                        <template x-if="selectOptions(row.field).length === 0">
+                            <input :type="inputType(row.field)"
+                                   x-model="row.value"
+                                   x-on:input="syncFilters()"
+                                   placeholder="Value"
+                                   class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 placeholder-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white dark:placeholder-slate-500">
+                        </template>
+                    </div>
+                </template>
+            </div>
+            <div class="md:col-span-2">
+                <select x-model="row.group"
+                        x-on:change="syncFilters()"
+                        class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                    <option value="and">AND</option>
+                    <option value="or">OR</option>
+                </select>
+            </div>
+            <div class="md:col-span-1">
+                <button type="button"
+                        x-on:click="removeRow(index)"
+                        class="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
+                    Remove
+                </button>
+            </div>
+        </div>
+    </template>
+    <div class="flex flex-wrap items-center gap-2">
+        <button type="button"
+                x-on:click="addRow()"
+                class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+            Add Condition
+        </button>
+        <button type="button"
+                x-on:click="clearRows()"
+                class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+            Clear
+        </button>
+        <p class="text-xs text-slate-500 dark:text-slate-400">AND conditions must all match; OR conditions match any. Use Apply to run.</p>
+    </div>
+</div>
+{% endmacro %}

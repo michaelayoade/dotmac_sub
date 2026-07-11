@@ -172,6 +172,7 @@ from app.tasks.vas import (
     run_wallet_auto_deduct,
     sync_vas_catalog,
 )
+from app.tasks.vendor_project_relay import relay_project_stub_to_crm
 from app.tasks.vpn import run_vpn_control_job, run_vpn_health_scan
 from app.tasks.webhooks import (
     deliver_webhook,
@@ -260,6 +261,7 @@ __all__ = [
     "retry_pending_compensation_failures",
     "refresh_radius_from_subs",
     "sync_device_login",
+    "relay_project_stub_to_crm",
     "run_vpn_control_job",
     "run_vpn_health_scan",
     "deliver_webhook",
