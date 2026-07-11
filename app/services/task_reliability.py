@@ -200,6 +200,13 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.events.retry_failed_events": _c("events", STATE, STATEFUL, STATUS),
     "app.tasks.exports.run_export_job": _c("exports", MANUAL, GUARDED, STATUS),
     "app.tasks.exports.run_scheduled_export": _c("exports", SWEEP, GUARDED, STATUS),
+    "app.tasks.field_erp.sync_field_erp_outbox": _c(
+        "integrations",
+        STATE,
+        STATEFUL,
+        STATUS,
+        "ERP delivery is retried by field_erp_sync_events status/idempotency keys.",
+    ),
     "app.tasks.gis.run_batch_geocode_job": _c("gis", ITEMS, PER_ITEM, STATUS),
     "app.tasks.gis.sync_gis_sources": _c("gis", SWEEP, IDEMP, HEALTH),
     "app.tasks.imports.process_import_run": _c("imports", ITEMS, PER_ITEM, STATUS),
