@@ -419,7 +419,8 @@ def test_migration_244_is_single_alembic_head():
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
     heads = script.get_heads()
-    assert heads == ["247_merge_phase3_inbox_heads"]
+    # 248 (maps vendor route domain) chains onto 247 and is the current head.
+    assert heads == ["248_maps_vendor_route_domain"]
 
 
 def test_migration_244_source_recreates_leads_partial_unique():
