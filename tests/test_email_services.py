@@ -3,6 +3,7 @@
 import smtplib
 
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.notification import Notification
 from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
 from app.services import email as email_service
@@ -116,7 +117,7 @@ def test_send_email_tracking_stores_text_body(db_session, monkeypatch):
     )
 
     assert result is True
-    notification = db_session.query(email_service.Notification).one()
+    notification = db_session.query(Notification).one()
     assert notification.body == "Your invoice is ready."
 
 

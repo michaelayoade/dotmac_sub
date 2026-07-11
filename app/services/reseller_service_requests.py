@@ -268,7 +268,7 @@ def _notify_reseller(db: Session, req: ResellerServiceRequest) -> None:
                 continue
             for channel in (NotificationChannel.push, NotificationChannel.email):
                 try:
-                    notifications_svc.create(
+                    notifications_svc.create_customer_notification(
                         db,
                         NotificationCreate(
                             channel=channel,

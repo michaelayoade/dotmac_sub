@@ -4,9 +4,9 @@ import logging
 import time
 
 from app.celery_app import celery_app
-from app.metrics import observe_job
 from app.services import vas_wallet as vas_wallet_service
 from app.services.db_session_adapter import db_session_adapter
+from app.services.observability import record_task_run
 
 logger = logging.getLogger(__name__)
 SessionLocal = db_session_adapter.create_session
@@ -31,7 +31,11 @@ def run_wallet_auto_deduct():
         raise
     finally:
         session.close()
-        observe_job("vas_auto_deduct", status, time.monotonic() - start)
+        record_task_run(
+            "vas_auto_deduct",
+            status=status,
+            duration_seconds=time.monotonic() - start,
+        )
 
 
 @celery_app.task(name="app.tasks.vas.sync_vas_catalog")
@@ -51,7 +55,11 @@ def sync_vas_catalog():
         raise
     finally:
         session.close()
-        observe_job("vas_catalog_sync", status, time.monotonic() - start)
+        record_task_run(
+            "vas_catalog_sync",
+            status=status,
+            duration_seconds=time.monotonic() - start,
+        )
 
 
 @celery_app.task(name="app.tasks.vas.run_vas_requery")
@@ -71,7 +79,11 @@ def run_vas_requery():
         raise
     finally:
         session.close()
-        observe_job("vas_requery", status, time.monotonic() - start)
+        record_task_run(
+            "vas_requery",
+            status=status,
+            duration_seconds=time.monotonic() - start,
+        )
 
 
 @celery_app.task(name="app.tasks.vas.run_vas_review_requery")
@@ -91,4 +103,8 @@ def run_vas_review_requery():
         raise
     finally:
         session.close()
-        observe_job("vas_review_requery", status, time.monotonic() - start)
+        record_task_run(
+            "vas_review_requery",
+            status=status,
+            duration_seconds=time.monotonic() - start,
+        )

@@ -2,11 +2,11 @@ import time
 
 from app.celery_app import celery_app
 from app.logging import get_logger
-from app.metrics import observe_job
 from app.models.integration import IntegrationRun, IntegrationRunStatus
 from app.services import integration as integration_service
 from app.services.common import coerce_uuid
 from app.services.db_session_adapter import db_session_adapter
+from app.services.observability import record_task_run
 
 SessionLocal = db_session_adapter.create_session
 
@@ -51,4 +51,4 @@ def run_integration_job(
     finally:
         session.close()
         duration = time.monotonic() - start
-        observe_job("integration_job", status, duration)
+        record_task_run("integration_job", status=status, duration_seconds=duration)

@@ -652,7 +652,7 @@ def _notify(db: Session, proof: PaymentProof, *, approved: bool) -> None:
                 continue
             for channel in (NotificationChannel.push, NotificationChannel.email):
                 try:
-                    notifications_svc.create(
+                    notifications_svc.create_customer_notification(
                         db,
                         NotificationCreate(
                             channel=channel,

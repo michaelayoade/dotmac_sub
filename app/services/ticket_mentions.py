@@ -9,14 +9,10 @@ from uuid import UUID
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models.notification import (
-    Notification,
-    NotificationChannel,
-    NotificationStatus,
-)
 from app.models.service_team import ServiceTeam, ServiceTeamMember
 from app.models.system_user import SystemUser
 from app.services.common import coerce_uuid
+from app.services.staff_notifications import queue_staff_email, queue_staff_push
 
 logger = logging.getLogger(__name__)
 
@@ -188,25 +184,17 @@ def notify_ticket_comment_mentions(
         .filter(SystemUser.id.in_([coerce_uuid(pid) for pid in recipient_ids]))
         .all()
     )
-    now = datetime.now(UTC)
     for user in users:
-        db.add(
-            Notification(
-                channel=NotificationChannel.push,
-                recipient=str(user.id),
-                subject=subject,
-                body=body,
-                status=NotificationStatus.delivered,
-                sent_at=now,
-            ),
+        queue_staff_push(
+            db,
+            recipient=str(user.id),
+            subject=subject,
+            body=body,
         )
         if user.email:
-            db.add(
-                Notification(
-                    channel=NotificationChannel.email,
-                    recipient=user.email,
-                    subject=subject,
-                    body=body,
-                    status=NotificationStatus.queued,
-                ),
+            queue_staff_email(
+                db,
+                recipient=user.email,
+                subject=subject,
+                body=body,
             )

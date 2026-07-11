@@ -475,7 +475,7 @@ class TestGisTask:
                         "app.tasks.gis.gis_sync_service.geo_sync.sync_addresses",
                         return_value=mock_result,
                     ) as mock_addresses:
-                        with patch("app.tasks.gis.observe_job"):
+                        with patch("app.tasks.gis.record_task_run"):
                             from app.tasks.gis import sync_gis_sources
 
                             sync_gis_sources()
@@ -504,7 +504,7 @@ class TestGisTask:
                     with patch(
                         "app.tasks.gis.gis_sync_service.geo_sync.sync_addresses",
                     ) as mock_addresses:
-                        with patch("app.tasks.gis.observe_job"):
+                        with patch("app.tasks.gis.record_task_run"):
                             from app.tasks.gis import sync_gis_sources
 
                             sync_gis_sources()
@@ -533,7 +533,7 @@ class TestGisTask:
                         "app.tasks.gis.gis_sync_service.geo_sync.sync_addresses",
                         return_value=mock_result,
                     ) as mock_addresses:
-                        with patch("app.tasks.gis.observe_job"):
+                        with patch("app.tasks.gis.record_task_run"):
                             from app.tasks.gis import sync_gis_sources
 
                             sync_gis_sources()
@@ -554,18 +554,17 @@ class TestGisTask:
                     "app.tasks.gis.gis_sync_service.geo_sync.sync_pop_sites",
                     side_effect=Exception("GIS error"),
                 ):
-                    with patch("app.tasks.gis.observe_job") as mock_observe:
+                    with patch("app.tasks.gis.record_task_run") as mock_record:
                         from app.tasks.gis import sync_gis_sources
 
                         with pytest.raises(Exception, match="GIS error"):
                             sync_gis_sources()
 
                         mock_session.close.assert_called_once()
-                        # Check that error status was reported
-                        mock_observe.assert_called_once()
-                        args = mock_observe.call_args[0]
+                        mock_record.assert_called_once()
+                        args, kwargs = mock_record.call_args
                         assert args[0] == "gis_sync"
-                        assert args[1] == "error"
+                        assert kwargs["status"] == "error"
 
 
 # =============================================================================
@@ -587,17 +586,17 @@ class TestIntegrationsTask:
             with patch(
                 "app.tasks.integrations.integration_service.integration_jobs.run"
             ) as mock_run:
-                with patch("app.tasks.integrations.observe_job") as mock_observe:
+                with patch("app.tasks.integrations.record_task_run") as mock_record:
                     from app.tasks.integrations import run_integration_job
 
                     run_integration_job(job_id)
 
                     mock_run.assert_called_once_with(mock_session, job_id)
                     mock_session.close.assert_called_once()
-                    mock_observe.assert_called_once()
-                    args = mock_observe.call_args[0]
+                    mock_record.assert_called_once()
+                    args, kwargs = mock_record.call_args
                     assert args[0] == "integration_job"
-                    assert args[1] == "success"
+                    assert kwargs["status"] == "success"
 
     def test_run_integration_job_exception_reports_error(self):
         """Test exception reports error status."""
@@ -611,16 +610,16 @@ class TestIntegrationsTask:
                 "app.tasks.integrations.integration_service.integration_jobs.run",
                 side_effect=Exception("Integration error"),
             ):
-                with patch("app.tasks.integrations.observe_job") as mock_observe:
+                with patch("app.tasks.integrations.record_task_run") as mock_record:
                     from app.tasks.integrations import run_integration_job
 
                     with pytest.raises(Exception, match="Integration error"):
                         run_integration_job(job_id)
 
                     mock_session.close.assert_called_once()
-                    mock_observe.assert_called_once()
-                    args = mock_observe.call_args[0]
-                    assert args[1] == "error"
+                    mock_record.assert_called_once()
+                    _args, kwargs = mock_record.call_args
+                    assert kwargs["status"] == "error"
 
 
 # =============================================================================

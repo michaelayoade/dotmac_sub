@@ -2,6 +2,7 @@
 
 import json
 import logging
+import time
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import or_
@@ -21,6 +22,7 @@ from app.services import sms as sms_service
 from app.services.db_session_adapter import db_session_adapter
 from app.services.email_template import render_email_bodies
 from app.services.integrations.connectors import whatsapp as whatsapp_service
+from app.services.observability import record_notification_queue_result
 from app.services.settings_spec import resolve_value
 from app.services.whatsapp_notification_templates import provider_template_from_template
 
@@ -409,8 +411,16 @@ def _deliver_notification_queue(db, batch_size: int = 50) -> int:
 @celery_app.task(name="app.tasks.notifications.deliver_notification_queue")
 def deliver_notification_queue() -> dict[str, int]:
     """Process queued notifications and retry failed ones."""
+    started = time.monotonic()
     with db_session_adapter.session() as session:
         result = _deliver_notification_queue_stats(session)
+        record_notification_queue_result(
+            session,
+            task_name="app.tasks.notifications.deliver_notification_queue",
+            result=result,
+            duration_seconds=time.monotonic() - started,
+        )
+        session.commit()
         logger.info(
             "Notification queue processed: delivered=%d, retried=%d, failed=%d, "
             "expired=%d, rate_limited=%d",

@@ -183,11 +183,9 @@ def _send_notice(
     queue runner owns delivery. ``{balance}`` / ``{threshold}`` placeholders in
     the body are filled; malformed templates fall back to the raw text.
     """
-    from app.models.notification import (
-        Notification,
-        NotificationChannel,
-        NotificationStatus,
-    )
+    from app.models.notification import NotificationChannel
+    from app.schemas.notification import NotificationCreate
+    from app.services.notification import notifications as notifications_svc
 
     email = _get_account_email(db, str(account.id))
     if not email:
@@ -199,16 +197,17 @@ def _send_notice(
         rendered = str(body).format(balance=balance, threshold=threshold)
     except (KeyError, IndexError, ValueError):
         rendered = str(body)
-    db.add(
-        Notification(
+    notifications_svc.queue_customer_notification(
+        db,
+        NotificationCreate(
+            subscriber_id=account.id,
             channel=NotificationChannel.email,
             event_type="prepaid_balance_enforcement",
             category="billing",
             recipient=email,
             subject=str(subject),
             body=rendered,
-            status=NotificationStatus.queued,
-        )
+        ),
     )
 
 

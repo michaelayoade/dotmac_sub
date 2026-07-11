@@ -41,16 +41,16 @@ from app.models.domain_settings import SettingDomain
 from app.models.scheduler import ScheduledTask
 from app.models.subscriber import Subscriber
 from app.services import settings_spec
+from app.services.access_resolution import (
+    postpaid_billing_filters,
+    prepaid_enforcement_filters,
+)
 from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
 from app.services.billing_statuses import (
     BILLABLE_SUBSCRIBER_STATUS_VALUES,
     BILLABLE_SUBSCRIBER_STATUSES,
 )
 from app.services.customer_financial_position import prepaid_available_balance
-from app.services.customer_service_state import (
-    postpaid_invoice_eligible_filters,
-    prepaid_enforcement_eligible_filters,
-)
 from app.services.job_heartbeat import get_last_result, get_last_success
 
 # Alert thresholds. Conservative defaults; tune via ops experience.
@@ -258,7 +258,7 @@ def invoice_scan_coverage(db: Session) -> tuple[int | None, int, float | None]:
         db.execute(
             select(func.count(Subscription.id))
             .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
-            .where(*postpaid_invoice_eligible_filters(Subscription, Subscriber))
+            .where(*postpaid_billing_filters(Subscription, Subscriber))
         ).scalar()
         or 0
     )
@@ -479,7 +479,7 @@ def negative_prepaid_balance_exposure(db: Session) -> tuple[int, Decimal, bool, 
         db.execute(
             select(Subscriber.id)
             .join(Subscription, Subscription.subscriber_id == Subscriber.id)
-            .where(*prepaid_enforcement_eligible_filters(Subscription, Subscriber))
+            .where(*prepaid_enforcement_filters(Subscription, Subscriber))
             .distinct()
         )
         .scalars()

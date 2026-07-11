@@ -21,7 +21,6 @@ from app.models.auth import ApiKey, MFAMethod, UserCredential
 from app.models.auth import Session as AuthSession
 from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.notification import (
-    Notification,
     NotificationChannel,
     NotificationStatus,
     NotificationTemplate,
@@ -36,6 +35,7 @@ from app.models.subscriber import (
     SubscriberStatus,
 )
 from app.schemas.audit import AuditEventCreate
+from app.schemas.notification import NotificationCreate
 from app.schemas.subscriber import (
     AddressCreate,
     AddressUpdate,
@@ -45,6 +45,7 @@ from app.schemas.subscriber import (
 from app.services import audit as audit_service
 from app.services import catalog as catalog_service
 from app.services import customer_portal
+from app.services import notification as notification_service
 from app.services import subscriber as subscriber_service
 from app.services import web_customer_lists as web_customer_lists_service
 from app.services.branding_config import get_brand
@@ -784,7 +785,8 @@ def queue_bulk_message_from_payload(
         raise HTTPException(
             status_code=400, detail="Bulk message confirmation required"
         )
-    notifications: list[Notification] = []
+    created_count = 0
+    notification_ids: list[str] = []
     skipped: list[dict[str, str]] = []
     suppressed: list[dict[str, str]] = []
     queued_count = 0
@@ -916,7 +918,7 @@ def queue_bulk_message_from_payload(
             else:
                 queued_count += 1
 
-        notification = Notification(
+        notification_payload = NotificationCreate(
             template_id=template.id,
             subscriber_id=subscriber.id,
             channel=channel,
@@ -929,28 +931,30 @@ def queue_bulk_message_from_payload(
             send_at=quiet_send_at if status == NotificationStatus.queued else None,
             last_error=last_error,
         )
+        created_count += 1
         if not preview_only:
-            db.add(notification)
-        notifications.append(notification)
+            notification = (
+                notification_service.notifications.queue_customer_notification(
+                    db, notification_payload
+                )
+            )
+            if notification.id:
+                notification_ids.append(str(notification.id))
 
     if not preview_only:
         db.commit()
-        for notification in notifications:
-            db.refresh(notification)
 
     return {
         "success": True,
         "preview": preview_only,
         "scope": scope,
         "matched_count": len(customers),
-        "created_count": len(notifications),
+        "created_count": created_count,
         "queued_count": queued_count,
         "suppressed_count": suppressed_count,
         "suppressed": suppressed,
         "skipped": skipped,
-        "notification_ids": [
-            str(notification.id) for notification in notifications if notification.id
-        ],
+        "notification_ids": notification_ids,
     }
 
 

@@ -15,11 +15,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.config import settings
 from app.models.domain_settings import SettingDomain
-from app.models.notification import (
-    Notification,
-    NotificationChannel,
-    NotificationStatus,
-)
+from app.models.notification import NotificationChannel, NotificationStatus
 from app.models.provisioning import ServiceOrder
 from app.models.subscriber import Subscriber, SubscriberContact
 from app.models.support import (
@@ -58,13 +54,11 @@ from app.services.customer_identity_resolution import (
     identity_resolution_requires_manual_review,
     resolve_customer_identity,
 )
-from app.services.customer_notification_policy import (
-    is_notification_enabled_for_subscriber,
-)
 from app.services.customer_support_links import ticket_customer_link_filter
 from app.services.dynamic_filters import FilterValidationError
 from app.services.events import emit_event
 from app.services.events.types import EventType
+from app.services.staff_notifications import queue_staff_email, queue_staff_push
 
 logger = logging.getLogger(__name__)
 
@@ -969,30 +963,21 @@ class Tickets:
         subject = f"Ticket assigned: {ticket.number or str(ticket.id)[:8]}"
         body = f"Ticket {ticket.number or ticket.id} assignment updated."
         for recipient in recipients:
-            notification_service.notifications.create(
+            queue_staff_push(
                 db,
-                NotificationCreate(
-                    channel=NotificationChannel.push,
-                    recipient=recipient,
-                    subject=subject,
-                    body=body,
-                    status=NotificationStatus.delivered,
-                    sent_at=_now(),
-                ),
+                recipient=recipient,
+                subject=subject,
+                body=body,
             )
 
         # Email queue for service-team assignments.
         if ticket.service_team_id:
             for recipient in recipients:
-                notification_service.notifications.create(
+                queue_staff_email(
                     db,
-                    NotificationCreate(
-                        channel=NotificationChannel.email,
-                        recipient=recipient,
-                        subject=subject,
-                        body=body,
-                        status=NotificationStatus.queued,
-                    ),
+                    recipient=recipient,
+                    subject=subject,
+                    body=body,
                 )
 
     @staticmethod
@@ -1015,7 +1000,7 @@ class Tickets:
         for subscriber in recipients:
             if actor_id and str(subscriber.id) == str(actor_id):
                 continue
-            notification_service.notifications.create(
+            notification_service.notifications.create_customer_notification(
                 db,
                 NotificationCreate(
                     channel=NotificationChannel.push,
@@ -1075,28 +1060,16 @@ class Tickets:
         for channel, recipient in sorted(recipients, key=lambda item: item[1]):
             if not recipient:
                 continue
-            status = NotificationStatus.queued
-            last_error = None
-            if not is_notification_enabled_for_subscriber(
+            notification_service.notifications.queue_customer_notification(
                 db,
-                subscriber_id=subscriber.id,
-                channel=channel,
-                category="support",
-                recipient=recipient,
-            ):
-                status = NotificationStatus.canceled
-                last_error = "Suppressed by customer notification preferences"
-            db.add(
-                Notification(
+                NotificationCreate(
                     subscriber_id=subscriber.id,
                     channel=channel,
                     recipient=recipient,
                     event_type="support_ticket_resolution_confirmation",
-                    category="support",
+                    category="service",
                     subject=subject if channel == NotificationChannel.email else None,
                     body=body,
-                    status=status,
-                    last_error=last_error,
                 ),
             )
 

@@ -305,16 +305,16 @@ _LEGACY_SKIP_STREAK_KEY = "infrastructure_poll:skip_streak"
 
 def record_poll_success(result: dict, *, now: datetime | None = None) -> None:
     """Stamp the heartbeat after a completed sweep (advisory, cache-only)."""
-    from app.services.task_heartbeat import record_success
+    from app.services.observability import record_task_run
 
-    record_success(HEARTBEAT_TASK, result, now=now)
+    record_task_run(HEARTBEAT_TASK, status="success", counters=result, now=now)
 
 
 def record_poll_skip() -> int:
     """Count consecutive already_running skips; returns the current streak."""
-    from app.services.task_heartbeat import record_skip
+    from app.services.observability import record_task_skip
 
-    return record_skip(HEARTBEAT_TASK)
+    return record_task_skip(HEARTBEAT_TASK, reason="already_running")
 
 
 def _legacy_heartbeat_age(now: datetime) -> float | None:

@@ -24,6 +24,7 @@ from app.services.customer_identity_resolution import resolve_customer_identity
 from app.services.settings_spec import resolve_value
 
 NotificationCategory = str
+_DISABLED_VALUES = {"false", "0", "no", "off", "disabled"}
 
 _BILLING_PREFIXES = ("invoice_", "payment_")
 _SERVICE_PREFIXES = (
@@ -178,6 +179,46 @@ def is_notification_enabled_for_subscriber(
         return False
 
     return True
+
+
+def status_allows_notification_for_subscriber(
+    db: Session,
+    *,
+    subscriber_id: UUID | None,
+    category: NotificationCategory | None,
+) -> bool:
+    """Apply the account-status notification gate for subscriber notifications."""
+    if subscriber_id is None:
+        return True
+    if resolve_value(db, SettingDomain.notification, "status_gate_enabled") is False:
+        return True
+
+    from app.services.notification_status_policy import status_allows_notification
+
+    subscriber = db.get(Subscriber, subscriber_id)
+    status = subscriber.status if subscriber else None
+    return status_allows_notification(status, category)
+
+
+def channel_disabled_in_config(db: Session, channel: NotificationChannel | str) -> bool:
+    """Return whether a notification channel is explicitly disabled.
+
+    Channels without an enable flag are fail-open and are never suppressed here.
+    """
+    normalized_channel = (
+        channel
+        if isinstance(channel, NotificationChannel)
+        else NotificationChannel(str(channel))
+    )
+    if normalized_channel != NotificationChannel.sms:
+        return False
+    try:
+        from app.services.sms import _get_setting
+
+        value = _get_setting(db, "sms_enabled", "SMS_ENABLED", "true")
+    except Exception:
+        return False
+    return str(value or "true").strip().lower() in _DISABLED_VALUES
 
 
 def _setting_bool(db: Session, key: str, default: bool = False) -> bool:

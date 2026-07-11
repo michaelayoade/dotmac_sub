@@ -39,8 +39,8 @@ def collect_customer_impact(db: Session) -> dict[str, int]:
     """Count active subscriptions by current infrastructure-fault exposure."""
     from app.models.catalog import Subscription
     from app.models.subscriber import Subscriber
+    from app.services.access_resolution import active_customer_service_filters
     from app.services.customer_service_state import (
-        active_customer_subscription_filters,
         active_outage_subscription_ids,
         subscribers_with_open_infrastructure_down_tickets,
     )
@@ -48,7 +48,7 @@ def collect_customer_impact(db: Session) -> dict[str, int]:
     active = db.execute(
         select(Subscription.id, Subscription.subscriber_id)
         .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
-        .where(*active_customer_subscription_filters(Subscription, Subscriber))
+        .where(*active_customer_service_filters(Subscription, Subscriber))
     ).all()
     active_ids = {row.id for row in active}
     subscriber_ids = {row.subscriber_id for row in active if row.subscriber_id}

@@ -24,13 +24,13 @@ from sqlalchemy.orm import Session
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.notification import (
     DeliveryStatus,
-    Notification,
     NotificationChannel,
     NotificationDelivery,
     NotificationStatus,
     NotificationTemplate,
 )
 from app.services.customer_identity_normalization import normalize_phone_identifier
+from app.services.notification import notifications as notification_records
 from app.services.notification_template_renderer import render_template_text
 
 logger = logging.getLogger(__name__)
@@ -269,24 +269,14 @@ def send_sms(
 
     # Create notification record if tracking
     notification = None
-    if notification_id:
-        notification = db.get(Notification, notification_id)
-    if notification is None and track:
-        notification = Notification(
+    if notification_id or track:
+        notification = notification_records.record_transport_attempt(
+            db,
+            notification_id=notification_id,
             channel=NotificationChannel.sms,
             recipient=normalized_phone,
             body=body,
-            status=NotificationStatus.sending,
         )
-        db.add(notification)
-        db.flush()
-    elif notification is not None:
-        notification.channel = NotificationChannel.sms
-        notification.recipient = normalized_phone
-        notification.body = body
-        notification.status = NotificationStatus.sending
-        notification.last_error = None
-        db.flush()
 
     # Send based on provider
     success = False
