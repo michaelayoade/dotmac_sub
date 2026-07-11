@@ -457,9 +457,9 @@ def test_single_alembic_head():
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
-    # Head advances as later PRs stack on 250 (perf PR added
-    # 251_native_read_path_indexes).
-    assert script.get_heads() == ["251_native_read_path_indexes"]
+    # Head advances as later PRs stack on; the billing incremental-sync PR
+    # added 252_billing_updated_since_indexes.
+    assert script.get_heads() == ["252_billing_updated_since_indexes"]
 
 
 def test_migration_249_adds_integration_settingdomain():
