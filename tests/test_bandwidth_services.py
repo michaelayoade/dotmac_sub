@@ -1,5 +1,6 @@
 """Tests for bandwidth service."""
 
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -318,15 +319,21 @@ def test_process_bandwidth_stream_resolves_network_device_from_nas(
         def close(self):
             return None
 
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import patch
 
-    # Mock db_session_adapter to return the test db_session
-    mock_adapter = MagicMock()
-    mock_adapter.create_session.return_value = db_session
+    class _SessionAdapter:
+        @contextmanager
+        def read_session(self):
+            yield db_session
+
+        @contextmanager
+        def session(self):
+            yield db_session
+            db_session.commit()
 
     with (
         patch("app.tasks.bandwidth._get_redis_client", return_value=_FakeRedis()),
-        patch("app.tasks.bandwidth.db_session_adapter", mock_adapter),
+        patch("app.tasks.bandwidth.db_session_adapter", _SessionAdapter()),
     ):
         result = bandwidth_tasks.process_bandwidth_stream()
 
@@ -342,3 +349,31 @@ def test_process_bandwidth_stream_resolves_network_device_from_nas(
         offset=0,
     )[0]
     assert sample.device_id == network_device_id
+
+
+def test_trim_redis_stream_closes_read_session_before_redis_write(monkeypatch):
+    session_open = False
+
+    class _SessionAdapter:
+        @contextmanager
+        def read_session(self):
+            nonlocal session_open
+            session_open = True
+            yield object()
+            session_open = False
+
+    class _FakeRedis:
+        def xtrim(self, *_args, **_kwargs):
+            assert session_open is False
+            return 3
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(bandwidth_tasks, "db_session_adapter", _SessionAdapter())
+    monkeypatch.setattr(bandwidth_tasks, "_get_redis_client", lambda: _FakeRedis())
+    monkeypatch.setattr(bandwidth_tasks, "_get_redis_stream_max_length", lambda db: 10)
+
+    result = bandwidth_tasks.trim_redis_stream()
+
+    assert result == {"trimmed": 3}

@@ -1,0 +1,206 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import
+    ambient_background, page_header, stats_card,
+    table_row, row_action, status_badge,
+    empty_state, animation_styles, icon_view
+%}
+
+{% block title %}Referrals - Admin{% endblock %}
+
+{% set ref_icon = '<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v13m0-13V6a2 2 0 112 2h-2zm0 0V5.5A2.5 2.5 0 109.5 8H12zm-7 4h14M5 12a2 2 0 110-4h14a2 2 0 110 4M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7"/></svg>' %}
+
+{% macro referral_status_badge(value) %}
+    {% if value == 'rewarded' %}{{ status_badge("Rewarded", variant="success") }}
+    {% elif value == 'qualified' %}{{ status_badge("Qualified", variant="info") }}
+    {% elif value == 'rejected' %}{{ status_badge("Rejected", variant="error") }}
+    {% elif value == 'expired' %}{{ status_badge("Expired", variant="inactive") }}
+    {% else %}{{ status_badge("Pending", variant="pending") }}{% endif %}
+{% endmacro %}
+
+{% macro reward_status_badge(value) %}
+    {% if value == 'issued' %}{{ status_badge("Issued", variant="success") }}
+    {% elif value == 'approved' %}{{ status_badge("Approved", variant="info") }}
+    {% elif value == 'pending' %}{{ status_badge("Pending", variant="pending") }}
+    {% elif value == 'void' %}{{ status_badge("Void", variant="error") }}
+    {% else %}{{ status_badge("None", variant="default") }}{% endif %}
+{% endmacro %}
+
+{% block content %}
+{{ ambient_background("amber", "orange") }}
+
+<div class="relative space-y-8">
+
+    {# Page Header #}
+    {% call(content) page_header(
+        "Referrals",
+        subtitle="Referral program — captured prospects, qualification and rewards",
+        icon=ref_icon,
+        color="amber",
+        breadcrumbs=[
+            {"label": "Customers", "href": "/admin/customers"},
+            {"label": "Referrals"}
+        ]
+    ) %}
+    <a href="{{ program_settings_url }}"
+       class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700">
+        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+        Program Settings
+    </a>
+    {% endcall %}
+
+    {% if not program.enabled %}
+    <div class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-200">
+        The referral program is currently <span class="font-semibold">disabled</span> — new captures are rejected.
+        Enable it via <a href="{{ program_settings_url }}" class="font-semibold underline">Program Settings</a>
+        (reward: {{ program.currency }} {{ program.amount }}).
+    </div>
+    {% endif %}
+
+    {# Stats #}
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4" style="animation-delay: 50ms;">
+        {{ stats_card(
+            "Total",
+            stats.total,
+            icon=ref_icon,
+            color="amber", color2="orange"
+        ) }}
+        {{ stats_card(
+            "Pending",
+            stats.pending,
+            icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+            color="blue", color2="indigo"
+        ) }}
+        {{ stats_card(
+            "Qualified (reward due)",
+            stats.qualified,
+            icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+            color="indigo", color2="violet"
+        ) }}
+        {{ stats_card(
+            "Rewarded",
+            stats.rewarded,
+            icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+            color="emerald", color2="green"
+        ) }}
+    </div>
+
+    {# Filters #}
+    <div class="animate-fade-in-up rounded-xl border border-slate-200/60 bg-white/80 px-5 py-3 shadow-sm backdrop-blur-sm dark:border-slate-700/60 dark:bg-slate-800/80" style="animation-delay: 100ms;">
+        <form method="get" action="/admin/referrals" class="flex flex-col gap-4 sm:flex-row sm:items-end">
+            <div class="sm:w-48">
+                <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">Status</label>
+                <select name="status" onchange="this.form.submit()"
+                        class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-amber-500 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">All Statuses</option>
+                    {% for s in statuses %}
+                    <option value="{{ s }}" {% if status_filter == s %}selected{% endif %}>{{ s | replace('_', ' ') | title }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="sm:w-48">
+                <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">Reward</label>
+                <select name="reward_status" onchange="this.form.submit()"
+                        class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-amber-500 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">All Reward States</option>
+                    {% for s in reward_statuses %}
+                    <option value="{{ s }}" {% if reward_status_filter == s %}selected{% endif %}>{{ s | replace('_', ' ') | title }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            {% if status_filter or reward_status_filter %}
+            <a href="/admin/referrals"
+               class="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                Clear filters
+            </a>
+            {% endif %}
+        </form>
+    </div>
+
+    {# Data table #}
+    <div class="animate-fade-in-up overflow-hidden rounded-2xl border border-slate-200/60 bg-white/80 shadow-sm backdrop-blur-sm dark:border-slate-700/60 dark:bg-slate-800/80" style="animation-delay: 150ms;">
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <thead>
+                    <tr class="border-b border-slate-100 bg-slate-50/80 dark:border-slate-700/50 dark:bg-slate-900/20">
+                        <th scope="col" class="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Referrer</th>
+                        <th scope="col" class="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Referred</th>
+                        <th scope="col" class="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Status</th>
+                        <th scope="col" class="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Reward</th>
+                        <th scope="col" class="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Reward Status</th>
+                        <th scope="col" class="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Source</th>
+                        <th scope="col" class="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Captured</th>
+                        <th scope="col" class="px-6 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+                    {% if referrals %}
+                    {% for ref in referrals %}
+                    {% set detail_href = "/admin/referrals/" ~ ref.id %}
+                    {% call table_row(color="amber") %}
+                        <td class="whitespace-nowrap px-6 py-4">
+                            {% if ref.referrer_href %}
+                            <a href="{{ ref.referrer_href }}" class="font-semibold text-slate-900 transition-colors hover:text-amber-700 hover:underline dark:text-white dark:hover:text-amber-300">{{ ref.referrer }}</a>
+                            {% else %}
+                            <span class="font-semibold text-slate-900 dark:text-white">{{ ref.referrer }}</span>
+                            {% endif %}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4">
+                            {% if ref.referred_href %}
+                            <a href="{{ ref.referred_href }}" class="text-sm text-slate-700 transition-colors hover:text-amber-700 hover:underline dark:text-slate-200 dark:hover:text-amber-300">{{ ref.referred }}</a>
+                            {% else %}
+                            <span class="text-sm text-slate-600 dark:text-slate-300">{{ ref.referred }}</span>
+                            {% endif %}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4">{{ referral_status_badge(ref.status) }}</td>
+                        <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{{ ref.reward }}</td>
+                        <td class="whitespace-nowrap px-6 py-4">{{ reward_status_badge(ref.reward_status) }}</td>
+                        <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ ref.source | replace('_', ' ') | title if ref.source != '—' else '—' }}</td>
+                        <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ ref.created_at.strftime('%Y-%m-%d %H:%M') if ref.created_at else '—' }}</td>
+                        <td class="whitespace-nowrap px-6 py-4 text-right">
+                            <div class="flex items-center justify-end gap-2 opacity-0 transition-opacity group-hover:opacity-100">
+                                {{ row_action(href=detail_href, icon=icon_view(), title="Review", color="amber") }}
+                            </div>
+                        </td>
+                    {% endcall %}
+                    {% endfor %}
+                    {% else %}
+                    {{ empty_state(
+                        title="No referrals found",
+                        message="Captured referrals will appear here as subscribers share their codes",
+                        icon=ref_icon,
+                        color="amber",
+                        colspan=8
+                    ) }}
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+
+        {# Pagination #}
+        {% if total_pages > 1 %}
+        {% set _extra %}{% if status_filter %}&status={{ status_filter }}{% endif %}{% if reward_status_filter %}&reward_status={{ reward_status_filter }}{% endif %}{% endset %}
+        <div class="border-t border-slate-200 bg-slate-50/50 px-6 py-3 dark:border-slate-700 dark:bg-slate-800/50">
+            <div class="flex items-center justify-between">
+                <p class="text-sm text-slate-500 dark:text-slate-400">
+                    Showing {{ ((page - 1) * per_page) + 1 }} to {{ [page * per_page, total] | min }} of {{ total }} results
+                </p>
+                <nav class="flex items-center gap-1">
+                    {% if page > 1 %}
+                    <a href="/admin/referrals?page={{ page - 1 }}&per_page={{ per_page }}{{ _extra }}"
+                       class="rounded-lg px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-700">Previous</a>
+                    {% endif %}
+                    {% if page < total_pages %}
+                    <a href="/admin/referrals?page={{ page + 1 }}&per_page={{ per_page }}{{ _extra }}"
+                       class="rounded-lg px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-700">Next</a>
+                    {% endif %}
+                </nav>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+</div>
+
+{{ animation_styles() }}
+{% endblock %}

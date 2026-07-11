@@ -1,0 +1,146 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import
+    ambient_background, detail_header, info_row, info_grid,
+    status_badge, card, animation_styles
+%}
+
+{% block title %}Referral - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("amber", "orange") }}
+
+<div class="relative space-y-8">
+
+    {% set st = row.status %}
+    {% if st == 'rewarded' %}{% set badge_variant = "success" %}
+    {% elif st == 'qualified' %}{% set badge_variant = "info" %}
+    {% elif st == 'rejected' %}{% set badge_variant = "error" %}
+    {% elif st == 'expired' %}{% set badge_variant = "inactive" %}
+    {% else %}{% set badge_variant = "pending" %}{% endif %}
+
+    {{ detail_header(
+        "Referral",
+        subtitle=row.referrer ~ " referred " ~ row.referred,
+        icon='<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v13m0-13V6a2 2 0 112 2h-2zm0 0V5.5A2.5 2.5 0 109.5 8H12zm-7 4h14M5 12a2 2 0 110-4h14a2 2 0 110 4M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7"/></svg>',
+        color="amber",
+        back_href="/admin/referrals",
+        back_label="Referrals",
+        status=status_badge(st | replace('_', ' ') | title, variant=badge_variant)
+    ) }}
+
+    {# Flash messages #}
+    {% if error %}
+    <div class="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 dark:border-rose-800 dark:bg-rose-900/30 dark:text-rose-200">{{ error }}</div>
+    {% endif %}
+    {% if message %}
+    <div class="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-200">{{ message }}</div>
+    {% endif %}
+
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+
+        {# Referral details #}
+        <div class="lg:col-span-2 space-y-6">
+        {% call card(title="Referral Details", icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2"/></svg>', color="amber") %}
+            {% call info_grid() %}
+                {% set referrer_html %}{% if row.referrer_href %}<a href="{{ row.referrer_href }}" class="font-medium text-amber-700 hover:underline dark:text-amber-400">{{ row.referrer }}</a>{% else %}{{ row.referrer }}{% endif %}{% endset %}
+                {% set referred_html %}{% if row.referred_href %}<a href="{{ row.referred_href }}" class="font-medium text-amber-700 hover:underline dark:text-amber-400">{{ row.referred }}</a>{% else %}{{ row.referred }}{% endif %}{% endset %}
+                {{ info_row("Referrer", referrer_html) }}
+                {{ info_row("Referred", referred_html) }}
+                {{ info_row("Referral code", code or "—") }}
+                {{ info_row("Source", (row.source | replace('_', ' ') | title) if row.source != '—' else "—") }}
+                {{ info_row("Captured", row.created_at.strftime('%Y-%m-%d %H:%M') if row.created_at else "—") }}
+                {{ info_row("Qualified", row.qualified_at.strftime('%Y-%m-%d %H:%M') if row.qualified_at else "—") }}
+                {{ info_row("Attributed lead", lead_id or "—") }}
+            {% endcall %}
+        {% endcall %}
+
+        {% call card(title="Captured Contact", icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>', color="slate") %}
+            {% call info_grid() %}
+                {{ info_row("Name", capture.get('name') or "—") }}
+                {{ info_row("Email", capture.get('email') or "—") }}
+                {{ info_row("Phone", capture.get('phone') or "—") }}
+            {% endcall %}
+        {% endcall %}
+
+        {% if referral.notes %}
+        {% call card(title="Notes", icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 8h10M7 12h6m-6 4h10M5 4h14a1 1 0 011 1v14l-4-2-4 2-4-2-4 2V5a1 1 0 011-1z"/></svg>', color="slate") %}
+            <p class="whitespace-pre-wrap text-sm text-slate-600 dark:text-slate-300">{{ referral.notes }}</p>
+        {% endcall %}
+        {% endif %}
+        </div>
+
+        {# Reward + actions #}
+        <div class="space-y-6">
+        {% call card(title="Reward", icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="emerald") %}
+            {% call info_grid() %}
+                {{ info_row("Amount", row.reward) }}
+                {{ info_row("Reward status", row.reward_status | replace('_', ' ') | title) }}
+                {{ info_row("Issued at", referral.reward_issued_at.strftime('%Y-%m-%d %H:%M') if referral.reward_issued_at else "—") }}
+                {% if reward_credit_id %}
+                {{ info_row("Wallet credit", reward_credit_id) }}
+                {% endif %}
+            {% endcall %}
+            <p class="mt-4 text-xs text-slate-500 dark:text-slate-400">
+                Program reward is currently {{ program.currency }} {{ program.amount }}
+                ({{ "enabled" if program.enabled else "disabled" }}) —
+                <a href="{{ program_settings_url }}" class="font-medium text-amber-700 hover:underline dark:text-amber-400">Program Settings</a>.
+            </p>
+        {% endcall %}
+
+        {% call card(title="Actions", icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>', color="amber") %}
+            <div class="space-y-4">
+                {% if row.can_qualify %}
+                <form method="post" action="/admin/referrals/{{ row.id }}/qualify"
+                      onsubmit="return confirm('Qualify this referral now? This overrides the automatic activation check and marks the reward as earned at the current program amount.');">
+                    {% include "components/forms/csrf_input.html" %}
+                    <button type="submit"
+                            class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 transition-colors">
+                        Qualify (override)
+                    </button>
+                    <p class="mt-1.5 text-xs text-slate-500 dark:text-slate-400">Use when the referred prospect signed up out-of-band{% if st == 'expired' %} or the qualification window lapsed unfairly{% endif %}.</p>
+                </form>
+                {% endif %}
+
+                {% if row.can_issue %}
+                <form method="post" action="/admin/referrals/{{ row.id }}/issue-reward"
+                      onsubmit="return confirm('Issue {{ row.reward }} to {{ row.referrer }} as a wallet credit? This pays the reward (idempotent — it can never double-credit).');">
+                    {% include "components/forms/csrf_input.html" %}
+                    <button type="submit"
+                            class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-emerald-700 transition-colors">
+                        Issue Reward
+                    </button>
+                </form>
+                {% endif %}
+
+                {% if row.can_reject %}
+                <form method="post" action="/admin/referrals/{{ row.id }}/reject"
+                      onsubmit="return confirm('Reject this referral? The reward is voided. This cannot be undone.');">
+                    {% include "components/forms/csrf_input.html" %}
+                    <div>
+                        <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">Rejection reason</label>
+                        <textarea name="reason" rows="2" maxlength="500" required
+                                  placeholder="e.g. self-referral, duplicate, fraud"
+                                  class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-rose-500 focus:ring-rose-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"></textarea>
+                    </div>
+                    <button type="submit"
+                            class="mt-2 w-full inline-flex items-center justify-center gap-2 rounded-lg bg-rose-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-rose-700 transition-colors">
+                        Reject Referral
+                    </button>
+                </form>
+                {% endif %}
+
+                {% if not (row.can_qualify or row.can_issue or row.can_reject) %}
+                <p class="text-sm text-slate-500 dark:text-slate-400">
+                    This referral is <span class="font-semibold">{{ st | replace('_', ' ') | title }}</span> — no further actions are available.
+                </p>
+                {% endif %}
+            </div>
+        {% endcall %}
+        </div>
+
+    </div>
+
+</div>
+
+{{ animation_styles() }}
+{% endblock %}
