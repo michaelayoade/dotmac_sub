@@ -372,6 +372,8 @@ class FieldMaterialRequestRead(BaseModel):
     id: UUID
     crm_work_order_id: str
     crm_material_request_id: str | None = None
+    erp_material_request_id: str | None = None
+    erp_material_status: str | None = None
     requested_by_person_id: UUID
     requested_by_system_user_id: UUID | None = None
     status: str

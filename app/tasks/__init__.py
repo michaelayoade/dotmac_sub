@@ -44,6 +44,7 @@ from app.tasks.events import (
     retry_failed_events,
 )
 from app.tasks.exports import run_export_job, run_scheduled_export
+from app.tasks.field_erp import sync_field_erp_outbox
 from app.tasks.gis import run_batch_geocode_job, sync_gis_sources
 from app.tasks.imports import run_import_job
 from app.tasks.infrastructure_availability import (
@@ -229,6 +230,7 @@ __all__ = [
     "auto_resolve_stale_inbox_conversations",
     "run_scheduled_export",
     "run_export_job",
+    "sync_field_erp_outbox",
     "retry_failed_events",
     "mark_stale_processing_events",
     "cleanup_old_events",

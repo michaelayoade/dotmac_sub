@@ -30,6 +30,8 @@ def serialize_material_request(request: FieldMaterialRequest) -> dict:
         "id": request.id,
         "crm_work_order_id": request.crm_work_order_id,
         "crm_material_request_id": request.crm_material_request_id,
+        "erp_material_request_id": request.erp_material_request_id,
+        "erp_material_status": request.erp_material_status,
         "requested_by_person_id": request.requested_by_person_id,
         "requested_by_system_user_id": request.requested_by_system_user_id,
         "status": request.status,

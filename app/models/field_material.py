@@ -156,6 +156,8 @@ class FieldMaterialRequest(Base):
     )
     crm_work_order_id: Mapped[str] = mapped_column(String(64), nullable=False)
     crm_material_request_id: Mapped[str | None] = mapped_column(String(64), unique=True)
+    erp_material_request_id: Mapped[str | None] = mapped_column(String(120))
+    erp_material_status: Mapped[str | None] = mapped_column(String(40))
     requested_by_technician_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("technician_profiles.id"), nullable=False
     )

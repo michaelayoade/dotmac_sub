@@ -20,8 +20,25 @@ from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.models.work_order_mirror import WorkOrderMirror
 from app.services.auth_dependencies import require_user_auth
+from app.services.dotmac_erp.field_outbox import DotMacERPFieldOutboxSync
 from app.services.field.jobs import field_jobs
 from app.services.field.material_requests import field_material_requests
+
+
+class _FakeMaterialErpClient:
+    def __init__(self) -> None:
+        self.payloads: list[dict] = []
+
+    def push_material_request(self, payload, *, idempotency_key=None):
+        self.payloads.append({"payload": payload, "idempotency_key": idempotency_key})
+        return {
+            "request_id": "ERP-MR-1001",
+            "request_number": "MR-1001",
+            "material_status": "issued",
+        }
+
+    def close(self) -> None:
+        pass
 
 
 def _user(db_session, name: str = "MaterialReq") -> SystemUser:
@@ -248,6 +265,16 @@ def test_manager_material_lifecycle_allocates_and_enqueues_erp(db_session):
     assert {event.action for event in events} == {"approve", "fulfill", "issue"}
     assert all(event.status == "pending" for event in events)
     assert events[0].payload["items"][0]["item_code"] == "DROP-250"
+
+    fake_client = _FakeMaterialErpClient()
+    result = DotMacERPFieldOutboxSync(fake_client, db_session).process_pending()
+    assert result.synced == 3
+    assert len(fake_client.payloads) == 3
+
+    material_request = db_session.get(FieldMaterialRequest, created["id"])
+    assert material_request.erp_material_request_id == "ERP-MR-1001"
+    assert material_request.erp_material_status == "issued"
+    assert all(event.status == "synced" for event in events)
 
 
 def test_material_request_api(db_session):

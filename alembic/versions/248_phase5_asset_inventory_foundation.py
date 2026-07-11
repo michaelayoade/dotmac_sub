@@ -23,6 +23,15 @@ def _has_table(name: str) -> bool:
     return name in inspect(op.get_bind()).get_table_names()
 
 
+def _has_column(table_name: str, column_name: str) -> bool:
+    inspector = inspect(op.get_bind())
+    if table_name not in inspector.get_table_names():
+        return False
+    return column_name in {
+        column["name"] for column in inspector.get_columns(table_name)
+    }
+
+
 def _uuid_type() -> sa.types.TypeEngine:
     if op.get_bind().dialect.name == "postgresql":
         return postgresql.UUID(as_uuid=True)
@@ -193,8 +202,25 @@ def upgrade() -> None:
             ["entity_type", "entity_id", "action"],
         )
 
+    if _has_table("field_material_requests"):
+        if not _has_column("field_material_requests", "erp_material_request_id"):
+            op.add_column(
+                "field_material_requests",
+                sa.Column("erp_material_request_id", sa.String(length=120)),
+            )
+        if not _has_column("field_material_requests", "erp_material_status"):
+            op.add_column(
+                "field_material_requests",
+                sa.Column("erp_material_status", sa.String(length=40)),
+            )
+
 
 def downgrade() -> None:
+    if _has_table("field_material_requests"):
+        if _has_column("field_material_requests", "erp_material_status"):
+            op.drop_column("field_material_requests", "erp_material_status")
+        if _has_column("field_material_requests", "erp_material_request_id"):
+            op.drop_column("field_material_requests", "erp_material_request_id")
     if _has_table("field_erp_sync_events"):
         op.drop_index(
             "ix_field_erp_sync_events_entity",

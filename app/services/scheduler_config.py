@@ -787,6 +787,27 @@ def build_beat_schedule() -> dict:
             enabled=cross_app_drift_enabled,
             interval_seconds=86400,
         )
+        dotmac_erp_sync_enabled = _effective_bool(
+            session,
+            SettingDomain.integration,
+            "dotmac_erp_sync_enabled",
+            "DOTMAC_ERP_SYNC_ENABLED",
+            False,
+        )
+        dotmac_erp_outbox_interval_seconds = _effective_int(
+            session,
+            SettingDomain.integration,
+            "dotmac_erp_outbox_interval_seconds",
+            "DOTMAC_ERP_OUTBOX_INTERVAL_SECONDS",
+            60,
+        )
+        _sync_scheduled_task(
+            session,
+            name="dotmac_erp_field_outbox_sync",
+            task_name="app.tasks.field_erp.sync_field_erp_outbox",
+            enabled=dotmac_erp_sync_enabled,
+            interval_seconds=max(dotmac_erp_outbox_interval_seconds, 30),
+        )
         # Roll imported RADIUS accounting into quota buckets (feeds FUP/overage).
         # Gated by the same usage flag. This follows the RADIUS accounting
         # cadence instead of the daily usage-rating cadence so FUP decisions

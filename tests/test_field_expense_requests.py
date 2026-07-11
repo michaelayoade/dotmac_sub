@@ -19,6 +19,7 @@ from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.models.work_order_mirror import WorkOrderMirror
 from app.services.auth_dependencies import require_user_auth
+from app.services.dotmac_erp.field_outbox import DotMacERPFieldOutboxSync
 from app.services.field import attachments as attachments_module
 from app.services.field.attachments import field_attachments
 from app.services.field.expense_requests import field_expense_requests
@@ -62,6 +63,22 @@ class _FakeUploads:
         file.is_deleted = True
         db.commit()
         return file
+
+
+class _FakeExpenseErpClient:
+    def __init__(self) -> None:
+        self.payloads: list[dict] = []
+
+    def push_expense_claim(self, payload, *, idempotency_key=None):
+        self.payloads.append({"payload": payload, "idempotency_key": idempotency_key})
+        return {
+            "claim_id": "ERP-EXP-1001",
+            "claim_number": "EXP-1001",
+            "claim_status": "approved",
+        }
+
+    def close(self) -> None:
+        pass
 
 
 @pytest.fixture()
@@ -291,6 +308,17 @@ def test_approve_expense_enqueues_erp_claim(db_session):
     assert event.status == "pending"
     assert event.payload["purpose"] == "Transport"
     assert event.payload["items"][0]["claimed_amount"] == "3200.00"
+
+    fake_client = _FakeExpenseErpClient()
+    result = DotMacERPFieldOutboxSync(fake_client, db_session).process_pending()
+    assert result.synced == 1
+    assert len(fake_client.payloads) == 1
+
+    expense_request = db_session.get(FieldExpenseRequest, created["id"])
+    assert expense_request.erp_expense_claim_id == "ERP-EXP-1001"
+    assert expense_request.erp_claim_number == "EXP-1001"
+    assert expense_request.erp_claim_status == "approved"
+    assert event.status == "synced"
 
 
 def test_expense_request_api(db_session):
