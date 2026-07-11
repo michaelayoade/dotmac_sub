@@ -7,13 +7,18 @@ from decimal import Decimal
 
 from app.models.billing import Invoice, InvoiceLine, InvoiceStatus
 from app.models.catalog import (
+    AccessCredential,
     AccessType,
+    AddOn,
+    AddOnPrice,
     BillingCycle,
     BillingMode,
     CatalogOffer,
     PriceBasis,
+    PriceType,
     ServiceType,
     Subscription,
+    SubscriptionAddOn,
     SubscriptionStatus,
 )
 from app.models.collections import DunningCase, DunningCaseStatus
@@ -21,6 +26,10 @@ from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services.billing_cleanup_audit import (
     build_billing_cleanup_report,
+    find_active_subscription_missing_radius,
+    find_billing_addon_without_billable_parent,
+    find_billing_disabled_service_lines,
+    find_billing_duplicate_subscription_period_lines,
     write_billing_cleanup_report,
 )
 
@@ -121,6 +130,118 @@ def _line(db, invoice, subscription, *, amount="100.00"):
     db.add(line)
     db.flush()
     return line
+
+
+def test_finds_disabled_service_lines(db_session):
+    account = _account(db_session, mode=BillingMode.postpaid)
+    subscription = _subscription(
+        db_session,
+        account,
+        mode=BillingMode.postpaid,
+        status=SubscriptionStatus.canceled,
+    )
+    subscription.canceled_at = datetime(2026, 6, 1, tzinfo=UTC)
+    invoice = _invoice(
+        db_session,
+        account,
+        status=InvoiceStatus.issued,
+        start=datetime(2026, 7, 1, tzinfo=UTC),
+        end=datetime(2026, 8, 1, tzinfo=UTC),
+    )
+    line = _line(db_session, invoice, subscription)
+    db_session.commit()
+
+    rows = find_billing_disabled_service_lines(db_session)
+
+    assert any(row["invoice_line_id"] == str(line.id) for row in rows)
+    row = next(row for row in rows if row["invoice_line_id"] == str(line.id))
+    assert row["finding_type"] == "disabled_service"
+    assert row["proposed_disposition"] == "credit_or_void_required"
+
+
+def test_finds_duplicate_subscription_period_lines(db_session):
+    account = _account(db_session, mode=BillingMode.postpaid)
+    subscription = _subscription(db_session, account, mode=BillingMode.postpaid)
+    start = datetime(2026, 7, 1, tzinfo=UTC)
+    end = datetime(2026, 8, 1, tzinfo=UTC)
+    invoice = _invoice(
+        db_session,
+        account,
+        status=InvoiceStatus.issued,
+        amount="200.00",
+        start=start,
+        end=end,
+    )
+    first = _line(db_session, invoice, subscription)
+    second = _line(db_session, invoice, subscription)
+    db_session.commit()
+
+    rows = find_billing_duplicate_subscription_period_lines(db_session)
+    line_ids = {row["invoice_line_id"] for row in rows}
+
+    assert str(first.id) in line_ids
+    assert str(second.id) in line_ids
+    assert all(row["duplicate_group_key"] for row in rows)
+
+
+def test_finds_orphan_recurring_addon(db_session):
+    account = _account(db_session, mode=BillingMode.postpaid)
+    subscription = _subscription(
+        db_session,
+        account,
+        mode=BillingMode.postpaid,
+        status=SubscriptionStatus.canceled,
+    )
+    subscription.canceled_at = datetime(2026, 7, 1, tzinfo=UTC)
+    addon = AddOn(name="Static IP", is_active=True)
+    db_session.add(addon)
+    db_session.flush()
+    db_session.add(
+        AddOnPrice(
+            add_on_id=addon.id,
+            price_type=PriceType.recurring,
+            amount=Decimal("1000.00"),
+            currency="NGN",
+            is_active=True,
+        )
+    )
+    sub_addon = SubscriptionAddOn(
+        subscription_id=subscription.id,
+        add_on_id=addon.id,
+        start_at=datetime(2026, 6, 1, tzinfo=UTC),
+    )
+    db_session.add(sub_addon)
+    db_session.commit()
+
+    rows = find_billing_addon_without_billable_parent(db_session)
+
+    assert any(row["subscription_add_on_id"] == str(sub_addon.id) for row in rows)
+
+
+def test_finds_active_subscription_missing_radius(db_session, monkeypatch):
+    account = _account(db_session, mode=BillingMode.prepaid)
+    subscription = _subscription(db_session, account, mode=BillingMode.prepaid)
+    subscription.login = "missing-radius"
+    credential = AccessCredential(
+        subscriber_id=account.id,
+        username="missing-radius",
+        secret_hash="plain:test123",
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "app.services.billing_cleanup_audit._external_ip_state",
+        lambda db, logins: ({}, set(), []),
+    )
+
+    rows = find_active_subscription_missing_radius(db_session)
+
+    assert any(row["subscription_id"] == str(subscription.id) for row in rows)
+    row = next(row for row in rows if row["subscription_id"] == str(subscription.id))
+    assert row["credential_usable"] == "true"
+    assert row["recommended_action"] == "sync_radius_connectivity"
 
 
 def test_billing_cleanup_report_includes_inconsistent_billing_buckets(db_session):
@@ -230,6 +351,10 @@ def test_write_billing_cleanup_report_writes_summary_and_bucket_csvs(
 
     assert "summary" in files
     assert (tmp_path / "prepaid_collectible_ar.csv").exists()
+    assert (tmp_path / "billing_disabled_service_lines.csv").exists()
+    assert (tmp_path / "billing_duplicate_subscription_period_lines.csv").exists()
+    assert (tmp_path / "billing_addon_without_billable_parent.csv").exists()
+    assert (tmp_path / "active_subscription_missing_radius.csv").exists()
     assert (tmp_path / "stale_dunning_cases.csv").exists()
     with (tmp_path / "summary.json").open() as handle:
         summary = json.load(handle)

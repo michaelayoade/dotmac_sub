@@ -31,6 +31,13 @@ def _input_fingerprints(args: argparse.Namespace) -> dict[str, str | None]:
         "stale_locks_csv_sha256": _csv_sha256(args.stale_locks_csv),
         "anchors_csv_sha256": _csv_sha256(args.anchors_csv),
         "mode_drift_csv_sha256": _csv_sha256(args.mode_drift_csv),
+        "invoice_anchors_csv_sha256": _csv_sha256(args.invoice_anchors_csv),
+        "prepaid_ar_csv_sha256": _csv_sha256(args.prepaid_ar_csv),
+        "prepaid_overlaps_csv_sha256": _csv_sha256(args.prepaid_overlaps_csv),
+        "disabled_lines_csv_sha256": _csv_sha256(args.disabled_lines_csv),
+        "duplicate_lines_csv_sha256": _csv_sha256(args.duplicate_lines_csv),
+        "orphan_addons_csv_sha256": _csv_sha256(args.orphan_addons_csv),
+        "missing_radius_csv_sha256": _csv_sha256(args.missing_radius_csv),
     }
 
 
@@ -47,18 +54,58 @@ def main() -> int:
     parser.add_argument("--stale-locks-csv")
     parser.add_argument("--anchors-csv")
     parser.add_argument("--mode-drift-csv")
+    parser.add_argument("--invoice-anchors-csv")
+    parser.add_argument("--prepaid-ar-csv")
+    parser.add_argument("--prepaid-overlaps-csv")
+    parser.add_argument("--disabled-lines-csv")
+    parser.add_argument("--duplicate-lines-csv")
+    parser.add_argument("--orphan-addons-csv")
+    parser.add_argument("--missing-radius-csv")
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--expect", help="Prior dry-run manifest required for --apply.")
     parser.add_argument("--out", help="Write result manifest here.")
     args = parser.parse_args()
 
-    if not any([args.stale_locks_csv, args.anchors_csv, args.mode_drift_csv]):
+    provided_csvs = [
+        args.stale_locks_csv,
+        args.anchors_csv,
+        args.mode_drift_csv,
+        args.invoice_anchors_csv,
+        args.prepaid_ar_csv,
+        args.prepaid_overlaps_csv,
+        args.disabled_lines_csv,
+        args.duplicate_lines_csv,
+        args.orphan_addons_csv,
+        args.missing_radius_csv,
+    ]
+    if not any(provided_csvs):
         print("REFUSED: provide at least one cleanup CSV.")
         return 2
 
     stale_rows = load_cleanup_csv(args.stale_locks_csv) if args.stale_locks_csv else []
     anchor_rows = load_cleanup_csv(args.anchors_csv) if args.anchors_csv else []
     mode_rows = load_cleanup_csv(args.mode_drift_csv) if args.mode_drift_csv else []
+    invoice_anchor_rows = (
+        load_cleanup_csv(args.invoice_anchors_csv) if args.invoice_anchors_csv else []
+    )
+    prepaid_ar_rows = (
+        load_cleanup_csv(args.prepaid_ar_csv) if args.prepaid_ar_csv else []
+    )
+    prepaid_overlap_rows = (
+        load_cleanup_csv(args.prepaid_overlaps_csv) if args.prepaid_overlaps_csv else []
+    )
+    disabled_line_rows = (
+        load_cleanup_csv(args.disabled_lines_csv) if args.disabled_lines_csv else []
+    )
+    duplicate_line_rows = (
+        load_cleanup_csv(args.duplicate_lines_csv) if args.duplicate_lines_csv else []
+    )
+    orphan_addon_rows = (
+        load_cleanup_csv(args.orphan_addons_csv) if args.orphan_addons_csv else []
+    )
+    missing_radius_rows = (
+        load_cleanup_csv(args.missing_radius_csv) if args.missing_radius_csv else []
+    )
     fingerprints = _input_fingerprints(args)
 
     db = SessionLocal()
@@ -68,6 +115,13 @@ def main() -> int:
             stale_lock_rows=stale_rows,
             anchor_rows=anchor_rows,
             mode_rows=mode_rows,
+            invoice_anchor_rows=invoice_anchor_rows,
+            prepaid_ar_rows=prepaid_ar_rows,
+            prepaid_overlap_rows=prepaid_overlap_rows,
+            disabled_line_rows=disabled_line_rows,
+            duplicate_line_rows=duplicate_line_rows,
+            orphan_addon_rows=orphan_addon_rows,
+            missing_radius_rows=missing_radius_rows,
         )
         print("=== billing cleanup remediation plan ===")
         print(
