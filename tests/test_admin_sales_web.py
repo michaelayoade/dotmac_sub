@@ -1,0 +1,604 @@
+"""Admin sales web surface tests (Phase 3 §2.6, PR 11): route registration +
+RBAC guards, ``web_sales`` context builders, and Jinja compilation of the new
+``templates/admin/sales/*`` pages."""
+
+import uuid
+from decimal import Decimal
+from pathlib import Path
+
+import pytest
+from fastapi.routing import APIRoute
+from fastapi.templating import Jinja2Templates
+
+from app.models.sales import SalesOrder
+from app.models.subscriber import Subscriber
+from app.schemas.sales import (
+    LeadCreate,
+    PipelineCreate,
+    PipelineStageCreate,
+    QuoteCreate,
+    QuoteLineItemCreate,
+)
+from app.services import sales as sales_service
+from app.services import web_sales
+from app.web.admin import sales as admin_sales
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _get_route(router, path: str, method: str) -> APIRoute:
+    for route in router.routes:
+        if (
+            isinstance(route, APIRoute)
+            and route.path == path
+            and method in route.methods
+        ):
+            return route
+    raise AssertionError(f"Route not found: {method} {path}")
+
+
+def _contains_value(value, expected: str) -> bool:
+    if isinstance(value, str):
+        return value == expected
+    if isinstance(value, (tuple, list, set)):
+        return any(_contains_value(item, expected) for item in value)
+    if isinstance(value, dict):
+        return any(_contains_value(item, expected) for item in value.values())
+    return False
+
+
+def _route_has_permission(router, path: str, method: str, expected: str) -> bool:
+    route = _get_route(router, path, method)
+    for dependency in route.dependant.dependencies:
+        call = dependency.call
+        closure = getattr(call, "__closure__", None) or ()
+        for cell in closure:
+            if _contains_value(cell.cell_contents, expected):
+                return True
+    return False
+
+
+def _make_subscriber(db, **overrides) -> Subscriber:
+    data = {
+        "first_name": "Ada",
+        "last_name": "Obi",
+        "email": f"ada-{uuid.uuid4().hex}@example.com",
+    }
+    data.update(overrides)
+    subscriber = Subscriber(**data)
+    db.add(subscriber)
+    db.commit()
+    db.refresh(subscriber)
+    return subscriber
+
+
+def _make_pipeline(db, name="Sales"):
+    return sales_service.pipelines.create(db, PipelineCreate(name=name))
+
+
+def _make_stage(db, pipeline, name="New", order_index=0, default_probability=25):
+    return sales_service.pipeline_stages.create(
+        db,
+        PipelineStageCreate(
+            pipeline_id=pipeline.id,
+            name=name,
+            order_index=order_index,
+            default_probability=default_probability,
+        ),
+    )
+
+
+def _make_lead(db, subscriber, **overrides):
+    payload = {"subscriber_id": subscriber.id, "title": "Fiber install"}
+    payload.update(overrides)
+    return sales_service.leads.create(db, LeadCreate(**payload))
+
+
+# ---------------------------------------------------------------------------
+# Route registration + permission guards
+# ---------------------------------------------------------------------------
+
+
+def test_lead_routes_require_lead_permissions():
+    router = admin_sales.router
+    assert _route_has_permission(router, "/sales/leads", "GET", "crm:lead:read")
+    assert _route_has_permission(router, "/sales/leads/board", "GET", "crm:lead:read")
+    assert _route_has_permission(
+        router, "/sales/leads/{lead_id}", "GET", "crm:lead:read"
+    )
+
+
+def test_pipeline_settings_routes_ride_lead_write():
+    router = admin_sales.router
+    for path, method in [
+        ("/sales/pipelines", "GET"),
+        ("/sales/pipelines/new", "GET"),
+        ("/sales/pipelines", "POST"),
+        ("/sales/pipelines/{pipeline_id}/edit", "GET"),
+        ("/sales/pipelines/{pipeline_id}", "POST"),
+        ("/sales/pipelines/{pipeline_id}/delete", "POST"),
+        ("/sales/pipelines/{pipeline_id}/stages", "POST"),
+        ("/sales/pipelines/stages/{stage_id}", "POST"),
+        ("/sales/pipelines/stages/{stage_id}/delete", "POST"),
+        ("/sales/pipelines/{pipeline_id}/bulk-assign-leads", "POST"),
+    ]:
+        assert _route_has_permission(router, path, method, "crm:lead:write"), (
+            f"{method} {path} must require crm:lead:write"
+        )
+
+
+def test_quote_routes_require_quote_read():
+    router = admin_sales.router
+    assert _route_has_permission(router, "/sales/quotes", "GET", "crm:quote:read")
+    assert _route_has_permission(
+        router, "/sales/quotes/{quote_id}", "GET", "crm:quote:read"
+    )
+
+
+def test_sales_order_routes_require_sales_order_read():
+    router = admin_sales.router
+    assert _route_has_permission(
+        router, "/sales/sales-orders", "GET", "crm:sales_order:read"
+    )
+    assert _route_has_permission(
+        router, "/sales/sales-orders/{order_id}", "GET", "crm:sales_order:read"
+    )
+
+
+def test_sales_router_is_registered_under_admin():
+    from app.web.admin import router as admin_router
+
+    paths = {route.path for route in admin_router.routes if isinstance(route, APIRoute)}
+    assert "/admin/sales/leads" in paths
+    assert "/admin/sales/leads/board" in paths
+    assert "/admin/sales/pipelines" in paths
+    assert "/admin/sales/quotes" in paths
+    assert "/admin/sales/sales-orders" in paths
+
+
+# ---------------------------------------------------------------------------
+# Context builders — leads
+# ---------------------------------------------------------------------------
+
+
+def test_leads_list_context_stats_and_filters(db_session):
+    pipeline = _make_pipeline(db_session, name=f"P-{uuid.uuid4().hex[:6]}")
+    stage = _make_stage(db_session, pipeline)
+    open_sub = _make_subscriber(db_session)
+    won_sub = _make_subscriber(db_session)
+    open_lead = _make_lead(
+        db_session,
+        open_sub,
+        pipeline_id=pipeline.id,
+        stage_id=stage.id,
+        estimated_value=Decimal("1000.00"),
+        currency="NGN",
+    )
+    won_lead = _make_lead(
+        db_session, won_sub, status="won", estimated_value=Decimal("500.00")
+    )
+
+    context = web_sales.build_leads_list_context(
+        db_session,
+        status=None,
+        pipeline_id=None,
+        stage_id=None,
+        lead_source=None,
+        search=None,
+        page=1,
+        per_page=25,
+    )
+    assert context["total"] >= 2
+    ids = {str(lead.id) for lead in context["leads"]}
+    assert {str(open_lead.id), str(won_lead.id)} <= ids
+    # Won leads never inflate the open pipeline value (CRM BUG-030 carried).
+    assert context["lead_stats"]["total_value"] == Decimal("1000.00")
+    assert context["lead_stats"]["won"] >= 1
+    assert str(pipeline.id) in context["pipeline_map"]
+    assert str(open_lead.subscriber_id) in context["subscriber_map"]
+
+    filtered = web_sales.build_leads_list_context(
+        db_session,
+        status="won",
+        pipeline_id=None,
+        stage_id=None,
+        lead_source=None,
+        search=None,
+        page=1,
+        per_page=25,
+    )
+    filtered_ids = {str(lead.id) for lead in filtered["leads"]}
+    assert str(won_lead.id) in filtered_ids
+    assert str(open_lead.id) not in filtered_ids
+    assert filtered["total"] == len(filtered_ids) or filtered["total"] >= 1
+
+    # A bogus status is dropped rather than 400ing the page.
+    bogus = web_sales.build_leads_list_context(
+        db_session,
+        status="not-a-status",
+        pipeline_id=None,
+        stage_id=None,
+        lead_source=None,
+        search=None,
+        page=1,
+        per_page=25,
+    )
+    assert bogus["status"] == ""
+
+
+def test_leads_list_context_search_scopes_total(db_session):
+    needle = uuid.uuid4().hex[:10]
+    subscriber = _make_subscriber(db_session, first_name=f"Zed{needle}")
+    lead = _make_lead(db_session, subscriber, title=f"Estate build {needle}")
+    _make_lead(db_session, _make_subscriber(db_session))
+
+    context = web_sales.build_leads_list_context(
+        db_session,
+        status=None,
+        pipeline_id=None,
+        stage_id=None,
+        lead_source=None,
+        search=needle,
+        page=1,
+        per_page=25,
+    )
+    assert context["total"] == 1
+    assert [str(item.id) for item in context["leads"]] == [str(lead.id)]
+
+
+def test_lead_detail_context_includes_quotes(db_session):
+    subscriber = _make_subscriber(db_session)
+    lead = _make_lead(db_session, subscriber)
+    quote = sales_service.quotes.create(
+        db_session, QuoteCreate(subscriber_id=subscriber.id, lead_id=lead.id)
+    )
+
+    context = web_sales.build_lead_detail_context(db_session, lead_id=str(lead.id))
+    assert str(context["lead"].id) == str(lead.id)
+    assert context["subscriber"].id == subscriber.id
+    assert context["subscriber_label"]
+    assert [str(item.id) for item in context["quotes"]] == [str(quote.id)]
+    assert context["status_val"] == "new"
+
+
+def test_leads_board_context_defaults_to_first_pipeline(db_session):
+    pipeline = _make_pipeline(db_session, name=f"AA-{uuid.uuid4().hex[:6]}")
+    context = web_sales.build_leads_board_context(db_session, pipeline_id=None)
+    assert context["selected_pipeline_id"]
+    explicit = web_sales.build_leads_board_context(
+        db_session, pipeline_id=str(pipeline.id)
+    )
+    assert explicit["selected_pipeline_id"] == str(pipeline.id)
+
+
+def test_kanban_cards_link_to_sub_admin_leads(db_session):
+    pipeline = _make_pipeline(db_session, name=f"K-{uuid.uuid4().hex[:6]}")
+    stage = _make_stage(db_session, pipeline)
+    subscriber = _make_subscriber(db_session)
+    lead = _make_lead(
+        db_session, subscriber, pipeline_id=pipeline.id, stage_id=stage.id
+    )
+
+    board = sales_service.leads.kanban_view(db_session, str(pipeline.id))
+    record = next(item for item in board["records"] if item["id"] == str(lead.id))
+    assert record["url"] == f"/admin/sales/leads/{lead.id}"
+
+
+# ---------------------------------------------------------------------------
+# Context builders — pipeline settings
+# ---------------------------------------------------------------------------
+
+
+def test_create_pipeline_from_form_seeds_default_stages(db_session):
+    pipeline_id = web_sales.create_pipeline_from_form(
+        db_session,
+        name=f"Form {uuid.uuid4().hex[:6]}",
+        is_active="true",
+        create_default_stages="on",
+    )
+    context = web_sales.build_pipeline_settings_context(
+        db_session, bulk_result="", bulk_count=""
+    )
+    stages = context["stage_map"].get(pipeline_id, [])
+    assert len(stages) == len(web_sales.DEFAULT_PIPELINE_STAGES)
+    assert stages[0].name == "Lead Identified"
+    assert any(str(p.id) == pipeline_id for p in context["pipelines"])
+
+
+def test_create_pipeline_from_form_requires_name(db_session):
+    with pytest.raises(ValueError):
+        web_sales.create_pipeline_from_form(
+            db_session, name="   ", is_active=None, create_default_stages=None
+        )
+
+
+def test_pipeline_form_contexts(db_session):
+    new_ctx = web_sales.build_pipeline_new_context()
+    assert new_ctx["action_url"] == "/admin/sales/pipelines"
+    assert new_ctx["pipeline"]["create_default_stages"] is True
+
+    pipeline = _make_pipeline(db_session, name=f"Edit-{uuid.uuid4().hex[:6]}")
+    edit_ctx = web_sales.build_pipeline_edit_context(
+        db_session, pipeline_id=str(pipeline.id)
+    )
+    assert edit_ctx["action_url"] == f"/admin/sales/pipelines/{pipeline.id}"
+
+    err_ctx = web_sales.build_pipeline_form_error_context(
+        mode="update",
+        pipeline_id=str(pipeline.id),
+        name="  X  ",
+        is_active="false",
+        create_default_stages=None,
+    )
+    assert err_ctx["pipeline"]["name"] == "X"
+    assert err_ctx["pipeline"]["is_active"] is False
+
+
+def test_stage_crud_and_bulk_assign_from_form(db_session):
+    pipeline = _make_pipeline(db_session, name=f"S-{uuid.uuid4().hex[:6]}")
+    web_sales.create_stage_from_form(
+        db_session,
+        pipeline_id=str(pipeline.id),
+        name="  Survey  ",
+        order_index=1,
+        default_probability=30,
+    )
+    context = web_sales.build_pipeline_settings_context(
+        db_session, bulk_result="", bulk_count=""
+    )
+    stages = context["stage_map"][str(pipeline.id)]
+    assert stages[0].name == "Survey"
+
+    web_sales.update_stage_from_form(
+        db_session,
+        stage_id=str(stages[0].id),
+        name="Site Survey",
+        order_index=2,
+        default_probability=40,
+        is_active="true",
+    )
+    db_session.refresh(stages[0])
+    assert stages[0].name == "Site Survey"
+    assert stages[0].default_probability == 40
+
+    # Unassigned lead gets pulled in by bulk assignment.
+    subscriber = _make_subscriber(db_session)
+    lead = _make_lead(db_session, subscriber)
+    count = web_sales.bulk_assign_leads(
+        db_session,
+        pipeline_id=str(pipeline.id),
+        stage_id=str(stages[0].id),
+        scope="unassigned",
+    )
+    assert count >= 1
+    db_session.refresh(lead)
+    assert lead.pipeline_id == pipeline.id
+    assert lead.stage_id == stages[0].id
+
+    web_sales.deactivate_stage(db_session, stage_id=str(stages[0].id))
+    db_session.refresh(stages[0])
+    assert stages[0].is_active is False
+
+    web_sales.deactivate_pipeline(db_session, str(pipeline.id))
+    db_session.refresh(pipeline)
+    assert pipeline.is_active is False
+
+
+# ---------------------------------------------------------------------------
+# Context builders — quotes
+# ---------------------------------------------------------------------------
+
+
+def test_quotes_list_context(db_session):
+    subscriber = _make_subscriber(db_session)
+    lead = _make_lead(db_session, subscriber)
+    quote = sales_service.quotes.create(
+        db_session, QuoteCreate(subscriber_id=subscriber.id, lead_id=lead.id)
+    )
+
+    context = web_sales.build_quotes_list_context(
+        db_session,
+        status=None,
+        lead_id=str(lead.id),
+        search=None,
+        page=1,
+        per_page=25,
+    )
+    assert context["total"] == 1
+    assert [str(item.id) for item in context["quotes"]] == [str(quote.id)]
+    assert str(lead.id) in context["lead_map"]
+    assert str(subscriber.id) in context["subscriber_map"]
+    assert context["stats"]["total"] >= 1
+
+    bogus = web_sales.build_quotes_list_context(
+        db_session,
+        status="never-a-status",
+        lead_id=None,
+        search=None,
+        page=1,
+        per_page=25,
+    )
+    assert bogus["status"] == ""
+
+
+def test_quote_detail_context_line_items_deposit_and_accept_state(db_session):
+    subscriber = _make_subscriber(db_session)
+    quote = sales_service.quotes.create(
+        db_session,
+        QuoteCreate(
+            subscriber_id=subscriber.id,
+            metadata_={
+                "source": "portal_self_serve",
+                "deposit_percent": 50,
+                "feasibility": {"feasible": True, "distance_m": 120},
+                "install": {"latitude": 9.05, "longitude": 7.49, "address": "Abuja"},
+                "deposit": {
+                    "reference": "dep-ref-1",
+                    "amount": "500.00",
+                    "provider": "paystack",
+                    "paid": True,
+                },
+            },
+        ),
+    )
+    item = sales_service.quote_line_items.create(
+        db_session,
+        QuoteLineItemCreate(
+            quote_id=quote.id,
+            description="Installation",
+            quantity=Decimal("1.000"),
+            unit_price=Decimal("1000.00"),
+            metadata_={"sub_offer_id": str(uuid.uuid4())},
+        ),
+    )
+
+    context = web_sales.build_quote_detail_context(db_session, quote_id=str(quote.id))
+    assert [str(row.id) for row in context["items"]] == [str(item.id)]
+    assert context["deposit"]["reference"] == "dep-ref-1"
+    assert context["deposit"]["paid"] is True
+    assert context["deposit_percent"] == 50
+    assert context["feasibility"]["feasible"] is True
+    assert context["install"]["address"] == "Abuja"
+    assert context["is_accepted"] is False
+    assert context["subscriber"].id == subscriber.id
+
+    # Accept-state display flips with the stored status (display-only here —
+    # the accept pipeline itself is covered by the sales-service tests).
+    quote.status = "accepted"
+    db_session.commit()
+    accepted = web_sales.build_quote_detail_context(db_session, quote_id=str(quote.id))
+    assert accepted["is_accepted"] is True
+    assert accepted["status_val"] == "accepted"
+
+
+# ---------------------------------------------------------------------------
+# Context builders — sales orders
+# ---------------------------------------------------------------------------
+
+
+def _make_sales_order(db, subscriber, **overrides) -> SalesOrder:
+    data = {
+        "subscriber_id": subscriber.id,
+        "order_number": f"SO-{uuid.uuid4().hex[:8]}",
+        "status": "confirmed",
+        "payment_status": "partial",
+        "currency": "NGN",
+        "subtotal": Decimal("100.00"),
+        "total": Decimal("100.00"),
+        "amount_paid": Decimal("40.00"),
+        "balance_due": Decimal("60.00"),
+    }
+    data.update(overrides)
+    order = SalesOrder(**data)
+    db.add(order)
+    db.commit()
+    db.refresh(order)
+    return order
+
+
+def test_sales_orders_list_context_stats_and_filters(db_session):
+    subscriber = _make_subscriber(db_session)
+    order = _make_sales_order(db_session, subscriber)
+    paid = _make_sales_order(
+        db_session,
+        subscriber,
+        status="paid",
+        payment_status="paid",
+        amount_paid=Decimal("100.00"),
+        balance_due=Decimal("0.00"),
+    )
+
+    context = web_sales.build_sales_orders_list_context(
+        db_session,
+        status=None,
+        payment_status=None,
+        source_type=None,
+        search=None,
+        page=1,
+        per_page=25,
+    )
+    assert context["total"] >= 2
+    assert context["stats"]["gross_sales"] >= Decimal("200.00")
+    assert context["stats"]["paid"] >= 1
+    assert context["stats"]["partial"] >= 1
+    assert context["stats"]["manual"] >= 2
+    assert str(subscriber.id) in context["subscriber_map"]
+
+    only_paid = web_sales.build_sales_orders_list_context(
+        db_session,
+        status=None,
+        payment_status="paid",
+        source_type="manual",
+        search=None,
+        page=1,
+        per_page=25,
+    )
+    ids = {str(item.id) for item in only_paid["orders"]}
+    assert str(paid.id) in ids
+    assert str(order.id) not in ids
+
+    # Search by order number narrows to the single row.
+    by_number = web_sales.build_sales_orders_list_context(
+        db_session,
+        status=None,
+        payment_status=None,
+        source_type=None,
+        search=order.order_number,
+        page=1,
+        per_page=25,
+    )
+    assert by_number["total"] == 1
+
+
+def test_sales_order_detail_context(db_session):
+    subscriber = _make_subscriber(db_session)
+    order = _make_sales_order(db_session, subscriber)
+
+    context = web_sales.build_sales_order_detail_context(
+        db_session, sales_order_id=str(order.id)
+    )
+    assert str(context["order"].id) == str(order.id)
+    assert context["subscriber"].id == subscriber.id
+    assert context["subscriber_label"]
+    assert context["lines"] == []
+    assert context["quote"] is None
+    assert context["project"] is None
+
+
+# ---------------------------------------------------------------------------
+# Templates compile
+# ---------------------------------------------------------------------------
+
+_SALES_TEMPLATES = [
+    "admin/sales/leads/index.html",
+    "admin/sales/leads/board.html",
+    "admin/sales/leads/detail.html",
+    "admin/sales/pipelines/index.html",
+    "admin/sales/pipelines/form.html",
+    "admin/sales/quotes/index.html",
+    "admin/sales/quotes/detail.html",
+    "admin/sales/sales_orders/index.html",
+    "admin/sales/sales_orders/detail.html",
+]
+
+
+@pytest.mark.parametrize("template_name", _SALES_TEMPLATES)
+def test_sales_templates_compile(template_name):
+    templates = Jinja2Templates(directory="templates")
+    assert templates.env.get_template(template_name) is not None
+
+
+def test_board_template_wires_kanban_api_endpoints():
+    source = Path("templates/admin/sales/leads/board.html").read_text()
+    assert 'data-kanban-endpoint="/api/v1/leads/kanban?pipeline_id=' in source
+    assert 'data-update-endpoint="/api/v1/leads/kanban/move"' in source
+    assert "/static/js/kanban.js" in source
+
+
+def test_sidebar_has_sales_entry():
+    source = Path("templates/components/navigation/admin_sidebar.html").read_text()
+    assert '"/admin/sales/leads"' in source or "'/admin/sales/leads'" in source
+    assert "'sales-quotes': 'sales'" in source
+    assert "'sales-orders': 'sales'" in source

@@ -933,7 +933,9 @@ class Leads(ListResponseMixin):
                     else None,
                     "status": lead.status or LeadStatus.new.value,
                     "currency": lead.currency or "",
-                    "url": f"/admin/crm/leads/{lead.id}",
+                    # Kanban cards deep-link into the sub admin surface
+                    # (this PR's /admin/sales pages).
+                    "url": f"/admin/sales/leads/{lead.id}",
                 }
             )
 

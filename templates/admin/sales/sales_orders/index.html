@@ -1,0 +1,154 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import status_badge %}
+{% block title %}Sales Orders - Admin{% endblock %}
+
+{% set so_status_variants = {
+    'draft': 'draft',
+    'confirmed': 'info',
+    'paid': 'success',
+    'fulfilled': 'success',
+    'cancelled': 'error'
+} %}
+{% set so_payment_variants = {
+    'pending': 'pending',
+    'partial': 'warning',
+    'paid': 'success',
+    'waived': 'inactive'
+} %}
+
+{% block content %}
+<div class="space-y-4">
+    <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+            <h1 class="font-display text-xl font-bold tracking-tight text-slate-900 dark:text-white">Sales Orders</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Orders from accepted quotes and manual sales, with payment tracking.</p>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Orders</p>
+            <p class="mt-1 font-display text-2xl font-bold text-slate-900 dark:text-white">{{ stats.total }}</p>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ stats.quote_backed }} from quotes · {{ stats.manual }} manual</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Gross Sales</p>
+            <p class="mt-1 font-display text-2xl font-bold text-slate-900 dark:text-white">NGN {{ "{:,.0f}".format(stats.gross_sales) }}</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Collected</p>
+            <p class="mt-1 font-display text-2xl font-bold text-emerald-600 dark:text-emerald-400">NGN {{ "{:,.0f}".format(stats.collected) }}</p>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ stats.paid }} paid · {{ stats.partial }} partial · {{ stats.paid_rate }}% paid rate</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Outstanding</p>
+            <p class="mt-1 font-display text-2xl font-bold text-amber-600 dark:text-amber-400">NGN {{ "{:,.0f}".format(stats.outstanding) }}</p>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ stats.pending_payment }} awaiting payment</p>
+        </div>
+    </div>
+
+    <div class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <form method="get" action="/admin/sales/sales-orders" class="space-y-3">
+            <div class="grid gap-2 lg:grid-cols-12">
+                <div class="lg:col-span-4">
+                    <label class="sr-only" for="so-search">Search</label>
+                    <input id="so-search" type="text" name="search" value="{{ search }}"
+                           placeholder="Search by order number, subscriber name, email, or phone..."
+                           class="w-full rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white">
+                </div>
+                <div class="lg:col-span-3">
+                    <select name="status" aria-label="Status" class="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">All Statuses</option>
+                        {% for item in statuses %}
+                        <option value="{{ item }}" {% if status == item %}selected{% endif %}>{{ item | title }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="lg:col-span-3">
+                    <select name="payment_status" aria-label="Payment status" class="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">All Payment Statuses</option>
+                        {% for item in payment_statuses %}
+                        <option value="{{ item }}" {% if payment_status == item %}selected{% endif %}>{{ item | title }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="lg:col-span-2">
+                    <select name="source_type" aria-label="Source" class="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">All Sources</option>
+                        <option value="quote" {% if source_type == 'quote' %}selected{% endif %}>From quote</option>
+                        <option value="manual" {% if source_type == 'manual' %}selected{% endif %}>Manual</option>
+                    </select>
+                </div>
+            </div>
+            <div class="flex items-center justify-end gap-2">
+                <a href="/admin/sales/sales-orders" class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200">Reset</a>
+                <button type="submit" class="rounded-lg bg-cyan-600 px-4 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-cyan-700">Filter</button>
+            </div>
+        </form>
+    </div>
+
+    <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
+            <thead class="bg-slate-50 dark:bg-slate-900">
+                <tr>
+                    <th class="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Order</th>
+                    <th class="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Subscriber</th>
+                    <th class="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Status</th>
+                    <th class="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Payment</th>
+                    <th class="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Total</th>
+                    <th class="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Balance Due</th>
+                    <th class="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Source</th>
+                    <th class="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Created</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
+                {% for order in orders %}
+                {% set subscriber = subscriber_map.get(order.subscriber_id|string) %}
+                <tr class="cursor-pointer transition hover:bg-cyan-50/40 dark:hover:bg-cyan-900/10" onclick="window.location='/admin/sales/sales-orders/{{ order.id }}'">
+                    <td class="px-4 py-2.5">
+                        <a class="font-semibold text-cyan-700 hover:underline dark:text-cyan-400" href="/admin/sales/sales-orders/{{ order.id }}">
+                            {{ order.order_number or order.id|string|truncate(8, True, '') }}
+                        </a>
+                    </td>
+                    <td class="px-4 py-2.5 text-slate-700 dark:text-slate-300">
+                        {% if subscriber %}
+                        {{ subscriber.display_name or ((subscriber.first_name or '') ~ ' ' ~ (subscriber.last_name or ''))|trim or subscriber.email or '-' }}
+                        {% else %}-{% endif %}
+                    </td>
+                    <td class="px-4 py-2.5">
+                        {% set status_val = order.status or 'draft' %}
+                        {{ status_badge(status_val | title, so_status_variants.get(status_val, 'default'), size='sm') }}
+                    </td>
+                    <td class="px-4 py-2.5">
+                        {% set payment_val = order.payment_status or 'pending' %}
+                        {{ status_badge(payment_val | title, so_payment_variants.get(payment_val, 'default'), size='sm') }}
+                    </td>
+                    <td class="px-4 py-2.5 text-right tabular-nums text-slate-700 dark:text-slate-300">{{ order.currency }} {{ "{:,.2f}".format(order.total or 0) }}</td>
+                    <td class="px-4 py-2.5 text-right tabular-nums text-slate-700 dark:text-slate-300">{{ order.currency }} {{ "{:,.2f}".format(order.balance_due or 0) }}</td>
+                    <td class="px-4 py-2.5 text-slate-700 dark:text-slate-300">
+                        {% if order.quote_id %}Quote{% else %}Manual{% endif %}
+                        {% if order.source %}<span class="block text-xs text-slate-500 dark:text-slate-400">{{ order.source }}</span>{% endif %}
+                    </td>
+                    <td class="px-4 py-2.5 text-xs text-slate-500 dark:text-slate-400">{{ order.created_at.strftime('%Y-%m-%d %H:%M') if order.created_at else '-' }}</td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="8" class="px-4 py-12 text-center text-sm text-slate-500 dark:text-slate-400">No sales orders found for the current filters.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {% set filter_params = '&status=' ~ status ~ '&payment_status=' ~ payment_status ~ '&source_type=' ~ source_type ~ '&search=' ~ (search|urlencode) %}
+    <div class="flex items-center justify-between gap-3">
+        <p class="text-xs text-slate-500 dark:text-slate-400">Page {{ page }} of {{ total_pages }} · {{ total }} order{{ '' if total == 1 else 's' }}</p>
+        <div class="flex items-center gap-2">
+            <a href="/admin/sales/sales-orders?page={{ page - 1 if page > 1 else 1 }}&per_page={{ per_page }}{{ filter_params }}"
+               class="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700 {% if page <= 1 %}pointer-events-none opacity-50{% endif %}">Previous</a>
+            <a href="/admin/sales/sales-orders?page={{ page + 1 }}&per_page={{ per_page }}{{ filter_params }}"
+               class="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700 {% if page >= total_pages %}pointer-events-none opacity-50{% endif %}">Next</a>
+        </div>
+    </div>
+</div>
+{% endblock %}
