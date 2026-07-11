@@ -1,17 +1,24 @@
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from scripts.migration.import_crm_phase3 import (
     STEP_ORDER,
     TABLE_SPECS,
+    ImportStats,
     PartyResolution,
+    RunContext,
+    _apply_leads,
     _load_party_map_csv,
     build_upsert_sql,
+    is_open_lead_unique_violation,
     merge_party_maps,
     parse_order_number,
+    partition_open_lead_conflicts,
     plan_lead_open_unique_conflicts,
     plan_referral_referred_unique_conflicts,
     provenance_metadata,
@@ -329,6 +336,150 @@ def test_referral_referred_unique_conflicts() -> None:
     )
 
     assert conflicts == [{"referred_subscriber_id": "sub-1", "referral_ids": "r-1;r-2"}]
+
+
+# ---- open-lead uniqueness is a SOFT per-row skip (§ hardening) --------------------
+
+
+class _FakeSavepoint:
+    def __init__(self) -> None:
+        self.committed = False
+        self.rolled_back = False
+
+    def commit(self) -> None:
+        self.committed = True
+
+    def rollback(self) -> None:
+        self.rolled_back = True
+
+
+class _FakeLeadConn:
+    """Minimal Connection stand-in: raises the open-lead unique violation for
+    the targeted lead ids, records savepoint commits/rollbacks."""
+
+    def __init__(self, conflict_ids: set[str]) -> None:
+        self.conflict_ids = conflict_ids
+        self.executed: list[str] = []
+        self.savepoints: list[_FakeSavepoint] = []
+
+    def begin_nested(self) -> _FakeSavepoint:
+        sp = _FakeSavepoint()
+        self.savepoints.append(sp)
+        return sp
+
+    def execute(self, _statement: Any, params: dict[str, Any] | None = None) -> None:
+        lead_id = str((params or {}).get("id"))
+        self.executed.append(lead_id)
+        if lead_id in self.conflict_ids:
+            raise IntegrityError(
+                "INSERT INTO leads ...",
+                params,
+                Exception(
+                    "duplicate key value violates unique constraint "
+                    '"uq_leads_one_open_per_subscriber_pipeline"'
+                ),
+            )
+
+
+def _lead_ctx(apply: bool = True) -> RunContext:
+    return RunContext(
+        apply=apply,
+        state_file=None,
+        overlap_seconds=0,
+        party_map={},
+        subscriber_map={},
+        staff_map={},
+        ticket_map={},
+    )
+
+
+def test_is_open_lead_unique_violation_matches_index_name() -> None:
+    exc = IntegrityError(
+        "stmt",
+        {},
+        Exception('unique constraint "uq_leads_one_open_per_subscriber_pipeline"'),
+    )
+    assert is_open_lead_unique_violation(exc)
+    other = IntegrityError("stmt", {}, Exception("some other FK violation"))
+    assert not is_open_lead_unique_violation(other)
+
+
+def test_partition_open_lead_conflicts_keeps_lowest_id_skips_rest() -> None:
+    payloads = [
+        _lead("l-2"),
+        _lead("l-1"),
+        _lead("l-3", subscriber_id="sub-2"),
+    ]
+
+    keep, skipped = partition_open_lead_conflicts(payloads)
+
+    # l-1/l-2 collapse onto (sub-1, pipe-1): keep l-1, skip l-2. l-3 is its own
+    # group and is kept.
+    assert {str(p["id"]) for p in keep} == {"l-1", "l-3"}
+    assert [row["crm_lead_id"] for row in skipped] == ["l-2"]
+    assert skipped[0]["reason"] == "in_batch_collapse"
+    assert skipped[0]["subscriber_id"] == "sub-1"
+    assert skipped[0]["pipeline_id"] == "pipe-1"
+
+
+def test_apply_leads_soft_skips_existing_open_conflict() -> None:
+    # l-2 conflicts with a pre-existing open lead already in sub; the per-row
+    # savepoint routes it to the CSV while l-1 and l-3 still import.
+    payloads = [_lead("l-1"), _lead("l-2"), _lead("l-3")]
+    conn = _FakeLeadConn(conflict_ids={"l-2"})
+    ctx = _lead_ctx(apply=True)
+
+    _apply_leads(conn, ctx, TABLE_SPECS["leads"], payloads, existing_ids=set())
+
+    reports = ctx.reports["lead_open_unique_conflicts"]
+    assert [r["crm_lead_id"] for r in reports] == ["l-2"]
+    assert reports[0]["reason"] == "existing_open_lead"
+    # The other two leads land and are marked present; the skipped one is not,
+    # so its nullable downstream FK references null out coherently.
+    assert ctx.present_ids["leads"] == {"l-1", "l-3"}
+    assert ctx.stats.steps["leads"]["created"] == 2
+    assert ctx.stats.steps["leads"]["skipped_open_unique_conflict"] == 1
+    # A soft skip is NOT a blocker — the run would still commit and not exit(2).
+    assert ctx.stats.blockers == []
+    # Every row got a savepoint; only the conflicting one was rolled back.
+    assert len(conn.savepoints) == 3
+    assert [sp.rolled_back for sp in conn.savepoints] == [False, True, False]
+
+
+def test_apply_leads_reraises_non_open_lead_integrity_error() -> None:
+    class _HardConn(_FakeLeadConn):
+        def execute(
+            self, _statement: Any, params: dict[str, Any] | None = None
+        ) -> None:
+            raise IntegrityError(
+                "stmt", params, Exception("null value in column violates not-null")
+            )
+
+    ctx = _lead_ctx(apply=True)
+    with pytest.raises(IntegrityError):
+        _apply_leads(_HardConn(set()), ctx, TABLE_SPECS["leads"], [_lead("l-1")], set())
+
+
+def test_apply_leads_dry_run_marks_present_without_executing() -> None:
+    payloads = [_lead("l-1"), _lead("l-2")]
+    conn = _FakeLeadConn(conflict_ids={"l-1"})
+    ctx = _lead_ctx(apply=False)
+
+    _apply_leads(conn, ctx, TABLE_SPECS["leads"], payloads, existing_ids=set())
+
+    assert conn.executed == []  # dry-run never writes
+    assert ctx.present_ids["leads"] == {"l-1", "l-2"}
+    assert ctx.reports["lead_open_unique_conflicts"] == []
+
+
+def test_import_stats_blockers_gate_unaffected_by_soft_lead_skips() -> None:
+    # The commit gate keys on stats.blockers; open-lead skips never touch it.
+    stats = ImportStats()
+    ctx = _lead_ctx(apply=True)
+    conn = _FakeLeadConn(conflict_ids={"l-1"})
+    _apply_leads(conn, ctx, TABLE_SPECS["leads"], [_lead("l-1")], set())
+    assert stats.blockers == []
+    assert ctx.stats.blockers == []
 
 
 # ---- work links (§3.5 step 7) -----------------------------------------------------

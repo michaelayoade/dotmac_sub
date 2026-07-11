@@ -12,7 +12,9 @@ from decimal import Decimal
 from typing import Any
 
 from scripts.migration.check_crm_vendor_routes_drift import (
+    _FIELD_SELECT,
     ALL_CLASSES,
+    FIELD_SPECS,
     GATING_CLASSES,
     INFO_CLASSES,
     classify_missing_row,
@@ -176,6 +178,47 @@ def test_route_geom_ewkt_drift_detected() -> None:
     sub_drift = {**crm, "route_geom": "SRID=4326;LINESTRING(9.9 9.9,1.0 1.0)"}
     diffs = compare_fields("as_built_routes", crm, sub_drift, subscriber_map={}).diffs
     assert [d.field for d in diffs] == ["route_geom"]
+
+
+# ---------------------------------------------------------------------------
+# as_built_routes has no is_active column (migration 248 / vendor_routes.py)
+# ---------------------------------------------------------------------------
+
+
+def test_as_built_routes_field_spec_omits_is_active() -> None:
+    fields = {name for name, _ in FIELD_SPECS["as_built_routes"]}
+    assert "is_active" not in fields
+    assert "is_active" not in _FIELD_SELECT["as_built_routes"]
+
+
+def test_every_other_vendor_table_still_has_is_active() -> None:
+    # Only as_built_routes is missing the column — the rest genuinely have it.
+    for table in (
+        "vendors",
+        "vendor_users",
+        "installation_projects",
+        "project_quotes",
+        "project_quote_line_items",
+        "as_built_line_items",
+    ):
+        assert "is_active" in {name for name, _ in FIELD_SPECS[table]}
+        assert "is_active" in _FIELD_SELECT[table]
+
+
+def test_as_built_routes_comparison_ignores_missing_is_active() -> None:
+    # A real as_built_routes row (no is_active key at all) must not raise or
+    # register a spurious diff.
+    crm = {
+        "id": "r1",
+        "project_id": "p1",
+        "status": "accepted",
+        "variation_type": None,
+        "actual_length_meters": Decimal("120.0"),
+        "version": 1,
+        "route_geom": "SRID=4326;LINESTRING(3.1 6.2,3.2 6.3)",
+    }
+    sub = {**crm}
+    assert compare_fields("as_built_routes", crm, sub, subscriber_map={}).diffs == ()
 
 
 # ---------------------------------------------------------------------------
