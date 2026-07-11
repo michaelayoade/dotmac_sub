@@ -29,7 +29,55 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.models.catalog import AccessState, BillingMode, SubscriptionStatus
+from app.models.subscriber import SubscriberStatus
+from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
+from app.services.billing_statuses import BILLABLE_SUBSCRIBER_STATUSES
+from app.services.radius_access_state import derive_access_state
+from app.services.subscriber_access_policy import RADIUS_BLOCKING_SUBSCRIBER_STATUSES
+
 logger = logging.getLogger(__name__)
+
+ACTIVE_CUSTOMER_SUBSCRIBER_STATUSES = frozenset({SubscriberStatus.active})
+RADIUS_PERMISSIVE_SUBSCRIBER_STATUSES = frozenset(
+    {
+        SubscriberStatus.active,
+        SubscriberStatus.delinquent,
+    }
+)
+
+
+def active_customer_subscription_filters(subscription_model, subscriber_model) -> tuple:
+    """SQL predicates for subscriptions that count as active customers.
+
+    This is intentionally stricter than billing eligibility: customer-impact
+    metrics should count subscribers with live service, not blocked/delinquent
+    accounts that billing may still chase.
+    """
+    return (
+        subscription_model.status == SubscriptionStatus.active,
+        subscriber_model.status.in_(ACTIVE_CUSTOMER_SUBSCRIBER_STATUSES),
+        subscriber_model.is_active.is_(True),
+    )
+
+
+def postpaid_invoice_eligible_filters(subscription_model, subscriber_model) -> tuple:
+    """SQL predicates mirroring the default postpaid invoice-cycle cohort."""
+    return (
+        subscription_model.status == SubscriptionStatus.active,
+        subscriber_model.status.in_(BILLABLE_SUBSCRIBER_STATUSES),
+        subscription_model.billing_mode != BillingMode.prepaid,
+    )
+
+
+def prepaid_enforcement_eligible_filters(subscription_model, subscriber_model) -> tuple:
+    """SQL predicates for prepaid balance enforcement / exposure cohorts."""
+    return (
+        subscription_model.status.in_(COLLECTIBLE_SERVICE_STATUSES),
+        subscriber_model.status.in_(BILLABLE_SUBSCRIBER_STATUSES),
+        subscription_model.billing_mode == BillingMode.prepaid,
+    )
+
 
 OPEN_INFRASTRUCTURE_TICKET_STATUSES = {
     "new",
@@ -117,6 +165,224 @@ class CustomerServiceState:
             "extension_candidate": self.extension_candidate,
             "checked_at": self.checked_at.isoformat(),
         }
+
+
+@dataclass(frozen=True)
+class CustomerBillingAccessState:
+    """Shared billing/access decision for one subscription.
+
+    The fields deliberately separate customer-impact, billing, prepaid
+    enforcement and RADIUS. Those answers use overlapping data, but they are
+    not the same rule.
+    """
+
+    subscription_id: object | None
+    subscriber_id: object | None
+    subscriber_status: str | None
+    subscription_status: str | None
+    account_billing_mode: str | None
+    subscription_billing_mode: str | None
+    account_enabled: bool
+    account_billing_enabled: bool
+    active_customer_service: bool
+    billable_account: bool
+    postpaid_invoice_eligible: bool
+    prepaid_enforcement_eligible: bool
+    counts_for_customer_impact: bool
+    radius_access_state: AccessState | None
+    radius_allowed: bool
+    radius_blocked: bool
+    radius_mode: str
+    access_block_reason: str | None
+    billing_block_reason: str | None
+
+
+def resolve_customer_billing_access_state(
+    subscription,
+    *,
+    subscriber=None,
+    captive_redirect_enabled: bool | None = None,
+) -> CustomerBillingAccessState:
+    """Resolve the account/subscription billing and access state.
+
+    Use this for in-memory decisions after a subscription row has already been
+    loaded. SQL-heavy jobs should use the companion filter helpers above for
+    coarse selection, then this resolver for per-row decisions.
+    """
+    subscriber = (
+        subscriber
+        if subscriber is not None
+        else getattr(subscription, "subscriber", None)
+    )
+
+    subscription_status = getattr(subscription, "status", None)
+    subscriber_status = getattr(subscriber, "status", None) if subscriber else None
+    subscription_mode = getattr(subscription, "billing_mode", None)
+    account_mode = getattr(subscriber, "billing_mode", None) if subscriber else None
+
+    account_enabled = bool(
+        subscriber is not None and getattr(subscriber, "is_active", False)
+    )
+    account_billing_enabled = bool(
+        subscriber is not None and getattr(subscriber, "billing_enabled", True)
+    )
+    billable_account = (
+        account_enabled
+        and account_billing_enabled
+        and subscriber_status in BILLABLE_SUBSCRIBER_STATUSES
+    )
+    active_customer_service = (
+        account_enabled
+        and subscriber_status in ACTIVE_CUSTOMER_SUBSCRIBER_STATUSES
+        and subscription_status == SubscriptionStatus.active
+    )
+    postpaid_invoice_eligible = (
+        billable_account
+        and subscription_status == SubscriptionStatus.active
+        and subscription_mode != BillingMode.prepaid
+    )
+    prepaid_enforcement_eligible = (
+        billable_account
+        and subscription_status in COLLECTIBLE_SERVICE_STATUSES
+        and subscription_mode == BillingMode.prepaid
+    )
+
+    captive = (
+        bool(captive_redirect_enabled)
+        if captive_redirect_enabled is not None
+        else bool(getattr(subscriber, "captive_redirect_enabled", False))
+    )
+    account_hard_reject = _account_radius_hard_reject(
+        subscriber_status=subscriber_status,
+        account_enabled=account_enabled,
+        subscriber_missing=subscriber is None,
+    )
+    radius_state = (
+        derive_access_state(
+            subscription_status,
+            captive_redirect_enabled=captive,
+            hard_reject=account_hard_reject,
+        )
+        if isinstance(subscription_status, SubscriptionStatus)
+        else None
+    )
+    if account_hard_reject and radius_state == AccessState.active:
+        radius_state = AccessState.suspended
+    radius_blocked = radius_state in {AccessState.suspended, AccessState.captive}
+    radius_allowed = radius_state in {AccessState.active, AccessState.captive}
+
+    access_block_reason = _access_block_reason(
+        subscription_status=subscription_status,
+        subscriber_status=subscriber_status,
+        account_enabled=account_enabled,
+        subscriber_missing=subscriber is None,
+        radius_state=radius_state,
+    )
+    billing_block_reason = _billing_block_reason(
+        subscription_status=subscription_status,
+        subscriber_status=subscriber_status,
+        account_enabled=account_enabled,
+        account_billing_enabled=account_billing_enabled,
+        subscription_mode=subscription_mode,
+    )
+
+    return CustomerBillingAccessState(
+        subscription_id=getattr(subscription, "id", None),
+        subscriber_id=getattr(subscription, "subscriber_id", None)
+        or getattr(subscriber, "id", None),
+        subscriber_status=_enum_value(subscriber_status),
+        subscription_status=_enum_value(subscription_status),
+        account_billing_mode=_enum_value(account_mode),
+        subscription_billing_mode=_enum_value(subscription_mode),
+        account_enabled=account_enabled,
+        account_billing_enabled=account_billing_enabled,
+        active_customer_service=active_customer_service,
+        billable_account=billable_account,
+        postpaid_invoice_eligible=postpaid_invoice_eligible,
+        prepaid_enforcement_eligible=prepaid_enforcement_eligible,
+        counts_for_customer_impact=active_customer_service,
+        radius_access_state=radius_state,
+        radius_allowed=radius_allowed,
+        radius_blocked=radius_blocked,
+        radius_mode=_radius_mode(radius_state),
+        access_block_reason=access_block_reason,
+        billing_block_reason=billing_block_reason,
+    )
+
+
+def _account_radius_hard_reject(
+    *,
+    subscriber_status: SubscriberStatus | None,
+    account_enabled: bool,
+    subscriber_missing: bool,
+) -> bool:
+    if subscriber_missing or not account_enabled:
+        return True
+    if subscriber_status in RADIUS_BLOCKING_SUBSCRIBER_STATUSES:
+        return True
+    if subscriber_status in RADIUS_PERMISSIVE_SUBSCRIBER_STATUSES:
+        return False
+    return True
+
+
+def _access_block_reason(
+    *,
+    subscription_status,
+    subscriber_status,
+    account_enabled: bool,
+    subscriber_missing: bool,
+    radius_state: AccessState | None,
+) -> str | None:
+    if subscriber_missing:
+        return "subscriber_missing"
+    if not account_enabled:
+        return "subscriber_inactive"
+    if subscriber_status in RADIUS_BLOCKING_SUBSCRIBER_STATUSES:
+        return f"subscriber_status_{_enum_value(subscriber_status)}"
+    if radius_state in {
+        AccessState.suspended,
+        AccessState.captive,
+        AccessState.terminated,
+    }:
+        return f"subscription_status_{_enum_value(subscription_status)}"
+    if radius_state is None:
+        return f"subscription_unprovisioned_{_enum_value(subscription_status)}"
+    return None
+
+
+def _billing_block_reason(
+    *,
+    subscription_status,
+    subscriber_status,
+    account_enabled: bool,
+    account_billing_enabled: bool,
+    subscription_mode,
+) -> str | None:
+    if not account_enabled:
+        return "subscriber_inactive"
+    if not account_billing_enabled:
+        return "account_billing_disabled"
+    if subscriber_status not in BILLABLE_SUBSCRIBER_STATUSES:
+        return f"subscriber_status_{_enum_value(subscriber_status)}"
+    if subscription_status not in COLLECTIBLE_SERVICE_STATUSES:
+        return f"subscription_status_{_enum_value(subscription_status)}"
+    if subscription_mode == BillingMode.prepaid:
+        return "prepaid_not_postpaid_invoice_eligible"
+    return None
+
+
+def _enum_value(value) -> str | None:
+    if value is None:
+        return None
+    return getattr(value, "value", str(value))
+
+
+def _radius_mode(state: AccessState | None) -> str:
+    if state is None:
+        return "none"
+    if state == AccessState.suspended:
+        return "reject"
+    return state.value
 
 
 def get_customer_service_state(

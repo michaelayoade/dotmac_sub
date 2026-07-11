@@ -12,6 +12,10 @@ from sqlalchemy import String, cast, exists, or_, select
 from sqlalchemy.sql.elements import ClauseElement, ColumnElement
 
 from app.models.support import Ticket, TicketAssignee, TicketChannel
+from app.services.customer_support_links import (
+    ticket_customer_link_filter,
+    ticket_unlinked_customer_filter,
+)
 from app.services.dynamic_filters import (
     DEFAULT_OPERATORS_BY_TYPE,
     NULL_TOKENS,
@@ -68,14 +72,11 @@ def _assigned_to_expression(operator: str, value: object) -> ClauseElement:
 
 
 def _subscriber_expression(operator: str, value: object) -> ClauseElement:
-    """Match either the subscriber or customer-account link (list() semantics)."""
+    """Match any customer link column (list() semantics)."""
 
     def _match(subscriber_id: object) -> ColumnElement[bool]:
         coerced = _coerce_scalar(subscriber_id, "uuid")
-        return or_(
-            Ticket.subscriber_id == coerced,
-            Ticket.customer_account_id == coerced,
-        )
+        return ticket_customer_link_filter(Ticket, coerced)
 
     if operator in {"is", "is not"}:
         token = str(value).strip().lower() if value is not None else None
@@ -83,7 +84,7 @@ def _subscriber_expression(operator: str, value: object) -> ClauseElement:
             raise FilterValidationError(
                 "subscriber_id supports only NULL checks for 'is'/'is not'"
             )
-        unlinked = Ticket.subscriber_id.is_(None) & Ticket.customer_account_id.is_(None)
+        unlinked = ticket_unlinked_customer_filter(Ticket)
         return unlinked if operator == "is" else ~unlinked
 
     if operator in {"in", "not in"}:

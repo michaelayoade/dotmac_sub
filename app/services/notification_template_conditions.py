@@ -6,8 +6,9 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import or_
 from sqlalchemy.orm import Session
+
+from app.services.customer_support_links import ticket_customer_link_filter
 
 
 class NotificationTemplateConditionError(ValueError):
@@ -273,13 +274,7 @@ class _ConditionEvaluator:
             self.db.query(Ticket.id)
             .filter(Ticket.is_active.is_(True))
             .filter(Ticket.status.in_(_OPEN_TICKET_STATUSES))
-            .filter(
-                or_(
-                    Ticket.subscriber_id == self.subscriber_id,
-                    Ticket.customer_account_id == self.subscriber_id,
-                    Ticket.customer_person_id == self.subscriber_id,
-                )
-            )
+            .filter(ticket_customer_link_filter(Ticket, self.subscriber_id))
             .count()
         )
 
@@ -297,16 +292,9 @@ class _ConditionEvaluator:
     def _overdue_invoice_count(self) -> int:
         if self.subscriber_id is None:
             return 0
-        from app.models.billing import Invoice, InvoiceStatus
+        from app.services.invoice_collectibility import overdue_status_count
 
-        return (
-            self.db.query(Invoice.id)
-            .filter(Invoice.account_id == self.subscriber_id)
-            .filter(Invoice.is_active.is_(True))
-            .filter(Invoice.status == InvoiceStatus.overdue)
-            .filter(Invoice.balance_due > 0)
-            .count()
-        )
+        return overdue_status_count(self.db, self.subscriber_id)
 
     def _active_dunning_case_count(self) -> int:
         if self.subscriber_id is None:

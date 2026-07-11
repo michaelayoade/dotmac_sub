@@ -36,7 +36,6 @@ from app.models.billing import (
 from app.models.catalog import (
     BillingMode,
     Subscription,
-    SubscriptionStatus,
 )
 from app.models.domain_settings import SettingDomain
 from app.models.scheduler import ScheduledTask
@@ -46,6 +45,11 @@ from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
 from app.services.billing_statuses import (
     BILLABLE_SUBSCRIBER_STATUS_VALUES,
     BILLABLE_SUBSCRIBER_STATUSES,
+)
+from app.services.customer_financial_position import prepaid_available_balance
+from app.services.customer_service_state import (
+    postpaid_invoice_eligible_filters,
+    prepaid_enforcement_eligible_filters,
 )
 from app.services.job_heartbeat import get_last_result, get_last_success
 
@@ -254,9 +258,7 @@ def invoice_scan_coverage(db: Session) -> tuple[int | None, int, float | None]:
         db.execute(
             select(func.count(Subscription.id))
             .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
-            .where(Subscription.status == SubscriptionStatus.active)
-            .where(Subscriber.status.in_(BILLABLE_SUBSCRIBER_STATUSES))
-            .where(Subscription.billing_mode != BillingMode.prepaid)
+            .where(*postpaid_invoice_eligible_filters(Subscription, Subscriber))
         ).scalar()
         or 0
     )
@@ -472,15 +474,12 @@ def negative_prepaid_balance_exposure(db: Session) -> tuple[int, Decimal, bool, 
     it.
     """
     from app.services import control_registry
-    from app.services.collections import get_available_balance
 
     account_ids = (
         db.execute(
             select(Subscriber.id)
             .join(Subscription, Subscription.subscriber_id == Subscriber.id)
-            .where(Subscription.billing_mode == BillingMode.prepaid)
-            .where(Subscription.status.in_(COLLECTIBLE_SERVICE_STATUSES))
-            .where(Subscriber.status.in_(BILLABLE_SUBSCRIBER_STATUSES))
+            .where(*prepaid_enforcement_eligible_filters(Subscription, Subscriber))
             .distinct()
         )
         .scalars()
@@ -489,7 +488,7 @@ def negative_prepaid_balance_exposure(db: Session) -> tuple[int, Decimal, bool, 
     count = 0
     total = Decimal("0.00")
     for account_id in account_ids:
-        balance = get_available_balance(db, str(account_id))
+        balance = prepaid_available_balance(db, account_id)
         if balance < Decimal("0.00"):
             count += 1
             total += abs(balance)

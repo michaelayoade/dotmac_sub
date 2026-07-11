@@ -252,6 +252,22 @@ def test_list_simple_params_priority_channel_creator(db_session):
     assert ids == {match.id}
 
 
+def test_subscriber_filter_matches_customer_person_link(db_session, subscriber):
+    match = _ticket(customer_person_id=subscriber.id)
+    other = _ticket()
+    db_session.add_all([match, other])
+    db_session.commit()
+
+    rows = support_service.tickets.list(
+        db_session,
+        subscriber_id=str(subscriber.id),
+        limit=50,
+    )
+    ids = {ticket.id for ticket in rows}
+
+    assert ids == {match.id}
+
+
 def test_list_is_active_param(db_session):
     active = _ticket()
     archived = _ticket(is_active=False)

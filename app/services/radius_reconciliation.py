@@ -22,6 +22,7 @@ from sqlalchemy import BigInteger, Column, DateTime, String, func, select
 from sqlalchemy.orm import Session
 
 from app.models.catalog import AccessCredential, Subscription, SubscriptionStatus
+from app.models.subscriber import Subscriber
 from app.services.radius import (
     _active_external_sync_configs,
     _external_radius_table,
@@ -37,6 +38,7 @@ from app.services.radius_address_lists import (
     DEFAULT_SUSPENDED_ADDRESS_LIST,
     suspended_address_list,
 )
+from app.services.subscriber_access_policy import RADIUS_BLOCKING_SUBSCRIBER_STATUSES
 
 logger = logging.getLogger(__name__)
 
@@ -68,8 +70,12 @@ def _chunked(values: list[str], size: int = _CHUNK):
 
 
 def _fully_blocked_usernames(db: Session) -> list[str]:
-    """Active-credential usernames of subscribers with >=1 no-access sub
-    (blocked or terminated) and no active sub."""
+    """Active-credential usernames that must not have normal RADIUS access."""
+    parent_blocked_subscribers = (
+        select(Subscriber.id)
+        .where(Subscriber.status.in_(RADIUS_BLOCKING_SUBSCRIBER_STATUSES))
+        .subquery()
+    )
     blocked_subscribers = (
         select(Subscription.subscriber_id)
         .where(Subscription.status.in_(_NO_ACCESS_STATUSES))
@@ -86,8 +92,13 @@ def _fully_blocked_usernames(db: Session) -> list[str]:
         select(AccessCredential.username)
         .distinct()
         .where(AccessCredential.is_active.is_(True))
-        .where(AccessCredential.subscriber_id.in_(select(blocked_subscribers)))
-        .where(AccessCredential.subscriber_id.notin_(select(active_subscribers)))
+        .where(
+            AccessCredential.subscriber_id.in_(select(parent_blocked_subscribers))
+            | (
+                AccessCredential.subscriber_id.in_(select(blocked_subscribers))
+                & AccessCredential.subscriber_id.notin_(select(active_subscribers))
+            )
+        )
     ).scalars()
     return [u for u in rows if u]
 

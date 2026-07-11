@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -135,6 +135,10 @@ def _enforcement_signals(db: Session) -> dict[str, int]:
     """
     from app.models.catalog import Subscription, SubscriptionStatus
     from app.models.radius_active_session import RadiusActiveSession
+    from app.models.subscriber import Subscriber, SubscriberStatus
+    from app.services.subscriber_access_policy import (
+        RADIUS_BLOCKING_SUBSCRIBER_STATUSES,
+    )
 
     active_sessions = int(
         db.execute(select(func.count()).select_from(RadiusActiveSession)).scalar() or 0
@@ -148,9 +152,13 @@ def _enforcement_signals(db: Session) -> dict[str, int]:
                 Subscription,
                 Subscription.id == RadiusActiveSession.subscription_id,
             )
+            .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
             .where(
-                Subscription.status.in_(
-                    (SubscriptionStatus.suspended, SubscriptionStatus.blocked)
+                or_(
+                    Subscription.status.in_(
+                        (SubscriptionStatus.suspended, SubscriptionStatus.blocked)
+                    ),
+                    Subscriber.status.in_(RADIUS_BLOCKING_SUBSCRIBER_STATUSES),
                 )
             )
         ).scalar()
@@ -162,8 +170,11 @@ def _enforcement_signals(db: Session) -> dict[str, int]:
         db.execute(
             select(func.count())
             .select_from(Subscription)
+            .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
             .where(
                 Subscription.status == SubscriptionStatus.active,
+                Subscriber.status == SubscriberStatus.active,
+                Subscriber.is_active.is_(True),
                 Subscription.login.isnot(None),
                 Subscription.login != "",
                 Subscription.login.not_in(session_logins),

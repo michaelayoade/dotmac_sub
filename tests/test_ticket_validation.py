@@ -126,6 +126,29 @@ def test_duplicate_open_ticket_can_be_blocked_by_metadata_policy(
     assert "Duplicate open ticket already exists" in str(exc.value.detail)
 
 
+def test_duplicate_open_ticket_context_matches_customer_person_link(
+    db_session, subscriber
+):
+    first = support_service.tickets.create(
+        db_session,
+        _payload(
+            customer_person_id=subscriber.id,
+            ticket_type="Router Troubleshooting",
+        ),
+        actor_id=str(subscriber.id),
+    )
+
+    context = ticket_validation.build_pre_create_context(
+        db_session,
+        _payload(
+            customer_person_id=subscriber.id,
+            ticket_type="Router Troubleshooting",
+        ),
+    )
+
+    assert context["duplicate_ticket_id"] == str(first.id)
+
+
 def test_duplicate_override_allows_repeated_ticket_type(db_session, subscriber):
     support_service.tickets.create(
         db_session,

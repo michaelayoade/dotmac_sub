@@ -5,9 +5,15 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 
+from app.models.catalog import AccessState, BillingMode, SubscriptionStatus
+from app.models.subscriber import SubscriberStatus
 from app.models.support import Ticket, TicketStatus
-from app.services.customer_service_state import get_customer_service_state
+from app.services.customer_service_state import (
+    get_customer_service_state,
+    resolve_customer_billing_access_state,
+)
 from app.services.topology.connection_status import Assessment
 from tests.test_customer_plan_change_prepaid import _make_offer, _make_subscription
 
@@ -43,6 +49,96 @@ def _assessment(state: str, *, area: bool = False) -> Assessment:
         advice=None,
         checked_at=datetime.now(UTC),
     )
+
+
+def _resolver_objects(
+    *,
+    subscriber_status=SubscriberStatus.active,
+    subscription_status=SubscriptionStatus.active,
+    billing_mode=BillingMode.postpaid,
+    is_active=True,
+    billing_enabled=True,
+    captive_redirect_enabled=False,
+):
+    subscriber_id = uuid.uuid4()
+    subscriber = SimpleNamespace(
+        id=subscriber_id,
+        status=subscriber_status,
+        billing_mode=billing_mode,
+        is_active=is_active,
+        billing_enabled=billing_enabled,
+        captive_redirect_enabled=captive_redirect_enabled,
+    )
+    subscription = SimpleNamespace(
+        id=uuid.uuid4(),
+        subscriber_id=subscriber_id,
+        status=subscription_status,
+        billing_mode=billing_mode,
+        subscriber=subscriber,
+    )
+    return subscriber, subscription
+
+
+def test_billing_access_resolver_active_postpaid_is_invoice_and_radius_eligible():
+    _subscriber, subscription = _resolver_objects()
+
+    state = resolve_customer_billing_access_state(subscription)
+
+    assert state.active_customer_service is True
+    assert state.counts_for_customer_impact is True
+    assert state.billable_account is True
+    assert state.postpaid_invoice_eligible is True
+    assert state.prepaid_enforcement_eligible is False
+    assert state.radius_access_state == AccessState.active
+    assert state.radius_mode == "active"
+    assert state.radius_allowed is True
+    assert state.access_block_reason is None
+
+
+def test_billing_access_resolver_active_prepaid_uses_prepaid_enforcement_path():
+    _subscriber, subscription = _resolver_objects(billing_mode=BillingMode.prepaid)
+
+    state = resolve_customer_billing_access_state(subscription)
+
+    assert state.active_customer_service is True
+    assert state.postpaid_invoice_eligible is False
+    assert state.prepaid_enforcement_eligible is True
+    assert state.billing_block_reason == "prepaid_not_postpaid_invoice_eligible"
+    assert state.radius_mode == "active"
+
+
+def test_billing_access_resolver_parent_hard_block_overrides_active_subscription():
+    _subscriber, subscription = _resolver_objects(
+        subscriber_status=SubscriberStatus.disabled
+    )
+
+    state = resolve_customer_billing_access_state(subscription)
+
+    assert state.active_customer_service is False
+    assert state.billable_account is False
+    assert state.postpaid_invoice_eligible is False
+    assert state.radius_access_state == AccessState.suspended
+    assert state.radius_mode == "reject"
+    assert state.radius_allowed is False
+    assert state.radius_blocked is True
+    assert state.access_block_reason == "subscriber_status_disabled"
+    assert state.billing_block_reason == "subscriber_status_disabled"
+
+
+def test_billing_access_resolver_delinquent_is_billable_but_radius_permissive():
+    _subscriber, subscription = _resolver_objects(
+        subscriber_status=SubscriberStatus.delinquent
+    )
+
+    state = resolve_customer_billing_access_state(subscription)
+
+    assert state.active_customer_service is False
+    assert state.counts_for_customer_impact is False
+    assert state.billable_account is True
+    assert state.postpaid_invoice_eligible is True
+    assert state.radius_access_state == AccessState.active
+    assert state.radius_allowed is True
+    assert state.access_block_reason is None
 
 
 def test_connected_customer_has_no_suppression(db_session, subscriber, monkeypatch):

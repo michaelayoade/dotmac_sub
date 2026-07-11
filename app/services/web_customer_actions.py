@@ -19,7 +19,6 @@ from sqlalchemy.orm import Session
 from app.models.audit import AuditActorType
 from app.models.auth import ApiKey, MFAMethod, UserCredential
 from app.models.auth import Session as AuthSession
-from app.models.billing import Invoice, InvoiceStatus
 from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.notification import (
     Notification,
@@ -51,6 +50,7 @@ from app.services import web_customer_lists as web_customer_lists_service
 from app.services.branding_config import get_brand
 from app.services.common import coerce_uuid
 from app.services.common import parse_date_filter as _parse_date
+from app.services.customer_financial_position import get_customer_financial_position
 from app.services.customer_identity_normalization import (
     normalize_email_identifier,
     normalize_phone_identifier,
@@ -561,42 +561,20 @@ def _format_money_ngn(value: Decimal | int | float | str | None) -> str:
 
 def _billing_template_variables(db: Session, subscriber: Subscriber) -> dict[str, str]:
     now = datetime.now(UTC)
-    open_statuses = (
-        InvoiceStatus.issued,
-        InvoiceStatus.partially_paid,
-        InvoiceStatus.overdue,
+    position = get_customer_financial_position(
+        db,
+        subscriber.id,
+        now=now,
+        include_prepaid_balance=False,
     )
-    invoices = list(
-        db.scalars(
-            select(Invoice)
-            .where(Invoice.account_id == subscriber.id)
-            .where(Invoice.is_active.is_(True))
-            .where(Invoice.status.in_(open_statuses))
-            .where(Invoice.balance_due > 0)
-            .order_by(Invoice.due_at.asc().nullslast(), Invoice.created_at.asc())
-        ).all()
-    )
-    outstanding = sum(
-        (Decimal(str(invoice.balance_due or 0)) for invoice in invoices),
-        Decimal("0"),
-    )
-    overdue_invoices = [
-        invoice
-        for invoice in invoices
-        if invoice.due_at and invoice.due_at.date() < now.date()
-    ]
-    oldest_overdue = overdue_invoices[0] if overdue_invoices else None
-    days_overdue = (
-        max(0, (now.date() - oldest_overdue.due_at.date()).days)
-        if oldest_overdue and oldest_overdue.due_at
-        else 0
-    )
+    outstanding = position.open_invoice_balance
+    oldest_overdue = position.oldest_due_invoice
     app_url = get_brand()["app_url"].rstrip("/")
     return {
         "amount": _format_money_ngn(outstanding),
         "total_amount": _format_money_ngn(outstanding),
         "balance_due": _format_money_ngn(outstanding),
-        "days_overdue": str(days_overdue),
+        "days_overdue": str(position.days_overdue),
         "invoice_number": str(oldest_overdue.invoice_number or "")
         if oldest_overdue
         else "",

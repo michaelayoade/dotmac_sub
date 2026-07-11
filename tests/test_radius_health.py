@@ -55,6 +55,7 @@ def _session_row(db_session, *, username: str, subscription=None):
 
 def test_enforcement_signals_counts_drift(db_session, subscriber, monkeypatch):
     from app.models.catalog import SubscriptionStatus
+    from app.models.subscriber import Subscriber, SubscriberStatus
 
     online = _subscription(
         db_session,
@@ -74,6 +75,26 @@ def test_enforcement_signals_counts_drift(db_session, subscriber, monkeypatch):
     )
     _session_row(db_session, username="susp-1", subscription=suspended)
 
+    disabled = Subscriber(
+        first_name="Radius",
+        last_name="Disabled",
+        email="radius-disabled@example.com",
+        status=SubscriberStatus.disabled,
+        is_active=False,
+    )
+    db_session.add(disabled)
+    db_session.commit()
+    disabled_stale_active = _subscription(
+        db_session,
+        disabled,
+        login="disabled-active-1",
+        status=SubscriptionStatus.active,
+        name="RH Disabled Active",
+    )
+    _session_row(
+        db_session, username="disabled-active-1", subscription=disabled_stale_active
+    )
+
     # active, has login, no session -> paid_active_without_session
     _subscription(
         db_session,
@@ -85,8 +106,8 @@ def test_enforcement_signals_counts_drift(db_session, subscriber, monkeypatch):
 
     signals = radius_health._enforcement_signals(db_session)
 
-    assert signals["active_sessions"] == 2
-    assert signals["suspended_with_session"] == 1
+    assert signals["active_sessions"] == 3
+    assert signals["suspended_with_session"] == 2
     assert signals["paid_active_without_session"] == 1
 
 

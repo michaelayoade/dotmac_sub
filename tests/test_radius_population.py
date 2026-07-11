@@ -5,10 +5,10 @@ import types
 from app.models.catalog import SubscriptionStatus
 from app.models.subscriber import SubscriberCategory, SubscriberStatus, UserType
 from app.services.radius_population import (
-    RADIUS_BLOCKING_SUBSCRIBER_STATUSES,
     _captive_redirect_allowed,
     _radreply_attrs,
 )
+from app.services.subscriber_access_policy import RADIUS_BLOCKING_SUBSCRIBER_STATUSES
 
 
 def test_account_level_radius_blocking_statuses():

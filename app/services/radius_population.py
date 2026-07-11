@@ -31,7 +31,6 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
-from app.models.subscriber import SubscriberStatus
 from app.services.credential_crypto import (
     decrypt_credential_with_key,
     get_encryption_key,
@@ -41,20 +40,12 @@ from app.services.radius_address_lists import (
     suspended_address_list,
 )
 from app.services.radius_dsn import radius_dsn_libpq
+from app.services.radius_projection_planner import plan_radius_projection
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
 ACCT_INTERIM_SECONDS = 300  # 5 min Acct-Interim-Update cadence
-RADIUS_BLOCKING_SUBSCRIBER_STATUSES = frozenset(
-    {
-        SubscriberStatus.blocked,
-        SubscriberStatus.suspended,
-        SubscriberStatus.disabled,
-        SubscriberStatus.canceled,
-        SubscriberStatus.new,
-    }
-)
 SUSPENDED_ADDRESS_LIST = DEFAULT_SUSPENDED_ADDRESS_LIST
 
 
@@ -291,38 +282,6 @@ def populate(dry_run: bool = True) -> dict[str, int]:
             p.id: p for p in db.scalars(select(RadiusProfile)).all()
         }
 
-        # Pre-fetch subscriber IDs whose account-level state must not get
-        # normal active RADIUS service even if a stale child subscription row is
-        # still marked active. Delinquent is intentionally excluded: it is a
-        # pre-suspension state where service may still be running.
-        blocked_subscriber_ids: set = {
-            sid
-            for (sid,) in db.execute(
-                select(Subscriber.id).where(
-                    Subscriber.status.in_(RADIUS_BLOCKING_SUBSCRIBER_STATUSES)
-                )
-            ).all()
-        }
-        logger.info(
-            "%d subscribers in blocked state",
-            len(blocked_subscriber_ids),
-        )
-
-        # Per-customer opt-in for the soft captive redirect. Blocked subscribers
-        # NOT in this set are hard-rejected (Auth-Type := Reject) instead of
-        # walled-gardened — the captive redirect is opt-in, not every account.
-        captive_optin_ids: set = {
-            sid
-            for (sid,) in db.execute(
-                select(Subscriber.id).where(
-                    Subscriber.captive_redirect_enabled.is_(True)
-                )
-            ).all()
-        }
-        logger.info(
-            "%d subscribers opted into captive redirect", len(captive_optin_ids)
-        )
-
         # Pre-fetch additional routed IP blocks,
         # keyed by subscriber_id, so each user's Framed-Routes are O(1) in the
         # sweep loop below.
@@ -403,11 +362,17 @@ def populate(dry_run: bool = True) -> dict[str, int]:
                 stats["skipped_no_password"] += 1
                 continue
 
-            sub_blocked = sub.subscriber_id in blocked_subscriber_ids
-            requested_captive = sub.subscriber_id in captive_optin_ids
+            requested_captive = bool(
+                getattr(sub.subscriber, "captive_redirect_enabled", False)
+            )
             captive = requested_captive and _captive_redirect_allowed(sub.subscriber)
             if requested_captive and not captive:
                 stats["captive_ineligible_optins"] += 1
+            projection = plan_radius_projection(
+                sub,
+                captive_redirect_enabled=captive,
+            )
+            sub_blocked = projection.blocked
             eff_ipv4 = sub.ipv4_address
             if not eff_ipv4 or eff_ipv4 == "0.0.0.0":  # nosec B104  # noqa: S104
                 eff_ipv4 = ipv4_by_subscriber.get(sub.subscriber_id)
@@ -428,20 +393,12 @@ def populate(dry_run: bool = True) -> dict[str, int]:
                 delegated_ipv6=pd_by_subscriber.get(sub.subscriber_id),
                 suspended_list_name=suspended_list_name,
             )
-            blocked_flag = sub_blocked or sub.status in (
-                SubscriptionStatus.blocked,
-                SubscriptionStatus.suspended,
-            )
+            blocked_flag = projection.blocked
             # Enforcement mode for the radcheck write: active subs and opted-in
             # blocked subs keep a usable password (captive subs are walled via
             # the radreply Address-List); non-opted blocked subs are hard
             # rejected (Auth-Type := Reject, offline).
-            if blocked_flag and not captive:
-                mode = "reject"
-            elif blocked_flag:
-                mode = "captive"
-            else:
-                mode = "active"
+            mode = projection.mode
             # Duplicate logins (migration duplicates): the ACTIVE sub wins the
             # slot — subscriber-level block still dominates via sub_blocked,
             # so a blocked customer stays enforced either way.

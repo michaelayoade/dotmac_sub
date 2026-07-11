@@ -53,6 +53,17 @@ class BillingProfile:
         return BillingMode.prepaid in self.subscription_modes
 
 
+@dataclass(frozen=True)
+class BillingModeTransitionDecision:
+    account_id: UUID
+    current_mode: BillingMode | None
+    target_mode: BillingMode
+    allowed: bool
+    reason: str | None
+    requires_subscription_alignment: bool
+    profile: BillingProfile
+
+
 def resolve_billing_profile(db: Session, account: Subscriber) -> BillingProfile:
     rows = (
         db.query(Subscription.billing_mode)
@@ -95,4 +106,62 @@ def resolve_billing_profile(db: Session, account: Subscriber) -> BillingProfile:
         effective_mode=account_mode,
         source="account",
         account_subscription_mismatch=False,
+    )
+
+
+def plan_billing_mode_transition(
+    profile: BillingProfile,
+    target_mode: BillingMode,
+    *,
+    allow_mixed_subscription_modes: bool = False,
+) -> BillingModeTransitionDecision:
+    """Decide whether an account can move to ``target_mode`` safely.
+
+    This is a policy decision only; callers still own the actual mutations and
+    any financial reconciliation required before changing modes.
+    """
+    if (
+        profile.effective_mode == target_mode
+        and not profile.account_subscription_mismatch
+    ):
+        return BillingModeTransitionDecision(
+            account_id=profile.account_id,
+            current_mode=profile.effective_mode,
+            target_mode=target_mode,
+            allowed=True,
+            reason="already_aligned",
+            requires_subscription_alignment=False,
+            profile=profile,
+        )
+
+    if profile.has_mixed_subscription_modes and not allow_mixed_subscription_modes:
+        return BillingModeTransitionDecision(
+            account_id=profile.account_id,
+            current_mode=profile.effective_mode,
+            target_mode=target_mode,
+            allowed=False,
+            reason="mixed_collectible_subscription_billing_modes",
+            requires_subscription_alignment=True,
+            profile=profile,
+        )
+
+    if profile.account_subscription_mismatch:
+        return BillingModeTransitionDecision(
+            account_id=profile.account_id,
+            current_mode=profile.effective_mode,
+            target_mode=target_mode,
+            allowed=False,
+            reason="account_subscription_billing_mode_mismatch",
+            requires_subscription_alignment=True,
+            profile=profile,
+        )
+
+    return BillingModeTransitionDecision(
+        account_id=profile.account_id,
+        current_mode=profile.effective_mode,
+        target_mode=target_mode,
+        allowed=True,
+        reason=None,
+        requires_subscription_alignment=profile.has_collectible_subscriptions,
+        profile=profile,
     )

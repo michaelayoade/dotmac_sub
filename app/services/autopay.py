@@ -27,13 +27,12 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models.autopay import AutopayMandate
 from app.models.billing import (
     Invoice,
-    InvoiceStatus,
     Payment,
     PaymentMethod,
     PaymentMethodType,
@@ -50,14 +49,9 @@ from app.services.billing_settings import account_has_collectible_service
 from app.services.common import coerce_uuid, round_money, to_decimal
 from app.services.events import emit_event
 from app.services.events.types import EventType
+from app.services.invoice_collectibility import list_open_invoices
 
 logger = logging.getLogger(__name__)
-
-_OPEN_STATUSES = (
-    InvoiceStatus.issued,
-    InvoiceStatus.partially_paid,
-    InvoiceStatus.overdue,
-)
 
 # Default max consecutive failed runs before the customer must re-enable autopay
 # or pick a new default card to reset the counter.
@@ -189,25 +183,7 @@ def _charge_only_due(db: Session) -> bool:
 
 
 def _open_invoices(db: Session, account_id: str) -> builtins.list[Invoice]:
-    query = select(Invoice).where(
-        Invoice.account_id == coerce_uuid(account_id),
-        Invoice.is_active.is_(True),
-        Invoice.status.in_(_OPEN_STATUSES),
-        Invoice.balance_due > 0,
-    )
-    if _charge_only_due(db):
-        # Only invoices that are actually due: past their due date, or flagged
-        # overdue without a due date. Freshly issued, not-yet-due invoices wait.
-        query = query.where(
-            or_(
-                Invoice.due_at <= datetime.now(UTC),
-                and_(
-                    Invoice.due_at.is_(None),
-                    Invoice.status == InvoiceStatus.overdue,
-                ),
-            )
-        )
-    return list(db.scalars(query).all())
+    return list_open_invoices(db, account_id, due_only=_charge_only_due(db))
 
 
 def _email(db: Session, account_id: str) -> str:
