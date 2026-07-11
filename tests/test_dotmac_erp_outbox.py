@@ -457,7 +457,7 @@ def test_single_alembic_head():
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ["250_field_material_request_erp_fields"]
+    assert script.get_heads() == ["251_event_handler_attempts"]
 
 
 def test_migration_249_adds_integration_settingdomain():

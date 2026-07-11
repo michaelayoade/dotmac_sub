@@ -420,8 +420,8 @@ def test_migration_244_is_single_alembic_head():
     script = ScriptDirectory.from_config(config)
     heads = script.get_heads()
     # The chain keeps advancing as later PRs stack on; the ERP re-home PR 3
-    # added 250_field_material_request_erp_fields as the current single head.
-    assert heads == ["250_field_material_request_erp_fields"]
+    # added 251_event_handler_attempts as the current single head.
+    assert heads == ["251_event_handler_attempts"]
 
 
 def test_migration_244_source_recreates_leads_partial_unique():
