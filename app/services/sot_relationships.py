@@ -140,6 +140,16 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=("cross-model network links", "device/entity identity"),
             ),
             SOTService(
+                name="network.monitoring_inventory",
+                module="app.services.network_monitoring",
+                owns=(
+                    "monitoring inventory mutations",
+                    "monitoring metric records",
+                    "alert rule and alert state mutations",
+                ),
+                depends_on=("network.identity",),
+            ),
+            SOTService(
                 name="network.access_path",
                 module="app.services.network.access_path",
                 owns=("subscription access path", "last-mile path summary"),

@@ -22,6 +22,7 @@ from app.models.network_monitoring import (
     AlertStatus,
     DeviceMetric,
     MetricType,
+    PopSite,
 )
 from app.models.subscription_engine import SettingValueType
 from app.models.system_user import SystemUser
@@ -55,6 +56,18 @@ def test_create_pop_site(db_session):
     )
     assert pop.name == "Downtown POP"
     assert pop.code == "DT001"
+
+
+def test_create_pop_site_committed_persists(db_session):
+    pop = monitoring_service.pop_sites.create_committed(
+        db_session,
+        PopSiteCreate(name="Committed POP", code="CPOP"),
+    )
+
+    persisted = db_session.get(PopSite, pop.id)
+
+    assert persisted is not None
+    assert persisted.name == "Committed POP"
 
 
 def test_update_pop_site(db_session):

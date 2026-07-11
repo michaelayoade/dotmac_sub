@@ -86,13 +86,15 @@ should not write heartbeat/run rows directly unless they are the helper.
 Dependency order:
 
 1. `network.identity`: resolves cross-model network/customer links.
-2. `network.access_path`: resolves `subscriber/subscription -> access path`.
-3. `network.radius_sessions`: resolves online-now state from active sessions.
-4. `network.device_state`: resolves device state from admin/live/poll signals.
-5. `network.outage_impact`: resolves affected customers from topology.
-6. `network.device_groups`: owns device-group mutations, membership, and bulk
+2. `network.monitoring_inventory`: owns monitoring inventory, metric records,
+   alert rules, and alert state mutations.
+3. `network.access_path`: resolves `subscriber/subscription -> access path`.
+4. `network.radius_sessions`: resolves online-now state from active sessions.
+5. `network.device_state`: resolves device state from admin/live/poll signals.
+6. `network.outage_impact`: resolves affected customers from topology.
+7. `network.device_groups`: owns device-group mutations, membership, and bulk
    action queueing.
-7. `network.events`: turns resolved state/impact into event decisions.
+8. `network.events`: turns resolved state/impact into event decisions.
 
 Rule: pollers write observations; resolver services decide state; event services
 decide consequences. Customer-facing outage, SLA, expiry suppression, support
