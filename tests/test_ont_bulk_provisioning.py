@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any
 from uuid import UUID
 
@@ -81,17 +80,16 @@ def test_bulk_direct_compat_task_dedupes_and_executes(monkeypatch):
 
     provisioned: list[str] = []
 
-    def fake_provision(db, ont_id, **kwargs):  # type: ignore[no-untyped-def]
+    def fake_provision(ont_id, **kwargs):  # type: ignore[no-untyped-def]
         provisioned.append(ont_id)
-        return SimpleNamespace(
-            success=True,
-            message=f"provisioned {ont_id}",
-            duration_ms=1,
-            step_name="authorization_baseline",
-        )
+        return {
+            "success": True,
+            "waiting": False,
+            "message": f"provisioned {ont_id}",
+        }
 
     monkeypatch.setattr(
-        "app.services.network.ont_provision_steps.apply_authorization_baseline",
+        "app.tasks.ont_provisioning.provision_ont.run",
         fake_provision,
     )
 
@@ -148,17 +146,25 @@ def test_bulk_direct_compat_task_uses_bulk_item_correlation(
 
     captured: dict[str, Any] = {}
 
-    def fake_provision(db, ont_id, **kwargs):  # type: ignore[no-untyped-def]
+    def fake_provision(ont_id, **kwargs):  # type: ignore[no-untyped-def]
         captured["ont_id"] = ont_id
-        return SimpleNamespace(
-            success=True,
-            message="ok",
-            duration_ms=1,
-            step_name="authorization_baseline",
+        captured.update(kwargs)
+        from app.services.network.bulk_provisioning import mark_bulk_item_completed
+
+        mark_bulk_item_completed(
+            db_session,
+            kwargs["bulk_item_id"],
+            {"success": True, "waiting": False, "message": "ok"},
         )
+        return {
+            "success": True,
+            "waiting": False,
+            "message": "ok",
+            "operation_id": "operation-1",
+        }
 
     monkeypatch.setattr(
-        "app.services.network.ont_provision_steps.apply_authorization_baseline",
+        "app.tasks.ont_provisioning.provision_ont.run",
         fake_provision,
     )
     monkeypatch.setattr(
@@ -189,17 +195,16 @@ def test_bulk_direct_compat_task_uses_bulk_item_correlation(
 def test_bulk_direct_compat_task_counts_failed_results(monkeypatch):
     from app.tasks.ont_provisioning import queue_bulk_provisioning
 
-    def fake_provision(db, ont_id, **kwargs):  # type: ignore[no-untyped-def]
+    def fake_provision(ont_id, **kwargs):  # type: ignore[no-untyped-def]
         success = ont_id != "ont-fail"
-        return SimpleNamespace(
-            success=success,
-            message="ok" if success else "baseline failed",
-            duration_ms=1,
-            step_name="authorization_baseline",
-        )
+        return {
+            "success": success,
+            "waiting": False,
+            "message": "ok" if success else "baseline failed",
+        }
 
     monkeypatch.setattr(
-        "app.services.network.ont_provision_steps.apply_authorization_baseline",
+        "app.tasks.ont_provisioning.provision_ont.run",
         fake_provision,
     )
 

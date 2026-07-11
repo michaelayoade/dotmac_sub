@@ -1012,6 +1012,10 @@ def test_direct_provision_route_ignores_posted_tr069_profile_override(
             message="ok",
             duration_ms=1,
             step_name="authorization_baseline",
+            waiting=False,
+            critical=True,
+            skipped=False,
+            data=None,
         )
 
     monkeypatch.setattr(
@@ -1032,6 +1036,7 @@ def test_direct_provision_route_ignores_posted_tr069_profile_override(
     response = network_onts_provisioning.provision_ont_direct(
         SimpleNamespace(headers={}),
         "ont-1",
+        dry_run=True,
         async_execution=False,
         db=db_session,
     )

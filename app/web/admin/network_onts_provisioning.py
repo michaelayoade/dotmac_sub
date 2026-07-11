@@ -416,40 +416,57 @@ def provision_ont_direct(
     Normal authorization applies this baseline automatically. This endpoint is
     kept for manual repair of already-authorized ONTs.
     """
-    del async_execution
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
         return denied
 
+    # Device writes always run through the tracked worker lifecycle. A dry run
+    # is DB-only and remains synchronous for immediate preview feedback.
+    if not dry_run:
+        from app.services.queue_adapter import enqueue_task
+
+        initiated_by = actor_label(request)
+        dispatch = enqueue_task(
+            "app.tasks.ont_provisioning.provision_ont",
+            args=[ont_id],
+            kwargs={
+                "dry_run": False,
+                "initiated_by": initiated_by,
+                "correlation_key": f"provision:{ont_id}",
+            },
+            correlation_id=f"provision:{ont_id}",
+            source="admin_ont_provisioning",
+            actor_id=initiated_by,
+        )
+        if not dispatch.queued:
+            return _step_response(
+                StepResult(
+                    "authorization_baseline",
+                    False,
+                    f"Could not queue ONT provisioning: {dispatch.error or 'unknown queue error'}",
+                ),
+                request=request,
+                ont_id=ont_id,
+            )
+        return _step_response(
+            StepResult(
+                "authorization_baseline",
+                True,
+                "ONT provisioning queued; waiting for device confirmation.",
+                waiting=True,
+                data={
+                    "task_id": dispatch.task_id,
+                    "correlation_key": f"provision:{ont_id}",
+                    "waiting_reason": "device_confirmation",
+                },
+            ),
+            request=request,
+            ont_id=ont_id,
+        )
+
     result = steps.apply_authorization_baseline(db, ont_id, dry_run=dry_run)
 
-    log_network_action_result(
-        request=request,
-        resource_type="ont",
-        resource_id=ont_id,
-        action="Provision ONT",
-        success=result.success,
-        message=result.message,
-        metadata={
-            "duration_ms": result.duration_ms,
-            "step_name": result.step_name,
-        },
-    )
-
-    toast_type = "success" if result.success else "error"
-    status_code = 200 if result.success else 400
-
-    return JSONResponse(
-        content={
-            "success": result.success,
-            "message": result.message,
-            "ont_id": ont_id,
-            "duration_ms": result.duration_ms,
-            "step_name": result.step_name,
-        },
-        status_code=status_code,
-        headers=_toast_headers(result.message, toast_type),
-    )
+    return _step_response(result, request=request, ont_id=ont_id)
 
 
 @router.post(

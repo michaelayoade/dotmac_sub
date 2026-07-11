@@ -1462,7 +1462,7 @@ def apply_authorization_baseline(
     baseline_domain_outcomes.update(
         dict((baseline_result.data or {}).get("domain_outcomes", {}))
     )
-    if baseline_result.success:
+    if baseline_result.success and not dry_run:
         _set_domain_outcome(
             baseline_domain_outcomes,
             "acs_bootstrap_verify",
@@ -1680,15 +1680,42 @@ def provision_with_reconciliation(
     steps_completed: list[str] = []
     created_port_indices: list[int] = []
     domain_outcomes: dict[str, dict[str, Any]] = {}
+    command_timings: list[dict[str, Any]] = []
+
+    def _run_olt_command(name: str, command: Callable[[], Any]) -> Any:
+        command_started = time.monotonic()
+        try:
+            command_result = command()
+        except Exception as exc:
+            command_timings.append(
+                {
+                    "command": name,
+                    "success": False,
+                    "duration_ms": int((time.monotonic() - command_started) * 1000),
+                    "error_type": type(exc).__name__,
+                }
+            )
+            raise
+        command_timings.append(
+            {
+                "command": name,
+                "success": bool(getattr(command_result, "success", False)),
+                "duration_ms": int((time.monotonic() - command_started) * 1000),
+            }
+        )
+        return command_result
 
     # 1. Create internet service port (adapter returns success on "already exists")
     _commit_without_expiring(db)
     if wan_vlan:
-        result = adapter.create_service_port(
-            ctx.fsp,
-            ctx.olt_ont_id,
-            gem_index=int(wan_gem),
-            vlan_id=int(wan_vlan),
+        result = _run_olt_command(
+            "create_internet_service_port",
+            lambda: adapter.create_service_port(
+                ctx.fsp,
+                ctx.olt_ont_id,
+                gem_index=int(wan_gem),
+                vlan_id=int(wan_vlan),
+            ),
         )
         if not result.success:
             ms = int((time.monotonic() - t0) * 1000)
@@ -1703,7 +1730,8 @@ def provision_with_reconciliation(
                             "status": "terminal_failure",
                             "message": f"Internet service port failed: {result.message}",
                         }
-                    }
+                    },
+                    {"command_timings": command_timings},
                 ),
             )
             _record_step(db, ctx.ont, "provision", step_result)
@@ -1714,16 +1742,24 @@ def provision_with_reconciliation(
             created_port_indices.append(result.data["service_port_index"])
 
         if wan_mode == "bridge":
-            native_result = adapter.configure_port_native_vlan(
-                ctx.fsp,
-                ctx.olt_ont_id,
-                eth_port=1,
-                vlan_id=int(wan_vlan),
+            native_result = _run_olt_command(
+                "configure_bridge_native_vlan",
+                lambda: adapter.configure_port_native_vlan(
+                    ctx.fsp,
+                    ctx.olt_ont_id,
+                    eth_port=1,
+                    vlan_id=int(wan_vlan),
+                ),
             )
             if not native_result.success:
                 for port_idx in created_port_indices:
                     try:
-                        adapter.delete_service_port(port_idx)
+                        _run_olt_command(
+                            "rollback_internet_service_port",
+                            lambda port_idx=port_idx: adapter.delete_service_port(
+                                port_idx
+                            ),
+                        )
                     except Exception:
                         pass
                 ms = int((time.monotonic() - t0) * 1000)
@@ -1739,7 +1775,10 @@ def provision_with_reconciliation(
                                 "message": f"Bridge native VLAN failed: {native_result.message}",
                             }
                         },
-                        {"rollback_performed": len(created_port_indices) > 0},
+                        {
+                            "rollback_performed": len(created_port_indices) > 0,
+                            "command_timings": command_timings,
+                        },
                     ),
                 )
                 _record_step(db, ctx.ont, "provision", step_result)
@@ -1769,15 +1808,28 @@ def provision_with_reconciliation(
     stale_cleared = []
     _commit_without_expiring(db)
     for ip_index in (0, 1):
-        result = adapter.clear_iphost_config(ctx.fsp, ctx.olt_ont_id, ip_index=ip_index)
+        result = _run_olt_command(
+            f"clear_iphost_{ip_index}",
+            lambda ip_index=ip_index: adapter.clear_iphost_config(
+                ctx.fsp, ctx.olt_ont_id, ip_index=ip_index
+            ),
+        )
         if result.success:
             stale_cleared.append(f"iphost:{ip_index}")
-        result = adapter.clear_internet_config(
-            ctx.fsp, ctx.olt_ont_id, ip_index=ip_index
+        result = _run_olt_command(
+            f"clear_internet_config_{ip_index}",
+            lambda ip_index=ip_index: adapter.clear_internet_config(
+                ctx.fsp, ctx.olt_ont_id, ip_index=ip_index
+            ),
         )
         if result.success:
             stale_cleared.append(f"internet-config:{ip_index}")
-        result = adapter.clear_wan_config(ctx.fsp, ctx.olt_ont_id, ip_index=ip_index)
+        result = _run_olt_command(
+            f"clear_wan_config_{ip_index}",
+            lambda ip_index=ip_index: adapter.clear_wan_config(
+                ctx.fsp, ctx.olt_ont_id, ip_index=ip_index
+            ),
+        )
         if result.success:
             stale_cleared.append(f"wan-config:{ip_index}")
     if stale_cleared:
@@ -1807,7 +1859,8 @@ def provision_with_reconciliation(
                         "status": "terminal_failure",
                         "message": "Management VLAN not resolved (config pack incomplete?)",
                     },
-                }
+                },
+                {"command_timings": command_timings},
             ),
         )
         _record_step(db, ctx.ont, "provision", step_result)
@@ -1833,7 +1886,8 @@ def provision_with_reconciliation(
                             "status": "terminal_failure",
                             "message": mgmt_message,
                         },
-                    }
+                    },
+                    {"command_timings": command_timings},
                 ),
             )
             _record_step(db, ctx.ont, "provision", step_result)
@@ -1865,7 +1919,8 @@ def provision_with_reconciliation(
                                 "status": "terminal_failure",
                                 "message": "OLT config pack not found after management IP allocation",
                             },
-                        }
+                        },
+                        {"command_timings": command_timings},
                     ),
                 )
                 _record_step(db, ctx.ont, "provision", step_result)
@@ -1909,7 +1964,8 @@ def provision_with_reconciliation(
                                 "imported OLT state"
                             ),
                         },
-                    }
+                    },
+                    {"command_timings": command_timings},
                 ),
             )
             _record_step(db, ctx.ont, "provision", step_result)
@@ -1931,12 +1987,18 @@ def provision_with_reconciliation(
             tr069_profile_id=values.get("tr069_olt_profile_id"),
         )
         _commit_without_expiring(db)
-        result = adapter.configure_management_batch(mgmt_spec)
+        result = _run_olt_command(
+            "configure_management_batch",
+            lambda: adapter.configure_management_batch(mgmt_spec),
+        )
         if not result.success:
             # Rollback created ports on failure
             for port_idx in created_port_indices:
                 try:
-                    adapter.delete_service_port(port_idx)
+                    _run_olt_command(
+                        "rollback_internet_service_port",
+                        lambda port_idx=port_idx: adapter.delete_service_port(port_idx),
+                    )
                 except Exception:
                     pass
             ms = int((time.monotonic() - t0) * 1000)
@@ -1953,7 +2015,10 @@ def provision_with_reconciliation(
                             "message": f"Management config failed: {result.message}",
                         },
                     },
-                    {"rollback_performed": len(created_port_indices) > 0},
+                    {
+                        "rollback_performed": len(created_port_indices) > 0,
+                        "command_timings": command_timings,
+                    },
                 ),
             )
             _record_step(db, ctx.ont, "provision", step_result)
@@ -2044,8 +2109,9 @@ def provision_with_reconciliation(
     service_ports_result = None
     try:
         _commit_without_expiring(db)
-        service_ports_result = adapter.get_service_ports_for_ont(
-            ctx.fsp, ctx.olt_ont_id
+        service_ports_result = _run_olt_command(
+            "readback_service_ports",
+            lambda: adapter.get_service_ports_for_ont(ctx.fsp, ctx.olt_ont_id),
         )
         if service_ports_result.success:
             from app.services.network.imported_service_ports import (
@@ -2117,6 +2183,7 @@ def provision_with_reconciliation(
                         "steps_completed": steps_completed,
                         "created_service_port_indices": created_port_indices,
                         "readback_service_port_indices": readback_port_indices,
+                        "command_timings": command_timings,
                     },
                 ),
             )
@@ -2126,8 +2193,9 @@ def provision_with_reconciliation(
 
         try:
             _commit_without_expiring(db)
-            tr069_binding_result = adapter.get_tr069_profile_binding(
-                ctx.fsp, ctx.olt_ont_id
+            tr069_binding_result = _run_olt_command(
+                "readback_tr069_profile_binding",
+                lambda: adapter.get_tr069_profile_binding(ctx.fsp, ctx.olt_ont_id),
             )
         except Exception as exc:
             logger.exception(
@@ -2159,14 +2227,20 @@ def provision_with_reconciliation(
             and readback_tr069_profile_id != expected_tr069_profile_int
         )
         if needs_tr069_reboot_retry:
-            reboot_result = adapter.reboot_ont(ctx.fsp, ctx.olt_ont_id)
+            reboot_result = _run_olt_command(
+                "reboot_after_tr069_bind",
+                lambda: adapter.reboot_ont(ctx.fsp, ctx.olt_ont_id),
+            )
             if reboot_result.success:
                 steps_completed.append("reset_after_tr069_bind")
                 time.sleep(_TR069_BINDING_READBACK_RETRY_DELAY_SEC)
                 try:
                     _commit_without_expiring(db)
-                    tr069_binding_result = adapter.get_tr069_profile_binding(
-                        ctx.fsp, ctx.olt_ont_id
+                    tr069_binding_result = _run_olt_command(
+                        "readback_tr069_profile_binding_after_reboot",
+                        lambda: adapter.get_tr069_profile_binding(
+                            ctx.fsp, ctx.olt_ont_id
+                        ),
                     )
                 except Exception:
                     logger.exception(
@@ -2261,6 +2335,7 @@ def provision_with_reconciliation(
                         "readback_service_port_indices": readback_port_indices,
                         "expected_tr069_profile_id": expected_tr069_profile_int,
                         "readback_tr069_profile_id": readback_tr069_profile_id,
+                        "command_timings": command_timings,
                     },
                 ),
             )
@@ -2291,6 +2366,7 @@ def provision_with_reconciliation(
                 "created_service_port_indices": created_port_indices,
                 "readback_service_port_indices": readback_port_indices,
                 "readback_tr069_profile_id": readback_tr069_profile_id,
+                "command_timings": command_timings,
             },
         ),
     )

@@ -56,6 +56,8 @@ def _dedupe_ont_ids(ont_ids: list[str | uuid.UUID]) -> tuple[list[uuid.UUID], in
 
 
 def _status_from_result(result: dict[str, Any]) -> BulkProvisioningItemStatus:
+    if result.get("waiting"):
+        return BulkProvisioningItemStatus.waiting
     if result.get("success"):
         return BulkProvisioningItemStatus.succeeded
     return BulkProvisioningItemStatus.failed
@@ -150,14 +152,13 @@ def bulk_provision_onts(
     step_data: dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> BulkProvisioningDispatchResult:
-    """Create a durable bulk run and execute OLT baseline repair synchronously.
+    """Create a durable bulk run and queue tracked OLT baseline repairs.
 
     Normal authorization applies this baseline automatically. This function is
     retained for manual repair and bulk re-apply operations.
     """
-    del provisioning_mode, chunk_delay_seconds, step_data
-    from app.services.network.ont_provision_steps import apply_authorization_baseline
-    from app.services.network.provisioning_events import provisioning_correlation
+    del provisioning_mode, step_data
+    from app.services.queue_adapter import enqueue_task
 
     workers = max(1, min(int(max_workers or 10), 50))
     unique_ont_ids, input_skipped_count = _dedupe_ont_ids(ont_ids)
@@ -183,37 +184,43 @@ def bulk_provision_onts(
         pending_count = 0
 
     processed_count = int(pending_count)
+    orchestrator_task_id: str | None = None
     if pending_count:
         run.status = BulkProvisioningRunStatus.running
-        db.flush()
-
-        pending_items = list_pending_bulk_items(db, run.id)
-        for item in pending_items:
-            mark_bulk_item_running(db, item.id)
-            try:
-                with provisioning_correlation(item.correlation_key):
-                    result = apply_authorization_baseline(
-                        db,
-                        str(item.ont_unit_id),
-                        dry_run=dry_run,
-                        allow_low_optical_margin=allow_low_optical_margin,
-                    )
-                payload = {
-                    "success": result.success,
-                    "message": result.message,
-                    "ont_id": str(item.ont_unit_id),
-                    "duration_ms": result.duration_ms,
-                    "bulk_run_id": str(run.id),
-                    "bulk_item_id": str(item.id),
-                    "correlation_key": item.correlation_key,
-                }
-                mark_bulk_item_completed(db, item.id, payload)
-            except Exception as exc:
-                mark_bulk_item_failed(db, item.id, str(exc))
-
-    finalize_bulk_provisioning_run(db, run.id)
-
-    db.commit()
+        db.commit()
+        dispatch = enqueue_task(
+            "app.tasks.ont_provisioning.queue_bulk_provisioning",
+            args=[[str(ont_id) for ont_id in unique_ont_ids]],
+            kwargs={
+                "dry_run": dry_run,
+                "initiated_by": initiated_by,
+                "max_parallel": workers,
+                "chunk_delay_seconds": chunk_delay_seconds,
+                "bulk_run_id": str(run.id),
+                "allow_low_optical_margin": allow_low_optical_margin,
+            },
+            correlation_id=run_correlation,
+            source=str((metadata or {}).get("source") or "bulk_provisioning"),
+            actor_id=initiated_by,
+        )
+        if dispatch.queued:
+            orchestrator_task_id = dispatch.task_id
+            run.run_metadata = {
+                **(run.run_metadata or {}),
+                "orchestrator_task_id": dispatch.task_id,
+            }
+        else:
+            error = dispatch.error or "unknown queue error"
+            for item in list_pending_bulk_items(db, run.id):
+                mark_bulk_item_failed(
+                    db, item.id, f"Bulk provisioning queue failed: {error}"
+                )
+            run.error_message = f"Bulk provisioning queue failed: {error}"
+        finalize_bulk_provisioning_run(db, run.id)
+        db.commit()
+    else:
+        finalize_bulk_provisioning_run(db, run.id)
+        db.commit()
     return BulkProvisioningDispatchResult(
         run_id=run.id,
         correlation_key=run.correlation_key,
@@ -221,7 +228,7 @@ def bulk_provision_onts(
         total=run.total_count,
         processed=processed_count,
         skipped=run.skipped_count,
-        orchestrator_task_id=None,
+        orchestrator_task_id=orchestrator_task_id,
     )
 
 
@@ -276,12 +283,16 @@ def mark_bulk_item_completed(
         return None
     item.status = _status_from_result(result)
     item.message = str(result.get("message") or "")
-    item.error_message = None if result.get("success") else item.message
+    item.error_message = (
+        None if result.get("success") or result.get("waiting") else item.message
+    )
     item.result_data = {
         **(item.result_data or {}),
         "provisioning_result": result,
     }
-    item.completed_at = datetime.now(UTC)
+    item.completed_at = (
+        None if item.status == BulkProvisioningItemStatus.waiting else datetime.now(UTC)
+    )
     db.flush()
     finalize_bulk_provisioning_run(db, item.run_id)
     return item
@@ -333,7 +344,11 @@ def finalize_bulk_provisioning_run(
         1
         for item in items
         if item.status
-        in {BulkProvisioningItemStatus.pending, BulkProvisioningItemStatus.running}
+        in {
+            BulkProvisioningItemStatus.pending,
+            BulkProvisioningItemStatus.running,
+            BulkProvisioningItemStatus.waiting,
+        }
     )
     if active_count:
         run.status = BulkProvisioningRunStatus.running
