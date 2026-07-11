@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 
 from starlette.requests import Request
 from starlette.responses import Response
 
 from app.main import (
+    api_sync_pressure_guard_middleware,
     csrf_middleware,
     security_headers_middleware,
     view_as_readonly_middleware,
@@ -111,6 +113,76 @@ def test_security_headers_middleware_returns_204_when_no_response(monkeypatch):
     response = _run_async(security_headers_middleware(request, call_next))
 
     assert response.status_code == 204
+
+
+def test_api_sync_pressure_guard_blocks_listed_sync_ip(monkeypatch):
+    request = _build_request(
+        path="/api/v1/sync/customers",
+        headers=[(b"x-forwarded-for", b"149.102.158.167")],
+    )
+    calls: list[tuple[str, int, int]] = []
+
+    def fake_allow_operation(key: str, *, limit: int, window_seconds: int, now=None):
+        calls.append((key, limit, window_seconds))
+        return SimpleNamespace(allowed=False, retry_after_seconds=17)
+
+    monkeypatch.setenv("API_SYNC_PRESSURE_OFFENDER_LIMIT", "12")
+    monkeypatch.setenv("API_SYNC_PRESSURE_WINDOW_SECONDS", "30")
+    monkeypatch.setattr(
+        "app.services.rate_limiter_adapter.allow_operation", fake_allow_operation
+    )
+
+    async def call_next(_request: Request) -> Response:
+        raise AssertionError("blocked API sync traffic must not reach downstream")
+
+    response = _run_async(api_sync_pressure_guard_middleware(request, call_next))
+
+    assert response.status_code == 429
+    assert response.headers["Retry-After"] == "17"
+    assert calls == [("api-v1-pressure:listed:149.102.158.167", 12, 30)]
+
+
+def test_api_sync_pressure_guard_allows_admin_without_rate_limit(monkeypatch):
+    request = _build_request(path="/admin/customers")
+
+    def fake_allow_operation(*args, **kwargs):
+        raise AssertionError("admin paths must not hit the API pressure limiter")
+
+    monkeypatch.setattr(
+        "app.services.rate_limiter_adapter.allow_operation", fake_allow_operation
+    )
+
+    async def call_next(_request: Request) -> Response:
+        return Response("ok", status_code=200)
+
+    response = _run_async(api_sync_pressure_guard_middleware(request, call_next))
+
+    assert response.status_code == 200
+
+
+def test_api_sync_pressure_guard_uses_general_bucket_for_other_api_ips(monkeypatch):
+    request = _build_request(
+        path="/api/v1/subscribers",
+        headers=[(b"x-forwarded-for", b"203.0.113.9")],
+    )
+    calls: list[tuple[str, int, int]] = []
+
+    def fake_allow_operation(key: str, *, limit: int, window_seconds: int, now=None):
+        calls.append((key, limit, window_seconds))
+        return SimpleNamespace(allowed=True, retry_after_seconds=None)
+
+    monkeypatch.setenv("API_SYNC_PRESSURE_PER_IP_LIMIT", "240")
+    monkeypatch.setattr(
+        "app.services.rate_limiter_adapter.allow_operation", fake_allow_operation
+    )
+
+    async def call_next(_request: Request) -> Response:
+        return Response("ok", status_code=200)
+
+    response = _run_async(api_sync_pressure_guard_middleware(request, call_next))
+
+    assert response.status_code == 200
+    assert calls == [("api-v1-pressure:general:203.0.113.9", 240, 60)]
 
 
 def test_csrf_middleware_exempts_customer_logout_without_token():

@@ -76,13 +76,13 @@ services:
     container_name: dotmac_redis_local
     restart: unless-stopped
     mem_limit: 1g
-    command: ["sh", "-c", "redis-server --appendonly yes --maxmemory 768mb --maxmemory-policy noeviction --requirepass $$REDIS_LOCAL_PASSWORD"]
+    command: ["sh", "-c", "redis-server --appendonly yes --maxmemory 768mb --maxmemory-policy noeviction --requirepass \"$${REDIS_LOCAL_PASSWORD}\""]
     environment:
       REDIS_LOCAL_PASSWORD: ${REDIS_LOCAL_PASSWORD}
     volumes:
     - /var/lib/dotmac-redis-local:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_LOCAL_PASSWORD}\" ping"]
       interval: 10s
       timeout: 5s
       retries: 5

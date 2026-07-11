@@ -1120,6 +1120,44 @@ def _client_ip(request: Request) -> str:
     return client_ip(request)
 
 
+_API_SYNC_PRESSURE_DEFAULT_PREFIXES = ("/api/v1/",)
+_API_SYNC_PRESSURE_DEFAULT_EXEMPT_PREFIXES = (
+    "/api/v1/auth/login",
+    "/api/v1/alerts/",
+    "/api/v1/webhooks/",
+)
+_API_SYNC_PRESSURE_DEFAULT_OFFENDER_IPS = ("149.102.158.167",)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return max(int(raw), minimum)
+    except ValueError:
+        logger.warning("Invalid integer env %s=%r; using %s", name, raw, default)
+        return default
+
+
+def _env_csv(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return tuple(item.strip() for item in raw.split(",") if item.strip())
+
+
+def _path_matches_prefix(path: str, prefixes: tuple[str, ...]) -> bool:
+    return any(path.startswith(prefix) for prefix in prefixes)
+
+
 def _request_is_https(request: Request) -> bool:
     proto = request.headers.get("x-forwarded-proto", "")
     if proto:
@@ -1198,6 +1236,60 @@ async def login_rate_limit_middleware(request: Request, call_next):
                 headers={"Retry-After": str(retry_after)},
             )
     return await call_next(request)
+
+
+@app.middleware("http")
+async def api_sync_pressure_guard_middleware(request: Request, call_next):
+    """Throttle API sync bursts before downstream handlers can acquire DB sessions."""
+    if not _env_bool("API_SYNC_PRESSURE_GUARD_ENABLED", True):
+        return await call_next(request)
+
+    path = request.url.path
+    prefixes = _env_csv(
+        "API_SYNC_PRESSURE_PATH_PREFIXES", _API_SYNC_PRESSURE_DEFAULT_PREFIXES
+    )
+    exempt_prefixes = _env_csv(
+        "API_SYNC_PRESSURE_EXEMPT_PATH_PREFIXES",
+        _API_SYNC_PRESSURE_DEFAULT_EXEMPT_PREFIXES,
+    )
+    if not _path_matches_prefix(path, prefixes) or _path_matches_prefix(
+        path, exempt_prefixes
+    ):
+        return await call_next(request)
+
+    from starlette.responses import JSONResponse as _JSONResponse
+
+    from app.services.rate_limiter_adapter import allow_operation
+
+    ip_address = _client_ip(request)
+    window = _env_int("API_SYNC_PRESSURE_WINDOW_SECONDS", 60)
+    offender_ips = set(
+        _env_csv(
+            "API_SYNC_PRESSURE_OFFENDER_IPS",
+            _API_SYNC_PRESSURE_DEFAULT_OFFENDER_IPS,
+        )
+    )
+    if ip_address in offender_ips:
+        bucket = "listed"
+        limit = _env_int("API_SYNC_PRESSURE_OFFENDER_LIMIT", 60)
+    else:
+        bucket = "general"
+        limit = _env_int("API_SYNC_PRESSURE_PER_IP_LIMIT", 300)
+
+    decision = allow_operation(
+        f"api-v1-pressure:{bucket}:{ip_address}",
+        limit=limit,
+        window_seconds=window,
+    )
+    if decision.allowed:
+        return await call_next(request)
+
+    retry_after = decision.retry_after_seconds or window
+    return _JSONResponse(
+        {"detail": "API sync pressure limit reached. Please retry shortly."},
+        status_code=429,
+        headers={"Retry-After": str(retry_after)},
+    )
 
 
 @app.middleware("http")
