@@ -33,7 +33,7 @@ def test_celery_queue_restart_targets_default_mapping(monkeypatch):
 
     assert targets["billing"] == "celery-worker-billing"
     assert targets["tr069"] == "celery-worker-tr069"
-    assert targets["ingestion"] == "celery-worker-bandwidth"
+    assert targets["ingestion"] == "celery-worker-ingestion"
 
 
 def test_celery_queue_restart_targets_parses_env(monkeypatch):
