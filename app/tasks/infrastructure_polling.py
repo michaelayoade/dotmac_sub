@@ -17,6 +17,7 @@ from billiard.exceptions import SoftTimeLimitExceeded
 
 from app.celery_app import celery_app
 from app.services.db_session_adapter import db_session_adapter
+from app.tasks._postgres_lock import postgres_session_advisory_lock
 
 logger = logging.getLogger(__name__)
 
@@ -50,9 +51,9 @@ def run_infrastructure_poll() -> dict[str, Any]:
         record_poll_success,
     )
 
-    with db_session_adapter.advisory_lock(
+    with postgres_session_advisory_lock(
         ADVISORY_LOCK_KEY, timeout_ms=_LOCK_TIMEOUT_MS
-    ) as (db, acquired):
+    ) as acquired:
         if not acquired:
             streak = record_poll_skip()
             logger.info(
@@ -61,6 +62,7 @@ def run_infrastructure_poll() -> dict[str, Any]:
                 streak,
             )
             return {"skipped": "already_running", "skip_streak": streak}
+        db = db_session_adapter.create_session()
         try:
             ping_interval = _interval_setting(
                 db,
@@ -74,17 +76,13 @@ def run_infrastructure_poll() -> dict[str, Any]:
                 DEFAULT_SNMP_INTERVAL_SECONDS,
                 floor=30,
             )
-            # The session-level advisory lock survives commit because the lock
-            # helper pins one connection. End the settings-read transaction
-            # before the long threaded poll so Postgres' idle-in-transaction
-            # timeout does not kill the lock connection mid-run.
-            db.commit()
+            db.rollback()
             result = poll_infrastructure(
                 db,
                 ping_interval_seconds=ping_interval,
                 snmp_interval_seconds=snmp_interval,
             )
-            db.commit()
+            db.rollback()
             # Stamp the heartbeat only after a committed sweep so a stalled or
             # failing poller ages out and trips the admin alert (dead-man
             # switch — see admin_alerts poll-health findings).
@@ -98,3 +96,5 @@ def run_infrastructure_poll() -> dict[str, Any]:
             db.rollback()
             logger.exception("infrastructure_poll_failed")
             return {"error": str(exc)}
+        finally:
+            db.close()
