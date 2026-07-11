@@ -109,7 +109,9 @@ def build_relay_payload(db: Session, project: Project) -> dict[str, Any]:
 
 
 def _sign(secret: str, body: bytes) -> str:
-    return "sha256=" + hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+    return (
+        "sha256=" + hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+    )
 
 
 def push_project_stub(db: Session, project_id: str) -> str:

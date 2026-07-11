@@ -44,9 +44,7 @@ class VendorProjectRelayHandler:
         try:
             self._dispatch(db, event)
         except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "Vendor project relay handler failed for %s: %s", name, exc
-            )
+            logger.warning("Vendor project relay handler failed for %s: %s", name, exc)
 
     def _dispatch(self, db: Session, event: Event) -> None:
         from app.config import settings
