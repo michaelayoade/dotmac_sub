@@ -164,6 +164,16 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("network.access_path", "network.device_state"),
             ),
             SOTService(
+                name="network.device_groups",
+                module="app.services.network.device_groups",
+                owns=(
+                    "network device group mutations",
+                    "device group membership",
+                    "device group bulk action queueing",
+                ),
+                depends_on=("network.identity",),
+            ),
+            SOTService(
                 name="network.events",
                 module="app.services.network.events",
                 owns=("network event decisions",),
@@ -171,6 +181,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "network.device_state",
                     "network.outage_impact",
                     "network.radius_sessions",
+                    "network.device_groups",
                 ),
             ),
         ),

@@ -31,6 +31,9 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "network.access_path",
         "network.device_state",
     )
+    assert sot_relationships.dependencies_for("network.device_groups") == (
+        "network.identity",
+    )
     assert sot_relationships.dependencies_for("financial.dunning") == (
         "financial.access_resolution",
         "financial.ledger",

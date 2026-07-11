@@ -48,16 +48,14 @@ def create_device_group(
     db: Session = Depends(get_db),
 ) -> dict:
     try:
-        group = device_group_service.create_device_group(
+        group = device_group_service.create_device_group_committed(
             db,
             name=payload.name,
             kind=payload.kind,
             description=payload.description,
         )
-        db.commit()
         return {"id": str(group.id), "name": group.name}
     except device_group_service.DeviceGroupError as exc:
-        db.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
@@ -97,16 +95,14 @@ def update_device_group(
     db: Session = Depends(get_db),
 ) -> dict:
     try:
-        group = device_group_service.update_device_group(
+        group = device_group_service.update_device_group_committed(
             db,
             group_id=group_id,
             name=payload.name,
             description=payload.description,
         )
-        db.commit()
         return {"id": str(group.id), "name": group.name}
     except device_group_service.DeviceGroupError as exc:
-        db.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
@@ -116,11 +112,11 @@ def update_device_group(
 )
 def archive_device_group(group_id: str, db: Session = Depends(get_db)) -> dict:
     try:
-        group = device_group_service.archive_device_group(db, group_id=group_id)
-        db.commit()
+        group = device_group_service.archive_device_group_committed(
+            db, group_id=group_id
+        )
         return {"id": str(group.id), "archived": True}
     except device_group_service.DeviceGroupError as exc:
-        db.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
@@ -135,16 +131,14 @@ def add_device_group_member(
     db: Session = Depends(get_db),
 ) -> dict:
     try:
-        member = device_group_service.add_device_group_member(
+        member = device_group_service.add_device_group_member_committed(
             db,
             group_id=group_id,
             device_type=payload.device_type,
             device_id=payload.device_id,
         )
-        db.commit()
         return {"id": str(member.id)}
     except device_group_service.DeviceGroupError as exc:
-        db.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
@@ -158,15 +152,13 @@ def remove_device_group_member(
     db: Session = Depends(get_db),
 ) -> dict:
     try:
-        device_group_service.remove_device_group_member(
+        device_group_service.remove_device_group_member_committed(
             db,
             group_id=group_id,
             member_id=member_id,
         )
-        db.commit()
         return {"removed": True}
     except device_group_service.DeviceGroupError as exc:
-        db.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
@@ -181,14 +173,12 @@ def queue_device_group_action(
     db: Session = Depends(get_db),
 ) -> dict:
     try:
-        result = device_group_service.enqueue_ont_group_action(
+        result = device_group_service.enqueue_ont_group_action_committed(
             db,
             group_id=group_id,
             action=payload.action,
             params=payload.params,
         )
-        db.commit()
         return result
     except device_group_service.DeviceGroupError as exc:
-        db.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
