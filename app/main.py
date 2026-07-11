@@ -654,24 +654,24 @@ async def audit_middleware(request: Request, call_next):
     # Check cache first to avoid unnecessary session creation
     audit_settings = _get_cached_audit_settings()
     if audit_settings is None:
-        db = SessionLocal()
-        try:
-            audit_settings = _load_audit_settings(db)
-        except SQLAlchemyError:
-            audit_settings = _get_cached_audit_settings(allow_stale=True)
-            logger.warning(
-                "audit_settings_refresh_failed",
-                exc_info=True,
-                extra={
-                    "event": "audit_settings_refresh_failed",
-                    "using_stale_cache": audit_settings is not None,
-                },
-            )
-            if audit_settings is None:
+        audit_settings = _get_cached_audit_settings(allow_stale=True)
+        if audit_settings is None:
+            db = SessionLocal()
+            try:
+                audit_settings = _load_audit_settings(db)
+            except SQLAlchemyError:
+                logger.warning(
+                    "audit_settings_refresh_failed",
+                    exc_info=True,
+                    extra={
+                        "event": "audit_settings_refresh_failed",
+                        "using_stale_cache": False,
+                    },
+                )
                 audit_settings = _default_audit_settings()
                 audit_settings["enabled"] = False
-        finally:
-            db.close()
+            finally:
+                db.close()
     if not audit_settings["enabled"]:
         return await call_next(request)
     track_read = request.method == "GET" and (
