@@ -37,6 +37,7 @@ from app.tasks.crm_ticket_push import (
 )
 from app.tasks.cross_app_drift import run_cross_app_drift_detection
 from app.tasks.customer_impact_metrics import export_customer_impact_metrics
+from app.tasks.dotmac_erp_outbox import deliver_erp_sync_events
 from app.tasks.enforcement import cleanup_subscription_block_sessions
 from app.tasks.events import (
     cleanup_old_events,
@@ -235,6 +236,7 @@ __all__ = [
     "cleanup_old_events",
     "cleanup_subscription_block_sessions",
     "run_cross_app_drift_detection",
+    "deliver_erp_sync_events",
     "run_usage_rating",
     "import_radius_accounting",
     "reap_stale_radius_sessions",

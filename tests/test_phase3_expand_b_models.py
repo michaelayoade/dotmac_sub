@@ -419,8 +419,9 @@ def test_migration_244_is_single_alembic_head():
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
     heads = script.get_heads()
-    # 248 (maps vendor route domain) chains onto 247 and is the current head.
-    assert heads == ["248_maps_vendor_route_domain"]
+    # The chain keeps advancing as later PRs stack on; the ERP re-home PR 1
+    # added 249_field_erp_sync_outbox as the current single head.
+    assert heads == ["249_field_erp_sync_outbox"]
 
 
 def test_migration_244_source_recreates_leads_partial_unique():

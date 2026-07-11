@@ -2407,6 +2407,34 @@ def build_beat_schedule() -> dict:
                 "schedule": crontab(hour=4, minute=10),
             }
 
+        # DotMac ERP outbox delivery (ERP re-home). Sweeps
+        # field_erp_sync_events → ERP's /sync/crm/* API. Master kill-switch is
+        # dotmac_erp_sync_enabled (integration domain, default OFF) so the entry
+        # is inert until a flow is cut over to sub; per-flow single-writer is
+        # further gated inside the task by sync_flow_ownership.
+        dotmac_erp_sync_enabled = _effective_bool(
+            session,
+            SettingDomain.integration,
+            "dotmac_erp_sync_enabled",
+            "DOTMAC_ERP_SYNC_ENABLED",
+            False,
+        )
+        dotmac_erp_outbox_interval = _effective_int(
+            session,
+            SettingDomain.integration,
+            "dotmac_erp_outbox_interval_seconds",
+            "DOTMAC_ERP_OUTBOX_INTERVAL_SECONDS",
+            60,
+        )
+        dotmac_erp_outbox_interval = max(dotmac_erp_outbox_interval, 30)
+        _sync_scheduled_task(
+            session,
+            name="dotmac_erp_outbox_delivery",
+            task_name="app.tasks.dotmac_erp_outbox.deliver_erp_sync_events",
+            enabled=dotmac_erp_sync_enabled,
+            interval_seconds=dotmac_erp_outbox_interval,
+        )
+
         # NOTE: the OLT deferred-operations queue + SSH circuit-breaker
         # subsystem was removed (it was never wired — the queue had no
         # producers and the real write paths bypassed the breaker, so it gave
