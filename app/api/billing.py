@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -147,12 +148,27 @@ def list_invoices(
     is_active: bool | None = None,
     order_by: str = Query(default="created_at"),
     order_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
+    updated_since: datetime | None = Query(
+        default=None,
+        description=(
+            "ISO8601 cutoff; return only invoices with updated_at >= this. "
+            "For incremental (watermark) sync. Omit for full/default behavior."
+        ),
+    ),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
     return billing_service.invoices.list_response(
-        db, account_id, status, is_active, order_by, order_dir, limit, offset
+        db,
+        account_id,
+        status,
+        is_active,
+        order_by,
+        order_dir,
+        limit=limit,
+        offset=offset,
+        updated_since=updated_since,
     )
 
 
@@ -295,6 +311,13 @@ def list_credit_notes(
     is_active: bool | None = None,
     order_by: str = Query(default="created_at"),
     order_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
+    updated_since: datetime | None = Query(
+        default=None,
+        description=(
+            "ISO8601 cutoff; return only credit notes with updated_at >= this. "
+            "For incremental (watermark) sync. Omit for full/default behavior."
+        ),
+    ),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -307,8 +330,9 @@ def list_credit_notes(
         is_active,
         order_by,
         order_dir,
-        limit,
-        offset,
+        limit=limit,
+        offset=offset,
+        updated_since=updated_since,
     )
 
 
@@ -1281,6 +1305,13 @@ def list_payments(
     is_active: bool | None = None,
     order_by: str = Query(default="created_at"),
     order_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
+    updated_since: datetime | None = Query(
+        default=None,
+        description=(
+            "ISO8601 cutoff; return only payments with updated_at >= this. "
+            "For incremental (watermark) sync. Omit for full/default behavior."
+        ),
+    ),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -1293,8 +1324,9 @@ def list_payments(
         is_active,
         order_by,
         order_dir,
-        limit,
-        offset,
+        limit=limit,
+        offset=offset,
+        updated_since=updated_since,
     )
 
 

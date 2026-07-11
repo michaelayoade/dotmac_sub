@@ -1558,6 +1558,8 @@ class Payments(ListResponseMixin):
         order_dir: str,
         limit: int,
         offset: int,
+        *,
+        updated_since: datetime | None = None,
     ):
         query = db.query(Payment)
         if account_id:
@@ -1574,16 +1576,23 @@ class Payments(ListResponseMixin):
             query = query.filter(Payment.is_active.is_(True))
         else:
             query = query.filter(Payment.is_active == is_active)
+        # Incremental-sync watermark (see Invoices.list); backed by
+        # ix_payments_is_active_updated_at.
+        if updated_since is not None:
+            query = query.filter(Payment.updated_at >= updated_since)
         query = apply_ordering(
             query,
             order_by,
             order_dir,
             {
                 "created_at": Payment.created_at,
+                "updated_at": Payment.updated_at,
                 "paid_at": Payment.paid_at,
                 "status": Payment.status,
             },
         )
+        # Stable, keyset-friendly tiebreaker for deterministic forward paging.
+        query = query.order_by(Payment.id.asc())
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod

@@ -234,6 +234,21 @@ class Invoice(Base):
             "is_active",
             "issued_at",
         ),
+        # Backs the ERP AR incremental sync watermark (WHERE is_active AND
+        # updated_at >= :cutoff ORDER BY updated_at). Without it the sync did a
+        # global unindexed sort → long-running sessions → app pool starvation.
+        Index(
+            "ix_invoices_is_active_updated_at",
+            "is_active",
+            "updated_at",
+        ),
+        # Backs the un-watermarked UI default (ORDER BY created_at DESC over
+        # active invoices) so that path stops sequentially sorting too.
+        Index(
+            "ix_invoices_is_active_created_at",
+            "is_active",
+            "created_at",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -340,6 +355,20 @@ class CreditNoteStatus(enum.Enum):
 
 class CreditNote(Base):
     __tablename__ = "credit_notes"
+    __table_args__ = (
+        # Backs the ERP AR incremental sync watermark + the un-watermarked
+        # default list sort (see the Invoice indexes for the incident context).
+        Index(
+            "ix_credit_notes_is_active_updated_at",
+            "is_active",
+            "updated_at",
+        ),
+        Index(
+            "ix_credit_notes_is_active_created_at",
+            "is_active",
+            "created_at",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -613,6 +642,18 @@ class Payment(Base):
             sqlite_where=text(
                 "is_active AND external_id IS NOT NULL AND external_id LIKE 'crm:%'"
             ),
+        ),
+        # Backs the ERP AR incremental sync watermark + the un-watermarked
+        # default list sort (see the Invoice indexes for the incident context).
+        Index(
+            "ix_payments_is_active_updated_at",
+            "is_active",
+            "updated_at",
+        ),
+        Index(
+            "ix_payments_is_active_created_at",
+            "is_active",
+            "created_at",
         ),
     )
 
