@@ -43,6 +43,7 @@ from app.services import web_support_tickets as web_support_tickets_service
 from app.services.customer_identity_resolution import (
     rebuild_identity_index_for_subscriber,
 )
+from app.services.customer_support_links import ticket_customer_any_link_filter
 
 
 def _ticket_payload(subscriber_id):
@@ -78,6 +79,48 @@ def _enable_support_ticket_notifications(db_session) -> None:
         )
     )
     db_session.commit()
+
+
+def test_ticket_customer_any_link_filter_matches_all_customer_link_fields(db_session):
+    account = Subscriber(
+        first_name="Support",
+        last_name="Account",
+        email=f"support-account-{uuid4().hex}@example.com",
+    )
+    person = Subscriber(
+        first_name="Support",
+        last_name="Person",
+        email=f"support-person-{uuid4().hex}@example.com",
+    )
+    other = Subscriber(
+        first_name="Support",
+        last_name="Other",
+        email=f"support-other-{uuid4().hex}@example.com",
+    )
+    db_session.add_all([account, person, other])
+    db_session.commit()
+
+    linked_by_subscriber = Ticket(title="Subscriber link", subscriber_id=account.id)
+    linked_by_account = Ticket(title="Account link", customer_account_id=account.id)
+    linked_by_person = Ticket(title="Person link", customer_person_id=person.id)
+    unlinked = Ticket(title="Other link", customer_account_id=other.id)
+    db_session.add_all(
+        [linked_by_subscriber, linked_by_account, linked_by_person, unlinked]
+    )
+    db_session.commit()
+
+    rows = (
+        db_session.query(Ticket)
+        .filter(ticket_customer_any_link_filter(Ticket, [account.id, person.id]))
+        .order_by(Ticket.title.asc())
+        .all()
+    )
+
+    assert [ticket.title for ticket in rows] == [
+        "Account link",
+        "Person link",
+        "Subscriber link",
+    ]
 
 
 def test_ticket_create_defaults_to_open_and_generates_number(db_session, subscriber):

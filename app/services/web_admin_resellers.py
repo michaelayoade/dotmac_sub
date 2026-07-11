@@ -11,12 +11,12 @@ from typing import cast
 from uuid import UUID
 
 from pydantic import ValidationError
-from sqlalchemy import func, inspect, or_, select
+from sqlalchemy import func, inspect, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.config import settings
 from app.models.auth import AuthProvider, UserCredential
-from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentStatus
+from app.models.billing import Invoice, Payment, PaymentStatus
 from app.models.catalog import CatalogOffer, Subscription, SubscriptionStatus
 from app.models.offer_availability import OfferResellerAvailability
 from app.models.rbac import Role
@@ -33,6 +33,13 @@ from app.services import subscriber as subscriber_service
 from app.services import web_system_user_mutations as web_system_user_mutations_service
 from app.services.auth_flow import hash_password
 from app.services.common import coerce_uuid
+from app.services.customer_support_links import ticket_customer_any_link_filter
+from app.services.invoice_collectibility import (
+    invoice_balance_sum_by_currency,
+    open_invoice_balance_for_accounts,
+    open_invoice_filters_for_accounts,
+    overdue_debt_filters_for_accounts,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -700,47 +707,20 @@ def get_reseller_detail_context(
             .all()
         )
 
-        outstanding_balance = db.scalar(
-            select(func.coalesce(func.sum(Invoice.balance_due), 0))
-            .where(Invoice.account_id.in_(linked_subscriber_ids))
-            .where(Invoice.is_active.is_(True))  # exclude soft-deleted invoices
-            .where(
-                Invoice.status.in_(
-                    [
-                        InvoiceStatus.issued,
-                        InvoiceStatus.partially_paid,
-                        InvoiceStatus.overdue,
-                    ]
-                )
-            )
-        ) or Decimal("0.00")
+        outstanding_balance = open_invoice_balance_for_accounts(
+            db, linked_subscriber_ids
+        )
         outstanding_balance_by_currency = [
-            {"currency": str(currency or ""), "amount": amount or Decimal("0.00")}
-            for currency, amount in db.execute(
-                select(
-                    Invoice.currency,
-                    func.coalesce(func.sum(Invoice.balance_due), 0),
-                )
-                .where(Invoice.account_id.in_(linked_subscriber_ids))
-                .where(Invoice.is_active.is_(True))
-                .where(
-                    Invoice.status.in_(
-                        [
-                            InvoiceStatus.issued,
-                            InvoiceStatus.partially_paid,
-                            InvoiceStatus.overdue,
-                        ]
-                    )
-                )
-                .group_by(Invoice.currency)
-                .order_by(Invoice.currency.asc())
-            ).all()
+            {"currency": str(currency or ""), "amount": amount}
+            for currency, amount in invoice_balance_sum_by_currency(
+                db, open_invoice_filters_for_accounts(linked_subscriber_ids)
+            )
         ]
         overdue_invoices = int(
             db.scalar(
-                select(func.count(Invoice.id))
-                .where(Invoice.account_id.in_(linked_subscriber_ids))
-                .where(Invoice.status == InvoiceStatus.overdue)
+                select(func.count(Invoice.id)).where(
+                    *overdue_debt_filters_for_accounts(linked_subscriber_ids)
+                )
             )
             or 0
         )
@@ -778,11 +758,7 @@ def get_reseller_detail_context(
             .all()
         )
 
-        ticket_scope = or_(
-            Ticket.subscriber_id.in_(linked_subscriber_ids),
-            Ticket.customer_account_id.in_(linked_subscriber_ids),
-            Ticket.customer_person_id.in_(linked_subscriber_ids),
-        )
+        ticket_scope = ticket_customer_any_link_filter(Ticket, linked_subscriber_ids)
         open_tickets = int(
             db.scalar(
                 select(func.count(Ticket.id))

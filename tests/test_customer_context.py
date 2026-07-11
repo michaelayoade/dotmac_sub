@@ -8,6 +8,10 @@ from app.services.customer_context import (
     allowed_customer_account_ids,
     allowed_customer_subscriber_ids,
     customer_is_restricted,
+    optional_customer_account_id,
+    optional_customer_subscriber_id,
+    require_customer_account_id,
+    require_customer_subscriber_id,
     resolve_customer_account_ids,
     resolve_customer_context,
 )
@@ -39,6 +43,17 @@ def test_customer_context_resolves_direct_session_ids(db_session, subscriber):
     assert context.read_only is True
     assert context.owns_account(subscriber.id) is True
     assert context.require_account_id() == str(subscriber.id)
+    assert optional_customer_account_id(db_session, customer) == str(subscriber.id)
+    assert optional_customer_subscriber_id(db_session, customer) == str(subscriber.id)
+    assert require_customer_account_id(db_session, customer) == str(subscriber.id)
+    assert require_customer_subscriber_id(db_session, customer) == str(subscriber.id)
+
+
+def test_customer_context_optional_helpers_return_none_when_unresolved(db_session):
+    customer: dict[str, object] = {}
+
+    assert optional_customer_account_id(db_session, customer) is None
+    assert optional_customer_subscriber_id(db_session, customer) is None
 
 
 def test_customer_context_falls_back_from_subscriber_to_active_subscription(

@@ -34,6 +34,7 @@ from app.services import catalog as catalog_service
 from app.services.billing._common import lock_account
 from app.services.collections import get_available_balance
 from app.services.common import coerce_uuid, round_money, to_decimal
+from app.services.customer_context import optional_customer_account_id
 
 
 def _addon_active_price(add_on: AddOn) -> tuple[Decimal, str]:
@@ -53,7 +54,7 @@ def _owned_subscription(db: Session, customer: dict, subscription_id: str):
     )
     if not subscription:
         return None
-    account_id = customer.get("account_id")
+    account_id = optional_customer_account_id(db, customer)
     if not account_id or str(subscription.subscriber_id) != str(account_id):
         return None
     return subscription

@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import work_orders_mirror
+from app.services.customer_context import optional_customer_subscriber_id
 from app.web.customer.auth import get_current_customer_from_request
 from app.web.customer.branding import get_customer_templates
 
@@ -31,7 +32,7 @@ def customer_work_orders(request: Request, db: Session = Depends(get_db)) -> Res
         return RedirectResponse(
             url="/portal/auth/login?next=/portal/work-orders", status_code=303
         )
-    subscriber_id = str(customer.get("subscriber_id") or "")
+    subscriber_id = str(optional_customer_subscriber_id(db, customer) or "")
     context = {
         "request": request,
         "customer": customer,
@@ -50,7 +51,7 @@ def customer_technician_location(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return JSONResponse({"detail": "Not authenticated"}, status_code=401)
-    subscriber_id = str(customer.get("subscriber_id") or "")
+    subscriber_id = str(optional_customer_subscriber_id(db, customer) or "")
     data = work_orders_mirror.technician_location(db, subscriber_id, work_order_id)
     return JSONResponse(data)
 
@@ -70,7 +71,7 @@ def customer_rate_technician(
         return RedirectResponse(
             url="/portal/auth/login?next=/portal/work-orders", status_code=303
         )
-    subscriber_id = str(customer.get("subscriber_id") or "")
+    subscriber_id = str(optional_customer_subscriber_id(db, customer) or "")
     status = "ok"
     try:
         work_orders_mirror.rate_technician(

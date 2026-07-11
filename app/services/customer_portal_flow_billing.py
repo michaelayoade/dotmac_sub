@@ -24,7 +24,11 @@ from app.services import billing as billing_service
 from app.services.collections import get_available_balance
 from app.services.common import coerce_uuid
 from app.services.common import validate_enum as _validate_enum
-from app.services.customer_context import customer_can_access_account
+from app.services.customer_context import (
+    customer_can_access_account,
+    optional_customer_account_id,
+    optional_customer_subscriber_id,
+)
 from app.services.customer_portal_context import (
     get_invoice_billing_contact,
     get_outstanding_balance,
@@ -174,8 +178,7 @@ def get_billing_page(
     per_page: int = 10,
 ) -> dict:
     """Get billing page data for the customer portal."""
-    account_id = customer.get("account_id")
-    account_id_str = str(account_id) if account_id else None
+    account_id_str = optional_customer_account_id(db, customer)
 
     if status == "pending":
         status = "issued"
@@ -254,8 +257,7 @@ def get_payment_arrangements_page(
     """Get payment arrangements page data for the customer portal."""
     from app.services import payment_arrangements as arrangement_service
 
-    account_id = customer.get("account_id")
-    account_id_str = str(account_id) if account_id else None
+    account_id_str = optional_customer_account_id(db, customer)
 
     empty_result: dict[str, Any] = {
         "arrangements": [],
@@ -308,8 +310,7 @@ def get_new_arrangement_page(
     invoice_id: str | None = None,
 ) -> dict:
     """Get data for the new payment arrangement form."""
-    account_id = customer.get("account_id")
-    account_id_str = str(account_id) if account_id else None
+    account_id_str = optional_customer_account_id(db, customer)
 
     invoices: list[Any] = []
     outstanding_balance: int | float = 0
@@ -370,10 +371,11 @@ def submit_payment_arrangement(
     """Submit a payment arrangement request."""
     from app.services import payment_arrangements as arrangement_service
 
-    account_id = customer.get("account_id")
-    account_id_str = str(account_id) if account_id else None
-    subscriber_id = customer.get("subscriber_id")
-    subscriber = db.get(Subscriber, subscriber_id) if subscriber_id else None
+    account_id_str = optional_customer_account_id(db, customer)
+    subscriber_id = optional_customer_subscriber_id(db, customer)
+    subscriber = (
+        db.get(Subscriber, coerce_uuid(subscriber_id)) if subscriber_id else None
+    )
 
     start = datetime.strptime(start_date, "%Y-%m-%d").date()
     amount = Decimal(total_amount.replace(",", ""))
@@ -441,7 +443,7 @@ def cancel_customer_arrangement(
     """
     from app.services import payment_arrangements as arrangement_service
 
-    account_id = customer.get("account_id")
+    account_id = optional_customer_account_id(db, customer)
     arrangement = arrangement_service.payment_arrangements.get(db, arrangement_id)
     if not account_id or str(arrangement.subscriber_id) != str(account_id):
         raise HTTPException(status_code=404, detail="Payment arrangement not found")
@@ -469,7 +471,7 @@ def get_payment_arrangement_detail(
     """Get payment arrangement detail data for the customer portal."""
     from app.services import payment_arrangements as arrangement_service
 
-    account_id = customer.get("account_id")
+    account_id = optional_customer_account_id(db, customer)
 
     try:
         arrangement = arrangement_service.payment_arrangements.get(

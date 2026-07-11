@@ -29,6 +29,10 @@ from app.services import customer_portal_context
 from app.services import provisioning as provisioning_service
 from app.services.common import coerce_uuid
 from app.services.common import validate_enum as _validate_enum
+from app.services.customer_context import (
+    optional_customer_account_id,
+    resolve_customer_context,
+)
 from app.services.customer_network_context import resolve_active_customer_ont_assignment
 from app.services.customer_portal_flow_changes import (
     get_offer_price_summary,
@@ -468,7 +472,7 @@ def _resolve_usage_subscription_id(db: Session, customer: dict) -> str | None:
     if subscription_ids:
         return subscription_ids[0]
 
-    subscription_id = customer.get("subscription_id")
+    subscription_id = resolve_customer_context(db, customer).subscription_id
     if subscription_id:
         return str(subscription_id)
 
@@ -1002,7 +1006,7 @@ def get_services_page(
     per_page: int = 10,
 ) -> dict:
     """Get services page data for the customer portal."""
-    account_id = customer.get("account_id")
+    account_id = optional_customer_account_id(db, customer)
     account_id_str = str(account_id) if account_id else None
 
     empty_result: dict[str, Any] = {
@@ -1071,7 +1075,7 @@ def get_service_detail(
     if not subscription:
         return None
 
-    account_id = customer.get("account_id")
+    account_id = optional_customer_account_id(db, customer)
     if not account_id or str(subscription.subscriber_id) != str(account_id):
         return None
 
@@ -1199,7 +1203,7 @@ def reboot_customer_subscription_ont(
     if not subscription:
         return False, "Subscription not found"
 
-    account_id = customer.get("account_id")
+    account_id = optional_customer_account_id(db, customer)
     if not account_id or str(subscription.subscriber_id) != str(account_id):
         return False, "Subscription not found"
     if subscription.status != SubscriptionStatus.active:
@@ -1217,7 +1221,7 @@ def reboot_customer_subscription_ont(
             f"{minutes} minute{'s' if minutes != 1 else ''} before trying again."
         )
 
-    actor = f"customer:{customer.get('id') or customer.get('account_id') or account_id}"
+    actor = f"customer:{customer.get('id') or account_id}"
     result = ont_device_actions.execute_reboot(
         db,
         str(ont.id),
@@ -1242,7 +1246,7 @@ def update_customer_subscription_wifi(
     )
     if not subscription:
         return False, "Subscription not found"
-    account_id = customer.get("account_id")
+    account_id = optional_customer_account_id(db, customer)
     if not account_id or str(subscription.subscriber_id) != str(account_id):
         return False, "Subscription not found"
     if subscription.status != SubscriptionStatus.active:
@@ -1298,8 +1302,9 @@ def get_service_orders_page(
     per_page: int = 10,
 ) -> dict:
     """Get service orders page data for the customer portal."""
-    account_id = customer.get("account_id")
-    subscription_id = customer.get("subscription_id")
+    context = resolve_customer_context(db, customer)
+    account_id = context.account_id or context.subscriber_id
+    subscription_id = context.subscription_id
     account_id_str = str(account_id) if account_id else None
     subscription_id_str = str(subscription_id) if subscription_id else None
 
@@ -1354,8 +1359,9 @@ def get_service_order_detail(
     service_order_id: str,
 ) -> dict | None:
     """Get service order detail data for the customer portal."""
-    account_id = customer.get("account_id")
-    subscription_id = customer.get("subscription_id")
+    context = resolve_customer_context(db, customer)
+    account_id = context.account_id or context.subscriber_id
+    subscription_id = context.subscription_id
     account_id_str = str(account_id) if account_id else None
     subscription_id_str = str(subscription_id) if subscription_id else None
 
@@ -1406,8 +1412,9 @@ def get_installation_detail(
     appointment_id: str,
 ) -> dict | None:
     """Get installation appointment detail data for the customer portal."""
-    account_id = customer.get("account_id")
-    subscription_id = customer.get("subscription_id")
+    context = resolve_customer_context(db, customer)
+    account_id = context.account_id or context.subscriber_id
+    subscription_id = context.subscription_id
     account_id_str = str(account_id) if account_id else None
     subscription_id_str = str(subscription_id) if subscription_id else None
 
@@ -1514,7 +1521,7 @@ def get_suspend_page(
         int(max_suspend_days) if isinstance(max_suspend_days, (str, int, float)) else 30
     )
 
-    account_id = customer.get("account_id")
+    account_id = optional_customer_account_id(db, customer)
     subscription = db.get(Subscription, subscription_id)
     if not subscription or str(subscription.subscriber_id) != str(account_id):
         return None
@@ -1593,7 +1600,7 @@ def apply_service_suspend(
     if days < 1 or days > max_days:
         raise ValueError(f"Suspension must be between 1 and {max_days} days")
 
-    account_id = customer.get("account_id")
+    account_id = optional_customer_account_id(db, customer)
     subscription = db.get(Subscription, subscription_id)
     if not subscription or str(subscription.subscriber_id) != str(account_id):
         raise ValueError("Subscription not found")
@@ -1672,7 +1679,7 @@ def get_resume_page(
     if enabled is False:
         return None
 
-    account_id = customer.get("account_id")
+    account_id = optional_customer_account_id(db, customer)
     subscription = db.get(Subscription, subscription_id)
     if not subscription or str(subscription.subscriber_id) != str(account_id):
         return None
@@ -1720,7 +1727,7 @@ def apply_service_resume(
     if enabled is False:
         raise ValueError("Self-service suspension is not enabled")
 
-    account_id = customer.get("account_id")
+    account_id = optional_customer_account_id(db, customer)
     subscription = db.get(Subscription, subscription_id)
     if not subscription or str(subscription.subscriber_id) != str(account_id):
         raise ValueError("Subscription not found")

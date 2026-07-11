@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import vas_wallet as vas_wallet_service
+from app.services.customer_context import optional_customer_subscriber_id
 from app.web.customer.auth import get_current_customer_from_request
 from app.web.customer.branding import get_customer_templates
 
@@ -19,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 def _page_context(request: Request, db: Session, customer: dict) -> dict:
-    subscriber_id = str(customer.get("subscriber_id") or "")
+    subscriber_id = str(optional_customer_subscriber_id(db, customer) or "")
     overview = vas_wallet_service.wallet_overview(db, subscriber_id)
     from app.services.collections._core import _resolve_prepaid_available_balance
 
@@ -70,7 +71,7 @@ def customer_wallet_topup_intent(
     try:
         result = vas_wallet_service.initiate_topup(
             db,
-            str(customer.get("subscriber_id") or ""),
+            str(optional_customer_subscriber_id(db, customer) or ""),
             amount,
             provider=(str(payload.get("provider") or "").strip() or None),
         )
@@ -100,7 +101,7 @@ def customer_wallet_topup_verify(
     try:
         result = vas_wallet_service.verify_topup(
             db,
-            str(customer.get("subscriber_id") or ""),
+            str(optional_customer_subscriber_id(db, customer) or ""),
             reference,
             provider=provider,
         )
@@ -131,7 +132,7 @@ def customer_wallet_pay_bill(
     try:
         vas_wallet_service.pay_bill(
             db,
-            str(customer.get("subscriber_id") or ""),
+            str(optional_customer_subscriber_id(db, customer) or ""),
             value,
             idempotency_key=(idempotency_key or "").strip() or None,
         )
@@ -154,7 +155,7 @@ def customer_wallet_auto_deduct(
         return RedirectResponse(url="/portal/auth/login", status_code=303)
     vas_wallet_service.set_auto_deduct(
         db,
-        str(customer.get("subscriber_id") or ""),
+        str(optional_customer_subscriber_id(db, customer) or ""),
         enabled.strip().lower() in {"1", "true", "on", "yes"},
     )
     return RedirectResponse(url="/portal/wallet", status_code=303)

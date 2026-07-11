@@ -31,7 +31,12 @@ from app.services.billing._common import lock_account
 from app.services.billing_adapter import PaymentIntent, billing_adapter
 from app.services.collections import get_available_balance, restore_account_services
 from app.services.common import round_money, to_decimal
-from app.services.customer_context import customer_can_access_account
+from app.services.customer_context import (
+    customer_can_access_account,
+    optional_customer_account_id,
+    optional_customer_subscriber_id,
+    require_customer_account_id,
+)
 from app.services.customer_portal_context import (
     get_invoice_billing_contact,
 )
@@ -313,11 +318,9 @@ def _format_naira(amount: Decimal | int | float) -> str:
     return f"₦{rounded:,.2f}"
 
 
-def _customer_account_uuid(customer: dict) -> uuid.UUID:
-    raw_account_id = customer.get("account_id")
-    if not raw_account_id:
-        raise ValueError("Customer account is missing")
-    return uuid.UUID(str(raw_account_id))
+def _customer_account_uuid(db: Session, customer: dict) -> uuid.UUID:
+    account_id = require_customer_account_id(db, customer)
+    return uuid.UUID(str(account_id))
 
 
 def _topup_policy_warnings(intent: TopupIntent) -> list[str]:
@@ -1122,7 +1125,7 @@ def _resolve_customer_email(db: Session, customer: dict) -> str:
         value = str(candidate or "").strip()
         if "@" in value:
             return value
-    account_id = customer.get("account_id")
+    account_id = optional_customer_account_id(db, customer)
     if account_id:
         try:
             subscriber = db.get(Subscriber, uuid.UUID(str(account_id)))
@@ -1147,7 +1150,7 @@ def get_topup_page(
     customer: dict,
 ) -> dict:
     """Build context for the customer top-up page."""
-    account_id = customer.get("account_id")
+    account_id = optional_customer_account_id(db, customer)
     provider_type = _resolve_payment_provider(db)
 
     # Resolve current balance
@@ -1190,7 +1193,7 @@ def get_topup_page(
         "payment_methods": payment_methods,
     }
     try:
-        account_uuid = _customer_account_uuid(customer)
+        account_uuid = _customer_account_uuid(db, customer)
         pending_direct = _latest_pending_direct_transfer_intent(db, account_uuid)
     except Exception:
         pending_direct = None
@@ -1222,7 +1225,7 @@ def get_payment_methods_page(
     direct-bank-transfer details so transfer is a first-class, discoverable
     method rather than a radio buried inside the top-up flow. Autopay status is
     layered on by the route (mirrors the top-up page)."""
-    account_id = customer.get("account_id")
+    account_id = optional_customer_account_id(db, customer)
 
     cards = []
     if account_id:
@@ -1310,7 +1313,7 @@ def create_topup_intent(
     charged server-side; passing ``idempotency_key`` makes that charge safe
     against double-submit (a replay returns the original intent rather than
     charging the card a second time)."""
-    account_id = _customer_account_uuid(customer)
+    account_id = _customer_account_uuid(db, customer)
     requested_amount = round_money(to_decimal(amount))
     if requested_amount <= Decimal("0.00"):
         raise ValueError("Top-up amount must be greater than ₦0.00")
@@ -1493,7 +1496,7 @@ def create_direct_transfer_topup_intent(
     if not direct_bank_transfer_enabled(db):
         raise ValueError("Direct bank transfer is not configured")
 
-    account_id = _customer_account_uuid(customer)
+    account_id = _customer_account_uuid(db, customer)
     requested_amount = round_money(to_decimal(amount))
     if requested_amount <= Decimal("0.00"):
         raise ValueError("Top-up amount must be greater than ₦0.00")
@@ -1544,7 +1547,7 @@ def get_direct_transfer_topup_page(db: Session, customer: dict) -> dict:
     """Build context for the customer direct-transfer instruction page."""
     if not direct_bank_transfer_enabled(db):
         raise ValueError("Direct bank transfer is not configured")
-    account_id = _customer_account_uuid(customer)
+    account_id = _customer_account_uuid(db, customer)
     intent = _latest_pending_direct_transfer_intent(db, account_id)
     if not intent:
         raise ValueError("Start a direct bank transfer payment first")
@@ -1570,7 +1573,7 @@ async def submit_direct_transfer_topup(
     if not direct_bank_transfer_enabled(db):
         raise ValueError("Direct bank transfer is not configured")
 
-    account_id = _customer_account_uuid(customer)
+    account_id = _customer_account_uuid(db, customer)
     intent = _latest_pending_direct_transfer_intent(db, account_id)
     if not intent:
         raise ValueError("Start a direct bank transfer payment first")
@@ -1597,7 +1600,7 @@ async def submit_direct_transfer_topup(
     proof = payment_proofs.submit_proof(
         db,
         str(account_id),
-        submitted_by=str(customer.get("subscriber_id") or account_id),
+        submitted_by=str(optional_customer_subscriber_id(db, customer) or account_id),
         amount=intent.requested_amount,
         bank_name=selected_account.get("bank_name"),
         reference=intent.reference,
@@ -1627,7 +1630,7 @@ def verify_and_record_topup(
     provider: str | None = None,
 ) -> dict:
     """Verify a top-up payment and add credit to account balance."""
-    account_id = _customer_account_uuid(customer)
+    account_id = _customer_account_uuid(db, customer)
     intent = db.scalars(
         select(TopupIntent).where(TopupIntent.reference == reference)
     ).first()

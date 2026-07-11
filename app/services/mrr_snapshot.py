@@ -9,9 +9,10 @@ from decimal import Decimal
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models.catalog import Subscription, SubscriptionStatus
+from app.models.catalog import Subscription
 from app.models.mrr_snapshot import MrrSnapshot
 from app.models.subscriber import Subscriber, SubscriberStatus
+from app.services.subscription_lifecycle_policy import mrr_countable_service_filters
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,7 @@ class MrrSnapshotManager:
                 func.count(Subscription.id),
             ).where(
                 Subscription.subscriber_id == sub_id,
-                Subscription.status == SubscriptionStatus.active,
+                *mrr_countable_service_filters(Subscription),
             )
             row = db.execute(mrr_stmt).first()
             mrr_amount = row[0] if row else Decimal("0")

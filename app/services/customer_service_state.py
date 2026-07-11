@@ -33,6 +33,11 @@ from app.models.catalog import AccessState, BillingMode, SubscriptionStatus
 from app.models.subscriber import SubscriberStatus
 from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
 from app.services.billing_statuses import BILLABLE_SUBSCRIBER_STATUSES
+from app.services.customer_support_links import (
+    ticket_customer_any_link_filter,
+    ticket_customer_link_filter,
+    ticket_customer_linked_ids,
+)
 from app.services.radius_access_state import derive_access_state
 from app.services.subscriber_access_policy import RADIUS_BLOCKING_SUBSCRIBER_STATUSES
 
@@ -449,21 +454,13 @@ def open_infrastructure_down_ticket(session: Session, subscriber_id):
     """The subscriber's open infrastructure-down ticket, or None."""
     if not subscriber_id:
         return None
-    from sqlalchemy import or_
-
     from app.models.support import Ticket
 
     tickets = (
         session.query(Ticket)
         .filter(Ticket.is_active.is_(True))
         .filter(Ticket.status.in_(OPEN_INFRASTRUCTURE_TICKET_STATUSES))
-        .filter(
-            or_(
-                Ticket.subscriber_id == subscriber_id,
-                Ticket.customer_account_id == subscriber_id,
-                Ticket.customer_person_id == subscriber_id,
-            )
-        )
+        .filter(ticket_customer_link_filter(Ticket, subscriber_id))
         .all()
     )
     for ticket in tickets:
@@ -477,8 +474,6 @@ def subscribers_with_open_infrastructure_down_tickets(
     subscriber_ids: set[object],
 ) -> set[object]:
     """Subset of ``subscriber_ids`` holding an open infrastructure-down ticket."""
-    from sqlalchemy import or_
-
     from app.models.support import Ticket
 
     subscriber_ids = {
@@ -491,21 +486,14 @@ def subscribers_with_open_infrastructure_down_tickets(
         session.query(Ticket)
         .filter(Ticket.is_active.is_(True))
         .filter(Ticket.status.in_(OPEN_INFRASTRUCTURE_TICKET_STATUSES))
-        .filter(
-            or_(
-                Ticket.subscriber_id.in_(subscriber_ids),
-                Ticket.customer_account_id.in_(subscriber_ids),
-                Ticket.customer_person_id.in_(subscriber_ids),
-            )
-        )
+        .filter(ticket_customer_any_link_filter(Ticket, subscriber_ids))
         .all()
     )
     suppressed: set[object] = set()
     for ticket in tickets:
         if not is_infrastructure_down_ticket(ticket):
             continue
-        for field in ("subscriber_id", "customer_account_id", "customer_person_id"):
-            ticket_subscriber_id = getattr(ticket, field, None)
+        for ticket_subscriber_id in ticket_customer_linked_ids(ticket):
             if ticket_subscriber_id in subscriber_ids:
                 suppressed.add(ticket_subscriber_id)
     return suppressed

@@ -18,6 +18,10 @@ from app.services import catalog as catalog_service
 from app.services.collections import get_available_balance
 from app.services.common import coerce_uuid
 from app.services.common import validate_enum as _validate_enum
+from app.services.customer_context import (
+    optional_customer_account_id,
+    optional_customer_subscriber_id,
+)
 from app.services.customer_portal_context import get_available_portal_offers
 from app.services.customer_portal_flow_common import (
     _compute_total_pages,
@@ -223,7 +227,7 @@ def get_change_plan_page(
     if not subscription:
         return None
 
-    account_id = customer.get("account_id")
+    account_id = optional_customer_account_id(db, customer)
     if not account_id or str(subscription.subscriber_id) != str(account_id):
         return None
 
@@ -296,7 +300,7 @@ def get_plan_change_quote(
     if not subscription:
         return None
 
-    account_id = customer.get("account_id")
+    account_id = optional_customer_account_id(db, customer)
     if not account_id or str(subscription.subscriber_id) != str(account_id):
         return None
 
@@ -336,7 +340,7 @@ def submit_change_plan(
     # Ownership check (mirrors get_change_plan_page/get_plan_change_quote): the
     # subscription must belong to the caller, otherwise a customer could submit a
     # plan change against another subscriber's service (IDOR).
-    account_id = customer.get("account_id")
+    account_id = optional_customer_account_id(db, customer)
     subscription = catalog_service.subscriptions.get(
         db=db, subscription_id=subscription_id
     )
@@ -347,8 +351,10 @@ def submit_change_plan(
     ):
         raise ValueError("Service not found.")
 
-    subscriber_id = customer.get("subscriber_id")
-    subscriber = db.get(Subscriber, subscriber_id) if subscriber_id else None
+    subscriber_id = optional_customer_subscriber_id(db, customer)
+    subscriber = (
+        db.get(Subscriber, coerce_uuid(subscriber_id)) if subscriber_id else None
+    )
 
     # Fail fast on offers the customer could never change to (cross-family,
     # hidden, archived, reseller-restricted): apply-time validation would only
@@ -465,7 +471,7 @@ def get_change_requests_page(
     """Get change requests page data for the customer portal."""
     from app.services import subscription_changes as change_service
 
-    account_id = customer.get("account_id")
+    account_id = optional_customer_account_id(db, customer)
     account_id_str = str(account_id) if account_id else None
 
     empty_result: dict[str, object] = {
@@ -606,7 +612,7 @@ def apply_instant_plan_change(
     if not subscription:
         raise ValueError("Subscription not found")
 
-    account_id = customer.get("account_id")
+    account_id = optional_customer_account_id(db, customer)
     if not account_id or str(subscription.subscriber_id) != str(account_id):
         raise ValueError("Subscription does not belong to this account")
 
@@ -686,8 +692,10 @@ def apply_instant_plan_change(
             "shortfall": shortfall,
         }
 
-    subscriber_id = customer.get("subscriber_id")
-    subscriber = db.get(Subscriber, subscriber_id) if subscriber_id else None
+    subscriber_id = optional_customer_subscriber_id(db, customer)
+    subscriber = (
+        db.get(Subscriber, coerce_uuid(subscriber_id)) if subscriber_id else None
+    )
 
     change_request = change_service.subscription_change_requests.create(
         db=db,
@@ -751,7 +759,7 @@ def request_plan_migration(
     if not subscription:
         raise ValueError("Subscription not found")
 
-    account_id = customer.get("account_id")
+    account_id = optional_customer_account_id(db, customer)
     if not account_id or str(subscription.subscriber_id) != str(account_id):
         raise ValueError("Subscription does not belong to this account")
 

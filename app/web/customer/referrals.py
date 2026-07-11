@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.services import referrals as referrals_service
 from app.services import referrals_mirror
+from app.services.customer_context import optional_customer_subscriber_id
 from app.web.customer.auth import get_current_customer_from_request
 from app.web.customer.branding import get_customer_templates
 
@@ -43,7 +44,7 @@ def customer_refer_and_earn(
     if not customer:
         return RedirectResponse(url=_LOGIN, status_code=303)
 
-    subscriber_id = str(customer.get("subscriber_id") or "")
+    subscriber_id = str(optional_customer_subscriber_id(db, customer) or "")
     context = {
         "request": request,
         "customer": customer,
@@ -67,7 +68,7 @@ def customer_refer_a_friend(
     if not customer:
         return RedirectResponse(url=_LOGIN, status_code=303)
 
-    subscriber_id = str(customer.get("subscriber_id") or "")
+    subscriber_id = str(optional_customer_subscriber_id(db, customer) or "")
     try:
         referrals_mirror.refer_a_friend(
             db,

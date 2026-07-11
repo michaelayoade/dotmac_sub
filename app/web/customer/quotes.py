@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import quotes_mirror
+from app.services.customer_context import optional_customer_subscriber_id
 from app.services.sales import selfserve as selfserve_service
 from app.web.customer.auth import get_current_customer_from_request
 from app.web.customer.branding import get_customer_templates
@@ -38,7 +39,7 @@ def customer_quotes(request: Request, db: Session = Depends(get_db)) -> Response
         return RedirectResponse(
             url="/portal/auth/login?next=/portal/quotes", status_code=303
         )
-    subscriber_id = str(customer.get("subscriber_id") or "")
+    subscriber_id = str(optional_customer_subscriber_id(db, customer) or "")
     context = {
         "request": request,
         "customer": customer,

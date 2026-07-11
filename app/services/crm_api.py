@@ -31,12 +31,11 @@ from app.models.service_extension import ServiceExtension, ServiceExtensionEntry
 from app.models.subscriber import Address, Subscriber, SubscriberStatus
 from app.models.system_user import SystemUser
 from app.models.usage import AccountingStatus, RadiusAccountingSession
-
-ACTIVE_INVOICE_STATUSES = (
-    InvoiceStatus.issued,
-    InvoiceStatus.partially_paid,
-    InvoiceStatus.overdue,
+from app.services.invoice_collectibility import (
+    open_invoice_balance,
+    open_invoice_filters_for_accounts,
 )
+
 SUCCESSFUL_PAYMENT_STATUSES = (PaymentStatus.succeeded,)
 ONLINE_FRESH_SECONDS = 24 * 60 * 60
 _MISSING = object()
@@ -231,16 +230,7 @@ def _total_paid_query(db: Session, subscriber_id: uuid.UUID) -> Decimal:
 
 
 def _balance_query(db: Session, subscriber_id: uuid.UUID) -> Decimal:
-    return Decimal(
-        str(
-            db.query(func.coalesce(func.sum(Invoice.balance_due), 0))
-            .filter(Invoice.account_id == subscriber_id)
-            .filter(Invoice.status.in_(ACTIVE_INVOICE_STATUSES))
-            .filter(Invoice.is_active.is_(True))
-            .scalar()
-            or 0
-        )
-    )
+    return open_invoice_balance(db, subscriber_id)
 
 
 def _invoiced_until_query(db: Session, subscriber_id: uuid.UUID) -> datetime | None:
@@ -503,9 +493,7 @@ def billing_by_subscriber(
                 Invoice.account_id,
                 func.coalesce(func.sum(Invoice.balance_due), 0),
             )
-            .where(Invoice.account_id.in_(subscriber_ids))
-            .where(Invoice.status.in_(ACTIVE_INVOICE_STATUSES))
-            .where(Invoice.is_active.is_(True))
+            .where(*open_invoice_filters_for_accounts(subscriber_ids))
             .group_by(Invoice.account_id)
         ).all()
     }

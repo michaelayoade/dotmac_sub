@@ -39,6 +39,10 @@ from app.services import web_customer_auth as web_customer_auth_service
 from app.services import web_network_speedtests as web_network_speedtests_service
 from app.services.audit_helpers import log_audit_event
 from app.services.bandwidth import add_directions_to_series, bandwidth_samples
+from app.services.customer_context import (
+    optional_customer_account_id,
+    optional_customer_subscriber_id,
+)
 from app.services.customer_portal_context import (
     emit_customer_event,
     get_dashboard_template_context,
@@ -343,9 +347,7 @@ def customer_portal_chat_session(
     if _is_read_only_customer(customer):
         raise HTTPException(status_code=403, detail=READ_ONLY_MUTATION_MESSAGE)
 
-    subscriber_id = customer.get("subscriber_id") or customer.get("session", {}).get(
-        "subscriber_id"
-    )
+    subscriber_id = optional_customer_subscriber_id(db, customer)
     if not subscriber_id:
         raise HTTPException(status_code=409, detail="Customer account is incomplete")
     return chat_session_service.broker_customer_session(db, str(subscriber_id))
@@ -408,7 +410,9 @@ def customer_support_create(
     subscriber_id, _subscription_id = customer_portal.resolve_customer_account(
         customer, db
     )
-    subscriber_lookup = str(subscriber_id or customer.get("subscriber_id") or "")
+    subscriber_lookup = str(
+        subscriber_id or optional_customer_subscriber_id(db, customer) or ""
+    )
     result = crm_portal.handle_ticket_create(
         db,
         customer,
@@ -663,8 +667,7 @@ def customer_invoice_pdf(
     generated_export = billing_invoice_pdf_service.generate_export_now(
         db,
         invoice_id=str(invoice_id),
-        requested_by_id=customer.get("subscriber_id")
-        or customer.get("session", {}).get("subscriber_id"),
+        requested_by_id=optional_customer_subscriber_id(db, customer),
     )
     if billing_invoice_pdf_service.is_export_cache_valid(db, invoice, generated_export):
         try:
@@ -691,9 +694,7 @@ def customer_invoice_pdf(
             )
 
     # Queue generation if the inline path did not produce a downloadable PDF.
-    subscriber_id = customer.get("subscriber_id") or customer.get("session", {}).get(
-        "subscriber_id"
-    )
+    subscriber_id = optional_customer_subscriber_id(db, customer)
     billing_invoice_pdf_service.queue_export(
         db,
         str(invoice_id),
@@ -934,9 +935,7 @@ def customer_speedtest(
     account_id, resolved_subscription_id = customer_portal.resolve_customer_account(
         customer, db
     )
-    subscriber_id = account_id or (
-        str(customer.get("subscriber_id")) if customer.get("subscriber_id") else None
-    )
+    subscriber_id = account_id or optional_customer_subscriber_id(db, customer)
     if not subscriber_id:
         return templates.TemplateResponse(
             "customer/errors/404.html",
@@ -981,9 +980,7 @@ def customer_speedtest_submit(
     account_id, resolved_subscription_id = customer_portal.resolve_customer_account(
         customer, db
     )
-    subscriber_id = account_id or (
-        str(customer.get("subscriber_id")) if customer.get("subscriber_id") else None
-    )
+    subscriber_id = account_id or optional_customer_subscriber_id(db, customer)
     if not subscriber_id:
         return templates.TemplateResponse(
             "customer/errors/404.html",
@@ -1380,7 +1377,7 @@ def _profile_context(
     from app.models.subscriber import Subscriber as _Subscriber
 
     subscriber = None
-    subscriber_id = customer.get("subscriber_id")
+    subscriber_id = optional_customer_subscriber_id(db, customer)
     if subscriber_id:
         subscriber = db.get(_Subscriber, subscriber_id)
     mfa_methods = []
@@ -1461,7 +1458,7 @@ def customer_profile_sign_out_other_sessions(
         return RedirectResponse(url="/portal/auth/login", status_code=303)
     if _is_read_only_customer(customer):
         return _read_only_response(request, customer, active_page="profile")
-    subscriber_id = customer.get("subscriber_id")
+    subscriber_id = optional_customer_subscriber_id(db, customer)
     current_session_token = request.cookies.get(customer_portal.SESSION_COOKIE_NAME)
     if subscriber_id:
         customer_portal.revoke_other_customer_sessions_for_subscriber(
@@ -1506,7 +1503,7 @@ def customer_update_profile(
         return RedirectResponse(url="/portal/auth/login", status_code=303)
     if _is_read_only_customer(customer):
         return _read_only_response(request, customer, active_page="profile")
-    subscriber_id = customer.get("subscriber_id")
+    subscriber_id = optional_customer_subscriber_id(db, customer)
     if not subscriber_id:
         return templates.TemplateResponse(
             "customer/profile/index.html",
@@ -1629,7 +1626,7 @@ def customer_resend_email_verification(
     if _is_read_only_customer(customer):
         return _read_only_response(request, customer, active_page="profile")
     sent = False
-    subscriber_id = customer.get("subscriber_id")
+    subscriber_id = optional_customer_subscriber_id(db, customer)
     if subscriber_id:
         try:
             sent = auth_flow_service.send_email_verification(db, str(subscriber_id))
@@ -1651,7 +1648,7 @@ def customer_mfa_setup(request: Request, db: Session = Depends(get_db)) -> Respo
         )
     if _is_read_only_customer(customer):
         return _read_only_response(request, customer, active_page="profile")
-    subscriber_id = customer.get("subscriber_id")
+    subscriber_id = optional_customer_subscriber_id(db, customer)
     if not subscriber_id:
         return RedirectResponse(url="/portal/profile", status_code=303)
 
@@ -1692,7 +1689,7 @@ def customer_mfa_confirm(
         return RedirectResponse(url="/portal/auth/login", status_code=303)
     if _is_read_only_customer(customer):
         return _read_only_response(request, customer, active_page="profile")
-    subscriber_id = customer.get("subscriber_id")
+    subscriber_id = optional_customer_subscriber_id(db, customer)
     if not subscriber_id:
         return RedirectResponse(url="/portal/profile", status_code=303)
 
@@ -2024,7 +2021,10 @@ def customer_create_invoice_payment_intent(
     except Exception:
         logger.warning(
             "Unable to start customer invoice payment intent",
-            extra={"invoice_id": invoice_id, "account_id": customer.get("account_id")},
+            extra={
+                "invoice_id": invoice_id,
+                "account_id": optional_customer_account_id(db, customer),
+            },
             exc_info=True,
         )
         return JSONResponse({"detail": PAYMENT_START_ERROR_MESSAGE}, status_code=400)
@@ -2047,7 +2047,7 @@ def customer_verify_payment(
 
     try:
         # Check if subscriber was restricted before payment
-        subscriber_id = customer.get("subscriber_id")
+        subscriber_id = optional_customer_subscriber_id(db, customer)
         was_restricted = bool(
             subscriber_id and is_subscriber_restricted(db, subscriber_id)
         )
@@ -2062,7 +2062,7 @@ def customer_verify_payment(
         )
         card_save = _capture_card_save_status(
             db,
-            account_id=str(customer.get("account_id") or ""),
+            account_id=str(optional_customer_account_id(db, customer) or ""),
             reference=reference,
             provider=provider,
             requested=save_card,
@@ -2136,7 +2136,7 @@ def customer_billing_topup(
             "customer": customer,
             **page_data,
             "autopay": autopay_service.get_status(
-                db, str(customer.get("account_id") or "")
+                db, str(optional_customer_account_id(db, customer) or "")
             ),
             "autopay_error": autopay_error,
             "autopay_success": autopay_success,
@@ -2188,7 +2188,7 @@ def customer_create_topup_intent(
     except Exception:
         logger.warning(
             "Unable to start customer top-up intent",
-            extra={"account_id": customer.get("account_id")},
+            extra={"account_id": optional_customer_account_id(db, customer)},
             exc_info=True,
         )
         return JSONResponse({"detail": PAYMENT_START_ERROR_MESSAGE}, status_code=400)
@@ -2285,7 +2285,8 @@ def customer_direct_transfer_topup_submitted(
         return RedirectResponse(url="/portal/auth/login", status_code=303)
 
     proof = payment_proofs_service.get_proof(db, proof_id)
-    if proof is None or str(proof.account_id) != str(customer.get("account_id") or ""):
+    account_id = optional_customer_account_id(db, customer)
+    if proof is None or str(proof.account_id) != str(account_id or ""):
         return RedirectResponse(
             url="/portal/billing/topup?autopay_error="
             + quote_plus("Submitted transfer receipt was not found."),
@@ -2316,7 +2317,7 @@ def customer_verify_topup(
         return RedirectResponse(url="/portal/auth/login", status_code=303)
 
     try:
-        subscriber_id = customer.get("subscriber_id")
+        subscriber_id = optional_customer_subscriber_id(db, customer)
         was_restricted = bool(
             subscriber_id and is_subscriber_restricted(db, subscriber_id)
         )
@@ -2326,7 +2327,7 @@ def customer_verify_topup(
         )
         card_save = _capture_card_save_status(
             db,
-            account_id=str(customer.get("account_id") or ""),
+            account_id=str(optional_customer_account_id(db, customer) or ""),
             reference=reference,
             provider=provider,
             requested=save_card,
@@ -2398,7 +2399,9 @@ def customer_autopay_enable(
         else None
     )
     try:
-        autopay_service.enable(db, str(customer.get("account_id") or ""), method_id)
+        autopay_service.enable(
+            db, str(optional_customer_account_id(db, customer) or ""), method_id
+        )
     except ValueError as exc:
         return RedirectResponse(
             url=f"/portal/billing/topup?autopay_error={quote_plus(str(exc))}",
@@ -2426,7 +2429,7 @@ def customer_autopay_disable(
             + quote_plus("View-only sessions cannot change autopay."),
             status_code=303,
         )
-    autopay_service.disable(db, str(customer.get("account_id") or ""))
+    autopay_service.disable(db, str(optional_customer_account_id(db, customer) or ""))
     return RedirectResponse(
         url="/portal/billing/topup?autopay_success=" + quote_plus("Autopay is off."),
         status_code=303,
@@ -2455,7 +2458,7 @@ def customer_payment_methods(
             "customer": customer,
             **page_data,
             "autopay": autopay_service.get_status(
-                db, str(customer.get("account_id") or "")
+                db, str(optional_customer_account_id(db, customer) or "")
             ),
             "success": saved,
             "form_error": error,
@@ -2481,7 +2484,7 @@ def customer_payment_method_set_default(
             status_code=303,
         )
     updated = customer_cards.set_default(
-        db, str(customer.get("account_id") or ""), method_id
+        db, str(optional_customer_account_id(db, customer) or ""), method_id
     )
     if updated is None:
         return RedirectResponse(
@@ -2513,7 +2516,7 @@ def customer_payment_method_remove(
             status_code=303,
         )
     removed = customer_cards.remove(
-        db, str(customer.get("account_id") or ""), method_id
+        db, str(optional_customer_account_id(db, customer) or ""), method_id
     )
     if not removed:
         return RedirectResponse(
@@ -2662,7 +2665,7 @@ def customer_submit_change_plan(
                             {
                                 "ticket_id": ticket_id,
                                 "subscriber_id": str(
-                                    customer.get("subscriber_id") or ""
+                                    optional_customer_subscriber_id(db, customer) or ""
                                 ),
                             },
                         )
@@ -2731,7 +2734,9 @@ def customer_request_plan_migration(
                 "customer_ticket_created",
                 {
                     "ticket_id": ticket_id,
-                    "subscriber_id": str(customer.get("subscriber_id") or ""),
+                    "subscriber_id": str(
+                        optional_customer_subscriber_id(db, customer) or ""
+                    ),
                 },
             )
             return RedirectResponse(url=f"/portal/support/{ticket_id}", status_code=303)
@@ -3058,7 +3063,7 @@ def customer_submit_payment_arrangement(
             status_code=303,
         )
     except (ValueError, HTTPException) as exc:
-        account_id = customer.get("account_id")
+        account_id = optional_customer_account_id(db, customer)
         account_id_str = str(account_id) if account_id else None
         error_ctx = customer_portal.get_arrangement_error_context(db, account_id_str)
         status_code = exc.status_code if isinstance(exc, HTTPException) else 400
