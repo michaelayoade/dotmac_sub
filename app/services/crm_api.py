@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from fastapi import HTTPException, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 from sqlalchemy.sql.elements import ColumnElement
@@ -1202,6 +1203,62 @@ def disable_subscriber_from_crm(
     db.commit()
     db.refresh(subscriber)
     return {"id": str(subscriber.id), "status": enum_value(subscriber.status)}
+
+
+def update_subscriber_status_from_crm(
+    db: Session,
+    subscriber: Subscriber,
+    *,
+    requested_status: str,
+    actor: str | None,
+    source: str | None,
+    reason: str | None,
+) -> dict[str, Any]:
+    current = subscriber.status
+    current_value = current.value if current else None
+    if current in {SubscriberStatus.disabled, SubscriberStatus.canceled}:
+        log_status_writeback(
+            db,
+            subscriber_id=subscriber.id,
+            actor=actor,
+            source=source,
+            reason=reason,
+            requested_status=requested_status,
+            previous_status=current_value,
+            result="already_terminal",
+            status_code=200,
+        )
+        db.commit()
+        return {"id": str(subscriber.id), "status": current_value}
+
+    if current not in {SubscriberStatus.blocked, SubscriberStatus.suspended}:
+        log_status_writeback(
+            db,
+            subscriber_id=subscriber.id,
+            actor=actor,
+            source=source,
+            reason=reason,
+            requested_status=requested_status,
+            previous_status=current_value,
+            result="rejected_transition",
+            status_code=status.HTTP_409_CONFLICT,
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Subscriber can only be disabled from blocked, suspended, "
+                "or nonpayment_suspended state."
+            ),
+        )
+
+    return disable_subscriber_from_crm(
+        db,
+        subscriber,
+        actor=actor,
+        source=source,
+        reason=reason,
+    )
 
 
 def create_account_credit(

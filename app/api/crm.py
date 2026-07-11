@@ -10,7 +10,6 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db import get_db
-from app.models.subscriber import SubscriberStatus
 from app.services import crm_api
 
 router = APIRouter(prefix="/crm", tags=["crm-api"])
@@ -295,45 +294,11 @@ def update_subscriber_status(
     if errors:
         _error(status.HTTP_400_BAD_REQUEST, "Invalid request body.", errors)
 
-    current = subscriber.status
-    current_value = current.value if current else None
-    if current in {SubscriberStatus.disabled, SubscriberStatus.canceled}:
-        crm_api.log_status_writeback(
-            db,
-            subscriber_id=subscriber.id,
-            actor=x_crm_actor,
-            source=source,
-            reason=reason,
-            requested_status=requested_status,
-            previous_status=current_value,
-            result="already_terminal",
-            status_code=200,
-        )
-        db.commit()
-        return _envelope({"id": str(subscriber.id), "status": current_value})
-
-    if current not in {SubscriberStatus.blocked, SubscriberStatus.suspended}:
-        crm_api.log_status_writeback(
-            db,
-            subscriber_id=subscriber.id,
-            actor=x_crm_actor,
-            source=source,
-            reason=reason,
-            requested_status=requested_status,
-            previous_status=current_value,
-            result="rejected_transition",
-            status_code=status.HTTP_409_CONFLICT,
-        )
-        db.commit()
-        _error(
-            status.HTTP_409_CONFLICT,
-            "Subscriber can only be disabled from blocked, suspended, or nonpayment_suspended state.",
-        )
-
     return _envelope(
-        crm_api.disable_subscriber_from_crm(
+        crm_api.update_subscriber_status_from_crm(
             db,
             subscriber,
+            requested_status=requested_status,
             actor=x_crm_actor,
             source=source,
             reason=reason,
