@@ -715,6 +715,23 @@ from app.models.vas import (  # noqa: F401
     VasWallet,
     VasWalletEntry,
 )
+from app.models.vendor_routes import (  # noqa: F401
+    AsBuiltLineItem,
+    AsBuiltRoute,
+    AsBuiltRouteStatus,
+    InstallationProject,
+    InstallationProjectNote,
+    InstallationProjectStatus,
+    ProjectQuote,
+    ProjectQuoteLineItem,
+    ProjectQuoteStatus,
+    ProposedRouteRevision,
+    ProposedRouteRevisionStatus,
+    VariationType,
+    Vendor,
+    VendorAssignmentType,
+    VendorUser,
+)
 from app.models.webhook import (  # noqa: F401
     WebhookDelivery,
     WebhookDeliveryStatus,
