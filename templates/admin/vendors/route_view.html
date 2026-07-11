@@ -1,0 +1,92 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Route View - Admin{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+<style>
+    #route-map {
+        height: calc(100vh - 260px);
+        min-height: 460px;
+        border-radius: 1rem;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="relative space-y-6">
+    <div class="flex items-center gap-4">
+        <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-500 to-purple-600 shadow-lg shadow-violet-500/25">
+            <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>
+        </div>
+        <div>
+            <a href="/admin/vendors/routes" class="inline-flex items-center gap-1 text-sm font-medium text-orange-600 hover:text-orange-700 dark:text-orange-400">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+                Back to Vendor Routes
+            </a>
+            <h1 class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{{ project.label if project else 'Route View' }}</h1>
+            <p class="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
+                {% if project %}{{ project.vendor or 'Unassigned vendor' }} &middot; {{ project.status | replace('_', ' ') }}{% else %}Installation project route{% endif %}
+            </p>
+        </div>
+    </div>
+
+    <div class="flex flex-wrap items-center gap-4 text-sm">
+        <div class="flex items-center gap-2"><span class="h-1 w-6 rounded-full" style="background:#7c3aed"></span><span class="text-slate-600 dark:text-slate-300">Proposed route</span></div>
+        <div class="flex items-center gap-2"><span class="h-1 w-6 rounded-full" style="background:#10b981"></span><span class="text-slate-600 dark:text-slate-300">As-built route</span></div>
+        <div class="flex items-center gap-2"><span class="h-1 w-6 rounded-full" style="background:#38bdf8"></span><span class="text-slate-600 dark:text-slate-300">Fiber network</span></div>
+    </div>
+
+    <div class="overflow-hidden rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <div id="route-map"></div>
+    </div>
+    <p id="route-empty" class="hidden text-sm text-amber-600 dark:text-amber-400">No route geometry saved for this project yet.</p>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/vendor/leaflet/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+(function() {
+    const networkGeojson = {{ network_geojson | tojson | safe }};
+    const ROUTE_URL = '/api/v1/vendor-routes/projects/{{ project_id }}/geojson';
+
+    const map = L.map('route-map').setView([9.0820, 8.6753], 6);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        maxZoom: 19
+    }).addTo(map);
+
+    // Fiber network overlay (context).
+    L.geoJSON(networkGeojson, {
+        style: function(feature) {
+            const t = feature.properties && feature.properties.type;
+            if (t === 'fiber_segment') return { color: '#38bdf8', weight: 2, opacity: 0.45 };
+            return { color: '#94a3b8', weight: 1.5, opacity: 0.4 };
+        },
+        pointToLayer: function(feature, latlng) {
+            const t = feature.properties && feature.properties.type;
+            const color = t === 'fdh_cabinet' ? '#f97316' : (t === 'splice_closure' ? '#14b8a6' : '#94a3b8');
+            return L.circleMarker(latlng, { radius: 4, color: '#fff', weight: 1, fillColor: color, fillOpacity: 0.9 });
+        }
+    }).addTo(map);
+
+    fetch(ROUTE_URL, { headers: { 'Accept': 'application/json' } })
+        .then(function(r) { return r.ok ? r.json() : Promise.reject(r.status); })
+        .then(function(fc) {
+            const features = (fc && fc.features) || [];
+            if (!features.length) { document.getElementById('route-empty').classList.remove('hidden'); return; }
+            const routeLayer = L.geoJSON(fc, {
+                style: function(feature) {
+                    const kind = feature.properties && feature.properties.kind;
+                    return { color: kind === 'as_built' ? '#10b981' : '#7c3aed', weight: 4, opacity: 0.9 };
+                }
+            }).addTo(map);
+            try { map.fitBounds(routeLayer.getBounds(), { padding: [40, 40], maxZoom: 17 }); } catch (e) { /* empty bounds */ }
+        })
+        .catch(function() { document.getElementById('route-empty').classList.remove('hidden'); });
+})();
+</script>
+{% endblock %}

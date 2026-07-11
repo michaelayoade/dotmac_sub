@@ -35,6 +35,8 @@
     'vpn': 'vpn', 'wireguard': 'vpn', 'wireguard-peers': 'vpn',
     'reports': 'reports', 'reports-revenue': 'reports', 'reports-customers': 'reports', 'reports-subscribers': 'reports',
     'reports-network': 'reports', 'reports-billing': 'reports',
+    'field-live-map': 'field-live-map', 'field-movement-playback': 'field-live-map',
+    'vendor-routes': 'vendor-routes',
     'gis': 'gis', 'integrations': 'integrations',
     'notifications': 'notifications', 'alert-policies': 'notifications', 'oncall-rotations': 'notifications',
     'settings-hub': 'system', 'configuration': 'system', 'system-modules': 'system',
@@ -200,6 +202,9 @@
     {% if module_states.get('vpn', True) %}
     {{ nav_link("VPN", "/admin/network/vpn", icon_vpn, "vpn") }}
     {% endif %}
+    {{ nav_link("Field Live Map", "/admin/dispatch/live-map", icon_gis, "field-live-map",
+        active_pages=["field-live-map", "field-movement-playback"]) }}
+    {{ nav_link("Vendor Routes", "/admin/vendors/routes", icon_network, "vendor-routes") }}
 
     {{ section_label("ADMIN") }}
     {% if module_states.get('reports', True) %}

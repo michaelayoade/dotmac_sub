@@ -146,6 +146,7 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.comms", "router", "api", "admin"),
     ("app.api.analytics", "router", "api", "admin"),
     ("app.api.fiber_plant", "router", "api", "perm:network:fiber"),
+    ("app.api.vendor_routes", "router", "api", "perm:network:fiber"),
     ("app.api.nextcloud_talk", "router", "api", "admin"),
     ("app.api.wireguard", "router", "api", "perm:network:vpn"),
     ("app.api.nas", "router", "api", "perm:network:nas"),

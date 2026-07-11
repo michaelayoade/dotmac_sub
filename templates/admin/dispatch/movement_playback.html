@@ -1,0 +1,171 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Movement Playback - Admin{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+<style>
+    #playback-map {
+        height: calc(100vh - 300px);
+        min-height: 440px;
+        border-radius: 1rem;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="relative space-y-6">
+    <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <div class="flex items-center gap-4">
+            <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-500 to-purple-600 shadow-lg shadow-violet-500/25">
+                <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>
+            </div>
+            <div>
+                <a href="/admin/dispatch/live-map" class="inline-flex items-center gap-1 text-sm font-medium text-orange-600 hover:text-orange-700 dark:text-orange-400">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+                    Back to Live Map
+                </a>
+                <h1 class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">Movement Playback</h1>
+                <p class="mt-0.5 text-sm text-slate-500 dark:text-slate-400">Replay a work order's technician travel path</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <div class="flex flex-wrap items-end gap-3">
+            <div>
+                <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Work order</label>
+                <select id="work-order" class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200">
+                    <option value="">Select a work order…</option>
+                    {% for wo in work_orders %}
+                    <option value="{{ wo.crm_work_order_id }}" {% if selected_work_order == wo.crm_work_order_id %}selected{% endif %}>{{ wo.label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <button id="btn-load" type="button" class="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-violet-500 to-purple-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:shadow-md">Load</button>
+            <button id="btn-play" type="button" class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200" disabled>Play</button>
+            <div class="flex-1 min-w-[200px]">
+                <input id="scrubber" type="range" min="0" max="0" value="0" class="w-full" disabled>
+                <div id="scrub-label" class="text-xs text-slate-400 dark:text-slate-500"></div>
+            </div>
+        </div>
+        <div class="mt-3 flex flex-wrap gap-6 text-sm">
+            <div><span class="text-slate-400 dark:text-slate-500">Points:</span> <span id="stat-points" class="font-semibold text-slate-700 dark:text-slate-200">0</span></div>
+            <div><span class="text-slate-400 dark:text-slate-500">Legs:</span> <span id="stat-legs" class="font-semibold text-slate-700 dark:text-slate-200">0</span></div>
+            <div><span class="text-slate-400 dark:text-slate-500">Distance:</span> <span id="stat-distance" class="font-semibold text-slate-700 dark:text-slate-200">–</span></div>
+        </div>
+    </div>
+
+    <div class="overflow-hidden rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <div id="playback-map"></div>
+    </div>
+    <p id="empty-note" class="hidden text-sm text-slate-400 dark:text-slate-500">No movement points recorded for that work order.</p>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/vendor/leaflet/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+(function() {
+    const map = L.map('playback-map').setView([6.5244, 3.3792], 11);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        maxZoom: 19
+    }).addTo(map);
+
+    let points = [];
+    let fullLine = null, progressLine = null, headMarker = null, startMarker = null, endMarker = null;
+    let playTimer = null;
+
+    function haversine(a, b) {
+        const R = 6371000, toRad = Math.PI / 180;
+        const dLat = (b[0] - a[0]) * toRad, dLon = (b[1] - a[1]) * toRad;
+        const s = Math.sin(dLat / 2) ** 2 + Math.cos(a[0] * toRad) * Math.cos(b[0] * toRad) * Math.sin(dLon / 2) ** 2;
+        return R * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s));
+    }
+    function fmtDist(m) { return m >= 1000 ? (m / 1000).toFixed(2) + ' km' : m.toFixed(0) + ' m'; }
+
+    function clearLayers() {
+        [fullLine, progressLine, headMarker, startMarker, endMarker].forEach(function(l) { if (l) map.removeLayer(l); });
+        fullLine = progressLine = headMarker = startMarker = endMarker = null;
+    }
+
+    function draw() {
+        clearLayers();
+        if (points.length === 0) return;
+        const coords = points.map(function(p) { return [p.latitude, p.longitude]; });
+        fullLine = L.polyline(coords, { color: '#cbd5e1', weight: 3, opacity: 0.5 }).addTo(map);
+        progressLine = L.polyline([coords[0]], { color: '#7c3aed', weight: 4 }).addTo(map);
+        startMarker = L.circleMarker(coords[0], { radius: 6, color: '#fff', weight: 2, fillColor: '#10b981', fillOpacity: 1 }).addTo(map);
+        endMarker = L.circleMarker(coords[coords.length - 1], { radius: 6, color: '#fff', weight: 2, fillColor: '#ef4444', fillOpacity: 1 }).addTo(map);
+        headMarker = L.circleMarker(coords[0], { radius: 7, color: '#fff', weight: 2, fillColor: '#7c3aed', fillOpacity: 1 }).addTo(map);
+        map.fitBounds(coords, { padding: [40, 40], maxZoom: 16 });
+        setIndex(0);
+    }
+
+    function setIndex(i) {
+        if (points.length === 0) return;
+        i = Math.max(0, Math.min(i, points.length - 1));
+        const coords = points.slice(0, i + 1).map(function(p) { return [p.latitude, p.longitude]; });
+        progressLine.setLatLngs(coords);
+        headMarker.setLatLng(coords[coords.length - 1]);
+        const scrubber = document.getElementById('scrubber');
+        scrubber.value = i;
+        const at = points[i].captured_at;
+        document.getElementById('scrub-label').textContent = at ? new Date(at).toLocaleString() : '';
+    }
+
+    function stopPlay() {
+        if (playTimer) { clearInterval(playTimer); playTimer = null; }
+        document.getElementById('btn-play').textContent = 'Play';
+    }
+
+    function togglePlay() {
+        const btn = document.getElementById('btn-play');
+        if (playTimer) { stopPlay(); return; }
+        if (points.length < 2) return;
+        btn.textContent = 'Pause';
+        const scrubber = document.getElementById('scrubber');
+        if (Number(scrubber.value) >= points.length - 1) setIndex(0);
+        playTimer = setInterval(function() {
+            const next = Number(scrubber.value) + 1;
+            if (next >= points.length) { stopPlay(); return; }
+            setIndex(next);
+        }, 400);
+    }
+
+    function load() {
+        stopPlay();
+        const wo = document.getElementById('work-order').value;
+        if (!wo) return;
+        fetch('/admin/dispatch/movement-playback/feed?work_order=' + encodeURIComponent(wo), { headers: { 'Accept': 'application/json' } })
+            .then(function(r) { return r.ok ? r.json() : Promise.reject(r.status); })
+            .then(function(data) {
+                points = (data && data.points) || [];
+                document.getElementById('stat-points').textContent = data.point_count || 0;
+                document.getElementById('stat-legs').textContent = data.leg_count || 0;
+                let dist = 0;
+                for (let i = 1; i < points.length; i++) {
+                    dist += haversine([points[i - 1].latitude, points[i - 1].longitude], [points[i].latitude, points[i].longitude]);
+                }
+                document.getElementById('stat-distance').textContent = points.length ? fmtDist(dist) : '–';
+                document.getElementById('empty-note').classList.toggle('hidden', points.length !== 0);
+                const scrubber = document.getElementById('scrubber');
+                scrubber.max = Math.max(0, points.length - 1);
+                scrubber.value = 0;
+                scrubber.disabled = points.length < 2;
+                document.getElementById('btn-play').disabled = points.length < 2;
+                draw();
+            })
+            .catch(function() { document.getElementById('empty-note').classList.remove('hidden'); });
+    }
+
+    document.getElementById('btn-load').addEventListener('click', load);
+    document.getElementById('btn-play').addEventListener('click', togglePlay);
+    document.getElementById('scrubber').addEventListener('input', function(e) { stopPlay(); setIndex(Number(e.target.value)); });
+    if (document.getElementById('work-order').value) load();
+})();
+</script>
+{% endblock %}
