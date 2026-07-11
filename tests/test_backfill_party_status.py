@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from scripts.migration.backfill_party_status import (
+    INSERT_SUBSCRIBER_SQL,
     BackfillPlan,
     CrmPersonRow,
     IdentityIndexRow,
@@ -14,6 +15,7 @@ from scripts.migration.backfill_party_status import (
     build_plan,
     choose_subscriber,
     normalize_phone,
+    resolve_default_reseller_id,
 )
 
 T1 = datetime(2026, 1, 1, tzinfo=UTC)
@@ -225,6 +227,54 @@ def test_unresolved_person_becomes_new_subscriber_row() -> None:
     created = plan.reports["created"][0]
     assert created["sources"] == "lead;quote"
     assert plan.person_map[0]["resolution"] == "created"
+
+
+# ---------------------------------------------------------------------------
+# reseller_id resolution (subscribers.reseller_id is NOT NULL, migration 116)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_default_reseller_prefers_house_row() -> None:
+    # DEFAULT_RESELLER_SQL orders house-first then created_at, so the first row
+    # is the House reseller — mirroring subscriber.py::_default_reseller_id.
+    rows = [
+        {"id": "house-id", "is_house": True},
+        {"id": "other-id", "is_house": False},
+    ]
+    assert resolve_default_reseller_id(rows) == "house-id"
+
+
+def test_resolve_default_reseller_falls_back_to_first_row() -> None:
+    # No house row: the query already ordered by created_at, so the first row
+    # is the earliest-created reseller (the fallback in the app helper).
+    rows = [{"id": "earliest-id", "is_house": False}]
+    assert resolve_default_reseller_id(rows) == "earliest-id"
+
+
+def test_resolve_default_reseller_override_wins_and_normalizes() -> None:
+    rows = [{"id": "house-id", "is_house": True}]
+    assert (
+        resolve_default_reseller_id(rows, "F02AAE97-0000-0000-0000-000000000000")
+        == "f02aae97-0000-0000-0000-000000000000"
+    )
+
+
+def test_resolve_default_reseller_none_when_no_resellers() -> None:
+    assert resolve_default_reseller_id([], None) is None
+
+
+def test_insert_sql_sets_reseller_id() -> None:
+    assert "reseller_id" in INSERT_SUBSCRIBER_SQL
+    assert "CAST(:reseller_id AS uuid)" in INSERT_SUBSCRIBER_SQL
+
+
+def test_prospect_insert_carries_resolved_reseller_id() -> None:
+    person = _person("p1", email="prospect@example.com")
+
+    plan = build_plan([person], [], default_reseller_id="house-id")
+
+    assert plan.inserts[0].reseller_id == "house-id"
+    assert plan.reports["created"][0]["reseller_id"] == "house-id"
 
 
 def test_created_row_party_status_defaults_to_lead() -> None:

@@ -204,6 +204,8 @@ FIELD_SPECS: dict[str, tuple[tuple[str, str], ...]] = {
         ("amount", "decimal"),
         ("is_active", "bool"),
     ),
+    # as_built_routes has no is_active column (migration 248 / vendor_routes.py);
+    # every other vendor table does, but this one is soft-versioned instead.
     "as_built_routes": (
         ("project_id", "uuid"),
         ("status", "text"),
@@ -211,7 +213,6 @@ FIELD_SPECS: dict[str, tuple[tuple[str, str], ...]] = {
         ("actual_length_meters", "decimal"),
         ("version", "int"),
         ("route_geom", "geom"),
-        ("is_active", "bool"),
     ),
     "as_built_line_items": (
         ("as_built_id", "uuid"),
@@ -339,9 +340,10 @@ _FIELD_SELECT: dict[str, str] = {
     "project_quote_line_items": (
         "id::text, quote_id::text, item_type, quantity, unit_price, amount, is_active"
     ),
+    # No is_active on as_built_routes — see FIELD_SPECS note.
     "as_built_routes": (
         "id::text, project_id::text, status::text, variation_type::text, "
-        "actual_length_meters, version, is_active"
+        "actual_length_meters, version"
     ),
     "as_built_line_items": (
         "id::text, as_built_id::text, item_type, quantity, unit_price, amount, is_active"

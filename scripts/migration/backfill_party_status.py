@@ -90,18 +90,32 @@ WHERE id = CAST(:id AS uuid)
 
 INSERT_SUBSCRIBER_SQL = """
 INSERT INTO subscribers (
-    id, first_name, last_name, display_name, email, email_verified, phone,
+    id, reseller_id, first_name, last_name, display_name, email,
+    email_verified, phone,
     gender, status, user_type, is_active, marketing_opt_in,
     billing_enabled, captive_redirect_enabled, billing_mode,
     party_status, metadata, created_at, updated_at
 ) VALUES (
-    CAST(:id AS uuid), :first_name, :last_name, :display_name, :email,
+    CAST(:id AS uuid), CAST(:reseller_id AS uuid), :first_name, :last_name,
+    :display_name, :email,
     false, :phone,
     CAST('unknown' AS gender), CAST('new' AS subscriberstatus),
     CAST('customer' AS usertype), :is_active, false,
     true, false, CAST('prepaid' AS billingmode),
     :party_status, CAST(:metadata AS json), now(), now()
 )
+"""
+
+# The reseller a prospect subscriber row belongs to when the CRM person has no
+# explicit reseller. ``subscribers.reseller_id`` is NOT NULL (migration 116);
+# normal creation resolves the House reseller in
+# app/services/subscriber.py::_default_reseller_id — house first
+# (``resellers.is_house``), else the earliest-created reseller. This SQL orders
+# house-first then created_at so the first row mirrors that choice exactly.
+DEFAULT_RESELLER_SQL = """
+SELECT id::text AS id, is_house
+FROM resellers
+ORDER BY is_house DESC NULLS LAST, created_at, id
 """
 
 
@@ -200,6 +214,7 @@ class SubscriberInsert:
     party_status: str
     is_active: bool
     metadata_json: str
+    reseller_id: str | None = None
 
 
 @dataclass
@@ -316,6 +331,30 @@ def _party_status_or_default(value: str | None) -> str:
     return DEFAULT_PARTY_STATUS
 
 
+def resolve_default_reseller_id(
+    reseller_rows: list[dict[str, Any]], override: str | None = None
+) -> str | None:
+    """Default reseller for prospect inserts, mirroring
+    app/services/subscriber.py::_default_reseller_id.
+
+    ``--default-reseller-id`` wins when supplied; otherwise the first row of
+    ``DEFAULT_RESELLER_SQL`` (house-first, then earliest ``created_at``) is
+    used, matching the House-reseller default that normal subscriber creation
+    applies. Returns ``None`` only when no reseller exists at all.
+    """
+    if override:
+        return _norm_id(override)
+    for row in reseller_rows:
+        resolved = _norm_id(row.get("id"))
+        if resolved:
+            return resolved
+    return None
+
+
+def _load_reseller_rows(sub: Connection) -> list[dict[str, Any]]:
+    return _rows(sub, DEFAULT_RESELLER_SQL)
+
+
 def choose_subscriber(rows: list[SubPartyRow]) -> tuple[SubPartyRow, list[SubPartyRow]]:
     """Pick the canonical sub row among several candidates for one person.
 
@@ -340,6 +379,8 @@ def build_plan(
     people: list[CrmPersonRow],
     sub_rows: list[SubPartyRow],
     identity_rows: list[IdentityIndexRow] | None = None,
+    *,
+    default_reseller_id: str | None = None,
 ) -> BackfillPlan:
     plan = BackfillPlan()
     stats = plan.stats
@@ -460,6 +501,7 @@ def build_plan(
                 party_status=party_status,
                 is_active=person.is_active,
                 metadata_json=json.dumps({"crm_person_id": person.id}),
+                reseller_id=default_reseller_id,
             )
             plan.inserts.append(insert)
             stats.created += 1
@@ -473,6 +515,7 @@ def build_plan(
                     "phone": person.phone,
                     "party_status": party_status,
                     "person_is_active": person.is_active,
+                    "reseller_id": default_reseller_id,
                     "sources": ";".join(person.sources),
                 }
             )
@@ -705,6 +748,7 @@ def _apply_plan(sub: Connection, plan: BackfillPlan, batch_size: int) -> None:
                 text(INSERT_SUBSCRIBER_SQL),
                 {
                     "id": insert.subscriber_id,
+                    "reseller_id": insert.reseller_id,
                     "first_name": insert.first_name,
                     "last_name": insert.last_name,
                     "display_name": insert.display_name,
@@ -752,6 +796,15 @@ def main() -> None:
         help="Commit to sub after this many subscriber writes.",
     )
     parser.add_argument(
+        "--default-reseller-id",
+        help=(
+            "Reseller id stamped on prospect subscriber rows "
+            "(subscribers.reseller_id is NOT NULL). Overrides the dynamically "
+            "resolved House reseller; required only when the House/any-reseller "
+            "resolution finds nothing yet a prospect insert is planned."
+        ),
+    )
+    parser.add_argument(
         "--out",
         default="party-status-backfill",
         help="Directory for the summary JSON, per-action CSVs and the "
@@ -773,9 +826,28 @@ def main() -> None:
         sub.execute(text("SET TRANSACTION READ ONLY"))
         sub_rows = _load_sub_rows(sub)
         identity_rows = _load_identity_rows(sub)
+        reseller_rows = _load_reseller_rows(sub)
         read_trans.rollback()
 
-        plan = build_plan(people, sub_rows, identity_rows)
+        default_reseller_id = resolve_default_reseller_id(
+            reseller_rows, args.default_reseller_id
+        )
+        plan = build_plan(
+            people,
+            sub_rows,
+            identity_rows,
+            default_reseller_id=default_reseller_id,
+        )
+
+        # subscribers.reseller_id is NOT NULL — a prospect insert with no
+        # resolvable reseller would die on the first row on prod. Fail fast
+        # with an actionable message instead.
+        if plan.inserts and not default_reseller_id:
+            raise SystemExit(
+                f"{len(plan.inserts)} prospect subscriber rows would be inserted "
+                "but no reseller could be resolved (no House reseller and the "
+                "resellers table is empty). Pass --default-reseller-id."
+            )
 
         if args.apply and (plan.inserts or plan.updates):
             _apply_plan(sub, plan, batch_size)
@@ -787,6 +859,7 @@ def main() -> None:
     report = {
         "apply": args.apply,
         "batch_size": batch_size,
+        "default_reseller_id": default_reseller_id,
         "output_dir": str(out),
         "stats": plan.stats.as_dict(),
     }

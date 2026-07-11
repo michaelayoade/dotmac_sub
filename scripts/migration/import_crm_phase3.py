@@ -75,6 +75,7 @@ from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
+from sqlalchemy.exc import IntegrityError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -97,6 +98,10 @@ SALES_ORDER_SEQUENCE_KEY = "sales_order_number"
 SALES_ORDER_NUMBER_PREFIX = "SO-"
 LEAD_FK_NAME = "fk_support_tickets_lead_id"
 UUID_SENTINEL = "00000000-0000-0000-0000-000000000000"
+
+# Partial unique on open leads (migration 244): one open lead per
+# (subscriber, pipeline). A violation is a SOFT per-row skip, not a blocker.
+LEAD_OPEN_UNIQUE_INDEX = "uq_leads_one_open_per_subscriber_pipeline"
 
 # Lead statuses outside the open-lead partial unique (§1.3).
 LEAD_CLOSED_STATUSES = {"won", "lost"}
@@ -400,6 +405,52 @@ def plan_lead_open_unique_conflicts(
         for (subscriber_id, pipeline_id), lead_ids in sorted(groups.items())
         if len(lead_ids) > 1
     ]
+
+
+def _open_lead_conflict_report_row(lead: dict[str, Any], reason: str) -> dict[str, Any]:
+    return {
+        "crm_lead_id": lead.get("id"),
+        "subscriber_id": lead.get("subscriber_id"),
+        "pipeline_id": lead.get("pipeline_id"),
+        "status": lead.get("status"),
+        "reason": reason,
+    }
+
+
+def partition_open_lead_conflicts(
+    leads: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Split planned lead payloads into ``(keep, skip)`` on the open-lead
+    partial unique (§1.3), the in-batch collapse guard.
+
+    When the person->subscriber collapse merges two open leads into one
+    (subscriber, pipeline) group, keep the lowest-id lead and soft-skip the
+    rest — a resilient per-row skip, never a blocker. DB-state conflicts
+    against pre-existing open leads are caught separately by a per-row
+    savepoint at apply time. Skipped rows carry the conflict report shape.
+    """
+    conflicts = plan_lead_open_unique_conflicts(leads)
+    skip_ids: dict[str, dict[str, Any]] = {}
+    for conflict in conflicts:
+        # lead_ids is a ";"-joined sorted list — keep the first, skip the rest.
+        ids = conflict["lead_ids"].split(";")
+        for loser in ids[1:]:
+            skip_ids[loser] = conflict
+    keep: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for lead in leads:
+        if str(lead.get("id")) in skip_ids:
+            skipped.append(_open_lead_conflict_report_row(lead, "in_batch_collapse"))
+        else:
+            keep.append(lead)
+    return keep, skipped
+
+
+def is_open_lead_unique_violation(exc: IntegrityError) -> bool:
+    """True when an IntegrityError is the open-lead partial unique violation
+    (matched on the index name, since it is an expression index not a named
+    constraint on PG)."""
+    return LEAD_OPEN_UNIQUE_INDEX in str(getattr(exc, "orig", None) or exc)
 
 
 def plan_referral_referred_unique_conflicts(
@@ -1013,6 +1064,46 @@ def _execute_upserts(
     )
 
 
+def _apply_leads(
+    sub: Connection,
+    ctx: RunContext,
+    spec: TableSpec,
+    payloads: list[dict[str, Any]],
+    existing_ids: set[str],
+) -> None:
+    """Resilient leads upsert (§ hardening): a per-row SAVEPOINT means a single
+    open-lead unique violation — a lead conflicting with a pre-existing open
+    lead already in sub — routes that one lead to the conflict CSV as a soft
+    skip and continues, without rolling back the leads batch, any other
+    vertical or the whole run. Only this uniqueness is soft; every other
+    IntegrityError still propagates and gates. Skipped leads are not marked
+    present, so their (nullable) downstream FK references null out coherently.
+    """
+    step = "leads"
+    sql = build_upsert_sql(spec)
+    applied_ids: set[str] = set()
+    for payload in payloads:
+        row_id = str(payload.get("id") or "").lower()
+        existed = row_id in existing_ids
+        if ctx.apply:
+            savepoint = sub.begin_nested()
+            try:
+                sub.execute(text(sql), payload)
+                savepoint.commit()
+            except IntegrityError as exc:
+                savepoint.rollback()
+                if not is_open_lead_unique_violation(exc):
+                    raise
+                ctx.stats.bump(step, "skipped_open_unique_conflict")
+                ctx.reports["lead_open_unique_conflicts"].append(
+                    _open_lead_conflict_report_row(payload, "existing_open_lead")
+                )
+                continue
+        ctx.stats.bump(step, "updated" if existed else "created")
+        applied_ids.add(row_id)
+    ctx.present_ids.setdefault(spec.table, set()).update(applied_ids)
+
+
 def _mark_present(ctx: RunContext, table: str, existing_ids: set[str]) -> None:
     ctx.present_ids.setdefault(table, set()).update(existing_ids)
 
@@ -1191,13 +1282,17 @@ def _import_leads(sub: Connection, crm: Connection, ctx: RunContext) -> None:
             }
         )
 
-    conflicts = plan_lead_open_unique_conflicts(payloads)
-    for conflict in conflicts:
-        ctx.reports["lead_open_unique_conflicts"].append(conflict)
-        ctx.block(step, {"reason": "lead_open_unique_conflict", **conflict})
-    if conflicts:
-        return
-    _execute_upserts(sub, ctx, step, TABLE_SPECS["leads"], payloads, existing)
+    # Open-lead uniqueness is a SOFT per-row skip, never a blocker (§ hardening).
+    # In-batch collapse dupes (two CRM leads whose persons collapsed onto one
+    # subscriber) are pruned here; conflicts against pre-existing open leads in
+    # sub are caught per-row by a savepoint in _apply_leads. Either way the rest
+    # of the leads — and every other vertical — still commit, and the conflicts
+    # are reported so CRM can be cleaned before the flip.
+    keep, skipped = partition_open_lead_conflicts(payloads)
+    for row in skipped:
+        ctx.stats.bump(step, "skipped_open_unique_conflict")
+        ctx.reports["lead_open_unique_conflicts"].append(row)
+    _apply_leads(sub, ctx, TABLE_SPECS["leads"], keep, existing)
 
 
 def _backfill_support_ticket_lead_ids(
