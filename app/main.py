@@ -1271,7 +1271,7 @@ async def api_sync_pressure_guard_middleware(request: Request, call_next):
     )
     if ip_address in offender_ips:
         bucket = "listed"
-        limit = _env_int("API_SYNC_PRESSURE_OFFENDER_LIMIT", 60)
+        limit = _env_int("API_SYNC_PRESSURE_OFFENDER_LIMIT", 10)
     else:
         bucket = "general"
         limit = _env_int("API_SYNC_PRESSURE_PER_IP_LIMIT", 300)
@@ -1285,6 +1285,20 @@ async def api_sync_pressure_guard_middleware(request: Request, call_next):
         return await call_next(request)
 
     retry_after = decision.retry_after_seconds or window
+    try:
+        from app.metrics import API_SYNC_PRESSURE_LIMITED
+
+        scope = next(
+            (
+                prefix
+                for prefix in prefixes
+                if path == prefix or path.startswith(prefix)
+            ),
+            "api",
+        )
+        API_SYNC_PRESSURE_LIMITED.labels(bucket, scope).inc()
+    except Exception:
+        logger.debug("api_sync_pressure_metric_failed", exc_info=True)
     return _JSONResponse(
         {"detail": "API sync pressure limit reached. Please retry shortly."},
         status_code=429,
