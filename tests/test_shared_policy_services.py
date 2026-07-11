@@ -18,9 +18,12 @@ from app.services.customer_reporting_policy import active_customer_subscription_
 from app.services.radius_projection_planner import plan_radius_projection
 from app.services.subscription_lifecycle_policy import (
     BILLING_COLLECTIBLE_SERVICE_STATUSES,
+    MRR_COUNTABLE_SERVICE_STATUSES,
     PORTAL_VISIBLE_SERVICE_STATUSES,
     RADIUS_PROJECTABLE_SERVICE_STATUSES,
     TERMINAL_SERVICE_STATUSES,
+    is_customer_impact_service_status,
+    is_mrr_countable_service_status,
 )
 from tests.test_customer_plan_change_prepaid import _make_offer, _make_subscription
 
@@ -85,6 +88,12 @@ def test_subscription_lifecycle_status_sets_are_named_by_workflow():
     assert SubscriptionStatus.stopped in PORTAL_VISIBLE_SERVICE_STATUSES
     assert SubscriptionStatus.blocked in BILLING_COLLECTIBLE_SERVICE_STATUSES
     assert SubscriptionStatus.blocked in RADIUS_PROJECTABLE_SERVICE_STATUSES
+    assert SubscriptionStatus.active in MRR_COUNTABLE_SERVICE_STATUSES
+    assert SubscriptionStatus.suspended not in MRR_COUNTABLE_SERVICE_STATUSES
+    assert is_customer_impact_service_status(SubscriptionStatus.active) is True
+    assert is_customer_impact_service_status(SubscriptionStatus.suspended) is False
+    assert is_mrr_countable_service_status(SubscriptionStatus.active) is True
+    assert is_mrr_countable_service_status(SubscriptionStatus.suspended) is False
     assert SubscriptionStatus.canceled in TERMINAL_SERVICE_STATUSES
 
 

@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
 
+from app.services.customer_context import optional_customer_subscriber_id
 from app.services.db_session_adapter import db_session_adapter
 
 logger = logging.getLogger(__name__)
@@ -157,7 +158,7 @@ def customer_branding_context(request: Request) -> dict[str, object]:
         try:
             customer = get_current_customer_from_request(request, db)
             if customer:
-                subscriber_id = customer.get("subscriber_id")
+                subscriber_id = optional_customer_subscriber_id(db, customer)
                 if subscriber_id and is_subscriber_restricted(db, subscriber_id):
                     restricted = True
                 notification_preview = get_notifications_preview(db, customer)

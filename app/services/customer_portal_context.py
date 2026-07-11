@@ -37,8 +37,10 @@ from app.services.customer_context import (
     allowed_customer_account_ids,
     allowed_customer_subscriber_ids,
     customer_is_restricted,
+    optional_customer_subscriber_id,
     resolve_customer_account_ids,
 )
+from app.services.customer_support_links import ticket_customer_link_filter
 
 logger = logging.getLogger(__name__)
 
@@ -358,10 +360,7 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
                 db.scalar(
                     select(func.count(Ticket.id))
                     .where(Ticket.is_active.is_(True))
-                    .where(
-                        (Ticket.subscriber_id == account_id)
-                        | (Ticket.customer_account_id == account_id)
-                    )
+                    .where(ticket_customer_link_filter(Ticket, account_id))
                     .where(
                         Ticket.status.notin_(
                             (
@@ -584,8 +583,10 @@ def get_invoice_billing_contact(db: Session, invoice, customer: dict) -> dict:
         )
         billing_email = account.email
 
-    subscriber_id = customer.get("subscriber_id")
-    subscriber = db.get(Subscriber, subscriber_id) if subscriber_id else None
+    subscriber_id = optional_customer_subscriber_id(db, customer)
+    subscriber = (
+        db.get(Subscriber, coerce_uuid(subscriber_id)) if subscriber_id else None
+    )
 
     if not billing_name and subscriber:
         billing_name = (
@@ -623,8 +624,7 @@ def get_customer_appointments(
     Returns:
         Dict with 'appointments', 'total', 'total_pages' keys
     """
-    account_id = customer.get("account_id")
-    subscription_id = customer.get("subscription_id")
+    account_id, subscription_id = resolve_customer_account_ids(db, customer)
     account_id_str = str(account_id) if account_id else None
     subscription_id_str = str(subscription_id) if subscription_id else None
 

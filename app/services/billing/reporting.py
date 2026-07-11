@@ -26,10 +26,11 @@ from app.models.billing import (
     PaymentMethod,
     PaymentStatus,
 )
-from app.models.catalog import Subscription, SubscriptionStatus
+from app.models.catalog import Subscription
 from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services import settings_spec
+from app.services.subscription_lifecycle_policy import mrr_countable_service_filters
 
 logger = logging.getLogger(__name__)
 
@@ -945,7 +946,7 @@ class BillingReporting:
                     "active_count"
                 ),
             ).where(
-                Subscription.status == SubscriptionStatus.active,
+                *mrr_countable_service_filters(Subscription),
                 Subscription.next_billing_at >= m_start,
                 Subscription.next_billing_at < m_end,
             )
@@ -981,7 +982,7 @@ class BillingReporting:
         planned_stmt = select(
             func.coalesce(func.sum(Subscription.unit_price), Decimal("0")),
         ).where(
-            Subscription.status == SubscriptionStatus.active,
+            *mrr_countable_service_filters(Subscription),
             Subscription.next_billing_at >= next_m_start,
             Subscription.next_billing_at < next_m_end,
         )

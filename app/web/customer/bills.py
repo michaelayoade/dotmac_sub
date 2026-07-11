@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.services import vas_purchases as vas_purchases_service
 from app.services import vas_wallet as vas_wallet_service
+from app.services.customer_context import optional_customer_subscriber_id
 from app.web.customer.auth import get_current_customer_from_request
 from app.web.customer.branding import get_customer_templates
 
@@ -63,7 +64,7 @@ def customer_bills_hub(request: Request, db: Session = Depends(get_db)) -> Respo
         return RedirectResponse(
             url="/portal/auth/login?next=/portal/bills", status_code=303
         )
-    subscriber_id = str(customer.get("subscriber_id") or "")
+    subscriber_id = str(optional_customer_subscriber_id(db, customer) or "")
     catalog = _jsonable_catalog(vas_purchases_service.customer_catalog(db))
     overview = vas_wallet_service.wallet_overview(db, subscriber_id, limit=0)
     transactions = vas_purchases_service.list_transactions(db, subscriber_id, limit=10)
@@ -136,7 +137,7 @@ def customer_bills_purchase(
     try:
         txn = vas_purchases_service.purchase(
             db,
-            subscriber_id=str(customer.get("subscriber_id") or ""),
+            subscriber_id=str(optional_customer_subscriber_id(db, customer) or ""),
             service_id=service_id,
             identifier=identifier,
             variation_code=variation_code.strip() or None,
@@ -165,7 +166,7 @@ def customer_bills_receipt(
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
     txn = vas_purchases_service.get_transaction(
-        db, str(customer.get("subscriber_id") or ""), txn_id
+        db, str(optional_customer_subscriber_id(db, customer) or ""), txn_id
     )
     return templates.TemplateResponse(
         "customer/bills/receipt.html",

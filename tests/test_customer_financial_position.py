@@ -11,9 +11,14 @@ from app.models.subscriber import Subscriber
 from app.services.customer_financial_position import get_customer_financial_position
 from app.services.invoice_collectibility import (
     due_invoice_balance,
+    invoice_balance_sum_by_currency,
     list_open_invoices,
     open_invoice_balance,
+    open_invoice_balance_for_accounts,
+    open_invoice_filters_for_accounts,
+    overdue_debt_balance_for_accounts,
     overdue_status_count,
+    overdue_status_count_for_accounts,
 )
 from app.services.notification_template_conditions import conditions_match
 from app.services.vas_wallet import _open_invoice_balance
@@ -38,6 +43,7 @@ def _invoice(
     status=InvoiceStatus.issued,
     balance="100.00",
     due_at=None,
+    currency="NGN",
     is_active=True,
 ):
     invoice = Invoice(
@@ -47,6 +53,7 @@ def _invoice(
         total=Decimal(balance),
         balance_due=Decimal(balance),
         due_at=due_at,
+        currency=currency,
         is_active=is_active,
     )
     db_session.add(invoice)
@@ -99,6 +106,60 @@ def test_invoice_collectibility_splits_open_due_and_overdue_status(db_session):
         Decimal("50.00"),
         Decimal("25.00"),
     ]
+
+
+def test_multi_account_collectibility_uses_shared_billing_rules(db_session):
+    subscriber_a = _subscriber(db_session)
+    subscriber_b = _subscriber(db_session)
+    now = datetime.now(UTC)
+    _invoice(
+        db_session,
+        subscriber_a,
+        status=InvoiceStatus.issued,
+        balance="100.00",
+        due_at=now - timedelta(days=2),
+    )
+    _invoice(
+        db_session,
+        subscriber_b,
+        status=InvoiceStatus.partially_paid,
+        balance="50.00",
+        currency="USD",
+        due_at=now + timedelta(days=2),
+    )
+    _invoice(
+        db_session,
+        subscriber_b,
+        status=InvoiceStatus.overdue,
+        balance="25.00",
+    )
+    _invoice(
+        db_session,
+        subscriber_b,
+        status=InvoiceStatus.paid,
+        balance="999.00",
+        due_at=now - timedelta(days=2),
+    )
+    _invoice(
+        db_session,
+        subscriber_b,
+        status=InvoiceStatus.issued,
+        balance="0.00",
+        due_at=now - timedelta(days=2),
+    )
+
+    account_ids = [subscriber_a.id, subscriber_b.id]
+
+    assert open_invoice_balance_for_accounts(db_session, account_ids) == Decimal(
+        "175.00"
+    )
+    assert overdue_debt_balance_for_accounts(
+        db_session, account_ids, now=now
+    ) == Decimal("125.00")
+    assert overdue_status_count_for_accounts(db_session, account_ids) == 1
+    assert invoice_balance_sum_by_currency(
+        db_session, open_invoice_filters_for_accounts(account_ids)
+    ) == [("NGN", Decimal("125.00")), ("USD", Decimal("50.00"))]
 
 
 def test_customer_financial_position_summarizes_customer_debt(db_session):

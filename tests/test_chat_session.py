@@ -115,6 +115,25 @@ def test_customer_session_carries_owned_ticket_context(db_session):
     assert "project_id" not in meta
 
 
+def test_customer_session_carries_customer_account_ticket_context(db_session):
+    from app.models.support import Ticket
+    from app.models.team_inbox import InboxConversation
+    from app.services import chat_session
+
+    sub = _make_subscriber(db_session)
+    ticket = Ticket(title="Account ticket", customer_account_id=sub.id)
+    db_session.add(ticket)
+    db_session.commit()
+
+    with _chat_settings():
+        chat_session.broker_customer_session(
+            db_session, str(sub.id), ticket_id=str(ticket.id)
+        )
+
+    meta = db_session.query(InboxConversation).one().metadata_
+    assert meta["ticket_id"] == str(ticket.id)
+
+
 def test_customer_session_carries_owned_project_context(db_session):
     from app.models.project_mirror import ProjectMirror
     from app.models.team_inbox import InboxConversation
@@ -209,6 +228,34 @@ def test_reseller_session_falls_back_to_org_contact(db_session):
     conversation = db_session.query(InboxConversation).one()
     assert conversation.contact_address == "contact@beta.example"
     assert conversation.metadata_["reseller_name"] == "Beta ISP"
+
+
+def test_reseller_session_accepts_customer_account_ticket_context(db_session):
+    from app.models.support import Ticket
+    from app.models.team_inbox import InboxConversation
+    from app.services import chat_session
+
+    reseller = Reseller(name="Gamma ISP", contact_email="contact@gamma.example")
+    account = Subscriber(
+        first_name="Gamma",
+        last_name="Customer",
+        email="gamma-customer@example.com",
+        reseller=reseller,
+    )
+    db_session.add_all([reseller, account])
+    db_session.commit()
+    ticket = Ticket(title="Managed account ticket", customer_account_id=account.id)
+    db_session.add(ticket)
+    db_session.commit()
+
+    principal = {"principal_type": "subscriber", "principal_id": "irrelevant"}
+    with _chat_settings():
+        chat_session.broker_reseller_session(
+            db_session, str(reseller.id), principal, ticket_id=str(ticket.id)
+        )
+
+    meta = db_session.query(InboxConversation).one().metadata_
+    assert meta["ticket_id"] == str(ticket.id)
 
 
 # ── inbound chat webhook → push ──────────────────────────────────────────────

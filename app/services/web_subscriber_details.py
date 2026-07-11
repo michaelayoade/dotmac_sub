@@ -9,7 +9,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session
 
-from app.models.billing import CreditNoteStatus, Invoice, InvoiceStatus, Payment
+from app.models.billing import CreditNoteStatus, Invoice, Payment
 from app.models.catalog import (
     ContractTerm,
     OfferStatus,
@@ -42,6 +42,8 @@ from app.services.audit_helpers import (
 )
 from app.services.customer_network_context import get_customer_network_context
 from app.services.customer_support_links import ticket_customer_link_filter
+from app.services.invoice_collectibility import open_invoice_balance
+from app.services.subscription_lifecycle_policy import is_customer_impact_service_status
 
 logger = logging.getLogger(__name__)
 
@@ -305,7 +307,7 @@ def build_subscriber_detail_snapshot(db: Session, subscriber, subscriber_id):
         subscriptions = [
             s
             for s in all_subscriptions
-            if getattr(s, "status", None) == SubscriptionStatus.active
+            if is_customer_impact_service_status(getattr(s, "status", None))
         ][:10]
         for sub in subscriptions:
             latest_session = (
@@ -359,19 +361,7 @@ def build_subscriber_detail_snapshot(db: Session, subscriber, subscriber_id):
                 limit=5,
                 offset=0,
             )
-            balance_due = sum(
-                (
-                    Decimal(str(getattr(inv, "balance_due", 0) or 0))
-                    for inv in invoices
-                    if inv.status
-                    in (
-                        InvoiceStatus.issued,
-                        InvoiceStatus.partially_paid,
-                        InvoiceStatus.overdue,
-                    )
-                ),
-                Decimal("0.00"),
-            )
+            balance_due = open_invoice_balance(db, account.id)
             credit_notes = billing_service.credit_notes.list(
                 db=db,
                 account_id=account.id,

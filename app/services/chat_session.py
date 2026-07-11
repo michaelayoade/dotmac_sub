@@ -9,6 +9,10 @@ from sqlalchemy.orm import Session
 
 from app.models.subscriber import Reseller, Subscriber
 from app.services.common import coerce_uuid
+from app.services.customer_support_links import (
+    ticket_customer_link_filter,
+    ticket_customer_linked_ids,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +27,7 @@ def _owned_ticket(db: Session, subscriber_id, ticket_id: str) -> bool:
         db.query(Ticket.id)
         .filter(
             Ticket.id == tid,
-            Ticket.subscriber_id == coerce_uuid(str(subscriber_id)),
+            ticket_customer_link_filter(Ticket, coerce_uuid(str(subscriber_id))),
         )
         .first()
         is not None
@@ -81,12 +85,11 @@ def _reseller_context(db, reseller_id, *, ticket_id, project_id):
 
     if ticket_id:
         tid = coerce_uuid(str(ticket_id))
-        owner = (
-            db.query(Ticket.subscriber_id).filter(Ticket.id == tid).scalar()
-            if tid is not None
-            else None
-        )
-        if not _reseller_owns(db, reseller_id, owner):
+        ticket = db.get(Ticket, tid) if tid is not None else None
+        if ticket is None or not any(
+            _reseller_owns(db, reseller_id, owner_id)
+            for owner_id in ticket_customer_linked_ids(ticket)
+        ):
             logger.warning(
                 "chat_ctx_ticket_not_owned reseller=%s ticket=%s",
                 reseller_id,

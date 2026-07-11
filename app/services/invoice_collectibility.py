@@ -37,11 +37,33 @@ def open_invoice_filters(account_id=None) -> tuple:
     return tuple(filters)
 
 
+def open_invoice_filters_for_accounts(account_ids) -> tuple:
+    """SQL predicates for active customer-facing debt across accounts."""
+    return (
+        Invoice.account_id.in_(_coerce_account_ids(account_ids)),
+        *open_invoice_filters(),
+    )
+
+
 def due_invoice_filters(account_id=None, *, now: datetime | None = None) -> tuple:
     """SQL predicates for open invoices that are due for collection now."""
     now = _as_aware(now)
     return (
         *open_invoice_filters(account_id),
+        or_(
+            Invoice.due_at <= now,
+            and_(Invoice.due_at.is_(None), Invoice.status == InvoiceStatus.overdue),
+        ),
+    )
+
+
+def due_invoice_filters_for_accounts(
+    account_ids, *, now: datetime | None = None
+) -> tuple:
+    """SQL predicates for invoices due for collection across accounts."""
+    now = _as_aware(now)
+    return (
+        *open_invoice_filters_for_accounts(account_ids),
         or_(
             Invoice.due_at <= now,
             and_(Invoice.due_at.is_(None), Invoice.status == InvoiceStatus.overdue),
@@ -66,6 +88,23 @@ def overdue_debt_filters(account_id=None, *, now: datetime | None = None) -> tup
     return tuple(filters)
 
 
+def overdue_debt_filters_for_accounts(
+    account_ids, *, now: datetime | None = None
+) -> tuple:
+    """SQL predicates for overdue debt across accounts."""
+    now = _as_aware(now)
+    return (
+        Invoice.account_id.in_(_coerce_account_ids(account_ids)),
+        Invoice.is_active.is_(True),
+        Invoice.status.in_(OVERDUE_DEBT_STATUSES),
+        Invoice.balance_due > Decimal("0.00"),
+        or_(
+            Invoice.status == InvoiceStatus.overdue,
+            Invoice.due_at < now,
+        ),
+    )
+
+
 def overdue_status_filters(account_id=None) -> tuple:
     """SQL predicates for invoices already marked overdue."""
     filters = [
@@ -76,6 +115,14 @@ def overdue_status_filters(account_id=None) -> tuple:
     if account_id is not None:
         filters.insert(0, Invoice.account_id == coerce_uuid(str(account_id)))
     return tuple(filters)
+
+
+def overdue_status_filters_for_accounts(account_ids) -> tuple:
+    """SQL predicates for invoices already marked overdue across accounts."""
+    return (
+        Invoice.account_id.in_(_coerce_account_ids(account_ids)),
+        *overdue_status_filters(),
+    )
 
 
 def list_open_invoices(
@@ -105,8 +152,29 @@ def invoice_balance_sum(db: Session, filters: Iterable) -> Decimal:
     return Decimal(str(total or "0.00"))
 
 
+def invoice_balance_sum_by_currency(
+    db: Session, filters: Iterable
+) -> list[tuple[str | None, Decimal]]:
+    return [
+        (currency, Decimal(str(total or "0.00")))
+        for currency, total in db.execute(
+            select(
+                Invoice.currency,
+                func.coalesce(func.sum(Invoice.balance_due), Decimal("0.00")),
+            )
+            .where(*tuple(filters))
+            .group_by(Invoice.currency)
+            .order_by(Invoice.currency.asc())
+        ).all()
+    ]
+
+
 def open_invoice_balance(db: Session, account_id) -> Decimal:
     return invoice_balance_sum(db, open_invoice_filters(account_id))
+
+
+def open_invoice_balance_for_accounts(db: Session, account_ids) -> Decimal:
+    return invoice_balance_sum(db, open_invoice_filters_for_accounts(account_ids))
 
 
 def due_invoice_balance(
@@ -121,12 +189,39 @@ def overdue_debt_balance(
     return invoice_balance_sum(db, overdue_debt_filters(account_id, now=now))
 
 
+def overdue_debt_balance_for_accounts(
+    db: Session, account_ids, *, now: datetime | None = None
+) -> Decimal:
+    return invoice_balance_sum(
+        db, overdue_debt_filters_for_accounts(account_ids, now=now)
+    )
+
+
 def overdue_status_count(db: Session, account_id) -> int:
     return int(
         db.execute(
             select(func.count(Invoice.id)).where(*overdue_status_filters(account_id))
         ).scalar()
         or 0
+    )
+
+
+def overdue_status_count_for_accounts(db: Session, account_ids) -> int:
+    return int(
+        db.execute(
+            select(func.count(Invoice.id)).where(
+                *overdue_status_filters_for_accounts(account_ids)
+            )
+        ).scalar()
+        or 0
+    )
+
+
+def _coerce_account_ids(account_ids) -> tuple:
+    return tuple(
+        account_id
+        for account_id in (coerce_uuid(str(value)) for value in account_ids or [])
+        if account_id is not None
     )
 
 

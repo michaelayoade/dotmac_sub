@@ -158,9 +158,33 @@ def customer_can_access_account(
     return resolve_customer_context(db, customer).owns_account(account_id)
 
 
+def optional_customer_account_id(
+    db: Session, customer: Mapping[str, object]
+) -> str | None:
+    """Resolve the customer's primary billing account ID, if available."""
+    context = resolve_customer_context(db, customer)
+    return context.account_id or context.subscriber_id
+
+
 def require_customer_account_id(db: Session, customer: Mapping[str, object]) -> str:
     """Resolve the customer's primary account ID or raise a user-safe error."""
     return resolve_customer_context(db, customer).require_account_id()
+
+
+def optional_customer_subscriber_id(
+    db: Session, customer: Mapping[str, object]
+) -> str | None:
+    """Resolve the authenticated portal subscriber/principal ID, if available."""
+    context = resolve_customer_context(db, customer)
+    return context.subscriber_id or context.account_id
+
+
+def require_customer_subscriber_id(db: Session, customer: Mapping[str, object]) -> str:
+    """Resolve the authenticated portal subscriber/principal ID or raise."""
+    subscriber_id = optional_customer_subscriber_id(db, customer)
+    if not subscriber_id:
+        raise ValueError("Unable to resolve customer subscriber.")
+    return subscriber_id
 
 
 def customer_is_restricted(db: Session, subscriber_id: object) -> bool:

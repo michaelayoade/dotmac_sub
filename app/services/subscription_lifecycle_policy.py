@@ -69,5 +69,13 @@ def mrr_countable_service_filters(subscription_model) -> tuple:
     return (subscription_model.status.in_(MRR_COUNTABLE_SERVICE_STATUSES),)
 
 
+def is_customer_impact_service_status(status: SubscriptionStatus | None) -> bool:
+    return status in CUSTOMER_IMPACT_STATUSES
+
+
+def is_mrr_countable_service_status(status: SubscriptionStatus | None) -> bool:
+    return status in MRR_COUNTABLE_SERVICE_STATUSES
+
+
 def is_terminal_service_status(status: SubscriptionStatus | None) -> bool:
     return status in TERMINAL_SERVICE_STATUSES

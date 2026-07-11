@@ -19,7 +19,6 @@ from app.models.billing import (
     CreditNoteApplication,
     CreditNoteStatus,
     Invoice,
-    InvoiceStatus,
     Payment,
     PaymentStatus,
     TaxRate,
@@ -77,8 +76,17 @@ from app.services.audit_helpers import (
 from app.services.billing_settings import resolve_payment_due_days
 from app.services.collections import get_available_balance
 from app.services.credential_crypto import decrypt_credential
+from app.services.customer_support_links import ticket_customer_any_link_filter
+from app.services.invoice_collectibility import (
+    open_invoice_balance_for_accounts,
+    overdue_debt_filters_for_accounts,
+)
 from app.services.network._common import decode_huawei_hex_serial
 from app.services.nin_matching import mask_nin
+from app.services.subscription_lifecycle_policy import (
+    is_customer_impact_service_status,
+    is_mrr_countable_service_status,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -471,13 +479,7 @@ def _build_activity_items(
         )
         support_tickets = (
             db.query(Ticket)
-            .filter(
-                or_(
-                    Ticket.subscriber_id.in_(account_ids),
-                    Ticket.customer_account_id.in_(account_ids),
-                    Ticket.customer_person_id.in_(account_ids),
-                )
-            )
+            .filter(ticket_customer_any_link_filter(Ticket, account_ids))
             .order_by(Ticket.updated_at.desc())
             .limit(8)
             .all()
@@ -681,12 +683,7 @@ def _build_common_financials(db: Session, account_ids):
             .all()
         )
 
-    balance_due = sum(
-        float(getattr(inv, "balance_due", 0) or 0)
-        for inv in invoices
-        if inv.status
-        in (InvoiceStatus.issued, InvoiceStatus.partially_paid, InvoiceStatus.overdue)
-    )
+    balance_due = float(open_invoice_balance_for_accounts(db, account_ids or []))
 
     current_balance = Decimal("0.00")
     for account_id in account_ids or []:
@@ -722,9 +719,7 @@ def _build_common_financials(db: Session, account_ids):
         )
         overdue_invoices = (
             db.query(func.count(Invoice.id))
-            .filter(Invoice.account_id.in_(account_ids))
-            .filter(Invoice.is_active.is_(True))
-            .filter(Invoice.status == InvoiceStatus.overdue)
+            .filter(*overdue_debt_filters_for_accounts(account_ids))
             .scalar()
             or 0
         )
@@ -872,13 +867,7 @@ def _build_relationship_data(db: Session, account_ids: list[UUID]) -> dict[str, 
 
     support_tickets = (
         db.query(Ticket)
-        .filter(
-            or_(
-                Ticket.subscriber_id.in_(account_ids),
-                Ticket.customer_account_id.in_(account_ids),
-                Ticket.customer_person_id.in_(account_ids),
-            )
-        )
+        .filter(ticket_customer_any_link_filter(Ticket, account_ids))
         .order_by(Ticket.updated_at.desc())
         .limit(10)
         .all()
@@ -1263,7 +1252,7 @@ def _build_network_connection_snapshot(
         status for status in by_subscription.values() if status["state"] == "stale"
     ]
     active_count = sum(
-        1 for sub in subscriptions if sub.status == SubscriptionStatus.active
+        1 for sub in subscriptions if is_customer_impact_service_status(sub.status)
     )
     if connected:
         label = "Connected"
@@ -1577,12 +1566,12 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
     balance_due = finance_data["balance_due"]
     financials = finance_data["financials"]
     active_subscriptions = sum(
-        1 for sub in subscriptions if sub.status == SubscriptionStatus.active
+        1 for sub in subscriptions if is_customer_impact_service_status(sub.status)
     )
     monthly_recurring = sum(
         float(getattr(sub, "unit_price", 0) or 0)
         for sub in subscriptions
-        if sub.status == SubscriptionStatus.active
+        if is_mrr_countable_service_status(sub.status)
     )
     financials["monthly_recurring"] = monthly_recurring
     relationship_data = _build_relationship_data(db, account_ids)

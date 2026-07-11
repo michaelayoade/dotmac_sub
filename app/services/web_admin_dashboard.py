@@ -278,6 +278,12 @@ def _build_dashboard_billing_summary(db: Session) -> dict[str, float]:
     """Return the small billing aggregate needed by the admin overview."""
     from sqlalchemy import text as sa_text
 
+    from app.services.invoice_collectibility import (
+        invoice_balance_sum,
+        open_invoice_filters,
+        overdue_debt_filters,
+    )
+
     try:
         row = db.execute(
             sa_text(
@@ -290,29 +296,16 @@ def _build_dashboard_billing_summary(db: Session) -> dict[str, float]:
                           AND status = 'succeeded'
                           AND paid_at >= date_trunc('month', NOW())
                           AND paid_at < date_trunc('month', NOW()) + INTERVAL '1 month'
-                    ), 0) AS payments_this_month,
-                    COALESCE((
-                        SELECT SUM(balance_due)
-                        FROM invoices
-                        WHERE is_active = true
-                          AND status != 'void'
-                          AND balance_due > 0
-                    ), 0) AS pending_amount,
-                    COALESCE((
-                        SELECT SUM(balance_due)
-                        FROM invoices
-                        WHERE is_active = true
-                          AND status != 'void'
-                          AND balance_due > 0
-                          AND due_at < NOW()
-                    ), 0) AS overdue_amount
+                    ), 0) AS payments_this_month
                 """
             )
         ).one()
         return {
             "payments_this_month": float(row.payments_this_month or 0),
-            "pending_amount": float(row.pending_amount or 0),
-            "overdue_amount": float(row.overdue_amount or 0),
+            "pending_amount": float(invoice_balance_sum(db, open_invoice_filters())),
+            "overdue_amount": float(
+                invoice_balance_sum(db, overdue_debt_filters(now=datetime.now(UTC)))
+            ),
         }
     except Exception:
         logger.debug("Failed to load dashboard billing summary", exc_info=True)
