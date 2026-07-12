@@ -95,6 +95,11 @@ def test_rotate_credential_encryption_material_updates_known_storage_targets(
         username="rotate-user",
         secret_hash=encrypt_credential_with_key("pppoe-pass", old_key),
     )
+    opaque_credential = AccessCredential(
+        subscriber_id=subscriber.id,
+        username="opaque-user",
+        secret_hash="YWJjZGVmZ2hpamtsbW5vcA==",
+    )
     payment_method = PaymentMethod(
         account_id=subscriber.id,
         token=encrypt_credential_with_key("pm-token", old_key),
@@ -188,6 +193,7 @@ def test_rotate_credential_encryption_material_updates_known_storage_targets(
         [
             nas,
             credential,
+            opaque_credential,
             payment_method,
             bank_account,
             webhook,
@@ -231,6 +237,10 @@ def test_rotate_credential_encryption_material_updates_known_storage_targets(
             db_session.get(AccessCredential, credential.id).secret_hash, new_key
         )
         == "pppoe-pass"
+    )
+    assert (
+        db_session.get(AccessCredential, opaque_credential.id).secret_hash
+        == "YWJjZGVmZ2hpamtsbW5vcA=="
     )
     assert (
         decrypt_credential_with_key(

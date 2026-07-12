@@ -46,12 +46,55 @@ def _active_subscription_with_ont(db_session):
         OntAssignment(
             ont_unit_id=ont.id,
             subscriber_id=subscriber.id,
+            subscription_id=subscription.id,
             active=True,
             wifi_ssid="ExistingSSID",
         )
     )
     db_session.commit()
     return subscriber, subscription, ont
+
+
+def test_uisp_ont_does_not_expose_huawei_customer_actions(db_session):
+    from app.models.network import OLTDevice
+    from app.models.uisp_control import (
+        UispDeviceIntent,
+        UispIntentStatus,
+        UispIntentTargetType,
+    )
+
+    subscriber, subscription, ont = _active_subscription_with_ont(db_session)
+    olt = OLTDevice(
+        name="UF-OLT-PORTAL",
+        vendor="ubiquiti",
+        uisp_device_id="uisp-olt-portal",
+    )
+    db_session.add(olt)
+    db_session.flush()
+    ont.olt_device_id = olt.id
+    ont.uisp_device_id = "uisp-onu-portal"
+    db_session.add(
+        UispDeviceIntent(
+            target_type=UispIntentTargetType.ont,
+            target_id=ont.id,
+            subscription_id=subscription.id,
+            uisp_device_id=ont.uisp_device_id,
+            desired_state={"wifi": {"ssid": "Portal"}},
+            status=UispIntentStatus.manual_required,
+        )
+    )
+    db_session.commit()
+
+    detail = get_service_detail(
+        db_session,
+        {"account_id": str(subscriber.id)},
+        str(subscription.id),
+    )
+
+    assert detail is not None
+    assert detail["can_reboot_ont"] is False
+    assert detail["can_update_wifi"] is False
+    assert detail["uisp_control_status"] == "manual_required"
 
 
 def test_service_detail_exposes_customer_reboot_when_ont_is_linked(db_session):

@@ -71,6 +71,20 @@ class DomainSettings(ListResponseMixin):
         bind = db.get_bind()
         return getattr(getattr(bind, "dialect", None), "name", None) == "sqlite"
 
+    @staticmethod
+    def _validate_relationship_change(
+        db: Session, domain: SettingDomain, key: str, value: object
+    ) -> None:
+        from app.services.control_relationships import (
+            ControlRelationshipError,
+            validate_setting_change,
+        )
+
+        try:
+            validate_setting_change(db, domain, key, value)
+        except ControlRelationshipError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     def _prepare_create_payload(
         self, db: Session, key: str, payload: DomainSettingCreate
     ) -> DomainSettingCreate:
@@ -127,6 +141,14 @@ class DomainSettings(ListResponseMixin):
         payload = self._prepare_create_payload(db, payload.key, payload)
         data = payload.model_dump()
         data["domain"] = self._resolve_domain(payload.domain)
+        self._validate_relationship_change(
+            db,
+            data["domain"],
+            payload.key,
+            payload.value_json
+            if payload.value_json is not None
+            else payload.value_text,
+        )
         setting = DomainSetting(**data)
         db.add(setting)
         db.commit()
@@ -180,6 +202,13 @@ class DomainSettings(ListResponseMixin):
         data = payload.model_dump(exclude_unset=True)
         if "domain" in data and data["domain"] != setting.domain:
             raise HTTPException(status_code=400, detail="Setting domain mismatch")
+        pending_value = data.get(
+            "value_json",
+            data.get("value_text", setting.value_json or setting.value_text),
+        )
+        self._validate_relationship_change(
+            db, setting.domain, setting.key, pending_value
+        )
         for key, value in data.items():
             setattr(setting, key, value)
         db.commit()
@@ -220,6 +249,11 @@ class DomainSettings(ListResponseMixin):
             data = payload.model_dump(exclude_unset=True)
             data.pop("domain", None)
             data.pop("key", None)
+            pending_value = data.get(
+                "value_json",
+                data.get("value_text", setting.value_json or setting.value_text),
+            )
+            self._validate_relationship_change(db, self.domain, key, pending_value)
             for field, value in data.items():
                 setattr(setting, field, value)
             db.commit()

@@ -25,6 +25,9 @@ from app.models.system_user import SystemUser
 from app.models.tr069 import Tr069AcsServer
 from app.models.vas import VasTransaction
 from app.models.webhook import WebhookEndpoint
+from app.services.access_credential_secret import (
+    is_one_way_access_credential_secret,
+)
 from app.services.credential_crypto import (
     ENCRYPTED_MODEL_FIELDS,
     decrypt_credential_with_key,
@@ -48,9 +51,36 @@ class CredentialKeyRotationResult:
     updated_values: int
 
 
+@dataclass(frozen=True)
+class CredentialRemediationResult:
+    status: str
+    execute: bool
+    values_scanned: int
+    plaintext_before: int
+    plaintext_after: int
+    undecryptable: int
+    updated_records: int = 0
+    updated_values: int = 0
+    reason: str | None = None
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "status": self.status,
+            "execute": self.execute,
+            "values_scanned": self.values_scanned,
+            "plaintext_before": self.plaintext_before,
+            "plaintext_after": self.plaintext_after,
+            "undecryptable": self.undecryptable,
+            "updated_records": self.updated_records,
+            "updated_values": self.updated_values,
+            "reason": self.reason,
+        }
+
+
 _INTEGRITY_STATES = (
     "encrypted",
     "plaintext",
+    "one_way",
     "undecryptable",
     "reference",
     "empty",
@@ -105,15 +135,46 @@ _ONT_DESIRED_CONFIG_CREDENTIAL_PATHS: tuple[tuple[str, ...], ...] = (
     ("wifi", "password"),
 )
 
+_RAW_ENCRYPTED_COLUMNS: tuple[tuple[str, str, str, str, str], ...] = (
+    (
+        "ConnectorConfig.headers",
+        "headers",
+        "SELECT headers FROM connector_configs WHERE headers IS NOT NULL",
+        "SELECT id, headers FROM connector_configs WHERE headers IS NOT NULL",
+        "UPDATE connector_configs SET headers = :value WHERE id = :id",
+    ),
+    (
+        "OAuthToken.access_token",
+        "access_token",
+        "SELECT access_token FROM oauth_tokens WHERE access_token IS NOT NULL",
+        "SELECT id, access_token FROM oauth_tokens WHERE access_token IS NOT NULL",
+        "UPDATE oauth_tokens SET access_token = :value WHERE id = :id",
+    ),
+    (
+        "OAuthToken.refresh_token",
+        "refresh_token",
+        "SELECT refresh_token FROM oauth_tokens WHERE refresh_token IS NOT NULL",
+        "SELECT id, refresh_token FROM oauth_tokens WHERE refresh_token IS NOT NULL",
+        "UPDATE oauth_tokens SET refresh_token = :value WHERE id = :id",
+    ),
+)
+
 
 def _empty_integrity_counts() -> dict[str, int]:
     return dict.fromkeys(_INTEGRITY_STATES, 0)
 
 
-def _credential_state(value: Any, keys: tuple[bytes, ...]) -> str:
+def _credential_state(
+    value: Any,
+    keys: tuple[bytes, ...],
+    *,
+    preserve_one_way: bool = False,
+) -> str:
     if value is None or value == "":
         return "empty"
     text_value = str(value)
+    if preserve_one_way and is_one_way_access_credential_secret(text_value):
+        return "one_way"
     if is_secret_ref(text_value):
         return "reference"
     if text_value.startswith("plain:") or not text_value.startswith("enc:"):
@@ -144,16 +205,24 @@ def scan_credential_encryption_integrity(
     def register(scope: str) -> None:
         counts.setdefault(scope, _empty_integrity_counts())
 
-    def observe(scope: str, value: Any) -> None:
+    def observe(scope: str, value: Any, *, preserve_one_way: bool = False) -> None:
         register(scope)
-        counts[scope][_credential_state(value, keys)] += 1
+        counts[scope][
+            _credential_state(value, keys, preserve_one_way=preserve_one_way)
+        ] += 1
 
     for model, fields in _MODEL_FIELDS:
         for field in fields:
             register(f"{model.__name__}.{field}")
         for row in db.scalars(select(model)).all():
             for field in fields:
-                observe(f"{model.__name__}.{field}", getattr(row, field, None))
+                observe(
+                    f"{model.__name__}.{field}",
+                    getattr(row, field, None),
+                    preserve_one_way=(
+                        model is AccessCredential and field == "secret_hash"
+                    ),
+                )
 
     nested_scopes = {
         path: ".".join(("OntUnit", "desired_config", *path))
@@ -199,6 +268,18 @@ def scan_credential_encryption_integrity(
     for row in connector_rows:
         observe(connector_scope, row.auth_config)
 
+    for (
+        scope,
+        _column_name,
+        integrity_sql,
+        _rotation_sql,
+        _update_sql,
+    ) in _RAW_ENCRYPTED_COLUMNS:
+        register(scope)
+        rows = db.execute(text(integrity_sql)).all()
+        for row in rows:
+            observe(scope, row[0])
+
     totals = Counter(dict.fromkeys(_INTEGRITY_STATES, 0))
     for states in counts.values():
         totals.update(states)
@@ -207,6 +288,55 @@ def scan_credential_encryption_integrity(
         totals={state: int(totals[state]) for state in _INTEGRITY_STATES},
         scanned_at=(now or datetime.now(UTC)).astimezone(UTC),
     )
+
+
+def publish_credential_integrity_snapshot(
+    integrity: CredentialIntegrityResult,
+    *,
+    operation: str,
+    operation_status: str,
+    extra_observations: tuple[tuple[str, str, float], ...] = (),
+) -> bool:
+    """Publish the canonical redacted credential-integrity state."""
+    from app.services.observability import StateObservation, publish_state_snapshot
+
+    observations = [
+        StateObservation(signal=signal, scope=scope, value=value)
+        for signal, scope, value in integrity.observations()
+    ]
+    observations.append(
+        StateObservation(
+            signal=f"{operation}_status",
+            scope=operation_status,
+            value=1.0,
+        )
+    )
+    observations.extend(
+        StateObservation(signal=signal, scope=scope, value=value)
+        for signal, scope, value in extra_observations
+    )
+
+    if operation_status in {"blocked", "error", "incomplete"}:
+        status = "error"
+    elif integrity.totals["undecryptable"] > 0:
+        status = "error"
+    elif integrity.totals["plaintext"] > 0:
+        status = "degraded"
+    else:
+        status = "ok"
+    try:
+        return publish_state_snapshot(
+            "credentials",
+            observations,
+            status=status,
+            now=integrity.scanned_at,
+        )
+    except Exception:
+        logger.exception(
+            "credential_integrity_snapshot_publish_failed operation=%s",
+            operation,
+        )
+        return False
 
 
 def _rotate_value(
@@ -237,9 +367,21 @@ def _rotate_value(
         rotated = encrypt_credential_with_key(plain_value, new_key)
         return rotated, rotated != value
 
+    if value.lower().startswith("cleartext:"):
+        plain_value = value[10:]
+        rotated = encrypt_credential_with_key(plain_value, new_key)
+        return rotated, rotated != value
+
     if not value.startswith("enc:"):
         rotated = encrypt_credential_with_key(value, new_key)
         return rotated, rotated != value
+
+    # Remediation passes the active key as both old and new. The integrity scan
+    # has already validated ciphertext against the active/previous keyring, so
+    # remediation must leave every encrypted value untouched and only converge
+    # plaintext values.
+    if old_key == new_key:
+        return value, False
 
     # Try decrypting with old key first
     try:
@@ -301,6 +443,12 @@ def _rotate_model_fields(
         row_changed = False
         for field in fields:
             current = getattr(row, field, None)
+            if (
+                model is AccessCredential
+                and field == "secret_hash"
+                and is_one_way_access_credential_secret(current)
+            ):
+                continue
             try:
                 rotated, changed = _rotate_value(
                     current, old_key=old_key, new_key=new_key
@@ -461,6 +609,33 @@ def _rotate_connector_auth_config(
     return updated_records, updated_values
 
 
+def _rotate_raw_encrypted_columns(
+    db: Session, *, old_key: str, new_key: str
+) -> tuple[int, int]:
+    """Rotate whole-blob/string encrypted columns without ORM decryption."""
+    updated_records = 0
+    updated_values = 0
+    for (
+        _scope,
+        column_name,
+        _integrity_sql,
+        rotation_sql,
+        update_sql,
+    ) in _RAW_ENCRYPTED_COLUMNS:
+        rows = db.execute(text(rotation_sql)).mappings()
+        for row in rows:
+            raw = row[column_name]
+            if not isinstance(raw, str) or not raw:
+                continue
+            rotated, changed = _rotate_value(raw, old_key=old_key, new_key=new_key)
+            if not changed:
+                continue
+            db.execute(text(update_sql), {"value": rotated, "id": row["id"]})
+            updated_records += 1
+            updated_values += 1
+    return updated_records, updated_values
+
+
 def rotate_credential_encryption_material(
     db: Session,
     *,
@@ -501,6 +676,12 @@ def rotate_credential_encryption_material(
     updated_records += records
     updated_values += values
 
+    records, values = _rotate_raw_encrypted_columns(
+        db, old_key=old_key, new_key=new_key
+    )
+    updated_records += records
+    updated_values += values
+
     if commit:
         db.commit()
     else:
@@ -516,3 +697,104 @@ def rotate_credential_encryption_material(
         updated_records=updated_records,
         updated_values=updated_values,
     )
+
+
+def remediate_credential_encryption(
+    db: Session,
+    *,
+    execute: bool = False,
+) -> CredentialRemediationResult:
+    """Converge plaintext credential values through the canonical inventory."""
+    before = scan_credential_encryption_integrity(db)
+    plaintext_before = int(before.totals["plaintext"])
+    undecryptable = int(before.totals["undecryptable"])
+
+    if undecryptable > 0:
+        result = CredentialRemediationResult(
+            status="blocked",
+            execute=execute,
+            values_scanned=before.values_scanned,
+            plaintext_before=plaintext_before,
+            plaintext_after=plaintext_before,
+            undecryptable=undecryptable,
+            reason="undecryptable_credentials",
+        )
+        publish_credential_integrity_snapshot(
+            before,
+            operation="remediation",
+            operation_status=result.status,
+        )
+        return result
+
+    active_key = get_encryption_key()
+    if active_key is None:
+        result = CredentialRemediationResult(
+            status="blocked",
+            execute=execute,
+            values_scanned=before.values_scanned,
+            plaintext_before=plaintext_before,
+            plaintext_after=plaintext_before,
+            undecryptable=0,
+            reason="encryption_key_missing",
+        )
+        publish_credential_integrity_snapshot(
+            before,
+            operation="remediation",
+            operation_status=result.status,
+        )
+        return result
+
+    if not execute:
+        result = CredentialRemediationResult(
+            status="dry_run",
+            execute=False,
+            values_scanned=before.values_scanned,
+            plaintext_before=plaintext_before,
+            plaintext_after=plaintext_before,
+            undecryptable=0,
+        )
+        publish_credential_integrity_snapshot(
+            before,
+            operation="remediation",
+            operation_status=result.status,
+        )
+        return result
+
+    key_text = (
+        active_key.decode("ascii") if isinstance(active_key, bytes) else str(active_key)
+    )
+    try:
+        updated = rotate_credential_encryption_material(
+            db,
+            old_key=key_text,
+            new_key=key_text,
+            commit=True,
+        )
+    except Exception:
+        db.rollback()
+        publish_credential_integrity_snapshot(
+            before,
+            operation="remediation",
+            operation_status="error",
+        )
+        raise
+
+    after = scan_credential_encryption_integrity(db)
+    plaintext_after = int(after.totals["plaintext"])
+    result = CredentialRemediationResult(
+        status="completed" if plaintext_after == 0 else "incomplete",
+        execute=True,
+        values_scanned=after.values_scanned,
+        plaintext_before=plaintext_before,
+        plaintext_after=plaintext_after,
+        undecryptable=int(after.totals["undecryptable"]),
+        updated_records=updated.updated_records,
+        updated_values=updated.updated_values,
+        reason=None if plaintext_after == 0 else "plaintext_credentials_remain",
+    )
+    publish_credential_integrity_snapshot(
+        after,
+        operation="remediation",
+        operation_status=result.status,
+    )
+    return result

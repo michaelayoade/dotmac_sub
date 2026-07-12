@@ -263,6 +263,7 @@ def maybe_send_invoice_notification(
     email_addr = getattr(account, "email", None)
     if not email_addr:
         return
+    from app.services.brand_profiles import resolve_brand
     from app.services.email_template import wrap_email_html
 
     inv_num = invoice.invoice_number or str(invoice.id)
@@ -315,6 +316,7 @@ def maybe_send_invoice_notification(
             f'<p style="margin: 18px 0 0; font-size: 13px; line-height: 1.6; color: #555;">You can also view the invoice here: <a href="{escape(invoice_url)}" style="color: #008000;">{escape(invoice_url)}</a></p>'
         ),
         subject=subject,
+        brand=resolve_brand(db, subscriber_id=account.id).to_dict(),
     )
     body_text = (
         f"Dear {getattr(account, 'display_name', None) or getattr(account, 'first_name', None) or 'Customer'},\n\n"

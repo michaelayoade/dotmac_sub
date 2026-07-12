@@ -1438,14 +1438,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.scheduler,
-        key="crm_billing_push_enabled",
-        env_var="CRM_BILLING_PUSH_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=False,
-        label="CRM Billing Push Enabled",
-    ),
-    SettingSpec(
-        domain=SettingDomain.scheduler,
         key="crm_cache_list_seconds",
         env_var="CRM_CACHE_LIST_SECONDS",
         value_type=SettingValueType.integer,

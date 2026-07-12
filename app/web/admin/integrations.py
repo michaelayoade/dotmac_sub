@@ -48,17 +48,6 @@ def integrations_overview(request: Request, db: Session = Depends(get_db)):
     """Main integrations page with connector inventory and integration actions."""
     state = web_integrations_service.build_connectors_list_data(db)
 
-    from app.services import crm_sync_failures
-
-    redrive_status = request.query_params.get("crm_redrive", "")
-    crm_redrive_message = ""
-    if redrive_status == "not_found":
-        crm_redrive_message = "CRM dead-letter was not found or is already resolved."
-    elif redrive_status == "skipped":
-        crm_redrive_message = "CRM dead-letter has no payload to re-drive."
-    elif redrive_status.isdigit():
-        crm_redrive_message = f"Re-drove {redrive_status} CRM dead-letter(s)."
-
     context = _base_context(request, db, active_page="integrations")
     context.update(
         {
@@ -67,35 +56,10 @@ def integrations_overview(request: Request, db: Session = Depends(get_db)):
             "page_subtitle": "Manage integrations, connectors, syncs, and external system access",
             "table_title": "Connectors",
             "recent_activities": recent_activity_for_paths(db, ["/admin/integrations"]),
-            "crm_dead_letter_count": crm_sync_failures.unresolved_count(db),
-            "crm_dead_letters": crm_sync_failures.list_failures(db, limit=25),
-            "crm_redrive_message": crm_redrive_message,
         }
     )
     return templates.TemplateResponse(
         "admin/integrations/connectors/index.html", context
-    )
-
-
-@router.post(
-    "/crm-dead-letters/redrive",
-    dependencies=[Depends(require_permission("system:settings:write"))],
-)
-def crm_dead_letters_redrive(failure_id: str = Form(""), db: Session = Depends(get_db)):
-    """Re-enqueue CRM push dead-letters — one by id, or all unresolved."""
-    from fastapi.responses import RedirectResponse
-
-    from app.services import crm_sync_failures
-
-    if failure_id.strip():
-        redriven = crm_sync_failures.redrive(db, failure_id.strip())
-        status = "1" if redriven else "not_found"
-    else:
-        result = crm_sync_failures.redrive_all(db)
-        status = str(result.get("redriven", 0))
-    return RedirectResponse(
-        url=f"/admin/integrations/?crm_redrive={status}",
-        status_code=303,
     )
 
 

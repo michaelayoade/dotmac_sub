@@ -99,7 +99,7 @@ def _merge_cpe_context(
 ) -> None:
     device = (
         db.query(CPEDevice)
-        .filter(CPEDevice.subscriber_id == subscription.subscriber_id)
+        .filter(CPEDevice.subscription_id == subscription.id)
         .filter(CPEDevice.status == DeviceStatus.active)
         .order_by(CPEDevice.created_at.desc())
         .first()

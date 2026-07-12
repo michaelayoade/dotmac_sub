@@ -94,6 +94,16 @@ class ServiceOrders(CRUDManager[ServiceOrder]):
         db.commit()
         db.refresh(order)
 
+        try:
+            from app.services.uisp_control_plane import stage_from_service_order
+
+            stage_from_service_order(db, order)
+        except Exception:
+            db.rollback()
+            logger.exception(
+                "uisp_service_order_staging_failed service_order_id=%s", order.id
+            )
+
         # Emit service_order.created event
         emit_event(
             db,

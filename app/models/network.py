@@ -353,6 +353,12 @@ class CPEDevice(Base):
         ForeignKey("subscribers.id", ondelete="SET NULL"),
         nullable=False,
     )
+    subscription_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("subscriptions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     service_address_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("addresses.id")
     )
@@ -393,6 +399,7 @@ class CPEDevice(Base):
     )
 
     subscriber = relationship("Subscriber", back_populates="cpe_devices")
+    subscription = relationship("Subscription")
     service_address = relationship("Address")
     parent_network_device = relationship("NetworkDevice")
     ports = relationship(

@@ -49,6 +49,11 @@ from app.schemas.radius import (
     RadiusSyncJobUpdate,
 )
 from app.services import radius_dsn, settings_spec
+from app.services.access_credential_secret import (
+    AccessCredentialSecretFormat,
+    classify_access_credential_secret,
+    explicit_cleartext_value,
+)
 from app.services.common import (
     apply_ordering,
     apply_pagination,
@@ -63,15 +68,12 @@ from app.services.secrets import resolve_secret
 logger = logging.getLogger(__name__)
 
 
-_CRYPT_PREFIXES = ("$1$", "$2a$", "$2b$", "$2y$", "$5$", "$6$")
 RADIUS_SYNC_ELIGIBLE_STATUSES = (
     SubscriptionStatus.active,
     SubscriptionStatus.suspended,
     SubscriptionStatus.canceled,
     SubscriptionStatus.expired,
 )
-_OPAQUE_RADIUS_VALUE_RE = re.compile(r"^[A-Za-z0-9+/=]+$")
-
 # Cache external FreeRADIUS engines per db_url so periodic sync jobs don't
 # rebuild a connection pool on every call. Keyed by the literal db_url string.
 _EXTERNAL_ENGINES: dict[str, Engine] = {}
@@ -121,26 +123,30 @@ def _external_password_row(
     secret_hash = str(credential.secret_hash or "").strip()
     if not secret_hash:
         return None
-    lowered = secret_hash.lower()
-    if lowered.startswith(("plain:", "cleartext:", "enc:")):
+    secret_format = classify_access_credential_secret(secret_hash)
+    if secret_format == AccessCredentialSecretFormat.encrypted:
         cleartext = _safe_decrypt_credential(
             secret_hash, label=f"user {credential.username}"
         )
-        if cleartext is None and lowered.startswith("enc:"):
+        if cleartext is None:
             # Undecryptable ciphertext (retired key) — skip rather than abort.
             return None
         return ("Cleartext-Password", ":=", cleartext or "")
-    if secret_hash.startswith(_CRYPT_PREFIXES):
+    if secret_format == AccessCredentialSecretFormat.explicit_cleartext:
+        return (
+            "Cleartext-Password",
+            ":=",
+            explicit_cleartext_value(secret_hash),
+        )
+    if secret_format == AccessCredentialSecretFormat.crypt_hash:
         return ("Crypt-Password", ":=", secret_hash)
-    if secret_hash.startswith("$pbkdf2-"):
+    if secret_format == AccessCredentialSecretFormat.pbkdf2_hash:
         logger.warning(
             "Skipping external RADIUS password sync for %s: unsupported legacy PBKDF2 service secret",
             credential.username,
         )
         return None
-    # Detect base64-encoded hashes from migration (no prefix, not crypt-style).
-    # These cannot be used as Cleartext-Password — they will cause auth failures.
-    if len(secret_hash) >= 20 and secret_hash.endswith("="):
+    if secret_format == AccessCredentialSecretFormat.opaque_hash:
         logger.warning(
             "Skipping external RADIUS password sync for %s: "
             "opaque hash detected (likely migration artifact, not cleartext)",
@@ -191,12 +197,10 @@ def _coerce_int_setting(value: object) -> int | None:
 
 
 def _is_opaque_radius_password(value: str | None) -> bool:
-    text = str(value or "").strip()
-    if len(text) < 20:
-        return False
-    if not _OPAQUE_RADIUS_VALUE_RE.fullmatch(text):
-        return False
-    return any(ch in text for ch in "+/=")
+    return (
+        classify_access_credential_secret(value)
+        == AccessCredentialSecretFormat.opaque_hash
+    )
 
 
 def _normalize_imported_radius_secret(

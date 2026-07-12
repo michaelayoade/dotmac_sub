@@ -1426,7 +1426,6 @@ def seed_scheduler_settings(db: Session) -> None:
     )
     for key, env_name, default in [
         ("crm_ticket_pull_enabled", "CRM_TICKET_PULL_ENABLED", "false"),
-        ("crm_billing_push_enabled", "CRM_BILLING_PUSH_ENABLED", "false"),
     ]:
         raw = os.getenv(env_name, default)
         scheduler_settings.ensure_by_key(

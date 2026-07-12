@@ -43,4 +43,5 @@ def auth_branding_context(request: Request) -> dict[str, object]:
         "sidebar_stats": stats,
         "portal_name": portal_name,
         "branding_favicon_url": str(stats.get("favicon_url") or "").strip(),
+        **({"brand": stats["brand"]} if stats.get("brand") else {}),
     }
