@@ -1,4 +1,5 @@
 from app.tasks.admin_alerts import evaluate_infrastructure_alerts
+from app.tasks.ai_operations import expire_stale_insights
 from app.tasks.alert_evaluation import evaluate_alert_rules
 from app.tasks.app_cache import refresh_dashboard_stats_cache_task
 from app.tasks.arrangements import check_overdue_arrangements
@@ -21,6 +22,7 @@ from app.tasks.billing import (
     check_billing_switch_task,
     run_invoice_cycle,
 )
+from app.tasks.campaigns import process_due_campaigns, send_campaign_batch
 from app.tasks.catalog import apply_due_subscription_changes, expire_subscriptions
 from app.tasks.collections import prepaid_balance_sweep, run_dunning
 from app.tasks.crm_billing_push import push_crm_billing_snapshots
@@ -207,6 +209,9 @@ __all__ = [
     "sync_vas_catalog",
     "run_import_job",
     "run_integration_job",
+    "process_due_campaigns",
+    "send_campaign_batch",
+    "expire_stale_insights",
     "generate_invoice_pdf_export",
     "run_radius_sync_job",
     "provision_ont",
