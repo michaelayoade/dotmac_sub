@@ -464,6 +464,7 @@ EVENT_TYPE_TO_TEMPLATE = {
     for event_type, spec in EVENT_NOTIFICATION_SPECS.items()
 }
 
+
 class NotificationHandler:
     """Handler that queues customer notifications."""
 

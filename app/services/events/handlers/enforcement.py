@@ -380,9 +380,7 @@ class EnforcementHandler:
                 account_id,
             )
             return
-        action = enforcement_event_policy.fup_action(
-            db, event.payload.get("action")
-        )
+        action = enforcement_event_policy.fup_action(db, event.payload.get("action"))
         if action == "none":
             return
 

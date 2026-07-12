@@ -99,3 +99,58 @@ def test_create_single_service_port_rejects_mismatched_duplicate(monkeypatch) ->
     assert ok is False
     assert assigned_index is None
     assert "different ONT/VLAN/GEM" in message
+
+
+def test_get_service_port_by_index_parses_huawei_detail_output(monkeypatch) -> None:
+    output = """
+      Index               : 225
+      VLAN ID             : 203
+      Port type           : gpon
+      F/S/P               : 0/2/1
+      ONT ID              : 10
+      GEM port index      : 1
+      Flow type           : vlan
+      Flow para           : 203
+      State               : up
+      Tag transform       : translate
+    """
+    transport = MagicMock()
+    channel = MagicMock()
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh._open_shell",
+        lambda _olt: (transport, channel, SimpleNamespace(prompt_regex=r"#\s*$")),
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh._read_until_prompt",
+        lambda *_args, **_kwargs: "",
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh._run_huawei_paged_cmd",
+        lambda *_args, **_kwargs: output,
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh.is_error_output",
+        lambda _output: False,
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh._parse_service_port_table",
+        lambda _output: [],
+    )
+
+    ok, message, port = service_ports.get_service_port_by_index(
+        SimpleNamespace(name="Garki Huawei OLT"), 225
+    )
+
+    assert ok is True
+    assert message == "Found service-port 225"
+    assert port == ServicePortEntry(
+        index=225,
+        vlan_id=203,
+        ont_id=10,
+        gem_index=1,
+        flow_type="vlan",
+        flow_para="203",
+        state="up",
+        fsp="0/2/1",
+        tag_transform="translate",
+    )

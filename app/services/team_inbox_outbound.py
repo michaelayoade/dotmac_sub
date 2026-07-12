@@ -493,7 +493,9 @@ def send_inbox_reply_for_conversation(
     record_failure: bool = False,
 ) -> InboxReplyResult:
     conversation_uuid = _coerce_uuid(conversation_id)
-    conversation = db.get(InboxConversation, conversation_uuid) if conversation_uuid else None
+    conversation = (
+        db.get(InboxConversation, conversation_uuid) if conversation_uuid else None
+    )
     if conversation is None:
         return InboxReplyResult(
             kind="conversation_not_found",

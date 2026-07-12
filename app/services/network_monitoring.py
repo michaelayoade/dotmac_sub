@@ -1039,9 +1039,7 @@ class DeviceInterfaces(ListResponseMixin):
     def update_committed(
         db: Session, interface_id: str, payload: DeviceInterfaceUpdate
     ):
-        return _commit(
-            db, lambda: DeviceInterfaces.update(db, interface_id, payload)
-        )
+        return _commit(db, lambda: DeviceInterfaces.update(db, interface_id, payload))
 
     @staticmethod
     def delete(db: Session, interface_id: str):

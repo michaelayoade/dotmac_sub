@@ -38,6 +38,17 @@ def _is_psycopg_autocommit_state_error(exc: ProgrammingError) -> bool:
     return "can't change 'autocommit' now" in str(exc).lower()
 
 
+def _bootstrap_wait_idempotency_key(
+    ont_id: str,
+    operation_id: str | None = None,
+    service_retry_count: int = 0,
+    *_args,
+    **_kwargs,
+) -> str:
+    """Deduplicate one bootstrap attempt without suppressing later retries."""
+    return f"{ont_id}:{operation_id or 'no-op'}:{service_retry_count}"
+
+
 def _sync_bootstrap_parent(
     db,
     *,
@@ -198,11 +209,7 @@ def sync_all_acs_devices() -> dict[str, int]:
 
 
 @celery_app.task(name="app.tasks.tr069.wait_for_ont_bootstrap")
-@idempotent_task(
-    key_func=lambda ont_id, operation_id=None, *args, **kw: (
-        f"{ont_id}:{operation_id or 'no-op'}"
-    )
-)
+@idempotent_task(key_func=_bootstrap_wait_idempotency_key)
 def wait_for_ont_bootstrap(
     ont_id: str,
     operation_id: str | None = None,

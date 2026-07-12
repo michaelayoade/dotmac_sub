@@ -135,6 +135,47 @@ class InvoiceLineRead(InvoiceLineBase):
     updated_at: datetime
 
 
+class InvoiceSyncLineRead(BaseModel):
+    """Minimal invoice-line contract used by the ERP bulk sync feed."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    description: str
+    quantity: Decimal
+    unit_price: Decimal
+    amount: Decimal | None = None
+    tax_rate_id: UUID | None = None
+
+
+class InvoiceSyncRead(BaseModel):
+    """Accounting fields required to mirror an invoice into DotMac ERP.
+
+    Keep this deliberately separate from ``InvoiceRead``. The normal API model
+    includes payment allocations and UI/detail fields which make a bulk AR pull
+    unnecessarily expensive.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    account_id: UUID
+    invoice_number: str | None = None
+    status: InvoiceStatus
+    currency: str
+    subtotal: Decimal
+    tax_total: Decimal
+    total: Decimal
+    balance_due: Decimal
+    issued_at: datetime | None = None
+    due_at: datetime | None = None
+    paid_at: datetime | None = None
+    memo: str | None = None
+    is_proforma: bool = False
+    updated_at: datetime
+    lines: list[InvoiceSyncLineRead] = Field(default_factory=list)
+
+
 class CreditNoteBase(BaseModel):
     account_id: UUID
     invoice_id: UUID | None = None

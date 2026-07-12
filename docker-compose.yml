@@ -466,10 +466,10 @@ services:
     - RADIUS_DB_PORT=${RADIUS_DB_PORT:-5432}
     - RADIUS_DB_NAME=${RADIUS_DB_NAME:-radius}
     - RADIUS_DB_USER=${RADIUS_DB_USER:-postgres}
-    - RADIUS_DB_PASS=${RADIUS_DB_PASS}
+    - RADIUS_DB_PASS=${RADIUS_DB_PASS:?RADIUS_DB_PASS must be set}
     # Shared secret for the admin-login realm (1822/1823) clients; each router's
     # /radius service=login entry must use the same value.
-    - ADMIN_RADIUS_SECRET=${ADMIN_RADIUS_SECRET}
+    - ADMIN_RADIUS_SECRET=${ADMIN_RADIUS_SECRET:?ADMIN_RADIUS_SECRET must be set}
   genieacs:
     build:
       context: .
