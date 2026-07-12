@@ -421,7 +421,7 @@ def test_migration_244_is_single_alembic_head():
     heads = script.get_heads()
     # The chain keeps advancing as later PRs stack on; ONT confirmation added
     # Phase 5 asset inventory now extends the current migration chain.
-    assert heads == ["259_campaign_ai_workqueue"]
+    assert heads == ["260_reconcile_event_attempts"]
 
 
 def test_migration_244_source_recreates_leads_partial_unique():

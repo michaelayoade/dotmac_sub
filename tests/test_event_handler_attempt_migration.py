@@ -10,7 +10,7 @@ def _load_migration():
         Path(__file__).resolve().parents[1]
         / "alembic"
         / "versions"
-        / "259_reconcile_event_handler_attempts.py"
+        / "260_reconcile_event_handler_attempts.py"
     )
     spec = importlib.util.spec_from_file_location("migration_259", path)
     assert spec and spec.loader

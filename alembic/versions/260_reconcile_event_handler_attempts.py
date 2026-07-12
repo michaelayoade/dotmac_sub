@@ -1,7 +1,7 @@
 """Reconcile legacy event handler attempt table shapes.
 
-Revision ID: 259_reconcile_event_attempts
-Revises: 258_erp_domain_sync_cursors
+Revision ID: 260_reconcile_event_attempts
+Revises: 259_campaign_ai_workqueue
 Create Date: 2026-07-12
 """
 
@@ -12,8 +12,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "259_reconcile_event_attempts"
-down_revision = "258_erp_domain_sync_cursors"
+revision = "260_reconcile_event_attempts"
+down_revision = "259_campaign_ai_workqueue"
 branch_labels = None
 depends_on = None
 
