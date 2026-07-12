@@ -22,7 +22,7 @@ libpq form (``postgresql://…``) for ``psycopg.connect()``.
 from __future__ import annotations
 
 import os
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 
 _SQLALCHEMY_PREFIX = "postgresql+psycopg://"
 _LIBPQ_PREFIX = "postgresql://"
@@ -68,6 +68,7 @@ def container_safe_external_db_url(value: str | None) -> str | None:
 
 def _from_parts() -> str | None:
     host = (os.getenv("RADIUS_DB_HOST") or "radius-db").strip()
+    port = (os.getenv("RADIUS_DB_PORT") or "5432").strip()
     database = (os.getenv("RADIUS_DB_NAME") or "radius").strip()
     username = (os.getenv("RADIUS_DB_USER") or "radius").strip()
     from app.services.secrets import get_env_or_secret
@@ -76,10 +77,14 @@ def _from_parts() -> str | None:
         "RADIUS_DB_PASS",
         "radius",
         "db_password",
-        default="l2f3clS-Ws9WgTXcsW3HoznBnEq3n7N-",
+        default="",
     ).strip()
-    if host and database and username and password:
-        return f"{_SQLALCHEMY_PREFIX}{username}:{password}@{host}:5432/{database}"
+    if host and port and database and username and password:
+        encoded_password = quote(password, safe="")
+        return (
+            f"{_SQLALCHEMY_PREFIX}{username}:{encoded_password}"
+            f"@{host}:{port}/{database}"
+        )
     return None
 
 
