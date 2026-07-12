@@ -65,6 +65,23 @@ def get_db():
         db.close()
 
 
+def finish_read_transaction(db: Session) -> None:
+    """Release a Postgres read transaction after all response data is materialized."""
+    bind = db.get_bind()
+    if bind.dialect.name != "postgresql":
+        return
+    if not db.in_transaction() or db.in_nested_transaction():
+        return
+    if db.new or db.dirty or db.deleted:
+        return
+    original_expire_on_commit = db.expire_on_commit
+    db.expire_on_commit = False
+    try:
+        db.commit()
+    finally:
+        db.expire_on_commit = original_expire_on_commit
+
+
 @contextmanager
 def form_write(db: Session) -> Generator[None, None, None]:
     """Guard a form handler's DB write so a failure can't poison the error path.

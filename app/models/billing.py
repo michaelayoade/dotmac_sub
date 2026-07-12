@@ -780,6 +780,12 @@ class PaymentAllocation(Base):
         # The unique constraint's index is payment_id-leading; this backs
         # invoice_id-leading lookups (allocations for an invoice).
         Index("ix_payment_allocations_invoice_id", "invoice_id"),
+        Index(
+            "ix_payment_allocations_invoice_active_payment",
+            "invoice_id",
+            "is_active",
+            "payment_id",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

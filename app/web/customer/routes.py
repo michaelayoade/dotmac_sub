@@ -24,7 +24,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
-from app.db import get_db
+from app.db import finish_read_transaction, get_db
 from app.services import auth_flow as auth_flow_service
 from app.services import autopay as autopay_service
 from app.services import billing_payment_receipts as payment_receipts_service
@@ -547,6 +547,7 @@ def customer_billing(
     billing_data = customer_portal.get_billing_page(
         db, customer, status=status, page=page, per_page=per_page
     )
+    finish_read_transaction(db)
 
     from datetime import UTC, datetime
 
