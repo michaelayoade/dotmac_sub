@@ -6,7 +6,6 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models.network import IPVersion
 from app.models.uisp_control import (
-    UispConfigSnapshot,
     UispDeviceIntent,
     UispIntentStatus,
 )

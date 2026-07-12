@@ -626,9 +626,7 @@ def get_intent(db: Session, intent_id: UUID) -> UispDeviceIntent | None:
     return db.get(UispDeviceIntent, intent_id)
 
 
-def get_intent_with_snapshots(
-    db: Session, intent_id: UUID
-) -> UispDeviceIntent | None:
+def get_intent_with_snapshots(db: Session, intent_id: UUID) -> UispDeviceIntent | None:
     return (
         db.query(UispDeviceIntent)
         .options(selectinload(UispDeviceIntent.snapshots))

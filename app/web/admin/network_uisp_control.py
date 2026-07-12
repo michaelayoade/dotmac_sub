@@ -7,13 +7,13 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.uisp_control import UispDeviceIntent, UispIntentStatus
+from app.services import uisp_control_plane
 from app.services.auth_dependencies import require_permission
 from app.services.uisp_control_plane import capabilities, request_apply
-from app.services import uisp_control_plane
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/network/uisp-control", tags=["web-admin-uisp"])
