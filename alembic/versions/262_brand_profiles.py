@@ -40,9 +40,7 @@ def upgrade() -> None:
         sa.Column("portal_domain", sa.String(255)),
         sa.Column("legal_address", sa.JSON()),
         sa.Column("metadata", sa.JSON()),
-        sa.Column(
-            "is_active", sa.Boolean(), nullable=False, server_default=sa.true()
-        ),
+        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),

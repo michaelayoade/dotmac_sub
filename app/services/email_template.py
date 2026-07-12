@@ -173,9 +173,7 @@ def wrap_email_html(
     )
     safe_subject = escape(subject)
     safe_company = escape(
-        company_name
-        if company_name is not None
-        else str(resolved_brand["legal_name"])
+        company_name if company_name is not None else str(resolved_brand["legal_name"])
     )
     safe_support = escape(
         support_email
