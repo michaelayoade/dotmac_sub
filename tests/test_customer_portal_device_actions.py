@@ -79,7 +79,7 @@ def test_uisp_ont_does_not_expose_huawei_customer_actions(db_session):
             target_id=ont.id,
             subscription_id=subscription.id,
             uisp_device_id=ont.uisp_device_id,
-            desired_config={"wifi": {"ssid": "Portal"}},
+            desired_state={"wifi": {"ssid": "Portal"}},
             status=UispIntentStatus.manual_required,
         )
     )

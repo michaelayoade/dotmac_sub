@@ -32,7 +32,7 @@ def _records(db_session, subscriber, catalog_offer):
         db_session,
         target_type=UispIntentTargetType.cpe,
         target_id=cpe.id,
-        desired_config={"wifi": {"ssid": "Customer"}},
+        desired_state={"wifi": {"ssid": "Customer"}},
     )
     operation = request_apply(db_session, intent, enqueue=False)
     return intent, operation

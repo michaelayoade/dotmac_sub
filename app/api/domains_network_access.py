@@ -135,7 +135,7 @@ def stage_uisp_intent(payload: UispIntentStage, db: Session = Depends(get_db)):
             target_id=payload.target_id,
             subscription_id=payload.subscription_id,
             service_order_id=payload.service_order_id,
-            desired_config=payload.desired_config,
+            desired_state=payload.desired_state,
         )
     except UispIntentError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

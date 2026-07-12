@@ -76,7 +76,7 @@ def _intent(db_session, subscriber, catalog_offer, desired):
         db_session,
         target_type=UispIntentTargetType.cpe,
         target_id=cpe.id,
-        desired_config=desired,
+        desired_state=desired,
     )
 
 

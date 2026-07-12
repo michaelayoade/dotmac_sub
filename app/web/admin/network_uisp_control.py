@@ -86,7 +86,7 @@ def uisp_control_detail(
     context.update(
         {
             "intent": intent,
-            "desired_redacted": redact_config(intent.desired_config),
+            "desired_redacted": redact_config(intent.desired_state),
             "capabilities": capabilities(),
         }
     )

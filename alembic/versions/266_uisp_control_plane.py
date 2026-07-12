@@ -23,7 +23,7 @@ def upgrade() -> None:
         sa.Column("subscription_id", sa.UUID(), nullable=True),
         sa.Column("service_order_id", sa.UUID(), nullable=True),
         sa.Column("uisp_device_id", sa.String(length=120), nullable=True),
-        sa.Column("desired_config", sa.JSON(), nullable=False),
+        sa.Column("desired_state", sa.JSON(), nullable=False),
         sa.Column("observed_config", sa.JSON(), nullable=True),
         sa.Column("drift", sa.JSON(), nullable=True),
         sa.Column("desired_revision", sa.Integer(), nullable=False),

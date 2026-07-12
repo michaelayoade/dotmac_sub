@@ -70,7 +70,7 @@ def test_matching_observation_is_only_path_to_verified(
         db_session,
         target_type=UispIntentTargetType.cpe,
         target_id=cpe.id,
-        desired_config={"management_ip": "172.21.10.2"},
+        desired_state={"management_ip": "172.21.10.2"},
     )
 
     assert intent.status == UispIntentStatus.staged
@@ -102,7 +102,7 @@ def test_drift_is_reported_from_observed_inventory(
         db_session,
         target_type=UispIntentTargetType.cpe,
         target_id=cpe.id,
-        desired_config={"management_ip": "172.21.10.9"},
+        desired_state={"management_ip": "172.21.10.9"},
     )
 
     observe_intent(db_session, intent, _observation())
@@ -125,7 +125,7 @@ def test_wifi_intent_queues_without_false_success_and_rejects_plaintext_secret(
             db_session,
             target_type=UispIntentTargetType.cpe,
             target_id=cpe.id,
-            desired_config={"wifi": {"ssid": "Customer", "password": "unsafe"}},
+            desired_state={"wifi": {"ssid": "Customer", "password": "unsafe"}},
         )
     except UispIntentError as exc:
         assert "password_ref" in str(exc)
@@ -136,7 +136,7 @@ def test_wifi_intent_queues_without_false_success_and_rejects_plaintext_secret(
         db_session,
         target_type=UispIntentTargetType.cpe,
         target_id=cpe.id,
-        desired_config={
+        desired_state={
             "wifi": {"ssid": "Customer", "password_ref": "bao://uisp/wifi/1"}
         },
     )
@@ -170,7 +170,7 @@ def test_inventory_reconcile_marks_missing_without_false_success(
         db_session,
         target_type=UispIntentTargetType.cpe,
         target_id=cpe.id,
-        desired_config={"management_ip": "172.21.10.2"},
+        desired_state={"management_ip": "172.21.10.2"},
     )
 
     result = reconcile_inventory(db_session, [])
@@ -190,7 +190,7 @@ def test_inventory_reconcile_refreshes_post_adoption_uisp_binding(
         db_session,
         target_type=UispIntentTargetType.cpe,
         target_id=cpe.id,
-        desired_config={"management_ip": "172.21.10.2"},
+        desired_state={"management_ip": "172.21.10.2"},
     )
     assert intent.uisp_device_id is None
 
@@ -253,7 +253,7 @@ def test_operator_edit_stages_new_revision_without_verification(
         db_session,
         target_type=UispIntentTargetType.cpe,
         target_id=cpe.id,
-        desired_config={"management_ip": "172.21.10.2"},
+        desired_state={"management_ip": "172.21.10.2"},
     )
     observe_intent(db_session, intent, _observation())
     assert intent.status == UispIntentStatus.verified
@@ -269,4 +269,4 @@ def test_operator_edit_stages_new_revision_without_verification(
     assert intent.status == UispIntentStatus.staged
     assert intent.desired_revision == 2
     assert intent.verified_revision == 1
-    assert intent.desired_config["firmware_version"] == "8.7.20"
+    assert intent.desired_state["firmware_version"] == "8.7.20"

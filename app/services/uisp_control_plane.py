@@ -168,12 +168,12 @@ def stage_intent(
     *,
     target_type: UispIntentTargetType,
     target_id: UUID,
-    desired_config: dict,
+    desired_state: dict,
     subscription_id: UUID | None = None,
     service_order_id: UUID | None = None,
     commit: bool = True,
 ) -> UispDeviceIntent:
-    desired = _validate_desired(desired_config)
+    desired = _validate_desired(desired_state)
     _device, owned_subscription_id, uisp_device_id = _target(db, target_type, target_id)
     if (
         subscription_id is not None
@@ -197,16 +197,16 @@ def stage_intent(
             subscription_id=resolved_subscription_id,
             service_order_id=service_order_id,
             uisp_device_id=uisp_device_id,
-            desired_config=desired,
+            desired_state=desired,
             desired_revision=1,
             status=UispIntentStatus.staged,
         )
         db.add(intent)
         db.flush()
     else:
-        if intent.desired_config != desired:
+        if intent.desired_state != desired:
             intent.desired_revision += 1
-        intent.desired_config = desired
+        intent.desired_state = desired
         intent.subscription_id = resolved_subscription_id
         intent.service_order_id = service_order_id or intent.service_order_id
         intent.uisp_device_id = uisp_device_id
@@ -279,7 +279,7 @@ def observe_intent(
 ) -> UispDeviceIntent:
     observed_at = now or datetime.now(UTC)
     observed = normalize_observation(device)
-    differences, unsupported = _drift(intent.desired_config or {}, observed)
+    differences, unsupported = _drift(intent.desired_state or {}, observed)
     if intent.observed_config != observed:
         _snapshot(db, intent, UispSnapshotSource.observed, observed, None)
     intent.observed_config = observed
@@ -391,7 +391,7 @@ def request_apply(
         ),
         str(intent.target_id),
         correlation_key=f"uisp:{intent.id}:revision:{intent.desired_revision}",
-        input_payload=redact_config(intent.desired_config),
+        input_payload=redact_config(intent.desired_state),
         initiated_by=initiated_by,
     )
     intent.status = UispIntentStatus.applying
@@ -429,7 +429,7 @@ def update_intent_desired(
     lifecycle_state: str | None = None,
 ) -> UispDeviceIntent:
     """Merge an operator edit into intent without claiming device delivery."""
-    desired = copy.deepcopy(intent.desired_config or {})
+    desired = copy.deepcopy(intent.desired_state or {})
     for key, value in (
         ("name", name),
         ("management_ip", management_ip),
@@ -471,7 +471,7 @@ def update_intent_desired(
         db,
         target_type=intent.target_type,
         target_id=intent.target_id,
-        desired_config=desired,
+        desired_state=desired,
         subscription_id=intent.subscription_id,
         service_order_id=intent.service_order_id,
     )
@@ -542,7 +542,7 @@ def stage_from_service_order(
         db,
         target_type=target_type,
         target_id=target_id,
-        desired_config=desired,
+        desired_state=desired,
         subscription_id=subscription.id,
         service_order_id=order.id,
         commit=False,

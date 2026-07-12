@@ -82,7 +82,7 @@ class UispDeviceIntent(Base):
         index=True,
     )
     uisp_device_id: Mapped[str | None] = mapped_column(String(120), index=True)
-    desired_config: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    desired_state: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     observed_config: Mapped[dict | None] = mapped_column(JSON)
     drift: Mapped[dict | None] = mapped_column(JSON)
     desired_revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)

@@ -17,7 +17,7 @@ class UispIntentStage(BaseModel):
     target_id: UUID
     subscription_id: UUID | None = None
     service_order_id: UUID | None = None
-    desired_config: dict = Field(default_factory=dict)
+    desired_state: dict = Field(default_factory=dict)
 
 
 class UispIntentRead(BaseModel):
@@ -29,7 +29,7 @@ class UispIntentRead(BaseModel):
     subscription_id: UUID | None
     service_order_id: UUID | None
     uisp_device_id: str | None
-    desired_config: dict
+    desired_state: dict
     observed_config: dict | None
     drift: dict | None
     desired_revision: int

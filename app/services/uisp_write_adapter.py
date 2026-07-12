@@ -330,7 +330,7 @@ class UispConfigurationWriteAdapter:
             db, vendor=vendor, model=model, firmware=firmware
         )
         transport = str(config_spec["transport"])
-        desired_fields = _desired_fields(intent.desired_config or {})
+        desired_fields = _desired_fields(intent.desired_state or {})
         if not desired_fields:
             raise UispWriteUnsupported("UISP intent has no writable fields")
         mappings = _field_mappings(config_spec, desired_fields)
