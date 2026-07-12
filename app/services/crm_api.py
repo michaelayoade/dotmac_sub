@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from time import monotonic
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -39,6 +40,7 @@ from app.services.invoice_collectibility import (
 
 SUCCESSFUL_PAYMENT_STATUSES = (PaymentStatus.succeeded,)
 ONLINE_FRESH_SECONDS = 24 * 60 * 60
+LOCATIONS_CACHE_TTL_SECONDS = 30
 _MISSING = object()
 _SUSPENDED_STATUSES = {
     SubscriptionStatus.suspended,
@@ -52,6 +54,7 @@ _TERMINATED_STATUSES = {
     SubscriptionStatus.hidden,
     SubscriptionStatus.archived,
 }
+_locations_cache: tuple[float, list[dict[str, Any]]] | None = None
 
 
 def coerce_subscriber_id(value: str) -> uuid.UUID | None:
@@ -926,6 +929,13 @@ def search_subscribers(
 
 
 def locations(db: Session) -> list[dict[str, Any]]:
+    global _locations_cache
+    now = monotonic()
+    if _locations_cache is not None:
+        cached_at, cached = _locations_cache
+        if now - cached_at < LOCATIONS_CACHE_TTL_SECONDS:
+            return [dict(item) for item in cached]
+
     result: dict[str, dict[str, str]] = {}
     for pop in db.scalars(
         select(PopSite).where(PopSite.is_active.is_(True)).order_by(PopSite.name)
@@ -938,7 +948,9 @@ def locations(db: Session) -> list[dict[str, Any]]:
             continue
         key = f"address:{str(label).strip().lower()}"
         result.setdefault(key, {"id": key, "name": str(label)})
-    return sorted(result.values(), key=lambda item: item["name"].lower())
+    rows = sorted(result.values(), key=lambda item: item["name"].lower())
+    _locations_cache = (now, [dict(item) for item in rows])
+    return rows
 
 
 def billing_risk_rows(
