@@ -47,6 +47,7 @@ from fastapi import HTTPException
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, selectinload
 
+from app.models.catalog import Subscription
 from app.models.project import Project
 from app.models.sales import (
     Quote,
@@ -417,6 +418,17 @@ def _line_offer_ref(line: object) -> str | None:
     return None
 
 
+def _line_add_on_ref(line: object) -> str | None:
+    meta = getattr(line, "metadata_", None)
+    if not isinstance(meta, dict):
+        return None
+    for key in ("sub_add_on_id", "add_on_id", "addon_id"):
+        value = str(meta.get(key) or "").strip()
+        if value:
+            return value
+    return None
+
+
 def _active_sales_order_lines(db: Session, sales_order_id) -> list[SalesOrderLine]:
     return (
         db.query(SalesOrderLine)
@@ -424,6 +436,292 @@ def _active_sales_order_lines(db: Session, sales_order_id) -> list[SalesOrderLin
         .filter(SalesOrderLine.is_active.is_(True))
         .all()
     )
+
+
+def _ensure_provisioning_order_for_sales_line(
+    db: Session,
+    *,
+    sales_order: SalesOrder,
+    line: SalesOrderLine,
+    subscription: Subscription,
+) -> None:
+    """Stage one idempotent provisioning order for a closed sale line."""
+    if sales_order.status not in {
+        SalesOrderStatus.paid.value,
+        SalesOrderStatus.fulfilled.value,
+    }:
+        return
+
+    from app.models.provisioning import (
+        ServiceOrder,
+        ServiceOrderStatus,
+        ServiceOrderType,
+    )
+    from app.schemas.provisioning import ServiceOrderCreate
+    from app.services.provisioning_managers import service_orders
+
+    subscription_id = getattr(subscription, "id", None)
+    persisted_subscription = (
+        db.get(Subscription, subscription_id) if subscription_id else None
+    )
+    if persisted_subscription is None:
+        return
+    existing = (
+        db.query(ServiceOrder)
+        .filter(ServiceOrder.sales_order_line_id == line.id)
+        .first()
+    )
+    if existing is not None:
+        return
+    execution_context = _build_staged_device_intent(
+        db,
+        sales_order=sales_order,
+        line=line,
+        subscription=persisted_subscription,
+    )
+    order = service_orders.create(
+        db,
+        ServiceOrderCreate(
+            subscriber_id=sales_order.subscriber_id,
+            subscription_id=persisted_subscription.id,
+            sales_order_id=sales_order.id,
+            sales_order_line_id=line.id,
+            status=ServiceOrderStatus.submitted,
+            order_type=ServiceOrderType.new_install,
+            notes=f"Provisioning for {sales_order.order_number or sales_order.id}",
+            execution_context=execution_context,
+        ),
+    )
+    metadata = dict(line.metadata_ or {})
+    metadata["service_order_id"] = str(order.id)
+    line.metadata_ = metadata
+    db.add(line)
+    db.commit()
+
+
+def _build_staged_device_intent(
+    db: Session,
+    *,
+    sales_order: SalesOrder,
+    line: SalesOrderLine,
+    subscription: Subscription,
+) -> dict[str, object]:
+    """Stage separate ONT and BNG intent without touching either control plane."""
+    from app.models.catalog import AccessCredential, ConnectionType, SubscriptionAddOn
+    from app.services.connection_type_provisioning import resolve_connection_type
+    from app.services.ipv6_pd import pd_enabled, resolve_pd_pool
+    from app.services.pppoe_credentials import auto_generate_pppoe_credential
+
+    subscription_id = subscription.id
+    subscriber_id = subscription.subscriber_id
+    credential = (
+        db.query(AccessCredential)
+        .filter(
+            AccessCredential.subscription_id == subscription_id,
+            AccessCredential.is_active.is_(True),
+        )
+        .first()
+    )
+    if credential is None:
+        credential = auto_generate_pppoe_credential(
+            db,
+            str(subscriber_id),
+            radius_profile_id=(
+                str(subscription.radius_profile_id)
+                if getattr(subscription, "radius_profile_id", None)
+                else None
+            ),
+            subscription_id=str(subscription_id),
+        )
+    if credential is not None and not str(getattr(subscription, "login", "") or ""):
+        subscription.login = credential.username
+
+    nas = getattr(subscription, "provisioning_nas_device", None)
+    connection_type = resolve_connection_type(db, subscription, nas)
+    wan_mode = {
+        ConnectionType.pppoe: "pppoe",
+        ConnectionType.dhcp: "dhcp",
+        ConnectionType.ipoe: "dhcp",
+        ConnectionType.static: "static_ip",
+        ConnectionType.hotspot: "dhcp",
+    }[connection_type]
+    pd_pool = resolve_pd_pool(db, subscription) if pd_enabled() else None
+    ip_protocol = "dual_stack" if pd_pool is not None else "ipv4"
+    desired_config: dict[str, object] = {
+        "wan.mode": wan_mode,
+        "wan.ip_protocol": ip_protocol,
+    }
+    if connection_type == ConnectionType.pppoe and credential is not None:
+        desired_config.update(
+            {
+                "wan.pppoe_username": credential.username,
+                "wan.pppoe_password": credential.secret_hash,
+            }
+        )
+
+    add_ons = []
+    for link in (
+        db.query(SubscriptionAddOn)
+        .filter(SubscriptionAddOn.subscription_id == subscription_id)
+        .all()
+    ):
+        add_on_type = getattr(getattr(link, "add_on", None), "addon_type", None)
+        add_ons.append(
+            {
+                "subscription_add_on_id": str(link.id),
+                "add_on_id": str(link.add_on_id),
+                "quantity": int(link.quantity or 1),
+                "type": add_on_type.value if add_on_type is not None else None,
+            }
+        )
+    return {
+        "source": "closed_sales_order",
+        "sales_order_id": str(sales_order.id),
+        "sales_order_line_id": str(line.id),
+        "subscription_id": str(subscription_id),
+        "subscriber_id": str(subscriber_id),
+        "service_address_id": str(getattr(subscription, "service_address_id", "") or "")
+        or None,
+        "catalog_offer_id": str(subscription.offer_id),
+        "device_intent": {
+            "version": 1,
+            "connection_type": connection_type.value,
+            "desired_config": desired_config,
+            "add_ons": add_ons,
+        },
+        # Subscriber addresses are BNG/RADIUS policy. The ONT intent only
+        # enables the access method and, for dual stack, the DHCPv6-PD client.
+        # It must never carry Framed-IP, delegated prefixes, or routed add-ons.
+        "bng_intent": {
+            "version": 1,
+            "subscription_id": str(subscription_id),
+            "connection_type": connection_type.value,
+            "radius_username": credential.username if credential is not None else None,
+            "ipv4": {
+                "source": "ipam",
+                "assignment_scope": "subscription",
+                "nat_policy": "pool_defined",
+            },
+            "ipv6": {
+                "source": "ipam",
+                "assignment_scope": "subscription",
+                "pd_enabled": pd_pool is not None,
+                "pd_pool_id": str(pd_pool.id) if pd_pool is not None else None,
+            },
+            "additional_routes": {
+                "source": "subscription_add_ons",
+                "radius_attribute": "Framed-Route",
+                "nat_policy": "no_nat",
+            },
+        },
+    }
+
+
+def _sync_sales_order_add_ons(
+    db: Session,
+    *,
+    lines: list[SalesOrderLine],
+    subscriptions: list[Subscription],
+) -> None:
+    """Attach explicitly sold add-ons to an unambiguous subscription."""
+    from app.models.catalog import AddOn, SubscriptionAddOn
+    from app.schemas.catalog import SubscriptionAddOnCreate
+    from app.services.catalog import subscription_add_ons
+    from app.services.web_catalog_subscriptions import (
+        _route_range_options_for_ipam,
+        normalize_additional_routes,
+        sync_additional_routes_for_subscription,
+    )
+
+    persisted = {
+        str(subscription.id): subscription
+        for candidate in subscriptions
+        if (subscription := db.get(Subscription, getattr(candidate, "id", None)))
+        is not None
+    }
+    for line in lines:
+        add_on_ref = _line_add_on_ref(line)
+        if not add_on_ref:
+            continue
+        meta = line.metadata_ if isinstance(line.metadata_, dict) else {}
+        target_id = str(meta.get("subscription_id") or "").strip()
+        if not target_id and len(persisted) == 1:
+            target_id = next(iter(persisted))
+        subscription = persisted.get(target_id)
+        try:
+            add_on = db.get(AddOn, coerce_uuid(add_on_ref))
+        except (TypeError, ValueError):
+            add_on = None
+        if subscription is None or add_on is None or not add_on.is_active:
+            logger.warning(
+                "sales_order_addon_unresolved line_id=%s addon=%s subscription=%s",
+                line.id,
+                add_on_ref,
+                target_id or "ambiguous",
+            )
+            continue
+        quantity = max(1, int(meta.get("quantity") or line.quantity or 1))
+        existing = (
+            db.query(SubscriptionAddOn)
+            .filter(
+                SubscriptionAddOn.subscription_id == subscription.id,
+                SubscriptionAddOn.add_on_id == add_on.id,
+                SubscriptionAddOn.end_at.is_(None),
+            )
+            .first()
+        )
+        if existing is None:
+            existing = subscription_add_ons.create(
+                db,
+                SubscriptionAddOnCreate(
+                    subscription_id=subscription.id,
+                    add_on_id=add_on.id,
+                    quantity=quantity,
+                    start_at=datetime.now(UTC),
+                ),
+            )
+        else:
+            existing.quantity = quantity
+
+        if add_on.ip_is_public and add_on.ip_prefix_length:
+            raw_cidrs = meta.get("additional_route_cidrs") or meta.get("cidrs") or []
+            if isinstance(raw_cidrs, str):
+                raw_cidrs = [raw_cidrs]
+            cidrs = [str(value) for value in raw_cidrs if str(value).strip()]
+            if not cidrs:
+                options = _route_range_options_for_ipam(db)
+                for option in options:
+                    groups = option.get("children_by_prefix")
+                    if not isinstance(groups, dict):
+                        continue
+                    children = groups.get(str(add_on.ip_prefix_length), [])
+                    if not isinstance(children, list):
+                        continue
+                    for child in children:
+                        cidrs.append(str(child["cidr"]))
+                        if len(cidrs) >= quantity:
+                            break
+                    if len(cidrs) >= quantity:
+                        break
+            if len(cidrs) < quantity:
+                raise ValueError(
+                    f"No available /{add_on.ip_prefix_length} routed block for add-on"
+                )
+            normalized = normalize_additional_routes(cidrs[:quantity])
+            sync_additional_routes_for_subscription(
+                db,
+                subscription_obj=subscription,
+                cidrs=[item[0] for item in normalized],
+                add_on_id=str(add_on.id),
+                quantity=quantity,
+            )
+
+        next_meta = dict(line.metadata_ or {})
+        next_meta["subscription_id"] = str(subscription.id)
+        next_meta["subscription_add_on_id"] = str(existing.id)
+        line.metadata_ = next_meta
+        db.add(line)
+    db.commit()
 
 
 def _push_sales_order_subscriptions(db: Session, sales_order: SalesOrder) -> None:
@@ -452,32 +750,43 @@ def _push_sales_order_subscriptions(db: Session, sales_order: SalesOrder) -> Non
         if not offer_lines:
             return
 
+        staged_subscriptions: list[tuple[SalesOrderLine, Subscription]] = []
         for line, offer_ref in offer_lines:
             meta = line.metadata_ if isinstance(line.metadata_, dict) else {}
-            if str(meta.get("selfcare_subscription_id") or "").strip():
-                continue  # already synced
+            existing_subscription_id = str(
+                meta.get("selfcare_subscription_id") or ""
+            ).strip()
+            subscription = None
+            invoice = None
+            if existing_subscription_id:
+                from app.models.catalog import Subscription
 
-            try:
-                result = crm_api.create_subscription(
-                    db,
-                    subscriber_id=str(sales_order.subscriber_id),
-                    offer_ref=offer_ref,
-                    external_ref=f"sales_order:{sales_order_id}:subscription:{line.id}",
-                    unit_price=line.unit_price,
+                subscription = db.get(
+                    Subscription, coerce_uuid(existing_subscription_id)
                 )
-            except LookupError:
-                logger.warning(
-                    "sales_order_subscription_offer_unresolved "
-                    "sales_order_id=%s line_id=%s offer_ref=%s",
-                    sales_order_id,
-                    line.id,
-                    offer_ref,
-                )
-                continue
-            subscription = result.get("subscription") if result else None
+            else:
+                try:
+                    result = crm_api.create_subscription(
+                        db,
+                        subscriber_id=str(sales_order.subscriber_id),
+                        offer_ref=offer_ref,
+                        external_ref=f"sales_order:{sales_order_id}:subscription:{line.id}",
+                        unit_price=line.unit_price,
+                        service_address_id=meta.get("service_address_id"),
+                    )
+                except LookupError:
+                    logger.warning(
+                        "sales_order_subscription_offer_unresolved "
+                        "sales_order_id=%s line_id=%s offer_ref=%s",
+                        sales_order_id,
+                        line.id,
+                        offer_ref,
+                    )
+                    continue
+                subscription = result.get("subscription") if result else None
+                invoice = result.get("invoice") if result else None
             if subscription is None:
                 continue
-            invoice = result.get("invoice")
             new_meta = dict(line.metadata_ or {})
             new_meta["selfcare_subscription_id"] = str(subscription.id)
             if invoice is not None:
@@ -490,6 +799,20 @@ def _push_sales_order_subscriptions(db: Session, sales_order: SalesOrder) -> Non
                 sales_order_id,
                 line.id,
                 subscription.id,
+            )
+            staged_subscriptions.append((line, subscription))
+        db.commit()
+        _sync_sales_order_add_ons(
+            db,
+            lines=lines,
+            subscriptions=[item[1] for item in staged_subscriptions],
+        )
+        for line, subscription in staged_subscriptions:
+            _ensure_provisioning_order_for_sales_line(
+                db,
+                sales_order=sales_order,
+                line=line,
+                subscription=subscription,
             )
         db.commit()
     except Exception:

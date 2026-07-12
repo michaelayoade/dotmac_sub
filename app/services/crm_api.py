@@ -1857,6 +1857,7 @@ def create_subscription(
     external_ref: str,
     unit_price: Any = None,
     start_at: datetime | None = None,
+    service_address_id: Any = None,
 ) -> dict:
     """Create a subscription for a subscriber from a CRM sale and generate its
     first (subscription-tagged) invoice, so the plan + its charge show in the
@@ -1898,6 +1899,7 @@ def create_subscription(
             SubscriptionCreate(
                 subscriber_id=subscriber.id,
                 offer_id=offer.id,
+                service_address_id=service_address_id,
                 status=SubscriptionStatus.pending,
                 start_at=start_at or datetime.now(UTC),
                 unit_price=price_override,

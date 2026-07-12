@@ -17,9 +17,11 @@ from app.services.network.reconcile import (
     AcsDeleteObject,
     AcsObservedFields,
     AcsSetDhcpServer,
+    AcsSetIpv6,
     AcsSetManagementServer,
     AcsSetNatEnabled,
     AcsSetPppoe,
+    AcsSetWanIp,
     AcsSetWifiPassword,
     AcsSetWifiSsid,
     OltAuthorize,
@@ -216,6 +218,99 @@ def test_synced_ont_produces_empty_plan():
     plan = compute_plan(desired, _synced_observed(desired), "sweep")
     assert plan.is_empty
     assert plan.required_surfaces == frozenset()
+
+
+def test_dual_stack_tr181_emits_ipv6_and_pd_action():
+    desired = _desired(ipv6_enabled=True, tr069_data_model_root="Device")
+    observed = _synced_observed(desired)
+    observed = dataclasses.replace(
+        observed,
+        acs=dataclasses.replace(
+            observed.acs,
+            acs_data_model_root="Device",
+            acs_observed_ipv6_enabled=False,
+        ),
+    )
+
+    plan = compute_plan(desired, observed, "sweep")
+
+    action = next(item for item in plan.actions if isinstance(item, AcsSetIpv6))
+    assert action.enabled is True
+    assert action.request_prefixes is True
+    assert action.interface_index == 1
+
+
+def test_dual_stack_tr098_is_visible_unrepairable_drift():
+    desired = _desired(
+        ipv6_enabled=True,
+        tr069_data_model_root="InternetGatewayDevice",
+    )
+    observed = _synced_observed(desired)
+    observed = dataclasses.replace(
+        observed,
+        acs=dataclasses.replace(
+            observed.acs,
+            acs_data_model_root="InternetGatewayDevice",
+            acs_observed_ipv6_enabled=False,
+        ),
+    )
+
+    plan = compute_plan(desired, observed, "sweep")
+
+    assert not any(isinstance(item, AcsSetIpv6) for item in plan.actions)
+    drift = next(item for item in plan.drifts if item.field == "ipv6_enabled")
+    assert drift.repairable is False
+
+
+def test_dhcp_wan_emits_reconciled_wan_ip_action():
+    desired = _desired(wan_mode="dhcp", nat_enabled=True)
+    observed = _synced_observed(desired)
+    observed = dataclasses.replace(
+        observed,
+        acs=dataclasses.replace(
+            observed.acs,
+            acs_data_model_root="InternetGatewayDevice",
+            acs_observed_wan_ip_enable=False,
+            acs_observed_wan_addressing_type="Static",
+        ),
+    )
+
+    plan = compute_plan(desired, observed, "sweep")
+
+    action = next(item for item in plan.actions if isinstance(item, AcsSetWanIp))
+    assert action.mode == "dhcp"
+    assert action.nat_enabled is True
+    assert action.vlan == 203
+
+
+def test_static_wan_action_carries_addressing_intent():
+    desired = _desired(
+        wan_mode="static",
+        nat_enabled=True,
+        wan_static_ip="198.51.100.10",
+        wan_static_subnet="255.255.255.248",
+        wan_static_gateway="198.51.100.9",
+        wan_static_dns="1.1.1.1,8.8.8.8",
+    )
+    observed = _synced_observed(desired)
+    observed = dataclasses.replace(
+        observed,
+        acs=dataclasses.replace(
+            observed.acs,
+            acs_data_model_root="InternetGatewayDevice",
+            acs_observed_wan_ip_enable=True,
+            acs_observed_wan_addressing_type="DHCP",
+        ),
+    )
+
+    action = next(
+        item
+        for item in compute_plan(desired, observed, "sync").actions
+        if isinstance(item, AcsSetWanIp)
+    )
+    assert action.mode == "static"
+    assert action.ip_address == "198.51.100.10"
+    assert action.gateway == "198.51.100.9"
 
 
 # ── Fresh authorization (TR-069 WAN path) ───────────────────────────────────

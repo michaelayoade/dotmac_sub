@@ -1,4 +1,8 @@
 {# Config Snapshot Detail — rendered inside slide-over panel #}
+{% macro snapshot_value(key, value) -%}
+{% set normalized = key | lower %}
+{{ '[redacted]' if ('password' in normalized or 'passphrase' in normalized or 'presharedkey' in normalized or 'pre_shared_key' in normalized or 'secret' in normalized) else (value if value is not none else '—') }}
+{%- endmacro %}
 <div class="space-y-6">
     {# Metadata #}
     <div class="flex items-center justify-between">
@@ -21,7 +25,7 @@
             {% for key, value in snapshot.device_info.items() %}
             <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800/60">
                 <dt class="text-[11px] uppercase tracking-wider font-semibold text-slate-500 dark:text-slate-400">{{ key | replace('_', ' ') }}</dt>
-                <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white break-all">{{ value if value is not none else '—' }}</dd>
+                <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white break-all">{{ snapshot_value(key, value) }}</dd>
             </div>
             {% endfor %}
         </dl>
@@ -39,7 +43,7 @@
             {% for key, value in snapshot.wan.items() %}
             <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800/60">
                 <dt class="text-[11px] uppercase tracking-wider font-semibold text-slate-500 dark:text-slate-400">{{ key | replace('_', ' ') }}</dt>
-                <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white break-all">{{ value if value is not none else '—' }}</dd>
+                <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white break-all">{{ snapshot_value(key, value) }}</dd>
             </div>
             {% endfor %}
         </dl>
@@ -57,7 +61,7 @@
             {% for key, value in snapshot.optical.items() %}
             <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800/60">
                 <dt class="text-[11px] uppercase tracking-wider font-semibold text-slate-500 dark:text-slate-400">{{ key | replace('_', ' ') }}</dt>
-                <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white break-all">{{ value if value is not none else '—' }}</dd>
+                <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white break-all">{{ snapshot_value(key, value) }}</dd>
             </div>
             {% endfor %}
         </dl>
@@ -75,7 +79,7 @@
             {% for key, value in snapshot.wifi.items() %}
             <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800/60">
                 <dt class="text-[11px] uppercase tracking-wider font-semibold text-slate-500 dark:text-slate-400">{{ key | replace('_', ' ') }}</dt>
-                <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white break-all">{{ value if value is not none else '—' }}</dd>
+                <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white break-all">{{ snapshot_value(key, value) }}</dd>
             </div>
             {% endfor %}
         </dl>

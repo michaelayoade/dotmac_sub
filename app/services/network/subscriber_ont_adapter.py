@@ -127,7 +127,7 @@ class SubscriberOntInfo:
     service_address: str | None
     assigned_at: datetime | None
     cpe_device_id: str | None = None
-    subscription_id: str | None = None  # For future subscription-level binding
+    subscription_id: str | None = None
 
 
 @dataclass
@@ -310,6 +310,30 @@ class DefaultSubscriberOntLinker:
                 subscriber_id=subscriber_id,
             )
 
+        resolved_subscription_id = None
+        if subscription_id is not None:
+            from fastapi import HTTPException
+
+            from app.services.network_subscriber_bridge import (
+                default_subscriber_validator,
+            )
+
+            try:
+                resolved_subscription_id, _ = (
+                    default_subscriber_validator.resolve_assignment_subscription(
+                        db,
+                        subscription_id=subscription_id,
+                        subscriber_id=subscriber.id,
+                    )
+                )
+            except HTTPException as exc:
+                return LinkResult.fail(
+                    LinkResultStatus.validation_error,
+                    str(exc.detail),
+                    ont_id=ont_id,
+                    subscriber_id=subscriber_id,
+                )
+
         # Check for existing active assignment on this ONT
         existing = db.scalars(
             select(OntAssignment).where(
@@ -355,6 +379,7 @@ class DefaultSubscriberOntLinker:
         assignment = OntAssignment(
             ont_unit_id=ont_id,
             subscriber_id=subscriber_id,
+            subscription_id=resolved_subscription_id,
             pon_port_id=resolved_pon_port_id,
             service_address_id=resolved_address_id,
             active=True,
@@ -589,8 +614,9 @@ class DefaultSubscriberOntLinker:
 
             # Get OLT info
             olt_name = None
-            if ont.olt_id:
-                olt = db.get(OLTDevice, str(ont.olt_id))
+            ont_olt_id = getattr(ont, "olt_device_id", None)
+            if ont_olt_id:
+                olt = db.get(OLTDevice, str(ont_olt_id))
                 olt_name = olt.name if olt else None
 
             # Get PON port info
@@ -731,37 +757,63 @@ class DefaultSubscriberOntLinker:
         resolved_subscription_id = subscription_id
         resolved_ont_id = ont_id
 
-        # If subscription provided, get subscriber
-        if resolved_subscription_id and not resolved_subscriber_id:
+        # An explicit subscription is authoritative for subscriber ownership.
+        if resolved_subscription_id:
             subscription = db.get(Subscription, resolved_subscription_id)
-            if subscription:
-                resolved_subscriber_id = str(subscription.subscriber_id)
-                context.subscription_id = resolved_subscription_id
-                # Also get NAS device if configured
-                if subscription.provisioning_nas_device_id:
-                    context.nas_device_id = str(subscription.provisioning_nas_device_id)
+            if subscription is None:
+                return context
+            subscription_subscriber_id = str(subscription.subscriber_id)
+            if (
+                resolved_subscriber_id
+                and str(resolved_subscriber_id) != subscription_subscriber_id
+            ):
+                return context
+            resolved_subscriber_id = subscription_subscriber_id
+            context.subscription_id = resolved_subscription_id
+            if subscription.service_address_id:
+                context.service_address_id = str(subscription.service_address_id)
+            # Also get NAS device if configured
+            if subscription.provisioning_nas_device_id:
+                context.nas_device_id = str(subscription.provisioning_nas_device_id)
 
-        # If ONT provided, get subscriber from assignment
-        if resolved_ont_id and not resolved_subscriber_id:
-            assignment = db.scalars(
-                select(OntAssignment).where(
-                    OntAssignment.ont_unit_id == resolved_ont_id,
-                    OntAssignment.active.is_(True),
+        # An explicit ONT must match the same assignment scope.
+        if resolved_ont_id:
+            assignment_query = select(OntAssignment).where(
+                OntAssignment.ont_unit_id == resolved_ont_id,
+                OntAssignment.active.is_(True),
+            )
+            if resolved_subscription_id:
+                assignment_query = assignment_query.where(
+                    OntAssignment.subscription_id == resolved_subscription_id
                 )
-            ).first()
+            assignment = db.scalars(assignment_query).first()
+            if resolved_subscription_id and assignment is None:
+                resolved_ont_id = None
             if assignment and assignment.subscriber_id:
-                resolved_subscriber_id = str(assignment.subscriber_id)
-                if assignment.service_address_id:
-                    context.service_address_id = str(assignment.service_address_id)
+                assignment_subscriber_id = str(assignment.subscriber_id)
+                if (
+                    resolved_subscriber_id
+                    and str(resolved_subscriber_id) != assignment_subscriber_id
+                ):
+                    resolved_ont_id = None
+                else:
+                    resolved_subscriber_id = assignment_subscriber_id
+                    if assignment.subscription_id and not resolved_subscription_id:
+                        resolved_subscription_id = str(assignment.subscription_id)
+                    if assignment.service_address_id:
+                        context.service_address_id = str(assignment.service_address_id)
 
         # If subscriber provided but no ONT, get ONT from assignment
         if resolved_subscriber_id and not resolved_ont_id:
-            assignment = db.scalars(
-                select(OntAssignment).where(
-                    OntAssignment.subscriber_id == resolved_subscriber_id,
-                    OntAssignment.active.is_(True),
+            assignment_query = select(OntAssignment).where(
+                OntAssignment.subscriber_id == resolved_subscriber_id,
+                OntAssignment.active.is_(True),
+            )
+            if resolved_subscription_id:
+                assignment_query = assignment_query.where(
+                    OntAssignment.subscription_id == resolved_subscription_id
                 )
-            ).first()
+            assignment = db.scalars(assignment_query).first()
             if assignment:
                 resolved_ont_id = str(assignment.ont_unit_id)
                 if assignment.service_address_id:
@@ -778,7 +830,8 @@ class DefaultSubscriberOntLinker:
             ont = db.get(OntUnit, resolved_ont_id)
             if ont:
                 context.ont_serial = ont.serial_number
-                context.olt_id = str(ont.olt_id) if ont.olt_id else None
+                ont_olt_id = getattr(ont, "olt_device_id", None)
+                context.olt_id = str(ont_olt_id) if ont_olt_id else None
 
                 # Get OLT name
                 if context.olt_id:
@@ -847,11 +900,12 @@ class DefaultSubscriberOntLinker:
         from app.models.network import OltAutofindCandidate, PonPort
 
         # Try ONT's discovered board/port
-        if ont.board is not None and ont.port is not None and ont.olt_id:
+        ont_olt_id = getattr(ont, "olt_device_id", None)
+        if ont.board is not None and ont.port is not None and ont_olt_id:
             port_name = f"{ont.board}/{ont.port}"
             pon_port = db.scalars(
                 select(PonPort).where(
-                    PonPort.olt_id == ont.olt_id,
+                    PonPort.olt_id == ont_olt_id,
                     PonPort.name.ilike(f"%{port_name}%"),
                 )
             ).first()

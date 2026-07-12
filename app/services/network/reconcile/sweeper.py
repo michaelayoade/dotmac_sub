@@ -37,10 +37,11 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.network import DeviceStatus, OLTDevice, OntUnit
+from app.models.ont_observation import OntObservation
 from app.services.network.reconcile.readers.reachability import (
     PingFunction,
     is_pingable,
@@ -149,6 +150,7 @@ def run_sweep_once(
     reconcile_fn: Callable = reconcile_ont,
     only_active: bool = True,
     alert_threshold: int | None = None,
+    max_onts: int | None = None,
 ) -> SweepStats:
     """Sweep every active ONT once and return aggregated stats.
 
@@ -167,17 +169,20 @@ def run_sweep_once(
         stmt = select(OntUnit.id)
         if only_active:
             stmt = stmt.where(OntUnit.is_active.is_(True))
-        # Skip ONTs whose parent OLT is not active (maintenance / draining /
-        # retired / inactive). An operator who took the OLT down expects the
-        # reconciler to stop touching it — previously the sweep ran full
-        # SSH/NBI reconciles against a device in maintenance. ONTs with no
-        # parent OLT (olt_device_id NULL) are still swept.
-        stmt = stmt.outerjoin(OLTDevice, OLTDevice.id == OntUnit.olt_device_id).where(
-            or_(
-                OntUnit.olt_device_id.is_(None),
-                OLTDevice.status == DeviceStatus.active,
-            )
+        # This is the Huawei reconciler. Ownership is explicit so UISP-managed
+        # UFiber ONUs and other vendors can never enter Huawei SSH/ACS paths.
+        stmt = (
+            stmt.join(OLTDevice, OLTDevice.id == OntUnit.olt_device_id)
+            .outerjoin(OntObservation, OntObservation.ont_unit_id == OntUnit.id)
+            .where(OntUnit.uisp_device_id.is_(None))
+            .where(OLTDevice.uisp_device_id.is_(None))
+            .where(OLTDevice.is_active.is_(True))
+            .where(OLTDevice.status == DeviceStatus.active)
+            .where(func.lower(OLTDevice.vendor) == "huawei")
+            .order_by(OntObservation.last_reconciled_at.asc().nullsfirst(), OntUnit.id)
         )
+        if max_onts is not None:
+            stmt = stmt.limit(max(1, int(max_onts)))
         ont_ids = [row[0] for row in catalog_db.execute(stmt).all()]
 
     stats.total_onts = len(ont_ids)

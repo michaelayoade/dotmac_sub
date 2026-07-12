@@ -1,5 +1,6 @@
 """Tests for the authoritative single-writer radreply builder."""
 
+import ipaddress
 import types
 
 from app.models.catalog import SubscriptionStatus
@@ -90,6 +91,46 @@ class TestRadreplyAdditionalRoutes:
     def test_no_routes_no_framed_route(self):
         attrs = _radreply_attrs(_sub(), None, None, additional_routes=None)
         assert _routes(attrs) == []
+
+    def test_e2e_private_primary_is_natted_public_addon_is_not(self):
+        """Simulate the Garki BNG split between subscriber NAT and routed IPs."""
+        private_primary = "172.16.99.10"
+        public_addon = "160.119.125.104/29"
+        attrs = _radreply_attrs(
+            _sub(ipv4=private_primary),
+            None,
+            None,
+            additional_routes=[(public_addon, 1)],
+        )
+
+        assert ("Framed-IP-Address", ":=", private_primary) in attrs
+        assert (
+            "Framed-Route",
+            "+=",
+            f"{public_addon} 0.0.0.0 1",
+        ) in attrs
+
+        # Current Garki Access SRCNAT partitions cover only the private pool.
+        # A public routed add-on therefore bypasses NAT by source matching.
+        nat_ranges = (
+            ("172.16.99.1", "172.16.99.63"),
+            ("172.16.99.64", "172.16.99.128"),
+            ("172.16.99.129", "172.16.99.191"),
+            ("172.16.99.192", "172.16.99.254"),
+        )
+        primary = ipaddress.ip_address(private_primary)
+        routed = ipaddress.ip_network(public_addon)
+        assert any(
+            ipaddress.ip_address(start) <= primary <= ipaddress.ip_address(end)
+            for start, end in nat_ranges
+        )
+        assert not any(
+            routed.overlaps(source_network)
+            for start, end in nat_ranges
+            for source_network in ipaddress.summarize_address_range(
+                ipaddress.ip_address(start), ipaddress.ip_address(end)
+            )
+        )
 
 
 class TestRadreplyIPv6:

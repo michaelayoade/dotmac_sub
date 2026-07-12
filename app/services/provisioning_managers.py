@@ -311,6 +311,19 @@ class ServiceOrders(CRUDManager[ServiceOrder]):
                 )
         for key, value in data.items():
             setattr(order, key, value)
+        if (
+            order.status == ServiceOrderStatus.active
+            and order.subscription_id is not None
+        ):
+            from app.models.catalog import Subscription, SubscriptionStatus
+            from app.services.account_lifecycle import activate_subscription
+
+            subscription = db.get(Subscription, order.subscription_id)
+            if (
+                subscription is not None
+                and subscription.status == SubscriptionStatus.pending
+            ):
+                activate_subscription(db, str(subscription.id))
         db.commit()
         db.refresh(order)
 

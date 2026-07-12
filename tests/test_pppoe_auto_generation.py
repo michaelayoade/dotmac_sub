@@ -74,6 +74,43 @@ class TestAutoGeneratePppoeCredential:
         assert result.is_active is True
         assert result.secret_hash is not None
 
+    def test_multi_service_credentials_bind_to_exact_subscription(
+        self, db_session, subscriber, catalog_offer
+    ):
+        from app.models.catalog import Subscription, SubscriptionStatus
+
+        _seed_pppoe_settings(db_session, start=31000)
+        _set_subscriber_number(db_session, subscriber, "SUB-031000")
+        first = Subscription(
+            subscriber_id=subscriber.id,
+            offer_id=catalog_offer.id,
+            status=SubscriptionStatus.pending,
+        )
+        second = Subscription(
+            subscriber_id=subscriber.id,
+            offer_id=catalog_offer.id,
+            status=SubscriptionStatus.pending,
+        )
+        db_session.add_all([first, second])
+        db_session.flush()
+
+        first_credential = auto_generate_pppoe_credential(
+            db_session,
+            str(subscriber.id),
+            subscription_id=str(first.id),
+        )
+        second_credential = auto_generate_pppoe_credential(
+            db_session,
+            str(subscriber.id),
+            subscription_id=str(second.id),
+        )
+
+        assert first_credential is not None
+        assert second_credential is not None
+        assert first_credential.username != second_credential.username
+        assert first_credential.subscription_id == first.id
+        assert second_credential.subscription_id == second.id
+
     def test_skips_when_credential_exists(self, db_session, subscriber):
         """When subscriber already has active credential, skips."""
         _seed_pppoe_settings(db_session, start=1000)

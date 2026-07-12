@@ -309,6 +309,7 @@ class IpPoolBase(BaseModel):
     dns_primary: str | None = Field(default=None, max_length=64)
     dns_secondary: str | None = Field(default=None, max_length=64)
     is_active: bool = True
+    nas_device_id: UUID | None = None
     olt_device_id: UUID | None = None
     vlan_id: UUID | None = None
     notes: str | None = None
@@ -328,6 +329,7 @@ class IpPoolUpdate(BaseModel):
     dns_primary: str | None = Field(default=None, max_length=64)
     dns_secondary: str | None = Field(default=None, max_length=64)
     is_active: bool | None = None
+    nas_device_id: UUID | None = None
     olt_device_id: UUID | None = None
     vlan_id: UUID | None = None
     notes: str | None = None
@@ -710,6 +712,10 @@ class OntAssignmentBase(BaseModel):
             "Optional caller-supplied ownership reference; not required for "
             "standalone OLT/ONT operation."
         ),
+    )
+    subscription_id: UUID | None = Field(
+        default=None,
+        description="Catalog subscription whose access service is delivered by this ONT.",
     )
     service_address_id: UUID | None = None
     assigned_at: datetime | None = None

@@ -128,8 +128,8 @@ def desired_from_ont_unit(db: Session, ont: OntUnit) -> OntDesiredState:
         ),
         # DEFAULT: nat/ipv6/dhcp explicit toggles aren't on every ONT today;
         # routed mode implies NAT+DHCP on (fleet convention from feedback_ont_setup_defaults).
-        nat_enabled=wan_mode == "pppoe",
-        ipv6_enabled=False,
+        nat_enabled=wan_mode != "bridge",
+        ipv6_enabled=str(values.get("ip_protocol") or "ipv4").lower() == "dual_stack",
         dhcp_enabled=_bool_or_default(values.get("lan_dhcp_enabled"), default=True),
         dhcp_pool_min=values.get("lan_dhcp_start") or "192.168.100.2",
         dhcp_pool_max=values.get("lan_dhcp_end") or "192.168.100.254",
@@ -150,6 +150,11 @@ def desired_from_ont_unit(db: Session, ont: OntUnit) -> OntDesiredState:
         subscriber_external_id=ont.external_id,
         wan_uprate_kbps=None,
         wan_downrate_kbps=None,
+        tr069_data_model_root=getattr(ont, "tr069_data_model", None),
+        wan_static_ip=values.get("wan_static_ip"),
+        wan_static_subnet=values.get("wan_static_subnet"),
+        wan_static_gateway=values.get("wan_static_gateway"),
+        wan_static_dns=values.get("wan_static_dns"),
     )
 
 
@@ -177,6 +182,16 @@ def apply_proposed_change(ont: OntUnit, target: OntDesiredState) -> None:
     _set_desired_value(ont, "lan", "dhcp_enabled", target.dhcp_enabled)
     _set_desired_value(ont, "lan", "dhcp_start", target.dhcp_pool_min)
     _set_desired_value(ont, "lan", "dhcp_end", target.dhcp_pool_max)
+    _set_desired_value(
+        ont,
+        "wan",
+        "ip_protocol",
+        "dual_stack" if target.ipv6_enabled else "ipv4",
+    )
+    _set_desired_value(ont, "wan", "static_ip", target.wan_static_ip)
+    _set_desired_value(ont, "wan", "static_subnet", target.wan_static_subnet)
+    _set_desired_value(ont, "wan", "static_gateway", target.wan_static_gateway)
+    _set_desired_value(ont, "wan", "static_dns", target.wan_static_dns)
     _set_desired_value(ont, "lan", "subnet", target.dhcp_subnet_mask)
 
     _set_desired_value(ont, "wan", "onu_mode", target.wan_mode)
@@ -257,6 +272,18 @@ def observed_from_ont_observation(
             acs_observed_wan_wcd_index=obs.acs_observed_wan_wcd_index,
             acs_observed_wan_instance_index=obs.acs_observed_wan_instance_index,
             acs_observed_wan_ppp_locations=(),
+            acs_data_model_root=obs.acs_data_model_root,
+            acs_observed_ipv6_enabled=obs.acs_observed_ipv6_enabled,
+            acs_observed_wan_ip_enable=obs.acs_observed_wan_ip_enable,
+            acs_observed_wan_addressing_type=obs.acs_observed_wan_addressing_type,
+            acs_observed_wan_ip_address=obs.acs_observed_wan_ip_address,
+            acs_observed_wan_subnet_mask=obs.acs_observed_wan_subnet_mask,
+            acs_observed_wan_gateway=obs.acs_observed_wan_gateway,
+            acs_observed_dhcpv6_enabled=obs.acs_observed_dhcpv6_enabled,
+            acs_observed_dhcpv6_request_prefixes=(
+                obs.acs_observed_dhcpv6_request_prefixes
+            ),
+            acs_observed_ra_enabled=obs.acs_observed_ra_enabled,
         ),
     )
 
@@ -321,6 +348,18 @@ def upsert_ont_observation(
     row.acs_observed_cr_password_set = observed.acs.acs_observed_cr_password_set
     row.acs_observed_wan_wcd_index = observed.acs.acs_observed_wan_wcd_index
     row.acs_observed_wan_instance_index = observed.acs.acs_observed_wan_instance_index
+    row.acs_data_model_root = observed.acs.acs_data_model_root
+    row.acs_observed_ipv6_enabled = observed.acs.acs_observed_ipv6_enabled
+    row.acs_observed_wan_ip_enable = observed.acs.acs_observed_wan_ip_enable
+    row.acs_observed_wan_addressing_type = observed.acs.acs_observed_wan_addressing_type
+    row.acs_observed_wan_ip_address = observed.acs.acs_observed_wan_ip_address
+    row.acs_observed_wan_subnet_mask = observed.acs.acs_observed_wan_subnet_mask
+    row.acs_observed_wan_gateway = observed.acs.acs_observed_wan_gateway
+    row.acs_observed_dhcpv6_enabled = observed.acs.acs_observed_dhcpv6_enabled
+    row.acs_observed_dhcpv6_request_prefixes = (
+        observed.acs.acs_observed_dhcpv6_request_prefixes
+    )
+    row.acs_observed_ra_enabled = observed.acs.acs_observed_ra_enabled
 
     db.flush()  # Establish row.id before the caller commits.
     return row
@@ -355,7 +394,9 @@ def _default_description(ont: OntUnit) -> str:
     return f"{ont.serial_number}_authd_{datetime.now(UTC).strftime('%Y%m%d')}"
 
 
-def _normalise_wan_mode(ip_mode: Any, onu_mode: Any) -> Literal["pppoe", "bridge"]:
+def _normalise_wan_mode(
+    ip_mode: Any, onu_mode: Any
+) -> Literal["pppoe", "dhcp", "static", "bridge"]:
     """Reduce the effective config's two related fields to the reconciler's
     single ``pppoe`` / ``bridge`` contract.
 
@@ -368,6 +409,11 @@ def _normalise_wan_mode(ip_mode: Any, onu_mode: Any) -> Literal["pppoe", "bridge
         return "bridge"
     if str(onu_mode or "").strip().lower() in bridge_signals:
         return "bridge"
+    normalized = str(ip_mode or "").strip().lower()
+    if normalized == "dhcp":
+        return "dhcp"
+    if normalized in {"static", "static_ip"}:
+        return "static"
     return "pppoe"
 
 

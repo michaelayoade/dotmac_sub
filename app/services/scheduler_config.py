@@ -1613,6 +1613,19 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(infrastructure_poll_seconds, 30),
         )
+        ont_reconcile_seconds = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "ont_reconcile_interval_seconds",
+            900,
+        )
+        _sync_scheduled_task(
+            session,
+            name="ont_reconcile_sweep",
+            task_name="app.tasks.ont_reconcile.run_ont_reconcile_sweep",
+            enabled=True,
+            interval_seconds=max(ont_reconcile_seconds, 300),
+        )
         # RADIUS health: accounting freshness + enforcement drift from the
         # external radacct DB and the reconciled live-session view. Customer
         # experience often fails here before any router goes down.

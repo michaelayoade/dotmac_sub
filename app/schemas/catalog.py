@@ -950,6 +950,7 @@ class AccessCredentialBase(BaseModel):
         validation_alias=AliasChoices("account_id", "subscriber_id"),
         serialization_alias="account_id",
     )
+    subscription_id: UUID | None = None
     username: str = Field(min_length=1, max_length=120)
     secret_hash: str | None = Field(default=None, max_length=255)
     is_active: bool = True
@@ -967,6 +968,7 @@ class AccessCredentialUpdate(BaseModel):
         validation_alias=AliasChoices("account_id", "subscriber_id"),
         serialization_alias="account_id",
     )
+    subscription_id: UUID | None = None
     username: str | None = Field(default=None, min_length=1, max_length=120)
     secret_hash: str | None = Field(default=None, max_length=255)
     is_active: bool | None = None

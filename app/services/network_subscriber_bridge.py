@@ -22,6 +22,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy.sql import Select
 
+from app.models.catalog import Subscription
 from app.models.subscriber import (
     Subscriber,
     SubscriberCategory,
@@ -65,6 +66,67 @@ class DefaultSubscriberValidator:
             str(subscriber_id),
             str(service_address_id) if service_address_id is not None else None,
         )
+
+    def resolve_assignment_subscription(
+        self,
+        db: Session,
+        *,
+        subscription_id: object,
+        subscriber_id: object | None,
+    ) -> tuple[object, object]:
+        """Validate an ONT's subscription binding and derive its subscriber."""
+        subscription = db.get(Subscription, subscription_id)
+        if subscription is None:
+            raise HTTPException(status_code=404, detail="Subscription not found")
+        if subscriber_id is not None and subscription.subscriber_id != subscriber_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Subscription does not belong to the assignment subscriber",
+            )
+        return subscription.id, subscription.subscriber_id
+
+    def apply_subscription_device_intent(
+        self,
+        db: Session,
+        *,
+        subscription_id: object,
+        ont: Any,
+    ) -> bool:
+        """Copy the latest staged sales intent into ONT desired config."""
+        from app.models.network import OntSyncStatus
+        from app.models.provisioning import ServiceOrder, ServiceOrderStatus
+        from app.services.network.ont_desired_config import set_desired_config_values
+
+        order = (
+            db.query(ServiceOrder)
+            .filter(ServiceOrder.subscription_id == subscription_id)
+            .filter(
+                ServiceOrder.status.in_(
+                    (
+                        ServiceOrderStatus.submitted,
+                        ServiceOrderStatus.scheduled,
+                        ServiceOrderStatus.provisioning,
+                    )
+                )
+            )
+            .order_by(ServiceOrder.created_at.desc())
+            .first()
+        )
+        context = order.execution_context if order else None
+        device_intent = (
+            context.get("device_intent") if isinstance(context, dict) else None
+        )
+        desired = (
+            device_intent.get("desired_config")
+            if isinstance(device_intent, dict)
+            else None
+        )
+        if not isinstance(desired, dict) or not desired:
+            return False
+        set_desired_config_values(ont, desired)
+        ont.sync_status = OntSyncStatus.out_of_sync
+        ont.last_error = "Staged from provisioning service order; awaiting reconcile"
+        return True
 
     def validate_business_owner(
         self,
