@@ -46,10 +46,13 @@ from app.schemas.sales import (
     PipelineStageCreate,
     PipelineStageUpdate,
     PipelineUpdate,
+    QuoteCreate,
+    QuoteUpdate,
 )
 from app.services import sales as sales_service
 from app.services import sales_orders as sales_orders_service
 from app.services.common import coerce_uuid
+from app.services.sales.selfserve import compute_feasibility
 from app.services.sales_orders import _resolve_project_for_sales_order
 
 # The CRM's recommended default stage set, seeded when "create default
@@ -559,6 +562,320 @@ def _count_quotes(
             )
         )
     return int(query.scalar() or 0)
+
+
+def _coordinate(
+    value: str | None, *, field: str, low: float, high: float
+) -> float | None:
+    """Parse a map-pin coordinate from form input.
+
+    Both coordinates are optional, but a half-pin is meaningless — the caller
+    enforces that they arrive together.
+    """
+    text_value = (value or "").strip()
+    if not text_value:
+        return None
+    try:
+        number = float(text_value)
+    except ValueError:
+        raise ValueError(f"{field} must be a number.") from None
+    if not low <= number <= high:
+        raise ValueError(f"{field} must be between {low} and {high}.")
+    return number
+
+
+def _install_pin(
+    db: Session,
+    *,
+    latitude: str | None,
+    longitude: str | None,
+    address: str | None,
+    region: str | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Build the ``install{}`` map-pin block, and its feasibility, from a form.
+
+    This is the same contract ``sales.selfserve`` stamps for portal-originated
+    quotes (``install{latitude, longitude, address, region}`` on ``metadata_``),
+    and downstream estimate/survey/billing read the pin from there. A staff-
+    authored quote must be indistinguishable from a portal one, so we reuse the
+    shape and the feasibility computation rather than inventing a parallel one.
+    """
+    lat = _coordinate(latitude, field="Latitude", low=-90.0, high=90.0)
+    lng = _coordinate(longitude, field="Longitude", low=-180.0, high=180.0)
+    if (lat is None) != (lng is None):
+        raise ValueError("Drop a pin on the map: latitude and longitude go together.")
+
+    clean_address = (address or "").strip() or None
+    clean_region = (region or "").strip() or None
+    if lat is None and lng is None and not clean_address and not clean_region:
+        return None, None
+
+    install = {
+        "latitude": lat,
+        "longitude": lng,
+        "address": clean_address,
+        "region": clean_region,
+    }
+    feasibility = (
+        compute_feasibility(db, lat, lng)
+        if lat is not None and lng is not None
+        else None
+    )
+    return install, feasibility
+
+
+def _merge_install_metadata(
+    existing: Any,
+    *,
+    install: dict[str, Any] | None,
+    feasibility: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Fold a new pin into a quote's existing metadata without clobbering it.
+
+    ``metadata_`` carries the whole portal contract (source, project_type,
+    deposit, pricing_mode...), so an admin edit must merge into it, never
+    replace it. Clearing the pin removes only the keys the pin owns.
+    """
+    meta: dict[str, Any] = dict(existing) if isinstance(existing, dict) else {}
+    if install is None:
+        meta.pop("install", None)
+        meta.pop("feasibility", None)
+    else:
+        meta["install"] = install
+        if feasibility is not None:
+            meta["feasibility"] = feasibility
+        else:
+            meta.pop("feasibility", None)
+    return meta or None
+
+
+def _quote_form_fields(
+    *,
+    subscriber_id: str | None,
+    lead_id: str | None,
+    status: str | None,
+    currency: str | None,
+    tax_rate: str | None,
+    expires_at: str | None,
+    notes: str | None,
+    latitude: str | None,
+    longitude: str | None,
+    address: str | None,
+    region: str | None,
+) -> dict[str, Any]:
+    return {
+        "subscriber_id": (subscriber_id or "").strip(),
+        "lead_id": (lead_id or "").strip(),
+        "status": (status or QuoteStatus.draft.value).strip(),
+        "currency": (currency or "NGN").strip().upper(),
+        "tax_rate": (tax_rate or "").strip(),
+        "expires_at": (expires_at or "").strip(),
+        "notes": (notes or "").strip(),
+        "latitude": (latitude or "").strip(),
+        "longitude": (longitude or "").strip(),
+        "address": (address or "").strip(),
+        "region": (region or "").strip(),
+    }
+
+
+def build_quote_new_context() -> dict[str, Any]:
+    return {
+        "quote_form": _quote_form_fields(
+            subscriber_id=None,
+            lead_id=None,
+            status=QuoteStatus.draft.value,
+            currency="NGN",
+            tax_rate=None,
+            expires_at=None,
+            notes=None,
+            latitude=None,
+            longitude=None,
+            address=None,
+            region=None,
+        ),
+        "status_values": quote_status_values(),
+        "form_title": "New Quote",
+        "submit_label": "Create Quote",
+        "action_url": "/admin/sales/quotes",
+        "error": None,
+    }
+
+
+def build_quote_edit_context(db: Session, *, quote_id: str) -> dict[str, Any]:
+    quote = sales_service.quotes.get(db, quote_id)
+    meta = quote.metadata_ if isinstance(quote.metadata_, dict) else {}
+    raw_install = meta.get("install")
+    install: dict[str, Any] = raw_install if isinstance(raw_install, dict) else {}
+    return {
+        "quote": quote,
+        "quote_form": _quote_form_fields(
+            subscriber_id=str(quote.subscriber_id),
+            lead_id=str(quote.lead_id) if quote.lead_id else None,
+            status=quote.status,
+            currency=quote.currency,
+            tax_rate=str(quote.tax_rate) if quote.tax_rate is not None else None,
+            expires_at=(
+                quote.expires_at.date().isoformat() if quote.expires_at else None
+            ),
+            notes=quote.notes,
+            latitude=(
+                str(install.get("latitude"))
+                if install.get("latitude") is not None
+                else None
+            ),
+            longitude=(
+                str(install.get("longitude"))
+                if install.get("longitude") is not None
+                else None
+            ),
+            address=install.get("address"),
+            region=install.get("region"),
+        ),
+        "status_values": quote_status_values(),
+        "form_title": "Edit Quote",
+        "submit_label": "Update Quote",
+        "action_url": f"/admin/sales/quotes/{quote_id}/edit",
+        "error": None,
+    }
+
+
+def build_quote_form_error_context(
+    *,
+    mode: str,
+    quote_id: str | None,
+    **fields: str | None,
+) -> dict[str, Any]:
+    editing = mode == "update"
+    return {
+        "quote_form": _quote_form_fields(**fields),  # type: ignore[arg-type]
+        "status_values": quote_status_values(),
+        "form_title": "Edit Quote" if editing else "New Quote",
+        "submit_label": "Update Quote" if editing else "Create Quote",
+        "action_url": (
+            f"/admin/sales/quotes/{quote_id}/edit" if editing else "/admin/sales/quotes"
+        ),
+    }
+
+
+def _quote_expiry(value: str | None) -> datetime | None:
+    text_value = (value or "").strip()
+    if not text_value:
+        return None
+    try:
+        return datetime.fromisoformat(text_value).replace(tzinfo=UTC)
+    except ValueError:
+        raise ValueError("Expiry must be a valid date.") from None
+
+
+def _quote_tax_rate(value: str | None) -> Decimal | None:
+    text_value = (value or "").strip()
+    if not text_value:
+        return None
+    try:
+        return Decimal(text_value)
+    except (ArithmeticError, ValueError):
+        raise ValueError("Tax rate must be a number.") from None
+
+
+def create_quote_from_form(
+    db: Session,
+    *,
+    subscriber_id: str | None,
+    lead_id: str | None,
+    status: str | None,
+    currency: str | None,
+    tax_rate: str | None,
+    expires_at: str | None,
+    notes: str | None,
+    latitude: str | None,
+    longitude: str | None,
+    address: str | None,
+    region: str | None,
+) -> str:
+    if not (subscriber_id or "").strip():
+        raise ValueError("A subscriber is required.")
+
+    install, feasibility = _install_pin(
+        db,
+        latitude=latitude,
+        longitude=longitude,
+        address=address,
+        region=region,
+    )
+    metadata = _merge_install_metadata(
+        {"source": "admin"}, install=install, feasibility=feasibility
+    )
+
+    payload = QuoteCreate(
+        subscriber_id=coerce_uuid(subscriber_id),
+        lead_id=coerce_uuid(lead_id) if (lead_id or "").strip() else None,
+        status=QuoteStatus(_clean_choice(status, quote_status_values()) or "draft"),
+        currency=(currency or "NGN").strip().upper(),
+        tax_rate=_quote_tax_rate(tax_rate),
+        expires_at=_quote_expiry(expires_at),
+        notes=(notes or "").strip() or None,
+        metadata_=metadata,
+    )
+    quote = sales_service.quotes.create(db, payload)
+    return str(quote.id)
+
+
+def update_quote_from_form(
+    db: Session,
+    *,
+    quote_id: str,
+    subscriber_id: str | None,
+    lead_id: str | None,
+    status: str | None,
+    currency: str | None,
+    tax_rate: str | None,
+    expires_at: str | None,
+    notes: str | None,
+    latitude: str | None,
+    longitude: str | None,
+    address: str | None,
+    region: str | None,
+) -> None:
+    quote = sales_service.quotes.get(db, quote_id)
+    install, feasibility = _install_pin(
+        db,
+        latitude=latitude,
+        longitude=longitude,
+        address=address,
+        region=region,
+    )
+    metadata = _merge_install_metadata(
+        quote.metadata_, install=install, feasibility=feasibility
+    )
+
+    payload = QuoteUpdate(
+        subscriber_id=(
+            coerce_uuid(subscriber_id) if (subscriber_id or "").strip() else None
+        ),
+        lead_id=coerce_uuid(lead_id) if (lead_id or "").strip() else None,
+        status=(
+            QuoteStatus(_clean_choice(status, quote_status_values()) or "draft")
+            if (status or "").strip()
+            else None
+        ),
+        currency=(currency or "").strip().upper() or None,
+        tax_rate=_quote_tax_rate(tax_rate),
+        expires_at=_quote_expiry(expires_at),
+        notes=(notes or "").strip() or None,
+        metadata_=metadata,
+    )
+    sales_service.quotes.update(db, quote_id, payload)
+
+
+def set_quote_status(db: Session, quote_id: str, status: str | None) -> None:
+    clean = _clean_choice(status, quote_status_values())
+    if not clean:
+        raise ValueError("Unknown quote status.")
+    sales_service.quotes.update(db, quote_id, QuoteUpdate(status=QuoteStatus(clean)))
+
+
+def deactivate_quote(db: Session, quote_id: str) -> None:
+    sales_service.quotes.delete(db, quote_id)
 
 
 def build_quotes_list_context(

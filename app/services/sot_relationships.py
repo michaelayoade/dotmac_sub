@@ -377,10 +377,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "scheduled credential key lifecycle",
                     "rotation grace period",
                     "credential re-encryption convergence",
+                    "credential integrity classification",
                 ),
                 depends_on=(
                     "secrets.reference_store",
                     "secrets.credential_crypto",
+                    "observability.recording",
                     "runtime.db_sessions",
                 ),
             ),
@@ -554,7 +556,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             SOTService(
                 name="observability.recording",
                 module="app.services.observability",
-                owns=("task/job run recording", "operational findings"),
+                owns=(
+                    "task/job run recording",
+                    "operational findings",
+                    "bounded state snapshot publication",
+                ),
             ),
             SOTService(
                 name="observability.task_reliability",
@@ -565,7 +571,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             SOTService(
                 name="observability.metrics",
                 module="app.metrics",
-                owns=("runtime counters", "runtime gauges"),
+                owns=(
+                    "runtime counters",
+                    "runtime gauges",
+                    "state snapshot scrape export",
+                ),
                 depends_on=("observability.recording",),
             ),
         ),

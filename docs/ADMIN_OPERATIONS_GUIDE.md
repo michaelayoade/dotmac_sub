@@ -1122,6 +1122,19 @@ variable, and recreate every API, worker, beat, poller, and listener process.
 Run the rotation dry-run again after the restart. Never rerun initialization
 with an old seed value.
 
+The daily rotation task is also the credential-integrity observer, including
+on days when rotation is not due. It publishes redacted, bounded state through
+the shared observability service. Use these series in VictoriaMetrics/Grafana:
+
+- `observability_state{domain="credentials",signal="undecryptable",scope="all"}`
+- `observability_state{domain="credentials",signal="plaintext",scope="all"}`
+- `observability_snapshot_age_seconds{domain="credentials"}`
+- `observability_snapshot_status{domain="credentials",status="error"}`
+
+The scan never exports credential values or record identifiers. Non-zero
+plaintext or undecryptable totals also enter the standard admin-alert lifecycle;
+undecryptable values block automatic key rotation until corrected.
+
 ### Rotation Order
 
 Rotate non-customer-facing secrets first, then payment, then authentication or network secrets. Keep one verified rollback path for each secret family before moving to the next.
