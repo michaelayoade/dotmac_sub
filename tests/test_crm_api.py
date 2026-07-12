@@ -33,6 +33,7 @@ from app.models.catalog import (
 )
 from app.models.collections import DunningCase
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+from app.models.lifecycle import SubscriptionLifecycleEvent
 from app.models.service_extension import (
     ServiceExtension,
     ServiceExtensionEntry,
@@ -239,6 +240,57 @@ def test_subscriber_list_embeds_services_billing_and_session_state(
     assert row["billing"]["total_paid"] == 10000.0
     assert row["session_state"] == "online"
     assert row["last_seen"].endswith("Z")
+
+
+def test_subscriber_list_batches_payload_metadata(db_session, crm_auth):
+    offer = _offer(db_session)
+    subscribers = []
+    for _ in range(5):
+        subscriber = _subscriber(db_session)
+        subscriber.account_start_date = None
+        subscription = _subscription(db_session, subscriber, offer)
+        db_session.add_all(
+            [
+                SubscriptionLifecycleEvent(
+                    subscription_id=subscription.id,
+                    to_status=SubscriptionStatus.suspended,
+                    created_at=datetime(2026, 5, 1, tzinfo=UTC),
+                ),
+                SubscriptionLifecycleEvent(
+                    subscription_id=subscription.id,
+                    to_status=SubscriptionStatus.canceled,
+                    created_at=datetime(2026, 6, 1, tzinfo=UTC),
+                ),
+            ]
+        )
+        subscribers.append(subscriber)
+    db_session.commit()
+
+    statements = []
+    engine = db_session.get_bind()
+
+    def count_statement(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", count_statement)
+    try:
+        response = _call_route(
+            crm_routes.list_subscribers,
+            _request({"page": "1", "per_page": "5"}),
+            db_session,
+        )
+    finally:
+        event.remove(engine, "before_cursor_execute", count_statement)
+
+    assert response.status_code == 200
+    rows = response.json()["data"]
+    target_ids = {str(subscriber.id) for subscriber in subscribers}
+    target_rows = [row for row in rows if row["id"] in target_ids]
+    assert len(target_rows) == 5
+    assert {row["activated_at"] for row in target_rows} == {"2026-01-01T00:00:00Z"}
+    assert {row["suspended_at"] for row in target_rows} == {"2026-05-01T00:00:00Z"}
+    assert {row["terminated_at"] for row in target_rows} == {"2026-06-01T00:00:00Z"}
+    assert len(statements) <= 10
 
 
 def test_invalid_query_parameters_return_400_field_errors(crm_auth):
