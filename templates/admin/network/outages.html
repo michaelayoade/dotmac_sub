@@ -49,7 +49,7 @@
     {% if reachability %}
     <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
         <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Down now — root-cause view</h3>
-        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Zabbix polls sites through their router, so devices behind a down parent read as down too. Unreachable rows are symptoms of their root cause, not separate outages.</p>
+        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Native polling follows the site hierarchy, so devices behind a down parent read as down too. Unreachable rows are symptoms of their root cause, not separate outages.</p>
         <table class="mt-4 w-full text-sm">
             <thead><tr class="text-left text-xs uppercase text-slate-400">
                 <th class="py-2">Device</th><th>Classification</th><th>Root cause</th>

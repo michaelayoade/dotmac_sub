@@ -24,13 +24,7 @@ if grep -Eq 'REPLACE_WITH|change-me|project-dsn' .env; then
     exit 1
 fi
 
-if [[ ! -f secrets/zabbix_db_password ]]; then
-    echo "secrets/zabbix_db_password is required for the Zabbix Docker secret" >&2
-    exit 1
-fi
-
 chmod 600 .env
-chmod 600 secrets/zabbix_db_password
 
 docker compose config >/dev/null
 docker compose up -d --build

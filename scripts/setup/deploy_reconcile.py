@@ -31,7 +31,6 @@ from app.services.settings_spec import resolve_value
 
 REQUIRED_OPENBAO_PATHS = [
     "auth",
-    "zabbix",
 ]
 
 OPTIONAL_OPENBAO_PATHS = [
