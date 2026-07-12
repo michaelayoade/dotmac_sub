@@ -31,10 +31,10 @@ def upgrade() -> None:
 
     bind = op.get_bind()
     inspector = sa.inspect(bind)
-    columns = {column["name"] for column in inspector.get_columns("ticket_access_tokens")}
-    indexes = {
-        index["name"] for index in inspector.get_indexes("ticket_access_tokens")
+    columns = {
+        column["name"] for column in inspector.get_columns("ticket_access_tokens")
     }
+    indexes = {index["name"] for index in inspector.get_indexes("ticket_access_tokens")}
 
     if "token" in columns:
         if "ix_ticket_access_tokens_token" in indexes:
@@ -52,9 +52,7 @@ def upgrade() -> None:
             sa.text("SELECT id, token_hash FROM ticket_access_tokens")
         ).mappings()
         for row in rows:
-            digest = hashlib.sha256(
-                str(row["token_hash"]).encode("utf-8")
-            ).hexdigest()
+            digest = hashlib.sha256(str(row["token_hash"]).encode("utf-8")).hexdigest()
             bind.execute(
                 sa.text(
                     "UPDATE ticket_access_tokens "
