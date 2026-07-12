@@ -94,6 +94,7 @@ class PaymentImportRow(BaseModel):
     status: PaymentStatus = PaymentStatus.succeeded
     memo: str | None = None
     external_id: str | None = None
+    invoice_number: str | None = None
 
 
 class NasDeviceImportRow(BaseModel):
@@ -179,6 +180,7 @@ ENTITY_CONFIG: dict[str, dict[str, Any]] = {
             "status",
             "memo",
             "external_id",
+            "invoice_number",
         ],
     },
     "nas_devices": {
@@ -437,6 +439,18 @@ def _validate_rows(
 def _persist_row(
     db: Session, module: str, parsed_row: Any, *, source_name: str | None = None
 ) -> Any:
+    from app.services.financial_imports import (
+        FINANCIAL_IMPORT_MODULES,
+        persist_import_row,
+    )
+
+    if module in FINANCIAL_IMPORT_MODULES:
+        return persist_import_row(
+            db,
+            module,
+            parsed_row,
+            source_name=source_name or "import",
+        )
     if module == "subscribers":
         obj = Subscriber(
             first_name=parsed_row.first_name,
@@ -448,73 +462,6 @@ def _persist_row(
         )
         db.add(obj)
         return obj
-    if module == "subscriptions":
-        obj = Subscription(
-            subscriber_id=parsed_row.subscriber_id,
-            offer_id=parsed_row.offer_id,
-            status=parsed_row.status,
-            billing_mode=parsed_row.billing_mode or BillingMode.prepaid,
-            start_at=parsed_row.start_at,
-            end_at=parsed_row.end_at,
-            next_billing_at=parsed_row.next_billing_at,
-            canceled_at=parsed_row.canceled_at,
-            cancel_reason=parsed_row.cancel_reason,
-        )
-        db.add(obj)
-        return obj
-    if module == "invoices":
-        obj = Invoice(
-            account_id=parsed_row.account_id,
-            invoice_number=parsed_row.invoice_number,
-            status=parsed_row.status,
-            currency=parsed_row.currency,
-            subtotal=parsed_row.subtotal,
-            tax_total=parsed_row.tax_total,
-            total=parsed_row.total,
-            balance_due=parsed_row.balance_due,
-            memo=parsed_row.memo,
-            metadata_={
-                "imported_via": "system_import_wizard",
-                "source_name": source_name or "import",
-                **(
-                    {"billing_mode": parsed_row.billing_mode.value}
-                    if parsed_row.billing_mode
-                    else {}
-                ),
-            },
-        )
-        db.add(obj)
-        return obj
-    if module == "payments":
-        # Imported cash is still cash. Constructing a Payment row directly left it
-        # an orphan: no PaymentAllocation, no LedgerEntry, no paid_at, no invoice
-        # recalculation — so the customer's invoices stayed open, the credit
-        # balance never saw the money, and dunning kept chasing them for it.
-        #
-        # Route through the payment owner, which allocates, posts the ledger
-        # credit, stamps paid_at and settles the invoices. commit=False keeps the
-        # caller's per-row SAVEPOINT intact so one bad row still cannot roll back
-        # the batch.
-        #
-        # NOTE: this is the NATIVE import path. Splynx-mirrored payments are a
-        # different thing and must not be routed here — they are mirrored, not
-        # posted, and legitimately carry no local allocation or ledger entry. That
-        # is why 3,116 of them look like "orphans" to a naive query and are not.
-        from app.schemas.billing import PaymentCreate
-        from app.services import billing as billing_service
-
-        return billing_service.payments.create(
-            db,
-            PaymentCreate(
-                account_id=parsed_row.account_id,
-                amount=parsed_row.amount,
-                currency=parsed_row.currency,
-                status=parsed_row.status,
-                memo=parsed_row.memo,
-                external_id=parsed_row.external_id,
-            ),
-            commit=False,
-        )
     if module == "nas_devices":
         obj = NasDevice(
             name=parsed_row.name,
@@ -680,6 +627,13 @@ def execute_import(
     file_bytes: bytes | None = None,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
+    from app.services.financial_imports import FINANCIAL_IMPORT_MODULES
+
+    if module in FINANCIAL_IMPORT_MODULES and not dry_run:
+        raise ValueError(
+            "Financial and subscription imports require a durable dry run. "
+            "Apply the validated run from Import Runs."
+        )
     parsed = parse_payload(
         data_format=data_format,
         raw_text=raw_text,
@@ -835,6 +789,14 @@ def rollback_import(
         raise ValueError("Import record not found")
 
     entry = history[entry_idx]
+    from app.services.financial_imports import FINANCIAL_IMPORT_MODULES
+
+    if str(entry.get("module") or "") in FINANCIAL_IMPORT_MODULES:
+        raise ValueError(
+            "Posted financial and subscription imports cannot be raw-deleted. "
+            "Use invoice void/write-off, payment reversal/refund, or subscription "
+            "lifecycle commands so compensating records remain auditable."
+        )
     if bool(entry.get("dry_run")):
         raise ValueError("Dry-run imports cannot be rolled back")
     if entry.get("rolled_back_at"):

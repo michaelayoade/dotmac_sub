@@ -51,10 +51,16 @@ class ImportRun(Base):
         Index("ix_import_runs_status", "status"),
         Index("ix_import_runs_module", "module"),
         Index("ix_import_runs_created_at", "created_at"),
+        Index("uq_import_runs_source_run_id", "source_run_id", unique=True),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    source_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("import_runs.id", ondelete="RESTRICT"),
+        nullable=True,
     )
     module: Mapped[str] = mapped_column(String(60), nullable=False)
     status: Mapped[ImportRunStatus] = mapped_column(
@@ -91,6 +97,18 @@ class ImportRun(Base):
         back_populates="run",
         cascade="all, delete-orphan",
         order_by="ImportRunRow.row_number",
+    )
+    source_run = relationship(
+        "ImportRun",
+        remote_side=[id],
+        foreign_keys=[source_run_id],
+        back_populates="applied_run",
+    )
+    applied_run = relationship(
+        "ImportRun",
+        foreign_keys=[source_run_id],
+        back_populates="source_run",
+        uselist=False,
     )
 
 
