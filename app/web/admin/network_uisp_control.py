@@ -13,6 +13,7 @@ from app.db import get_db
 from app.models.uisp_control import UispDeviceIntent, UispIntentStatus
 from app.services.auth_dependencies import require_permission
 from app.services.uisp_control_plane import capabilities, request_apply
+from app.services import uisp_control_plane
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/network/uisp-control", tags=["web-admin-uisp"])
@@ -40,18 +41,14 @@ def uisp_control_list(
     status: str | None = None,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    query = db.query(UispDeviceIntent)
+    selected_status = None
     if status:
         try:
             selected_status = UispIntentStatus(status)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Invalid UISP status") from exc
-        query = query.filter(UispDeviceIntent.status == selected_status)
-    intents = query.order_by(UispDeviceIntent.updated_at.desc()).limit(500).all()
-    counts: dict[str, int] = {}
-    for intent in db.query(UispDeviceIntent.status).all():
-        value = intent[0].value
-        counts[value] = counts.get(value, 0) + 1
+    intents = uisp_control_plane.list_intents(db, status=selected_status, limit=500)
+    counts = uisp_control_plane.intent_status_counts(db)
     context = _context(request, db)
     context.update(
         {
@@ -72,12 +69,7 @@ def uisp_control_list(
 def uisp_control_detail(
     request: Request, intent_id: UUID, db: Session = Depends(get_db)
 ) -> HTMLResponse:
-    intent = (
-        db.query(UispDeviceIntent)
-        .options(selectinload(UispDeviceIntent.snapshots))
-        .filter(UispDeviceIntent.id == intent_id)
-        .one_or_none()
-    )
+    intent = uisp_control_plane.get_intent_with_snapshots(db, intent_id)
     if intent is None:
         raise HTTPException(status_code=404, detail="UISP intent not found")
     context = _context(request, db)

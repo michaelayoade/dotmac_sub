@@ -106,16 +106,17 @@ def list_uisp_intents(
     intent_status: str | None = Query(default=None, alias="status"),
     db: Session = Depends(get_db),
 ):
-    query = db.query(UispDeviceIntent)
-    if subscription_id is not None:
-        query = query.filter(UispDeviceIntent.subscription_id == subscription_id)
+    from app.services import uisp_control_plane
+
+    selected_status = None
     if intent_status:
         try:
             selected_status = UispIntentStatus(intent_status)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Invalid UISP status") from exc
-        query = query.filter(UispDeviceIntent.status == selected_status)
-    return query.order_by(UispDeviceIntent.updated_at.desc()).limit(200).all()
+    return uisp_control_plane.list_intents(
+        db, subscription_id=subscription_id, status=selected_status
+    )
 
 
 @router.post(
@@ -148,7 +149,9 @@ def stage_uisp_intent(payload: UispIntentStage, db: Session = Depends(get_db)):
     dependencies=[Depends(require_permission("network:cpe:read"))],
 )
 def get_uisp_intent(intent_id: UUID, db: Session = Depends(get_db)):
-    intent = db.get(UispDeviceIntent, intent_id)
+    from app.services import uisp_control_plane
+
+    intent = uisp_control_plane.get_intent(db, intent_id)
     if intent is None:
         raise HTTPException(status_code=404, detail="UISP intent not found")
     return intent
@@ -161,15 +164,11 @@ def get_uisp_intent(intent_id: UUID, db: Session = Depends(get_db)):
     dependencies=[Depends(require_permission("network:cpe:read"))],
 )
 def list_uisp_snapshots(intent_id: UUID, db: Session = Depends(get_db)):
-    if db.get(UispDeviceIntent, intent_id) is None:
+    from app.services import uisp_control_plane
+
+    if uisp_control_plane.get_intent(db, intent_id) is None:
         raise HTTPException(status_code=404, detail="UISP intent not found")
-    return (
-        db.query(UispConfigSnapshot)
-        .filter(UispConfigSnapshot.intent_id == intent_id)
-        .order_by(UispConfigSnapshot.created_at.desc())
-        .limit(200)
-        .all()
-    )
+    return uisp_control_plane.list_snapshots(db, intent_id)
 
 
 @router.post(

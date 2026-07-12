@@ -11,7 +11,8 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy.orm import Session
+from sqlalchemy import func
+from sqlalchemy.orm import Session, selectinload
 
 from app.models.catalog import AccessType, Subscription
 from app.models.network import CPEDevice, DeviceType, OLTDevice, OntAssignment, OntUnit
@@ -584,3 +585,65 @@ def stage_pending_orders_for_subscription(
     else:
         db.flush()
     return intents
+
+
+# ---------------------------------------------------------------------------
+# Reads
+#
+# The API and web layers must not issue queries of their own
+# (``tests/architecture/test_thin_wrappers.py``): the control plane owns how
+# intents and snapshots are selected, ordered and bounded, so that the REST
+# endpoint and the admin page cannot drift apart in what they show.
+# ---------------------------------------------------------------------------
+
+
+def list_intents(
+    db: Session,
+    *,
+    subscription_id: UUID | None = None,
+    status: UispIntentStatus | None = None,
+    limit: int = 200,
+) -> list[UispDeviceIntent]:
+    query = db.query(UispDeviceIntent)
+    if subscription_id is not None:
+        query = query.filter(UispDeviceIntent.subscription_id == subscription_id)
+    if status is not None:
+        query = query.filter(UispDeviceIntent.status == status)
+    return query.order_by(UispDeviceIntent.updated_at.desc()).limit(limit).all()
+
+
+def intent_status_counts(db: Session) -> dict[str, int]:
+    """Intent count per status, for the admin list's filter chips."""
+    rows = (
+        db.query(UispDeviceIntent.status, func.count(UispDeviceIntent.id))
+        .group_by(UispDeviceIntent.status)
+        .all()
+    )
+    return {status.value: int(count) for status, count in rows}
+
+
+def get_intent(db: Session, intent_id: UUID) -> UispDeviceIntent | None:
+    return db.get(UispDeviceIntent, intent_id)
+
+
+def get_intent_with_snapshots(
+    db: Session, intent_id: UUID
+) -> UispDeviceIntent | None:
+    return (
+        db.query(UispDeviceIntent)
+        .options(selectinload(UispDeviceIntent.snapshots))
+        .filter(UispDeviceIntent.id == intent_id)
+        .one_or_none()
+    )
+
+
+def list_snapshots(
+    db: Session, intent_id: UUID, *, limit: int = 200
+) -> list[UispConfigSnapshot]:
+    return (
+        db.query(UispConfigSnapshot)
+        .filter(UispConfigSnapshot.intent_id == intent_id)
+        .order_by(UispConfigSnapshot.created_at.desc())
+        .limit(limit)
+        .all()
+    )
