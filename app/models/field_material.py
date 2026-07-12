@@ -173,6 +173,7 @@ class FieldMaterialRequest(Base):
     status: Mapped[str] = mapped_column(String(30), default="draft", nullable=False)
     priority: Mapped[str] = mapped_column(String(20), default="medium", nullable=False)
     notes: Mapped[str | None] = mapped_column(Text)
+    source_warehouse_code: Mapped[str | None] = mapped_column(String(100))
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
     # ERP mirror fields (ERP re-home, PR 3). Written back by the outbox after ERP
     # accepts the ISSUE, and refreshed by the status reconcile. Mirror the
@@ -235,6 +236,7 @@ class FieldMaterialRequestItem(Base):
     )
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     notes: Mapped[str | None] = mapped_column(Text)
+    serial_numbers: Mapped[list | None] = mapped_column(JSON)
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False

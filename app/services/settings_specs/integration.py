@@ -29,6 +29,14 @@ def build_integration_specs(setting_spec: Callable[..., Any]) -> list[Any]:
         ),
         setting_spec(
             domain=SettingDomain.integration,
+            key="dotmac_erp_domain_sync_enabled",
+            env_var="DOTMAC_ERP_DOMAIN_SYNC_ENABLED",
+            value_type=SettingValueType.boolean,
+            default=False,
+            label="DotMac ERP Operational Context Sync Enabled",
+        ),
+        setting_spec(
+            domain=SettingDomain.integration,
             key="dotmac_erp_base_url",
             env_var="DOTMAC_ERP_BASE_URL",
             value_type=SettingValueType.string,

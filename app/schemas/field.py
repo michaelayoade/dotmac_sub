@@ -279,6 +279,45 @@ class FieldEquipmentRead(BaseModel):
     notes: str | None = None
 
 
+class FieldEquipmentCustodyRead(BaseModel):
+    id: UUID
+    asset_source: str
+    asset_id: UUID
+    technician_id: UUID
+    system_user_id: UUID | None = None
+    status: str
+    issued_at: datetime
+    returned_at: datetime | None = None
+    condition_on_issue: str | None = None
+    condition_on_return: str | None = None
+    notes: str | None = None
+    asset_label: str | None = None
+    asset_identifier: str | None = None
+    assigned_to: str | None = None
+
+
+class FieldEquipmentIssueRequest(BaseModel):
+    asset_source: Literal[
+        "field_inventory",
+        "field_asset",
+        "ont",
+        "cpe",
+        "olt",
+        "network_device",
+        "router",
+    ]
+    asset_id: UUID
+    technician_id: UUID
+    condition_on_issue: str | None = Field(default=None, max_length=80)
+    notes: str | None = Field(default=None, max_length=2000)
+
+
+class FieldEquipmentReturnRequest(BaseModel):
+    condition_on_return: str | None = Field(default=None, max_length=80)
+    status: Literal["returned", "lost", "damaged"] = "returned"
+    notes: str | None = Field(default=None, max_length=2000)
+
+
 class FieldMaterialRead(BaseModel):
     id: UUID
     crm_work_order_id: str
@@ -310,12 +349,14 @@ class FieldMaterialRequestItemCreate(BaseModel):
     item_id: UUID
     quantity: int = Field(gt=0)
     notes: str | None = Field(default=None, max_length=1000)
+    serial_numbers: list[str] = Field(default_factory=list, max_length=100)
 
 
 class FieldMaterialRequestCreate(BaseModel):
     crm_work_order_id: str = Field(min_length=1, max_length=64)
     priority: Literal["low", "medium", "high", "urgent"] = "medium"
     notes: str | None = Field(default=None, max_length=2000)
+    source_warehouse_code: str = Field(min_length=1, max_length=100)
     items: list[FieldMaterialRequestItemCreate] = Field(min_length=1, max_length=50)
 
 
@@ -327,6 +368,7 @@ class FieldMaterialRequestItemRead(BaseModel):
     unit: str | None = None
     quantity: int
     notes: str | None = None
+    serial_numbers: list[str] = Field(default_factory=list)
 
 
 class FieldMaterialRequestRead(BaseModel):
@@ -338,6 +380,7 @@ class FieldMaterialRequestRead(BaseModel):
     status: str
     priority: str
     notes: str | None = None
+    source_warehouse_code: str | None = None
     submitted_at: datetime | None = None
     approved_at: datetime | None = None
     rejected_at: datetime | None = None
@@ -345,6 +388,10 @@ class FieldMaterialRequestRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     items: list[FieldMaterialRequestItemRead] = Field(default_factory=list)
+
+
+class FieldManagerMaterialRejectRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=500)
 
 
 class FieldInventoryItemRead(BaseModel):

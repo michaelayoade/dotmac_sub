@@ -41,6 +41,8 @@ from app.tasks.dotmac_erp_outbox import (
     deliver_erp_sync_events,
     refresh_expense_claim_statuses,
     refresh_material_request_statuses,
+    repair_purchase_invoice_sync,
+    sync_erp_operational_domains,
 )
 from app.tasks.enforcement import cleanup_subscription_block_sessions
 from app.tasks.events import (
@@ -178,7 +180,6 @@ from app.tasks.vas import (
     run_wallet_auto_deduct,
     sync_vas_catalog,
 )
-from app.tasks.vendor_project_relay import relay_project_stub_to_crm
 from app.tasks.vpn import run_vpn_control_job, run_vpn_health_scan
 from app.tasks.webhooks import (
     deliver_webhook,
@@ -244,6 +245,8 @@ __all__ = [
     "deliver_erp_sync_events",
     "refresh_expense_claim_statuses",
     "refresh_material_request_statuses",
+    "repair_purchase_invoice_sync",
+    "sync_erp_operational_domains",
     "run_usage_rating",
     "import_radius_accounting",
     "reap_stale_radius_sessions",
@@ -270,7 +273,6 @@ __all__ = [
     "retry_pending_compensation_failures",
     "refresh_radius_from_subs",
     "sync_device_login",
-    "relay_project_stub_to_crm",
     "run_vpn_control_job",
     "run_vpn_health_scan",
     "deliver_webhook",

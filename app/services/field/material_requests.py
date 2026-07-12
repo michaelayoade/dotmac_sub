@@ -15,6 +15,7 @@ from app.models.field_material import (
     FieldInventoryItem,
     FieldMaterialRequest,
     FieldMaterialRequestItem,
+    FieldWorkOrderMaterial,
 )
 from app.models.work_order_mirror import WorkOrderMirror
 from app.services.common import apply_pagination, coerce_uuid
@@ -36,6 +37,7 @@ def serialize_material_request(request: FieldMaterialRequest) -> dict:
         "status": request.status,
         "priority": request.priority,
         "notes": request.notes,
+        "source_warehouse_code": request.source_warehouse_code,
         "erp_material_request_id": request.erp_material_request_id,
         "erp_material_status": request.erp_material_status,
         "client_ref": request.client_ref,
@@ -54,6 +56,7 @@ def serialize_material_request(request: FieldMaterialRequest) -> dict:
                 "unit": item.item.unit if item.item else None,
                 "quantity": item.quantity,
                 "notes": item.notes,
+                "serial_numbers": item.serial_numbers or [],
             }
             for item in request.items
         ],
@@ -113,6 +116,7 @@ class FieldMaterialRequests:
         priority: str,
         notes: str | None,
         items: list[dict[str, Any]],
+        source_warehouse_code: str | None = None,
     ) -> dict:
         if not items:
             raise HTTPException(status_code=422, detail="At least one item is required")
@@ -134,15 +138,17 @@ class FieldMaterialRequests:
             status="draft",
             priority=_priority(priority),
             notes=(notes or "").strip() or None,
+            source_warehouse_code=(source_warehouse_code or "").strip() or None,
         )
         db.add(request)
         db.flush()
-        for item, quantity, notes in planned_items:
+        for item, quantity, notes, serial_numbers in planned_items:
             request.items.append(
                 FieldMaterialRequestItem(
                     item_id=item.id,
                     quantity=quantity,
                     notes=notes,
+                    serial_numbers=serial_numbers,
                 )
             )
         _mark_sub_authoritative(row)
@@ -170,13 +176,39 @@ class FieldMaterialRequests:
         return serialize_material_request(request)
 
     @staticmethod
-    def approve(db: Session, material_request_id: str) -> dict:
-        """Manager approval of a submitted material request (ISSUE trigger).
+    def list_all(
+        db: Session,
+        *,
+        status: str | None = None,
+        crm_work_order_id: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict]:
+        """Manager view: material requests across all technicians."""
+        query = (
+            db.query(FieldMaterialRequest)
+            .options(
+                selectinload(FieldMaterialRequest.items).selectinload(
+                    FieldMaterialRequestItem.item
+                )
+            )
+            .filter(FieldMaterialRequest.is_active.is_(True))
+            .order_by(FieldMaterialRequest.created_at.desc())
+        )
+        if status:
+            query = query.filter(FieldMaterialRequest.status == _status(status))
+        if crm_work_order_id:
+            query = query.filter(
+                FieldMaterialRequest.crm_work_order_id == crm_work_order_id
+            )
+        return [
+            serialize_material_request(request)
+            for request in apply_pagination(query, limit, offset).all()
+        ]
 
-        This is where CRM pushes the ISSUE to ERP; the sub mirror enqueues the ERP
-        material-request outbox intent here too. Best-effort + flag-gated, so it is
-        inert until cutover and never fails the approval.
-        """
+    @staticmethod
+    def approve(db: Session, material_request_id: str) -> dict:
+        """Approve a submitted request and enqueue the current ERP ISSUE flow."""
         request = _get_request(db, material_request_id)
         if request.status != "submitted":
             raise HTTPException(
@@ -184,28 +216,59 @@ class FieldMaterialRequests:
             )
         request.status = "approved"
         request.approved_at = datetime.now(UTC)
+        _note_request_event(request, "approved")
         _mark_sub_authoritative(request.work_order_mirror)
         db.commit()
         db.refresh(request)
         _maybe_enqueue_erp_sync(db, request)
         return serialize_material_request(request)
 
-
-def _get_request(db: Session, material_request_id: str) -> FieldMaterialRequest:
-    request = (
-        db.query(FieldMaterialRequest)
-        .options(
-            selectinload(FieldMaterialRequest.items).selectinload(
-                FieldMaterialRequestItem.item
+    @staticmethod
+    def reject(db: Session, material_request_id: str, reason: str) -> dict:
+        request = _get_request(db, material_request_id)
+        if request.status != "submitted":
+            raise HTTPException(
+                status_code=409, detail="Only submitted requests reject"
             )
-        )
-        .filter(FieldMaterialRequest.id == coerce_uuid(material_request_id))
-        .filter(FieldMaterialRequest.is_active.is_(True))
-        .one_or_none()
-    )
-    if request is None:
-        raise HTTPException(status_code=404, detail="Material request not found")
-    return request
+        cleaned = (reason or "").strip()
+        if not cleaned:
+            raise HTTPException(status_code=422, detail="reason is required")
+        request.status = "rejected"
+        request.rejected_at = datetime.now(UTC)
+        _note_request_event(request, "rejected", reason=cleaned[:500])
+        _mark_sub_authoritative(request.work_order_mirror)
+        db.commit()
+        db.refresh(request)
+        return serialize_material_request(request)
+
+    @staticmethod
+    def issue(db: Session, material_request_id: str) -> dict:
+        request = _get_request(db, material_request_id)
+        if request.status != "approved":
+            raise HTTPException(status_code=409, detail="Only approved requests issue")
+        _sync_work_order_materials(db, request, status="reserved")
+        request.status = "issued"
+        _note_request_event(request, "issued")
+        _mark_sub_authoritative(request.work_order_mirror)
+        db.commit()
+        db.refresh(request)
+        return serialize_material_request(request)
+
+    @staticmethod
+    def fulfill(db: Session, material_request_id: str) -> dict:
+        request = _get_request(db, material_request_id)
+        if request.status not in {"approved", "issued"}:
+            raise HTTPException(
+                status_code=409, detail="Only approved or issued requests fulfill"
+            )
+        _sync_work_order_materials(db, request, status="reserved")
+        request.status = "fulfilled"
+        request.fulfilled_at = datetime.now(UTC)
+        _note_request_event(request, "fulfilled")
+        _mark_sub_authoritative(request.work_order_mirror)
+        db.commit()
+        db.refresh(request)
+        return serialize_material_request(request)
 
 
 def _get_scoped_request(
@@ -232,6 +295,79 @@ def _get_scoped_request(
     return request
 
 
+def _get_request(db: Session, material_request_id: str) -> FieldMaterialRequest:
+    request = (
+        db.query(FieldMaterialRequest)
+        .options(
+            selectinload(FieldMaterialRequest.items).selectinload(
+                FieldMaterialRequestItem.item
+            )
+        )
+        .filter(FieldMaterialRequest.id == coerce_uuid(material_request_id))
+        .filter(FieldMaterialRequest.is_active.is_(True))
+        .one_or_none()
+    )
+    if request is None:
+        raise HTTPException(status_code=404, detail="Material request not found")
+    return request
+
+
+def _note_request_event(
+    request: FieldMaterialRequest, event: str, *, reason: str | None = None
+) -> None:
+    metadata = dict(request.metadata_ or {})
+    events = list(metadata.get("manager_events") or [])
+    event_payload: dict[str, Any] = {
+        "event": event,
+        "occurred_at": datetime.now(UTC).isoformat(),
+    }
+    if reason:
+        event_payload["reason"] = reason
+    events.append(event_payload)
+    metadata["manager_events"] = events[-20:]
+    if reason:
+        metadata["rejection_reason"] = reason
+    request.metadata_ = metadata
+
+
+def _sync_work_order_materials(
+    db: Session, request: FieldMaterialRequest, *, status: str
+) -> None:
+    existing = {
+        row.item_id: row
+        for row in db.query(FieldWorkOrderMaterial)
+        .filter(
+            FieldWorkOrderMaterial.work_order_mirror_id == request.work_order_mirror_id
+        )
+        .filter(FieldWorkOrderMaterial.is_active.is_(True))
+        .all()
+    }
+    for requested_item in request.items:
+        row = existing.get(requested_item.item_id)
+        if row is None:
+            row = FieldWorkOrderMaterial(
+                work_order_mirror_id=request.work_order_mirror_id,
+                crm_work_order_id=request.crm_work_order_id,
+                item_id=requested_item.item_id,
+                allocated_quantity=requested_item.quantity,
+                consumed_quantity=0,
+                status=status,
+                notes=requested_item.notes,
+                metadata_={"material_request_id": str(request.id)},
+            )
+            db.add(row)
+            continue
+        row.allocated_quantity = max(row.allocated_quantity, requested_item.quantity)
+        row.status = (
+            "used" if row.consumed_quantity >= row.allocated_quantity else status
+        )
+        if requested_item.notes:
+            row.notes = requested_item.notes
+        metadata = dict(row.metadata_ or {})
+        metadata["material_request_id"] = str(request.id)
+        row.metadata_ = metadata
+
+
 def _item(db: Session, item_id) -> FieldInventoryItem:
     item = db.get(FieldInventoryItem, item_id)
     if item is None or not item.is_active:
@@ -241,8 +377,8 @@ def _item(db: Session, item_id) -> FieldInventoryItem:
 
 def _validate_items(
     db: Session, items: list[dict[str, Any]]
-) -> list[tuple[FieldInventoryItem, int, str | None]]:
-    planned: list[tuple[FieldInventoryItem, int, str | None]] = []
+) -> list[tuple[FieldInventoryItem, int, str | None, list[str]]]:
+    planned: list[tuple[FieldInventoryItem, int, str | None, list[str]]] = []
     seen: set[str] = set()
     for entry in items:
         item = _item(db, entry.get("item_id"))
@@ -250,11 +386,19 @@ def _validate_items(
         if item_key in seen:
             raise HTTPException(status_code=422, detail="Duplicate item_id in request")
         seen.add(item_key)
+        serial_numbers = [
+            str(value).strip()
+            for value in (entry.get("serial_numbers") or [])
+            if str(value).strip()
+        ]
+        if len(serial_numbers) != len(set(serial_numbers)):
+            raise HTTPException(status_code=422, detail="Duplicate serial number")
         planned.append(
             (
                 item,
                 _quantity(entry.get("quantity")),
                 (entry.get("notes") or "").strip() or None,
+                serial_numbers,
             )
         )
     return planned

@@ -309,7 +309,7 @@ def test_delivery_writes_erp_po_id_back(db_session):
     db_session.refresh(install)
     assert result.accepted == 1
     assert install.erp_purchase_order_id == "PO-ERP-1"
-    assert client.posts[0]["path"] == "/api/v1/sync/crm/purchase-orders"
+    assert client.posts[0]["path"] == "/api/v1/sync/sub/purchase-orders"
     assert client.posts[0]["idempotency_key"] == f"po-ip-{install.id}"
 
 

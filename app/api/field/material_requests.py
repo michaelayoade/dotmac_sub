@@ -46,6 +46,7 @@ def create_field_material_request(
         crm_work_order_id=payload.crm_work_order_id,
         priority=payload.priority,
         notes=payload.notes,
+        source_warehouse_code=payload.source_warehouse_code,
         items=[item.model_dump() for item in payload.items],
     )
 

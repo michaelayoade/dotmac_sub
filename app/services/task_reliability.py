@@ -166,9 +166,6 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "re-covers anything a failed run missed.",
     ),
     "app.tasks.crm_sync.push_subscriber_change": _c("crm", AUTORETRY, GUARDED, DEAD),
-    "app.tasks.vendor_project_relay.relay_project_stub_to_crm": _c(
-        "crm", AUTORETRY, GUARDED, STATUS
-    ),
     "app.tasks.crm_sync.redrive_crm_dead_letters": _c("crm", DLQ, IDEMP, DEAD),
     "app.tasks.crm_ticket_pull.pull_crm_tickets": _c("crm", SWEEP, IDEMP, HEALTH),
     "app.tasks.crm_ticket_pull.sync_crm_ticket": _c("crm", SWEEP, IDEMP, STATUS),
@@ -210,6 +207,16 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         STATUS,
         "Read-only ERP status poll for in-flight material requests; re-run safe, "
         "refreshes erp_material_status on the source row.",
+    ),
+    "app.tasks.dotmac_erp_outbox.repair_purchase_invoice_sync": _c(
+        "integration", SWEEP, IDEMP, STATUS
+    ),
+    "app.tasks.dotmac_erp_outbox.sync_erp_operational_domains": _c(
+        "integration",
+        SWEEP,
+        IDEMP,
+        STATUS,
+        "Watermarked Sub project/ticket/work-order context feed to ERP; ERP upserts by source UUID.",
     ),
     "app.tasks.enforcement.cleanup_subscription_block_sessions": _c(
         "enforcement", SWEEP, IDEMP, HEALTH

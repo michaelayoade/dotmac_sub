@@ -630,18 +630,6 @@ _FEATURE_CONTROLS: tuple[Control, ...] = (
         description="Serve referral reads from native referral tables.",
     ),
     Control(
-        key="projects.vendor_project_relay",
-        layer=Layer.feature,
-        default=False,
-        on_missing=False,
-        legacy=(
-            LegacyAlias(
-                _PRJ, "vendor_project_relay_enabled", "VENDOR_PROJECT_RELAY_ENABLED"
-            ),
-        ),
-        description="Relay vendor-relevant native project stubs to CRM.",
-    ),
-    Control(
         key="sales.lead_dedup",
         layer=Layer.feature,
         default=True,

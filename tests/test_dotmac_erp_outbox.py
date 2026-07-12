@@ -163,7 +163,7 @@ def test_deliver_accepted_marks_row_and_sends_idempotency_key(db_session):
     assert event.erp_response == {"claim_id": "ERP-123", "status": "approved"}
     # The stored idempotency key is what gets sent (safe re-delivery).
     assert client.posts[0]["idempotency_key"] == event.idempotency_key
-    assert client.posts[0]["path"] == "/sync/crm/expense-claims"
+    assert client.posts[0]["path"] == "/api/v1/sync/sub/expense-claims"
     assert result.accepted == 1 and result.processed == 1
 
 
@@ -457,7 +457,7 @@ def test_single_alembic_head():
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ["254_waiting_bulk_item_status"]
+    assert script.get_heads() == ["258_erp_domain_sync_cursors"]
 
 
 def test_migration_249_adds_integration_settingdomain():

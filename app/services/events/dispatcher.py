@@ -302,9 +302,6 @@ def _initialize_handlers(dispatcher: EventDispatcher) -> None:
     from app.services.events.handlers.notification import NotificationHandler
     from app.services.events.handlers.provisioning import ProvisioningHandler
     from app.services.events.handlers.referral import ReferralHandler
-    from app.services.events.handlers.vendor_project_relay import (
-        VendorProjectRelayHandler,
-    )
     from app.services.events.handlers.webhook import WebhookHandler
 
     dispatcher.register_handler(WebhookHandler())
@@ -316,10 +313,9 @@ def _initialize_handlers(dispatcher: EventDispatcher) -> None:
     dispatcher.register_handler(CrmSyncHandler())
     dispatcher.register_handler(ArrangementHandler())
     dispatcher.register_handler(ReferralHandler())
-    dispatcher.register_handler(VendorProjectRelayHandler())
 
     logger.info(
-        "Event handlers initialized: webhook, integration_hooks, lifecycle, notification, provisioning, enforcement, crm_sync, arrangements, referral, vendor_project_relay",
+        "Event handlers initialized: webhook, integration_hooks, lifecycle, notification, provisioning, enforcement, crm_sync, arrangements, referral",
         extra={
             "event": "event_handlers_initialized",
             "handler_count": len(dispatcher._handlers),

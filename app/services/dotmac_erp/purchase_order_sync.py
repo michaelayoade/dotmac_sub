@@ -84,7 +84,7 @@ logger = logging.getLogger(__name__)
 ENTITY_TYPE = "installation_project"
 
 # The future scope-change flow (design doc 32 §D "Variations" / §F.3): a re-quote
-# supersedes the baseline PO via ERP's ``/sync/crm/purchase-orders/variations``,
+# supersedes the baseline PO via ERP's ``/sync/sub/purchase-orders/variations``,
 # keyed ``variation_id``, preserving the AP ``superseded_po_id`` chain. Left as a
 # noted slot — NOT implemented in PR 4.
 VARIATION_FLOW_SLOT = "purchase_order_variation"
@@ -349,7 +349,14 @@ def apply_erp_response(db: Session, event: FieldErpSyncEvent) -> None:
             event.entity_id,
         )
         return
-    apply_purchase_order_response(installation_project, event.erp_response)
+    if not apply_purchase_order_response(installation_project, event.erp_response):
+        return
+    # PO and invoice deliveries may race. Once the PO ID lands, make any
+    # already-approved vendor invoice eligible for the outbox sweep.
+    from app.services.dotmac_erp.purchase_invoice_sync import enqueue_purchase_invoice
+
+    for invoice in installation_project.purchase_invoices:
+        enqueue_purchase_invoice(db, invoice)
 
 
 # ---------------------------------------------------------------------------

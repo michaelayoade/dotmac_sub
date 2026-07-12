@@ -159,6 +159,7 @@ from app.models.enforcement_lock import (  # noqa: F401
     EnforcementLock,
     EnforcementReason,
 )
+from app.models.erp_domain_sync import ErpDomainSyncCursor  # noqa: F401
 from app.models.event_store import (  # noqa: F401
     EventHandlerAttempt,
     EventStatus,
@@ -172,6 +173,10 @@ from app.models.fiber_change_request import (  # noqa: F401
     FiberChangeRequest,
     FiberChangeRequestOperation,
     FiberChangeRequestStatus,
+)
+from app.models.field_asset import (  # noqa: F401
+    FieldAsset,
+    FieldAssetCustody,
 )
 from app.models.field_attachment import FieldAttachment  # noqa: F401
 from app.models.field_chat import FieldJobChatMessage  # noqa: F401
@@ -738,6 +743,9 @@ from app.models.vendor_routes import (  # noqa: F401
     VariationType,
     Vendor,
     VendorAssignmentType,
+    VendorPurchaseInvoice,
+    VendorPurchaseInvoiceLineItem,
+    VendorPurchaseInvoiceStatus,
     VendorUser,
 )
 from app.models.webhook import (  # noqa: F401
