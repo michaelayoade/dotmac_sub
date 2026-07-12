@@ -115,6 +115,16 @@ def test_edit_preserves_unrelated_metadata(db_session, subscriber, feasible):
         "pricing_mode": "provisional",
     }
     db_session.commit()
+    # The edit below moves the quote to `sent`, which the sales service now
+    # refuses on a quote with no lines -- give it one.
+    web_sales.add_quote_line_item_from_form(
+        db_session,
+        quote_id=quote_id,
+        description="Fibre drop",
+        quantity="1",
+        unit_price="50000",
+        discount_percent="0",
+    )
 
     web_sales.update_quote_from_form(
         db_session,

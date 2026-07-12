@@ -340,6 +340,17 @@ def test_quote_sent_stamps_sent_at(db_session):
     quote = sales_service.quotes.create(
         db_session, QuoteCreate(subscriber_id=subscriber.id)
     )
+    # A quote must have at least one line before it can be sent -- an empty
+    # quote is worth nothing and must not reach a customer.
+    sales_service.quote_line_items.create(
+        db_session,
+        QuoteLineItemCreate(
+            quote_id=quote.id,
+            description="Installation",
+            quantity=Decimal("1"),
+            unit_price=Decimal("25000.00"),
+        ),
+    )
     quote = sales_service.quotes.update(
         db_session, str(quote.id), QuoteUpdate(status=QuoteStatus.sent)
     )
