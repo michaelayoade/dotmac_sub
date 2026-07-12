@@ -218,6 +218,12 @@ reconcile-nas-lifecycle: ## Plan NAS lifecycle and subscription access-path repa
 reconcile-nas-lifecycle-details: ## Show bounded per-NAS review evidence
 	poetry run python -m scripts.one_off.reconcile_nas_lifecycle --details
 
+report-nas-access-path-evidence: ## Summarize recent history for blocked NAS rows
+	poetry run python -m scripts.one_off.report_nas_access_path_evidence
+
+report-nas-access-path-evidence-details: ## Show redacted per-NAS history evidence
+	poetry run python -m scripts.one_off.report_nas_access_path_evidence --details
+
 reconcile-nas-lifecycle-execute: ## Execute the exact reviewed NAS lifecycle plan
 	@test -n "$(PLAN_DIGEST)" || (echo "PLAN_DIGEST is required" && exit 2)
 	poetry run python -m scripts.one_off.reconcile_nas_lifecycle \

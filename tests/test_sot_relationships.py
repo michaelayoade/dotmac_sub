@@ -96,6 +96,11 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "runtime.db_sessions",
         "observability.recording",
     )
+    assert sot_relationships.dependencies_for("network.nas_access_path_evidence") == (
+        "network.radius_sessions",
+        "network.nas_lifecycle",
+        "runtime.db_sessions",
+    )
     assert sot_relationships.dependencies_for("control.feature_registry") == (
         "control.module_manager",
         "control.domain_settings",

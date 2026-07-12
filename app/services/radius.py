@@ -861,6 +861,18 @@ def _active_external_sync_configs(db: Session) -> list[dict]:
     return [fallback] if fallback else []
 
 
+def authoritative_external_radius_db_url(db: Session) -> str | None:
+    """Resolve the one external RADIUS database used by sync and accounting."""
+    db_urls = {
+        str(config.get("db_url") or "").strip()
+        for config in _active_external_sync_configs(db)
+        if str(config.get("db_url") or "").strip()
+    }
+    if len(db_urls) > 1:
+        raise RuntimeError("Multiple external RADIUS databases are configured")
+    return next(iter(db_urls), None)
+
+
 def ensure_radius_clients_for_nas(db: Session, nas_device: NasDevice) -> int:
     """Ensure active RadiusClient rows exist for a NAS on all active servers."""
     client_ip = _radius_client_ip_for_nas(nas_device)

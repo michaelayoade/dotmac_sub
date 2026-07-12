@@ -880,6 +880,33 @@ def test_external_nas_lifecycle_helpers_do_not_read_or_return_secrets(
     assert remaining == [("10.0.0.2",)]
 
 
+def test_authoritative_external_radius_db_url_requires_one_target(
+    db_session, monkeypatch
+):
+    monkeypatch.setattr(
+        radius_service,
+        "_active_external_sync_configs",
+        lambda _db: [
+            {"db_url": "postgresql+psycopg://radius-one/radius"},
+            {"db_url": "postgresql+psycopg://radius-one/radius"},
+        ],
+    )
+    assert radius_service.authoritative_external_radius_db_url(db_session) == (
+        "postgresql+psycopg://radius-one/radius"
+    )
+
+    monkeypatch.setattr(
+        radius_service,
+        "_active_external_sync_configs",
+        lambda _db: [
+            {"db_url": "postgresql+psycopg://radius-one/radius"},
+            {"db_url": "postgresql+psycopg://radius-two/radius"},
+        ],
+    )
+    with pytest.raises(RuntimeError, match="Multiple external RADIUS databases"):
+        radius_service.authoritative_external_radius_db_url(db_session)
+
+
 def test_radius_nas_lifecycle_projects_active_and_inactive_state(
     db_session, radius_server, tmp_path, monkeypatch
 ):

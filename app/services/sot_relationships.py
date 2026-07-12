@@ -206,7 +206,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             SOTService(
                 name="network.radius_sessions",
                 module="app.services.network.radius_sessions",
-                owns=("online-now session state", "primary NAS session"),
+                owns=(
+                    "online-now session state",
+                    "primary NAS session",
+                    "bounded historical NAS evidence",
+                ),
                 depends_on=("network.identity",),
             ),
             SOTService(
@@ -239,6 +243,19 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "access.radius_state",
                     "runtime.db_sessions",
                     "observability.recording",
+                ),
+            ),
+            SOTService(
+                name="network.nas_access_path_evidence",
+                module="app.services.nas_access_path_evidence",
+                owns=(
+                    "manual NAS lifecycle evidence reports",
+                    "historical access-path review recommendations",
+                ),
+                depends_on=(
+                    "network.radius_sessions",
+                    "network.nas_lifecycle",
+                    "runtime.db_sessions",
                 ),
             ),
             SOTService(

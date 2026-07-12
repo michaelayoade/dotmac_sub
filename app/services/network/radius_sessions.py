@@ -8,10 +8,12 @@ outage impact; higher layers compose those answers.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.models.radius import RadiusClient
 from app.models.radius_active_session import RadiusActiveSession
 from app.models.usage import AccountingStatus, RadiusAccountingSession
 from app.services.common import coerce_uuid
@@ -28,6 +30,38 @@ class RadiusSessionResolution:
     @property
     def is_online(self) -> bool:
         return self.primary_session is not None
+
+
+@dataclass(frozen=True)
+class HistoricalNasTarget:
+    nas_device_id: object
+    session_count: int
+    last_seen_at: datetime
+
+
+@dataclass(frozen=True)
+class SubscriptionNasHistory:
+    subscription_id: object
+    targets: tuple[HistoricalNasTarget, ...]
+
+
+def _accounting_recency_expression():
+    return func.coalesce(
+        RadiusAccountingSession.last_update_at,
+        RadiusAccountingSession.session_end,
+        RadiusAccountingSession.session_start,
+        RadiusAccountingSession.created_at,
+    )
+
+
+def latest_accounting_observation_at(db: Session) -> datetime | None:
+    """Return the newest imported accounting observation for freshness checks."""
+    value = db.scalar(select(func.max(_accounting_recency_expression())))
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def list_active_sessions_for_subscriber(
@@ -121,6 +155,69 @@ def live_nas_device_ids_for_subscription(
         seen.add(nas_device_id)
         ordered.append(nas_device_id)
     return tuple(ordered)
+
+
+def recent_nas_history_by_subscription(
+    db: Session,
+    subscription_ids,
+    *,
+    since: datetime,
+) -> dict[object, SubscriptionNasHistory]:
+    """Aggregate recent accounting NAS evidence without exposing session rows."""
+    normalized_ids = tuple(coerce_uuid(value) for value in subscription_ids)
+    if not normalized_ids:
+        return {}
+    cutoff = since if since.tzinfo is not None else since.replace(tzinfo=UTC)
+    recency = _accounting_recency_expression()
+    resolved_nas_id = func.coalesce(
+        RadiusAccountingSession.nas_device_id,
+        RadiusClient.nas_device_id,
+    )
+    rows = db.execute(
+        select(
+            RadiusAccountingSession.subscription_id,
+            resolved_nas_id.label("nas_device_id"),
+            func.count(RadiusAccountingSession.id).label("session_count"),
+            func.max(recency).label("last_seen_at"),
+        )
+        .outerjoin(
+            RadiusClient,
+            RadiusClient.id == RadiusAccountingSession.radius_client_id,
+        )
+        .where(RadiusAccountingSession.subscription_id.in_(normalized_ids))
+        .where(resolved_nas_id.is_not(None))
+        .where(recency >= cutoff)
+        .group_by(RadiusAccountingSession.subscription_id, resolved_nas_id)
+        .order_by(RadiusAccountingSession.subscription_id, resolved_nas_id)
+    ).all()
+    grouped: dict[object, list[HistoricalNasTarget]] = {}
+    for subscription_id, nas_device_id, session_count, last_seen_at in rows:
+        if subscription_id is None or nas_device_id is None or last_seen_at is None:
+            continue
+        if last_seen_at.tzinfo is None:
+            last_seen_at = last_seen_at.replace(tzinfo=UTC)
+        grouped.setdefault(subscription_id, []).append(
+            HistoricalNasTarget(
+                nas_device_id=nas_device_id,
+                session_count=int(session_count or 0),
+                last_seen_at=last_seen_at.astimezone(UTC),
+            )
+        )
+    return {
+        subscription_id: SubscriptionNasHistory(
+            subscription_id=subscription_id,
+            targets=tuple(
+                sorted(
+                    targets,
+                    key=lambda target: (
+                        -target.last_seen_at.timestamp(),
+                        str(target.nas_device_id),
+                    ),
+                )
+            ),
+        )
+        for subscription_id, targets in grouped.items()
+    }
 
 
 def open_accounting_session_query(db: Session):
