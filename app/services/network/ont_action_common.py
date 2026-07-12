@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy.orm import Session
 
@@ -27,6 +27,27 @@ class ActionResult:
     message: str
     data: dict[str, Any] | None = None
     waiting: bool = False
+
+
+def genieacs_error_result(exc: Exception, message_prefix: str) -> ActionResult:
+    """Preserve queued-delivery state when translating GenieACS exceptions."""
+    from app.services.genieacs_client import GenieACSTaskQueuedError
+
+    waiting = isinstance(exc, GenieACSTaskQueuedError)
+    data = None
+    if waiting:
+        queued_exc = cast(GenieACSTaskQueuedError, exc)
+        data = {
+            "delivery_status": "queued",
+            "task_id": queued_exc.task_id,
+            "reason": queued_exc.reason,
+        }
+    return ActionResult(
+        success=False,
+        message=f"{message_prefix}: {exc}",
+        data=data,
+        waiting=waiting,
+    )
 
 
 @dataclass
@@ -342,7 +363,10 @@ def set_and_verify(
     Raises:
         GenieACSError: If task times out or verification fails.
     """
-    from app.services.genieacs_client import GenieACSError  # local import avoids cycle
+    from app.services.genieacs_client import (  # local import avoids cycle
+        GenieACSError,
+        GenieACSTaskQueuedError,
+    )
 
     if not params:
         raise GenieACSError("set_and_verify called with no parameters")
@@ -372,10 +396,12 @@ def set_and_verify(
                 "param_count": len(params),
             },
         )
-        raise GenieACSError(
+        raise GenieACSTaskQueuedError(
             "setParameterValues queued but Connection Request failed: "
             f"{cr_error}. Task {task_id} is queued — drain via OLT `ont reset` "
-            "or wait for the next Inform."
+            "or wait for the next Inform.",
+            task_id=task_id,
+            reason=cr_error,
         )
 
     if not task_id:
@@ -405,7 +431,11 @@ def set_and_verify(
         if not completed:
             # Don't delete: a CR-failed task that hasn't drained yet may still
             # complete on the next Inform. Surface the failure but leave it queued.
-            raise GenieACSError(f"setParameterValues task timed out: {msg}")
+            raise GenieACSTaskQueuedError(
+                f"setParameterValues task timed out: {msg}",
+                task_id=task_id,
+                reason="task_timeout",
+            )
 
     if skip_verification or not expected_values:
         return spv_result

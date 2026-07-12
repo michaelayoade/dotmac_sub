@@ -22,6 +22,7 @@ from app.services.network.ont_action_common import (
     ActionResult,
     build_tr069_params,
     detect_data_model_root,
+    genieacs_error_result,
     get_ont_client_or_error,
     persist_data_model_root,
     read_param_from_cache,
@@ -920,7 +921,7 @@ def set_lan_config(
         )
     except GenieACSError as exc:
         logger.error("Set LAN config failed for ONT %s: %s", ont.serial_number, exc)
-        return ActionResult(success=False, message=f"Failed to set LAN config: {exc}")
+        return genieacs_error_result(exc, "Failed to set LAN config")
 
 
 def set_connection_request_credentials(
@@ -981,9 +982,8 @@ def set_connection_request_credentials(
             ont.serial_number,
             exc,
         )
-        return ActionResult(
-            success=False,
-            message=f"Failed to set connection request credentials: {exc}",
+        return genieacs_error_result(
+            exc, "Failed to set connection request credentials"
         )
 
 
