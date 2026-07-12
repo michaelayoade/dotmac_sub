@@ -15,12 +15,15 @@ from app.models.subscription_change import (
     SubscriptionChangeStatus,
 )
 from app.services import catalog as catalog_service
-from app.services.collections import get_available_balance
 from app.services.common import coerce_uuid
 from app.services.common import validate_enum as _validate_enum
 from app.services.customer_context import (
     optional_customer_account_id,
     optional_customer_subscriber_id,
+)
+from app.services.customer_financial_position import (
+    CustomerFinancialPosition,
+    get_customer_financial_position,
 )
 from app.services.customer_portal_context import get_available_portal_offers
 from app.services.customer_portal_flow_common import (
@@ -84,7 +87,28 @@ def _to_int(value: object, default: int = 0) -> int:
 def _customer_credit_balance(db: Session, account_id: str | None) -> Decimal:
     if not account_id:
         return Decimal("0.00")
-    return get_available_balance(db, account_id)
+    return get_customer_financial_position(db, account_id).prepaid_available_balance
+
+
+def _customer_financial_position(
+    db: Session,
+    account_id: str | None,
+) -> CustomerFinancialPosition | None:
+    if not account_id:
+        return None
+    return get_customer_financial_position(db, account_id)
+
+
+def _collection_blocking_balance(
+    db: Session,
+    account_id: str | None,
+) -> Decimal:
+    position = _customer_financial_position(db, account_id)
+    return (
+        position.collection_blocking_balance
+        if position is not None
+        else Decimal("0.00")
+    )
 
 
 def _build_plan_change_quote(
@@ -238,15 +262,22 @@ def get_change_plan_page(
         current_offer = db.get(CatalogOffer, subscription.offer_id)
     next_billing_date = _resolve_next_billing_date(db, subscription)
     copy = get_plan_change_copy(subscription)
-    wallet_balance = _customer_credit_balance(db, str(subscription.subscriber_id))
+    financial_position = _customer_financial_position(
+        db, str(subscription.subscriber_id)
+    )
+    wallet_balance = (
+        financial_position.prepaid_available_balance
+        if financial_position is not None
+        else Decimal("0.00")
+    )
     # Surface arrears up-front: a self-service plan change is blocked at submit
     # while the account has overdue invoices (block-until-settled, #30). Showing
     # it here lets the customer settle first instead of hitting the error on
     # submit.
-    from app.services.payment_arrangements import get_account_outstanding_balance
-
-    arrears_amount = get_account_outstanding_balance(
-        db, str(subscription.subscriber_id)
+    arrears_amount = (
+        financial_position.collection_blocking_balance
+        if financial_position is not None
+        else Decimal("0.00")
     )
     # Plan-change quotes are computed lazily — one per offer the customer
     # selects — via get_plan_change_quote(). Pricing the whole catalog here ran a
@@ -369,9 +400,7 @@ def submit_change_plan(
     # Same block-until-settled policy as apply_instant_plan_change: an account
     # in arrears must clear overdue invoices before any plan change (including a
     # future-dated request).
-    from app.services.payment_arrangements import get_account_outstanding_balance
-
-    arrears = get_account_outstanding_balance(db, str(subscription.subscriber_id))
+    arrears = _collection_blocking_balance(db, str(subscription.subscriber_id))
     if arrears > Decimal("0.00"):
         raise ValueError(
             f"You have an overdue balance of {arrears:,.2f}. "
@@ -422,6 +451,11 @@ def get_change_plan_error_context(
     )
     next_billing_date = _resolve_next_billing_date(db, subscription)
     copy = get_plan_change_copy(subscription)
+    error_position = (
+        _customer_financial_position(db, str(subscription.subscriber_id))
+        if subscription
+        else None
+    )
 
     return {
         "subscription": subscription,
@@ -441,8 +475,8 @@ def get_change_plan_error_context(
             else {}
         ),
         "current_wallet_balance": (
-            _customer_credit_balance(db, str(subscription.subscriber_id))
-            if subscription
+            error_position.prepaid_available_balance
+            if error_position is not None
             else Decimal("0.00")
         ),
         "migration_options": _build_migration_options(db, subscription)
@@ -650,9 +684,14 @@ def apply_instant_plan_change(
     # postpaid — the old affordability gate only looked at prepaid wallet credit
     # and never considered outstanding debt). Account 100000016 could upgrade
     # while owing because this check did not exist.
-    from app.services.payment_arrangements import get_account_outstanding_balance
-
-    arrears = get_account_outstanding_balance(db, str(subscription.subscriber_id))
+    financial_position = _customer_financial_position(
+        db, str(subscription.subscriber_id)
+    )
+    arrears = (
+        financial_position.collection_blocking_balance
+        if financial_position is not None
+        else Decimal("0.00")
+    )
     if arrears > Decimal("0.00"):
         raise ValueError(
             f"You have an overdue balance of {arrears:,.2f}. "
@@ -665,7 +704,11 @@ def apply_instant_plan_change(
     new_price = _get_offer_recurring_price(new_offer)
     old_name = current_offer.name if current_offer else "Unknown"
     new_name = new_offer.name
-    wallet_balance = _customer_credit_balance(db, str(subscription.subscriber_id))
+    wallet_balance = (
+        financial_position.prepaid_available_balance
+        if financial_position is not None
+        else Decimal("0.00")
+    )
     quote = _build_plan_change_quote(
         db,
         subscription,

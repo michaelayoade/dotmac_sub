@@ -10,6 +10,10 @@ from app.schemas.webhook import (
     WebhookSubscriptionCreate,
 )
 from app.services import webhook as webhook_service
+from app.services.webhook_deliveries import (
+    list_retryable_failed_deliveries,
+    record_delivery_http_failure,
+)
 
 
 def test_webhook_endpoint_subscription_delivery_flow(db_session):
@@ -96,6 +100,55 @@ def test_webhook_delivery_logs_structured_lifecycle(db_session, caplog):
     assert created_record.delivery_id == str(delivery.id)
     assert updated_record.delivery_status == WebhookDeliveryStatus.delivered.value
     assert updated_record.response_status == 200
+
+
+def test_webhook_delivery_retry_policy_respects_endpoint_max_retries(db_session):
+    endpoint = webhook_service.webhook_endpoints.create(
+        db_session,
+        WebhookEndpointCreate(
+            name="Limited retries",
+            url="https://example.com/webhooks",
+            max_retries=2,
+            retry_backoff_seconds=5,
+        ),
+    )
+    subscription = webhook_service.webhook_subscriptions.create(
+        db_session,
+        WebhookSubscriptionCreate(
+            endpoint_id=endpoint.id,
+            event_type=WebhookEventType.invoice_paid,
+        ),
+    )
+    delivery = webhook_service.webhook_deliveries.create(
+        db_session,
+        WebhookDeliveryCreate(
+            subscription_id=subscription.id,
+            event_type=WebhookEventType.invoice_paid,
+            payload={"invoice_id": "inv-1"},
+        ),
+    )
+
+    retry_delay = record_delivery_http_failure(
+        delivery,
+        response_status=500,
+        response_text="upstream failed",
+    )
+
+    assert retry_delay == 5
+    assert delivery.status == WebhookDeliveryStatus.pending
+    assert delivery.attempt_count == 1
+
+    retry_delay = record_delivery_http_failure(
+        delivery,
+        response_status=502,
+        response_text="still failed",
+    )
+    db_session.commit()
+
+    assert retry_delay is None
+    assert delivery.status == WebhookDeliveryStatus.failed
+    assert delivery.attempt_count == 2
+    assert delivery not in list_retryable_failed_deliveries(db_session)
 
 
 def test_webhook_endpoints_default_active(db_session):

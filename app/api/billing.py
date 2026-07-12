@@ -77,6 +77,7 @@ from app.services import billing as billing_service
 from app.services import billing_automation as billing_automation_service
 from app.services import customer_portal_flow_payments as customer_payments
 from app.services.auth_dependencies import require_permission, require_user_auth
+from app.services.customer_context import require_customer_account_id
 
 router = APIRouter()
 
@@ -1286,9 +1287,10 @@ def verify_payment(
             customer_portal_flow_payment_methods as customer_cards,
         )
 
+        account_id = require_customer_account_id(db, customer)
         try:
             customer_cards.capture_card_after_payment(
-                db, customer["account_id"], payload.reference, payload.provider
+                db, account_id, payload.reference, payload.provider
             )
             card_saved = True
             card_save_message = CARD_SAVE_SUCCESS_MESSAGE

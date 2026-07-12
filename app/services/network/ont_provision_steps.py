@@ -251,6 +251,27 @@ class BlockingOperationError(RuntimeError):
     pass
 
 
+def _bootstrap_poll_error_result(exc: Exception, duration_ms: int) -> StepResult:
+    """Classify stale PostgreSQL poll connections as retryable verification."""
+    message = str(exc)
+    retryable_db_error = "idle-in-transaction timeout" in message.casefold()
+    return StepResult(
+        "wait_tr069_bootstrap",
+        False,
+        f"Bootstrap poll error: {message}",
+        duration_ms,
+        critical=not retryable_db_error,
+        waiting=retryable_db_error,
+        data={
+            "failure_class": (
+                "retryable_db_connection"
+                if retryable_db_error
+                else "acs_bootstrap_poll_error"
+            )
+        },
+    )
+
+
 ProgressCallback = Callable[[int, int, str], None]
 
 
@@ -406,11 +427,12 @@ def wait_tr069_bootstrap(
         return result
     except Exception as e:
         logger.error("Error during TR-069 bootstrap poll: %s", e)
-        db.rollback()
+        try:
+            db.rollback()
+        except Exception:
+            db.invalidate()
         ms = int((time.monotonic() - t0) * 1000)
-        result = StepResult(
-            "wait_tr069_bootstrap", False, f"Bootstrap poll error: {e}", ms
-        )
+        result = _bootstrap_poll_error_result(e, ms)
         try:
             _record_step(db, ont, "wait_tr069_bootstrap", result)
         except Exception:

@@ -30,7 +30,7 @@ from app.models.vas import (
     VasWalletEntry,
 )
 from app.schemas.settings import DomainSettingUpdate
-from app.services import settings_spec
+from app.services import control_registry, settings_spec
 from app.services.billing._common import lock_account
 from app.services.common import coerce_uuid
 from app.services.domain_settings import vas_settings
@@ -82,12 +82,7 @@ def pay_bill_dedupe_window_seconds(db: Session) -> int:
 
 
 def is_enabled(db: Session) -> bool:
-    value = settings_spec.resolve_value(db, SettingDomain.vas, "enabled")
-    if value is None:
-        return False
-    if isinstance(value, bool):
-        return value
-    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+    return control_registry.is_enabled(db, "vas.wallet")
 
 
 def require_enabled(db: Session) -> None:

@@ -164,6 +164,7 @@ from app.services.bandwidth import (
     bandwidth_samples,
     with_subscriber_directions,
 )
+from app.services.customer_context import require_customer_account_id
 from app.services.sales import selfserve as selfserve_service
 from app.services.topology import connection_status as connection_status_service
 
@@ -514,12 +515,11 @@ def my_plan_change_submit(
     verifies ownership, availability, arrears, and prepaid affordability.
     """
     customer = _customer(db, principal)
+    account_id = require_customer_account_id(db, customer)
     subscription = catalog_service.subscriptions.get(
         db=db, subscription_id=subscription_id
     )
-    if not subscription or str(subscription.subscriber_id) != str(
-        customer["account_id"]
-    ):
+    if not subscription or str(subscription.subscriber_id) != str(account_id):
         raise HTTPException(status_code=404, detail="Service not found")
     try:
         result = customer_changes.apply_instant_plan_change(
@@ -752,6 +752,7 @@ def my_topup_verify(
 ):
     """Verify a top-up transaction and credit the account."""
     customer = _customer(db, principal)
+    account_id = require_customer_account_id(db, customer)
     try:
         result = customer_payments.verify_and_record_topup(
             db, customer, payload.reference
@@ -763,7 +764,7 @@ def my_topup_verify(
     if payload.save_card:
         try:
             customer_cards.capture_card_after_payment(
-                db, customer["account_id"], payload.reference, None
+                db, account_id, payload.reference, None
             )
             card_saved = True
             card_save_message = CARD_SAVE_SUCCESS_MESSAGE

@@ -77,7 +77,7 @@ class CustomerContext:
 
 
 def resolve_customer_context(
-    db: Session, customer: Mapping[str, object]
+    db: Session | None, customer: Mapping[str, object]
 ) -> CustomerContext:
     """Resolve a customer session dict into a shared context object."""
     account_id = _clean_id(customer.get("account_id"))
@@ -91,12 +91,16 @@ def resolve_customer_context(
     subscriber = _get_subscriber(db, subscriber_id)
     account = _get_subscriber(db, account_id)
 
-    if not account_id and not subscription_id and subscriber_id:
+    if db is not None and not account_id and not subscription_id and subscriber_id:
         account = _fallback_account_for_subscriber(db, subscriber_id)
         if account is not None:
             account_id = str(account.id)
 
-    subscription = _resolve_subscription(db, subscription_id, account_id)
+    subscription = (
+        _resolve_subscription(db, subscription_id, account_id)
+        if db is not None
+        else None
+    )
     if subscription is not None:
         subscription_id = str(subscription.id)
         if not account_id and subscription.subscriber_id:
@@ -132,7 +136,7 @@ def resolve_customer_context(
 
 
 def resolve_customer_account_ids(
-    db: Session, customer: Mapping[str, object]
+    db: Session | None, customer: Mapping[str, object]
 ) -> tuple[str | None, str | None]:
     """Compatibility shape for older callers: ``(account_id, subscription_id)``."""
     context = resolve_customer_context(db, customer)
@@ -140,46 +144,50 @@ def resolve_customer_account_ids(
 
 
 def allowed_customer_account_ids(
-    db: Session, customer: Mapping[str, object]
+    db: Session | None, customer: Mapping[str, object]
 ) -> list[str]:
     return list(resolve_customer_context(db, customer).allowed_account_ids)
 
 
 def allowed_customer_subscriber_ids(
-    db: Session, customer: Mapping[str, object]
+    db: Session | None, customer: Mapping[str, object]
 ) -> list[str]:
     return list(resolve_customer_context(db, customer).allowed_subscriber_ids)
 
 
 def customer_can_access_account(
-    db: Session, customer: Mapping[str, object], account_id: object | None
+    db: Session | None, customer: Mapping[str, object], account_id: object | None
 ) -> bool:
     """Return whether a customer session may access an account-owned resource."""
     return resolve_customer_context(db, customer).owns_account(account_id)
 
 
 def optional_customer_account_id(
-    db: Session, customer: Mapping[str, object]
+    db: Session | None, customer: Mapping[str, object]
 ) -> str | None:
     """Resolve the customer's primary billing account ID, if available."""
     context = resolve_customer_context(db, customer)
     return context.account_id or context.subscriber_id
 
 
-def require_customer_account_id(db: Session, customer: Mapping[str, object]) -> str:
+def require_customer_account_id(
+    db: Session | None, customer: Mapping[str, object]
+) -> str:
     """Resolve the customer's primary account ID or raise a user-safe error."""
     return resolve_customer_context(db, customer).require_account_id()
 
 
 def optional_customer_subscriber_id(
-    db: Session, customer: Mapping[str, object]
+    db: Session | None, customer: Mapping[str, object]
 ) -> str | None:
     """Resolve the authenticated portal subscriber/principal ID, if available."""
     context = resolve_customer_context(db, customer)
     return context.subscriber_id or context.account_id
 
 
-def require_customer_subscriber_id(db: Session, customer: Mapping[str, object]) -> str:
+def require_customer_subscriber_id(
+    db: Session | None, customer: Mapping[str, object]
+) -> str:
     """Resolve the authenticated portal subscriber/principal ID or raise."""
     subscriber_id = optional_customer_subscriber_id(db, customer)
     if not subscriber_id:
@@ -256,7 +264,11 @@ def _allowed_account_ids(
     return allowed
 
 
-def _get_subscriber(db: Session, subscriber_id: object | None) -> Subscriber | None:
+def _get_subscriber(
+    db: Session | None, subscriber_id: object | None
+) -> Subscriber | None:
+    if db is None:
+        return None
     coerced = _safe_uuid(subscriber_id)
     if coerced is None:
         return None

@@ -190,12 +190,14 @@ def test_customer_financial_position_summarizes_customer_debt(db_session):
     assert position.open_invoice_balance == Decimal("200.00")
     assert position.due_invoice_balance == Decimal("200.00")
     assert position.overdue_debt_balance == Decimal("200.00")
+    assert position.collection_blocking_balance == Decimal("80.00")
     assert position.overdue_invoice_count == 1
     assert position.oldest_due_invoice == oldest
     assert position.days_overdue == 5
     assert position.has_open_debt is True
     assert position.has_due_debt is True
     assert position.has_overdue_debt is True
+    assert position.has_collection_blocking_debt is True
 
 
 def test_wired_consumers_use_shared_due_and_overdue_rules(db_session):

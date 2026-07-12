@@ -31,7 +31,11 @@ def test_submonthly_gated_by_default(db_session, period):
 
 
 def test_submonthly_allowed_when_flag_enabled(db_session, monkeypatch):
-    monkeypatch.setattr("app.services.web_fup.resolve_value", lambda *a, **k: "true")
+    # The gate now reads the flag through the control registry
+    # (usage.fup_submonthly_rules) rather than settings resolve_value.
+    monkeypatch.setattr(
+        "app.services.web_fup.control_registry.is_enabled", lambda *a, **k: True
+    )
     _guard_submonthly_period(db_session, "daily")  # no raise
 
 

@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.models.comms import CustomerNotificationEvent, CustomerNotificationStatus
 from app.models.notification import Notification, NotificationStatus
 from app.models.subscriber import Subscriber
-from app.services.common import coerce_uuid
+from app.services.customer_context import resolve_customer_context
 from app.services.customer_notification_policy import (
     get_subscriber_notification_preferences,
     is_notification_enabled_for_subscriber,
@@ -87,12 +87,8 @@ def _resolve_notification_context(
     db: Session,
     customer: dict,
 ) -> tuple[Subscriber | None, list[str]]:
-    subscriber_id = customer.get("subscriber_id") or customer.get("session", {}).get(
-        "subscriber_id"
-    )
-    subscriber = (
-        db.get(Subscriber, coerce_uuid(subscriber_id)) if subscriber_id else None
-    )
+    context = resolve_customer_context(db, customer)
+    subscriber = context.subscriber or context.account
 
     recipients: list[str] = []
     if subscriber:

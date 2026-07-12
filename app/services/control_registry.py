@@ -89,8 +89,13 @@ _CAT = SettingDomain.catalog
 _N = SettingDomain.notification
 _P = SettingDomain.provisioning
 _NET = SettingDomain.network
+_R = SettingDomain.radius
 _SCH = SettingDomain.scheduler
 _G = SettingDomain.gis
+_U = SettingDomain.usage
+_V = SettingDomain.vas
+_PRJ = SettingDomain.projects
+_SUB = SettingDomain.subscriber
 
 
 _FEATURE_CONTROLS: tuple[Control, ...] = (
@@ -194,6 +199,36 @@ _FEATURE_CONTROLS: tuple[Control, ...] = (
         description="Prepaid balance/expiry suspension sweep.",
     ),
     Control(
+        key="billing.prepaid_monthly_invoicing",
+        layer=Layer.feature,
+        owner_module="billing",
+        default=False,
+        on_missing=False,
+        legacy=(
+            LegacyAlias(
+                _B,
+                "prepaid_monthly_invoicing_enabled",
+                "PREPAID_MONTHLY_INVOICING_ENABLED",
+            ),
+        ),
+        description="Monthly prepaid invoice generation.",
+    ),
+    Control(
+        key="billing.direct_bank_transfer",
+        layer=Layer.feature,
+        owner_module="billing",
+        default=False,
+        on_missing=False,
+        legacy=(
+            LegacyAlias(
+                _B,
+                "direct_bank_transfer_enabled",
+                "BILLING_DIRECT_BANK_TRANSFER_ENABLED",
+            ),
+        ),
+        description="Customer-visible direct bank transfer payment option.",
+    ),
+    Control(
         key="catalog.subscription_expiration",
         layer=Layer.feature,
         owner_module="catalog",
@@ -237,6 +272,118 @@ _FEATURE_CONTROLS: tuple[Control, ...] = (
             LegacyAlias(_N, "notification_queue_enabled", "NOTIFICATION_QUEUE_ENABLED"),
         ),
         description="Notification delivery queue runner.",
+    ),
+    Control(
+        key="usage.warnings",
+        layer=Layer.feature,
+        default=True,
+        on_missing=True,
+        legacy=(LegacyAlias(_U, "usage_warning_enabled", "USAGE_WARNING_ENABLED"),),
+        description="Usage warning event/notification emission.",
+    ),
+    Control(
+        key="usage.fup_submonthly_rules",
+        layer=Layer.feature,
+        default=False,
+        on_missing=False,
+        legacy=(
+            LegacyAlias(
+                _U,
+                "fup_submonthly_rules_enabled",
+                "USAGE_FUP_SUBMONTHLY_RULES_ENABLED",
+            ),
+        ),
+        description="Allow daily/weekly FUP rules from samples-derived usage.",
+    ),
+    Control(
+        key="sessions.radius_accounting_import",
+        layer=Layer.feature,
+        owner_module="network",
+        default=True,
+        on_missing=True,
+        legacy=(
+            LegacyAlias(
+                _U,
+                "radius_accounting_import_enabled",
+                "RADIUS_ACCOUNTING_IMPORT_ENABLED",
+            ),
+        ),
+        description="Import RADIUS accounting sessions.",
+    ),
+    Control(
+        key="sessions.radius_reap_stale",
+        layer=Layer.feature,
+        owner_module="network",
+        default=False,
+        on_missing=False,
+        legacy=(
+            LegacyAlias(
+                _U, "radius_session_reap_enabled", "RADIUS_SESSION_REAP_ENABLED"
+            ),
+        ),
+        description="Close stale RADIUS accounting sessions.",
+    ),
+    Control(
+        key="access.radius_coa",
+        layer=Layer.feature,
+        owner_module="network",
+        default=True,
+        on_missing=True,
+        legacy=(LegacyAlias(_R, "coa_enabled", "RADIUS_COA_ENABLED"),),
+        description="RADIUS CoA / disconnect requests.",
+    ),
+    Control(
+        key="access.mikrotik_session_kill",
+        layer=Layer.feature,
+        owner_module="network",
+        default=True,
+        on_missing=True,
+        legacy=(
+            LegacyAlias(
+                _NET,
+                "mikrotik_session_kill_enabled",
+                "NETWORK_MIKROTIK_SESSION_KILL_ENABLED",
+            ),
+        ),
+        description="MikroTik session kill enforcement.",
+    ),
+    Control(
+        key="access.mikrotik_api_session_kick",
+        layer=Layer.feature,
+        owner_module="network",
+        default=True,
+        on_missing=True,
+        legacy=(
+            LegacyAlias(
+                _NET,
+                "mikrotik_api_session_kick_enabled",
+                "NETWORK_MIKROTIK_API_SESSION_KICK_ENABLED",
+            ),
+        ),
+        description="MikroTik API session kick enforcement.",
+    ),
+    Control(
+        key="access.address_list_block",
+        layer=Layer.feature,
+        owner_module="network",
+        default=True,
+        on_missing=True,
+        legacy=(
+            LegacyAlias(
+                _NET,
+                "address_list_block_enabled",
+                "NETWORK_ADDRESS_LIST_BLOCK_ENABLED",
+            ),
+        ),
+        description="MikroTik address-list based blocking.",
+    ),
+    Control(
+        key="vas.wallet",
+        layer=Layer.feature,
+        default=False,
+        on_missing=False,
+        legacy=(LegacyAlias(_V, "enabled", "VAS_ENABLED"),),
+        description="VAS wallet and purchases.",
     ),
     Control(
         key="provisioning.compensation_retry",
@@ -418,6 +565,89 @@ _FEATURE_CONTROLS: tuple[Control, ...] = (
             LegacyAlias(_SCH, "crm_billing_push_enabled", "CRM_BILLING_PUSH_ENABLED"),
         ),
         description="Push billing snapshots to CRM.",
+    ),
+    Control(
+        key="crm.phase3_native_sync",
+        layer=Layer.feature,
+        owner_module="crm",
+        default=False,
+        on_missing=False,
+        legacy=(
+            LegacyAlias(
+                _PRJ,
+                "crm_phase3_native_sync_enabled",
+                "CRM_PHASE3_NATIVE_SYNC_ENABLED",
+            ),
+        ),
+        description="Sync CRM Phase 3 deltas into native project/sales tables.",
+    ),
+    Control(
+        key="projects.native_read",
+        layer=Layer.feature,
+        default=False,
+        on_missing=False,
+        legacy=(
+            LegacyAlias(
+                _PRJ, "projects_native_read_enabled", "PROJECTS_NATIVE_READ_ENABLED"
+            ),
+        ),
+        description="Serve project reads from native project tables.",
+    ),
+    Control(
+        key="quotes.native_read",
+        layer=Layer.feature,
+        default=False,
+        on_missing=False,
+        legacy=(
+            LegacyAlias(
+                _PRJ, "quotes_native_read_enabled", "QUOTES_NATIVE_READ_ENABLED"
+            ),
+        ),
+        description="Serve quote reads from native quote tables.",
+    ),
+    Control(
+        key="quotes.native_write",
+        layer=Layer.feature,
+        default=False,
+        on_missing=False,
+        legacy=(
+            LegacyAlias(
+                _PRJ, "quotes_native_write_enabled", "QUOTES_NATIVE_WRITE_ENABLED"
+            ),
+        ),
+        description="Accept quote writes through the native quote/sales pipeline.",
+    ),
+    Control(
+        key="referrals.native_read",
+        layer=Layer.feature,
+        default=False,
+        on_missing=False,
+        legacy=(
+            LegacyAlias(
+                _PRJ, "referrals_native_read_enabled", "REFERRALS_NATIVE_READ_ENABLED"
+            ),
+        ),
+        description="Serve referral reads from native referral tables.",
+    ),
+    Control(
+        key="projects.vendor_project_relay",
+        layer=Layer.feature,
+        default=False,
+        on_missing=False,
+        legacy=(
+            LegacyAlias(
+                _PRJ, "vendor_project_relay_enabled", "VENDOR_PROJECT_RELAY_ENABLED"
+            ),
+        ),
+        description="Relay vendor-relevant native project stubs to CRM.",
+    ),
+    Control(
+        key="sales.lead_dedup",
+        layer=Layer.feature,
+        default=True,
+        on_missing=True,
+        legacy=(LegacyAlias(_SUB, "lead_dedup_enabled", "LEAD_DEDUP_ENABLED"),),
+        description="Prevent duplicate open leads per subscriber.",
     ),
     Control(
         key="gis.sync",

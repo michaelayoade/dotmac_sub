@@ -89,6 +89,7 @@ from app.schemas.project import (
     ProjectTemplateUpdate,
     ProjectUpdate,
 )
+from app.services import control_registry
 from app.services import domain_settings as domain_settings_service
 from app.services.common import (
     apply_ordering,
@@ -1327,13 +1328,7 @@ def native_read_enabled(db: Session) -> bool:
     keep serving ``projects_mirror``; ON — they serve the native ``projects``
     table via ``portal_read_for_subscriber`` / ``Projects.portal_list``.
     """
-    from app.services import settings_spec
-
-    return bool(
-        settings_spec.resolve_value(
-            db, SettingDomain.projects, "projects_native_read_enabled"
-        )
-    )
+    return control_registry.is_enabled(db, "projects.native_read")
 
 
 def portal_read_for_subscriber(db: Session, subscriber_id: str) -> dict:

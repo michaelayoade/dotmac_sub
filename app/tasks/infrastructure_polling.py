@@ -91,10 +91,26 @@ def run_infrastructure_poll() -> dict[str, Any]:
         except SoftTimeLimitExceeded:
             db.rollback()
             logger.warning("infrastructure_poll_timed_out")
+            from app.services.infrastructure_polling import HEARTBEAT_TASK
+            from app.services.observability import record_task_run
+
+            record_task_run(
+                HEARTBEAT_TASK,
+                status="error",
+                counters={"error": "infrastructure_poll_timed_out"},
+            )
             return {"error": "infrastructure_poll_timed_out"}
         except Exception as exc:  # noqa: BLE001 - report and roll back
             db.rollback()
             logger.exception("infrastructure_poll_failed")
+            from app.services.infrastructure_polling import HEARTBEAT_TASK
+            from app.services.observability import record_task_run
+
+            record_task_run(
+                HEARTBEAT_TASK,
+                status="error",
+                counters={"error": "infrastructure_poll_failed"},
+            )
             return {"error": str(exc)}
         finally:
             db.close()

@@ -78,7 +78,7 @@ from app.schemas.sales import (
     QuoteLineItemCreate,
     QuoteUpdate,
 )
-from app.services import settings_spec
+from app.services import control_registry, settings_spec
 from app.services.common import coerce_uuid
 from app.services.sales.service import leads, quote_line_items, quotes
 
@@ -407,11 +407,7 @@ def native_read_enabled(db: Session) -> bool:
     ``build_portal_quote_payload``. Distinct from the PR 5 write flag
     (``quotes_native_write_enabled``) so reads can flip first (§4.2 step 3).
     """
-    return bool(
-        settings_spec.resolve_value(
-            db, SettingDomain.projects, "quotes_native_read_enabled"
-        )
-    )
+    return control_registry.is_enabled(db, "quotes.native_read")
 
 
 class SelfServeQuotes:

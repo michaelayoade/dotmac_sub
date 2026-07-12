@@ -10,15 +10,13 @@ from app.services.db_session_adapter import db_session_adapter
 from app.services.payment_arrangements import payment_arrangements
 
 logger = logging.getLogger(__name__)
-SessionLocal = db_session_adapter.create_session
 
 
 @celery_app.task(name="app.tasks.arrangements.check_overdue_arrangements")
 def check_overdue_arrangements() -> dict[str, int]:
     """Advance due installments and default arrangements with repeated misses."""
     logger.info("Starting payment arrangement overdue check")
-    session = SessionLocal()
-    try:
+    with db_session_adapter.session() as session:
         if not billing_enabled(session):
             logger.info(
                 "arrangement check skipped: local billing disabled (billing_enabled)"
@@ -52,8 +50,3 @@ def check_overdue_arrangements() -> dict[str, int]:
             "installments_marked_due": marked_due,
             "arrangements_defaulted": defaulted,
         }
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()

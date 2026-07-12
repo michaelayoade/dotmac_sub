@@ -5,7 +5,7 @@
     {% set _dot = {'up': 'bg-emerald-500', 'down': 'bg-rose-500', 'problem': 'bg-amber-500'}.get(_ls, 'bg-slate-300 dark:bg-slate-600') %}
     {% set _label = {'up': 'Up', 'down': 'Down', 'problem': 'Problem'}.get(_ls, 'Unknown') %}
     <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Network Path</h3>
-    <p class="mt-1 text-xs text-slate-400 dark:text-slate-500">Reconciled from Zabbix; live status warmed periodically (cached, not live-polled).</p>
+    <p class="mt-1 text-xs text-slate-400 dark:text-slate-500">Live status is warmed periodically from native polling.</p>
     {% if known_outage %}
     <div class="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700 dark:bg-rose-900/30 dark:text-rose-300">
         Known outage{% if known_outage.note %} &mdash; {{ known_outage.note }}{% endif %} ({{ known_outage.affected_count }} subscriptions affected). This customer is within a declared outage.

@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -56,6 +57,7 @@ from app.services.customer_notification_policy import (
     status_allows_notification_for_subscriber,
 )
 from app.services.email_template import html_to_text
+from app.services.notification_channel_policy import resolve_notification_channels
 from app.services.notification_template_conditions import validate_conditions
 from app.services.response import ListResponseMixin, list_response
 
@@ -79,6 +81,16 @@ def _clean_feed_body(body: str | None) -> str | None:
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
     return text or None
+
+
+def _subscriber_recipient_for_channel(
+    subscriber, channel: NotificationChannel
+) -> str | None:
+    if channel == NotificationChannel.email:
+        return getattr(subscriber, "email", None)
+    if channel in {NotificationChannel.sms, NotificationChannel.whatsapp}:
+        return getattr(subscriber, "phone", None)
+    return str(getattr(subscriber, "id", "") or "") or None
 
 
 def _severity_rank(severity: AlertSeverity) -> int:
@@ -266,6 +278,62 @@ class Templates(ListResponseMixin):
 
 
 class Notifications(ListResponseMixin):
+    @staticmethod
+    def queue_customer_notifications_for_policy(
+        db: Session,
+        *,
+        subscriber,
+        template_code: str | None,
+        event_type: str | None,
+        category: str | None,
+        default_channels: Iterable[NotificationChannel | str],
+        subject: str | None,
+        body: str | None,
+        commit: bool = True,
+    ) -> int:
+        """Queue customer notifications after channel-policy resolution.
+
+        Domain code supplies the intent. This service owns channel selection,
+        recipient selection, policy gates, and row creation.
+        """
+        if subscriber is None:
+            return 0
+        normalized_defaults = tuple(
+            channel
+            if isinstance(channel, NotificationChannel)
+            else NotificationChannel(str(channel))
+            for channel in default_channels
+        )
+        channels = resolve_notification_channels(
+            db,
+            template_code=template_code,
+            event_type=event_type,
+            category=category,
+            default_channels=normalized_defaults,
+        )
+        created = 0
+        for channel in channels:
+            recipient = _subscriber_recipient_for_channel(subscriber, channel)
+            if not recipient:
+                continue
+            payload = NotificationCreate(
+                channel=channel,
+                subscriber_id=getattr(subscriber, "id", None),
+                recipient=recipient,
+                subject=subject,
+                body=body,
+                category=category,
+                event_type=event_type,
+            )
+            notification = (
+                Notifications.create_customer_notification(db, payload)
+                if commit
+                else Notifications.queue_customer_notification(db, payload)
+            )
+            if notification is not None:
+                created += 1
+        return created
+
     @staticmethod
     def _apply_customer_queue_policy(
         db: Session,
