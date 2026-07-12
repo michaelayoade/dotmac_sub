@@ -1202,6 +1202,24 @@ contains network-device identity and aggregate service counts, never customer
 identity or credential values. Successful writes use action
 `nas_lifecycle_reconcile` in the transactional audit log.
 
+For records blocked on `manual_review`, gather recent accounting evidence before
+changing lifecycle or subscription links:
+
+```bash
+python -m scripts.one_off.report_nas_access_path_evidence
+python -m scripts.one_off.report_nas_access_path_evidence --days 90 --details
+```
+
+The report is read-only. It resolves accounting rows through their direct NAS
+identity first and their linked RADIUS client only as a fallback. Output is
+aggregated by NAS and never includes subscriber, subscription, credential, or
+session identity. Recommendations are review classifications, not mutation
+authority: historical use can support reactivation or relink review, but only
+current exact live-session evidence can authorize automatic relinking.
+The command reports `source_stale` and exits `2` when the newest accounting
+observation is more than 24 hours old. Do not use its recommendations until the
+accounting import is healthy and the report has been rerun.
+
 ### Rotation Order
 
 Rotate non-customer-facing secrets first, then payment, then authentication or network secrets. Keep one verified rollback path for each secret family before moving to the next.
