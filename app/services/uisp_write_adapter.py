@@ -43,6 +43,10 @@ class UispWriteUnsupported(UispWriteAdapterError):
     pass
 
 
+class UispPostWriteReadbackError(UispWriteAdapterError):
+    """UISP accepted a write, but mandatory readback could not complete."""
+
+
 @dataclass(frozen=True)
 class UispFieldMapping:
     canonical_name: str
@@ -291,14 +295,27 @@ class UispConfigurationWriteAdapter:
         except UispClientError as exc:
             raise UispWriteAdapterError(str(exc)) from exc
 
-        return self._readback(
-            device_id,
-            transport,
-            mappings,
-            expected,
-            write_accepted=True,
-            response=response,
-        )
+        try:
+            return self._readback(
+                device_id,
+                transport,
+                mappings,
+                expected,
+                write_accepted=True,
+                response=response,
+            )
+        except Exception as exc:
+            # The write has already hit the device. Past this point *any*
+            # readback failure is a post-write readback failure -- not just a
+            # UispClientError. An unexpected device payload raising KeyError or
+            # TypeError in the comparison would otherwise escape untranslated,
+            # reach the task's generic handler with ``result`` still None, and
+            # be recorded as a plain `failed` intent. `failed` is not in the
+            # reconciliation filter, so the device would sit silently diverged
+            # from its desired_state with nothing left to notice.
+            raise UispPostWriteReadbackError(
+                "UISP accepted the write but device readback failed"
+            ) from exc
 
     def readback(self, db: Session, intent: UispDeviceIntent) -> UispApplyResult:
         """Read and compare mapped fields without issuing a write."""
