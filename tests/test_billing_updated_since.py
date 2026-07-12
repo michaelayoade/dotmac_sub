@@ -108,9 +108,7 @@ def test_invoice_sync_feed_is_lightweight_and_watermarked(
     db_session, subscriber_account
 ):
     old = _make_invoice(db_session, subscriber_account.id, _T0)
-    current = _make_invoice(
-        db_session, subscriber_account.id, _T0 + timedelta(days=1)
-    )
+    current = _make_invoice(db_session, subscriber_account.id, _T0 + timedelta(days=1))
     db_session.add(
         InvoiceLine(
             invoice_id=current.id,
