@@ -1165,13 +1165,25 @@ class Payments(ListResponseMixin):
         return created
 
     @staticmethod
-    def create(db: Session, payload: PaymentCreate, *, auto_allocate: bool = True):
+    def create(
+        db: Session,
+        payload: PaymentCreate,
+        *,
+        auto_allocate: bool = True,
+        commit: bool = True,
+    ):
         """Create a payment.
 
         When ``auto_allocate`` is False and no explicit allocations are given,
         the payment is NOT spread over open invoices; the full amount is
         recorded as unallocated account credit instead. Default behavior
         (auto-allocate to oldest unpaid invoices) is unchanged.
+
+        ``commit=False`` posts the payment on the caller's transaction and
+        flushes instead of committing, so a caller that is already inside a
+        SAVEPOINT (the bulk import wizard, which isolates each row so one bad
+        row cannot roll back the batch) can still route through this owner
+        rather than hand-rolling a Payment row. The caller owns the commit.
         """
         if payload.amount is not None and payload.amount <= 0:
             raise HTTPException(
@@ -1313,7 +1325,10 @@ class Payments(ListResponseMixin):
             invoice = get_by_id(db, Invoice, invoice_id)
             if invoice:
                 _finalize_invoice_payment_effects(db, invoice)
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
         db.refresh(payment)
 
         # Emit payment.received event(s)
@@ -1339,7 +1354,8 @@ class Payments(ListResponseMixin):
         # run inline on this session with commit=False. The payment itself is
         # already committed above; commit again so those resolve/restore
         # mutations are durable instead of left pending for the caller to drop.
-        db.commit()
+        if commit:
+            db.commit()
         return payment
 
     @staticmethod
