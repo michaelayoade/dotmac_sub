@@ -56,6 +56,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     assert sot_relationships.dependencies_for("secrets.rotation") == (
         "secrets.reference_store",
         "secrets.credential_crypto",
+        "observability.recording",
         "runtime.db_sessions",
     )
     assert sot_relationships.dependencies_for("communications.team_inbox") == (

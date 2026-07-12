@@ -9,12 +9,24 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.network_monitoring import AlertSeverity
 from app.services.credential_crypto import (
     generate_encryption_key,
     get_encryption_key,
 )
-from app.services.credential_key_rotation import rotate_credential_encryption_material
+from app.services.credential_key_rotation import (
+    CredentialIntegrityResult,
+    rotate_credential_encryption_material,
+    scan_credential_encryption_integrity,
+)
 from app.services.db_session_adapter import db_session_adapter
+from app.services.observability import (
+    Finding,
+    StateObservation,
+    publish_state_snapshot,
+    record_finding,
+    resolve_findings,
+)
 from app.services.secrets import (
     clear_cache,
     is_openbao_available,
@@ -33,6 +45,7 @@ _CURRENT_FIELD = "credential_encryption_key"
 _PREVIOUS_FIELD = "credential_encryption_previous_key"
 _ROTATED_AT_FIELD = "credential_encryption_rotated_at"
 _RETIRE_AFTER_FIELD = "credential_encryption_previous_retire_after"
+_INTEGRITY_FINDING_PREFIX = "observability:credentials:"
 
 
 def _as_bool(value: object, default: bool) -> bool:
@@ -265,12 +278,182 @@ def evaluate_scheduled_rotation(
     }
 
 
+def _sync_integrity_findings(
+    db: Session,
+    integrity: CredentialIntegrityResult,
+    rotation_result: dict[str, object],
+) -> None:
+    active: set[str] = set()
+    totals = integrity.totals
+    for state, severity, title in (
+        (
+            "undecryptable",
+            AlertSeverity.critical,
+            "Stored credentials cannot be decrypted",
+        ),
+        (
+            "plaintext",
+            AlertSeverity.warning,
+            "Stored credentials are not encrypted",
+        ),
+    ):
+        count = int(totals.get(state, 0))
+        if count <= 0:
+            continue
+        fingerprint = f"{_INTEGRITY_FINDING_PREFIX}{state}"
+        active.add(fingerprint)
+        affected_scopes = sorted(
+            scope
+            for scope, states in integrity.counts.items()
+            if int(states.get(state, 0)) > 0
+        )
+        record_finding(
+            db,
+            Finding(
+                fingerprint=fingerprint,
+                domain="security",
+                source="credential_integrity",
+                severity=severity,
+                title=title,
+                summary=f"{count} credential value(s) classified as {state}.",
+                details={
+                    "state": state,
+                    "count": count,
+                    "affected_scopes": affected_scopes,
+                    "scanned_at": integrity.scanned_at.isoformat(),
+                },
+                target_url="/admin/system/secrets",
+            ),
+        )
+    if rotation_result.get("status") == "blocked":
+        fingerprint = f"{_INTEGRITY_FINDING_PREFIX}rotation-blocked"
+        active.add(fingerprint)
+        reason = str(rotation_result.get("reason") or "unknown")
+        record_finding(
+            db,
+            Finding(
+                fingerprint=fingerprint,
+                domain="security",
+                source="credential_rotation",
+                severity=AlertSeverity.critical,
+                title="Credential key rotation is blocked",
+                summary=f"Credential key rotation is blocked: {reason}.",
+                details={"reason": reason},
+                target_url="/admin/system/secrets",
+            ),
+        )
+    resolve_findings(
+        db,
+        managed_prefix=_INTEGRITY_FINDING_PREFIX,
+        active_fingerprints=active,
+    )
+
+
+def _publish_integrity_state(
+    db: Session,
+    integrity: CredentialIntegrityResult,
+    *,
+    managed: bool,
+    key_source: str,
+    rotation_result: dict[str, object],
+) -> None:
+    observations = [
+        StateObservation(signal=signal, scope=scope, value=value)
+        for signal, scope, value in integrity.observations()
+    ]
+    observations.append(
+        StateObservation(
+            signal="managed_key_source",
+            scope=key_source,
+            value=1.0 if managed else 0.0,
+        )
+    )
+    rotation_status = str(rotation_result.get("status") or "error")
+    observations.append(
+        StateObservation(
+            signal="rotation_status",
+            scope=rotation_status,
+            value=1.0,
+        )
+    )
+    due_at = _parse_datetime(rotation_result.get("next_rotation_at"))
+    if due_at is not None:
+        observations.append(
+            StateObservation(
+                signal="rotation_next_due_timestamp_seconds",
+                scope="all",
+                value=due_at.timestamp(),
+            )
+        )
+
+    if rotation_status == "blocked" or integrity.totals["undecryptable"] > 0:
+        snapshot_status = "error"
+    elif integrity.totals["plaintext"] > 0:
+        snapshot_status = "degraded"
+    else:
+        snapshot_status = "ok"
+    try:
+        publish_state_snapshot(
+            "credentials",
+            observations,
+            status=snapshot_status,
+            now=integrity.scanned_at,
+        )
+    except Exception:
+        logger.exception("credential_integrity_snapshot_publish_failed")
+
+    try:
+        _sync_integrity_findings(db, integrity, rotation_result)
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("credential_integrity_finding_sync_failed")
+
+
+def _attach_integrity_counts(
+    result: dict[str, object],
+    integrity: CredentialIntegrityResult,
+) -> dict[str, object]:
+    return {
+        **result,
+        "integrity_values": integrity.values_scanned,
+        "integrity_plaintext": integrity.totals["plaintext"],
+        "integrity_undecryptable": integrity.totals["undecryptable"],
+    }
+
+
 def run_scheduled_credential_rotation() -> dict[str, object]:
-    """Single-flight scheduled entry point."""
+    """Single daily entry point for integrity observation and key lifecycle."""
     with db_session_adapter.advisory_lock(
         _ROTATION_LOCK_KEY,
         timeout_ms=5000,
     ) as (db, acquired):
         if not acquired:
             return {"status": "already_running", "rotated": False}
-        return evaluate_scheduled_rotation(db)
+        integrity = scan_credential_encryption_integrity(db)
+        managed, key_source = _managed_key_source(db)
+        if integrity.totals["undecryptable"] > 0:
+            result: dict[str, object] = {
+                "status": "blocked",
+                "reason": "credential_integrity_failed",
+                "rotated": False,
+            }
+        else:
+            result = evaluate_scheduled_rotation(db)
+            updated_values = result.get("updated_values")
+            values_changed = (
+                isinstance(updated_values, (int, float))
+                and not isinstance(updated_values, bool)
+                and updated_values > 0
+            )
+            if bool(result.get("rotated")) or values_changed:
+                integrity = scan_credential_encryption_integrity(db)
+
+        _publish_integrity_state(
+            db,
+            integrity,
+            managed=managed,
+            key_source=key_source,
+            rotation_result=result,
+        )
+        return _attach_integrity_counts(result, integrity)

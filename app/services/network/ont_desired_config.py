@@ -11,6 +11,9 @@ from collections.abc import Callable
 from copy import deepcopy
 from typing import Any
 
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
 from app.models.network import OntUnit
 
 # Legacy field mappings are no longer needed. All callers now use canonical
@@ -160,6 +163,19 @@ def get_desired_config_value(
             return default
         cursor = cursor[part]
     return cursor
+
+
+def desired_config_values_for_paths(
+    db: Session,
+    paths: tuple[tuple[str, ...], ...],
+) -> list[tuple[tuple[str, ...], Any]]:
+    """Return identity-free desired-config values for bounded credential paths."""
+    values: list[tuple[tuple[str, ...], Any]] = []
+    for ont in db.scalars(select(OntUnit)).all():
+        config = desired_config(ont)
+        for path in paths:
+            values.append((path, get_desired_config_value(config, *path)))
+    return values
 
 
 def set_desired_config_values(ont: OntUnit, values: dict[str, Any]) -> None:
