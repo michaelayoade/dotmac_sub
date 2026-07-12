@@ -12,8 +12,8 @@ paths.
 from __future__ import annotations
 
 import logging
-from uuid import UUID as _UUID
 from datetime import UTC, datetime, timedelta
+from uuid import UUID as _UUID
 
 import httpx
 from sqlalchemy import select

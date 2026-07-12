@@ -38,9 +38,7 @@ def _intent(metadata: dict | None) -> TopupIntent:
 
 
 def test_invoice_payment_allocates_to_the_invoice_the_customer_chose():
-    intent = _intent(
-        {"payment_flow": "invoice_payment", "invoice_id": _INVOICE_ID}
-    )
+    intent = _intent({"payment_flow": "invoice_payment", "invoice_id": _INVOICE_ID})
 
     allocations = _intent_allocations(intent, _AMOUNT)
 
@@ -67,8 +65,6 @@ def test_invoice_payment_without_an_invoice_id_does_not_guess():
 
 
 def test_unparseable_invoice_id_does_not_guess():
-    intent = _intent(
-        {"payment_flow": "invoice_payment", "invoice_id": "not-a-uuid"}
-    )
+    intent = _intent({"payment_flow": "invoice_payment", "invoice_id": "not-a-uuid"})
 
     assert _intent_allocations(intent, _AMOUNT) is None
