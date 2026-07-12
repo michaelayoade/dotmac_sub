@@ -372,6 +372,73 @@ def quotes_list(
     return templates.TemplateResponse("admin/sales/quotes/index.html", context)
 
 
+# NOTE: `/quotes/new` must stay above `/quotes/{quote_id}` or the detail route
+# captures "new" as an id.
+@router.get(
+    "/quotes/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("crm:quote:write"))],
+)
+def quote_new(request: Request, db: Session = Depends(get_db)):
+    context = _ctx(request, db, "sales-quotes")
+    context.update(web_sales_service.build_quote_new_context())
+    return templates.TemplateResponse("admin/sales/quotes/form.html", context)
+
+
+@router.post(
+    "/quotes",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("crm:quote:write"))],
+)
+def quote_create(
+    request: Request,
+    subscriber_id: str | None = Form(default=None),
+    lead_id: str | None = Form(default=None),
+    status: str | None = Form(default=None),
+    currency: str | None = Form(default=None),
+    tax_rate: str | None = Form(default=None),
+    expires_at: str | None = Form(default=None),
+    notes: str | None = Form(default=None),
+    latitude: str | None = Form(default=None),
+    longitude: str | None = Form(default=None),
+    address: str | None = Form(default=None),
+    region: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+):
+    fields = {
+        "subscriber_id": subscriber_id,
+        "lead_id": lead_id,
+        "status": status,
+        "currency": currency,
+        "tax_rate": tax_rate,
+        "expires_at": expires_at,
+        "notes": notes,
+        "latitude": latitude,
+        "longitude": longitude,
+        "address": address,
+        "region": region,
+    }
+    try:
+        quote_id = web_sales_service.create_quote_from_form(db, **fields)
+        return RedirectResponse(
+            url=f"/admin/sales/quotes/{quote_id}", status_code=303
+        )
+    except (ValidationError, ValueError) as exc:
+        db.rollback()
+        error = _error_detail(exc)
+
+    context = _ctx(request, db, "sales-quotes")
+    context.update(
+        web_sales_service.build_quote_form_error_context(
+            mode="create", quote_id=None, **fields
+        )
+    )
+    context["error"] = error
+    return templates.TemplateResponse(
+        "admin/sales/quotes/form.html", context, status_code=400
+    )
+
+
 @router.get(
     "/quotes/{quote_id}",
     response_class=HTMLResponse,
@@ -381,6 +448,94 @@ def quote_detail(request: Request, quote_id: str, db: Session = Depends(get_db))
     context = _ctx(request, db, "sales-quotes")
     context.update(web_sales_service.build_quote_detail_context(db, quote_id=quote_id))
     return templates.TemplateResponse("admin/sales/quotes/detail.html", context)
+
+
+@router.get(
+    "/quotes/{quote_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("crm:quote:write"))],
+)
+def quote_edit(request: Request, quote_id: str, db: Session = Depends(get_db)):
+    context = _ctx(request, db, "sales-quotes")
+    context.update(web_sales_service.build_quote_edit_context(db, quote_id=quote_id))
+    return templates.TemplateResponse("admin/sales/quotes/form.html", context)
+
+
+@router.post(
+    "/quotes/{quote_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("crm:quote:write"))],
+)
+def quote_update(
+    request: Request,
+    quote_id: str,
+    subscriber_id: str | None = Form(default=None),
+    lead_id: str | None = Form(default=None),
+    status: str | None = Form(default=None),
+    currency: str | None = Form(default=None),
+    tax_rate: str | None = Form(default=None),
+    expires_at: str | None = Form(default=None),
+    notes: str | None = Form(default=None),
+    latitude: str | None = Form(default=None),
+    longitude: str | None = Form(default=None),
+    address: str | None = Form(default=None),
+    region: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+):
+    fields = {
+        "subscriber_id": subscriber_id,
+        "lead_id": lead_id,
+        "status": status,
+        "currency": currency,
+        "tax_rate": tax_rate,
+        "expires_at": expires_at,
+        "notes": notes,
+        "latitude": latitude,
+        "longitude": longitude,
+        "address": address,
+        "region": region,
+    }
+    try:
+        web_sales_service.update_quote_from_form(db, quote_id=quote_id, **fields)
+        return RedirectResponse(
+            url=f"/admin/sales/quotes/{quote_id}", status_code=303
+        )
+    except (ValidationError, ValueError) as exc:
+        db.rollback()
+        error = _error_detail(exc)
+
+    context = _ctx(request, db, "sales-quotes")
+    context.update(
+        web_sales_service.build_quote_form_error_context(
+            mode="update", quote_id=quote_id, **fields
+        )
+    )
+    context["error"] = error
+    return templates.TemplateResponse(
+        "admin/sales/quotes/form.html", context, status_code=400
+    )
+
+
+@router.post(
+    "/quotes/{quote_id}/status",
+    dependencies=[Depends(require_permission("crm:quote:write"))],
+)
+def quote_set_status(
+    quote_id: str,
+    status: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+):
+    web_sales_service.set_quote_status(db, quote_id, status)
+    return RedirectResponse(url=f"/admin/sales/quotes/{quote_id}", status_code=303)
+
+
+@router.post(
+    "/quotes/{quote_id}/delete",
+    dependencies=[Depends(require_permission("crm:quote:write"))],
+)
+def quote_delete(quote_id: str, db: Session = Depends(get_db)):
+    web_sales_service.deactivate_quote(db, quote_id)
+    return RedirectResponse(url="/admin/sales/quotes", status_code=303)
 
 
 # ---------------------------------------------------------------------------
