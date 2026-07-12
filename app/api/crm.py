@@ -159,6 +159,7 @@ def list_subscribers(request: Request, db: Session = Depends(get_db)) -> dict[st
         crm_api.billing_by_subscriber(db, subscribers) if "billing" in includes else {}
     )
     sessions = crm_api.latest_session_by_subscriber(db, subscriber_ids)
+    metadata = crm_api.subscriber_payload_metadata(db, subscribers)
     data = []
     for subscriber in subscribers:
         kwargs: dict[str, Any] = {}
@@ -172,6 +173,7 @@ def list_subscribers(request: Request, db: Session = Depends(get_db)) -> dict[st
                 subscriber,
                 session=sessions.get(subscriber.id),
                 include_session_state="session_state" in includes,
+                metadata=metadata.get(subscriber.id),
                 **kwargs,
             )
         )
@@ -195,8 +197,14 @@ def search_subscribers(
     sessions = crm_api.latest_session_by_subscriber(
         db, [item.id for item in subscribers]
     )
+    metadata = crm_api.subscriber_payload_metadata(db, subscribers)
     data = [
-        crm_api.subscriber_payload(db, subscriber, session=sessions.get(subscriber.id))
+        crm_api.subscriber_payload(
+            db,
+            subscriber,
+            session=sessions.get(subscriber.id),
+            metadata=metadata.get(subscriber.id),
+        )
         for subscriber in subscribers
     ]
     return _envelope(data, {**meta, "total": total})
