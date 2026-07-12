@@ -14,6 +14,7 @@ from app.models.workqueue import WorkqueueSnooze
 from app.schemas.ai_operations import AIInsightCreate, AiIntakeConfigUpsert
 from app.schemas.campaigns import CampaignCreate
 from app.services import ai_operations, comms_campaigns, workqueue
+from app.services.workqueue.permissions import AUDIENCE_TEAM_SCOPE
 from app.tasks import notifications as notification_tasks
 
 
@@ -218,9 +219,21 @@ def test_workqueue_aggregates_native_items_and_respects_snooze(db_session):
     db_session.add_all([conversation, ticket])
     db_session.flush()
 
+    # The queue now scopes reads to what the principal may actually see. The
+    # team's unassigned conversation is only visible at team audience, so the
+    # principal needs the team scope to reach it -- the old signature took a
+    # bare user_id and applied no authorization at all.
+    principal = workqueue.WorkqueuePrincipal(
+        person_id=user_id,
+        roles=frozenset(),
+        scopes=frozenset({AUDIENCE_TEAM_SCOPE}),
+        can_view=True,
+        can_act=True,
+    )
+
     items = workqueue.list_workqueue(
         db_session,
-        user_id=user_id,
+        principal,
         service_team_id=team.id,
     )
     workqueue.snooze_item(
@@ -232,7 +245,7 @@ def test_workqueue_aggregates_native_items_and_respects_snooze(db_session):
     )
     unsnoozed = workqueue.list_workqueue(
         db_session,
-        user_id=user_id,
+        principal,
         service_team_id=team.id,
     )
 
