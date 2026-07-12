@@ -298,7 +298,7 @@ def test_migration_248_is_single_alembic_head():
     script = ScriptDirectory.from_config(config)
     # 248 is a single link in the chain; the current head advances as later PRs
     # stack on top (Phase 5 asset inventory is the current head).
-    assert script.get_heads() == ["258_erp_domain_sync_cursors"]
+    assert script.get_heads() == ["259_campaign_ai_workqueue"]
 
 
 def test_migration_248_creates_geometry_gist_indexes():
