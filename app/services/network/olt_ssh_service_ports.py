@@ -19,6 +19,33 @@ _CONFLICTED_SERVICE_PORT_RE = re.compile(
 )
 
 
+def _parse_service_port_detail(output: str) -> ServicePortEntry | None:
+    """Parse Huawei's colon-delimited single service-port response."""
+    fields = {
+        key.casefold(): value.strip()
+        for key, value in re.findall(
+            r"^\s*([^:\r\n]+?)\s*:\s*(.*?)\s*$", output, re.MULTILINE
+        )
+    }
+    required = ("index", "vlan id", "ont id", "gem port index")
+    if any(not fields.get(key) for key in required):
+        return None
+    try:
+        return ServicePortEntry(
+            index=int(fields["index"]),
+            vlan_id=int(fields["vlan id"]),
+            ont_id=int(fields["ont id"]),
+            gem_index=int(fields["gem port index"]),
+            flow_type=fields.get("flow type", ""),
+            flow_para=fields.get("flow para", ""),
+            state=fields.get("state", ""),
+            fsp=fields.get("f/s/p", ""),
+            tag_transform=fields.get("tag transform", ""),
+        )
+    except ValueError:
+        return None
+
+
 def _service_port_matches_intent(
     port: ServicePortEntry,
     *,
@@ -83,6 +110,9 @@ def get_service_port_by_index(
         for entry in entries:
             if entry.index == index:
                 return True, f"Found service-port {index}", entry
+        detail = _parse_service_port_detail(output)
+        if detail is not None and detail.index == index:
+            return True, f"Found service-port {index}", detail
         return True, f"Service-port {index} was not found", None
     except Exception as exc:
         logger.error(

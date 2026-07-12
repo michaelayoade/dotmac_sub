@@ -42,13 +42,6 @@ class OltDetailAdapter:
 
         olt = page_data.get("olt")
         monitoring_device = page_data.get("monitoring_device")
-        # Legacy runtime-health overlay retired with the native monitoring
-        # cutover: always empty, so the template falls back to the native
-        # ping/SNMP poll indicators (the behaviour it already had while the
-        # overlay source was unconfigured). The context key keeps its old
-        # name because the template still reads it.
-        zabbix_health: dict[str, object] = {}
-
         try:
             operations = operations_service.build_operation_history(
                 db, "olt", str(olt_id)
@@ -79,7 +72,6 @@ class OltDetailAdapter:
                 ),
                 "access_info": self._build_access_info(olt, monitoring_device),
                 "monitoring_source": self._build_monitoring_source(page_data),
-                "zabbix_health": zabbix_health,
                 "detail_actions": self._build_detail_actions(olt_id, olt),
                 "terminal_context": self._build_terminal_context(olt_id),
                 "firmware_context": self._build_firmware_context(
