@@ -110,6 +110,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="financial.prepaid_threshold",
+                module="app.services.prepaid_threshold",
+                owns=(
+                    "prepaid enforcement threshold",
+                    "unfunded prepaid renewal requirement",
+                ),
+                depends_on=("financial.billing_profile",),
+            ),
+            SOTService(
                 name="financial.access_resolution",
                 module="app.services.access_resolution",
                 owns=(
@@ -206,7 +215,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             SOTService(
                 name="network.radius_sessions",
                 module="app.services.network.radius_sessions",
-                owns=("online-now session state", "primary NAS session"),
+                owns=(
+                    "online-now session state",
+                    "primary NAS session",
+                    "bounded historical NAS evidence",
+                ),
                 depends_on=("network.identity",),
             ),
             SOTService(
@@ -214,6 +227,45 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.network.device_state",
                 owns=("live infrastructure state", "pollability interpretation"),
                 depends_on=("network.identity",),
+            ),
+            SOTService(
+                name="network.nas_inventory",
+                module="app.services.nas.devices",
+                owns=("NAS administrative lifecycle state", "NAS inventory reads"),
+                depends_on=("network.identity",),
+            ),
+            SOTService(
+                name="network.nas_lifecycle",
+                module="app.services.nas_lifecycle",
+                owns=(
+                    "NAS lifecycle reconciliation plans",
+                    "subscription NAS relink decisions",
+                    "NAS lifecycle RADIUS projection commands",
+                ),
+                depends_on=(
+                    "network.identity",
+                    "network.access_path",
+                    "network.radius_sessions",
+                    "network.device_state",
+                    "network.nas_inventory",
+                    "service_intent.subscription_nas_assignment",
+                    "access.radius_state",
+                    "runtime.db_sessions",
+                    "observability.recording",
+                ),
+            ),
+            SOTService(
+                name="network.nas_access_path_evidence",
+                module="app.services.nas_access_path_evidence",
+                owns=(
+                    "manual NAS lifecycle evidence reports",
+                    "historical access-path review recommendations",
+                ),
+                depends_on=(
+                    "network.radius_sessions",
+                    "network.nas_lifecycle",
+                    "runtime.db_sessions",
+                ),
             ),
             SOTService(
                 name="network.outage_impact",
@@ -857,6 +909,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="service_intent.catalog_validation",
                 module="app.services.catalog.validation",
                 owns=("catalog mutation validation", "offer/profile consistency"),
+                depends_on=("service_intent.catalog_policy",),
+            ),
+            SOTService(
+                name="service_intent.subscription_nas_assignment",
+                module="app.services.catalog.subscriptions",
+                owns=(
+                    "subscription provisioning NAS assignment",
+                    "nonterminal services grouped by NAS",
+                ),
                 depends_on=("service_intent.catalog_policy",),
             ),
             SOTService(
