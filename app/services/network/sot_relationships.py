@@ -6,8 +6,11 @@ The dependency direction is intentional:
 2. access_path: resolves customer service path using identity + topology.
 3. radius_sessions: resolves who is online now.
 4. device_state: resolves infrastructure state from poll/live/admin signals.
-5. outage_impact: resolves affected customers from topology/access paths.
-6. events: turns state/impact transitions into business events.
+5. nas_inventory: owns NAS administrative lifecycle state.
+6. subscription_nas_assignment: owns commercial-service NAS bindings.
+7. nas_lifecycle: composes the owners into guarded reconciliation decisions.
+8. outage_impact: resolves affected customers from topology/access paths.
+9. events: turns state/impact transitions into business events.
 
 Callers should depend on the highest-level service that answers their question
 instead of reaching across layers. For example, support/customer surfaces should
@@ -21,6 +24,19 @@ SOT_RELATIONSHIPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("access_path", ("identity",)),
     ("radius_sessions", ("identity",)),
     ("device_state", ("identity",)),
+    ("nas_inventory", ("identity",)),
+    ("subscription_nas_assignment", ("identity",)),
+    (
+        "nas_lifecycle",
+        (
+            "identity",
+            "access_path",
+            "radius_sessions",
+            "device_state",
+            "nas_inventory",
+            "subscription_nas_assignment",
+        ),
+    ),
     ("outage_impact", ("access_path", "device_state")),
     ("events", ("device_state", "outage_impact", "radius_sessions")),
 )

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.radius_active_session import RadiusActiveSession
@@ -77,6 +77,50 @@ def active_session_count_for_subscriber(db: Session, subscriber_id) -> int:
         )
         or 0
     )
+
+
+def list_all_active_sessions(db: Session) -> list[RadiusActiveSession]:
+    """Return the canonical live-session inventory for SOT coordinators."""
+    return list(
+        db.scalars(select(RadiusActiveSession).order_by(RadiusActiveSession.id)).all()
+    )
+
+
+def live_nas_device_ids_for_subscription(
+    db: Session,
+    subscription_id,
+    subscriber_id,
+    *,
+    allow_unbound: bool = True,
+) -> tuple[object, ...]:
+    """Return live NAS evidence from primitive subscription identity."""
+    resolved_subscription_id = coerce_uuid(subscription_id)
+    resolved_subscriber_id = coerce_uuid(subscriber_id)
+    binding_filter = RadiusActiveSession.subscription_id == resolved_subscription_id
+    if allow_unbound:
+        binding_filter = or_(
+            binding_filter,
+            RadiusActiveSession.subscription_id.is_(None),
+        )
+    rows = db.scalars(
+        select(RadiusActiveSession.nas_device_id)
+        .where(RadiusActiveSession.subscriber_id == resolved_subscriber_id)
+        .where(RadiusActiveSession.nas_device_id.is_not(None))
+        .where(binding_filter)
+        .order_by(
+            RadiusActiveSession.last_update.desc().nullslast(),
+            RadiusActiveSession.session_start.desc(),
+            RadiusActiveSession.id,
+        )
+    ).all()
+    seen: set[object] = set()
+    ordered: list[object] = []
+    for nas_device_id in rows:
+        if nas_device_id is None or nas_device_id in seen:
+            continue
+        seen.add(nas_device_id)
+        ordered.append(nas_device_id)
+    return tuple(ordered)
 
 
 def open_accounting_session_query(db: Session):

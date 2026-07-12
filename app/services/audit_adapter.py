@@ -70,6 +70,12 @@ class AuditAdapter:
             defer_until_commit=defer_until_commit,
         )
 
+    def stage(self, db: Session, record: AuditRecord):
+        """Stage an audit event in the caller-owned transaction."""
+        from app.services import audit as audit_service
+
+        return audit_service.audit_events.stage(db, self.build_payload(record))
+
     def list_events(self, db: Session, **filters):
         from app.services import audit as audit_service
 
@@ -108,4 +114,33 @@ def record_audit_event(
             request_id=request_id,
         ),
         defer_until_commit=defer_until_commit,
+    )
+
+
+def stage_audit_event(
+    db: Session,
+    *,
+    action: str,
+    entity_type: str,
+    entity_id: str | None = None,
+    actor_type: AuditActorType = AuditActorType.system,
+    actor_id: str | None = None,
+    metadata: dict[str, object] | None = None,
+    status_code: int | None = None,
+    is_success: bool = True,
+    request_id: str | None = None,
+):
+    return audit_adapter.stage(
+        db,
+        AuditRecord(
+            action=action,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            metadata=dict(metadata or {}),
+            status_code=status_code,
+            is_success=is_success,
+            request_id=request_id,
+        ),
     )

@@ -1471,14 +1471,10 @@ def reverse_ledger_entry(
     return billing_service.ledger_entries.reverse(db, entry_id, memo)
 
 
-@router.delete(
-    "/ledger-entries/{entry_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    tags=["ledger-entries"],
-    dependencies=[Depends(require_permission("billing:ledger:write"))],
-)
-def delete_ledger_entry(entry_id: str, db: Session = Depends(get_db)):
-    billing_service.ledger_entries.delete(db, entry_id)
+# DELETE /ledger-entries/{entry_id} is deliberately absent. The ledger is
+# append-only: deleting an entry silently moved the account balance with no
+# record of why. Undo a posted entry by reversing it —
+# POST /ledger-entries/{entry_id}/reverse.
 
 
 # --- Tax Rates ---
