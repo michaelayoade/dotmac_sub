@@ -1077,8 +1077,7 @@ class Quotes(ListResponseMixin):
         # accepted quote that has already fired the fulfilment pipeline.
         if data.get("status") in _QUOTE_COMMITTING_STATUSES:
             raise ValueError(
-                "A new quote starts as a draft. Add line items, then send or "
-                "accept it."
+                "A new quote starts as a draft. Add line items, then send or accept it."
             )
 
         if not data.get("currency"):

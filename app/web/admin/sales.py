@@ -551,9 +551,7 @@ def quote_line_item_add(
     "/quotes/{quote_id}/line-items/{item_id}/delete",
     dependencies=[Depends(require_permission("crm:quote:write"))],
 )
-def quote_line_item_delete(
-    quote_id: str, item_id: str, db: Session = Depends(get_db)
-):
+def quote_line_item_delete(quote_id: str, item_id: str, db: Session = Depends(get_db)):
     web_sales_service.delete_quote_line_item(db, item_id)
     return RedirectResponse(url=f"/admin/sales/quotes/{quote_id}", status_code=303)
 
