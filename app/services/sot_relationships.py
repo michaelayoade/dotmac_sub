@@ -118,6 +118,41 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
                 depends_on=("financial.access_resolution", "financial.ledger"),
             ),
+            SOTService(
+                name="financial.billing_scheduled",
+                module="app.services.billing.scheduled",
+                owns=(
+                    "scheduled invoice and overdue execution",
+                    "billing health and audit execution",
+                    "scheduled billing notification execution",
+                ),
+                depends_on=(
+                    "financial.ledger",
+                    "financial.access_resolution",
+                ),
+            ),
+            SOTService(
+                name="financial.collections_scheduled",
+                module="app.services.collections.scheduled",
+                owns=(
+                    "scheduled billing enforcement execution",
+                    "scheduled prepaid balance enforcement execution",
+                    "scheduled bundle-state reconciliation execution",
+                ),
+                depends_on=(
+                    "financial.dunning",
+                    "financial.access_resolution",
+                ),
+            ),
+            SOTService(
+                name="financial.payment_reconciliation",
+                module="app.services.payment_reconciliation",
+                owns=(
+                    "stranded top-up reconciliation",
+                    "scheduled top-up reconciliation execution",
+                ),
+                depends_on=("financial.ledger",),
+            ),
         ),
         entrypoints=(
             "app.services.billing_automation",
@@ -125,6 +160,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             "app.web.admin.billing_*",
             "app.api.billing",
             "app.tasks.billing",
+            "app.tasks.collections",
+            "app.tasks.enforcement",
+            "app.tasks.payment_reconciliation",
         ),
         rule=(
             "No caller infers access or balances from draft invoices, imported "

@@ -75,9 +75,10 @@ def test_suspend_account_suspends_non_dedicated_bundle(
 
 
 def test_run_bundle_reconcile_task(db_session, monkeypatch):
+    from app.services.collections import scheduled
     from app.tasks import collections as ctask
 
-    monkeypatch.setattr(ctask, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(scheduled, "SessionLocal", lambda: db_session)
     monkeypatch.setattr(db_session, "commit", lambda: None)
     monkeypatch.setattr(db_session, "close", lambda: None)
 

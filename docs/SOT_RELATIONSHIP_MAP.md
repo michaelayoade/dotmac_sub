@@ -36,9 +36,13 @@ that obscure business behavior.
 2. Customer financial position owns read-side financial summaries.
 3. Billing/access resolvers own entitlement and service-state decisions.
 4. Dunning owns postpaid enforcement; prepaid enforcement owns prepaid access.
+5. Scheduled billing, collections, and payment-reconciliation services own DB
+   sessions, transaction outcomes, and operational logging for Celery runners.
 
 Rule: no module should infer access from draft invoices, ad hoc balances, or
-legacy import fields when a billing/access resolver exists.
+legacy import fields when a billing/access resolver exists. Celery tasks only
+apply scheduling, routing, idempotency, and feature-gate concerns before calling
+the owning financial service.
 
 ## Customer Context
 

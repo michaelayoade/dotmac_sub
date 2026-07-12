@@ -41,6 +41,14 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "financial.access_resolution",
         "financial.ledger",
     )
+    assert sot_relationships.dependencies_for("financial.billing_scheduled") == (
+        "financial.ledger",
+        "financial.access_resolution",
+    )
+    assert sot_relationships.dependencies_for("financial.collections_scheduled") == (
+        "financial.dunning",
+        "financial.access_resolution",
+    )
     assert sot_relationships.dependencies_for(
         "communications.notification_service"
     ) == ("communications.channel_policy", "communications.event_policy")

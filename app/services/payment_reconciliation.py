@@ -27,6 +27,7 @@ from app.services.billing._common import lock_account
 from app.services.collections import restore_account_services
 from app.services.common import round_money, to_decimal
 from app.services.customer_portal_flow_payments import _provider_uuid
+from app.services.db_session_adapter import db_session_adapter
 from app.services.payment_gateway_adapter import payment_gateway_adapter
 from app.services.topup_intents import set_topup_intent_status
 
@@ -49,6 +50,7 @@ _GATEWAY_PROVIDERS = ("paystack", "flutterwave")
 _NOT_FOUND_STATUSES = (400, 404)
 DEFAULT_STALE_MINUTES = 15
 DEFAULT_MAX_AGE_DAYS = 7
+SessionLocal = db_session_adapter.create_session
 
 
 def _resolve_positive_int_setting(
@@ -275,3 +277,27 @@ def reconcile_pending_topups(
         "expired": expired,
         "errors": errors,
     }
+
+
+def reconcile_topups_scheduled() -> dict[str, int]:
+    """Scheduled top-up reconciliation entry point."""
+    logger.info("Starting top-up payment reconciliation sweep")
+    session = SessionLocal()
+    try:
+        result = reconcile_pending_topups(session)
+        logger.info(
+            "Top-up reconciliation completed: checked=%d recovered=%d "
+            "linked=%d expired=%d errors=%d",
+            result.get("checked", 0),
+            result.get("recovered", 0),
+            result.get("linked", 0),
+            result.get("expired", 0),
+            result.get("errors", 0),
+        )
+        session.commit()
+        return result
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
