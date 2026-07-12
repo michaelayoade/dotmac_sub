@@ -206,6 +206,28 @@ def overdue_status_count(db: Session, account_id) -> int:
     )
 
 
+def collection_blocking_balance(db: Session, account_id) -> Decimal:
+    """Balance that blocks collection-sensitive self-service actions.
+
+    This preserves the legacy arrangement/plan-change rule: only invoices
+    already marked ``overdue`` and still classified as collectible AR block the
+    action. Broader past-due debt remains available via ``overdue_debt_balance``.
+    """
+    from app.services.billing.invoice_classification import (
+        collectible_ar_invoice_filter,
+    )
+
+    return invoice_balance_sum(
+        db,
+        (
+            Invoice.account_id == coerce_uuid(str(account_id)),
+            Invoice.status == InvoiceStatus.overdue,
+            Invoice.is_active.is_(True),
+            collectible_ar_invoice_filter(),
+        ),
+    )
+
+
 def overdue_status_count_for_accounts(db: Session, account_ids) -> int:
     return int(
         db.execute(

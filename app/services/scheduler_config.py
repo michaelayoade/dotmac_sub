@@ -2363,10 +2363,8 @@ def build_beat_schedule() -> dict:
         # Gated by the same crm_phase3_native_sync_enabled flag as the
         # webhook adapter — default OFF; the whole entry dies at the Phase 3
         # contract (PR 15). Follows the crm.ticket_pull precedent.
-        crm_phase3_native_sync_enabled = bool(
-            resolve_value(
-                session, SettingDomain.projects, "crm_phase3_native_sync_enabled"
-            )
+        crm_phase3_native_sync_enabled = control_registry.is_enabled(
+            session, "crm.phase3_native_sync"
         )
         crm_phase3_delta_interval = _effective_int(
             session,

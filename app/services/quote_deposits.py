@@ -34,12 +34,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.billing import InvoiceStatus
-from app.models.domain_settings import SettingDomain
 from app.models.quote_mirror import QuoteMirror
 from app.schemas.billing import InvoiceCreate
 from app.services import billing as billing_service
+from app.services import control_registry, quotes_mirror
 from app.services import customer_portal_flow_payments as payments
-from app.services import quotes_mirror, settings_spec
 from app.services.common import coerce_uuid
 from app.services.sales import selfserve
 
@@ -48,11 +47,7 @@ logger = logging.getLogger(__name__)
 
 def _native_write_enabled(db: Session) -> bool:
     """Phase 3 flip flag: native quote accept vs CRM write-through."""
-    return bool(
-        settings_spec.resolve_value(
-            db, SettingDomain.projects, "quotes_native_write_enabled"
-        )
-    )
+    return control_registry.is_enabled(db, "quotes.native_write")
 
 
 def _quote_row(db: Session, subscriber_id: str, quote_id: str) -> QuoteMirror:

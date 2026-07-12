@@ -204,6 +204,41 @@ def test_event_notification_drops_policy_suppression(db_session):
     assert db_session.query(Notification).count() == before
 
 
+def test_queue_customer_notifications_for_policy_resolves_channels_and_recipients(
+    db_session,
+):
+    subscriber = _subscriber(db_session, suffix="policy-helper")
+
+    created = (
+        notification_service.notifications.queue_customer_notifications_for_policy(
+            db_session,
+            subscriber=subscriber,
+            template_code="fup_throttled",
+            event_type="fup_throttled",
+            category="fup",
+            default_channels=(NotificationChannel.push, NotificationChannel.email),
+            subject="Usage threshold reached",
+            body="Your usage crossed the configured threshold.",
+        )
+    )
+
+    rows = (
+        db_session.query(Notification)
+        .filter(Notification.subscriber_id == subscriber.id)
+        .order_by(Notification.channel)
+        .all()
+    )
+
+    assert created == 2
+    assert {row.channel for row in rows} == {
+        NotificationChannel.email,
+        NotificationChannel.push,
+    }
+    assert {row.recipient for row in rows} == {subscriber.email, str(subscriber.id)}
+    assert {row.event_type for row in rows} == {"fup_throttled"}
+    assert {row.category for row in rows} == {"fup"}
+
+
 def test_internal_notification_bypasses_customer_identity_and_gates(db_session):
     subscriber = _subscriber(
         db_session, status=SubscriberStatus.canceled, suffix="internal-bypass"

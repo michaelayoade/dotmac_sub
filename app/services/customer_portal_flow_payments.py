@@ -26,6 +26,7 @@ from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.idempotency import IdempotencyKey
 from app.models.subscriber import Subscriber
 from app.services import billing as billing_service
+from app.services import control_registry
 from app.services import customer_portal_flow_payment_methods as customer_cards
 from app.services.billing._common import lock_account
 from app.services.billing_adapter import PaymentIntent, billing_adapter
@@ -248,6 +249,8 @@ def enabled_direct_bank_transfer_accounts(db: Session) -> list[dict[str, str]]:
 
 
 def direct_bank_transfer_enabled(db: Session) -> bool:
+    if not control_registry.is_enabled(db, "billing.direct_bank_transfer"):
+        return False
     # Resolve from a single settings read (the accounts list is already attached
     # by direct_bank_transfer_settings) rather than calling
     # enabled_direct_bank_transfer_accounts, which would re-query the same rows.

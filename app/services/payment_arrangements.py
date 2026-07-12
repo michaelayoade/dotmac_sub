@@ -125,22 +125,9 @@ def get_account_outstanding_balance(db: Session, subscriber_id: str) -> Decimal:
     Service-level equivalent of the portal-context helper; arrangements may
     only cover what is actually owed and overdue.
     """
-    from sqlalchemy import func
+    from app.services.invoice_collectibility import collection_blocking_balance
 
-    from app.models.billing import Invoice, InvoiceStatus
-    from app.services.billing.invoice_classification import (
-        collectible_ar_invoice_filter,
-    )
-
-    total = (
-        db.query(func.coalesce(func.sum(Invoice.balance_due), 0))
-        .filter(Invoice.account_id == coerce_uuid(subscriber_id))
-        .filter(Invoice.status == InvoiceStatus.overdue)
-        .filter(Invoice.is_active.is_(True))
-        .filter(collectible_ar_invoice_filter())
-        .scalar()
-    )
-    return Decimal(str(total or 0))
+    return collection_blocking_balance(db, subscriber_id)
 
 
 class PaymentArrangements(ListResponseMixin):

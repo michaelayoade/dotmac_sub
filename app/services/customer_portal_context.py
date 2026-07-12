@@ -41,6 +41,7 @@ from app.services.customer_context import (
     resolve_customer_account_ids,
 )
 from app.services.customer_support_links import ticket_customer_link_filter
+from app.services.network.radius_sessions import live_framed_ips_by_subscription
 
 logger = logging.getLogger(__name__)
 
@@ -142,23 +143,7 @@ def _live_framed_ips(db: Session, subscription_ids: list) -> dict:
     """
     if not subscription_ids:
         return {}
-    from app.models.usage import RadiusAccountingSession
-
-    rows = (
-        db.query(
-            RadiusAccountingSession.subscription_id,
-            RadiusAccountingSession.framed_ip_address,
-        )
-        .filter(RadiusAccountingSession.subscription_id.in_(subscription_ids))
-        .filter(RadiusAccountingSession.session_end.is_(None))
-        .filter(RadiusAccountingSession.framed_ip_address.isnot(None))
-        .order_by(RadiusAccountingSession.session_start.desc())
-        .all()
-    )
-    ips: dict = {}
-    for sub_id, ip in rows:
-        ips.setdefault(sub_id, ip)
-    return ips
+    return live_framed_ips_by_subscription(db, subscription_ids)
 
 
 def _format_address(address) -> str:

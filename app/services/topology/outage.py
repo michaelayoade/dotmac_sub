@@ -23,7 +23,6 @@ from app.models.operational_escalation import OperationalEntityType
 from app.services import operational_escalation
 from app.services.topology.affected import (
     _dist_to_core,
-    affected_customers,
     downstream_nodes,
     lldp_adjacency,
 )
@@ -198,9 +197,19 @@ def declare_outage(
     if node is None and basestation is None and fdh is None:
         raise ValueError("declare_outage requires a node, basestation, or FDH cabinet")
     if impact is None:
-        impact = affected_customers(
-            session, node=node, basestation=basestation, fdh=fdh
+        from app.services.network.outage_impact import (
+            resolve_basestation_impact,
+            resolve_fdh_impact,
+            resolve_node_impact,
         )
+
+        if node is not None:
+            impact = resolve_node_impact(session, node).payload
+        elif basestation is not None:
+            impact = resolve_basestation_impact(session, basestation).payload
+        else:
+            assert fdh is not None
+            impact = resolve_fdh_impact(session, fdh).payload
     incident = OutageIncident(
         root_node_id=node.id if node is not None else None,
         basestation_id=basestation.id if basestation is not None else None,

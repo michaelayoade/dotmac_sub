@@ -14,22 +14,17 @@ from app.models.catalog import Subscription
 from app.models.connector import ConnectorConfig
 from app.models.domain_settings import SettingDomain
 from app.models.network import (
-    CPEDevice,
-    DeviceStatus,
     IPAssignment,
     IpPool,
     IPv4Address,
     IPv6Address,
     IPVersion,
-    OLTDevice,
-    OntUnit,
 )
 from app.models.provisioning import (
     ProvisioningVendor,
     ProvisioningWorkflow,
     ServiceOrder,
 )
-from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
 from app.schemas.network import IPAssignmentCreate
 from app.services import network as network_service
 from app.services import settings_spec
@@ -37,7 +32,7 @@ from app.services.common import (
     coerce_uuid,
     validate_enum,
 )
-from app.services.credential_crypto import decrypt_credential
+from app.services.provisioning_context import extend_provisioning_context
 from app.services.secrets import resolve_secret
 
 logger = logging.getLogger(__name__)
@@ -647,84 +642,7 @@ def _extend_provisioning_context(
     subscription_id: str | None,
     context: dict,
 ) -> dict:
-    if not subscription_id:
-        return context
-    subscription = db.get(Subscription, coerce_uuid(subscription_id))
-    if not subscription:
-        return context
-    device = (
-        db.query(CPEDevice)
-        .filter(CPEDevice.subscriber_id == subscription.subscriber_id)
-        .filter(CPEDevice.status == DeviceStatus.active)
-        .order_by(CPEDevice.created_at.desc())
-        .first()
-    )
-    if not device:
-        return context
-    context.update(
-        {
-            "cpe_device_id": str(device.id),
-            "cpe_serial_number": device.serial_number,
-        }
-    )
-    tr069_device = None
-    if device.id:
-        tr069_device = (
-            db.query(Tr069CpeDevice)
-            .filter(Tr069CpeDevice.cpe_device_id == device.id)
-            .first()
-        )
-    if not tr069_device and device.serial_number:
-        tr069_device = (
-            db.query(Tr069CpeDevice)
-            .filter(Tr069CpeDevice.serial_number == device.serial_number)
-            .filter(Tr069CpeDevice.is_active.is_(True))
-            .first()
-        )
-    if tr069_device:
-        context.update(
-            {
-                "tr069_cpe_device_id": str(tr069_device.id),
-                "tr069_serial_number": tr069_device.serial_number,
-                "tr069_oui": tr069_device.oui,
-                "tr069_product_class": tr069_device.product_class,
-                "tr069_acs_server_id": str(tr069_device.acs_server_id),
-            }
-        )
-        if (
-            tr069_device.oui
-            and tr069_device.product_class
-            and tr069_device.serial_number
-        ):
-            context["genieacs_device_id"] = (
-                f"{tr069_device.oui}-{tr069_device.product_class}-{tr069_device.serial_number}"
-            )
-
-    # Resolve ACS server details for ManagementServer push
-    acs_server_id = context.get("tr069_acs_server_id")
-    if not acs_server_id and context.get("ont_id"):
-        ont = db.get(OntUnit, context["ont_id"])
-        if ont and ont.olt_device_id:
-            olt = db.get(OLTDevice, str(ont.olt_device_id))
-            if olt and olt.tr069_acs_server_id:
-                acs_server_id = str(olt.tr069_acs_server_id)
-    if not acs_server_id:
-        default_id = settings_spec.resolve_value(
-            db, SettingDomain.tr069, "default_acs_server_id"
-        )
-        if default_id:
-            acs_server_id = str(default_id)
-
-    if acs_server_id:
-        acs_server = db.get(Tr069AcsServer, acs_server_id)
-        if acs_server and acs_server.cwmp_url:
-            context["acs_server"] = {
-                "cwmp_url": acs_server.cwmp_url,
-                "cwmp_username": acs_server.cwmp_username,
-                "cwmp_password": decrypt_credential(acs_server.cwmp_password),
-            }
-
-    return context
+    return extend_provisioning_context(db, subscription_id, context)
 
 
 def resolve_workflow_for_service_order(

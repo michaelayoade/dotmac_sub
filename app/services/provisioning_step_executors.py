@@ -42,11 +42,11 @@ def execute_create_olt_service_port(
 
     # Use Subscriber-ONT adapter to resolve complete provisioning context
     if not ont_unit_id and (subscription_id or subscriber_id):
-        from app.services.network.subscriber_ont_adapter import (
-            resolve_provisioning_context,
+        from app.services.provisioning_context import (
+            resolve_operations_provisioning_context,
         )
 
-        prov_context = resolve_provisioning_context(
+        prov_context = resolve_operations_provisioning_context(
             db,
             subscriber_id=subscriber_id,
             subscription_id=subscription_id,

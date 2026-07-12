@@ -54,7 +54,6 @@ from app.models.radius import (
 )
 from app.models.radius_error import RadiusAuthError
 from app.models.subscriber import Address, ChannelType, Subscriber
-from app.models.usage import RadiusAccountingSession
 from app.schemas.catalog import SubscriptionCreate, SubscriptionUpdate
 from app.schemas.network import IPAssignmentCreate, IPAssignmentUpdate
 from app.schemas.subscriber import SubscriberAccountCreate
@@ -78,6 +77,9 @@ from app.services.billing_adapter import (
 )
 from app.services.billing_settings import resolve_payment_due_days
 from app.services.credential_crypto import decrypt_credential
+from app.services.network.radius_sessions import (
+    latest_open_accounting_session_for_subscription,
+)
 from app.timezone import APP_TIMEZONE_NAME, format_in_app_timezone
 
 logger = logging.getLogger(__name__)
@@ -3366,24 +3368,11 @@ def _subscription_connection_status(
             "identifier": None,
         }
 
-    query = db.query(RadiusAccountingSession).filter(
-        RadiusAccountingSession.session_end.is_(None)
+    session = latest_open_accounting_session_for_subscription(
+        db,
+        subscription.id,
+        access_credential_id=credential.id if credential else None,
     )
-    if credential:
-        query = query.filter(
-            or_(
-                RadiusAccountingSession.subscription_id == subscription.id,
-                RadiusAccountingSession.access_credential_id == credential.id,
-            )
-        )
-    else:
-        query = query.filter(RadiusAccountingSession.subscription_id == subscription.id)
-
-    session = query.order_by(
-        RadiusAccountingSession.last_update_at.desc().nullslast(),
-        RadiusAccountingSession.session_start.desc().nullslast(),
-        RadiusAccountingSession.created_at.desc(),
-    ).first()
     if not session:
         return {
             "state": "offline",

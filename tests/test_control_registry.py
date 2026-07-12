@@ -194,6 +194,53 @@ def test_default_off_feature_stays_off_until_enabled(db_session):
     assert control_registry.is_enabled(db_session, "network.olt_profile_sync") is True
 
 
+def test_new_control_aliases_keep_expected_defaults_and_legacy_rows(db_session):
+    from app.models.domain_settings import SettingDomain
+
+    assert (
+        control_registry.is_enabled(db_session, "billing.direct_bank_transfer") is False
+    )
+    _set_legacy(db_session, SettingDomain.billing, "direct_bank_transfer_enabled", True)
+    assert (
+        control_registry.is_enabled(db_session, "billing.direct_bank_transfer") is True
+    )
+
+    assert control_registry.is_enabled(db_session, "access.radius_coa") is True
+    _set_legacy(db_session, SettingDomain.radius, "coa_enabled", False)
+    assert control_registry.is_enabled(db_session, "access.radius_coa") is False
+
+    assert control_registry.is_enabled(db_session, "vas.wallet") is False
+    _set_legacy(db_session, SettingDomain.vas, "enabled", True)
+    assert control_registry.is_enabled(db_session, "vas.wallet") is True
+
+
+def test_scheduler_routes_new_registered_usage_keys_through_resolver(db_session):
+    from app.models.domain_settings import SettingDomain
+
+    assert (
+        scheduler_config._effective_bool(
+            db_session,
+            SettingDomain.usage,
+            "radius_accounting_import_enabled",
+            "RADIUS_ACCOUNTING_IMPORT_ENABLED",
+            True,
+        )
+        is True
+    )
+
+    _set_canonical(db_session, "sessions.radius_accounting_import", False)
+    assert (
+        scheduler_config._effective_bool(
+            db_session,
+            SettingDomain.usage,
+            "radius_accounting_import_enabled",
+            "RADIUS_ACCOUNTING_IMPORT_ENABLED",
+            True,
+        )
+        is False
+    )
+
+
 def test_env_overrides_canonical_row(db_session, monkeypatch):
     """Env is the emergency override and wins over a stored canonical row."""
     _set_canonical(db_session, "billing.autopay", False)

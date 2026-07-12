@@ -1,9 +1,31 @@
 """Tests for Celery tasks."""
 
 import logging
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+
+@contextmanager
+def _fake_adapter_session(session):
+    """Stand-in for ``db_session_adapter.session()``.
+
+    The SoT refactor moved session lifecycle out of the task modules and into
+    ``SqlAlchemySessionAdapter.session`` (commit on success, rollback on error,
+    always close). Tests patch the adapter's context manager with this fake so
+    the task under test still gets a session while the lifecycle assertions
+    (commit/rollback/close) exercise the same contract the real adapter honors.
+    """
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
 
 # =============================================================================
 # Billing Task Tests
@@ -419,7 +441,10 @@ class TestBillingMasterSwitchGates:
 
     def test_autopay_skipped_when_billing_disabled(self):
         mock_session = MagicMock()
-        with patch("app.tasks.autopay.SessionLocal", return_value=mock_session):
+        with patch(
+            "app.tasks.autopay.db_session_adapter.session",
+            lambda: _fake_adapter_session(mock_session),
+        ):
             with patch("app.tasks.autopay.billing_enabled", return_value=False):
                 with patch("app.tasks.autopay.autopay_service.run_all_due") as mock_run:
                     from app.tasks.autopay import charge_due_invoices
@@ -431,7 +456,10 @@ class TestBillingMasterSwitchGates:
 
     def test_arrangement_check_skipped_when_billing_disabled(self):
         mock_session = MagicMock()
-        with patch("app.tasks.arrangements.SessionLocal", return_value=mock_session):
+        with patch(
+            "app.tasks.arrangements.db_session_adapter.session",
+            lambda: _fake_adapter_session(mock_session),
+        ):
             with patch("app.tasks.arrangements.billing_enabled", return_value=False):
                 with patch(
                     "app.tasks.arrangements.payment_arrangements"
@@ -582,7 +610,10 @@ class TestIntegrationsTask:
         mock_session.query.return_value.filter.return_value.filter.return_value.first.return_value = None
         job_id = "00000000-0000-0000-0000-000000000123"
 
-        with patch("app.tasks.integrations.SessionLocal", return_value=mock_session):
+        with patch(
+            "app.tasks.integrations.db_session_adapter.session",
+            lambda: _fake_adapter_session(mock_session),
+        ):
             with patch(
                 "app.tasks.integrations.integration_service.integration_jobs.run"
             ) as mock_run:
@@ -605,7 +636,10 @@ class TestIntegrationsTask:
         mock_session.query.return_value.filter.return_value.filter.return_value.first.return_value = None
         job_id = "00000000-0000-0000-0000-000000000456"
 
-        with patch("app.tasks.integrations.SessionLocal", return_value=mock_session):
+        with patch(
+            "app.tasks.integrations.db_session_adapter.session",
+            lambda: _fake_adapter_session(mock_session),
+        ):
             with patch(
                 "app.tasks.integrations.integration_service.integration_jobs.run",
                 side_effect=Exception("Integration error"),

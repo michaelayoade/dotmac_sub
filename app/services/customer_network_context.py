@@ -190,7 +190,7 @@ def _resolve_topology_paths(
     *,
     subscriptions: list[Subscription] | None,
 ) -> dict[object, object]:
-    from app.services.topology.customer_path import resolve_customer_path
+    from app.services.network.access_path import resolve_subscription_access_path
 
     subscriptions = subscriptions or list(
         db.scalars(
@@ -202,7 +202,7 @@ def _resolve_topology_paths(
     paths: dict[object, object] = {}
     for subscription in subscriptions:
         try:
-            paths[subscription.id] = resolve_customer_path(db, subscription)
+            paths[subscription.id] = resolve_subscription_access_path(db, subscription)
         except Exception:
             continue
     return paths

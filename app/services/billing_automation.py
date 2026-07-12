@@ -36,7 +36,7 @@ from app.models.catalog import (
 from app.models.domain_settings import SettingDomain
 from app.models.network import SubscriberAdditionalRoute
 from app.models.subscriber import Address, Subscriber, SubscriberStatus
-from app.services import enforcement_window, settings_spec
+from app.services import control_registry, enforcement_window, settings_spec
 from app.services.billing import _recalculate_invoice_totals
 from app.services.billing.invoice_classification import (
     collectible_ar_invoice_filter,
@@ -1005,11 +1005,7 @@ def subscription_invoice_eligible(
 
 def _hourly_notifications_enabled(db: Session) -> bool:
     """Whether the dedicated hourly billing-notifications runner owns the emits."""
-    return bool(
-        settings_spec.resolve_value(
-            db, SettingDomain.collections, "billing_notifications_hourly_enabled"
-        )
-    )
+    return control_registry.is_enabled(db, "billing.notifications_hourly")
 
 
 def run_billing_notifications(
@@ -1125,8 +1121,8 @@ def run_invoice_cycle(
     # drafts until funded from the wallet. Default OFF keeps the scheduled cycle
     # postpaid-only.
     # Genuine daily/balance prepaid stays off-invoice regardless.
-    include_prepaid_monthly = _setting_truthy(
-        db, "prepaid_monthly_invoicing_enabled", default=False
+    include_prepaid_monthly = control_registry.is_enabled(
+        db, "billing.prepaid_monthly_invoicing"
     )
     # Deposit-is-truth: prepaid advance invoices created by the scheduled runner
     # are DRAFT (not AR, never overdue, never dunned) until the wallet fully
