@@ -2,7 +2,7 @@
 
 Covers the auth-safe MAC match (ONU own-MAC == active subscription MAC),
 ambiguity/no-match skips, the already-linked and Huawei (non-UISP) exclusions,
-idempotency, duplicate-subscription-row collapse, and — critically — that the
+idempotency, duplicate-subscription ambiguity, and — critically — that the
 pass NEVER writes ``subscriptions.mac_address``.
 """
 
@@ -107,6 +107,8 @@ def test_router_mode_mac_match_creates_assignment(
     assert len(assignments) == 1
     assignment = assignments[0]
     assert assignment.subscriber_id == subscriber.id
+    assert assignment.subscription_id == sub.id
+    assert assignment.service_address_id == sub.service_address_id
     assert assignment.notes == PROVENANCE
     assert assignment.active is True
 
@@ -203,22 +205,23 @@ def test_two_similar_names_stays_ambiguous(db_session, subscriber, catalog_offer
     assert _active_assignments(db_session, onu.id) == []
 
 
-def test_duplicate_subscription_rows_one_subscriber_still_matches(
+def test_duplicate_active_services_one_subscriber_stays_ambiguous(
     db_session, subscriber, catalog_offer
 ):
     olt = _olt(db_session)
     onu = _onu(db_session, olt, mac=ROUTER_MAC_UISP)
-    # Known dupes: two active rows for the SAME subscriber+MAC collapse to one
-    # distinct subscriber -> still an unambiguous match.
+    # Customer identity is not service identity. Two active services carrying
+    # the same MAC cannot be assigned safely without another service-level
+    # signal, even when both belong to the same subscriber.
     _active_subscription(db_session, subscriber, catalog_offer, ROUTER_MAC_SUB)
     _active_subscription(db_session, subscriber, catalog_offer, ROUTER_MAC_UISP)
     db_session.commit()
 
     result = link_ufiber_onus_to_subscribers(db_session)
 
-    assert result["ambiguous"] == 0
-    assert result["matched_linked"] == 1
-    assert len(_active_assignments(db_session, onu.id)) == 1
+    assert result["ambiguous"] == 1
+    assert result["matched_linked"] == 0
+    assert _active_assignments(db_session, onu.id) == []
 
 
 def test_onu_with_existing_active_assignment_skipped(

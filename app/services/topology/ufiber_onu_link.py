@@ -121,9 +121,11 @@ def _name_similarity(name: str | None, candidates: list[str]) -> float:
 
 @dataclass
 class _SubMatch:
-    """One distinct active subscriber a MAC resolves to, with tiebreak context."""
+    """One exact active subscription a MAC resolves to."""
 
     subscriber_id: uuid.UUID
+    subscription_id: uuid.UUID
+    service_address_id: uuid.UUID | None = None
     labels: list[str] = field(default_factory=list)
     login: str | None = None
 
@@ -131,14 +133,11 @@ class _SubMatch:
 def _active_subscriber_mac_index(
     session: Session,
 ) -> dict[str, dict[uuid.UUID, _SubMatch]]:
-    """Normalized MAC -> {subscriber_id: _SubMatch} over ACTIVE subscriptions.
+    """Normalized MAC -> {subscription_id: match} over active services.
 
     Mirrors ``uisp_sync._active_subscriber_macs`` but also carries each
-    subscriber's name labels (for the ambiguity tiebreak) and a representative
-    subscription ``login`` (for stale-duplicate reporting). The subscriptions
-    table carries historical duplicate rows, so scoping to ``status='active'``
-    and collapsing to *distinct* subscribers means a MAC still mapping to >1
-    subscriber is genuinely ambiguous. Built once per run;
+    subscriber's labels and service identity. Multiple services for one customer
+    remain distinct and therefore ambiguous unless another signal resolves them.
     ``subscriptions.mac_address`` is only READ here, never written.
     """
     index: dict[str, dict[uuid.UUID, _SubMatch]] = {}
@@ -146,6 +145,8 @@ def _active_subscriber_mac_index(
         session.query(
             Subscription.mac_address,
             Subscription.subscriber_id,
+            Subscription.id,
+            Subscription.service_address_id,
             Subscription.login,
             Subscriber.display_name,
             Subscriber.first_name,
@@ -159,19 +160,35 @@ def _active_subscriber_mac_index(
         )
         .all()
     )
-    for mac, sid, login, display, first, last, company in rows:
+    for (
+        mac,
+        sid,
+        subscription_id,
+        address_id,
+        login,
+        display,
+        first,
+        last,
+        company,
+    ) in rows:
         normalized = _norm_mac(mac)
         if not normalized:
             continue
         by_sub = index.setdefault(normalized, {})
-        match = by_sub.get(sid)
+        match = by_sub.get(subscription_id)
         if match is None:
             labels = [
                 label
                 for label in (display, f"{first or ''} {last or ''}", company)
                 if _norm_name(label)
             ]
-            by_sub[sid] = _SubMatch(subscriber_id=sid, labels=labels, login=login)
+            by_sub[subscription_id] = _SubMatch(
+                subscriber_id=sid,
+                subscription_id=subscription_id,
+                service_address_id=address_id,
+                labels=labels,
+                login=login,
+            )
         elif match.login is None and login:
             match.login = login
     return index
@@ -343,13 +360,30 @@ def link_ufiber_onus_to_subscribers(db: Session) -> dict:
                 assignment = OntAssignment(
                     ont_unit_id=onu.id,
                     subscriber_id=winner.subscriber_id,
+                    subscription_id=winner.subscription_id,
                     pon_port_id=onu.pon_port_id,
-                    service_address_id=None,
+                    service_address_id=winner.service_address_id,
                     active=True,
                     assigned_at=now,
                     notes=note,
                 )
                 db.add(assignment)
+                db.flush()
+                try:
+                    with db.begin_nested():
+                        from app.services.uisp_control_plane import (
+                            stage_pending_orders_for_subscription,
+                        )
+
+                        stage_pending_orders_for_subscription(
+                            db, winner.subscription_id, commit=False
+                        )
+                except Exception:
+                    logger.exception(
+                        "ufiber_order_staging_failed subscription_id=%s ont=%s",
+                        winner.subscription_id,
+                        onu.id,
+                    )
             if via_tiebreak:
                 result["matched_by_name_tiebreak"] += 1
             else:
