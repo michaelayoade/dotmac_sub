@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import nullsfirst
+from sqlalchemy import and_, nullsfirst, or_
+from sqlalchemy.orm import Session
 
 from app.celery_app import celery_app
+from app.models.network_operation import NetworkOperationStatus
 from app.models.uisp_control import (
     UispConfigSnapshot,
     UispDeviceIntent,
@@ -21,11 +23,50 @@ from app.services.uisp import UispClient, UispClientError
 from app.services.uisp_control_plane import redact_config
 from app.services.uisp_write_adapter import (
     UispConfigurationWriteAdapter,
+    UispPostWriteReadbackError,
     UispWriteAdapterError,
     UispWriteUnsupported,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _mark_pending_readback(
+    db: Session,
+    operation_id: str,
+    intent_id: str,
+    message: str,
+) -> None:
+    """Persist a durable recovery marker after a possibly-applied write."""
+    db.rollback()
+    recovery_db = db_session_adapter.create_session()
+    try:
+        intent = recovery_db.get(UispDeviceIntent, intent_id)
+        if intent is not None:
+            intent.status = UispIntentStatus.pending_readback
+            intent.last_error = message
+        operation = network_operations.get(recovery_db, operation_id)
+        if operation.status in {
+            NetworkOperationStatus.pending,
+            NetworkOperationStatus.running,
+            NetworkOperationStatus.waiting,
+        }:
+            network_operations.mark_warning(
+                recovery_db,
+                operation_id,
+                message,
+                output_payload={
+                    "outcome": "pending_readback",
+                    "verified": False,
+                    "write_may_have_applied": True,
+                },
+            )
+        recovery_db.commit()
+    except Exception:
+        recovery_db.rollback()
+        raise
+    finally:
+        recovery_db.close()
 
 
 def execute_uisp_apply(
@@ -46,6 +87,7 @@ def execute_uisp_apply(
         intent.last_error = None
         db.commit()
 
+        result = None
         try:
             resolved_adapter = adapter or UispConfigurationWriteAdapter(
                 client or UispClient.from_env()
@@ -73,13 +115,27 @@ def execute_uisp_apply(
                 network_operations.mark_succeeded(
                     db, operation_id, output_payload=payload
                 )
+                # Snapshot, verified intent revision, and operation success must
+                # become durable atomically. A later context-manager commit is
+                # too late to recover cleanly from an audit persistence failure.
+                db.commit()
                 return {"success": True, **payload}
             intent.status = UispIntentStatus.drifted
             intent.last_error = result.message
             network_operations.mark_failed(
                 db, operation_id, result.message, output_payload=payload
             )
+            db.commit()
             return {"success": False, **payload}
+        except UispPostWriteReadbackError as exc:
+            message = str(exc)
+            _mark_pending_readback(db, operation_id, intent_id, message)
+            return {
+                "success": False,
+                "outcome": "pending_readback",
+                "verified": False,
+                "message": message,
+            }
         except UispWriteUnsupported as exc:
             message = str(exc)
             intent.status = UispIntentStatus.manual_required
@@ -103,9 +159,26 @@ def execute_uisp_apply(
                 "uisp_apply_failed operation=%s intent=%s", operation.id, intent.id
             )
             message = f"Unexpected UISP apply failure: {exc}"
+            if result is not None and result.write_accepted:
+                recovery_message = (
+                    "UISP write/readback completed but atomic audit persistence "
+                    f"failed: {exc}"
+                )
+                _mark_pending_readback(db, operation_id, intent_id, recovery_message)
+                return {
+                    "success": False,
+                    "outcome": "pending_readback",
+                    "verified": False,
+                    "message": recovery_message,
+                }
+            db.rollback()
+            intent = db.get(UispDeviceIntent, intent_id)
+            if intent is None:
+                return {"success": False, "outcome": "failed", "message": message}
             intent.status = UispIntentStatus.failed
             intent.last_error = message
             network_operations.mark_failed(db, operation_id, message)
+            db.commit()
             return {"success": False, "outcome": "failed", "message": message}
 
 
@@ -131,15 +204,23 @@ def reconcile_uisp_config_readback(max_intents: int = 25) -> dict[str, Any]:
     bounded = max(1, min(int(max_intents), 100))
     stats = {"checked": 0, "verified": 0, "drifted": 0, "unsupported": 0, "failed": 0}
     with db_session_adapter.session() as db:
+        stale_applying_before = datetime.now(UTC) - timedelta(minutes=5)
         intents = (
             db.query(UispDeviceIntent)
             .filter(
-                UispDeviceIntent.status.in_(
-                    {
-                        UispIntentStatus.verified,
-                        UispIntentStatus.drifted,
-                        UispIntentStatus.manual_required,
-                    }
+                or_(
+                    UispDeviceIntent.status.in_(
+                        {
+                            UispIntentStatus.verified,
+                            UispIntentStatus.drifted,
+                            UispIntentStatus.manual_required,
+                            UispIntentStatus.pending_readback,
+                        }
+                    ),
+                    and_(
+                        UispDeviceIntent.status == UispIntentStatus.applying,
+                        UispDeviceIntent.updated_at < stale_applying_before,
+                    ),
                 )
             )
             .order_by(nullsfirst(UispDeviceIntent.last_observed_at.asc()))

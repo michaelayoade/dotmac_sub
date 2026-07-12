@@ -6,10 +6,24 @@ from types import SimpleNamespace
 from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.network import CPEDevice, DeviceType
 from app.models.network_operation import NetworkOperationStatus
-from app.models.uisp_control import UispIntentStatus, UispIntentTargetType
+from app.models.uisp_control import (
+    UispConfigSnapshot,
+    UispDeviceIntent,
+    UispIntentStatus,
+    UispIntentTargetType,
+    UispSnapshotSource,
+)
 from app.services.uisp_control_plane import request_apply, stage_intent
-from app.services.uisp_write_adapter import UispApplyResult, UispWriteUnsupported
-from app.tasks.uisp_control import execute_uisp_apply
+from app.services.uisp_write_adapter import (
+    UispApplyResult,
+    UispPostWriteReadbackError,
+    UispWriteUnsupported,
+)
+from app.tasks.uisp_control import (
+    _mark_pending_readback,
+    execute_uisp_apply,
+    reconcile_uisp_config_readback,
+)
 
 
 def _records(db_session, subscriber, catalog_offer):
@@ -102,6 +116,234 @@ def test_task_marks_readback_drift_failed(
     assert result["success"] is False
     assert intent.status == UispIntentStatus.drifted
     assert operation.status == NetworkOperationStatus.failed
+
+
+def test_snapshot_failure_after_verified_write_becomes_pending_readback(
+    db_session, subscriber, catalog_offer, monkeypatch
+):
+    intent, operation = _records(db_session, subscriber, catalog_offer)
+    _use_session(monkeypatch, db_session)
+    original_add = db_session.add
+
+    def fail_snapshot_add(instance):
+        if isinstance(instance, UispConfigSnapshot):
+            if instance.intent is not None and instance in instance.intent.snapshots:
+                instance.intent.snapshots.remove(instance)
+            raise RuntimeError("snapshot persistence failed")
+        return original_add(instance)
+
+    monkeypatch.setattr(db_session, "add", fail_snapshot_add)
+    recovery_calls = []
+    monkeypatch.setattr(
+        "app.tasks.uisp_control._mark_pending_readback",
+        lambda db, operation_id, intent_id, message: recovery_calls.append(
+            (operation_id, intent_id, message)
+        ),
+    )
+    adapter = SimpleNamespace(
+        apply=lambda db, item: UispApplyResult(
+            outcome="verified",
+            message="matched",
+            write_accepted=True,
+            verified=True,
+            attempts=1,
+            observed_config={"wifi.ssid": "Customer"},
+        )
+    )
+
+    result = execute_uisp_apply(str(operation.id), str(intent.id), adapter=adapter)
+
+    assert result["outcome"] == "pending_readback"
+    assert recovery_calls == [
+        (
+            str(operation.id),
+            str(intent.id),
+            "UISP write/readback completed but atomic audit persistence failed: "
+            "snapshot persistence failed",
+        )
+    ]
+
+
+def test_atomic_finalize_commit_failure_rolls_back_success_and_marks_pending(
+    db_session, subscriber, catalog_offer, monkeypatch
+):
+    intent, operation = _records(db_session, subscriber, catalog_offer)
+    _use_session(monkeypatch, db_session)
+    original_commit = db_session.commit
+    state = {"write_returned": False, "failed": False}
+
+    def apply(db, item):
+        state["write_returned"] = True
+        return UispApplyResult(
+            outcome="verified",
+            message="matched",
+            write_accepted=True,
+            verified=True,
+            attempts=1,
+            observed_config={"wifi.ssid": "Customer"},
+        )
+
+    def fail_finalize_once():
+        if state["write_returned"] and not state["failed"]:
+            state["failed"] = True
+            raise RuntimeError("commit failed")
+        return original_commit()
+
+    monkeypatch.setattr(db_session, "commit", fail_finalize_once)
+    recovery_calls = []
+    monkeypatch.setattr(
+        "app.tasks.uisp_control._mark_pending_readback",
+        lambda db, operation_id, intent_id, message: recovery_calls.append(
+            (operation_id, intent_id, message)
+        ),
+    )
+
+    result = execute_uisp_apply(
+        str(operation.id), str(intent.id), adapter=SimpleNamespace(apply=apply)
+    )
+
+    assert result["outcome"] == "pending_readback"
+    assert recovery_calls == [
+        (
+            str(operation.id),
+            str(intent.id),
+            "UISP write/readback completed but atomic audit persistence failed: "
+            "commit failed",
+        )
+    ]
+
+
+def test_post_write_readback_error_is_recoverable(
+    db_session, subscriber, catalog_offer, monkeypatch
+):
+    intent, operation = _records(db_session, subscriber, catalog_offer)
+    _use_session(monkeypatch, db_session)
+    recovery_calls = []
+    monkeypatch.setattr(
+        "app.tasks.uisp_control._mark_pending_readback",
+        lambda db, operation_id, intent_id, message: recovery_calls.append(
+            (operation_id, intent_id, message)
+        ),
+    )
+
+    def readback_failed(db, item):
+        raise UispPostWriteReadbackError("write accepted; readback unavailable")
+
+    result = execute_uisp_apply(
+        str(operation.id),
+        str(intent.id),
+        adapter=SimpleNamespace(apply=readback_failed),
+    )
+
+    assert result["outcome"] == "pending_readback"
+    assert recovery_calls == [
+        (
+            str(operation.id),
+            str(intent.id),
+            "write accepted; readback unavailable",
+        )
+    ]
+
+
+def test_pending_readback_recovery_uses_a_fresh_transaction(monkeypatch):
+    current_db = SimpleNamespace(rollback=lambda: None)
+    intent = SimpleNamespace(status=UispIntentStatus.applying, last_error=None)
+    operation = SimpleNamespace(status=NetworkOperationStatus.running)
+    calls = []
+
+    class RecoverySession:
+        def get(self, model, object_id):
+            assert model is UispDeviceIntent
+            assert object_id == "intent-1"
+            return intent
+
+        def commit(self):
+            calls.append("commit")
+
+        def rollback(self):
+            calls.append("rollback")
+
+        def close(self):
+            calls.append("close")
+
+    recovery_db = RecoverySession()
+    monkeypatch.setattr(
+        "app.tasks.uisp_control.db_session_adapter.create_session",
+        lambda: recovery_db,
+    )
+    monkeypatch.setattr(
+        "app.tasks.uisp_control.network_operations.get",
+        lambda db, operation_id: operation,
+    )
+
+    def mark_warning(db, operation_id, message, *, output_payload):
+        calls.append((operation_id, message, output_payload))
+        operation.status = NetworkOperationStatus.warning
+
+    monkeypatch.setattr(
+        "app.tasks.uisp_control.network_operations.mark_warning", mark_warning
+    )
+
+    _mark_pending_readback(current_db, "operation-1", "intent-1", "audit failed")
+
+    assert intent.status == UispIntentStatus.pending_readback
+    assert intent.last_error == "audit failed"
+    assert operation.status == NetworkOperationStatus.warning
+    assert calls == [
+        (
+            "operation-1",
+            "audit failed",
+            {
+                "outcome": "pending_readback",
+                "verified": False,
+                "write_may_have_applied": True,
+            },
+        ),
+        "commit",
+        "close",
+    ]
+
+
+def test_reconciler_materializes_snapshot_before_verifying_pending_readback(
+    db_session, subscriber, catalog_offer, monkeypatch
+):
+    intent, _operation = _records(db_session, subscriber, catalog_offer)
+    intent.status = UispIntentStatus.pending_readback
+    db_session.commit()
+    _use_session(monkeypatch, db_session)
+    monkeypatch.setattr("app.services.uisp.uisp_configured", lambda: True)
+    monkeypatch.setattr(
+        "app.tasks.uisp_control.UispClient.from_env", lambda: SimpleNamespace()
+    )
+    adapter = SimpleNamespace(
+        readback=lambda db, item: UispApplyResult(
+            outcome="verified",
+            message="matched",
+            write_accepted=False,
+            verified=True,
+            attempts=1,
+            observed_config={"wifi.ssid": "Customer"},
+        )
+    )
+    monkeypatch.setattr(
+        "app.tasks.uisp_control.UispConfigurationWriteAdapter",
+        lambda *args, **kwargs: adapter,
+    )
+
+    stats = reconcile_uisp_config_readback(max_intents=25)
+
+    db_session.refresh(intent)
+    snapshot = (
+        db_session.query(UispConfigSnapshot)
+        .filter(UispConfigSnapshot.source == UispSnapshotSource.observed)
+        .one()
+    )
+    assert stats["checked"] == 1
+    assert stats["verified"] == 1
+    assert intent.status == UispIntentStatus.verified
+    assert intent.verified_revision == intent.desired_revision
+    assert snapshot.revision == intent.desired_revision
+    assert snapshot.config == {"wifi.ssid": "Customer"}
 
 
 def test_task_marks_model_unsupported_warning(

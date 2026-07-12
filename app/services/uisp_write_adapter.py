@@ -43,6 +43,10 @@ class UispWriteUnsupported(UispWriteAdapterError):
     pass
 
 
+class UispPostWriteReadbackError(UispWriteAdapterError):
+    """UISP accepted a write, but mandatory readback could not complete."""
+
+
 @dataclass(frozen=True)
 class UispFieldMapping:
     canonical_name: str
@@ -291,14 +295,19 @@ class UispConfigurationWriteAdapter:
         except UispClientError as exc:
             raise UispWriteAdapterError(str(exc)) from exc
 
-        return self._readback(
-            device_id,
-            transport,
-            mappings,
-            expected,
-            write_accepted=True,
-            response=response,
-        )
+        try:
+            return self._readback(
+                device_id,
+                transport,
+                mappings,
+                expected,
+                write_accepted=True,
+                response=response,
+            )
+        except UispClientError as exc:
+            raise UispPostWriteReadbackError(
+                "UISP accepted the write but device readback failed"
+            ) from exc
 
     def readback(self, db: Session, intent: UispDeviceIntent) -> UispApplyResult:
         """Read and compare mapped fields without issuing a write."""
