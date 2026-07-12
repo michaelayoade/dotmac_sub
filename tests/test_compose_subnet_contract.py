@@ -26,9 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def _compose_default_subnet() -> str:
     text = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     # `- subnet: ${DOCKER_SUBNET:-172.20.255.0/24}` -> the default after `:-`
-    match = re.search(
-        r"-\s*subnet:\s*\$\{DOCKER_SUBNET:-([0-9./]+)\}", text
-    )
+    match = re.search(r"-\s*subnet:\s*\$\{DOCKER_SUBNET:-([0-9./]+)\}", text)
     assert match, "compose default network must declare `subnet: ${DOCKER_SUBNET:-...}`"
     return match.group(1)
 
