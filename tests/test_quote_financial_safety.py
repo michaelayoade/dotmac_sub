@@ -16,6 +16,12 @@ from __future__ import annotations
 import pytest
 
 from app.models.sales import Quote, QuoteStatus, SalesOrder
+
+# Accepting a quote mints a sales order, whose number comes from
+# ``document_sequences``. conftest builds the schema from whatever is registered
+# on Base.metadata at import time, so this module has to pull the model in or
+# the table is missing when the file runs on its own.
+from app.models.sequence import DocumentSequence  # noqa: F401
 from app.schemas.sales import QuoteCreate, QuoteLineItemCreate, QuoteUpdate
 from app.services import sales as sales_service
 
