@@ -457,7 +457,12 @@ def test_single_alembic_head():
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ["271_billing_portal_read_pressure_indexes"]
+    heads = script.get_heads()
+    assert len(heads) == 1, (
+        f"Expected exactly one Alembic head, found {len(heads)}: {heads}. "
+        "Two branches almost certainly numbered their migrations off the same "
+        "parent -- renumber the later one onto the current head."
+    )
 
 
 def test_migration_249_adds_integration_settingdomain():
