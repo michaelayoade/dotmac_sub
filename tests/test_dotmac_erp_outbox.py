@@ -457,7 +457,7 @@ def test_single_alembic_head():
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ["270_network_operation_router_types"]
+    assert script.get_heads() == ["271_billing_portal_read_pressure_indexes"]
 
 
 def test_migration_249_adds_integration_settingdomain():
