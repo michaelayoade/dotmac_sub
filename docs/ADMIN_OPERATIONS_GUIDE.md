@@ -1111,12 +1111,16 @@ OpenBao reference such as
 key makes the task report `blocked_static_environment_key`; this prevents one
 worker changing data while other processes remain pinned to an old key.
 
-For the one-time migration, set `CREDENTIAL_ENCRYPTION_KEY_SEED` to the current
-literal key and run `scripts/setup/openbao_init.sh`. Confirm
-`secret/settings/auth#credential_encryption_key`, change
-`CREDENTIAL_ENCRYPTION_KEY` to the reference above, remove the seed variable,
-and restart API and worker processes. Never rerun initialization with an old
-seed value.
+For the one-time migration, first run the credential backfills and a full
+rotation dry-run with the current literal key. Set
+`CREDENTIAL_ENCRYPTION_KEY_SEED` to that exact existing key, byte for byte. Do
+not generate a new key during an upgrade: existing `enc:` values would become
+undecryptable. Run `scripts/setup/openbao_init.sh`, confirm
+`secret/settings/auth#credential_encryption_key` resolves to the same key, then
+change `CREDENTIAL_ENCRYPTION_KEY` to the reference above, remove the seed
+variable, and recreate every API, worker, beat, poller, and listener process.
+Run the rotation dry-run again after the restart. Never rerun initialization
+with an old seed value.
 
 ### Rotation Order
 
