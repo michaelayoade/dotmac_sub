@@ -6,7 +6,12 @@ from datetime import UTC, datetime, timedelta
 from app.models.ai_insight import AIInsightStatus
 from app.models.comms_campaign import CampaignRecipient, CampaignRecipientStatus
 from app.models.notification import Notification
-from app.models.service_team import ServiceTeam, ServiceTeamType
+from app.models.service_team import (
+    ServiceTeam,
+    ServiceTeamMember,
+    ServiceTeamMemberRole,
+    ServiceTeamType,
+)
 from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
 from app.models.support import Ticket
 from app.models.team_inbox import InboxConversation, InboxMessage
@@ -14,7 +19,6 @@ from app.models.workqueue import WorkqueueSnooze
 from app.schemas.ai_operations import AIInsightCreate, AiIntakeConfigUpsert
 from app.schemas.campaigns import CampaignCreate
 from app.services import ai_operations, comms_campaigns, workqueue
-from app.services.workqueue.permissions import AUDIENCE_TEAM_SCOPE
 from app.tasks import notifications as notification_tasks
 
 
@@ -219,14 +223,23 @@ def test_workqueue_aggregates_native_items_and_respects_snooze(db_session):
     db_session.add_all([conversation, ticket])
     db_session.flush()
 
-    # The queue now scopes reads to what the principal may actually see. The
-    # team's unassigned conversation is only visible at team audience, so the
-    # principal needs the team scope to reach it -- the old signature took a
-    # bare user_id and applied no authorization at all.
+    # list_workqueue() now scopes reads to what the principal may actually see;
+    # the old signature took a bare user_id and applied no authorization at all.
+    # This user is an ordinary member of the team, which is what the original
+    # test implied: they see their own assigned ticket plus the team's
+    # unassigned conversation.
+    db_session.add(
+        ServiceTeamMember(
+            team_id=team.id,
+            person_id=user_id,
+            role=ServiceTeamMemberRole.member.value,
+        )
+    )
+    db_session.flush()
     principal = workqueue.WorkqueuePrincipal(
         person_id=user_id,
         roles=frozenset(),
-        scopes=frozenset({AUDIENCE_TEAM_SCOPE}),
+        scopes=frozenset(),
         can_view=True,
         can_act=True,
     )
