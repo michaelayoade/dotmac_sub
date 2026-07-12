@@ -948,9 +948,9 @@ def locations(db: Session) -> list[dict[str, Any]]:
             continue
         key = f"address:{str(label).strip().lower()}"
         result.setdefault(key, {"id": key, "name": str(label)})
-    rows = sorted(result.values(), key=lambda item: item["name"].lower())
-    _locations_cache = (now, [dict(item) for item in rows])
-    return rows
+    ordered = sorted(result.values(), key=lambda item: item["name"].lower())
+    _locations_cache = (now, [dict(item) for item in ordered])
+    return ordered
 
 
 def billing_risk_rows(
