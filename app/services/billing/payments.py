@@ -1645,6 +1645,15 @@ class Payments(ListResponseMixin):
             _validate_collection_account(
                 db, str(collection_account_id), data.get("currency", payment.currency)
             )
+        # A status change is a settlement decision, not a field edit. mark_status
+        # owns it: it enforces the legal-transition table, stamps paid_at (a
+        # succeeded payment with a NULL paid_at is invisible to the enforcement
+        # health gate and silently blocks all collections suspensions), resolves
+        # dunning cases, applies prepaid service credit, and emits
+        # payment_received. Blind-setattr here bypassed every one of those and
+        # reopened the production paid_at regression that create() already fixed.
+        requested_status = data.pop("status", None)
+
         for key, value in data.items():
             setattr(payment, key, value)
         invoice_ids = [alloc.invoice_id for alloc in payment.allocations]
@@ -1654,6 +1663,12 @@ class Payments(ListResponseMixin):
                 db.flush()
                 _finalize_invoice_payment_effects(db, invoice)
         db.commit()
+
+        if requested_status is not None:
+            normalized = validate_enum(requested_status, PaymentStatus, "status")
+            if normalized and normalized != payment.status:
+                Payments.mark_status(db, str(payment.id), normalized)
+
         db.refresh(payment)
         return payment
 
