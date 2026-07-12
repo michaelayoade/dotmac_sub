@@ -495,6 +495,7 @@ services:
     - GENIEACS_UI_WORKER_PROCESSES=${GENIEACS_UI_WORKER_PROCESSES:-1}
     - GENIEACS_UI_INTERFACE=127.0.0.1
     - GENIEACS_EXT_TIMEOUT=15000
+    - 'GENIEACS_CWMP_CONNECTION_REQUEST_AUTH=AUTH(EXT("auth", "connectionRequestUsername", DeviceID.SerialNumber), EXT("auth", "connectionRequestPassword", DeviceID.SerialNumber))'
     - GENIEACS_DEBUG_FILE=/var/log/genieacs/debug.yaml
     - GENIEACS_CWMP_LOG_FILE=/var/log/genieacs/cwmp.log
     - NODE_OPTIONS=--enable-source-maps

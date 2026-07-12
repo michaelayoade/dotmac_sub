@@ -570,3 +570,43 @@ def test_successful_saved_service_apply_clears_pending_marker(
 
     assert result.success is True
     assert "delivery" not in (ont.desired_config or {})
+
+
+def test_queued_saved_service_apply_remains_pending(db_session, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from app.models.network import OntProvisioningStatus, OntUnit
+    from app.services.network.ont_desired_config import set_desired_config_values
+    from app.services.network.ont_provision_steps import apply_saved_service_config
+
+    ont = OntUnit(serial_number="QUEUED-PENDING-001", is_active=True)
+    set_desired_config_values(
+        ont,
+        {
+            "delivery.pending_apply": True,
+            "wifi.ssid": "QUEUED-PENDING",
+        },
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "app.services.network.ont_provision_steps.genieacs_service",
+        SimpleNamespace(
+            set_wifi_config=lambda *a, **kw: SimpleNamespace(
+                success=False,
+                message=(
+                    "Failed to set WiFi config: setParameterValues queued but "
+                    "Connection Request failed: HTTP 401. Task abc is queued."
+                ),
+            )
+        ),
+    )
+
+    result = apply_saved_service_config(db_session, str(ont.id))
+
+    assert result.success is False
+    assert result.waiting is True
+    assert result.data and result.data["pending_deliveries"]
+    assert ont.provisioning_status == OntProvisioningStatus.pending_service_config
+    assert (ont.desired_config or {})["delivery"]["pending_apply"] is True
