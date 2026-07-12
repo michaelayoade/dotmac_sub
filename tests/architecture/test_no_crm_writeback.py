@@ -50,7 +50,15 @@ def test_deferred_mutations_are_the_only_remaining_writes() -> None:
     deferred one requires deleting it from the set, which is the visible signal
     that the cutover advanced.
     """
-    mutation_verbs = ("create_", "update_", "delete_", "submit_", "post_", "accept_", "request_")
+    mutation_verbs = (
+        "create_",
+        "update_",
+        "delete_",
+        "submit_",
+        "post_",
+        "accept_",
+        "request_",
+    )
     present = {
         name
         for name in dir(CRMClient)
