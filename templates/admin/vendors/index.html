@@ -1,0 +1,98 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import status_badge %}
+{% block title %}Vendors - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-4">
+    <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+            <h1 class="font-display text-xl font-bold tracking-tight text-slate-900 dark:text-white">Vendors</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Contractors who bid on installation projects and submit as-built routes.</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <a href="/admin/vendors/operations"
+               class="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                Review Queue
+            </a>
+            <a href="/admin/vendors/new"
+               class="inline-flex items-center gap-2 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-cyan-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                New Vendor
+            </a>
+        </div>
+    </div>
+
+    <form method="get" class="flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="min-w-[200px] flex-1">
+            <label for="vendor-search" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Search</label>
+            <input id="vendor-search" type="search" name="search" value="{{ search }}"
+                   class="block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                   placeholder="Name, code, contact...">
+        </div>
+        <div>
+            <label for="vendor-status" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Status</label>
+            <select id="vendor-status" name="status"
+                    class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="" {% if not status %}selected{% endif %}>All</option>
+                <option value="active" {% if status == 'active' %}selected{% endif %}>Active</option>
+                <option value="inactive" {% if status == 'inactive' %}selected{% endif %}>Inactive</option>
+            </select>
+        </div>
+        <button type="submit" class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 dark:bg-slate-700 dark:hover:bg-slate-600">Filter</button>
+    </form>
+
+    <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-800/60">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Vendor</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Code</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Contact</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Service Area</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                    {% for vendor in vendors %}
+                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/40">
+                        <td class="px-6 py-4">
+                            <a href="/admin/vendors/{{ vendor.id }}" class="text-sm font-medium text-cyan-600 hover:underline dark:text-cyan-400">{{ vendor.name }}</a>
+                        </td>
+                        <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ vendor.code or '—' }}</td>
+                        <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
+                            {{ vendor.contact_name or '—' }}
+                            {% if vendor.contact_email %}<div class="text-xs text-slate-400">{{ vendor.contact_email }}</div>{% endif %}
+                        </td>
+                        <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ vendor.service_area or '—' }}</td>
+                        <td class="px-6 py-4">
+                            {{ status_badge('Active' if vendor.is_active else 'Inactive', 'success' if vendor.is_active else 'inactive', size='sm') }}
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="5" class="px-6 py-12 text-center text-sm text-slate-500 dark:text-slate-400">
+                            No vendors yet. <a href="/admin/vendors/new" class="font-medium text-cyan-600 hover:underline">Create the first one.</a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        {% if pages > 1 %}
+        <div class="flex items-center justify-between border-t border-slate-200 px-6 py-3 dark:border-slate-700">
+            <p class="text-sm text-slate-500 dark:text-slate-400">{{ total }} vendor{{ '' if total == 1 else 's' }} · page {{ page }} of {{ pages }}</p>
+            <div class="flex gap-2">
+                {% if page > 1 %}
+                <a href="?page={{ page - 1 }}&search={{ search }}&status={{ status }}" class="rounded-lg border border-slate-200 px-3 py-1.5 text-sm hover:bg-slate-50 dark:border-slate-600 dark:hover:bg-slate-700">Previous</a>
+                {% endif %}
+                {% if page < pages %}
+                <a href="?page={{ page + 1 }}&search={{ search }}&status={{ status }}" class="rounded-lg border border-slate-200 px-3 py-1.5 text-sm hover:bg-slate-50 dark:border-slate-600 dark:hover:bg-slate-700">Next</a>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
