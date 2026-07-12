@@ -84,6 +84,15 @@ class GenieACSTaskRejectedError(GenieACSError):
     pass
 
 
+class GenieACSTaskQueuedError(GenieACSError):
+    """Raised when GenieACS accepted a task but has not delivered it yet."""
+
+    def __init__(self, message: str, *, task_id: str = "", reason: str = "") -> None:
+        super().__init__(message)
+        self.task_id = task_id
+        self.reason = reason
+
+
 class GenieACSClient:
     """HTTP client for GenieACS NBI (Northbound Interface).
 

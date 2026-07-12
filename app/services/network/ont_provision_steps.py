@@ -88,6 +88,15 @@ def _is_queued_acs_delivery(message: object) -> bool:
     return any(marker in normalized for marker in _QUEUED_ACS_DELIVERY_MARKERS)
 
 
+def _result_is_queued_acs_delivery(result: object) -> bool:
+    data = getattr(result, "data", None)
+    if isinstance(data, dict) and data.get("delivery_status") == "queued":
+        return True
+    return bool(getattr(result, "waiting", False)) or _is_queued_acs_delivery(
+        getattr(result, "message", "")
+    )
+
+
 def _validate_olt_profile_dependencies(
     db: Session,
     *,
@@ -846,9 +855,7 @@ def apply_saved_service_config(
     def _append(name: str, result) -> None:
         success = bool(getattr(result, "success", False))
         message = str(getattr(result, "message", ""))
-        waiting = bool(getattr(result, "waiting", False)) or (
-            not success and _is_queued_acs_delivery(message)
-        )
+        waiting = not success and _result_is_queued_acs_delivery(result)
         steps.append(
             {
                 "step": name,

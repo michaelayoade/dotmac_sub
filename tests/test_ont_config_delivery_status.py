@@ -595,10 +595,9 @@ def test_queued_saved_service_apply_remains_pending(db_session, monkeypatch) -> 
         SimpleNamespace(
             set_wifi_config=lambda *a, **kw: SimpleNamespace(
                 success=False,
-                message=(
-                    "Failed to set WiFi config: setParameterValues queued but "
-                    "Connection Request failed: HTTP 401. Task abc is queued."
-                ),
+                message="Delivery deferred by ACS.",
+                waiting=True,
+                data={"delivery_status": "queued", "task_id": "abc"},
             )
         ),
     )

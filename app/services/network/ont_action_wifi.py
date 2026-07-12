@@ -7,11 +7,12 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.services.genieacs_client import GenieACSError
+from app.services.genieacs_client import GenieACSError, GenieACSTaskQueuedError
 from app.services.network.ont_action_common import (
     ActionResult,
     build_tr069_params,
     detect_data_model_root,
+    genieacs_error_result,
     get_ont_client_or_error,
     set_and_verify,
 )
@@ -347,6 +348,8 @@ def _set_best_effort_wifi_field(
             verify=True,
         )
     except GenieACSError as exc:
+        if isinstance(exc, GenieACSTaskQueuedError):
+            raise
         if not allow_unverified:
             raise
         logger.info(
@@ -561,7 +564,7 @@ def set_wifi_config(
         )
     except GenieACSError as exc:
         logger.error("Set WiFi config failed for ONT %s: %s", ont.serial_number, exc)
-        return ActionResult(success=False, message=f"Failed to set WiFi config: {exc}")
+        return genieacs_error_result(exc, "Failed to set WiFi config")
 
 
 def toggle_lan_port(db: Session, ont_id: str, port: int, enabled: bool) -> ActionResult:

@@ -560,6 +560,30 @@ def test_verified_write_deletes_queued_spv_when_connection_request_never_recover
     assert deleted == ["gpv-task", "gpv-task", "spv-task"]
 
 
+def test_verified_write_exposes_structured_queued_delivery() -> None:
+    import pytest
+
+    from app.services.genieacs_client import GenieACSTaskQueuedError
+    from app.services.network.ont_action_common import set_and_verify
+
+    class FakeClient:
+        def set_parameter_values(self, _device_id, _params):
+            return {
+                "_id": "spv-task",
+                "connectionRequestError": "HTTP 401",
+            }
+
+    with pytest.raises(GenieACSTaskQueuedError) as raised:
+        set_and_verify(
+            FakeClient(),
+            "device-1",
+            {"Device.WiFi.SSID.1.SSID": "DOTMAC"},
+        )
+
+    assert raised.value.task_id == "spv-task"
+    assert raised.value.reason == "HTTP 401"
+
+
 def test_ont_client_resolution_repairs_stale_genieacs_identity(
     db_session,
     monkeypatch,

@@ -60,7 +60,8 @@ PRESET_DEFINITIONS = {
 CONFIG_ENTRIES = {
     # CPE authentication using auth extension
     "cwmp.auth": 'EXT("auth", "authenticateCpe", username, password, DeviceID.ID, DeviceID.SerialNumber)',
-    # Connection-request authentication using per-device/effective config.
+    # Keep this expression aligned with GENIEACS_CWMP_CONNECTION_REQUEST_AUTH
+    # in docker-compose.yml.
     "cwmp.connectionRequestAuth": (
         'AUTH(EXT("auth", "connectionRequestUsername", DeviceID.SerialNumber), '
         'EXT("auth", "connectionRequestPassword", DeviceID.SerialNumber))'
