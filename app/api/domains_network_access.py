@@ -189,7 +189,7 @@ def apply_uisp_intent(intent_id: UUID, db: Session = Depends(get_db)):
         operation_id=operation.id,
         status=operation.status.value,
         applied=False,
-        message=operation.error or "UISP apply requires operator action",
+        message=operation.error or "UISP apply queued; awaiting device readback",
     )
 
 

@@ -103,7 +103,7 @@ def uisp_control_apply(intent_id: UUID, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="UISP intent not found")
     request_apply(db, intent)
     return RedirectResponse(
-        f"/admin/network/uisp-control/{intent_id}?notice=manual_required",
+        f"/admin/network/uisp-control/{intent_id}?notice=queued",
         status_code=303,
     )
 

@@ -114,7 +114,7 @@ def test_drift_is_reported_from_observed_inventory(
     }
 
 
-def test_wifi_intent_is_manual_and_plaintext_secret_is_rejected(
+def test_wifi_intent_queues_without_false_success_and_rejects_plaintext_secret(
     db_session, subscriber, catalog_offer
 ):
     subscription = _subscription(db_session, subscriber, catalog_offer)
@@ -141,12 +141,14 @@ def test_wifi_intent_is_manual_and_plaintext_secret_is_rejected(
         },
     )
     observe_intent(db_session, intent, _observation())
-    operation = request_apply(db_session, intent, initiated_by="test-admin")
+    operation = request_apply(
+        db_session, intent, initiated_by="test-admin", enqueue=False
+    )
 
-    assert intent.status == UispIntentStatus.manual_required
-    assert operation.status == NetworkOperationStatus.warning
-    assert operation.output_payload["applied"] is False
-    assert operation.error
+    assert intent.status == UispIntentStatus.applying
+    assert operation.status == NetworkOperationStatus.pending
+    assert operation.output_payload is None
+    assert operation.error is None
     desired_snapshot = (
         db_session.query(UispConfigSnapshot)
         .filter(

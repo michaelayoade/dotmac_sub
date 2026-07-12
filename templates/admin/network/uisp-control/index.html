@@ -12,7 +12,7 @@
             <label for="status" class="sr-only">Status</label>
             <select id="status" name="status" onchange="this.form.submit()" class="border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white">
                 <option value="">All statuses</option>
-                {% for value in ['verified', 'drifted', 'manual_required', 'pending_observation', 'staged', 'failed'] %}
+                {% for value in ['applying', 'pending_readback', 'verified', 'drifted', 'manual_required', 'pending_observation', 'staged', 'failed'] %}
                 <option value="{{ value }}" {% if status_filter == value %}selected{% endif %}>{{ value | replace('_', ' ') | title }}</option>
                 {% endfor %}
             </select>

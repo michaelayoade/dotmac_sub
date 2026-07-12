@@ -120,8 +120,7 @@ def test_uisp_client_requires_configuration():
         raise AssertionError("expected UispConfigurationError")
 
 
-def test_uisp_client_exposes_no_write_helpers():
-    # The client is read-only by design: every public helper is a GET list.
+def test_uisp_client_exposes_scoped_configuration_write_helpers():
     public = {
         name
         for name in dir(uisp.UispClient)
@@ -134,4 +133,6 @@ def test_uisp_client_exposes_no_write_helpers():
         "list_airmax_stations",
         "list_olt_onus",
         "list_data_links",
+        "get_device_configuration",
+        "put_device_configuration",
     }

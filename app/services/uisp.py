@@ -1,13 +1,13 @@
-"""Read-only UISP (Ubiquiti network controller) NMS API client.
+"""UISP (Ubiquiti network controller) NMS API client.
 
 Follows the shared external-API client conventions: base-URL/token
 resolution (file -> env -> OpenBao), request timeout from env, and a
 short-cooldown reachability circuit breaker so an unreachable UISP fast-fails
 instead of stacking full HTTP timeouts.
 
-This client is strictly READ-ONLY: it only issues GET requests against the
-NMS v2.1 API and exposes no write helpers. Topology imports flow one way,
-UISP -> sub's own tables (see ``app/services/topology/uisp_sync.py``).
+Inventory helpers issue GET requests. Configuration writes are restricted to
+the documented per-device configuration endpoint and are consumed by the
+desired/observed adapter, which performs a later GET readback before success.
 """
 
 from __future__ import annotations
@@ -33,6 +33,19 @@ class UispConfigurationError(UispClientError):
 
 
 class UispAuthError(UispClientError):
+    pass
+
+
+class UispApiError(UispClientError):
+    def __init__(
+        self, message: str, *, status_code: int, error_code: str | None = None
+    ):
+        super().__init__(message)
+        self.status_code = status_code
+        self.error_code = error_code
+
+
+class UispUnsupportedOperationError(UispApiError):
     pass
 
 
@@ -141,20 +154,29 @@ class UispClient:
             timeout=timeout,
         )
 
-    def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
-        """GET a v2.1 endpoint and return parsed JSON. Never writes."""
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        json_body: dict[str, Any] | None = None,
+    ) -> Any:
+        """Issue one authenticated v2.1 request and return parsed JSON."""
         if _REACHABILITY_CIRCUIT.is_open():
             raise UispClientError("UISP circuit open after recent connection failures")
         url = f"{self.api_url}{NMS_API_PREFIX}{path}"
         try:
             with httpx.Client(timeout=self.timeout) as client:
-                response = client.get(
+                response = client.request(
+                    method,
                     url,
                     params=params,
+                    json=json_body,
                     headers={"x-auth-token": self.api_token},
                 )
                 response.raise_for_status()
-                data = response.json()
+                data = response.json() if response.content else None
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code in {401, 403}:
                 logger.error(
@@ -164,15 +186,36 @@ class UispClient:
                 raise UispAuthError(
                     f"UISP API authentication failed with HTTP {exc.response.status_code}"
                 ) from exc
+            try:
+                error_payload = exc.response.json()
+            except ValueError:
+                error_payload = {}
+            message = str(
+                error_payload.get("message")
+                or error_payload.get("error")
+                or f"UISP API request failed with HTTP {exc.response.status_code}"
+            )
+            error_code = error_payload.get("error")
             logger.info(
                 "uisp_request_failure",
                 extra={
                     "event": "uisp_request_failure",
+                    "method": method,
                     "path": path,
                     "status_code": exc.response.status_code,
+                    "error_code": error_code,
                 },
             )
-            raise UispClientError("UISP API request failed") from exc
+            error_type = (
+                UispUnsupportedOperationError
+                if exc.response.status_code == 501
+                else UispApiError
+            )
+            raise error_type(
+                message,
+                status_code=exc.response.status_code,
+                error_code=str(error_code) if error_code else None,
+            ) from exc
         except (httpx.RequestError, ValueError) as exc:
             _REACHABILITY_CIRCUIT.trip()
             logger.info(
@@ -183,9 +226,15 @@ class UispClient:
 
         logger.info(
             "uisp_request_success",
-            extra={"event": "uisp_request_success", "path": path},
+            extra={"event": "uisp_request_success", "method": method, "path": path},
         )
         return data
+
+    def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        return self._request("GET", path, params=params)
+
+    def _put(self, path: str, payload: dict[str, Any]) -> Any:
+        return self._request("PUT", path, json_body=payload)
 
     def _get_list(
         self, path: str, params: dict[str, Any] | None = None
@@ -219,6 +268,27 @@ class UispClient:
     def list_data_links(self) -> list[dict[str, Any]]:
         """All UISP data-links — device<->device backhaul topology edges."""
         return self._get_list("/data-links")
+
+    def get_device_configuration(self, device_id: str) -> dict[str, Any]:
+        """Read the installed device's UISP configuration document."""
+        data = self._get(f"/devices/{device_id}/configuration")
+        if not isinstance(data, dict):
+            raise UispClientError("Invalid UISP device configuration result")
+        return data
+
+    def put_device_configuration(
+        self, device_id: str, configuration: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Replace a device configuration document through UISP.
+
+        Callers must first GET the document, preserve unknown fields, and
+        perform a later GET readback. This method deliberately exposes no
+        arbitrary path or generic HTTP write surface.
+        """
+        data = self._put(f"/devices/{device_id}/configuration", configuration)
+        if data is not None and not isinstance(data, dict):
+            raise UispClientError("Invalid UISP configuration write result")
+        return data
 
 
 def check_uisp_availability(timeout: float = 3.0) -> dict[str, Any]:

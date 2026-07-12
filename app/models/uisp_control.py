@@ -31,6 +31,8 @@ class UispIntentTargetType(enum.Enum):
 
 class UispIntentStatus(enum.Enum):
     staged = "staged"
+    applying = "applying"
+    pending_readback = "pending_readback"
     pending_observation = "pending_observation"
     verified = "verified"
     drifted = "drifted"

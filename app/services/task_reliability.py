@@ -489,6 +489,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "One-shot inventory backfill; re-runs only stamp still-empty mgmt_ips, "
         "so redriving after a failure is safe.",
     ),
+    "app.tasks.uisp_control.apply_uisp_intent": _c("network", STATE, STATEFUL, STATUS),
+    "app.tasks.uisp_control.reconcile_uisp_config_readback": _c(
+        "network",
+        SWEEP,
+        IDEMP,
+        HEALTH,
+        "Bounded mapped configuration readback; no writes and repeated reads converge.",
+    ),
     "app.tasks.topology_uisp.run_uisp_topology_sync": _c(
         "network",
         SWEEP,

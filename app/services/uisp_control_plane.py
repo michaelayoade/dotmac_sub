@@ -1,8 +1,7 @@
 """Capability-aware desired/observed control plane for UISP devices.
 
-UISP's documented NMS integration used by this application is read-only. This
-module therefore records intent, snapshots observations, and reports drift, but
-never marks a requested mutation successful merely because work was queued.
+Writes are model-mapped and asynchronous. A queued or accepted mutation never
+counts as success until the device configuration GET readback converges.
 """
 
 from __future__ import annotations
@@ -18,7 +17,6 @@ from app.models.catalog import AccessType, Subscription
 from app.models.network import CPEDevice, DeviceType, OLTDevice, OntAssignment, OntUnit
 from app.models.network_operation import (
     NetworkOperation,
-    NetworkOperationStatus,
     NetworkOperationTargetType,
     NetworkOperationType,
 )
@@ -31,19 +29,28 @@ from app.models.uisp_control import (
     UispSnapshotSource,
 )
 
-READ_ONLY_CAPABILITIES: dict[str, bool | str] = {
+UISP_CAPABILITIES: dict[str, bool | str] = {
     "inventory": True,
     "topology": True,
     "firmware_inventory": True,
-    "config_observation": "limited",
-    "config_write": False,
-    "wifi_write": False,
-    "firmware_upgrade": False,
-    "remote_access_write": False,
-    "decommission_write": False,
+    "config_observation": "inventory_and_mapped_readback",
+    "config_write": "model_mapped",
+    "wifi_write": "model_mapped",
+    "firmware_upgrade": "model_mapped",
+    "remote_access_write": "model_mapped",
+    "decommission_write": "model_mapped",
 }
 
-_SECRET_KEYS = {"password", "passphrase", "secret", "token", "credential"}
+_SECRET_KEYS = {
+    "password",
+    "passphrase",
+    "secret",
+    "token",
+    "credential",
+    "psk",
+    "pre_shared",
+    "preshared",
+}
 _OBSERVABLE_PATHS = {
     "name",
     "model",
@@ -67,7 +74,7 @@ class UispIntentError(ValueError):
 
 
 def capabilities() -> dict[str, bool | str]:
-    return dict(READ_ONLY_CAPABILITIES)
+    return dict(UISP_CAPABILITIES)
 
 
 def redact_config(value: Any) -> Any:
@@ -278,7 +285,7 @@ def observe_intent(
     intent.observed_config = observed
     intent.last_observed_at = observed_at
     intent.drift = {"differences": differences, "unsupported": unsupported}
-    if unsupported:
+    if unsupported and intent.verified_revision != intent.desired_revision:
         intent.status = UispIntentStatus.manual_required
         intent.last_error = (
             "UISP NMS API has no documented write/readback support for: "
@@ -319,6 +326,7 @@ def reconcile_inventory(
         "drifted": 0,
         "manual_required": 0,
         "failed": 0,
+        "applying": 0,
     }
     intents = (
         db.query(UispDeviceIntent)
@@ -326,6 +334,12 @@ def reconcile_inventory(
         .all()
     )
     for intent in intents:
+        if intent.status in {
+            UispIntentStatus.applying,
+            UispIntentStatus.pending_readback,
+        }:
+            result["applying"] += 1
+            continue
         try:
             _device, owned_subscription_id, current_uisp_id = _target(
                 db, intent.target_type, intent.target_id
@@ -355,34 +369,50 @@ def reconcile_inventory(
 
 
 def request_apply(
-    db: Session, intent: UispDeviceIntent, *, initiated_by: str | None = None
+    db: Session,
+    intent: UispDeviceIntent,
+    *,
+    initiated_by: str | None = None,
+    enqueue: bool = True,
 ) -> NetworkOperation:
-    operation = NetworkOperation(
-        operation_type=(
+    from app.services.network_operations import network_operations
+
+    operation = network_operations.start(
+        db,
+        (
             NetworkOperationType.router_config_push
             if intent.target_type == UispIntentTargetType.cpe
             else NetworkOperationType.ont_provision
         ),
-        target_type=(
+        (
             NetworkOperationTargetType.cpe
             if intent.target_type == UispIntentTargetType.cpe
             else NetworkOperationTargetType.ont
         ),
-        target_id=intent.target_id,
-        status=NetworkOperationStatus.warning,
+        str(intent.target_id),
         correlation_key=f"uisp:{intent.id}:revision:{intent.desired_revision}",
         input_payload=redact_config(intent.desired_config),
-        output_payload={"capabilities": capabilities(), "applied": False},
-        error="UISP mutation is not supported by the documented read-only adapter",
         initiated_by=initiated_by,
-        started_at=datetime.now(UTC),
-        completed_at=datetime.now(UTC),
     )
-    intent.status = UispIntentStatus.manual_required
-    intent.last_error = operation.error
-    db.add(operation)
+    intent.status = UispIntentStatus.applying
+    intent.last_error = None
     db.commit()
     db.refresh(operation)
+    if enqueue:
+        try:
+            from app.tasks.uisp_control import apply_uisp_intent
+
+            apply_uisp_intent.delay(str(operation.id), str(intent.id))
+        except Exception as exc:
+            network_operations.mark_failed(
+                db,
+                str(operation.id),
+                f"Failed to enqueue UISP apply task: {exc}",
+            )
+            intent.status = UispIntentStatus.failed
+            intent.last_error = operation.error
+            db.commit()
+            db.refresh(operation)
     return operation
 
 
