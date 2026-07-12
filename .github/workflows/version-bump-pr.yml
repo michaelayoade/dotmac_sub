@@ -94,6 +94,25 @@ jobs:
           VERSION="$(tr -d '[:space:]' < VERSION)"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
+      # GitHub does not trigger workflow runs for events raised with GITHUB_TOKEN --
+      # a deliberate guard against workflows recursing into themselves. So when we
+      # fall back to it, the bump PR opens with *zero* checks, the required contexts
+      # on the base branch never report, and the PR is unmergeable except by an admin
+      # bypass. That failure is silent, which is how main's VERSION drifted far behind
+      # the bump PR's. Surface it here, and say so in the PR body, instead.
+      - name: Check PR-creation token
+        if: steps.impact.outputs.bump != 'none'
+        id: token
+        env:
+          VERSION_BUMP_TOKEN: ${{ secrets.VERSION_BUMP_TOKEN }}
+        run: |
+          if [ -n "$VERSION_BUMP_TOKEN" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=VERSION_BUMP_TOKEN is not set::The bump PR will be created with GITHUB_TOKEN, so CI will not run on it and its required status checks can never report. It will sit unmergeable until VERSION_BUMP_TOKEN (a PAT or GitHub App token with contents:write + pull-requests:write) is configured."
+          fi
+
       - name: Create version bump PR
         if: steps.impact.outputs.bump != 'none'
         uses: peter-evans/create-pull-request@v6
@@ -108,7 +127,19 @@ jobs:
             Rolling version bump PR for `${{ github.event.pull_request.base.ref }}` — updated in place as source PRs merge, carrying any pending bump forward.
 
             Version impact: none because this PR only applies generated version bumps.
-
+            ${{ steps.token.outputs.present == 'false' && '
+            > [!WARNING]
+            > **This PR cannot merge as-is, and no CI will run on it.**
+            >
+            > It was created with `GITHUB_TOKEN`, and GitHub does not trigger workflow
+            > runs for events raised with that token (a recursion guard). So the required
+            > status checks on the base branch will never report, and the PR stays
+            > `BLOCKED` — merging it needs an admin bypass every time.
+            >
+            > Fix: set a repo secret `VERSION_BUMP_TOKEN` to a PAT or GitHub App token with
+            > `contents: write` + `pull-requests: write`. This workflow already prefers it
+            > over `GITHUB_TOKEN`; once set, the next bump PR runs CI and merges on green.
+            ' || '' }}
             Latest source PR: #${{ github.event.pull_request.number }}
             Latest source impact: ${{ steps.impact.outputs.impact }}
             New version: ${{ steps.version.outputs.version }}
