@@ -6,12 +6,34 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
+from sqlalchemy import create_engine, text
+
 from app.celery_app import celery_app
 from app.models.radius_active_session import RadiusActiveSession
 from app.services import admin_alerts, radius_health
 from tests.test_customer_plan_change_prepaid import _make_offer, _make_subscription
 
 TASK_NAME = "app.tasks.radius_health.run_radius_health_check"
+
+
+def test_radacct_schema_rejects_undersized_nasportid():
+    engine = create_engine("sqlite://")
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE radacct (nasportid VARCHAR(32))"))
+        assert radius_health._radacct_schema_signals(conn) == {
+            "radacct_schema_ok": 0,
+            "radacct_nasportid_capacity": 32,
+        }
+
+
+def test_radacct_schema_accepts_full_radius_attribute():
+    engine = create_engine("sqlite://")
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE radacct (nasportid VARCHAR(253))"))
+        assert radius_health._radacct_schema_signals(conn) == {
+            "radacct_schema_ok": 1,
+            "radacct_nasportid_capacity": 253,
+        }
 
 
 def test_task_registered_routed_and_exported():
@@ -131,13 +153,16 @@ def test_push_radius_metrics_writes_gauges(monkeypatch):
             "suspended_with_session": 2,
             "paid_active_without_session": 60,
             "radacct_read_ok": 1,
+            "radacct_schema_ok": 1,
+            "radacct_nasportid_capacity": 253,
         }
     )
 
-    assert result == {"radius_metric_lines": 7, "radius_metric_write_failed": 0}
+    assert result == {"radius_metric_lines": 9, "radius_metric_write_failed": 0}
     names = {line.split("{")[0].split(" ")[0] for line in written["lines"]}
     assert "radius_acct_freshness_seconds" in names
     assert "radius_suspended_with_active_session" in names
+    assert "radius_radacct_schema_ok" in names
     assert written["kwargs"]["operation"] == "radius_health"
 
 
@@ -166,6 +191,8 @@ def _wire_heartbeat(monkeypatch, result: dict | None):
 
 _HEALTHY = {
     "radacct_read_ok": 1,
+    "radacct_schema_ok": 1,
+    "radacct_nasportid_capacity": 253,
     "open_sessions": 855,
     "stale_open_sessions": 0,
     "acct_freshness_seconds": 30.0,
@@ -190,6 +217,22 @@ def test_unreadable_radacct_is_critical(db_session, monkeypatch):
     findings = admin_alerts._radius_health_findings(db_session)
     assert [f.fingerprint for f in findings] == [
         "infrastructure:radius:radacct-unreachable"
+    ]
+    assert findings[0].severity.name == "critical"
+
+
+def test_undersized_radacct_schema_is_critical(db_session, monkeypatch):
+    _wire_heartbeat(
+        monkeypatch,
+        {
+            **_HEALTHY,
+            "radacct_schema_ok": 0,
+            "radacct_nasportid_capacity": 32,
+        },
+    )
+    findings = admin_alerts._radius_health_findings(db_session)
+    assert [f.fingerprint for f in findings] == [
+        "infrastructure:radius:radacct-schema-incompatible"
     ]
     assert findings[0].severity.name == "critical"
 

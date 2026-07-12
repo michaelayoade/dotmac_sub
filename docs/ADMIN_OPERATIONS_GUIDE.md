@@ -1229,6 +1229,22 @@ connector target, run `freeradius -XC` in the container, and verify that both
 `radpostauth` and `radacct` advance. The accounting importer fails its task when
 the source is stale, allowing task-reliability alerting to remain authoritative.
 
+Existing RADIUS databases must also accept the full 253-octet NAS-Port-Id
+payload. Vendor interface descriptions longer than the historical 32-character
+default otherwise reject the complete accounting row. Apply the idempotent
+upgrade before or with the application deployment:
+
+```bash
+docker exec -i dotmac_radius_pg_test sh -lc \
+  'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+  < config/freeradius/upgrade_003_radacct_nasportid_capacity.sql
+```
+
+Verify `radacct.nasportid` reports `253` in `information_schema.columns`, then
+confirm `radius_radacct_schema_ok` is `1`. Rejected over-length writes are
+labelled in Loki as `event="radius_accounting_write_rejected"`; that event
+must remain absent after the upgrade.
+
 ### Rotation Order
 
 Rotate non-customer-facing secrets first, then payment, then authentication or network secrets. Keep one verified rollback path for each secret family before moving to the next.
