@@ -420,9 +420,7 @@ def quote_create(
     }
     try:
         quote_id = web_sales_service.create_quote_from_form(db, **fields)
-        return RedirectResponse(
-            url=f"/admin/sales/quotes/{quote_id}", status_code=303
-        )
+        return RedirectResponse(url=f"/admin/sales/quotes/{quote_id}", status_code=303)
     except (ValidationError, ValueError) as exc:
         db.rollback()
         error = _error_detail(exc)
@@ -497,9 +495,7 @@ def quote_update(
     }
     try:
         web_sales_service.update_quote_from_form(db, quote_id=quote_id, **fields)
-        return RedirectResponse(
-            url=f"/admin/sales/quotes/{quote_id}", status_code=303
-        )
+        return RedirectResponse(url=f"/admin/sales/quotes/{quote_id}", status_code=303)
     except (ValidationError, ValueError) as exc:
         db.rollback()
         error = _error_detail(exc)

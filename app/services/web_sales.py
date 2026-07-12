@@ -564,7 +564,9 @@ def _count_quotes(
     return int(query.scalar() or 0)
 
 
-def _coordinate(value: str | None, *, field: str, low: float, high: float) -> float | None:
+def _coordinate(
+    value: str | None, *, field: str, low: float, high: float
+) -> float | None:
     """Parse a map-pin coordinate from form input.
 
     Both coordinates are optional, but a half-pin is meaningless — the caller
@@ -615,7 +617,9 @@ def _install_pin(
         "region": clean_region,
     }
     feasibility = (
-        compute_feasibility(db, lat, lng) if lat is not None and lng is not None else None
+        compute_feasibility(db, lat, lng)
+        if lat is not None and lng is not None
+        else None
     )
     return install, feasibility
 

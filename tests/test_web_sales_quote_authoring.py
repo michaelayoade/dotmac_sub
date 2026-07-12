@@ -146,9 +146,7 @@ def test_edit_preserves_unrelated_metadata(db_session, subscriber, feasible):
     assert refreshed.status == QuoteStatus.sent.value
 
 
-def test_clearing_the_pin_drops_its_stale_feasibility(
-    db_session, subscriber, feasible
-):
+def test_clearing_the_pin_drops_its_stale_feasibility(db_session, subscriber, feasible):
     """Feasibility is derived from the pin. If the pin goes, a stale
     feasibility verdict must not linger and get trusted downstream."""
     quote_id = _create(db_session, subscriber, latitude="9.05", longitude="7.49")
