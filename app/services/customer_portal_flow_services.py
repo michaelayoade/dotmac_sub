@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models.bandwidth import BandwidthSample
 from app.models.catalog import CatalogOffer, Subscription, SubscriptionStatus
-from app.models.network import OntAssignment, OntUnit
+from app.models.network import CPEDevice, DeviceStatus, OntAssignment, OntUnit
 from app.models.provisioning import ServiceOrder, ServiceOrderStatus
 from app.models.usage import RadiusAccountingSession, UsageRecord
 from app.services import catalog as catalog_service
@@ -1086,6 +1086,33 @@ def get_service_detail(
     )
     customer_assignment = _resolve_customer_subscription_assignment(db, subscription)
     customer_ont = customer_assignment.ont_unit if customer_assignment else None
+    customer_cpe = (
+        db.query(CPEDevice)
+        .filter(
+            CPEDevice.subscription_id == subscription.id,
+            CPEDevice.status == DeviceStatus.active,
+        )
+        .order_by(CPEDevice.created_at.desc())
+        .first()
+    )
+    uisp_target = None
+    if customer_ont is not None and customer_ont.uisp_device_id:
+        uisp_target = ("ont", customer_ont.id)
+    elif customer_cpe is not None and customer_cpe.uisp_device_id:
+        uisp_target = ("cpe", customer_cpe.id)
+    uisp_intent = None
+    if uisp_target is not None:
+        from app.models.uisp_control import UispDeviceIntent, UispIntentTargetType
+
+        uisp_intent = (
+            db.query(UispDeviceIntent)
+            .filter(
+                UispDeviceIntent.target_type == UispIntentTargetType(uisp_target[0]),
+                UispDeviceIntent.target_id == uisp_target[1],
+            )
+            .one_or_none()
+        )
+    customer_ont_is_uisp = bool(customer_ont and customer_ont.uisp_device_id)
 
     # Renewal context: show renewal banner when contract nearing expiration
     renewal_context: dict[str, Any] = {"show_renewal": False}
@@ -1117,14 +1144,20 @@ def get_service_detail(
         "fup_status": fup_status,
         "pppoe_credentials": pppoe_creds,
         "customer_ont": customer_ont,
+        "customer_cpe": customer_cpe,
         "customer_wifi_ssid": getattr(customer_assignment, "wifi_ssid", None),
         "can_reboot_ont": bool(
             customer_ont is not None
+            and not customer_ont_is_uisp
             and subscription.status == SubscriptionStatus.active
         ),
         "can_update_wifi": bool(
             customer_ont is not None
+            and not customer_ont_is_uisp
             and subscription.status == SubscriptionStatus.active
+        ),
+        "uisp_control_status": (
+            uisp_intent.status.value if uisp_intent is not None else None
         ),
         "billing_mode": billing_mode,
         "billing_mode_display": "Prepaid" if billing_mode == "prepaid" else "Postpaid",
@@ -1284,7 +1317,11 @@ def _resolve_customer_subscription_assignment(
     subscription: Subscription,
 ) -> OntAssignment | None:
     """Resolve the active ONT assignment for a subscription's subscriber."""
-    return resolve_active_customer_ont_assignment(db, subscription.subscriber_id)
+    return resolve_active_customer_ont_assignment(
+        db,
+        subscription.subscriber_id,
+        subscription_id=subscription.id,
+    )
 
 
 def get_service_orders_page(

@@ -168,6 +168,7 @@ from app.tasks.tr069 import (
 from app.tasks.tr069 import (
     sync_all_acs_devices as tr069_sync_all_acs_devices,
 )
+from app.tasks.uisp_control import apply_uisp_intent, reconcile_uisp_config_readback
 from app.tasks.uisp_ip_backfill import run_uisp_mgmt_ip_backfill
 from app.tasks.unmatched_radio import run_unmatched_radio_review
 from app.tasks.usage import (
@@ -297,6 +298,8 @@ __all__ = [
     "reconcile_detected_outages",
     "run_uisp_topology_sync",
     "run_uisp_mgmt_ip_backfill",
+    "apply_uisp_intent",
+    "reconcile_uisp_config_readback",
     "run_ufiber_onu_link",
     "run_unmatched_radio_review",
     "export_topology_metrics",

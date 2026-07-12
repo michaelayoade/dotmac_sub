@@ -1,8 +1,14 @@
-from fastapi import APIRouter, Depends, Query, status
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.network import IPVersion
+from app.models.uisp_control import (
+    UispDeviceIntent,
+    UispIntentStatus,
+)
 from app.schemas.common import ListResponse
 from app.schemas.network import (
     CPEDeviceCreate,
@@ -63,12 +69,126 @@ from app.schemas.network import (
     VlanUpdate,
 )
 from app.schemas.network_metrics import PortUtilizationRead
+from app.schemas.uisp_control import (
+    UispApplyRead,
+    UispIntentRead,
+    UispIntentStage,
+    UispSnapshotRead,
+)
 from app.services import (
     network as network_service,
 )
 from app.services.auth_dependencies import require_permission
 
 router = APIRouter()
+
+
+@router.get(
+    "/uisp/capabilities",
+    tags=["network", "uisp"],
+    dependencies=[Depends(require_permission("network:cpe:read"))],
+)
+def get_uisp_capabilities():
+    from app.services.uisp_control_plane import capabilities
+
+    return capabilities()
+
+
+@router.get(
+    "/uisp/intents",
+    response_model=list[UispIntentRead],
+    tags=["network", "uisp"],
+    dependencies=[Depends(require_permission("network:cpe:read"))],
+)
+def list_uisp_intents(
+    subscription_id: UUID | None = None,
+    intent_status: str | None = Query(default=None, alias="status"),
+    db: Session = Depends(get_db),
+):
+    from app.services import uisp_control_plane
+
+    selected_status = None
+    if intent_status:
+        try:
+            selected_status = UispIntentStatus(intent_status)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid UISP status") from exc
+    return uisp_control_plane.list_intents(
+        db, subscription_id=subscription_id, status=selected_status
+    )
+
+
+@router.post(
+    "/uisp/intents",
+    response_model=UispIntentRead,
+    status_code=status.HTTP_201_CREATED,
+    tags=["network", "uisp"],
+    dependencies=[Depends(require_permission("network:cpe:write"))],
+)
+def stage_uisp_intent(payload: UispIntentStage, db: Session = Depends(get_db)):
+    from app.services.uisp_control_plane import UispIntentError, stage_intent
+
+    try:
+        return stage_intent(
+            db,
+            target_type=payload.target_type,
+            target_id=payload.target_id,
+            subscription_id=payload.subscription_id,
+            service_order_id=payload.service_order_id,
+            desired_state=payload.desired_state,
+        )
+    except UispIntentError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get(
+    "/uisp/intents/{intent_id}",
+    response_model=UispIntentRead,
+    tags=["network", "uisp"],
+    dependencies=[Depends(require_permission("network:cpe:read"))],
+)
+def get_uisp_intent(intent_id: UUID, db: Session = Depends(get_db)):
+    from app.services import uisp_control_plane
+
+    intent = uisp_control_plane.get_intent(db, intent_id)
+    if intent is None:
+        raise HTTPException(status_code=404, detail="UISP intent not found")
+    return intent
+
+
+@router.get(
+    "/uisp/intents/{intent_id}/snapshots",
+    response_model=list[UispSnapshotRead],
+    tags=["network", "uisp"],
+    dependencies=[Depends(require_permission("network:cpe:read"))],
+)
+def list_uisp_snapshots(intent_id: UUID, db: Session = Depends(get_db)):
+    from app.services import uisp_control_plane
+
+    if uisp_control_plane.get_intent(db, intent_id) is None:
+        raise HTTPException(status_code=404, detail="UISP intent not found")
+    return uisp_control_plane.list_snapshots(db, intent_id)
+
+
+@router.post(
+    "/uisp/intents/{intent_id}/apply",
+    response_model=UispApplyRead,
+    tags=["network", "uisp"],
+    dependencies=[Depends(require_permission("network:cpe:write"))],
+)
+def apply_uisp_intent(intent_id: UUID, db: Session = Depends(get_db)):
+    from app.services.uisp_control_plane import request_apply
+
+    intent = db.get(UispDeviceIntent, intent_id)
+    if intent is None:
+        raise HTTPException(status_code=404, detail="UISP intent not found")
+    operation = request_apply(db, intent)
+    return UispApplyRead(
+        operation_id=operation.id,
+        status=operation.status.value,
+        applied=False,
+        message=operation.error or "UISP apply queued; awaiting device readback",
+    )
 
 
 @router.post(
