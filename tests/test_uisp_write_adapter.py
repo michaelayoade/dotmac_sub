@@ -247,7 +247,21 @@ def test_non_client_readback_failure_after_an_accepted_write_is_recoverable(
     )
 
     class ExplodingReadbackClient(FakeClient):
+        """Serves the pre-write read, then explodes on the readback.
+
+        apply() reads the device twice: once to compute the proposed config,
+        once to read back after writing. Only the second must fail, or the write
+        never happens and the guard under test is never reached.
+        """
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.reads = 0
+
         def get_device_configuration(self, *args, **kwargs):
+            self.reads += 1
+            if self.reads == 1:
+                return super().get_device_configuration(*args, **kwargs)
             # Not a UispClientError -- the kind of thing a malformed device
             # response actually raises.
             raise KeyError("unexpected payload shape")
