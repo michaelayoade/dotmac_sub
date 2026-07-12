@@ -12,8 +12,8 @@ ordering for deterministic forward paging.
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from app.models.billing import CreditNote, Payment
-from app.schemas.billing import InvoiceCreate
+from app.models.billing import CreditNote, InvoiceLine, Payment
+from app.schemas.billing import InvoiceCreate, InvoiceLineUpdate, InvoiceSyncRead
 from app.services import billing as billing_service
 
 _T0 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
@@ -102,6 +102,80 @@ def test_invoice_updated_since_ordering_is_stable(db_session, subscriber_account
     tied_expected = sorted([a.id, b.id], key=str)
     assert ordered_ids[:2] == tied_expected
     assert ordered_ids[2] == later.id
+
+
+def test_invoice_sync_feed_is_lightweight_and_watermarked(
+    db_session, subscriber_account
+):
+    old = _make_invoice(db_session, subscriber_account.id, _T0)
+    current = _make_invoice(db_session, subscriber_account.id, _T0 + timedelta(days=1))
+    db_session.add(
+        InvoiceLine(
+            invoice_id=current.id,
+            description="Internet service",
+            quantity=Decimal("1"),
+            unit_price=Decimal("100.00"),
+            amount=Decimal("100.00"),
+        )
+    )
+    db_session.add(
+        InvoiceLine(
+            invoice_id=current.id,
+            description="Removed charge",
+            quantity=Decimal("1"),
+            unit_price=Decimal("50.00"),
+            amount=Decimal("50.00"),
+            is_active=False,
+        )
+    )
+    db_session.flush()
+
+    response = billing_service.invoices.sync_list_response(
+        db_session,
+        account_id=None,
+        status=None,
+        is_active=None,
+        updated_since=_T0 + timedelta(days=1),
+        limit=500,
+        offset=0,
+    )
+
+    assert [row.id for row in response["items"]] == [current.id]
+    assert old.id not in {row.id for row in response["items"]}
+    payload = InvoiceSyncRead.model_validate(response["items"][0]).model_dump()
+    assert payload["lines"][0]["description"] == "Internet service"
+    assert len(payload["lines"]) == 1
+    assert "payment_allocations" not in payload
+    assert "billing_period_start" not in payload
+
+
+def test_invoice_line_edit_advances_parent_sync_watermark(
+    db_session, subscriber_account
+):
+    invoice = _make_invoice(db_session, subscriber_account.id, _T0)
+    line = InvoiceLine(
+        invoice_id=invoice.id,
+        description="Old description",
+        quantity=Decimal("1"),
+        unit_price=Decimal("100.00"),
+        amount=Decimal("100.00"),
+    )
+    db_session.add(line)
+    db_session.commit()
+    invoice.updated_at = _T0
+    db_session.commit()
+
+    billing_service.invoice_lines.update(
+        db_session,
+        str(line.id),
+        InvoiceLineUpdate(description="Corrected description"),
+    )
+
+    db_session.refresh(invoice)
+    updated_at = invoice.updated_at
+    if updated_at.tzinfo is None:  # SQLite drops timezone information.
+        updated_at = updated_at.replace(tzinfo=UTC)
+    assert updated_at > _T0
 
 
 def test_payment_updated_since_filters(db_session, subscriber_account):
