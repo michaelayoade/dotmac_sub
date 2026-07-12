@@ -449,6 +449,43 @@ def _recalculate_quote_totals(db: Session, quote: Quote) -> None:
     db.commit()
 
 
+#: Statuses that put a quote in front of a customer or commit the business to it.
+#: Reaching either one drives real downstream effects — accepting converts the
+#: party to a customer and spawns a sales order, an installation invoice and an
+#: install project — so a quote must actually be worth something first.
+_QUOTE_COMMITTING_STATUSES = frozenset(
+    {QuoteStatus.sent.value, QuoteStatus.accepted.value}
+)
+
+
+def _assert_quote_is_sendable(db: Session, quote: Quote, status: str | None) -> None:
+    """Refuse to send or accept a quote that has no line items.
+
+    A quote with no lines has a zero subtotal and a zero total. Accepting one
+    still runs the full fulfilment pipeline (``_handle_quote_accepted``) and
+    produces a customer, a sales order and an install project for no money.
+    Nothing in the write path prevented that, so the admin quote form could
+    create an already-``accepted`` quote and commit the business to a job worth
+    nothing.
+
+    The guard lives here, in the command service, rather than in the form: every
+    caller (web, API, importer) mutates quotes through this class, and the
+    invariant belongs to the domain, not to one UI.
+    """
+    if status not in _QUOTE_COMMITTING_STATUSES:
+        return
+    has_lines = (
+        db.query(QuoteLineItem.id).filter(QuoteLineItem.quote_id == quote.id).first()
+        is not None
+    )
+    if not has_lines:
+        raise ValueError(
+            "Add at least one line item before sending or accepting this quote — "
+            "a quote with no lines is worth nothing and would still create a "
+            "sales order and an install project."
+        )
+
+
 def _upgrade_party_status_to_customer(subscriber: Subscriber | None) -> None:
     """Won lead / accepted quote converts a prospect into a customer (§1.3)."""
     if subscriber is None:
@@ -1034,6 +1071,16 @@ class Quotes(ListResponseMixin):
 
         _prepare_quote_ownership(db, data)
 
+        # A brand-new quote has no line items yet -- they are added afterwards --
+        # so it can never legitimately start out sent or accepted. Reject before
+        # the insert, otherwise the row commits and we are left with an orphaned
+        # accepted quote that has already fired the fulfilment pipeline.
+        if data.get("status") in _QUOTE_COMMITTING_STATUSES:
+            raise ValueError(
+                "A new quote starts as a draft. Add line items, then send or "
+                "accept it."
+            )
+
         if not data.get("currency"):
             default_currency = _default_currency(db)
             if default_currency:
@@ -1043,8 +1090,6 @@ class Quotes(ListResponseMixin):
         db.commit()
         db.refresh(quote)
         _apply_lead_status_from_quote(db, quote, quote.status)
-        if quote.status == QuoteStatus.accepted.value:
-            _handle_quote_accepted(db, quote)
         return quote
 
     @staticmethod
@@ -1135,6 +1180,11 @@ class Quotes(ListResponseMixin):
                 raise HTTPException(status_code=404, detail="Subscriber not found")
 
         _prepare_quote_ownership(db, data, existing=quote)
+
+        # Check before mutating: a rejected transition must leave the quote
+        # exactly as it was, not half-applied.
+        if data.get("status") != previous_status:
+            _assert_quote_is_sendable(db, quote, data.get("status"))
 
         for key, value in data.items():
             setattr(quote, key, value)

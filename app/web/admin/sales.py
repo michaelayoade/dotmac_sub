@@ -513,15 +513,76 @@ def quote_update(
 
 
 @router.post(
+    "/quotes/{quote_id}/line-items",
+    dependencies=[Depends(require_permission("crm:quote:write"))],
+)
+def quote_line_item_add(
+    request: Request,
+    quote_id: str,
+    description: str | None = Form(default=None),
+    quantity: str | None = Form(default=None),
+    unit_price: str | None = Form(default=None),
+    discount_percent: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+):
+    try:
+        web_sales_service.add_quote_line_item_from_form(
+            db,
+            quote_id=quote_id,
+            description=description,
+            quantity=quantity,
+            unit_price=unit_price,
+            discount_percent=discount_percent,
+        )
+    except (ValidationError, ValueError) as exc:
+        db.rollback()
+        context = _ctx(request, db, "sales-quotes")
+        context.update(
+            web_sales_service.build_quote_detail_context(db, quote_id=quote_id)
+        )
+        context["error"] = _error_detail(exc)
+        return templates.TemplateResponse(
+            "admin/sales/quotes/detail.html", context, status_code=400
+        )
+    return RedirectResponse(url=f"/admin/sales/quotes/{quote_id}", status_code=303)
+
+
+@router.post(
+    "/quotes/{quote_id}/line-items/{item_id}/delete",
+    dependencies=[Depends(require_permission("crm:quote:write"))],
+)
+def quote_line_item_delete(
+    quote_id: str, item_id: str, db: Session = Depends(get_db)
+):
+    web_sales_service.delete_quote_line_item(db, item_id)
+    return RedirectResponse(url=f"/admin/sales/quotes/{quote_id}", status_code=303)
+
+
+@router.post(
     "/quotes/{quote_id}/status",
+    response_class=HTMLResponse,
     dependencies=[Depends(require_permission("crm:quote:write"))],
 )
 def quote_set_status(
+    request: Request,
     quote_id: str,
     status: str | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
-    web_sales_service.set_quote_status(db, quote_id, status)
+    try:
+        web_sales_service.set_quote_status(db, quote_id, status)
+    except (ValidationError, ValueError) as exc:
+        # Sending or accepting a quote with no line items is refused by the
+        # sales service. Surface that to the operator instead of 500ing.
+        db.rollback()
+        context = _ctx(request, db, "sales-quotes")
+        context.update(
+            web_sales_service.build_quote_detail_context(db, quote_id=quote_id)
+        )
+        context["error"] = _error_detail(exc)
+        return templates.TemplateResponse(
+            "admin/sales/quotes/detail.html", context, status_code=400
+        )
     return RedirectResponse(url=f"/admin/sales/quotes/{quote_id}", status_code=303)
 
 

@@ -1,0 +1,128 @@
+"""A quote with no line items must not be able to commit the business.
+
+#1198 gave staff a quote form but no way to add line items, and its status
+dropdown offered every status including ``accepted``. ``Quotes.create`` runs
+``_handle_quote_accepted`` whenever the incoming status is ``accepted``, so an
+operator could create a quote worth exactly nothing and, in the same request,
+convert the party to a customer and spawn a sales order and an install project
+for a job with no money attached.
+
+The invariant belongs to the sales service, not the form: web, API and importer
+all mutate quotes through it.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from app.models.sales import Quote, QuoteStatus, SalesOrder
+from app.schemas.sales import QuoteCreate, QuoteLineItemCreate, QuoteUpdate
+from app.services import sales as sales_service
+
+
+def _draft(db_session, subscriber) -> Quote:
+    return sales_service.quotes.create(
+        db_session,
+        QuoteCreate(subscriber_id=subscriber.id, status=QuoteStatus.draft),
+    )
+
+
+def _add_line(db_session, quote, *, unit_price="50000.00") -> None:
+    sales_service.quote_line_items.create(
+        db_session,
+        QuoteLineItemCreate(
+            quote_id=quote.id,
+            description="Fibre drop, 120m",
+            quantity="1",
+            unit_price=unit_price,
+        ),
+    )
+
+
+def test_cannot_create_a_quote_that_is_already_accepted(db_session, subscriber):
+    """The exact path #1198 opened: an accepted quote with no lines would have
+    run the whole fulfilment pipeline for zero money."""
+    with pytest.raises(ValueError, match="starts as a draft"):
+        sales_service.quotes.create(
+            db_session,
+            QuoteCreate(subscriber_id=subscriber.id, status=QuoteStatus.accepted),
+        )
+
+    # Nothing was persisted, and no sales order was spawned.
+    assert db_session.query(Quote).count() == 0
+    assert db_session.query(SalesOrder).count() == 0
+
+
+def test_cannot_create_a_quote_that_is_already_sent(db_session, subscriber):
+    with pytest.raises(ValueError, match="starts as a draft"):
+        sales_service.quotes.create(
+            db_session,
+            QuoteCreate(subscriber_id=subscriber.id, status=QuoteStatus.sent),
+        )
+    assert db_session.query(Quote).count() == 0
+
+
+def test_cannot_accept_a_quote_with_no_line_items(db_session, subscriber):
+    quote = _draft(db_session, subscriber)
+    assert quote.total == 0
+
+    with pytest.raises(ValueError, match="at least one line item"):
+        sales_service.quotes.update(
+            db_session, str(quote.id), QuoteUpdate(status=QuoteStatus.accepted)
+        )
+
+    # The rejected transition left the quote exactly as it was -- not
+    # half-applied -- and fired nothing downstream.
+    db_session.refresh(quote)
+    assert quote.status == QuoteStatus.draft.value
+    assert db_session.query(SalesOrder).count() == 0
+
+
+def test_cannot_send_a_quote_with_no_line_items(db_session, subscriber):
+    quote = _draft(db_session, subscriber)
+
+    with pytest.raises(ValueError, match="at least one line item"):
+        sales_service.quotes.update(
+            db_session, str(quote.id), QuoteUpdate(status=QuoteStatus.sent)
+        )
+
+    db_session.refresh(quote)
+    assert quote.status == QuoteStatus.draft.value
+
+
+def test_a_quote_with_lines_can_still_be_sent_and_accepted(db_session, subscriber):
+    """The guard must not break the legitimate path."""
+    quote = _draft(db_session, subscriber)
+    _add_line(db_session, quote)
+    db_session.refresh(quote)
+    assert quote.total > 0
+
+    sales_service.quotes.update(
+        db_session, str(quote.id), QuoteUpdate(status=QuoteStatus.sent)
+    )
+    db_session.refresh(quote)
+    assert quote.status == QuoteStatus.sent.value
+
+    sales_service.quotes.update(
+        db_session, str(quote.id), QuoteUpdate(status=QuoteStatus.accepted)
+    )
+    db_session.refresh(quote)
+    assert quote.status == QuoteStatus.accepted.value
+    # The fulfilment pipeline ran -- for a quote that is actually worth money.
+    assert db_session.query(SalesOrder).count() == 1
+
+
+def test_a_zero_priced_line_is_allowed(db_session, subscriber):
+    """The guard is 'has lines', not 'total > 0'. A deliberately free install
+    (promo, goodwill, warranty rework) is a real quote with real lines; refusing
+    it would be a different bug."""
+    quote = _draft(db_session, subscriber)
+    _add_line(db_session, quote, unit_price="0.00")
+
+    sales_service.quotes.update(
+        db_session, str(quote.id), QuoteUpdate(status=QuoteStatus.accepted)
+    )
+
+    db_session.refresh(quote)
+    assert quote.status == QuoteStatus.accepted.value
+    assert quote.total == 0
