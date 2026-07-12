@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import DomainSetting
-from app.services.credential_crypto import is_encrypted
+from app.services.credential_crypto import decrypt_credential, is_encrypted
 from app.services.secrets import (
     is_openbao_available,
     is_openbao_ref,
@@ -71,6 +71,32 @@ def find_plaintext_secret_settings(
     return [row for row in rows if is_plaintext_secret_setting(row)]
 
 
+def find_noncanonical_secret_settings(
+    db: Session,
+    *,
+    domain: str | None = None,
+    key: str | None = None,
+) -> list[DomainSetting]:
+    """Find secret settings that are not stored as OpenBao references."""
+    query = (
+        db.query(DomainSetting)
+        .filter(DomainSetting.is_active.is_(True))
+        .filter(DomainSetting.is_secret.is_(True))
+        .filter(DomainSetting.value_text.is_not(None))
+    )
+    if domain:
+        query = query.filter(DomainSetting.domain == domain)
+    if key:
+        query = query.filter(DomainSetting.key == key)
+    rows = query.order_by(DomainSetting.domain, DomainSetting.key).all()
+    return [
+        row
+        for row in rows
+        if str(row.value_text or "").strip()
+        and not is_openbao_ref(str(row.value_text or "").strip())
+    ]
+
+
 def migrate_plaintext_secret_settings(
     db: Session,
     *,
@@ -78,7 +104,7 @@ def migrate_plaintext_secret_settings(
     domain: str | None = None,
     key: str | None = None,
 ) -> SecretCleanupResult:
-    candidates = find_plaintext_secret_settings(db, domain=domain, key=key)
+    candidates = find_noncanonical_secret_settings(db, domain=domain, key=key)
     migrated_keys: list[str] = []
     skipped_keys: list[str] = []
     errors: list[str] = []
@@ -114,7 +140,19 @@ def migrate_plaintext_secret_settings(
         path = openbao_secret_path(setting)
         existing = read_secret_fields(path)
         payload = dict(existing)
-        payload[setting.key] = str(setting.value_text or "")
+        stored_value = str(setting.value_text or "")
+        try:
+            secret_value = (
+                decrypt_credential(stored_value)
+                if is_encrypted(stored_value)
+                else stored_value
+            )
+        except ValueError:
+            errors.append(f"{key_name}: encrypted value could not be decrypted")
+            skipped += 1
+            skipped_keys.append(key_name)
+            continue
+        payload[setting.key] = str(secret_value or "")
 
         if not write_secret(path, payload):
             errors.append(f"{key_name}: failed to write OpenBao secret")

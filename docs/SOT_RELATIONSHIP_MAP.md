@@ -14,17 +14,18 @@ before migrating more callers.
 3. `network`
 4. `subscriber_sessions`
 5. `application_sessions`
-6. `notifications_communications`
-7. `events_webhooks`
-8. `runtime_infrastructure`
-9. `observability`
-10. `provisioning_operations`
-11. `feature_control_plane`
-12. `authorization_control_plane`
-13. `scheduler_control_plane`
-14. `network_access_control_plane`
-15. `service_intent_control_plane`
-16. `integration_control_plane`
+6. `secrets_credentials`
+7. `notifications_communications`
+8. `events_webhooks`
+9. `runtime_infrastructure`
+10. `observability`
+11. `provisioning_operations`
+12. `feature_control_plane`
+13. `authorization_control_plane`
+14. `scheduler_control_plane`
+15. `network_access_control_plane`
+16. `service_intent_control_plane`
+17. `integration_control_plane`
 
 Rule: each PR should finish one domain slice: define the owner service, migrate
 the highest-risk callers, and add focused tests. Avoid broad mechanical rewrites
@@ -53,6 +54,20 @@ network summary composition.
 
 Rule: admin, portal, support, and reporting views should consume context
 services instead of rebuilding customer joins.
+
+## Secrets and Credentials
+
+1. Bootstrap secrets required before the application starts use environment or
+   mounted secret files.
+2. Low-cardinality application and integration secrets use OpenBao references.
+3. High-cardinality customer, device, and connector credentials use the
+   declared encrypted database-field inventory.
+4. Scheduled rotation stages current and previous keys, converges stored
+   ciphertext, and retires the previous key only after the grace period.
+
+Rule: callers request a secret or credential outcome from the owning service.
+They do not choose fallback precedence, store plaintext, reveal existing values
+in forms, or rotate key material directly.
 
 ## Notifications and Communications
 

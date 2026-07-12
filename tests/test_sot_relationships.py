@@ -12,6 +12,7 @@ def test_domain_sot_relationships_cover_expected_domains():
         "network",
         "subscriber_sessions",
         "application_sessions",
+        "secrets_credentials",
         "notifications_communications",
         "events_webhooks",
         "runtime_infrastructure",
@@ -52,6 +53,11 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     assert sot_relationships.dependencies_for(
         "communications.notification_service"
     ) == ("communications.channel_policy", "communications.event_policy")
+    assert sot_relationships.dependencies_for("secrets.rotation") == (
+        "secrets.reference_store",
+        "secrets.credential_crypto",
+        "runtime.db_sessions",
+    )
     assert sot_relationships.dependencies_for("communications.team_inbox") == (
         "customer.identity_scope",
         "communications.channel_policy",

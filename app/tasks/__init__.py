@@ -122,6 +122,7 @@ from app.tasks.router_sync import (
     sync_all_interfaces,
     sync_all_system_info,
 )
+from app.tasks.security import run_scheduled_credential_rotation
 from app.tasks.support_tickets import auto_confirm_resolved_tickets
 from app.tasks.team_inbox import (
     auto_resolve_stale_conversations as auto_resolve_stale_inbox_conversations,
@@ -322,6 +323,7 @@ __all__ = [
     "execute_config_push",
     "sync_all_interfaces",
     "sync_all_system_info",
+    "run_scheduled_credential_rotation",
     "reconcile_project_mirror",
     "reconcile_quote_mirror",
     "reconcile_referral_mirror",

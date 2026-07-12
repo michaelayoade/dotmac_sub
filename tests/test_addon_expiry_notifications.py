@@ -83,7 +83,10 @@ def test_notify_expiring_data_bundles_emits_within_24h_window(
 
     monkeypatch.setattr(db_session, "close", lambda: None)
     with (
-        patch("app.tasks.usage.SessionLocal", return_value=db_session),
+        patch(
+            "app.services.db_session_adapter.SessionLocal",
+            return_value=db_session,
+        ),
         patch("app.services.events.emit_event", _capture),
     ):
         from app.tasks.usage import notify_expiring_data_bundles
@@ -110,7 +113,10 @@ def test_notify_expiring_data_bundles_skips_outside_window(
     events = []
     monkeypatch.setattr(db_session, "close", lambda: None)
     with (
-        patch("app.tasks.usage.SessionLocal", return_value=db_session),
+        patch(
+            "app.services.db_session_adapter.SessionLocal",
+            return_value=db_session,
+        ),
         patch(
             "app.services.events.emit_event",
             lambda *a, **k: events.append(a),

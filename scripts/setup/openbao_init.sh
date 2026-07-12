@@ -18,7 +18,7 @@ set -euo pipefail
 
 CONTAINER="dotmac_sub_openbao"
 BAO_ADDR="${BAO_ADDR:-http://127.0.0.1:8200}"
-BAO_TOKEN="${BAO_TOKEN:-dotmac-sub-dev-token}"
+BAO_TOKEN="${BAO_TOKEN:-${OPENBAO_TOKEN:-}}"
 CHECK_ONLY=0
 STRICT=0
 
@@ -36,6 +36,11 @@ for arg in "$@"; do
             ;;
     esac
 done
+
+if [ -z "$BAO_TOKEN" ]; then
+    echo "BAO_TOKEN or OPENBAO_TOKEN is required; no default token is used." >&2
+    exit 1
+fi
 
 if [ -f ".env" ]; then
     set -a
@@ -110,11 +115,17 @@ done
 echo "==> Seeding OpenBao KV v2 (real env values only)..."
 
 seed_group auth \
-    "JWT_SECRET,CREDENTIAL_ENCRYPTION_KEY" \
+    "JWT_SECRET" \
     "jwt_secret=${JWT_SECRET:-}" \
-    "credential_encryption_key=${CREDENTIAL_ENCRYPTION_KEY:-}" \
     "totp_encryption_key=${TOTP_ENCRYPTION_KEY:-}" \
     "wireguard_key_encryption_key=${WIREGUARD_KEY_ENCRYPTION_KEY:-}"
+
+# One-time bootstrap only. Do not derive this from CREDENTIAL_ENCRYPTION_KEY:
+# after scheduled rotation that environment value may be stale, and rerunning
+# initialization must never roll the managed keyring backward.
+seed_group settings/auth \
+    "CREDENTIAL_ENCRYPTION_KEY_SEED" \
+    "credential_encryption_key=${CREDENTIAL_ENCRYPTION_KEY_SEED:-}"
 
 seed_group database \
     "DATABASE_URL,POSTGRES_PASSWORD" \

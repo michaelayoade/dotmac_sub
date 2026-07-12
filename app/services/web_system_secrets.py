@@ -11,8 +11,8 @@ MASKED_SECRET_VALUE = "••••••••"
 def build_secrets_index_context(*, status: str | None, message: str | None) -> dict:
     from app.services.secrets import (
         is_openbao_available,
+        list_secret_field_names,
         list_secret_paths,
-        read_secret_fields,
         read_secret_metadata,
     )
 
@@ -22,11 +22,11 @@ def build_secrets_index_context(*, status: str | None, message: str | None) -> d
     for path in paths:
         path_clean = path.rstrip("/")
         meta = read_secret_metadata(path_clean) if available else {}
-        fields = read_secret_fields(path_clean) if available else {}
+        fields = list_secret_field_names(path_clean) if available else []
         secrets_list.append(
             {
                 "path": path_clean,
-                "fields": list(fields.keys()),
+                "fields": fields,
                 "field_count": len(fields),
                 "version": meta.get("current_version", "?"),
                 "created_time": meta.get("created_time", ""),
@@ -44,7 +44,7 @@ def build_secrets_index_context(*, status: str | None, message: str | None) -> d
 def build_secret_edit_context(path: str) -> dict:
     from app.services.secrets import (
         is_openbao_available,
-        read_secret_fields,
+        list_secret_field_names,
         read_secret_metadata,
     )
 
@@ -54,7 +54,7 @@ def build_secret_edit_context(path: str) -> dict:
         }
     return {
         "secret_path": path,
-        "fields": read_secret_fields(path),
+        "fields": dict.fromkeys(list_secret_field_names(path), MASKED_SECRET_VALUE),
         "metadata": read_secret_metadata(path),
         "error": None,
     }
@@ -97,7 +97,7 @@ def save_secret(path: str, form: Mapping[str, object]) -> dict:
     return {
         "ok": False,
         "secret_path": path,
-        "fields": updated,
+        "fields": dict.fromkeys(updated, MASKED_SECRET_VALUE),
         "metadata": {},
         "error": "Failed to save secret to OpenBao",
     }

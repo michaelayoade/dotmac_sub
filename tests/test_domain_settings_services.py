@@ -75,3 +75,36 @@ def test_ensure_by_key_returns_concurrent_insert(db_session, monkeypatch):
 
     assert setting.key == "sync_interval_seconds"
     assert setting.value_text == "60"
+
+
+def test_secret_update_preserves_existing_classification(db_session, monkeypatch):
+    settings = domain_settings_service.DomainSettings(domain=SettingDomain.auth)
+    monkeypatch.setattr(settings, "_allow_plain_secret_fallback", lambda _db: False)
+    monkeypatch.setattr(domain_settings_service, "is_openbao_available", lambda: True)
+    monkeypatch.setattr(domain_settings_service, "read_secret_fields", lambda _path: {})
+    writes: list[tuple[str, dict[str, str]]] = []
+    monkeypatch.setattr(
+        domain_settings_service,
+        "write_secret",
+        lambda path, data: writes.append((path, data)) or True,
+    )
+
+    created = settings.create(
+        db_session,
+        DomainSettingCreate(
+            domain=SettingDomain.auth,
+            key="jwt_secret",
+            value_type=SettingValueType.string,
+            value_text="first-secret",
+            is_secret=True,
+        ),
+    )
+    updated = settings.update(
+        db_session,
+        str(created.id),
+        DomainSettingUpdate(value_text="second-secret"),
+    )
+
+    assert updated.is_secret is True
+    assert updated.value_text == "bao://secret/settings/auth#jwt_secret"
+    assert writes[-1] == ("settings/auth", {"jwt_secret": "second-secret"})

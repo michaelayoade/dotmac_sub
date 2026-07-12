@@ -26,12 +26,11 @@ from app.models.domain_settings import SettingDomain
 from app.models.tr069 import Tr069AcsServer
 from app.services.genieacs_client import GenieACSError, create_genieacs_client
 from app.services.scheduler_config import find_unregistered_scheduled_tasks
-from app.services.secrets import list_secret_paths, read_secret_fields
+from app.services.secrets import list_secret_field_names, list_secret_paths
 from app.services.settings_spec import resolve_value
 
 REQUIRED_OPENBAO_PATHS = [
     "auth",
-    "zabbix",
 ]
 
 OPTIONAL_OPENBAO_PATHS = [
@@ -165,7 +164,7 @@ def check_openbao() -> CheckResult:
     missing_optional_paths = [path for path in optional_paths if path not in paths]
     field_presence: dict[str, list[str]] = {}
     for path in sorted(paths.intersection(expected_paths)):
-        field_presence[path] = sorted(read_secret_fields(path).keys())
+        field_presence[path] = list_secret_field_names(path)
 
     ok = not missing_required_paths
     summary = (

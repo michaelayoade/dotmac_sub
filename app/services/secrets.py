@@ -9,7 +9,9 @@ All secret resolution goes through this module. Supports:
 
 import logging
 import os
+import time
 from functools import lru_cache
+from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
@@ -17,9 +19,33 @@ from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
 
-# Cache TTL: secrets are cached per-process to avoid repeated HTTP calls.
-# The LRU cache is bounded and cleared on app restart.
+# Secrets are cached per-process to avoid repeated HTTP calls. A time bucket in
+# the cache key expires entries even when rotation happens in another process.
 _CACHE_SIZE = 128
+_DEFAULT_CACHE_TTL_SECONDS = 60
+
+
+def _read_openbao_token() -> str | None:
+    token_file = os.getenv("OPENBAO_TOKEN_FILE") or os.getenv("VAULT_TOKEN_FILE")
+    if token_file:
+        try:
+            token = Path(token_file).read_text(encoding="utf-8").strip()
+        except OSError:
+            logger.warning("OpenBao token file is unreadable: %s", token_file)
+        else:
+            if token:
+                return token
+    return os.getenv("OPENBAO_TOKEN") or os.getenv("VAULT_TOKEN")
+
+
+def _cache_bucket() -> int:
+    raw_ttl = os.getenv("OPENBAO_CACHE_TTL_SECONDS", "")
+    try:
+        ttl = int(raw_ttl) if raw_ttl else _DEFAULT_CACHE_TTL_SECONDS
+    except ValueError:
+        ttl = _DEFAULT_CACHE_TTL_SECONDS
+    ttl = max(1, min(ttl, 3600))
+    return int(time.monotonic() // ttl)
 
 
 def is_secret_ref(value: str | None) -> bool:
@@ -39,7 +65,7 @@ def is_openbao_ref(value: str | None) -> bool:
 def _openbao_config() -> tuple[str, str, str | None, str]:
     """Return (addr, token, namespace, kv_version) from env."""
     addr = os.getenv("OPENBAO_ADDR") or os.getenv("VAULT_ADDR")
-    token = os.getenv("OPENBAO_TOKEN") or os.getenv("VAULT_TOKEN")
+    token = _read_openbao_token()
     namespace = os.getenv("OPENBAO_NAMESPACE") or os.getenv("VAULT_NAMESPACE")
     kv_version = os.getenv("OPENBAO_KV_VERSION", "2")
     if not addr:
@@ -53,7 +79,7 @@ def is_openbao_available() -> bool:
     """Check if OpenBao is configured and reachable (non-throwing)."""
     try:
         addr = os.getenv("OPENBAO_ADDR") or os.getenv("VAULT_ADDR")
-        token = os.getenv("OPENBAO_TOKEN") or os.getenv("VAULT_TOKEN")
+        token = _read_openbao_token()
         if not addr or not token:
             return False
         resp = httpx.get(
@@ -83,6 +109,7 @@ def _fetch_secret_data(
     token: str,
     namespace: str | None,
     http_get_identity: int,
+    cache_bucket: int,
 ) -> dict:
     """Fetch and cache a secret payload from OpenBao."""
     headers: dict[str, str] = {"X-Vault-Token": token}
@@ -115,7 +142,13 @@ def resolve_openbao_ref(reference: str) -> str:
         url = f"{addr}/v1/{mount}/{path}"
     else:
         url = f"{addr}/v1/{mount}/data/{path}"
-    raw_data = _fetch_secret_data(url, token, namespace, id(httpx.get))
+    raw_data = _fetch_secret_data(
+        url,
+        token,
+        namespace,
+        id(httpx.get),
+        _cache_bucket(),
+    )
     if str(kv_version) == "1":
         secret_data = raw_data
     else:
@@ -248,7 +281,7 @@ def read_secret_metadata(path: str) -> dict:
 
 
 def read_secret_fields(path: str) -> dict[str, str]:
-    """Read all fields for a secret path (values masked for display)."""
+    """Read secret values for internal update and resolution workflows."""
     try:
         addr, token, namespace, kv_version = _openbao_config()
         url = f"{addr}/v1/secret/data/{path}"
@@ -264,6 +297,11 @@ def read_secret_fields(path: str) -> dict[str, str]:
     except Exception as exc:
         logger.warning("Failed to read OpenBao fields for %s: %s", path, exc)
         return {}
+
+
+def list_secret_field_names(path: str) -> list[str]:
+    """Return field names without exposing values to callers."""
+    return sorted(read_secret_fields(path).keys())
 
 
 def write_secret(path: str, data: dict[str, str]) -> bool:
