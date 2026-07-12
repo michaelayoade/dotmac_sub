@@ -1325,6 +1325,7 @@ def send_subscription_credentials(
     )
     from html import escape
 
+    from app.services.brand_profiles import resolve_brand
     from app.services.email_template import wrap_email_html
 
     body_html = wrap_email_html(
@@ -1335,6 +1336,7 @@ def send_subscription_credentials(
             "<p>Please keep these details secure.</p>"
         ),
         subject=subject,
+        brand=resolve_brand(db, subscriber_id=subscriber.id).to_dict(),
     )
 
     email_sent = 0

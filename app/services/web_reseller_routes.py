@@ -42,6 +42,15 @@ def _require_reseller_context(request: Request, db: Session):
         "active": bool(context.get("is_impersonation")),
         "return_to": context.get("return_to") or "/admin/resellers",
     }
+    request.state.reseller_context = context
+    try:
+        from app.services.brand_profiles import resolve_brand
+
+        request.state.reseller_brand = resolve_brand(
+            db, reseller_id=context["reseller"].id
+        ).to_dict()
+    except Exception:
+        logger.debug("Failed to attach reseller branding to request context")
     return context
 
 
