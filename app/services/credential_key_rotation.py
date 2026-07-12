@@ -48,6 +48,32 @@ class CredentialKeyRotationResult:
     updated_values: int
 
 
+@dataclass(frozen=True)
+class CredentialRemediationResult:
+    status: str
+    execute: bool
+    values_scanned: int
+    plaintext_before: int
+    plaintext_after: int
+    undecryptable: int
+    updated_records: int = 0
+    updated_values: int = 0
+    reason: str | None = None
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "status": self.status,
+            "execute": self.execute,
+            "values_scanned": self.values_scanned,
+            "plaintext_before": self.plaintext_before,
+            "plaintext_after": self.plaintext_after,
+            "undecryptable": self.undecryptable,
+            "updated_records": self.updated_records,
+            "updated_values": self.updated_values,
+            "reason": self.reason,
+        }
+
+
 _INTEGRITY_STATES = (
     "encrypted",
     "plaintext",
@@ -209,6 +235,55 @@ def scan_credential_encryption_integrity(
     )
 
 
+def publish_credential_integrity_snapshot(
+    integrity: CredentialIntegrityResult,
+    *,
+    operation: str,
+    operation_status: str,
+    extra_observations: tuple[tuple[str, str, float], ...] = (),
+) -> bool:
+    """Publish the canonical redacted credential-integrity state."""
+    from app.services.observability import StateObservation, publish_state_snapshot
+
+    observations = [
+        StateObservation(signal=signal, scope=scope, value=value)
+        for signal, scope, value in integrity.observations()
+    ]
+    observations.append(
+        StateObservation(
+            signal=f"{operation}_status",
+            scope=operation_status,
+            value=1.0,
+        )
+    )
+    observations.extend(
+        StateObservation(signal=signal, scope=scope, value=value)
+        for signal, scope, value in extra_observations
+    )
+
+    if operation_status in {"blocked", "error", "incomplete"}:
+        status = "error"
+    elif integrity.totals["undecryptable"] > 0:
+        status = "error"
+    elif integrity.totals["plaintext"] > 0:
+        status = "degraded"
+    else:
+        status = "ok"
+    try:
+        return publish_state_snapshot(
+            "credentials",
+            observations,
+            status=status,
+            now=integrity.scanned_at,
+        )
+    except Exception:
+        logger.exception(
+            "credential_integrity_snapshot_publish_failed operation=%s",
+            operation,
+        )
+        return False
+
+
 def _rotate_value(
     value: str | None,
     *,
@@ -240,6 +315,13 @@ def _rotate_value(
     if not value.startswith("enc:"):
         rotated = encrypt_credential_with_key(value, new_key)
         return rotated, rotated != value
+
+    # Remediation passes the active key as both old and new. The integrity scan
+    # has already validated ciphertext against the active/previous keyring, so
+    # remediation must leave every encrypted value untouched and only converge
+    # plaintext values.
+    if old_key == new_key:
+        return value, False
 
     # Try decrypting with old key first
     try:
@@ -516,3 +598,104 @@ def rotate_credential_encryption_material(
         updated_records=updated_records,
         updated_values=updated_values,
     )
+
+
+def remediate_credential_encryption(
+    db: Session,
+    *,
+    execute: bool = False,
+) -> CredentialRemediationResult:
+    """Converge plaintext credential values through the canonical inventory."""
+    before = scan_credential_encryption_integrity(db)
+    plaintext_before = int(before.totals["plaintext"])
+    undecryptable = int(before.totals["undecryptable"])
+
+    if undecryptable > 0:
+        result = CredentialRemediationResult(
+            status="blocked",
+            execute=execute,
+            values_scanned=before.values_scanned,
+            plaintext_before=plaintext_before,
+            plaintext_after=plaintext_before,
+            undecryptable=undecryptable,
+            reason="undecryptable_credentials",
+        )
+        publish_credential_integrity_snapshot(
+            before,
+            operation="remediation",
+            operation_status=result.status,
+        )
+        return result
+
+    active_key = get_encryption_key()
+    if active_key is None:
+        result = CredentialRemediationResult(
+            status="blocked",
+            execute=execute,
+            values_scanned=before.values_scanned,
+            plaintext_before=plaintext_before,
+            plaintext_after=plaintext_before,
+            undecryptable=0,
+            reason="encryption_key_missing",
+        )
+        publish_credential_integrity_snapshot(
+            before,
+            operation="remediation",
+            operation_status=result.status,
+        )
+        return result
+
+    if not execute:
+        result = CredentialRemediationResult(
+            status="dry_run",
+            execute=False,
+            values_scanned=before.values_scanned,
+            plaintext_before=plaintext_before,
+            plaintext_after=plaintext_before,
+            undecryptable=0,
+        )
+        publish_credential_integrity_snapshot(
+            before,
+            operation="remediation",
+            operation_status=result.status,
+        )
+        return result
+
+    key_text = (
+        active_key.decode("ascii") if isinstance(active_key, bytes) else str(active_key)
+    )
+    try:
+        updated = rotate_credential_encryption_material(
+            db,
+            old_key=key_text,
+            new_key=key_text,
+            commit=True,
+        )
+    except Exception:
+        db.rollback()
+        publish_credential_integrity_snapshot(
+            before,
+            operation="remediation",
+            operation_status="error",
+        )
+        raise
+
+    after = scan_credential_encryption_integrity(db)
+    plaintext_after = int(after.totals["plaintext"])
+    result = CredentialRemediationResult(
+        status="completed" if plaintext_after == 0 else "incomplete",
+        execute=True,
+        values_scanned=after.values_scanned,
+        plaintext_before=plaintext_before,
+        plaintext_after=plaintext_after,
+        undecryptable=int(after.totals["undecryptable"]),
+        updated_records=updated.updated_records,
+        updated_values=updated.updated_values,
+        reason=None if plaintext_after == 0 else "plaintext_credentials_remain",
+    )
+    publish_credential_integrity_snapshot(
+        after,
+        operation="remediation",
+        operation_status=result.status,
+    )
+    return result

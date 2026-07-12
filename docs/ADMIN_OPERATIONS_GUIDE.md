@@ -1135,6 +1135,19 @@ The scan never exports credential values or record identifiers. Non-zero
 plaintext or undecryptable totals also enter the standard admin-alert lifecycle;
 undecryptable values block automatic key rotation until corrected.
 
+Use the same inventory for one-time plaintext remediation. Dry-run first, then
+execute, then confirm a second dry-run reports zero plaintext candidates:
+
+```bash
+python -m scripts.one_off.remediate_credential_encryption --dry-run
+python -m scripts.one_off.remediate_credential_encryption --execute
+python -m scripts.one_off.remediate_credential_encryption --dry-run
+```
+
+The command returns aggregate JSON only and publishes the resulting integrity
+snapshot. It blocks before writing when the active key is missing or any stored
+ciphertext is undecryptable.
+
 ### Rotation Order
 
 Rotate non-customer-facing secrets first, then payment, then authentication or network secrets. Keep one verified rollback path for each secret family before moving to the next.

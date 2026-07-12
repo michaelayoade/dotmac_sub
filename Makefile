@@ -198,11 +198,11 @@ prod-check: ## Run deployment reconciliation checks in the production stack
 
 # ─── Credentials ──────────────────────────────────────────
 
-encrypt-credentials: ## Encrypt existing NAS credentials (dry run)
-	poetry run python scripts/encrypt_nas_credentials.py --dry-run
+encrypt-credentials: ## Audit all credential-at-rest values (dry run)
+	poetry run python -m scripts.one_off.remediate_credential_encryption --dry-run
 
-encrypt-credentials-execute: ## Encrypt existing NAS credentials (execute)
-	poetry run python scripts/encrypt_nas_credentials.py --execute
+encrypt-credentials-execute: ## Encrypt plaintext values in all credential stores
+	poetry run python -m scripts.one_off.remediate_credential_encryption --execute
 
 generate-encryption-key: ## Generate a new credential encryption key
 	@python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
