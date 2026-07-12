@@ -835,6 +835,51 @@ def _read_radreply(db_path):
         conn.close()
 
 
+def test_external_nas_lifecycle_helpers_do_not_read_or_return_secrets(
+    db_session, tmp_path, monkeypatch
+):
+    db_path = tmp_path / "radius-nas-lifecycle.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "CREATE TABLE nas (nasname TEXT, shortname TEXT, type TEXT, "
+            "secret TEXT, description TEXT)"
+        )
+        conn.executemany(
+            "INSERT INTO nas (nasname, secret) VALUES (?, ?)",
+            [("10.0.0.1", "secret-one"), ("10.0.0.2", "secret-two")],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    config = _fake_external_config(db_path)
+    monkeypatch.setattr(
+        radius_service, "_active_external_sync_configs", lambda _db: [config]
+    )
+
+    found = radius_service.external_radius_nas_client_ips(
+        db_session, {"10.0.0.1", "10.0.0.3"}
+    )
+    inventory = radius_service.external_radius_nas_secret_inventory(
+        db_session, {"10.0.0.1", "10.0.0.3"}
+    )
+    removed = radius_service.remove_external_radius_nas_clients(
+        db_session, {"10.0.0.1"}
+    )
+
+    assert found == {"10.0.0.1"}
+    assert inventory.present_client_ips == {"10.0.0.1"}
+    assert inventory.recoverable_secrets == {"10.0.0.1": "secret-one"}
+    assert inventory.conflicting_client_ips == set()
+    assert removed == 1
+    conn = sqlite3.connect(db_path)
+    try:
+        remaining = list(conn.execute("SELECT nasname FROM nas ORDER BY nasname"))
+    finally:
+        conn.close()
+    assert remaining == [("10.0.0.2",)]
+
+
 class TestBlockUnblockExternalRadiusCredentials:
     """Group-based blocking writes one Auth-Type:=Reject row in radcheck
     while leaving password/reply/group rows intact. Unblock deletes just

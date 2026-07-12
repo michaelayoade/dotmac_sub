@@ -418,6 +418,23 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "runtime.db_sessions",
                 ),
             ),
+            SOTService(
+                name="secrets.credential_recovery",
+                module="app.services.credential_lifecycle_cleanup",
+                owns=(
+                    "lost-key credential recovery planning",
+                    "lifecycle-safe unrecoverable credential cleanup",
+                    "reviewed cleanup plan digest enforcement",
+                ),
+                depends_on=(
+                    "secrets.credential_integrity",
+                    "network.identity",
+                    "network.radius_sessions",
+                    "access.radius_state",
+                    "runtime.db_sessions",
+                    "observability.recording",
+                ),
+            ),
         ),
         entrypoints=(
             "app.tasks.security",

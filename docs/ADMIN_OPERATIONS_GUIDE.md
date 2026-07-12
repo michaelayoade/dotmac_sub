@@ -1151,6 +1151,33 @@ The command returns aggregate JSON only and publishes the resulting integrity
 snapshot. It blocks before writing when the active key is missing or any stored
 ciphertext is undecryptable.
 
+If the original key cannot be recovered, resolve undecryptable values through
+the lifecycle cleanup planner before plaintext remediation. The planner:
+
+- decommissions and clears an inactive NAS only when it has no non-terminal
+  subscription and no live RADIUS session by device ID or client IP;
+- recovers a service-referenced or active NAS secret only when every configured
+  external FreeRADIUS store agrees on one authoritative value;
+- removes only the corrupt `desired_config.wifi.password` leaf for an ONT and
+  records that an operator reset is required;
+- stages one audit event per mutation in the same local database transaction;
+- emits an identity-free plan digest and refuses a different execute-time plan.
+
+Review the aggregate plan, then pass its exact digest:
+
+```bash
+python -m scripts.one_off.cleanup_unrecoverable_credentials
+python -m scripts.one_off.cleanup_unrecoverable_credentials \
+  --execute --confirm-plan-digest <reviewed-digest>
+python -m scripts.one_off.cleanup_unrecoverable_credentials
+```
+
+Do not use this workflow to make an active device look decommissioned or to
+invent a replacement secret. Resolve lifecycle blockers first. After cleanup,
+run plaintext remediation and confirm both `plaintext` and `undecryptable` are
+zero. Search the audit log for action `credential_lifecycle_cleanup` to review
+record-level evidence without exposing secrets in command output.
+
 ### Rotation Order
 
 Rotate non-customer-facing secrets first, then payment, then authentication or network secrets. Keep one verified rollback path for each secret family before moving to the next.
