@@ -94,6 +94,7 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.web.public", "router", "web", "none"),
     ("app.web.admin.network_routers", "router", "admin", "none"),
     ("app.websocket.router", "router", "ws", "none"),
+    ("app.websocket.workqueue_router", "router", "ws", "none"),
     ("app.api.notifications", "router", "api", "perm:monitoring"),
     ("app.api.external", "router", "api", "admin"),
     ("app.api.billing", "router", "api", "user"),

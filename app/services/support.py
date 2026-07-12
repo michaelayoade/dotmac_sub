@@ -609,6 +609,29 @@ class TicketSlaEvents:
         db.commit()
 
 
+def _notify_workqueue(
+    ticket: Ticket,
+    change: str,
+    *,
+    previous_assignee_id: UUID | None = None,
+) -> None:
+    """Push a ticket write onto the live workqueue channels (best-effort)."""
+    try:
+        from app.services.workqueue.events import emit_item_change
+        from app.services.workqueue.types import ItemKind
+
+        emit_item_change(
+            item_kind=ItemKind.ticket,
+            item_id=ticket.id,
+            change=change,  # type: ignore[arg-type]
+            assignee_id=ticket.assigned_to_person_id,
+            previous_assignee_id=previous_assignee_id,
+            service_team_id=ticket.service_team_id,
+        )
+    except Exception:  # pragma: no cover — realtime must never fail a write
+        logger.debug("workqueue_notify_failed ticket_id=%s", ticket.id, exc_info=True)
+
+
 class Tickets:
     @staticmethod
     def list_response(
@@ -1186,6 +1209,7 @@ class Tickets:
 
         db.commit()
         db.refresh(ticket)
+        _notify_workqueue(ticket, "added")
         return ticket
 
     @staticmethod
@@ -1772,6 +1796,12 @@ class Tickets:
 
         db.commit()
         db.refresh(ticket)
+        previous_assignee = before.get("assigned_to_person_id")
+        _notify_workqueue(
+            ticket,
+            "updated",
+            previous_assignee_id=UUID(previous_assignee) if previous_assignee else None,
+        )
         return ticket
 
     @staticmethod

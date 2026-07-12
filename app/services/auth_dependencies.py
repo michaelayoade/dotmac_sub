@@ -51,6 +51,20 @@ def _claims_from_payload_or_db(
     return list(resolved_roles), list(resolved_scopes)
 
 
+def claims_for_principal(
+    db: Session,
+    principal_id: str,
+    principal_type: str,
+    payload: dict[str, Any],
+) -> tuple[list[str], list[str]]:
+    """Roles/scopes for a principal — token claims first, RBAC tables otherwise.
+
+    Public entry point for auth surfaces that cannot use the HTTP dependency
+    stack (e.g. WebSocket handshakes).
+    """
+    return _claims_from_payload_or_db(db, principal_id, principal_type, payload)
+
+
 def _extract_bearer_token(authorization: str | None) -> str | None:
     if not authorization:
         return None
