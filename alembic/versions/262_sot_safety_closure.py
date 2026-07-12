@@ -29,32 +29,48 @@ def upgrade() -> None:
         postgresql_using="headers::text",
     )
 
-    op.drop_index("ix_ticket_access_tokens_token", table_name="ticket_access_tokens")
-    op.alter_column(
-        "ticket_access_tokens",
-        "token",
-        new_column_name="token_hash",
-        existing_type=sa.String(length=64),
-        existing_nullable=False,
-    )
     bind = op.get_bind()
-    rows = bind.execute(
-        sa.text("SELECT id, token_hash FROM ticket_access_tokens")
-    ).mappings()
-    for row in rows:
-        digest = hashlib.sha256(str(row["token_hash"]).encode("utf-8")).hexdigest()
-        bind.execute(
-            sa.text(
-                "UPDATE ticket_access_tokens SET token_hash = :digest WHERE id = :id"
-            ),
-            {"digest": digest, "id": row["id"]},
+    inspector = sa.inspect(bind)
+    columns = {column["name"] for column in inspector.get_columns("ticket_access_tokens")}
+    indexes = {
+        index["name"] for index in inspector.get_indexes("ticket_access_tokens")
+    }
+
+    if "token" in columns:
+        if "ix_ticket_access_tokens_token" in indexes:
+            op.drop_index(
+                "ix_ticket_access_tokens_token", table_name="ticket_access_tokens"
+            )
+        op.alter_column(
+            "ticket_access_tokens",
+            "token",
+            new_column_name="token_hash",
+            existing_type=sa.String(length=64),
+            existing_nullable=False,
         )
-    op.create_index(
-        "ix_ticket_access_tokens_token_hash",
-        "ticket_access_tokens",
-        ["token_hash"],
-        unique=True,
-    )
+        rows = bind.execute(
+            sa.text("SELECT id, token_hash FROM ticket_access_tokens")
+        ).mappings()
+        for row in rows:
+            digest = hashlib.sha256(
+                str(row["token_hash"]).encode("utf-8")
+            ).hexdigest()
+            bind.execute(
+                sa.text(
+                    "UPDATE ticket_access_tokens "
+                    "SET token_hash = :digest WHERE id = :id"
+                ),
+                {"digest": digest, "id": row["id"]},
+            )
+        indexes.discard("ix_ticket_access_tokens_token")
+
+    if "ix_ticket_access_tokens_token_hash" not in indexes:
+        op.create_index(
+            "ix_ticket_access_tokens_token_hash",
+            "ticket_access_tokens",
+            ["token_hash"],
+            unique=True,
+        )
 
 
 def downgrade() -> None:
