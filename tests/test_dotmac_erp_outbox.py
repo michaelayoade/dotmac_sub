@@ -457,7 +457,7 @@ def test_single_alembic_head():
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ["266_uisp_control_plane"]
+    assert script.get_heads() == ["267_brand_profiles"]
 
 
 def test_migration_249_adds_integration_settingdomain():

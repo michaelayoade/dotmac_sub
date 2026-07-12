@@ -23,6 +23,7 @@ from fastapi import (
 )
 from fastapi.responses import (
     HTMLResponse,
+    JSONResponse,
     RedirectResponse,
     Response,
     StreamingResponse,
@@ -3525,6 +3526,21 @@ def settings_branding_update(
             normalised_secondary = secondary_candidate.lstrip("#").lower()
             _persist_setting("brand_secondary_color", f"#{normalised_secondary}")
 
+        from app.services.brand_profiles import (
+            sync_platform_brand_from_legacy_settings_committed,
+        )
+
+        sync_platform_brand_from_legacy_settings_committed(
+            db,
+            overwrite_fields={
+                "logo_url",
+                "dark_logo_url",
+                "favicon_url",
+                "primary_color",
+                "secondary_color",
+            },
+        )
+
         return RedirectResponse(url="/admin/system/branding", status_code=303)
     except Exception as exc:
         db.rollback()
@@ -4518,6 +4534,29 @@ def branding_page(request: Request, db: Session = Depends(get_db)):
         "admin/system/branding.html",
         _config_context(request, db, {"active_page": "system-branding", **data}),
     )
+
+
+@router.get(
+    "/control-relationships",
+    response_class=JSONResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
+def control_relationship_diagnostics(db: Session = Depends(get_db)):
+    from app.services.control_relationships import (
+        audit_setting_relationships,
+        event_policies,
+        event_topology,
+        relationship_manifest,
+    )
+
+    return {
+        "relationships": relationship_manifest(),
+        "event_topology": event_topology(),
+        "event_policies": event_policies(),
+        "settings_findings": [
+            finding.to_dict() for finding in audit_setting_relationships(db)
+        ],
+    }
 
 
 @router.get(
