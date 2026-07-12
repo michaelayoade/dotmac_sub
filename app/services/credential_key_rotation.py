@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select, text
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 
 from app.models.billing import BankAccount, PaymentMethod
 from app.models.catalog import AccessCredential, NasDevice
@@ -36,6 +36,7 @@ from app.services.credential_crypto import (
     get_previous_encryption_key,
 )
 from app.services.network.ont_desired_config import (
+    desired_config_column,
     desired_config_values_for_paths,
     rotate_desired_config_credentials,
 )
@@ -164,7 +165,7 @@ def _empty_integrity_counts() -> dict[str, int]:
     return dict.fromkeys(_INTEGRITY_STATES, 0)
 
 
-def _credential_state(
+def classify_credential_value_state(
     value: Any,
     keys: tuple[bytes, ...],
     *,
@@ -208,17 +209,30 @@ def scan_credential_encryption_integrity(
     def observe(scope: str, value: Any, *, preserve_one_way: bool = False) -> None:
         register(scope)
         counts[scope][
-            _credential_state(value, keys, preserve_one_way=preserve_one_way)
+            classify_credential_value_state(
+                value, keys, preserve_one_way=preserve_one_way
+            )
         ] += 1
 
     for model, fields in _MODEL_FIELDS:
         for field in fields:
             register(f"{model.__name__}.{field}")
-        for row in db.scalars(select(model)).all():
-            for field in fields:
+        property_fields: set[str] = set()
+        if model is OntUnit and "pppoe_password" in fields:
+            property_fields.add("pppoe_password")
+            for _path, value in desired_config_values_for_paths(
+                db, (("wan", "pppoe_password"),)
+            ):
+                observe("OntUnit.pppoe_password", value)
+        column_fields = tuple(field for field in fields if field not in property_fields)
+        columns = tuple(getattr(model, field) for field in column_fields)
+        if not columns:
+            continue
+        for values_row in db.execute(select(*columns)).all():
+            for field, value in zip(column_fields, values_row, strict=True):
                 observe(
                     f"{model.__name__}.{field}",
-                    getattr(row, field, None),
+                    value,
                     preserve_one_way=(
                         model is AccessCredential and field == "secret_hash"
                     ),
@@ -243,8 +257,8 @@ def scan_credential_encryption_integrity(
         .where(DomainSetting.is_active.is_(True))
         .where(DomainSetting.is_secret.is_(True))
     ).all()
-    for row in settings_rows:
-        observe(settings_scope, row.value_text)
+    for settings_row in settings_rows:
+        observe(settings_scope, settings_row.value_text)
 
     hook_scopes = {
         key: f"IntegrationHook.auth_config.{key}"
@@ -265,8 +279,8 @@ def scan_credential_encryption_integrity(
     connector_rows = db.execute(
         text("SELECT auth_config FROM connector_configs WHERE auth_config IS NOT NULL")
     ).all()
-    for row in connector_rows:
-        observe(connector_scope, row.auth_config)
+    for connector_row in connector_rows:
+        observe(connector_scope, connector_row.auth_config)
 
     for (
         scope,
@@ -439,7 +453,14 @@ def _rotate_model_fields(
         if field in columns
     }
     logger.debug("Rotating credential fields for model %s", model.__name__)
-    for row in db.scalars(select(model)).all():
+    load_attributes = [model.id]
+    for field in fields:
+        if field in columns:
+            load_attributes.append(getattr(model, field))
+        elif model is OntUnit and field == "pppoe_password":
+            load_attributes.append(desired_config_column())
+    query = select(model).options(load_only(*load_attributes))
+    for row in db.scalars(query).all():
         row_changed = False
         for field in fields:
             current = getattr(row, field, None)
@@ -486,7 +507,8 @@ def _rotate_ont_desired_config_credentials(
 ) -> tuple[int, int]:
     updated_records = 0
     updated_values = 0
-    for ont in db.scalars(select(OntUnit)).all():
+    query = select(OntUnit).options(load_only(OntUnit.id, desired_config_column()))
+    for ont in db.scalars(query).all():
 
         def rotate_nested_value(
             path: tuple[str, ...], current: Any
