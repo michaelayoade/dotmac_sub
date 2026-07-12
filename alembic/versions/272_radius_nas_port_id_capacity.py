@@ -1,7 +1,7 @@
 """Allow full-length RADIUS NAS-Port-Id values in app session projections.
 
-Revision ID: 270_radius_nas_port_id_capacity
-Revises: 269_ledger_reversal_link
+Revision ID: 272_radius_nas_port_id_capacity
+Revises: 271_billing_portal_read_pressure_indexes
 """
 
 from __future__ import annotations
@@ -11,8 +11,8 @@ from sqlalchemy import inspect
 
 from alembic import op
 
-revision = "270_radius_nas_port_id_capacity"
-down_revision = "269_ledger_reversal_link"
+revision = "272_radius_nas_port_id_capacity"
+down_revision = "271_billing_portal_read_pressure_indexes"
 branch_labels = None
 depends_on = None
 
