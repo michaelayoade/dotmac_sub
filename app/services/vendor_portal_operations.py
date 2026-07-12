@@ -59,7 +59,9 @@ def _project(db: Session, project_id: str) -> InstallationProject:
 def _quote(db: Session, quote_id: str, vendor_id: str | None = None) -> ProjectQuote:
     row = (
         db.query(ProjectQuote)
-        .options(selectinload(ProjectQuote.line_items), joinedload(ProjectQuote.project))
+        .options(
+            selectinload(ProjectQuote.line_items), joinedload(ProjectQuote.project)
+        )
         .filter(ProjectQuote.id == coerce_uuid(quote_id))
         .filter(ProjectQuote.is_active.is_(True))
         .one_or_none()
@@ -158,7 +160,9 @@ class VendorPortalOperations:
     def list_projects(
         db: Session, vendor_id: str, *, available: bool, limit: int, offset: int
     ) -> list[dict]:
-        query = db.query(InstallationProject).options(joinedload(InstallationProject.project))
+        query = db.query(InstallationProject).options(
+            joinedload(InstallationProject.project)
+        )
         if available:
             now = _now()
             query = query.filter(
@@ -191,11 +195,12 @@ class VendorPortalOperations:
         db: Session, payload: VendorQuoteCreate, *, vendor_id: str, user_id: str
     ) -> dict:
         project = _project(db, str(payload.project_id))
-        if (
-            project.assignment_type == VendorAssignmentType.direct.value
-            and str(project.assigned_vendor_id) != str(vendor_id)
-        ):
-            raise HTTPException(status_code=403, detail="Project is assigned to another vendor")
+        if project.assignment_type == VendorAssignmentType.direct.value and str(
+            project.assigned_vendor_id
+        ) != str(vendor_id):
+            raise HTTPException(
+                status_code=403, detail="Project is assigned to another vendor"
+            )
         if project.bidding_close_at and project.bidding_close_at <= _now():
             raise HTTPException(status_code=409, detail="Bidding window has closed")
         existing = (
@@ -255,7 +260,11 @@ class VendorPortalOperations:
         if quote.status not in _EDITABLE_QUOTES:
             raise HTTPException(status_code=409, detail="Quote is not editable")
         line = next(
-            (item for item in quote.line_items if str(item.id) == line_id and item.is_active),
+            (
+                item
+                for item in quote.line_items
+                if str(item.id) == line_id and item.is_active
+            ),
             None,
         )
         if line is None:
@@ -275,7 +284,11 @@ class VendorPortalOperations:
         if quote.status not in _EDITABLE_QUOTES:
             raise HTTPException(status_code=409, detail="Quote is not editable")
         line = next(
-            (item for item in quote.line_items if str(item.id) == line_id and item.is_active),
+            (
+                item
+                for item in quote.line_items
+                if str(item.id) == line_id and item.is_active
+            ),
             None,
         )
         if line is None:
@@ -292,7 +305,9 @@ class VendorPortalOperations:
             raise HTTPException(status_code=409, detail="Quote is not submittable")
         active = [item for item in quote.line_items if item.is_active]
         if not active:
-            raise HTTPException(status_code=422, detail="Quote requires at least one line")
+            raise HTTPException(
+                status_code=422, detail="Quote requires at least one line"
+            )
         _recalculate(quote)
         quote.status = ProjectQuoteStatus.submitted.value
         quote.submitted_at = _now()
@@ -392,7 +407,9 @@ class VendorPortalOperations:
     ) -> dict:
         project = _project(db, str(payload.project_id))
         if str(project.assigned_vendor_id) != str(vendor_id):
-            raise HTTPException(status_code=403, detail="Project is assigned to another vendor")
+            raise HTTPException(
+                status_code=403, detail="Project is assigned to another vendor"
+            )
         if not payload.geojson and not payload.line_items:
             raise HTTPException(status_code=422, detail="Provide a route or line items")
         row = AsBuiltRoute(

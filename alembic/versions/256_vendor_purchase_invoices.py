@@ -36,11 +36,13 @@ def upgrade() -> None:
             sa.ForeignKey("installation_projects.id"),
             nullable=False,
         ),
+        sa.Column("vendor_id", uuid_type, sa.ForeignKey("vendors.id"), nullable=False),
         sa.Column(
-            "vendor_id", uuid_type, sa.ForeignKey("vendors.id"), nullable=False
+            "status", sa.String(length=40), nullable=False, server_default="draft"
         ),
-        sa.Column("status", sa.String(length=40), nullable=False, server_default="draft"),
-        sa.Column("currency", sa.String(length=3), nullable=False, server_default="NGN"),
+        sa.Column(
+            "currency", sa.String(length=3), nullable=False, server_default="NGN"
+        ),
         sa.Column("tax_rate_percent", sa.Numeric(5, 2)),
         sa.Column("subtotal", sa.Numeric(12, 2), nullable=False, server_default="0"),
         sa.Column("tax_total", sa.Numeric(12, 2), nullable=False, server_default="0"),
@@ -92,8 +94,14 @@ def upgrade() -> None:
         ("ix_vendor_purchase_invoices_invoice_number", ["invoice_number"]),
         ("ix_vendor_purchase_invoices_project_id", ["project_id"]),
         ("ix_vendor_purchase_invoices_vendor_id", ["vendor_id"]),
-        ("ix_vendor_purchase_invoices_erp_purchase_order_id", ["erp_purchase_order_id"]),
-        ("ix_vendor_purchase_invoices_erp_purchase_invoice_id", ["erp_purchase_invoice_id"]),
+        (
+            "ix_vendor_purchase_invoices_erp_purchase_order_id",
+            ["erp_purchase_order_id"],
+        ),
+        (
+            "ix_vendor_purchase_invoices_erp_purchase_invoice_id",
+            ["erp_purchase_invoice_id"],
+        ),
     ):
         op.create_index(name, "vendor_purchase_invoices", columns)
 

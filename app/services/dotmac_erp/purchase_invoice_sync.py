@@ -42,9 +42,7 @@ def purchase_invoice_eligibility_error(invoice: VendorPurchaseInvoice) -> str | 
     if not (invoice.vendor.erp_id or "").strip():
         return "Vendor is not linked to an ERP supplier"
     erp_po_id = (
-        invoice.erp_purchase_order_id
-        or invoice.project.erp_purchase_order_id
-        or ""
+        invoice.erp_purchase_order_id or invoice.project.erp_purchase_order_id or ""
     ).strip()
     if not erp_po_id:
         return "Waiting for the installation project's ERP purchase order"
@@ -74,8 +72,7 @@ def build_purchase_invoice_payload(invoice: VendorPurchaseInvoice) -> dict:
             {
                 "item_type": item_type[:80],
                 "description": (
-                    description
-                    or f"{item_type.replace('_', ' ').title()} item"
+                    description or f"{item_type.replace('_', ' ').title()} item"
                 )[:2000],
                 "quantity": str(item.quantity),
                 "unit_price": str(item.unit_price),
@@ -143,7 +140,9 @@ def event_ready(db: Session, event: FieldErpSyncEvent) -> bool:
         return True  # Let normal delivery dead-letter the invalid source.
     erp_po_id = invoice.erp_purchase_order_id or invoice.project.erp_purchase_order_id
     if not erp_po_id:
-        invoice.erp_sync_error = "Waiting for the installation project's ERP purchase order"
+        invoice.erp_sync_error = (
+            "Waiting for the installation project's ERP purchase order"
+        )
         return False
     if event.payload.get("erp_purchase_order_id") != erp_po_id:
         invoice.erp_purchase_order_id = erp_po_id
@@ -208,8 +207,7 @@ def repair_purchase_invoice_sync(db: Session, *, limit: int = 100) -> dict:
         db.query(VendorPurchaseInvoice)
         .filter(VendorPurchaseInvoice.is_active.is_(True))
         .filter(
-            VendorPurchaseInvoice.status
-            == VendorPurchaseInvoiceStatus.approved.value
+            VendorPurchaseInvoice.status == VendorPurchaseInvoiceStatus.approved.value
         )
         .order_by(VendorPurchaseInvoice.updated_at.asc())
         .limit(max(1, min(limit, 500)))

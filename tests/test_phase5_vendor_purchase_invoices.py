@@ -101,7 +101,4 @@ def test_vendor_invoice_lifecycle_and_neutral_erp_contract(db_session):
     assert payload["source_invoice_id"] == str(approved["id"])
     assert payload["source_project_id"] == str(install.project_id)
     assert "crm_invoice_id" not in payload
-    assert (
-        FLOW_ENDPOINTS["purchase_invoice"]
-        == "/api/v1/sync/sub/purchase-invoices"
-    )
+    assert FLOW_ENDPOINTS["purchase_invoice"] == "/api/v1/sync/sub/purchase-invoices"

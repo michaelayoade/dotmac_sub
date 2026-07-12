@@ -75,7 +75,9 @@ def _project_payload(row: Project) -> dict:
     subscriber = row.subscriber
     customer_name = None
     if subscriber:
-        customer_name = f"{subscriber.first_name or ''} {subscriber.last_name or ''}".strip()
+        customer_name = (
+            f"{subscriber.first_name or ''} {subscriber.last_name or ''}".strip()
+        )
     return {
         "source_id": str(row.id),
         "name": row.name,

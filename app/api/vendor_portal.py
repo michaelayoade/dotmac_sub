@@ -133,9 +133,7 @@ def submit_quote(
     return vendor_portal_operations.submit_quote(db, quote_id, _vendor_id(context))
 
 
-@router.post(
-    "/quotes/{quote_id}/route-revisions", status_code=status.HTTP_201_CREATED
-)
+@router.post("/quotes/{quote_id}/route-revisions", status_code=status.HTTP_201_CREATED)
 def create_route_revision(
     quote_id: str,
     payload: VendorRouteRevisionCreate,
@@ -209,17 +207,13 @@ def create_purchase_invoice(
     )
 
 
-@router.get(
-    "/purchase-invoices/{invoice_id}", response_model=VendorPurchaseInvoiceRead
-)
+@router.get("/purchase-invoices/{invoice_id}", response_model=VendorPurchaseInvoiceRead)
 def get_purchase_invoice(
     invoice_id: str,
     context: dict = Depends(require_native_vendor_context),
     db: Session = Depends(get_db),
 ):
-    return vendor_purchase_invoices.get(
-        db, invoice_id, vendor_id=_vendor_id(context)
-    )
+    return vendor_purchase_invoices.get(db, invoice_id, vendor_id=_vendor_id(context))
 
 
 @router.patch(

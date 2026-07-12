@@ -238,6 +238,8 @@ def test_manager_material_lifecycle_allocates_work_order_stock(db_session):
     allocation = db_session.query(FieldWorkOrderMaterial).one()
     assert allocation.item_id == item.id
     assert allocation.allocated_quantity == 10
+
+
 def test_material_request_api(db_session):
     user = _user(db_session)
     _profile(db_session, user)

@@ -165,9 +165,7 @@ def serialize(invoice: VendorPurchaseInvoice) -> dict:
 
 class VendorPurchaseInvoices:
     @staticmethod
-    def for_project(
-        db: Session, project_id: str, *, vendor_id: str
-    ) -> dict | None:
+    def for_project(db: Session, project_id: str, *, vendor_id: str) -> dict | None:
         rows = VendorPurchaseInvoices.list(
             db,
             vendor_id=vendor_id,

@@ -163,9 +163,7 @@ class Vendor(Base):
 
     users = relationship("VendorUser", back_populates="vendor")
     quotes = relationship("ProjectQuote", back_populates="vendor")
-    purchase_invoices = relationship(
-        "VendorPurchaseInvoice", back_populates="vendor"
-    )
+    purchase_invoices = relationship("VendorPurchaseInvoice", back_populates="vendor")
 
 
 class VendorUser(Base):
@@ -263,9 +261,7 @@ class InstallationProject(Base):
     )
     project_notes = relationship("InstallationProjectNote", back_populates="project")
     as_built_routes = relationship("AsBuiltRoute", back_populates="project")
-    purchase_invoices = relationship(
-        "VendorPurchaseInvoice", back_populates="project"
-    )
+    purchase_invoices = relationship("VendorPurchaseInvoice", back_populates="project")
 
 
 class ProjectQuote(Base):
@@ -405,12 +401,8 @@ class VendorPurchaseInvoice(Base):
     attachment_stored_file_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("stored_files.id")
     )
-    erp_purchase_order_id: Mapped[str | None] = mapped_column(
-        String(100), index=True
-    )
-    erp_purchase_invoice_id: Mapped[str | None] = mapped_column(
-        String(100), index=True
-    )
+    erp_purchase_order_id: Mapped[str | None] = mapped_column(String(100), index=True)
+    erp_purchase_invoice_id: Mapped[str | None] = mapped_column(String(100), index=True)
     erp_purchase_invoice_status: Mapped[str | None] = mapped_column(String(40))
     erp_sync_error: Mapped[str | None] = mapped_column(String(500))
     erp_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -427,12 +419,8 @@ class VendorPurchaseInvoice(Base):
 
     project = relationship("InstallationProject", back_populates="purchase_invoices")
     vendor = relationship("Vendor", back_populates="purchase_invoices")
-    reviewed_by = relationship(
-        "SystemUser", foreign_keys=[reviewed_by_system_user_id]
-    )
-    created_by = relationship(
-        "SystemUser", foreign_keys=[created_by_system_user_id]
-    )
+    reviewed_by = relationship("SystemUser", foreign_keys=[reviewed_by_system_user_id])
+    created_by = relationship("SystemUser", foreign_keys=[created_by_system_user_id])
     attachment = relationship("StoredFile", foreign_keys=[attachment_stored_file_id])
     line_items = relationship(
         "VendorPurchaseInvoiceLineItem",

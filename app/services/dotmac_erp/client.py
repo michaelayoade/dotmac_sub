@@ -458,35 +458,27 @@ class DotMacERPClient:
             params["only_below_reorder"] = True
         if only_with_available_serials:
             params["only_with_available_serials"] = True
-        result = self._request(
-            "GET", "/api/v1/sync/sub/inventory", params=params
-        )
+        result = self._request("GET", "/api/v1/sync/sub/inventory", params=params)
         if isinstance(result, dict):
             return result
         return {"items": result if isinstance(result, list) else []}
 
     def get_inventory_item(self, item_id: str) -> dict | None:
         try:
-            result = self._request(
-                "GET", f"/api/v1/sync/sub/inventory/{item_id}"
-            )
+            result = self._request("GET", f"/api/v1/sync/sub/inventory/{item_id}")
         except DotMacERPNotFoundError:
             return None
         return result if isinstance(result, dict) else None
 
     def list_inventory_warehouses(self) -> list[dict]:
-        result = self._request(
-            "GET", "/api/v1/sync/sub/inventory/meta/warehouses"
-        )
+        result = self._request("GET", "/api/v1/sync/sub/inventory/meta/warehouses")
         if isinstance(result, dict):
             rows = result.get("warehouses") or result.get("items") or []
             return rows if isinstance(rows, list) else []
         return result if isinstance(result, list) else []
 
     def list_inventory_categories(self) -> list[dict]:
-        result = self._request(
-            "GET", "/api/v1/sync/sub/inventory/meta/categories"
-        )
+        result = self._request("GET", "/api/v1/sync/sub/inventory/meta/categories")
         if isinstance(result, dict):
             rows = result.get("categories") or result.get("items") or []
             return rows if isinstance(rows, list) else []

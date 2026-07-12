@@ -92,7 +92,9 @@ def vendor_project_detail(
         available = vendor_portal_operations.list_projects(
             db, vendor_id, available=True, limit=500, offset=0
         )
-        project = next((item for item in available if str(item["id"]) == project_id), None)
+        project = next(
+            (item for item in available if str(item["id"]) == project_id), None
+        )
     if project is None:
         from fastapi import HTTPException
 

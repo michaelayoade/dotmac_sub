@@ -67,9 +67,7 @@ _asset_custody_write = require_any_permission(
     "inventory:write",
 )
 _purchase_invoice_read = require_any_permission("inventory:read", "finance:ap:read")
-_purchase_invoice_write = require_any_permission(
-    "inventory:write", "finance:ap:write"
-)
+_purchase_invoice_write = require_any_permission("inventory:write", "finance:ap:write")
 
 
 @router.get("/me", response_model=FieldManagerMeResponse)
