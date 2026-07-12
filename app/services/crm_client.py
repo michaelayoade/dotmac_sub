@@ -398,7 +398,6 @@ class CRMClient:
             logger.error("CRM raw request error %s %s: %s", method, path, exc)
             raise CRMClientError(f"CRM connection error: {exc}") from exc
 
-
     def _cached_get(
         self,
         path: str,
@@ -469,7 +468,6 @@ class CRMClient:
             f"/api/v1/subscribers/{subscriber_id}", None, self.cache_detail_ttl
         )
 
-
     def list_subscribers(
         self,
         *,
@@ -526,8 +524,6 @@ class CRMClient:
             f"/api/v1/tickets/{ticket_id}", None, self.cache_detail_ttl
         )
 
-
-
     def list_ticket_comments(
         self, ticket_id: str, *, use_cache: bool = True
     ) -> list[dict[str, Any]]:
@@ -543,7 +539,6 @@ class CRMClient:
             else self._request("GET", "/api/v1/ticket-comments", params=params)
         )
         return data if isinstance(data, list) else data.get("items", [])
-
 
     # ── Work Orders ──────────────────────────────────────────────────────
 
@@ -562,9 +557,6 @@ class CRMClient:
         return self._cached_get(
             f"/api/v1/work-orders/{work_order_id}", None, self.cache_detail_ttl
         )
-
-
-
 
     def create_portal_session(
         self,
@@ -708,7 +700,6 @@ class CRMClient:
             headers={"Authorization": f"Bearer {token}"},
         )
         return data if isinstance(data, dict) else {}
-
 
     def create_portal_referral(
         self,
