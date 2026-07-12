@@ -99,6 +99,7 @@ from app.web.admin.usage import router as usage_router
 from app.web.admin.vas import router as vas_router
 from app.web.admin.vendor_operations import router as vendor_operations_router
 from app.web.admin.vendor_routes import router as vendor_routes_router
+from app.web.admin.vendors import router as vendors_router
 from app.web.admin.wireguard import legacy_router as wireguard_legacy_router
 from app.web.admin.wireguard import router as wireguard_router
 from app.web.auth.dependencies import require_admin_web_auth
@@ -390,6 +391,10 @@ router.include_router(support_automation_router)
 router.include_router(support_assignment_rules_router)
 router.include_router(projects_router)
 router.include_router(vendor_operations_router)
+# Last of the /vendors routers on purpose: this one owns `/vendors/{vendor_id}`,
+# which would otherwise swallow the literal `/vendors/routes` and
+# `/vendors/operations` paths registered above.
+router.include_router(vendors_router)
 router.include_router(
     wireguard_router,
     prefix="/network",
