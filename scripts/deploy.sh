@@ -11,6 +11,11 @@
 #   deploy.sh --status           show pinned vs running image
 #   SKIP_BACKUP=1 deploy.sh ...  skip the pre-migration DB backup (NOT recommended)
 #
+# RUN IT DETACHED over SSH -- `nohup ./scripts/deploy.sh sha-... &` or inside
+# tmux. A dropped SSH session sends SIGHUP and kills the deploy mid-flight; the
+# script now cleans up after itself, but a deploy that dies during `alembic
+# upgrade heads` still leaves the schema half-applied.
+#
 # Procedure:
 #   verify image on GHCR -> DB backup -> pin APP_IMAGE in .env -> pull ->
 #   alembic upgrade heads (one-off container) -> recreate app+workers -> health gate.
@@ -32,6 +37,45 @@ IMAGE_RETAIN_COUNT="${IMAGE_RETAIN_COUNT:-5}"
 APP_SERVICES=(app celery-worker celery-worker-bandwidth celery-worker-ingestion \
   celery-worker-billing celery-worker-tr069 celery-beat bandwidth-poller \
   syslog-listener)
+
+DB_CONTAINER="${DB_CONTAINER:-dotmac_pg_local}"
+
+# --- One deploy at a time -------------------------------------------------
+#
+# Nothing used to stop two deploys running at once. On 2026-07-12 two did: each
+# started a full pg_dump of the production database, load hit 52 on 16 cores,
+# the app was starved out and the site served 502s for ~10 minutes. Had both
+# reached `alembic upgrade heads` they would have raced the migration chain
+# against the same database.
+LOCK_FILE="${DEPLOY_LOCK_FILE:-/var/lock/dotmac_sub_deploy.lock}"
+command -v flock >/dev/null || {
+  # Fail closed, but say WHY. Without this, `! flock` succeeds on a missing
+  # binary and the script claims another deploy holds the lock -- sending you
+  # to hunt a process that does not exist.
+  echo "REFUSING TO DEPLOY: flock(1) not found; cannot guarantee only one deploy runs." >&2
+  echo "Install util-linux, or set DEPLOY_LOCK_FILE= to opt out (NOT recommended)." >&2
+  exit 1
+}
+exec 9>"${LOCK_FILE}" 2>/dev/null || {
+  echo "Cannot open deploy lock ${LOCK_FILE}" >&2
+  exit 1
+}
+if ! flock -n 9; then
+  echo "REFUSING TO DEPLOY: another deploy already holds ${LOCK_FILE}." >&2
+  pgrep -af "scripts/deploy.sh" | grep -v "^$$ " | sed "s/^/  running: /" >&2 || true
+  exit 1
+fi
+
+# A pg_dump left behind by a deploy that died (e.g. its SSH session dropped)
+# outlives its parent and keeps hammering the DB. The lock will not catch that
+# -- the dead process released it. Refuse to pile a second dump on top.
+if pgrep -f "pg_dump .*-d ${DB_NAME:-dotmac_sub}" >/dev/null 2>&1; then
+  echo "REFUSING TO DEPLOY: a pg_dump is already running against ${DB_NAME:-dotmac_sub}." >&2
+  pgrep -af "pg_dump" | sed "s/^/  /" >&2
+  echo "It is probably orphaned from a deploy that died. Kill it, then retry:" >&2
+  echo "  pkill -f pg_dump; docker exec ${DB_CONTAINER} pkill -f pg_dump" >&2
+  exit 1
+fi
 
 log() { printf '\n==> %s\n' "$*"; }
 
@@ -80,15 +124,38 @@ log "Deploying ${IMAGE} (currently pinned: ${PREV_IMAGE:-none})"
 log "Verifying image exists on registry"
 docker manifest inspect "${IMAGE}" >/dev/null
 
+# If this script is killed mid-backup -- an SSH session dropping is enough --
+# the pg_dump it started does NOT die with it. It keeps running, and the next
+# deploy attempt piles another one on top. Take the whole child tree down.
+cleanup_children() {
+  local rc=$?
+  if [[ -n "${BACKUP_PID:-}" ]] && kill -0 "${BACKUP_PID}" 2>/dev/null; then
+    kill -TERM "${BACKUP_PID}" 2>/dev/null || true
+  fi
+  # pg_dump runs inside the DB container via `docker exec`; it survives the
+  # exec client, so signal it there too.
+  docker exec "${DB_CONTAINER}" sh -c "pkill -f pg_dump" >/dev/null 2>&1 || true
+  return $rc
+}
+trap 'cleanup_children; echo "Deploy interrupted -- backup child terminated, nothing pinned or migrated" >&2; exit 130' INT TERM HUP
+
 if [[ "${SKIP_BACKUP:-0}" != "1" ]]; then
   log "Backing up database before migrations (SKIP_BACKUP=1 to skip)"
-  bash "${REPO_DIR}/scripts/db_backup.sh"
+  bash "${REPO_DIR}/scripts/db_backup.sh" &
+  BACKUP_PID=$!
+  wait "${BACKUP_PID}"
+  BACKUP_PID=""
 fi
 
 repin_prev() {
   [[ -n "${PREV_IMAGE}" ]] && sed -i "s|^APP_IMAGE=.*|APP_IMAGE=${PREV_IMAGE}|" "${DEPLOY_DIR}/.env"
 }
 trap 'repin_prev; echo "Deploy FAILED — APP_IMAGE restored to ${PREV_IMAGE:-none} (running containers untouched)" >&2' ERR
+
+# From here on APP_IMAGE may already be pinned, so an interrupt must restore it
+# too -- not just terminate the backup child. (Migrations are NOT reverted; new
+# revisions must stay backward-compatible with the previous release.)
+trap 'cleanup_children; repin_prev; echo "Deploy interrupted — APP_IMAGE restored to ${PREV_IMAGE:-none}" >&2; exit 130' INT TERM HUP
 
 log "Pinning APP_IMAGE=${IMAGE}"
 if grep -q '^APP_IMAGE=' .env; then
