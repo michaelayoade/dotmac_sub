@@ -11,8 +11,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "265_brand_profiles"
-down_revision = "264_sales_order_service_order_link"
+revision = "267_brand_profiles"
+down_revision = "266_uisp_control_plane"
 branch_labels = None
 depends_on = None
 
