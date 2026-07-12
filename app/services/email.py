@@ -778,6 +778,9 @@ def send_email_with_config(
         f"{config.get('from_name') or get_brand()['from_name']} <{config.get('from_email') or get_brand()['from_email']}>"
     )
     msg["To"] = to_email
+    reply_to = str(config.get("reply_to") or "").strip()
+    if reply_to:
+        msg["Reply-To"] = reply_to
 
     if body_text:
         msg.attach(MIMEText(body_text, "plain"))

@@ -52,6 +52,55 @@ class CampaignRecipientStatus(enum.StrEnum):
     failed = "failed"
     skipped = "skipped"
     replied = "replied"
+    # Terminal: the address was on the suppression list at build or send time.
+    suppressed = "suppressed"
+
+
+class CampaignSuppressionReason(enum.StrEnum):
+    unsubscribed = "unsubscribed"
+    bounced = "bounced"
+    complaint = "complaint"
+    manual = "manual"
+
+
+class CampaignSmtpConfig(Base):
+    """A named SMTP endpoint a campaign (or a sender profile) delivers through.
+
+    Sub already resolves SMTP credentials per ``sender_key`` from domain
+    settings (``app.services.email``). This table is the *campaign-scoped*
+    override for the cases where marketing mail must leave through a different
+    relay than transactional mail, without polluting the global settings.
+    """
+
+    __tablename__ = "campaign_smtp_configs"
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_campaign_smtp_configs_name"),
+        Index("ix_campaign_smtp_configs_active", "is_active", "name"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    host: Mapped[str] = mapped_column(String(255), nullable=False)
+    port: Mapped[int] = mapped_column(Integer, default=587, nullable=False)
+    username: Mapped[str | None] = mapped_column(String(255))
+    # Stored server-side only; never serialised back out of the API.
+    password: Mapped[str | None] = mapped_column(String(255))
+    use_tls: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    use_ssl: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    metadata_: Mapped[dict | None] = mapped_column(
+        "metadata", MutableDict.as_mutable(JSON())
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
 
 
 class CampaignSender(Base):
@@ -69,6 +118,9 @@ class CampaignSender(Base):
     from_name: Mapped[str | None] = mapped_column(String(160))
     from_email: Mapped[str | None] = mapped_column(String(255))
     reply_to: Mapped[str | None] = mapped_column(String(255))
+    campaign_smtp_config_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("campaign_smtp_configs.id")
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     metadata_: Mapped[dict | None] = mapped_column(
         "metadata", MutableDict.as_mutable(JSON())
@@ -81,6 +133,8 @@ class CampaignSender(Base):
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
     )
+
+    smtp_config = relationship("CampaignSmtpConfig")
 
 
 class Campaign(Base):
@@ -122,6 +176,12 @@ class Campaign(Base):
     whatsapp_template_components: Mapped[dict | None] = mapped_column(JSON)
     segment_filter: Mapped[dict | None] = mapped_column(JSON)
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Optional send window: sends are only released between these local hours
+    # (inclusive start, exclusive end) in `send_window_timezone`. A window that
+    # wraps past midnight (e.g. 20 -> 6) is supported.
+    send_window_start_hour: Mapped[int | None] = mapped_column(Integer)
+    send_window_end_hour: Mapped[int | None] = mapped_column(Integer)
+    send_window_timezone: Mapped[str | None] = mapped_column(String(64))
     sending_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     total_recipients: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -135,6 +195,9 @@ class Campaign(Base):
     )
     campaign_sender_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("campaign_senders.id")
+    )
+    campaign_smtp_config_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("campaign_smtp_configs.id")
     )
     service_team_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("service_teams.id")
@@ -156,6 +219,7 @@ class Campaign(Base):
     )
 
     sender = relationship("CampaignSender")
+    smtp_config = relationship("CampaignSmtpConfig")
     service_team = relationship("ServiceTeam")
     connector_config = relationship("ConnectorConfig")
     steps = relationship(
@@ -181,7 +245,12 @@ class CampaignStep(Base):
     subject: Mapped[str | None] = mapped_column(String(200))
     body_html: Mapped[str | None] = mapped_column(Text)
     body_text: Mapped[str | None] = mapped_column(Text)
+    # Wait time *after the previous stage* (the initial send for step 0, else
+    # the preceding step's due time). Effective offset from `sending_started_at`
+    # is therefore the running sum across steps, not this value alone.
     delay_days: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    delay_hours: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -201,16 +270,29 @@ class CampaignRecipient(Base):
         UniqueConstraint(
             "campaign_id", "subscriber_id", "step_id", name="uq_campaign_sub_step"
         ),
+        # Partial unique indexes: `sqlite_where` mirrors `postgresql_where` so the
+        # SQLite test harness enforces the same rule as production. Without it,
+        # SQLite drops the predicate and the index becomes unconditional — which
+        # would forbid a subscriber from ever receiving a second sequence step.
         Index(
             "uq_campaign_sub_null_step",
             "campaign_id",
             "subscriber_id",
             unique=True,
             postgresql_where=text("step_id IS NULL"),
+            sqlite_where=text("step_id IS NULL"),
         ),
         Index("ix_campaign_recipients_status", "campaign_id", "status"),
         Index("ix_campaign_recipients_subscriber", "subscriber_id"),
         Index("ix_campaign_recipients_conversation", "conversation_id"),
+        Index("ix_campaign_recipients_step", "campaign_id", "step_id"),
+        Index(
+            "uq_campaign_recipients_unsubscribe_token",
+            "unsubscribe_token",
+            unique=True,
+            postgresql_where=text("unsubscribe_token IS NOT NULL"),
+            sqlite_where=text("unsubscribe_token IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -246,6 +328,13 @@ class CampaignRecipient(Base):
     clicked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     open_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     click_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Delivery tracking: how many times we handed this recipient to the
+    # transport, and when we last did so (regardless of outcome).
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    suppressed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # One-click unsubscribe secret, minted per recipient row.
+    unsubscribe_token: Mapped[str | None] = mapped_column(String(64))
     metadata_: Mapped[dict | None] = mapped_column(
         "metadata", MutableDict.as_mutable(JSON())
     )
@@ -259,3 +348,50 @@ class CampaignRecipient(Base):
     notification = relationship("Notification")
     conversation = relationship("InboxConversation")
     message = relationship("InboxMessage")
+
+
+class CampaignSuppression(Base):
+    """Do-not-contact list, keyed by (channel, normalized address).
+
+    Suppression is deliberately **global per channel**, not per campaign: an
+    unsubscribe from one blast must hold for every later blast. `campaign_id`
+    records where the suppression originated, for audit only — it never scopes
+    enforcement.
+    """
+
+    __tablename__ = "campaign_suppressions"
+    __table_args__ = (
+        UniqueConstraint("channel", "address", name="uq_campaign_suppressions_address"),
+        Index("ix_campaign_suppressions_subscriber", "subscriber_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    channel: Mapped[str] = mapped_column(String(40), nullable=False)
+    address: Mapped[str] = mapped_column(String(255), nullable=False)
+    subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id")
+    )
+    campaign_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("campaigns.id")
+    )
+    reason: Mapped[str] = mapped_column(
+        String(40), default=CampaignSuppressionReason.unsubscribed.value, nullable=False
+    )
+    source: Mapped[str | None] = mapped_column(String(80))
+    notes: Mapped[str | None] = mapped_column(Text)
+    metadata_: Mapped[dict | None] = mapped_column(
+        "metadata", MutableDict.as_mutable(JSON())
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    subscriber = relationship("Subscriber")
+    campaign = relationship("Campaign")

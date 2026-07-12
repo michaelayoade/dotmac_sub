@@ -457,12 +457,7 @@ def test_single_alembic_head():
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
-    heads = script.get_heads()
-    assert len(heads) == 1, (
-        f"Expected exactly one Alembic head, found {len(heads)}: {heads}. "
-        "Two branches almost certainly numbered their migrations off the same "
-        "parent -- renumber the later one onto the current head."
-    )
+    assert script.get_heads() == ["262_campaign_parity"]
 
 
 def test_migration_249_adds_integration_settingdomain():

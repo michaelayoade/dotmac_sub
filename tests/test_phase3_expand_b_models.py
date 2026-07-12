@@ -421,11 +421,7 @@ def test_migration_244_is_single_alembic_head():
     heads = script.get_heads()
     # The chain keeps advancing as later PRs stack on; ONT confirmation added
     # Phase 5 asset inventory now extends the current migration chain.
-    assert len(heads) == 1, (
-        f"Expected exactly one Alembic head, found {len(heads)}: {heads}. "
-        "Two branches almost certainly numbered their migrations off the same "
-        "parent -- renumber the later one onto the current head."
-    )
+    assert heads == ["262_campaign_parity"]
 
 
 def test_migration_244_source_recreates_leads_partial_unique():
