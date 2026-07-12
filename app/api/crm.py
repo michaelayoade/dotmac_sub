@@ -14,6 +14,8 @@ from app.services import crm_api
 
 router = APIRouter(prefix="/crm", tags=["crm-api"])
 
+CRM_SUBSCRIBER_MAX_PER_PAGE = 100
+
 
 def _error(
     status_code: int, message: str, errors: dict[str, list[str]] | None = None
@@ -47,7 +49,9 @@ def _query_value(request: Request, name: str) -> str | None:
     return value if value not in ("", None) else None
 
 
-def _pagination(request: Request) -> tuple[int, int, dict[str, Any]]:
+def _pagination(
+    request: Request, *, max_per_page: int = 500
+) -> tuple[int, int, dict[str, Any]]:
     errors: dict[str, list[str]] = {}
 
     def parse_int(name: str, default: int, *, min_value: int, max_value: int) -> int:
@@ -70,10 +74,21 @@ def _pagination(request: Request) -> tuple[int, int, dict[str, Any]]:
         return value
 
     page = parse_int("page", 1, min_value=1, max_value=1_000_000)
-    per_page = parse_int("per_page", 100, min_value=1, max_value=500)
+    per_page = parse_int("per_page", 100, min_value=1, max_value=max_per_page)
     if errors:
         _error(status.HTTP_400_BAD_REQUEST, "Invalid query parameters.", errors)
     return page, per_page, {"page": page, "per_page": per_page}
+
+
+def _finish_read_response(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    bind = db.get_bind()
+    if (
+        bind.dialect.name == "postgresql"
+        and db.in_transaction()
+        and not db.in_nested_transaction()
+    ):
+        db.rollback()
+    return payload
 
 
 def _include_values(request: Request, allowed: set[str]) -> set[str]:
@@ -144,7 +159,9 @@ def ping() -> dict[str, str]:
 
 @router.get("/subscribers", dependencies=[Depends(require_crm_bearer)])
 def list_subscribers(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
-    page, per_page, meta = _pagination(request)
+    page, per_page, meta = _pagination(
+        request, max_per_page=CRM_SUBSCRIBER_MAX_PER_PAGE
+    )
     includes = _include_values(
         request, {"services", "billing", "session_state", "last_seen"}
     )
@@ -177,7 +194,7 @@ def list_subscribers(request: Request, db: Session = Depends(get_db)) -> dict[st
                 **kwargs,
             )
         )
-    return _envelope(data, {**meta, "total": total})
+    return _finish_read_response(db, _envelope(data, {**meta, "total": total}))
 
 
 @router.get("/subscribers/search", dependencies=[Depends(require_crm_bearer)])
@@ -192,7 +209,9 @@ def search_subscribers(
             {"q": ["Search query is required."]},
         )
     assert q is not None
-    page, per_page, meta = _pagination(request)
+    page, per_page, meta = _pagination(
+        request, max_per_page=CRM_SUBSCRIBER_MAX_PER_PAGE
+    )
     subscribers, total = crm_api.search_subscribers(db, q, page=page, per_page=per_page)
     sessions = crm_api.latest_session_by_subscriber(
         db, [item.id for item in subscribers]
@@ -207,7 +226,7 @@ def search_subscribers(
         )
         for subscriber in subscribers
     ]
-    return _envelope(data, {**meta, "total": total})
+    return _finish_read_response(db, _envelope(data, {**meta, "total": total}))
 
 
 @router.get("/subscribers/online", dependencies=[Depends(require_crm_bearer)])
@@ -215,7 +234,7 @@ def online_subscribers(db: Session = Depends(get_db)) -> dict[str, Any]:
     # Online state is inferred from open, fresh RADIUS accounting sessions.
     # It is not an authoritative real-time device poll; subscribers whose NAS
     # has not sent interim accounting inside ONLINE_FRESH_SECONDS are excluded.
-    return _envelope(crm_api.online_subscribers(db))
+    return _finish_read_response(db, _envelope(crm_api.online_subscribers(db)))
 
 
 @router.get("/subscribers/{subscriber_id}", dependencies=[Depends(require_crm_bearer)])
@@ -316,16 +335,18 @@ def update_subscriber_status(
 
 @router.get("/locations", dependencies=[Depends(require_crm_bearer)])
 def locations(db: Session = Depends(get_db)) -> dict[str, Any]:
-    return _envelope(crm_api.locations(db))
+    return _finish_read_response(db, _envelope(crm_api.locations(db)))
 
 
 @router.get("/billing-risk-source", dependencies=[Depends(require_crm_bearer)])
 def billing_risk_source(
     request: Request, db: Session = Depends(get_db)
 ) -> dict[str, Any]:
-    page, per_page, meta = _pagination(request)
+    page, per_page, meta = _pagination(
+        request, max_per_page=CRM_SUBSCRIBER_MAX_PER_PAGE
+    )
     rows, total = crm_api.billing_risk_rows(db, page=page, per_page=per_page)
-    return _envelope(rows, {**meta, "total": total})
+    return _finish_read_response(db, _envelope(rows, {**meta, "total": total}))
 
 
 @router.post(

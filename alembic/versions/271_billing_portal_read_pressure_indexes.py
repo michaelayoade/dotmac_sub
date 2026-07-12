@@ -6,16 +6,16 @@ read-only queries. During pool pressure we observed idle transactions sitting on
 composite indexes back the exact predicates used by that page so each request
 spends less time holding a pooled connection.
 
-Revision ID: 270_billing_portal_read_pressure_indexes
-Revises: 269_ledger_reversal_link
+Revision ID: 271_billing_portal_read_pressure_indexes
+Revises: 270_network_operation_router_types
 """
 
 from __future__ import annotations
 
 from alembic import op
 
-revision = "270_billing_portal_read_pressure_indexes"
-down_revision = "269_ledger_reversal_link"
+revision = "271_billing_portal_read_pressure_indexes"
+down_revision = "270_network_operation_router_types"
 branch_labels = None
 depends_on = None
 

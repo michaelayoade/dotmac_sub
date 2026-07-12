@@ -43,6 +43,7 @@ from app.models.service_extension import (
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.models.system_user import SystemUser
 from app.models.usage import AccountingStatus, RadiusAccountingSession
+from app.services import crm_api
 
 TOKEN = "crm-test-token"
 
@@ -291,6 +292,43 @@ def test_subscriber_list_batches_payload_metadata(db_session, crm_auth):
     assert {row["suspended_at"] for row in target_rows} == {"2026-05-01T00:00:00Z"}
     assert {row["terminated_at"] for row in target_rows} == {"2026-06-01T00:00:00Z"}
     assert len(statements) <= 10
+
+
+def test_subscriber_list_rejects_pressure_page_size(crm_auth):
+    response = _call_route(
+        crm_routes.list_subscribers,
+        _request({"page": "1", "per_page": "500"}),
+        object(),
+    )
+
+    assert response.status_code == 400
+    assert "per_page" in response.json()["detail"]["errors"]
+
+
+def test_locations_uses_short_cache(db_session, crm_auth):
+    crm_api._locations_cache = None
+    subscriber = _subscriber(db_session)
+    db_session.commit()
+
+    statements = []
+    engine = db_session.get_bind()
+
+    def count_statement(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", count_statement)
+    try:
+        first = _call_route(crm_routes.locations, db_session)
+        second = _call_route(crm_routes.locations, db_session)
+    finally:
+        event.remove(engine, "before_cursor_execute", count_statement)
+        crm_api._locations_cache = None
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json() == second.json()
+    assert any(item["name"] == subscriber.city for item in first.json()["data"])
+    assert len(statements) == 2
 
 
 def test_invalid_query_parameters_return_400_field_errors(crm_auth):
