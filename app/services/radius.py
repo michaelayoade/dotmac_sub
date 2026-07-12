@@ -797,6 +797,11 @@ def _radius_client_ip_for_nas(nas_device: NasDevice) -> str:
     ).strip()
 
 
+def radius_client_ip_for_nas(nas_device: NasDevice) -> str:
+    """Public RADIUS client identity projection for a NAS device."""
+    return _radius_client_ip_for_nas(nas_device)
+
+
 def _active_radius_servers(db: Session) -> list[RadiusServer]:
     return list(
         db.scalars(
@@ -1467,6 +1472,115 @@ def remove_external_radius_nas_clients(
             )
             removed += max(int(result.rowcount or 0), 0)
     return removed
+
+
+@dataclass(frozen=True)
+class RadiusNasLifecycleState:
+    client_ip: str | None
+    internal_active_clients: int
+    external_present: bool
+
+
+@dataclass(frozen=True)
+class RadiusNasLifecycleResult:
+    desired_active: bool
+    internal_clients_changed: int
+    external_clients_changed: int
+
+
+def radius_nas_lifecycle_state(
+    db: Session,
+    nas_device: NasDevice,
+) -> RadiusNasLifecycleState:
+    """Resolve bounded internal/external RADIUS client lifecycle evidence."""
+    return radius_nas_lifecycle_states(db, [nas_device])[nas_device.id]
+
+
+def radius_nas_lifecycle_states(
+    db: Session,
+    nas_devices: list[NasDevice],
+) -> dict[object, RadiusNasLifecycleState]:
+    """Batch lifecycle evidence without per-device external database queries."""
+    if not nas_devices:
+        return {}
+    device_ids = [device.id for device in nas_devices]
+    active_client_ips: dict[object, set[str]] = {}
+    active_client_counts: dict[object, int] = {}
+    for device_id, client_ip in db.execute(
+        select(RadiusClient.nas_device_id, RadiusClient.client_ip)
+        .where(RadiusClient.nas_device_id.in_(device_ids))
+        .where(RadiusClient.is_active.is_(True))
+    ).all():
+        normalized_ip = str(client_ip or "").strip()
+        if device_id is None:
+            continue
+        active_client_counts[device_id] = active_client_counts.get(device_id, 0) + 1
+        if normalized_ip:
+            active_client_ips.setdefault(device_id, set()).add(normalized_ip)
+
+    candidate_ips: dict[object, set[str]] = {}
+    for device in nas_devices:
+        projected_ip = _radius_client_ip_for_nas(device)
+        candidates = set(active_client_ips.get(device.id, set()))
+        if projected_ip:
+            candidates.add(projected_ip)
+        candidate_ips[device.id] = candidates
+    external_ips = external_radius_nas_client_ips(
+        db, set().union(*candidate_ips.values()) if candidate_ips else set()
+    )
+    return {
+        device.id: RadiusNasLifecycleState(
+            client_ip=(
+                _radius_client_ip_for_nas(device)
+                or next(iter(sorted(active_client_ips.get(device.id, set()))), None)
+            ),
+            internal_active_clients=active_client_counts.get(device.id, 0),
+            external_present=bool(candidate_ips[device.id] & external_ips),
+        )
+        for device in nas_devices
+    }
+
+
+def apply_radius_nas_lifecycle(
+    db: Session,
+    nas_device: NasDevice,
+    *,
+    active: bool,
+) -> RadiusNasLifecycleResult:
+    """Project one reviewed NAS lifecycle decision into RADIUS stores."""
+    if active:
+        internal_changed = ensure_radius_clients_for_nas(db, nas_device)
+        external_changed = 0
+        for config in _active_external_sync_configs(db):
+            external_changed += int(
+                _external_sync_nas(config, [nas_device]).get("external_nas_synced", 0)
+            )
+        return RadiusNasLifecycleResult(
+            desired_active=True,
+            internal_clients_changed=internal_changed,
+            external_clients_changed=external_changed,
+        )
+
+    clients = db.scalars(
+        select(RadiusClient)
+        .where(RadiusClient.nas_device_id == nas_device.id)
+        .where(RadiusClient.is_active.is_(True))
+    ).all()
+    client_ips = {
+        normalized_ip
+        for client in clients
+        if (normalized_ip := str(client.client_ip or "").strip())
+    }
+    for client in clients:
+        client.is_active = False
+    if client_ip := _radius_client_ip_for_nas(nas_device):
+        client_ips.add(client_ip)
+    external_changed = remove_external_radius_nas_clients(db, client_ips)
+    return RadiusNasLifecycleResult(
+        desired_active=False,
+        internal_clients_changed=len(clients),
+        external_clients_changed=external_changed,
+    )
 
 
 class RadiusUsers(ListResponseMixin):
