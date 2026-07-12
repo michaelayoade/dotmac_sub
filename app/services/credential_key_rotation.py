@@ -223,9 +223,13 @@ def scan_credential_encryption_integrity(
     for row in connector_rows:
         observe(connector_scope, row.auth_config)
 
-    for scope, _column_name, integrity_sql, _rotation_sql, _update_sql in (
-        _RAW_ENCRYPTED_COLUMNS
-    ):
+    for (
+        scope,
+        _column_name,
+        integrity_sql,
+        _rotation_sql,
+        _update_sql,
+    ) in _RAW_ENCRYPTED_COLUMNS:
         register(scope)
         rows = db.execute(text(integrity_sql)).all()
         for row in rows:
@@ -499,9 +503,13 @@ def _rotate_raw_encrypted_columns(
     """Rotate whole-blob/string encrypted columns without ORM decryption."""
     updated_records = 0
     updated_values = 0
-    for _scope, column_name, _integrity_sql, rotation_sql, update_sql in (
-        _RAW_ENCRYPTED_COLUMNS
-    ):
+    for (
+        _scope,
+        column_name,
+        _integrity_sql,
+        rotation_sql,
+        update_sql,
+    ) in _RAW_ENCRYPTED_COLUMNS:
         rows = db.execute(text(rotation_sql)).mappings()
         for row in rows:
             raw = row[column_name]

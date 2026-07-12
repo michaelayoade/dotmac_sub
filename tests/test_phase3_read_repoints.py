@@ -119,22 +119,8 @@ def test_me_projects_flag_on_serves_native(monkeypatch):
 # ── GET /me/quotes ────────────────────────────────────────────────────────────
 
 
-def test_me_quotes_flag_off_serves_mirror(monkeypatch):
+def test_me_quotes_serves_native(monkeypatch):
     principal = _subscriber_principal()
-    monkeypatch.setattr(selfserve_service, "native_read_enabled", lambda db: False)
-    monkeypatch.setattr(
-        me_api.quotes_mirror,
-        "read_for_subscriber",
-        lambda db, sid: {**MIRROR_QUOTES, "sid": sid},
-    )
-    out = me_api.my_quotes(db=None, principal=principal)
-    assert out["src"] == "mirror"
-    assert out["sid"] == principal["subscriber_id"]
-
-
-def test_me_quotes_flag_on_serves_native(monkeypatch):
-    principal = _subscriber_principal()
-    monkeypatch.setattr(selfserve_service, "native_read_enabled", lambda db: True)
     monkeypatch.setattr(
         selfserve_service.selfserve_quotes,
         "read_for_subscriber",
@@ -148,22 +134,8 @@ def test_me_quotes_flag_on_serves_native(monkeypatch):
 # ── GET /me/referrals ─────────────────────────────────────────────────────────
 
 
-def test_me_referrals_flag_off_serves_mirror(monkeypatch):
+def test_me_referrals_serves_native(monkeypatch):
     principal = _subscriber_principal()
-    monkeypatch.setattr(referrals_service, "native_read_enabled", lambda db: False)
-    monkeypatch.setattr(
-        me_api.referrals_mirror,
-        "read_for_subscriber",
-        lambda db, sid: {**MIRROR_REFERRALS, "sid": sid},
-    )
-    out = me_api.my_referrals(db=None, principal=principal)
-    assert out["src"] == "mirror"
-    assert out["sid"] == principal["subscriber_id"]
-
-
-def test_me_referrals_flag_on_serves_native(monkeypatch):
-    principal = _subscriber_principal()
-    monkeypatch.setattr(referrals_service, "native_read_enabled", lambda db: True)
     monkeypatch.setattr(
         referrals_service.referrals,
         "read_for_subscriber",
@@ -266,16 +238,7 @@ def test_web_tracker_routes_by_flag(monkeypatch):
     assert web_projects._tracker(None, "s1")["src"] == "native"
 
 
-def test_web_quotes_routes_by_flag(monkeypatch):
-    monkeypatch.setattr(selfserve_service, "native_read_enabled", lambda db: False)
-    monkeypatch.setattr(
-        web_quotes.quotes_mirror,
-        "read_for_subscriber",
-        lambda db, sid: MIRROR_QUOTES,
-    )
-    assert web_quotes._quotes(None, "s1")["src"] == "mirror"
-
-    monkeypatch.setattr(selfserve_service, "native_read_enabled", lambda db: True)
+def test_web_quotes_serve_native(monkeypatch):
     monkeypatch.setattr(
         selfserve_service.selfserve_quotes,
         "read_for_subscriber",
@@ -284,16 +247,7 @@ def test_web_quotes_routes_by_flag(monkeypatch):
     assert web_quotes._quotes(None, "s1")["src"] == "native"
 
 
-def test_web_referrals_routes_by_flag(monkeypatch):
-    monkeypatch.setattr(referrals_service, "native_read_enabled", lambda db: False)
-    monkeypatch.setattr(
-        web_referrals.referrals_mirror,
-        "read_for_subscriber",
-        lambda db, sid: MIRROR_REFERRALS,
-    )
-    assert web_referrals._summary(None, "s1")["src"] == "mirror"
-
-    monkeypatch.setattr(referrals_service, "native_read_enabled", lambda db: True)
+def test_web_referrals_serve_native(monkeypatch):
     monkeypatch.setattr(
         referrals_service.referrals,
         "read_for_subscriber",
@@ -325,33 +279,7 @@ def _native_quote(db, sub):
         )
 
 
-def test_reseller_quotes_flag_off_serves_mirror(db_session, monkeypatch):
-    monkeypatch.setattr(selfserve_service, "native_read_enabled", lambda db: False)
-    reseller = _reseller(db_session)
-    mine = _subscriber(db_session, reseller_id=reseller.id)
-    native = _native_quote(db_session, mine)  # must NOT appear while OFF
-    db_session.add(
-        QuoteMirror(
-            crm_quote_id="q-mirror",
-            subscriber_id=mine.id,
-            status="draft",
-            currency="NGN",
-            total="75000.00",
-            payload={"id": "q-mirror", "status": "draft", "total": "75000.00"},
-        )
-    )
-    db_session.commit()
-
-    out = reseller_crm_views.quotes_for_reseller(db_session, str(reseller.id))
-    ids = [q["id"] for q in out["quotes"]]
-    assert ids == ["q-mirror"]
-    assert str(native.id) not in ids
-    assert out["quotes"][0]["account_id"] == str(mine.id)
-    assert out["quotes"][0]["account_name"]
-
-
-def test_reseller_quotes_flag_on_serves_native(db_session, monkeypatch):
-    monkeypatch.setattr(selfserve_service, "native_read_enabled", lambda db: True)
+def test_reseller_quotes_serve_native(db_session):
     reseller = _reseller(db_session)
     mine = _subscriber(db_session, reseller_id=reseller.id)
     other = _subscriber(db_session)  # not this reseller's

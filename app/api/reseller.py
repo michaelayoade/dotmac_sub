@@ -834,8 +834,7 @@ def my_reseller_quotes(
     principal: dict = Depends(require_user_auth),
 ) -> dict:
     """Self-serve installation quotes across all the reseller's customers,
-    each row tagged with its account. Served from the local CRM mirror, or
-    natively behind ``quotes_native_read_enabled`` (Phase 3 §4.2)."""
+    each row tagged with its account. Served from Sub's native quote tables."""
     reseller_id = _reseller_id(db, principal)
     return reseller_crm_views.quotes_for_reseller(db, reseller_id)
 

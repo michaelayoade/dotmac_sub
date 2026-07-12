@@ -16,7 +16,6 @@ from app.models.subscriber import Subscriber
 from app.services import quote_deposits
 from app.services.sales import selfserve
 
-
 _FAP = SimpleNamespace(id=uuid.uuid4(), name="NAP-041")
 
 
@@ -142,7 +141,10 @@ def test_verify_unpaid_leaves_native_quote_draft(db_session):
         )
     assert out["paid"] is False
     assert out["quote"]["status"] == "draft"
-    assert db_session.query(SalesOrder).filter(SalesOrder.quote_id == quote.id).count() == 0
+    assert (
+        db_session.query(SalesOrder).filter(SalesOrder.quote_id == quote.id).count()
+        == 0
+    )
 
 
 def test_verify_is_subscriber_scoped(db_session):

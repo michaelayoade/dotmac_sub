@@ -6,7 +6,6 @@ from pathlib import Path
 
 from app.services.crm_client import CRMClient
 
-
 ROOT = Path(__file__).resolve().parents[2]
 
 
