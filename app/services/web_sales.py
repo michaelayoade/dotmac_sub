@@ -47,6 +47,7 @@ from app.schemas.sales import (
     PipelineStageUpdate,
     PipelineUpdate,
     QuoteCreate,
+    QuoteLineItemCreate,
     QuoteUpdate,
 )
 from app.services import sales as sales_service
@@ -678,6 +679,20 @@ def _quote_form_fields(
     }
 
 
+def creatable_quote_status_values() -> list[str]:
+    """A new quote can only start as a draft.
+
+    ``sent`` and ``accepted`` drive real downstream effects, and a quote that
+    does not exist yet cannot have line items -- so offering them on the create
+    form is offering a way to commit the business to a quote worth nothing.
+    """
+    return [
+        value
+        for value in quote_status_values()
+        if value not in {QuoteStatus.sent.value, QuoteStatus.accepted.value}
+    ]
+
+
 def build_quote_new_context() -> dict[str, Any]:
     return {
         "quote_form": _quote_form_fields(
@@ -693,7 +708,7 @@ def build_quote_new_context() -> dict[str, Any]:
             address=None,
             region=None,
         ),
-        "status_values": quote_status_values(),
+        "status_values": creatable_quote_status_values(),
         "form_title": "New Quote",
         "submit_label": "Create Quote",
         "action_url": "/admin/sales/quotes",
@@ -865,6 +880,47 @@ def update_quote_from_form(
         metadata_=metadata,
     )
     sales_service.quotes.update(db, quote_id, payload)
+
+
+def add_quote_line_item_from_form(
+    db: Session,
+    *,
+    quote_id: str,
+    description: str | None,
+    quantity: str | None,
+    unit_price: str | None,
+    discount_percent: str | None,
+) -> None:
+    """Add a priced line to a quote.
+
+    Without this, a staff-authored quote has no lines, so its subtotal and total
+    are zero — it is a quote for nothing. ``QuoteLineItems.create`` recalculates
+    the quote totals, so the money follows from the lines rather than being
+    typed in directly.
+    """
+    clean_description = (description or "").strip()
+    if not clean_description:
+        raise ValueError("A line item needs a description.")
+
+    def _decimal(value: str | None, field: str, default: str) -> Decimal:
+        text_value = (value or "").strip() or default
+        try:
+            return Decimal(text_value)
+        except (ArithmeticError, ValueError):
+            raise ValueError(f"{field} must be a number.") from None
+
+    payload = QuoteLineItemCreate(
+        quote_id=coerce_uuid(quote_id),
+        description=clean_description,
+        quantity=_decimal(quantity, "Quantity", "1"),
+        unit_price=_decimal(unit_price, "Unit price", "0"),
+        discount_percent=_decimal(discount_percent, "Discount", "0"),
+    )
+    sales_service.quote_line_items.create(db, payload)
+
+
+def delete_quote_line_item(db: Session, item_id: str) -> None:
+    sales_service.quote_line_items.delete(db, item_id)
 
 
 def set_quote_status(db: Session, quote_id: str, status: str | None) -> None:
