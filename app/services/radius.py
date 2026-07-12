@@ -2,6 +2,7 @@ import hashlib
 import logging
 import re
 import threading
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -1368,6 +1369,104 @@ def _external_sync_nas(
             )
             created += 1
     return {"external_nas_synced": created}
+
+
+def external_radius_nas_client_ips(
+    db: Session,
+    client_ips: set[str],
+) -> set[str]:
+    """Return configured external RADIUS NAS clients without reading secrets."""
+    wanted = {str(value).strip() for value in client_ips if str(value).strip()}
+    if not wanted:
+        return set()
+
+    found: set[str] = set()
+    for config in _active_external_sync_configs(db):
+        nas_table = _external_radius_table(
+            config.get("nas_table", "nas"),
+            Column("nasname", String),
+        )
+        engine = _get_external_engine(config["db_url"])
+        with engine.connect() as conn:
+            rows = conn.execute(
+                select(nas_table.c.nasname).where(nas_table.c.nasname.in_(wanted))
+            ).scalars()
+            found.update(str(value).strip() for value in rows if value)
+    return found
+
+
+@dataclass(frozen=True)
+class ExternalRadiusNasSecretInventory:
+    present_client_ips: frozenset[str]
+    recoverable_secrets: dict[str, str]
+    conflicting_client_ips: frozenset[str]
+
+
+def external_radius_nas_secret_inventory(
+    db: Session,
+    client_ips: set[str],
+) -> ExternalRadiusNasSecretInventory:
+    """Read authoritative NAS secrets and reject cross-store conflicts."""
+    wanted = {str(value).strip() for value in client_ips if str(value).strip()}
+    values: dict[str, set[str]] = {client_ip: set() for client_ip in wanted}
+    present: set[str] = set()
+    for config in _active_external_sync_configs(db):
+        nas_table = _external_radius_table(
+            config.get("nas_table", "nas"),
+            Column("nasname", String),
+            Column("secret", String),
+        )
+        engine = _get_external_engine(config["db_url"])
+        with engine.connect() as conn:
+            rows = conn.execute(
+                select(nas_table.c.nasname, nas_table.c.secret).where(
+                    nas_table.c.nasname.in_(wanted)
+                )
+            ).all()
+        for client_ip, secret in rows:
+            normalized_ip = str(client_ip or "").strip()
+            if not normalized_ip:
+                continue
+            present.add(normalized_ip)
+            normalized_secret = str(secret or "")
+            if normalized_secret:
+                values.setdefault(normalized_ip, set()).add(normalized_secret)
+
+    conflicts = {client_ip for client_ip, secrets in values.items() if len(secrets) > 1}
+    recoverable = {
+        client_ip: next(iter(secrets))
+        for client_ip, secrets in values.items()
+        if len(secrets) == 1
+    }
+    return ExternalRadiusNasSecretInventory(
+        present_client_ips=frozenset(present),
+        recoverable_secrets=recoverable,
+        conflicting_client_ips=frozenset(conflicts),
+    )
+
+
+def remove_external_radius_nas_clients(
+    db: Session,
+    client_ips: set[str],
+) -> int:
+    """Remove explicitly decommissioned NAS clients from external RADIUS stores."""
+    wanted = {str(value).strip() for value in client_ips if str(value).strip()}
+    if not wanted:
+        return 0
+
+    removed = 0
+    for config in _active_external_sync_configs(db):
+        nas_table = _external_radius_table(
+            config.get("nas_table", "nas"),
+            Column("nasname", String),
+        )
+        engine = _get_external_engine(config["db_url"])
+        with engine.begin() as conn:
+            result = conn.execute(
+                delete(nas_table).where(nas_table.c.nasname.in_(wanted))
+            )
+            removed += max(int(result.rowcount or 0), 0)
+    return removed
 
 
 class RadiusUsers(ListResponseMixin):

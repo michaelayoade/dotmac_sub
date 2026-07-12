@@ -64,6 +64,14 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "observability.recording",
         "runtime.db_sessions",
     )
+    assert sot_relationships.dependencies_for("secrets.credential_recovery") == (
+        "secrets.credential_integrity",
+        "network.identity",
+        "network.radius_sessions",
+        "access.radius_state",
+        "runtime.db_sessions",
+        "observability.recording",
+    )
     assert sot_relationships.dependencies_for("communications.team_inbox") == (
         "customer.identity_scope",
         "communications.channel_policy",
