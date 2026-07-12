@@ -700,7 +700,8 @@ def build_quote_new_context() -> dict[str, Any]:
 def build_quote_edit_context(db: Session, *, quote_id: str) -> dict[str, Any]:
     quote = sales_service.quotes.get(db, quote_id)
     meta = quote.metadata_ if isinstance(quote.metadata_, dict) else {}
-    install = meta.get("install") if isinstance(meta.get("install"), dict) else {}
+    raw_install = meta.get("install")
+    install: dict[str, Any] = raw_install if isinstance(raw_install, dict) else {}
     return {
         "quote": quote,
         "quote_form": _quote_form_fields(
