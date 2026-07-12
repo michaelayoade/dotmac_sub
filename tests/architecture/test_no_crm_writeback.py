@@ -1,5 +1,7 @@
 """Keep CRM as an inbound migration source, never a Sub write target."""
 
+from __future__ import annotations
+
 from pathlib import Path
 
 from app.services.crm_client import CRMClient

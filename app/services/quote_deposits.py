@@ -30,6 +30,7 @@ from app.services import customer_portal_flow_payments as payments
 from app.services.common import coerce_uuid
 from app.services.sales import selfserve
 
+
 def initiate_deposit(
     db: Session,
     customer: dict,

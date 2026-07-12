@@ -1,11 +1,11 @@
 """Architecture checks for secret and credential ownership."""
 
-from app.services import credential_key_rotation
-from app.services.credential_crypto import ENCRYPTED_MODEL_FIELDS
 from app.models.connector import ConnectorConfig
 from app.models.oauth_token import OAuthToken
 from app.models.support import TicketAccessToken
 from app.models.types import EncryptedJSON, EncryptedText
+from app.services import credential_key_rotation
+from app.services.credential_crypto import ENCRYPTED_MODEL_FIELDS
 
 
 def test_every_declared_encrypted_model_is_covered_by_key_rotation() -> None:
