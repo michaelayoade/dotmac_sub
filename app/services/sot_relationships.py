@@ -58,6 +58,16 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
                 depends_on=("financial.ledger",),
             ),
+            SOTService(
+                name="customer.branding",
+                module="app.services.brand_profiles",
+                owns=(
+                    "platform/reseller/organization brand profiles",
+                    "customer-facing brand precedence",
+                    "legacy branding convergence",
+                ),
+                depends_on=("customer.identity_scope", "control.domain_settings"),
+            ),
         ),
         entrypoints=(
             "app.web.customer",
@@ -492,6 +502,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="events.dispatcher",
                 module="app.services.events.dispatcher",
                 owns=("event routing", "handler orchestration"),
+                depends_on=("control.relationships",),
             ),
             SOTService(
                 name="events.store",
@@ -668,6 +679,16 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.settings_spec",
                 owns=("setting schema", "setting value coercion", "env fallback rules"),
                 depends_on=("control.domain_settings",),
+            ),
+            SOTService(
+                name="control.relationships",
+                module="app.services.control_relationships",
+                owns=(
+                    "setting exclusivity and migration-chain validation",
+                    "event handler stage and capability ownership",
+                    "control relationship diagnostics",
+                ),
+                depends_on=("control.domain_settings", "control.settings_spec"),
             ),
         ),
         entrypoints=(

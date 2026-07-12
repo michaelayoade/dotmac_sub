@@ -58,7 +58,9 @@ class ConnectorConfig(Base):
     )
     # Encrypted at rest — holds third-party credentials (basic/bearer/HMAC/api_key).
     auth_config: Mapped[dict | None] = mapped_column(EncryptedJSON)
-    headers: Mapped[dict | None] = mapped_column(JSON)
+    # Headers can carry Authorization/API keys and therefore share the same
+    # whole-blob encryption policy as auth_config.
+    headers: Mapped[dict | None] = mapped_column(EncryptedJSON)
     retry_policy: Mapped[dict | None] = mapped_column(JSON)
     timeout_sec: Mapped[int | None] = mapped_column(Integer)
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)

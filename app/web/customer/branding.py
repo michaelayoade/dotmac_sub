@@ -143,6 +143,10 @@ def customer_branding_context(request: Request) -> dict[str, object]:
 
     # Check restricted status per-request (user-specific, cannot be cached globally)
     restricted = False
+    cached_brand = stats.get("brand") if isinstance(stats, dict) else None
+    resolved_brand: dict[str, object] | None = (
+        dict(cached_brand) if isinstance(cached_brand, dict) else None
+    )
     notification_preview: dict[str, object] = {
         "recent_notifications": [],
         "recent_notifications_total": 0,
@@ -159,6 +163,20 @@ def customer_branding_context(request: Request) -> dict[str, object]:
             customer = get_current_customer_from_request(request, db)
             if customer:
                 subscriber_id = optional_customer_subscriber_id(db, customer)
+                if subscriber_id:
+                    from app.services.brand_profiles import resolve_brand
+
+                    brand = resolve_brand(db, subscriber_id=subscriber_id)
+                    resolved_brand = brand.to_dict()
+                    stats = {
+                        **stats,
+                        "sidebar_logo_url": brand.logo_url,
+                        "sidebar_logo_dark_url": brand.dark_logo_url,
+                        "favicon_url": brand.favicon_url,
+                        "app_name": brand.product_name,
+                    }
+                    portal_name = brand.product_name
+                    favicon = brand.favicon_url
                 if subscriber_id and is_subscriber_restricted(db, subscriber_id):
                     restricted = True
                 notification_preview = get_notifications_preview(db, customer)
@@ -171,6 +189,7 @@ def customer_branding_context(request: Request) -> dict[str, object]:
         "sidebar_stats": stats,
         "branding_favicon_url": favicon,
         "portal_name": portal_name,
+        **({"brand": resolved_brand} if resolved_brand else {}),
         "restricted": restricted,
         **notification_preview,
     }

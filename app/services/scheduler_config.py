@@ -1727,6 +1727,13 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(topology_uisp_minutes * 60, 300),
         )
+        _sync_scheduled_task(
+            session,
+            name="uisp_config_readback",
+            task_name="app.tasks.uisp_control.reconcile_uisp_config_readback",
+            enabled=True,
+            interval_seconds=max(topology_uisp_minutes * 60, 300),
+        )
         # UFiber ONU -> subscriber link: net-new, auth-safe association pass.
         # Router-mode UF-Wifi ONUs carry the customer router MAC as their own
         # MAC (from UISP), so a direct MAC match to an ACTIVE subscription
@@ -2405,31 +2412,6 @@ def build_beat_schedule() -> dict:
             schedule["crm_phase3_native_delta"] = {
                 "task": "app.tasks.crm_native_sync.pull_crm_phase3_native_delta",
                 "schedule": timedelta(minutes=crm_phase3_delta_interval),
-            }
-
-        # Nightly billing snapshot to the CRM (balance / next bill date /
-        # billing cycle on the CRM subscriber record for support agents).
-        crm_billing_push_enabled = _effective_bool(
-            session,
-            SettingDomain.scheduler,
-            "crm_billing_push_enabled",
-            "CRM_BILLING_PUSH_ENABLED",
-            False,
-        )
-        if crm_billing_push_enabled:
-            schedule["crm_billing_push"] = {
-                "task": "app.tasks.crm_billing_push.push_crm_billing_snapshots",
-                "schedule": crontab(hour=2, minute=30),
-            }
-
-        # Daily re-drive of CRM push dead-letters — a multi-hour CRM outage
-        # self-recovers without manual action. Runs whenever CRM sync is on
-        # (gated by the same ticket-pull flag, the canonical CRM-enabled
-        # signal). Cheap no-op when the dead-letter table is empty.
-        if crm_ticket_pull_enabled or crm_billing_push_enabled:
-            schedule["crm_dead_letter_redrive"] = {
-                "task": "app.tasks.crm_sync.redrive_crm_dead_letters",
-                "schedule": crontab(hour=4, minute=10),
             }
 
         # DotMac ERP outbox delivery (ERP re-home). Sweeps
