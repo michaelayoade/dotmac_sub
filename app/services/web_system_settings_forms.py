@@ -27,8 +27,9 @@ def upsert_settings_from_specs(
     service,
     skip_blank_secrets: bool = True,
 ) -> list[str]:
-    """Validate/normalize submitted spec values and upsert to settings store."""
+    """Validate and atomically upsert one domain's submitted settings."""
     errors: list[str] = []
+    payloads: dict[str, DomainSettingUpdate] = {}
 
     for spec in specs:
         raw = form.get(spec.key)
@@ -81,14 +82,16 @@ def upsert_settings_from_specs(
                 value_json_raw,
             )
 
-        payload = DomainSettingUpdate(
+        payloads[spec.key] = DomainSettingUpdate(
             value_type=spec.value_type,
             value_text=value_text,
             value_json=value_json,
             is_secret=spec.is_secret,
             is_active=True,
         )
-        service.upsert_by_key(db, spec.key, payload)
+
+    if not errors:
+        service.upsert_many_by_key(db, payloads)
 
     return errors
 

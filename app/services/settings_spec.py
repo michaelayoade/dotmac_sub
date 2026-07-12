@@ -1,5 +1,8 @@
+import json
 import logging
+import os
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any, cast
 
 from fastapi import HTTPException
@@ -54,6 +57,20 @@ class SettingSpec(ListResponseMixin):
     is_secret: bool = False
 
 
+class SettingSource(StrEnum):
+    database = "database"
+    environment = "environment"
+    default = "default"
+    unset = "unset"
+
+
+@dataclass(frozen=True)
+class ResolvedSetting:
+    value: object | None
+    source: SettingSource
+    error: str | None = None
+
+
 SETTINGS_SPECS: list[SettingSpec] = [
     SettingSpec(
         domain=SettingDomain.auth,
@@ -64,6 +81,46 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=None,
         required=True,
         is_secret=True,
+    ),
+    SettingSpec(
+        domain=SettingDomain.audit,
+        key="enabled",
+        env_var="AUDIT_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=True,
+        label="Audit Logging Enabled",
+    ),
+    SettingSpec(
+        domain=SettingDomain.audit,
+        key="methods",
+        env_var="AUDIT_METHODS",
+        value_type=SettingValueType.json,
+        default=["POST", "PUT", "PATCH", "DELETE"],
+        label="Audited HTTP Methods",
+    ),
+    SettingSpec(
+        domain=SettingDomain.audit,
+        key="skip_paths",
+        env_var="AUDIT_SKIP_PATHS",
+        value_type=SettingValueType.json,
+        default=["/static", "/web", "/health"],
+        label="Audit Path Exclusions",
+    ),
+    SettingSpec(
+        domain=SettingDomain.audit,
+        key="read_trigger_header",
+        env_var="AUDIT_READ_TRIGGER_HEADER",
+        value_type=SettingValueType.string,
+        default="x-audit-read",
+        label="Read Audit Header",
+    ),
+    SettingSpec(
+        domain=SettingDomain.audit,
+        key="read_trigger_query",
+        env_var="AUDIT_READ_TRIGGER_QUERY",
+        value_type=SettingValueType.string,
+        default="audit",
+        label="Read Audit Query Parameter",
     ),
     SettingSpec(
         domain=SettingDomain.auth,
@@ -146,7 +203,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
         key="refresh_cookie_secure",
         env_var="REFRESH_COOKIE_SECURE",
         value_type=SettingValueType.boolean,
-        default=False,
+        default=True,
     ),
     SettingSpec(
         domain=SettingDomain.auth,
@@ -612,6 +669,59 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=50,
         min_value=1,
         max_value=1000,
+    ),
+    SettingSpec(
+        domain=SettingDomain.notification,
+        key="sms_enabled",
+        env_var="SMS_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=True,
+    ),
+    SettingSpec(
+        domain=SettingDomain.notification,
+        key="sms_provider",
+        env_var="SMS_PROVIDER",
+        value_type=SettingValueType.string,
+        default="webhook",
+        allowed={"twilio", "africastalking", "webhook"},
+    ),
+    SettingSpec(
+        domain=SettingDomain.notification,
+        key="sms_api_key",
+        env_var="SMS_API_KEY",
+        value_type=SettingValueType.string,
+        default=None,
+        is_secret=True,
+    ),
+    SettingSpec(
+        domain=SettingDomain.notification,
+        key="sms_api_secret",
+        env_var="SMS_API_SECRET",
+        value_type=SettingValueType.string,
+        default=None,
+        is_secret=True,
+    ),
+    SettingSpec(
+        domain=SettingDomain.notification,
+        key="sms_username",
+        env_var="SMS_USERNAME",
+        value_type=SettingValueType.string,
+        default=None,
+    ),
+    SettingSpec(
+        domain=SettingDomain.notification,
+        key="sms_from_number",
+        env_var="SMS_FROM_NUMBER",
+        value_type=SettingValueType.string,
+        default=None,
+    ),
+    SettingSpec(
+        domain=SettingDomain.notification,
+        key="sms_webhook_url",
+        env_var="SMS_WEBHOOK_URL",
+        value_type=SettingValueType.string,
+        default=None,
+        is_secret=True,
     ),
     SettingSpec(
         domain=SettingDomain.notification,
@@ -1367,14 +1477,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
         key="broker_url",
         env_var="CELERY_BROKER_URL",
         value_type=SettingValueType.string,
-        default="redis://localhost:6379/0",
+        default=None,
     ),
     SettingSpec(
         domain=SettingDomain.scheduler,
         key="result_backend",
         env_var="CELERY_RESULT_BACKEND",
         value_type=SettingValueType.string,
-        default="redis://localhost:6379/1",
+        default=None,
     ),
     SettingSpec(
         domain=SettingDomain.scheduler,
@@ -1398,14 +1508,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.integer,
         default=30,
         min_value=5,
-    ),
-    SettingSpec(
-        domain=SettingDomain.scheduler,
-        key="refresh_minutes",
-        env_var="CELERY_BEAT_REFRESH_MINUTES",
-        value_type=SettingValueType.integer,
-        default=5,
-        min_value=1,
     ),
     SettingSpec(
         domain=SettingDomain.scheduler,
@@ -1800,6 +1902,126 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.billing,
+        key="company_name",
+        env_var="COMPANY_NAME",
+        value_type=SettingValueType.string,
+        default="",
+        label="Company Name",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="company_address_street1",
+        env_var="COMPANY_ADDRESS_STREET1",
+        value_type=SettingValueType.string,
+        default="",
+        label="Company Address Line 1",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="company_address_street2",
+        env_var="COMPANY_ADDRESS_STREET2",
+        value_type=SettingValueType.string,
+        default="",
+        label="Company Address Line 2",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="company_address_city",
+        env_var="COMPANY_ADDRESS_CITY",
+        value_type=SettingValueType.string,
+        default="",
+        label="Company City",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="company_address_zip",
+        env_var="COMPANY_ADDRESS_ZIP",
+        value_type=SettingValueType.string,
+        default="",
+        label="Company Postal Code",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="company_address_country",
+        env_var="COMPANY_ADDRESS_COUNTRY",
+        value_type=SettingValueType.string,
+        default="Nigeria",
+        label="Company Country",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="company_email",
+        env_var="COMPANY_EMAIL",
+        value_type=SettingValueType.string,
+        default="",
+        label="Company Email",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="company_phone",
+        env_var="COMPANY_PHONE",
+        value_type=SettingValueType.string,
+        default="",
+        label="Company Phone",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="company_vat_number",
+        env_var="COMPANY_VAT_NUMBER",
+        value_type=SettingValueType.string,
+        default="",
+        label="Company VAT Number",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="company_registration_id",
+        env_var="COMPANY_REGISTRATION_ID",
+        value_type=SettingValueType.string,
+        default="",
+        label="Company Registration ID",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="company_bank_name",
+        env_var="COMPANY_BANK_NAME",
+        value_type=SettingValueType.string,
+        default="",
+        label="Company Bank Name",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="company_bank_account",
+        env_var="COMPANY_BANK_ACCOUNT",
+        value_type=SettingValueType.string,
+        default="",
+        label="Company Bank Account",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="company_bank_branch",
+        env_var="COMPANY_BANK_BRANCH",
+        value_type=SettingValueType.string,
+        default="",
+        label="Company Bank Branch",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="billing_url",
+        env_var="BILLING_URL",
+        value_type=SettingValueType.string,
+        default="",
+        label="Billing URL",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="partner_commission_pct",
+        env_var="PARTNER_COMMISSION_PCT",
+        value_type=SettingValueType.string,
+        default="0",
+        label="Partner Commission (%)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
         key="billing_enabled",
         env_var="BILLING_ENABLED",
         value_type=SettingValueType.boolean,
@@ -1832,6 +2054,16 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.integer,
         default=86400,
         min_value=300,
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="billing_day",
+        env_var="BILLING_DAY",
+        value_type=SettingValueType.integer,
+        default=None,
+        min_value=1,
+        max_value=28,
+        label="Default Billing Day",
     ),
     SettingSpec(
         domain=SettingDomain.billing,
@@ -4261,47 +4493,217 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=False,
         label="Projects: vendor project-stub relay to CRM (Phase 3 write-flip; deleted at Phase 5)",
     ),
+    SettingSpec(
+        domain=SettingDomain.field,
+        key="mobile_min_app_version",
+        env_var="FIELD_MOBILE_MIN_APP_VERSION",
+        value_type=SettingValueType.string,
+        default="1.0.0",
+        label="Minimum supported field app version",
+    ),
+    SettingSpec(
+        domain=SettingDomain.field,
+        key="mobile_latest_app_version",
+        env_var="FIELD_MOBILE_LATEST_APP_VERSION",
+        value_type=SettingValueType.string,
+        default="1.0.0",
+        label="Latest field app version",
+    ),
+    SettingSpec(
+        domain=SettingDomain.field,
+        key="mobile_feature_flags",
+        env_var=None,
+        value_type=SettingValueType.json,
+        default={
+            "vendor_module": True,
+            "offline_sync": True,
+            "location_sharing": False,
+        },
+        label="Field app feature flags",
+    ),
+    SettingSpec(
+        domain=SettingDomain.field,
+        key="completion_requires_evidence",
+        env_var="FIELD_COMPLETION_REQUIRES_EVIDENCE",
+        value_type=SettingValueType.boolean,
+        default=True,
+        label="Require evidence before work-order completion",
+    ),
+    SettingSpec(
+        domain=SettingDomain.field,
+        key="geofence_auto_status_enabled",
+        env_var="FIELD_GEOFENCE_AUTO_STATUS_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=False,
+        label="Automatically start field jobs on geofence arrival",
+    ),
+    SettingSpec(
+        domain=SettingDomain.field,
+        key="geofence_arrival_radius_m",
+        env_var="FIELD_GEOFENCE_ARRIVAL_RADIUS_M",
+        value_type=SettingValueType.integer,
+        default=120,
+        min_value=1,
+        max_value=5000,
+        label="Field job arrival radius (m)",
+    ),
 ]
 
-DOMAIN_SETTINGS_SERVICE = {
-    SettingDomain.auth: settings_service.auth_settings,
-    SettingDomain.audit: settings_service.audit_settings,
-    SettingDomain.billing: settings_service.billing_settings,
-    SettingDomain.catalog: settings_service.catalog_settings,
-    SettingDomain.subscriber: settings_service.subscriber_settings,
-    SettingDomain.imports: settings_service.imports_settings,
-    SettingDomain.notification: settings_service.notification_settings,
-    SettingDomain.network: settings_service.network_settings,
-    SettingDomain.network_monitoring: settings_service.network_monitoring_settings,
-    SettingDomain.provisioning: settings_service.provisioning_settings,
-    SettingDomain.geocoding: settings_service.geocoding_settings,
-    SettingDomain.usage: settings_service.usage_settings,
-    SettingDomain.radius: settings_service.radius_settings,
-    SettingDomain.collections: settings_service.collections_settings,
-    SettingDomain.lifecycle: settings_service.lifecycle_settings,
-    SettingDomain.projects: settings_service.projects_settings,
-    SettingDomain.inventory: settings_service.inventory_settings,
-    SettingDomain.comms: settings_service.comms_settings,
-    SettingDomain.tr069: settings_service.tr069_settings,
-    SettingDomain.snmp: settings_service.snmp_settings,
-    SettingDomain.bandwidth: settings_service.bandwidth_settings,
-    SettingDomain.subscription_engine: settings_service.subscription_engine_settings,
-    SettingDomain.gis: settings_service.gis_settings,
-    SettingDomain.scheduler: settings_service.scheduler_settings,
-    SettingDomain.vas: settings_service.vas_settings,
-    SettingDomain.integration: settings_service.integration_settings,
-}
+# Historical controls that had no runtime reader. They remain named here so a
+# production drift report can identify stale database rows, but they are not
+# part of the active registry, admin/API surfaces, or startup seeding.
+RETIRED_SETTING_KEYS = frozenset(
+    {
+        "account_number_enabled",
+        "account_number_padding",
+        "account_number_start",
+        "core_device_ping_interval_seconds",
+        "core_device_snmp_walk_interval_seconds",
+        "default_account_status",
+        "default_contact_role",
+        "default_material_status",
+        "default_olt_port_type",
+        "default_reservation_status",
+        "default_splitter_input_ports",
+        "default_splitter_output_ports",
+        "hotspot_redirect_url",
+        "hotspot_walled_garden",
+        "meta_access_token_override",
+        "meta_api_timeout_seconds",
+        "meta_oauth_redirect_uri",
+        "notification_category_preferences_enabled",
+        "olt_polling_interval_minutes",
+        "ont_offline_poll_threshold",
+        "pon_outage_min_offline_onus",
+        "vendor_bid_minimum_days",
+        "vendor_quote_approval_threshold",
+        "vendor_quote_validity_days",
+        "vendor_remember_ttl_seconds",
+        "vendor_session_ttl_seconds",
+    }
+)
+SETTINGS_SPECS = [
+    spec for spec in SETTINGS_SPECS if spec.key not in RETIRED_SETTING_KEYS
+]
+
+DOMAIN_SETTINGS_SERVICE = settings_service.DOMAIN_SETTINGS_SERVICE
+
+
+_SPEC_INDEX: dict[tuple[SettingDomain, str], SettingSpec] = {}
+_SPECS_BY_DOMAIN: dict[SettingDomain, list[SettingSpec]] = {}
+for _spec in SETTINGS_SPECS:
+    _identity = (_spec.domain, _spec.key)
+    if _identity in _SPEC_INDEX:
+        raise RuntimeError(
+            f"Duplicate setting specification: {_spec.domain.value}.{_spec.key}"
+        )
+    _SPEC_INDEX[_identity] = _spec
+    _SPECS_BY_DOMAIN.setdefault(_spec.domain, []).append(_spec)
 
 
 def get_spec(domain: SettingDomain, key: str) -> SettingSpec | None:
-    for spec in SETTINGS_SPECS:
-        if spec.domain == domain and spec.key == key:
-            return spec
-    return None
+    return _SPEC_INDEX.get((domain, key))
 
 
 def list_specs(domain: SettingDomain) -> list[SettingSpec]:
-    return [spec for spec in SETTINGS_SPECS if spec.domain == domain]
+    return list(_SPECS_BY_DOMAIN.get(domain, ()))
+
+
+def _environment_raw(spec: SettingSpec) -> str | None:
+    if not spec.env_var:
+        return None
+    value = os.getenv(spec.env_var)
+    if value is None or value == "":
+        return None
+    return value
+
+
+def _validated_value(
+    spec: SettingSpec, raw: object | None
+) -> tuple[object | None, str | None]:
+    value, error = coerce_value(spec, raw)
+    if error:
+        return spec.default, error
+    if spec.allowed and value is not None and value not in spec.allowed:
+        return spec.default, f"Value must be one of: {sorted(spec.allowed)}"
+    if spec.value_type != SettingValueType.integer or value is None:
+        return value, None
+
+    parsed = _coerce_int_value(value)
+    if parsed is None:
+        return spec.default, "Value must be an integer"
+    if spec.min_value is not None and parsed < spec.min_value:
+        return spec.default, f"Value must be >= {spec.min_value}"
+    if spec.max_value is not None and parsed > spec.max_value:
+        return spec.default, f"Value must be <= {spec.max_value}"
+    return parsed, None
+
+
+def resolve_setting(db, domain: SettingDomain, key: str) -> ResolvedSetting:
+    """Resolve one runtime setting and report which control plane owns its value.
+
+    Persisted active values are authoritative. Environment variables are
+    bootstrap fallbacks for rows that do not exist, and registry defaults are
+    the final fallback. This keeps live admin changes effective while retaining
+    deterministic first-deploy configuration.
+    """
+    spec = get_spec(domain, key)
+    if not spec:
+        return ResolvedSetting(None, SettingSource.unset, "Setting is not registered")
+
+    service = DOMAIN_SETTINGS_SERVICE.get(domain)
+    setting = None
+    if service and db is not None:
+        try:
+            setting = service.get_by_key(db, key)
+        except HTTPException:
+            setting = None
+
+    raw = extract_db_value(setting)
+    source = SettingSource.database
+    if raw is None:
+        raw = _environment_raw(spec)
+        source = SettingSource.environment
+    if raw is None:
+        raw = spec.default
+        source = SettingSource.default if raw is not None else SettingSource.unset
+
+    value, error = _validated_value(spec, raw)
+    if error:
+        logger.warning(
+            "invalid_runtime_setting",
+            extra={
+                "event": "invalid_runtime_setting",
+                "domain": domain.value,
+                "key": key,
+                "source": source.value,
+                "error": error,
+            },
+        )
+        fallback, fallback_error = _validated_value(spec, spec.default)
+        return ResolvedSetting(
+            fallback,
+            SettingSource.default if fallback is not None else SettingSource.unset,
+            error or fallback_error,
+        )
+    return ResolvedSetting(value, source)
+
+
+def read_stored_value(db, domain: SettingDomain, key: str) -> object | None:
+    """Read an active stored value without requiring registry membership.
+
+    This is reserved for dynamic keys and explicit legacy aliases. Registered
+    runtime controls should use :func:`resolve_value` so type validation,
+    bootstrap fallback, and defaults remain consistent.
+    """
+    service = DOMAIN_SETTINGS_SERVICE.get(domain)
+    if not service or db is None:
+        return None
+    try:
+        setting = service.get_by_key(db, key)
+    except HTTPException:
+        return None
+    return extract_db_value(setting)
 
 
 def resolve_value(db, domain: SettingDomain, key: str) -> Any:
@@ -4318,39 +4720,8 @@ def resolve_value(db, domain: SettingDomain, key: str) -> Any:
     if cached is not None:
         return cast(object, cached)
 
-    # 2. Query database
-    service = DOMAIN_SETTINGS_SERVICE.get(domain)
-    setting = None
-    if service:
-        try:
-            setting = service.get_by_key(db, key)
-        except HTTPException:
-            setting = None
-    raw = extract_db_value(setting)
-    if raw is None:
-        raw = spec.default
-    value, error = coerce_value(spec, raw)
-    if error:
-        value = spec.default
-    if spec.allowed and value is not None and value not in spec.allowed:
-        value = spec.default
-    if spec.value_type == SettingValueType.integer and value is not None:
-        parsed = _coerce_int_value(value)
-        if parsed is None:
-            parsed = spec.default if isinstance(spec.default, int) else None
-        if (
-            spec.min_value is not None
-            and parsed is not None
-            and parsed < spec.min_value
-        ):
-            parsed = spec.default if isinstance(spec.default, int) else None
-        if (
-            spec.max_value is not None
-            and parsed is not None
-            and parsed > spec.max_value
-        ):
-            parsed = spec.default if isinstance(spec.default, int) else None
-        value = parsed
+    # 2. Resolve from the authoritative hierarchy.
+    value = resolve_setting(db, domain, key).value
 
     # 3. Cache the result (only non-None values)
     if value is not None:
@@ -4377,31 +4748,28 @@ def resolve_values_atomic(db, domain: SettingDomain, keys: list[str]) -> dict[st
     if not keys:
         return {}
 
-    # 1. Check cache for all keys
-    cached = SettingsCache.get_multi(domain.value, keys)
-    missing_keys = [k for k in keys if k not in cached]
-
-    if not missing_keys:
-        return cached
-
-    # 2. Query database for missing keys in single query
+    # Query every requested key in one statement. Mixing independently cached
+    # values can produce a configuration combination that never existed in the
+    # database during a multi-setting update.
     service = DOMAIN_SETTINGS_SERVICE.get(domain)
     if not service:
-        return cached
+        return {}
 
     from app.models.domain_settings import DomainSetting
 
     settings = (
         db.query(DomainSetting)
         .filter(DomainSetting.domain == domain)
-        .filter(DomainSetting.key.in_(missing_keys))
+        .filter(DomainSetting.key.in_(keys))
+        .filter(DomainSetting.is_active.is_(True))
         .all()
     )
 
     settings_by_key = {s.key: s for s in settings}
+    resolved: dict[str, Any] = {}
     to_cache: dict[str, Any] = {}
 
-    for key in missing_keys:
+    for key in keys:
         spec = get_spec(domain, key)
         if not spec:
             continue
@@ -4409,43 +4777,24 @@ def resolve_values_atomic(db, domain: SettingDomain, keys: list[str]) -> dict[st
         setting = settings_by_key.get(key)
         raw = extract_db_value(setting)
         if raw is None:
+            raw = _environment_raw(spec)
+        if raw is None:
             raw = spec.default
-        value, error = coerce_value(spec, raw)
-        if error:
-            value = spec.default
-        if spec.allowed and value is not None and value not in spec.allowed:
-            value = spec.default
-        if spec.value_type == SettingValueType.integer and value is not None:
-            parsed = _coerce_int_value(value)
-            if parsed is None:
-                parsed = spec.default if isinstance(spec.default, int) else None
-            if (
-                spec.min_value is not None
-                and parsed is not None
-                and parsed < spec.min_value
-            ):
-                parsed = spec.default if isinstance(spec.default, int) else None
-            if (
-                spec.max_value is not None
-                and parsed is not None
-                and parsed > spec.max_value
-            ):
-                parsed = spec.default if isinstance(spec.default, int) else None
-            value = parsed
+        value, _error = _validated_value(spec, raw)
 
         if value is not None:
-            cached[key] = value
+            resolved[key] = value
             to_cache[key] = value
 
     # 3. Cache all retrieved values atomically
     if to_cache:
         SettingsCache.set_multi(domain.value, to_cache)
 
-    return cached
+    return resolved
 
 
 def extract_db_value(setting: "DomainSetting | None") -> object | None:
-    if not setting:
+    if not setting or not setting.is_active:
         return None
     if setting.value_text is not None:
         return cast(object, setting.value_text)
@@ -4478,8 +4827,29 @@ def coerce_value(spec: SettingSpec, raw: object) -> tuple[object | None, str | N
         return None, "Value must be an integer"
     if spec.value_type == SettingValueType.string:
         if isinstance(raw, str):
+            if spec.allowed:
+                allowed_by_casefold = {
+                    item.casefold(): item for item in spec.allowed
+                }
+                canonical = allowed_by_casefold.get(raw.strip().casefold())
+                if canonical is not None:
+                    return canonical, None
             return raw, None
         return str(raw), None
+    if spec.value_type == SettingValueType.json:
+        if not isinstance(raw, str):
+            return raw, None
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            if isinstance(spec.default, list):
+                return [item.strip() for item in raw.split(",") if item.strip()], None
+            return None, "Value must be valid JSON"
+        if isinstance(spec.default, list) and not isinstance(parsed, list):
+            return None, "Value must be a JSON list"
+        if isinstance(spec.default, dict) and not isinstance(parsed, dict):
+            return None, "Value must be a JSON object"
+        return parsed, None
     return raw, None
 
 
@@ -4488,7 +4858,7 @@ def normalize_for_db(
 ) -> tuple[str | None, object | None]:
     if spec.value_type == SettingValueType.boolean:
         bool_value = bool(value)
-        return ("true" if bool_value else "false"), None
+        return ("true" if bool_value else "false"), bool_value
     if spec.value_type == SettingValueType.integer:
         parsed = _coerce_int_value(value)
         if parsed is None:

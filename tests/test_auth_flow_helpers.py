@@ -62,10 +62,9 @@ def test_setting_value_and_jwt_secret_errors(db_session, monkeypatch):
     db_session.add(setting_json)
     db_session.commit()
     assert auth_flow_service._setting_value(db_session, "jwt_algorithm") == "HS512"
-    assert (
-        auth_flow_service._setting_value(db_session, "jwt_refresh_ttl_days")
-        == "{'value': 'bad'}"
-    )
+    # Registered settings are validated by the shared resolver; malformed
+    # stored values fall back to the registered default.
+    assert auth_flow_service._setting_value(db_session, "jwt_refresh_ttl_days") == "30"
 
     monkeypatch.delenv("JWT_SECRET", raising=False)
     with pytest.raises(HTTPException):

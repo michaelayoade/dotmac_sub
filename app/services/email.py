@@ -19,6 +19,7 @@ from app.models.notification import (
 )
 from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
+from app.services import settings_spec
 from app.services.branding_config import get_brand
 from app.services.domain_settings import notification_settings
 from app.services.notification import notifications as notification_records
@@ -116,22 +117,11 @@ def _setting_value_for_domain(
     domain: SettingDomain,
     key: str,
 ) -> str | None:
-    if db is None:
-        return None
-    setting = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == domain)
-        .filter(DomainSetting.key == key)
-        .filter(DomainSetting.is_active.is_(True))
-        .first()
-    )
-    if not setting:
-        return None
-    if setting.value_text:
-        return str(setting.value_text)
-    if setting.value_json is not None:
-        return str(setting.value_json)
-    return None
+    if settings_spec.get_spec(domain, key) is not None:
+        value = settings_spec.resolve_value(db, domain, key)
+    else:
+        value = settings_spec.read_stored_value(db, domain, key)
+    return None if value is None else str(value)
 
 
 def _legacy_smtp_config(db: Session | None) -> dict:
@@ -216,12 +206,9 @@ def _valid_sender_key(sender_key: str) -> bool:
 def list_smtp_senders(db: Session | None) -> list[dict[str, Any]]:
     if db is None:
         return []
-    settings = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.notification)
-        .filter(DomainSetting.is_active.is_(True))
-        .filter(DomainSetting.key.like(f"{SMTP_SENDER_KEY_PREFIX}%"))
-        .all()
+    settings = notification_settings.list_by_key_prefix(
+        db,
+        SMTP_SENDER_KEY_PREFIX,
     )
 
     senders: dict[str, dict[str, Any]] = {}
@@ -273,12 +260,9 @@ def get_default_smtp_sender_key(db: Session | None) -> str:
 def get_smtp_activity_map(db: Session | None) -> dict[str, str]:
     if db is None:
         return {}
-    settings = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.notification)
-        .filter(DomainSetting.is_active.is_(True))
-        .filter(DomainSetting.key.like(f"{SMTP_ACTIVITY_KEY_PREFIX}%"))
-        .all()
+    settings = notification_settings.list_by_key_prefix(
+        db,
+        SMTP_ACTIVITY_KEY_PREFIX,
     )
     activity_map: dict[str, str] = {}
     for setting in settings:
@@ -323,12 +307,7 @@ def upsert_smtp_activity_mapping(
             ),
         )
         return
-    existing = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.notification)
-        .filter(DomainSetting.key == key)
-        .first()
-    )
+    existing = notification_settings.find_by_key(db, key, include_inactive=True)
     if existing:
         notification_settings.upsert_by_key(
             db, key, DomainSettingUpdate(is_active=False)
@@ -389,49 +368,38 @@ def upsert_smtp_sender(
             False,
         ),
     }
-    for field, (value_type, value_text, value_json, is_secret) in values.items():
-        notification_settings.upsert_by_key(
-            db,
-            _sender_setting_key(normalized_key, field),
-            DomainSettingUpdate(
+    payloads = {
+        _sender_setting_key(normalized_key, field): DomainSettingUpdate(
                 value_type=value_type,
                 value_text=value_text,
                 value_json=value_json,
                 is_secret=is_secret,
                 is_active=True,
-            ),
         )
+        for field, (value_type, value_text, value_json, is_secret) in values.items()
+    }
 
     if password is not None and password.strip():
-        notification_settings.upsert_by_key(
-            db,
-            _sender_setting_key(normalized_key, "password"),
+        payloads[_sender_setting_key(normalized_key, "password")] = (
             DomainSettingUpdate(
                 value_type=SettingValueType.string,
                 value_text=password.strip(),
                 is_secret=True,
                 is_active=True,
-            ),
+            )
         )
+    notification_settings.upsert_many_by_key(db, payloads)
 
     return normalized_key
 
 
 def deactivate_smtp_sender(db: Session, sender_key: str) -> None:
     prefix = f"{SMTP_SENDER_KEY_PREFIX}{sender_key.strip().lower()}."
-    settings = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.notification)
-        .filter(DomainSetting.key.like(f"{prefix}%"))
-        .filter(DomainSetting.is_active.is_(True))
-        .all()
+    settings = notification_settings.list_by_key_prefix(db, prefix)
+    notification_settings.upsert_many_by_key(
+        db,
+        {setting.key: DomainSettingUpdate(is_active=False) for setting in settings},
     )
-    for setting in settings:
-        notification_settings.upsert_by_key(
-            db,
-            setting.key,
-            DomainSettingUpdate(is_active=False),
-        )
 
 
 def _resolve_smtp_sender_config(

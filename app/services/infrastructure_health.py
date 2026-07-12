@@ -588,7 +588,13 @@ def _check_celery(db: Session) -> ServiceStatus:
 
 def _check_nominatim(db: Session) -> ServiceStatus:
     """Check Nominatim geocoding service."""
-    url = os.getenv("GEOCODING_BASE_URL", "http://nominatim:8080")
+    from app.models.domain_settings import SettingDomain
+    from app.services.settings_spec import resolve_value
+
+    url = str(
+        resolve_value(db, SettingDomain.geocoding, "base_url")
+        or "http://nominatim:8080"
+    )
     start = time.monotonic()
     try:
         resp = httpx.get(

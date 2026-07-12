@@ -14,8 +14,7 @@ import string
 from typing import TYPE_CHECKING
 
 from app.models.catalog import AccessCredential, ConnectionType
-from app.models.domain_settings import DomainSetting, SettingDomain
-from app.models.subscription_engine import SettingValueType
+from app.models.domain_settings import SettingDomain
 from app.services import numbering, settings_spec
 from app.services.credential_crypto import encrypt_credential
 from app.services.customer_identifiers import pppoe_username_from_subscriber_number
@@ -52,37 +51,7 @@ def _resolve_int_setting(value: object, fallback: int) -> int:
 
 
 def _resolve_radius_setting(db: Session, key: str) -> object | None:
-    """Resolve a radius setting directly from the database for activation-time consistency."""
-    spec = settings_spec.get_spec(SettingDomain.radius, key)
-    if not spec:
-        return None
-
-    setting = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.radius)
-        .filter(DomainSetting.key == key)
-        .filter(DomainSetting.is_active.is_(True))
-        .first()
-    )
-    raw = settings_spec.extract_db_value(setting)
-    if raw is None:
-        raw = spec.default
-
-    value, error = settings_spec.coerce_value(spec, raw)
-    if error:
-        value = spec.default
-    if spec.allowed and value is not None and value not in spec.allowed:
-        value = spec.default
-    if spec.value_type == SettingValueType.integer and value is not None:
-        parsed = _resolve_int_setting(
-            value, spec.default if isinstance(spec.default, int) else 1
-        )
-        if spec.min_value is not None and parsed < spec.min_value:
-            parsed = spec.default if isinstance(spec.default, int) else parsed
-        if spec.max_value is not None and parsed > spec.max_value:
-            parsed = spec.default if isinstance(spec.default, int) else parsed
-        value = parsed
-    return value
+    return settings_spec.resolve_value(db, SettingDomain.radius, key)
 
 
 def _generate_pppoe_username(db: Session, subscriber_id: str) -> str | None:

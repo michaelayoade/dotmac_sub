@@ -3,14 +3,14 @@ from __future__ import annotations
 import logging
 
 from fastapi import HTTPException, UploadFile
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.imports.loader import load_csv_content
-from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.domain_settings import SettingDomain
 from app.schemas.imports import SubscriberCustomFieldImportRow
 from app.schemas.subscriber import SubscriberCustomFieldCreate
 from app.services import subscriber as subscriber_service
+from app.services.settings_spec import get_spec, read_stored_value, resolve_value
 
 logger = logging.getLogger(__name__)
 
@@ -19,15 +19,11 @@ _DEFAULT_MAX_ROWS = 5000
 
 
 def _imports_int_setting(db: Session, key: str, default: int) -> int:
-    setting = db.scalars(
-        select(DomainSetting)
-        .where(DomainSetting.domain == SettingDomain.imports)
-        .where(DomainSetting.key == key)
-        .where(DomainSetting.is_active.is_(True))
-    ).first()
-    if not setting:
-        return default
-    value = setting.value_text if setting.value_text is not None else setting.value_json
+    value = (
+        resolve_value(db, SettingDomain.imports, key)
+        if get_spec(SettingDomain.imports, key)
+        else read_stored_value(db, SettingDomain.imports, key)
+    )
     if value is None:
         return default
     try:

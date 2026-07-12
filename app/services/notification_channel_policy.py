@@ -7,7 +7,7 @@ from collections.abc import Iterable, Mapping
 
 from sqlalchemy.orm import Session
 
-from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.domain_settings import SettingDomain
 from app.models.notification import NotificationChannel
 from app.services import settings_spec
 
@@ -59,16 +59,14 @@ def _legacy_event_channels(
 ) -> tuple[NotificationChannel, ...]:
     if not template_code:
         return ()
-    setting = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.notification)
-        .filter(DomainSetting.key == f"notification_event_{template_code}_channels")
-        .filter(DomainSetting.is_active.is_(True))
-        .first()
+    value = settings_spec.read_stored_value(
+        db,
+        SettingDomain.notification,
+        f"notification_event_{template_code}_channels",
     )
-    if setting is None:
+    if value is None:
         return ()
-    return parse_channel_list(setting.value_text or setting.value_json)
+    return parse_channel_list(value)
 
 
 def _policy_value(

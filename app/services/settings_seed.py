@@ -1,10 +1,11 @@
 import json
 import logging
 import os
+from collections.abc import Iterable
 
 from sqlalchemy.orm import Session
 
-from app.models.domain_settings import SettingDomain
+from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
 from app.services.domain_settings import (
@@ -34,6 +35,113 @@ from app.services.secrets import is_openbao_ref
 from app.timezone import APP_TIMEZONE_NAME
 
 logger = logging.getLogger(__name__)
+
+
+class SettingsSeedError(RuntimeError):
+    pass
+
+
+def _seed_raw_value(spec) -> object | None:
+    raw: object | None = None
+    if spec.env_var:
+        env_value = os.getenv(spec.env_var)
+        if env_value not in {None, ""}:
+            raw = env_value
+    if raw is None:
+        raw = spec.default
+    return raw
+
+
+def seed_registered_settings(
+    db: Session,
+    *,
+    domains: Iterable[SettingDomain] | None = None,
+) -> int:
+    """Insert every missing registered setting in one transaction.
+
+    The registry owns types, defaults, bootstrap environment names, and secret
+    classification. Existing rows are never overwritten; live changes remain
+    database-owned. Secret bootstrap values must already be OpenBao references.
+    """
+    from app.services import settings_spec
+
+    selected_domains = set(domains) if domains is not None else None
+    specs = [
+        spec
+        for spec in settings_spec.SETTINGS_SPECS
+        if selected_domains is None or spec.domain in selected_domains
+    ]
+    existing = {
+        (row.domain, row.key)
+        for row in db.query(DomainSetting.domain, DomainSetting.key).all()
+    }
+    created: list[DomainSetting] = []
+
+    for spec in specs:
+        identity = (spec.domain, spec.key)
+        if identity in existing:
+            continue
+        raw = _seed_raw_value(spec)
+        if raw is None:
+            continue
+        if spec.is_secret and (not isinstance(raw, str) or not is_openbao_ref(raw)):
+            logger.warning(
+                "secret_setting_seed_skipped",
+                extra={
+                    "event": "secret_setting_seed_skipped",
+                    "domain": spec.domain.value,
+                    "key": spec.key,
+                    "reason": "bootstrap value is not an OpenBao reference",
+                },
+            )
+            continue
+
+        value, error = settings_spec.coerce_value(spec, raw)
+        if error:
+            raise SettingsSeedError(f"{spec.domain.value}.{spec.key}: {error}")
+        if spec.allowed and value is not None and value not in spec.allowed:
+            raise SettingsSeedError(
+                f"{spec.domain.value}.{spec.key}: value must be one of "
+                f"{sorted(spec.allowed)}"
+            )
+        if spec.value_type == SettingValueType.integer and value is not None:
+            parsed = int(str(value))
+            if spec.min_value is not None and parsed < spec.min_value:
+                raise SettingsSeedError(
+                    f"{spec.domain.value}.{spec.key}: value must be >= {spec.min_value}"
+                )
+            if spec.max_value is not None and parsed > spec.max_value:
+                raise SettingsSeedError(
+                    f"{spec.domain.value}.{spec.key}: value must be <= {spec.max_value}"
+                )
+
+        value_text, value_json = settings_spec.normalize_for_db(spec, value)
+        created.append(
+            DomainSetting(
+                domain=spec.domain,
+                key=spec.key,
+                value_type=spec.value_type,
+                value_text=value_text,
+                value_json=value_json,
+                is_secret=spec.is_secret,
+                is_active=True,
+            )
+        )
+
+    if not created:
+        return 0
+    try:
+        db.add_all(created)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    for domain in {row.domain for row in created}:
+        from app.services.settings_cache import SettingsCache
+
+        SettingsCache.invalidate_domain(domain.value)
+    return len(created)
 
 
 def seed_auth_settings(db: Session) -> None:
@@ -1417,12 +1525,6 @@ def seed_scheduler_settings(db: Session) -> None:
         key="beat_refresh_seconds",
         value_type=SettingValueType.integer,
         value_text=os.getenv("CELERY_BEAT_REFRESH_SECONDS", "30"),
-    )
-    scheduler_settings.ensure_by_key(
-        db,
-        key="refresh_minutes",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("CELERY_BEAT_REFRESH_MINUTES", "5"),
     )
     for key, env_name, default in [
         ("crm_ticket_pull_enabled", "CRM_TICKET_PULL_ENABLED", "false"),

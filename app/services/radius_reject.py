@@ -12,11 +12,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.catalog import NasDevice, Subscription, SubscriptionStatus
-from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.domain_settings import DomainSetting
 from app.models.radius import RadiusClient, RadiusServer
 from app.models.subscriber import Subscriber
 from app.models.subscription_engine import SettingValueType
+from app.schemas.settings import DomainSettingUpdate
 from app.services.common import coerce_uuid
+from app.services.domain_settings import radius_settings
 from app.services.enforcement import _sanitize_routeros_value
 from app.services.nas import DeviceProvisioner
 
@@ -57,11 +59,7 @@ from app.services.radius_access_state import (  # noqa: E402
 
 
 def _get_setting(db: Session, key: str) -> DomainSetting | None:
-    return db.scalars(
-        select(DomainSetting)
-        .where(DomainSetting.domain == SettingDomain.radius)
-        .where(DomainSetting.key == key)
-    ).first()
+    return radius_settings.find_by_key(db, key)
 
 
 def _get_setting_text(db: Session, key: str) -> str:
@@ -108,23 +106,15 @@ def _load_runtime_state(db: Session) -> dict[str, Any]:
 
 
 def _save_runtime_state(db: Session, state: dict[str, Any]) -> None:
-    setting = _get_setting(db, _RUNTIME_STATE_KEY)
-    if setting:
-        setting.value_type = SettingValueType.json
-        setting.value_json = state
-        setting.value_text = None
-        setting.is_active = True
-        return
-    db.add(
-        DomainSetting(
-            domain=SettingDomain.radius,
-            key=_RUNTIME_STATE_KEY,
+    radius_settings.stage_by_key(
+        db,
+        _RUNTIME_STATE_KEY,
+        DomainSettingUpdate(
             value_type=SettingValueType.json,
             value_json=state,
-            value_text=None,
             is_active=True,
             is_secret=False,
-        )
+        ),
     )
 
 
@@ -554,23 +544,15 @@ def push_reject_rules_once(db: Session) -> dict[str, Any]:
         return result
 
     pushed_at = datetime.now(UTC).isoformat()
-    if existing:
-        existing.value_type = SettingValueType.string
-        existing.value_text = pushed_at
-        existing.value_json = None
-        existing.is_active = True
-    else:
-        db.add(
-            DomainSetting(
-                domain=SettingDomain.radius,
-                key=_INITIAL_PUSH_KEY,
-                value_type=SettingValueType.string,
-                value_text=pushed_at,
-                value_json=None,
-                is_active=True,
-                is_secret=False,
-            )
-        )
-    db.commit()
+    radius_settings.upsert_by_key(
+        db,
+        _INITIAL_PUSH_KEY,
+        DomainSettingUpdate(
+            value_type=SettingValueType.string,
+            value_text=pushed_at,
+            is_active=True,
+            is_secret=False,
+        ),
+    )
     result["bootstrap"] = True
     return result

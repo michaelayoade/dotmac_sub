@@ -31,7 +31,7 @@ from app.models.auth import (
 from app.models.auth import (
     Session as AuthSession,
 )
-from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.domain_settings import SettingDomain
 from app.models.rbac import (
     Permission,
     Role,
@@ -145,26 +145,12 @@ def _clean_device_id(value: str | None, max_len: int = 64) -> str | None:
 
 
 def _setting_value(db: Session | None, key: str) -> str | None:
-    if db is None:
-        return None
-    setting = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.auth)
-        .filter(DomainSetting.key == key)
-        .filter(DomainSetting.is_active.is_(True))
-        .first()
-    )
-    if not setting:
-        return None
-    if setting.value_text:
-        return cast(str, setting.value_text)
-    if setting.value_json is not None:
-        return str(setting.value_json)
-    return None
+    value = resolve_value(db, SettingDomain.auth, key)
+    return None if value is None else str(value)
 
 
 def _jwt_secret(db: Session | None) -> str:
-    secret = _env_value("JWT_SECRET") or _setting_value(db, "jwt_secret")
+    secret = _setting_value(db, "jwt_secret")
     secret = resolve_secret(secret)
     if not secret:
         raise HTTPException(status_code=500, detail="JWT secret not configured")
@@ -172,13 +158,10 @@ def _jwt_secret(db: Session | None) -> str:
 
 
 def _jwt_algorithm(db: Session | None) -> str:
-    return _env_value("JWT_ALGORITHM") or _setting_value(db, "jwt_algorithm") or "HS256"
+    return _setting_value(db, "jwt_algorithm") or "HS256"
 
 
 def _access_ttl_minutes(db: Session | None) -> int:
-    env_value = _env_int("JWT_ACCESS_TTL_MINUTES")
-    if env_value is not None:
-        return env_value
     value = _setting_value(db, "jwt_access_ttl_minutes")
     if value is not None:
         try:
@@ -189,9 +172,6 @@ def _access_ttl_minutes(db: Session | None) -> int:
 
 
 def _refresh_ttl_days(db: Session | None) -> int:
-    env_value = _env_int("JWT_REFRESH_TTL_DAYS")
-    if env_value is not None:
-        return env_value
     value = _setting_value(db, "jwt_refresh_ttl_days")
     if value is not None:
         try:
@@ -202,18 +182,27 @@ def _refresh_ttl_days(db: Session | None) -> int:
 
 
 def _totp_issuer(db: Session | None) -> str:
-    return _env_value("TOTP_ISSUER") or _setting_value(db, "totp_issuer") or "dotmac_sm"
+    return _setting_value(db, "totp_issuer") or "dotmac_sm"
 
 
 def _force_admin_mfa(db: Session | None) -> bool:
-    value = _env_value("ADMIN_MFA_REQUIRED")
-    if value is None:
-        value = _setting_value(db, "admin_mfa_required")
-    if value is None:
-        value = _setting_value(db, "force_2fa")
-    if value is None:
-        value = resolve_value(db, SettingDomain.auth, "admin_mfa_required")
-    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+    from app.services.settings_spec import SettingSource, resolve_setting
+
+    canonical = resolve_setting(db, SettingDomain.auth, "admin_mfa_required")
+    if canonical.source in {SettingSource.database, SettingSource.environment}:
+        return str(canonical.value or "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+    legacy = _setting_value(db, "force_2fa")
+    return str(legacy or canonical.value or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def _setting_int(
@@ -228,11 +217,7 @@ def _setting_int(
 
 
 def _refresh_cookie_name(db: Session | None) -> str:
-    return (
-        _env_value("REFRESH_COOKIE_NAME")
-        or _setting_value(db, "refresh_cookie_name")
-        or "refresh_token"
-    )
+    return _setting_value(db, "refresh_cookie_name") or "refresh_token"
 
 
 def _wants_refresh_in_body(request: Request | None) -> bool:
@@ -250,9 +235,6 @@ def _wants_refresh_in_body(request: Request | None) -> bool:
 
 
 def _refresh_cookie_secure(db: Session | None) -> bool:
-    env_value = _env_value("REFRESH_COOKIE_SECURE")
-    if env_value is not None:
-        return env_value.lower() in {"1", "true", "yes", "on"}
     value = _setting_value(db, "refresh_cookie_secure")
     if value is not None:
         return str(value).lower() in {"1", "true", "yes", "on"}
@@ -263,29 +245,19 @@ def _refresh_cookie_secure(db: Session | None) -> bool:
 
 
 def _refresh_cookie_samesite(db: Session | None) -> str:
-    return (
-        _env_value("REFRESH_COOKIE_SAMESITE")
-        or _setting_value(db, "refresh_cookie_samesite")
-        or "lax"
-    )
+    return _setting_value(db, "refresh_cookie_samesite") or "lax"
 
 
 def _refresh_cookie_domain(db: Session | None) -> str | None:
-    return _env_value("REFRESH_COOKIE_DOMAIN") or _setting_value(
-        db, "refresh_cookie_domain"
-    )
+    return _setting_value(db, "refresh_cookie_domain")
 
 
 def _refresh_cookie_path(db: Session | None) -> str:
-    return (
-        _env_value("REFRESH_COOKIE_PATH")
-        or _setting_value(db, "refresh_cookie_path")
-        or "/auth"
-    )
+    return _setting_value(db, "refresh_cookie_path") or "/auth"
 
 
 def _mfa_key(db: Session | None) -> bytes:
-    key = _env_value("TOTP_ENCRYPTION_KEY") or _setting_value(db, "totp_encryption_key")
+    key = _setting_value(db, "totp_encryption_key")
     key = resolve_secret(key)
     if not key:
         raise HTTPException(

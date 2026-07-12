@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.domain_settings import SettingDomain
+from app.services.settings_spec import resolve_values_atomic
 
 DEFAULT_MIN_APP_VERSION = "1.0.0"
 DEFAULT_LATEST_APP_VERSION = "1.0.0"
@@ -28,17 +29,7 @@ _KEYS = (
 class FieldConfigService:
     @staticmethod
     def get(db: Session) -> dict:
-        rows = (
-            db.query(DomainSetting)
-            .filter(DomainSetting.domain == SettingDomain.field)
-            .filter(DomainSetting.key.in_(_KEYS))
-            .filter(DomainSetting.is_active.is_(True))
-            .all()
-        )
-        values = {
-            row.key: row.value_json if row.value_json is not None else row.value_text
-            for row in rows
-        }
+        values = resolve_values_atomic(db, SettingDomain.field, list(_KEYS))
         flags = values.get("mobile_feature_flags")
         if not isinstance(flags, dict):
             flags = {}

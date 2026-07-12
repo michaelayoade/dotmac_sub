@@ -17,10 +17,11 @@ from typing import Any
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.domain_settings import SettingDomain
 from app.models.work_order_mirror import WorkOrderMirror
 from app.services.field.jobs import _location, _profile_from_principal, _scoped_query
 from app.services.field.transitions import field_transitions
+from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
 
@@ -30,18 +31,12 @@ _ARRIVABLE_STATUSES = {"scheduled", "dispatched"}
 
 
 def geofence_enabled(db: Session) -> bool:
-    row = _setting_row(db, "geofence_auto_status_enabled")
-    if row is None:
-        return False
-    value = row.value_json if row.value_json is not None else row.value_text
+    value = resolve_value(db, SettingDomain.field, "geofence_auto_status_enabled")
     return str(value).strip().lower() in {"true", "1", "yes"}
 
 
 def arrival_radius_m(db: Session) -> float:
-    row = _setting_row(db, "geofence_arrival_radius_m")
-    if row is None:
-        return DEFAULT_ARRIVAL_RADIUS_M
-    value = row.value_json if row.value_json is not None else row.value_text
+    value = resolve_value(db, SettingDomain.field, "geofence_arrival_radius_m")
     try:
         radius = float(str(value))
     except (TypeError, ValueError):
@@ -112,16 +107,6 @@ def evaluate(
                 }
             )
     return fired
-
-
-def _setting_row(db: Session, key: str) -> DomainSetting | None:
-    return (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.field)
-        .filter(DomainSetting.key == key)
-        .filter(DomainSetting.is_active.is_(True))
-        .first()
-    )
 
 
 def _arrivable_jobs(db: Session, profile) -> list[WorkOrderMirror]:

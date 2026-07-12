@@ -18,7 +18,7 @@ from app.metrics import (
     record_cache_lookup,
 )
 from app.models.audit import AuditActorType
-from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.domain_settings import SettingDomain
 from app.models.network import OLTDevice, OntUnit, OnuOnlineStatus
 from app.models.network_monitoring import (
     DeviceInterface,
@@ -96,10 +96,6 @@ def _float_setting(value) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
-
-
-def _setting_raw_value(setting: DomainSetting) -> object | None:
-    return setting.value_json if setting.value_json is not None else setting.value_text
 
 
 def _rollback_after_failed_query(db: Session) -> None:
@@ -254,14 +250,15 @@ def _build_health_thresholds(db: Session) -> dict:
         "network_health_crit_pct": "network_crit_pct",
         "ont_signal_warning_dbm": "ont_signal_warning_dbm",
     }
-    rows = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.network_monitoring)
-        .filter(DomainSetting.key.in_(keys.keys()))
-        .filter(DomainSetting.is_active.is_(True))
-        .all()
+    resolved = settings_spec.resolve_values_atomic(
+        db,
+        SettingDomain.network_monitoring,
+        list(keys),
     )
-    values = {keys[row.key]: _float_setting(_setting_raw_value(row)) for row in rows}
+    values = {
+        output_key: _float_setting(resolved.get(setting_key))
+        for setting_key, output_key in keys.items()
+    }
     return {field: values.get(field) for field in keys.values()}
 
 

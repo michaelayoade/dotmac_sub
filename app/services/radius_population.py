@@ -565,18 +565,13 @@ DEVICE_LOGIN_SYNC_STATUS_KEY = "device_login_last_sync"
 
 def get_device_login_sync_status(db) -> dict | None:
     """Return the last staff router-login RADIUS sync status, if recorded."""
-    from app.models.domain_settings import DomainSetting, SettingDomain
+    from app.models.domain_settings import SettingDomain
+    from app.services.settings_spec import read_stored_value
 
-    row = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.radius)
-        .filter(DomainSetting.key == DEVICE_LOGIN_SYNC_STATUS_KEY)
-        .filter(DomainSetting.is_active.is_(True))
-        .first()
-    )
-    if not row or not isinstance(row.value_json, dict):
+    value = read_stored_value(db, SettingDomain.radius, DEVICE_LOGIN_SYNC_STATUS_KEY)
+    if not isinstance(value, dict):
         return None
-    return row.value_json
+    return value
 
 
 def record_device_login_sync_status(
@@ -589,8 +584,9 @@ def record_device_login_sync_status(
     """Persist the last staff router-login RADIUS sync result."""
     from datetime import UTC, datetime
 
-    from app.models.domain_settings import DomainSetting, SettingDomain
     from app.models.subscription_engine import SettingValueType
+    from app.schemas.settings import DomainSettingUpdate
+    from app.services.domain_settings import radius_settings
 
     payload = {
         "status": status,
@@ -600,28 +596,16 @@ def record_device_login_sync_status(
     if error:
         payload["error"] = error
 
-    row = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.radius)
-        .filter(DomainSetting.key == DEVICE_LOGIN_SYNC_STATUS_KEY)
-        .first()
-    )
-    if row is None:
-        row = DomainSetting(
-            domain=SettingDomain.radius,
-            key=DEVICE_LOGIN_SYNC_STATUS_KEY,
+    radius_settings.upsert_by_key(
+        db,
+        DEVICE_LOGIN_SYNC_STATUS_KEY,
+        DomainSettingUpdate(
             value_type=SettingValueType.json,
             value_json=payload,
+            is_secret=False,
             is_active=True,
-        )
-        db.add(row)
-    else:
-        row.value_type = SettingValueType.json
-        row.value_json = payload
-        row.value_text = None
-        row.is_secret = False
-        row.is_active = True
-    db.commit()
+        ),
+    )
     return payload
 
 

@@ -809,6 +809,57 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         ),
     ),
     DomainSOT(
+        domain="settings_control_plane",
+        services=(
+            SOTService(
+                name="settings.registry",
+                module="app.services.settings_spec",
+                owns=(
+                    "runtime setting identity and type",
+                    "runtime setting defaults and bounds",
+                    "bootstrap environment ownership",
+                    "runtime setting resolution hierarchy",
+                ),
+            ),
+            SOTService(
+                name="settings.persistence",
+                module="app.services.domain_settings",
+                owns=(
+                    "domain setting reads and writes",
+                    "atomic domain setting mutations",
+                    "settings cache invalidation",
+                ),
+                depends_on=("settings.registry", "secrets.reference_store"),
+            ),
+            SOTService(
+                name="settings.lifecycle",
+                module="app.services.settings_seed",
+                owns=("registry-driven setting bootstrap",),
+                depends_on=("settings.registry", "settings.persistence"),
+            ),
+            SOTService(
+                name="settings.health",
+                module="app.services.settings_health",
+                owns=(
+                    "unknown setting detection",
+                    "setting type and secret-reference drift",
+                ),
+                depends_on=("settings.registry", "settings.persistence"),
+            ),
+        ),
+        entrypoints=(
+            "app.api.settings",
+            "app.web.admin.system",
+            "app.services.web_system_*",
+            "app.services.scheduler_config",
+        ),
+        rule=(
+            "Process configuration stays environment-owned; registered runtime "
+            "controls resolve through the registry and persist only through a "
+            "domain settings service; secret values remain in OpenBao."
+        ),
+    ),
+    DomainSOT(
         domain="integration_control_plane",
         services=(
             SOTService(

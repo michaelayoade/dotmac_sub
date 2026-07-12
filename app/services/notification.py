@@ -1,5 +1,4 @@
 import logging
-import os
 import re
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
@@ -9,7 +8,7 @@ from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.domain_settings import SettingDomain
 from app.models.network_monitoring import AlertSeverity, AlertStatus
 from app.models.notification import (
     AlertNotificationLog,
@@ -42,6 +41,7 @@ from app.schemas.notification import (
     OnCallRotationMemberUpdate,
     OnCallRotationUpdate,
 )
+from app.services import settings_spec
 from app.services.common import (
     apply_ordering,
     apply_pagination,
@@ -103,26 +103,11 @@ def _severity_rank(severity: AlertSeverity) -> int:
 
 
 def _get_setting_value(db: Session, key: str) -> str | None:
-    setting = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.notification)
-        .filter(DomainSetting.key == key)
-        .filter(DomainSetting.is_active.is_(True))
-        .first()
-    )
-    if not setting:
-        return None
-    if setting.value_text:
-        return setting.value_text
-    if setting.value_json is not None:
-        return str(setting.value_json)
-    return None
+    value = settings_spec.resolve_value(db, SettingDomain.notification, key)
+    return None if value is None else str(value)
 
 
 def _setting_bool(db: Session, key: str, env_key: str, default: bool) -> bool:
-    env_value = os.getenv(env_key)
-    if env_value is not None and env_value != "":
-        return env_value.strip().lower() in {"1", "true", "yes", "on"}
     value = _get_setting_value(db, key)
     if value is None:
         return default
@@ -130,12 +115,6 @@ def _setting_bool(db: Session, key: str, env_key: str, default: bool) -> bool:
 
 
 def _setting_int(db: Session, key: str, env_key: str, default: int) -> int:
-    env_value = os.getenv(env_key)
-    if env_value is not None and env_value != "":
-        try:
-            return int(env_value)
-        except ValueError:
-            return default
     value = _get_setting_value(db, key)
     if value is None:
         return default
@@ -148,9 +127,6 @@ def _setting_int(db: Session, key: str, env_key: str, default: int) -> int:
 def _setting_str(
     db: Session, key: str, env_key: str, default: str | None
 ) -> str | None:
-    env_value = os.getenv(env_key)
-    if env_value is not None and env_value != "":
-        return env_value
     value = _get_setting_value(db, key)
     if value is None:
         return default

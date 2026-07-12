@@ -22,7 +22,7 @@ from app.models.auth import (
 from app.models.auth import (
     Session as AuthSession,
 )
-from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.domain_settings import SettingDomain
 from app.models.radius import RadiusServer
 from app.models.subscriber import Subscriber
 from app.schemas.auth import (
@@ -117,20 +117,12 @@ _API_KEY_MAX_PER_WINDOW = 5
 
 
 def _auth_setting(db: Session, key: str) -> str | None:
-    setting = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.auth)
-        .filter(DomainSetting.key == key)
-        .filter(DomainSetting.is_active.is_(True))
-        .first()
+    value = (
+        settings_spec.resolve_value(db, SettingDomain.auth, key)
+        if settings_spec.get_spec(SettingDomain.auth, key)
+        else settings_spec.read_stored_value(db, SettingDomain.auth, key)
     )
-    if not setting:
-        return None
-    if setting.value_text is not None:
-        return setting.value_text
-    if setting.value_json is not None:
-        return str(setting.value_json)
-    return None
+    return None if value is None else str(value)
 
 
 def _auth_int_setting(db: Session, key: str, default: int) -> int:

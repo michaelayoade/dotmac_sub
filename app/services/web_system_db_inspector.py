@@ -7,7 +7,6 @@ import hashlib
 import hmac
 import io
 import logging
-import os
 import re
 from datetime import UTC, datetime
 from typing import Any
@@ -19,7 +18,10 @@ from sqlalchemy import MetaData, Table, func, select, text
 from sqlalchemy.orm import Session
 
 from app.models.auth import AuthProvider, UserCredential
+from app.models.domain_settings import SettingDomain
 from app.services.auth_flow import verify_password
+from app.services.secrets import resolve_secret
+from app.services.settings_spec import resolve_value
 
 MAX_ROWS = 500
 DEFAULT_ROWS = 100
@@ -35,11 +37,10 @@ def _now() -> datetime:
 
 
 def _secret() -> str:
-    secret = os.getenv("JWT_SECRET")
+    raw = resolve_value(None, SettingDomain.auth, "jwt_secret")
+    secret = resolve_secret(str(raw)) if raw else None
     if not secret:
-        raise RuntimeError(
-            "JWT_SECRET environment variable is required for DB inspector"
-        )
+        raise RuntimeError("JWT secret is required for DB inspector")
     return secret
 
 

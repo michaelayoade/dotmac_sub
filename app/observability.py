@@ -1,5 +1,4 @@
 import logging
-import os
 import time
 import uuid
 
@@ -9,6 +8,9 @@ from starlette.requests import Request
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.metrics import REQUEST_COUNT, REQUEST_ERRORS, REQUEST_LATENCY
+from app.models.domain_settings import SettingDomain
+from app.services.secrets import resolve_secret
+from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
 _SKIP_OBSERVABILITY_PATHS = {"/health", "/metrics"}
@@ -25,14 +27,12 @@ def _extract_bearer_token(request: Request) -> str | None:
 
 
 def _jwt_secret() -> str | None:
-    secret = os.getenv("JWT_SECRET")
-    if secret:
-        return secret
-    return None
+    value = resolve_value(None, SettingDomain.auth, "jwt_secret")
+    return resolve_secret(str(value)) if value else None
 
 
 def _jwt_algorithm() -> str:
-    return os.getenv("JWT_ALGORITHM", "HS256")
+    return str(resolve_value(None, SettingDomain.auth, "jwt_algorithm") or "HS256")
 
 
 def _extract_actor_id_from_jwt(token: str | None) -> str | None:

@@ -36,36 +36,7 @@ _EXCLUDED_FILES = {
 
 # Pre-existing registered-but-unread keys (2026-07-03). Burn-down only — wire or
 # remove each, never extend. A new orphan must fail the build instead.
-_KNOWN_ORPHAN_SETTINGS: set[str] = {
-    "account_number_enabled",
-    "account_number_padding",
-    "account_number_start",
-    "core_device_ping_interval_seconds",
-    "core_device_snmp_walk_interval_seconds",
-    "default_account_status",
-    "default_contact_role",
-    "default_material_status",
-    "default_olt_port_type",
-    "default_reservation_status",
-    "default_splitter_input_ports",
-    "default_splitter_output_ports",
-    "hotspot_redirect_url",
-    "hotspot_walled_garden",
-    "meta_access_token_override",
-    "meta_api_timeout_seconds",
-    "meta_oauth_redirect_uri",
-    "notification_category_preferences_enabled",
-    "olt_polling_interval_minutes",
-    "ont_offline_poll_threshold",
-    "pon_outage_min_offline_onus",
-    # prepaid_* enforcement settings wired 2026-07-04 by the prepaid balance
-    # sweep (app/services/collections/prepaid_balance_sweep.py).
-    "vendor_bid_minimum_days",
-    "vendor_quote_approval_threshold",
-    "vendor_quote_validity_days",
-    "vendor_remember_ttl_seconds",
-    "vendor_session_ttl_seconds",
-}
+_KNOWN_ORPHAN_SETTINGS: set[str] = set()
 
 
 def _repo_root() -> pathlib.Path:

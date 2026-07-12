@@ -6,12 +6,11 @@ from math import asin, cos, isclose, radians, sin, sqrt
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType, AuditEvent
 from app.models.catalog import Subscription, SubscriptionStatus
-from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.domain_settings import SettingDomain
 from app.models.gis import (
     CustomerLocationChangeRequest,
     CustomerLocationChangeRequestStatus,
@@ -26,6 +25,7 @@ from app.services import audit as audit_service
 from app.services import geocoding as geocoding_service
 from app.services import gis as gis_service
 from app.services.customer_context import optional_customer_subscriber_id
+from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
 
@@ -729,19 +729,8 @@ def geocode_service_address(
 
 
 def _gis_setting_raw(db: Session, key: str) -> str | None:
-    row = db.scalars(
-        select(DomainSetting)
-        .where(DomainSetting.domain == SettingDomain.gis)
-        .where(DomainSetting.key == key)
-        .where(DomainSetting.is_active.is_(True))
-    ).first()
-    if not row:
-        return None
-    if row.value_text is not None:
-        return row.value_text
-    if row.value_json is not None:
-        return str(row.value_json)
-    return None
+    value = resolve_value(db, SettingDomain.gis, key)
+    return None if value is None else str(value)
 
 
 def _gis_setting_bool(db: Session, key: str, default: bool) -> bool:

@@ -12,7 +12,7 @@ from typing import Any, cast
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.domain_settings import SettingDomain
 from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
 from app.services import settings_spec
@@ -30,15 +30,19 @@ def _read_settings(
     db: Session, domain: SettingDomain, keys: list[str]
 ) -> dict[str, str]:
     """Read a batch of DomainSettings, returning {key: value_text}."""
-    stmt = (
-        select(DomainSetting)
-        .where(DomainSetting.domain == domain)
-        .where(DomainSetting.key.in_(keys))
-    )
-    rows = db.scalars(stmt).all()
-    result: dict[str, str] = dict.fromkeys(keys, "")
-    for row in rows:
-        result[row.key] = row.value_text or ""
+    result: dict[str, str] = {}
+    for key in keys:
+        value = (
+            settings_spec.resolve_value(db, domain, key)
+            if settings_spec.get_spec(domain, key)
+            else settings_spec.read_stored_value(db, domain, key)
+        )
+        if isinstance(value, bool):
+            result[key] = "true" if value else "false"
+        elif isinstance(value, (dict, list)):
+            result[key] = json.dumps(value)
+        else:
+            result[key] = str(value or "")
     return result
 
 
@@ -53,57 +57,43 @@ def _save_settings(
 ) -> None:
     """Upsert a batch of DomainSettings."""
     secret_keys = secret_keys or set()
-    spec_updates: list[tuple[str, DomainSettingUpdate]] = []
+    updates: dict[str, DomainSettingUpdate] = {}
+    registered_keys: set[str] = set()
     if use_specs:
         for key in keys:
             spec = settings_spec.get_spec(domain, key)
             if not spec:
                 continue
-            value = _coerce_spec_form_value(spec, data.get(key))
+            registered_keys.add(key)
+            raw_value = data.get(key)
+            if (
+                (raw_value is None or str(raw_value).strip() == "")
+                and spec.default is None
+                and not spec.required
+            ):
+                continue
+            value = _coerce_spec_form_value(spec, raw_value)
             value_text, value_json = settings_spec.normalize_for_db(spec, value)
             setting_value_json = cast(dict | list | bool | int | str | None, value_json)
-            spec_updates.append(
-                (
-                    key,
-                    DomainSettingUpdate(
+            updates[key] = DomainSettingUpdate(
                         value_type=spec.value_type,
                         value_text=value_text,
                         value_json=setting_value_json,
                         is_secret=spec.is_secret or key in secret_keys,
                         is_active=True,
-                    ),
-                )
-            )
-
-    spec_keys = {key for key, _ in spec_updates}
-    spec_service = DomainSettings(domain) if spec_updates else None
-    if spec_service:
-        for key, payload in spec_updates:
-            spec_service.upsert_by_key(db, key, payload)
+                    )
 
     for key in keys:
-        if key in spec_keys:
+        if key in registered_keys:
             continue
         value = (data.get(key) or "").strip()
-        stmt = select(DomainSetting).where(
-            DomainSetting.domain == domain,
-            DomainSetting.key == key,
-        )
-        setting = db.scalars(stmt).first()
-        if setting:
-            setting.value_text = value
-            setting.is_secret = key in secret_keys
-        else:
-            setting = DomainSetting(
-                domain=domain,
-                key=key,
+        updates[key] = DomainSettingUpdate(
                 value_text=value,
                 value_type=SettingValueType.string,
                 is_secret=key in secret_keys,
+                is_active=True,
             )
-            db.add(setting)
-    db.flush()
-    db.commit()
+    DomainSettings(domain).upsert_many_by_key(db, updates)
 
 
 def _coerce_spec_form_value(
@@ -145,9 +135,23 @@ PREFERENCE_KEYS = [
 
 def get_preferences_context(db: Session) -> dict:
     preferences = _read_settings(db, SettingDomain.auth, PREFERENCE_KEYS)
-    if not preferences.get("admin_mfa_required"):
-        legacy = _read_settings(db, SettingDomain.auth, ["force_2fa"])
-        preferences["admin_mfa_required"] = legacy.get("force_2fa", "")
+    canonical = settings_spec.resolve_setting(
+        db,
+        SettingDomain.auth,
+        "admin_mfa_required",
+    )
+    if canonical.source is settings_spec.SettingSource.default:
+        legacy = settings_spec.read_stored_value(
+            db,
+            SettingDomain.auth,
+            "force_2fa",
+        )
+        if legacy is not None:
+            preferences["admin_mfa_required"] = (
+                "true"
+                if str(legacy).strip().lower() in {"1", "true", "yes", "on"}
+                else "false"
+            )
     return {"preferences": preferences}
 
 
@@ -245,8 +249,7 @@ DIRECT_BANK_TRANSFER_KEYS = [
 
 def get_billing_config_context(db: Session) -> dict:
     billing = _read_settings(db, SettingDomain.billing, BILLING_KEYS)
-    if not billing.get("payment_due_days"):
-        billing["payment_due_days"] = str(resolve_payment_due_days(db))
+    billing["payment_due_days"] = str(resolve_payment_due_days(db))
     defaults = {
         "suspension_grace_hours": "48",
         "expiry_reminder_days": "7",

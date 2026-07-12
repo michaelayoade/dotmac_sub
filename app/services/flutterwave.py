@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hmac
 import logging
-import os
 import uuid
 from decimal import Decimal
 from typing import Any
@@ -13,6 +12,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import SettingDomain
+from app.services.secrets import resolve_secret
 from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
@@ -24,30 +24,21 @@ MAX_GATEWAY_TIMEOUT_SECONDS = 120
 
 
 def _get_secret_key(db: Session | None = None) -> str:
-    """Resolve the Flutterwave secret key from settings or env."""
-    if db:
-        val = resolve_value(db, SettingDomain.billing, "flutterwave_secret_key")
-        if val:
-            return str(val)
-    return os.getenv("FLUTTERWAVE_SECRET_KEY", "")
+    """Resolve the Flutterwave secret key through the settings control plane."""
+    value = resolve_value(db, SettingDomain.billing, "flutterwave_secret_key")
+    return (resolve_secret(str(value)) or "") if value else ""
 
 
 def _get_public_key(db: Session | None = None) -> str:
-    """Resolve the Flutterwave public key from settings or env."""
-    if db:
-        val = resolve_value(db, SettingDomain.billing, "flutterwave_public_key")
-        if val:
-            return str(val)
-    return os.getenv("FLUTTERWAVE_PUBLIC_KEY", "")
+    """Resolve the Flutterwave public key through the settings control plane."""
+    value = resolve_value(db, SettingDomain.billing, "flutterwave_public_key")
+    return str(value) if value else ""
 
 
 def _get_secret_hash(db: Session | None = None) -> str:
-    """Resolve the Flutterwave webhook secret hash from settings or env."""
-    if db:
-        val = resolve_value(db, SettingDomain.billing, "flutterwave_secret_hash")
-        if val:
-            return str(val)
-    return os.getenv("FLUTTERWAVE_SECRET_HASH", "")
+    """Resolve the webhook secret hash through the settings control plane."""
+    value = resolve_value(db, SettingDomain.billing, "flutterwave_secret_hash")
+    return (resolve_secret(str(value)) or "") if value else ""
 
 
 def _default_currency(db: Session | None = None) -> str:

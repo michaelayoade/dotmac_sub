@@ -15,6 +15,7 @@ from app.services import billing_invoice_pdf as billing_invoice_pdf_service
 from app.services import infrastructure_health as infrastructure_health_service
 from app.services import job_heartbeat, settings_spec
 from app.services import system_health as system_health_service
+from app.services.settings_health import inspect_settings
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,7 @@ def build_health_data(db) -> dict[str, object]:
     health_status = system_health_service.evaluate_health(health, thresholds)
     invoice_cache_stats = billing_invoice_pdf_service.get_cache_dashboard_stats(db)
     infrastructure_services = infrastructure_health_service.check_all_services(db)
+    settings_report = inspect_settings(db)
     return {
         "health": health,
         "health_status": health_status,
@@ -59,6 +61,16 @@ def build_health_data(db) -> dict[str, object]:
         "replication_health": _build_replication_health(db),
         "task_activity": _build_task_activity(db),
         "erp_sync_ownership": _build_erp_sync_ownership(db),
+        "settings_health": {
+            "status": "ok" if settings_report.ok else "degraded",
+            "registered": settings_report.registered,
+            "active_rows": settings_report.active_rows,
+            "inactive_registered": settings_report.inactive_registered,
+            "retired_active": list(settings_report.retired_active),
+            "unknown_active": list(settings_report.unknown_active),
+            "invalid_active": list(settings_report.invalid_active),
+            "secret_mismatches": list(settings_report.secret_mismatches),
+        },
     }
 
 

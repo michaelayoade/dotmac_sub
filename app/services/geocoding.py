@@ -9,10 +9,11 @@ from urllib.parse import quote, urlparse
 
 import httpx
 from fastapi import HTTPException
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.domain_settings import SettingDomain
+from app.services.secrets import resolve_secret
+from app.services.settings_spec import get_spec, read_stored_value, resolve_value
 
 logger = logging.getLogger(__name__)
 _LAST_REQUEST_LOCK = threading.Lock()
@@ -20,19 +21,17 @@ _LAST_REQUEST_AT: dict[str, float] = {}
 
 
 def _setting_value(db: Session, key: str) -> str | None:
-    setting = db.scalars(
-        select(DomainSetting)
-        .where(DomainSetting.domain == SettingDomain.geocoding)
-        .where(DomainSetting.key == key)
-        .where(DomainSetting.is_active.is_(True))
-    ).first()
-    if not setting:
+    spec = get_spec(SettingDomain.geocoding, key)
+    value = (
+        resolve_value(db, SettingDomain.geocoding, key)
+        if spec
+        else read_stored_value(db, SettingDomain.geocoding, key)
+    )
+    if value is None:
         return None
-    if setting.value_text is not None:
-        return setting.value_text
-    if setting.value_json is not None:
-        return str(setting.value_json)
-    return None
+    if spec and spec.is_secret:
+        return resolve_secret(str(value))
+    return str(value)
 
 
 def _setting_bool(db: Session, key: str, default: bool) -> bool:

@@ -168,6 +168,14 @@ class TestGeocodingThrottle:
         with (
             patch("app.services.geocoding.time.monotonic") as mock_monotonic,
             patch("app.services.geocoding.time.sleep") as mock_sleep,
+            patch(
+                "app.services.settings_cache.SettingsCache.get",
+                return_value=None,
+            ),
+            patch(
+                "app.services.settings_cache.SettingsCache.set",
+                return_value=False,
+            ),
         ):
             mock_monotonic.side_effect = [10.0, 10.2, 11.0]
             geocoding._throttle_geocoding_request(
@@ -410,7 +418,7 @@ class TestNominatimSearch:
             geocoding._nominatim_search(db_session, "Test", 1)
 
         call_args = mock_get.call_args
-        assert "countrycodes" not in call_args[1]["params"]
+        assert call_args[1]["params"]["countrycodes"] == "ng"
 
     def test_limit_minimum_is_one(self, db_session):
         """Test limit is at least 1."""

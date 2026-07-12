@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription, SubscriptionStatus
-from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.domain_settings import SettingDomain
 from app.services import settings_spec
 
 # A subscription in one of these states represents a *live* (connectable)
@@ -84,14 +84,10 @@ def check_billing_switch(db: Session) -> dict:
 
     Returns a dict; callers should alert when ``ok`` is false.
     """
-    import os
-
     actual = billing_enabled(db, default=False)
-    # Read the pinned expected value directly (it is not a registered spec key):
-    # a DomainSetting row wins, else the BILLING_ENABLED_EXPECTED env, else false.
+    # The expected value is a registered setting with the standard
+    # database -> bootstrap environment -> default hierarchy.
     expected_raw = _setting_value(db, "billing_enabled_expected")
-    if expected_raw is None:
-        expected_raw = os.getenv("BILLING_ENABLED_EXPECTED")
     if expected_raw is None:
         expected = False
     elif isinstance(expected_raw, bool):
@@ -119,16 +115,9 @@ def _coerce_int(value: object, default: int) -> int:
 def _domain_setting_value(
     db: Session, domain: SettingDomain, key: str
 ) -> object | None:
-    stmt = (
-        select(DomainSetting)
-        .where(DomainSetting.domain == domain)
-        .where(DomainSetting.key == key)
-        .where(DomainSetting.is_active.is_(True))
-    )
-    setting = db.scalars(stmt).first()
-    if not setting:
-        return None
-    return setting.value_json if setting.value_json is not None else setting.value_text
+    if settings_spec.get_spec(domain, key) is None:
+        return settings_spec.read_stored_value(db, domain, key)
+    return settings_spec.resolve_value(db, domain, key)
 
 
 def _setting_value(db: Session, key: str) -> object | None:
@@ -178,9 +167,16 @@ def resolve_payment_due_days(
     if sub_due_days is not None:
         return max(_coerce_int(sub_due_days, default), 0)
 
-    canonical = _setting_value(db, "payment_due_days")
-    if canonical is not None:
-        return max(_coerce_int(canonical, default), 0)
+    canonical = settings_spec.resolve_setting(
+        db,
+        SettingDomain.billing,
+        "payment_due_days",
+    )
+    if canonical.source in {
+        settings_spec.SettingSource.database,
+        settings_spec.SettingSource.environment,
+    }:
+        return max(_coerce_int(canonical.value, default), 0)
 
     legacy_invoice = _setting_value(db, "invoice_due_days")
     if legacy_invoice is not None:
@@ -190,7 +186,7 @@ def resolve_payment_due_days(
     if legacy_terms is not None:
         return max(_coerce_int(legacy_terms, default), 0)
 
-    return default
+    return max(_coerce_int(canonical.value, default), 0)
 
 
 def accounts_with_live_service(db: Session) -> set:

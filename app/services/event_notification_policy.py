@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.domain_settings import SettingDomain
 from app.services.events.types import Event, EventType
-from app.services.settings_spec import resolve_value
+from app.services.settings_spec import read_stored_value, resolve_value
 
 _ENABLED_VALUES = {"1", "true", "yes", "on", "enabled"}
 
@@ -22,20 +22,8 @@ BILLING_SUSPENSION_REASONS = {"overdue", "dunning", "invoice_overdue"}
 
 
 def _notification_setting_value(db: Session, key: str) -> str | None:
-    setting = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.notification)
-        .filter(DomainSetting.key == key)
-        .filter(DomainSetting.is_active.is_(True))
-        .first()
-    )
-    if not setting:
-        return None
-    if setting.value_text is not None:
-        return str(setting.value_text)
-    if setting.value_json is not None:
-        return str(setting.value_json)
-    return None
+    value = read_stored_value(db, SettingDomain.notification, key)
+    return None if value is None else str(value)
 
 
 def event_notifications_enabled(db: Session, template_code: str) -> bool:

@@ -10,11 +10,12 @@ from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.domain_settings import SettingDomain
 from app.models.field_attachment import FieldAttachment
 from app.models.field_job_event import FIELD_JOB_EVENTS, FieldJobEvent
 from app.models.field_worklog import FieldWorkLog
 from app.models.work_order_mirror import WorkOrderMirror
+from app.services import settings_spec
 from app.services.common import coerce_uuid
 from app.services.field.jobs import _profile_from_principal, _scoped_query
 from app.services.field.source import mark_sub_authoritative
@@ -279,16 +280,11 @@ def _apply_status_timestamps(
 
 
 def _completion_gate_enabled(db: Session) -> bool:
-    setting = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.field)
-        .filter(DomainSetting.key == "completion_requires_evidence")
-        .filter(DomainSetting.is_active.is_(True))
-        .first()
+    value = settings_spec.resolve_value(
+        db,
+        SettingDomain.field,
+        "completion_requires_evidence",
     )
-    if setting is None:
-        return True
-    value = setting.value_json if setting.value_json is not None else setting.value_text
     return str(value).lower() not in {"false", "0", "no"}
 
 

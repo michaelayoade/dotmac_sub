@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.orm import Session
 
-from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.domain_settings import SettingDomain
 from app.services.credential_crypto import (
     generate_encryption_key,
     get_encryption_key,
@@ -22,7 +22,7 @@ from app.services.secrets import (
     read_secret_fields,
     write_secret,
 )
-from app.services.settings_spec import resolve_value
+from app.services.settings_spec import read_stored_value, resolve_value
 
 logger = logging.getLogger(__name__)
 
@@ -70,14 +70,12 @@ def _managed_key_source(db: Session) -> tuple[bool, str]:
             return True, "openbao_env_ref"
         return False, "static_environment_key"
 
-    setting = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.auth)
-        .filter(DomainSetting.key == "credential_encryption_key")
-        .filter(DomainSetting.is_active.is_(True))
-        .first()
+    setting_value = read_stored_value(
+        db,
+        SettingDomain.auth,
+        "credential_encryption_key",
     )
-    if setting and is_openbao_ref(str(setting.value_text or "")):
+    if setting_value and is_openbao_ref(str(setting_value)):
         return True, "openbao_setting_ref"
     return False, "credential_key_is_not_an_openbao_reference"
 

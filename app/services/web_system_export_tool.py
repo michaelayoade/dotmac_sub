@@ -33,9 +33,11 @@ from app.models.subscriber import Subscriber
 from app.models.subscription_engine import SettingValueType
 from app.models.system_user import SystemUser
 from app.schemas.audit import AuditEventCreate
+from app.schemas.settings import DomainSettingUpdate
 from app.services import audit as audit_service
 from app.services import email as email_service
 from app.services import settings_spec
+from app.services.domain_settings import imports_settings
 
 logger = logging.getLogger(__name__)
 
@@ -567,53 +569,34 @@ def _parse_export_job_setting(setting: DomainSetting) -> dict[str, Any]:
 
 
 def list_export_jobs(db: Session, *, limit: int = 25) -> list[dict[str, Any]]:
-    settings = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.imports)
-        .filter(DomainSetting.key.like(f"{EXPORT_JOB_KEY_PREFIX}%"))
-        .filter(DomainSetting.is_active.is_(True))
-        .order_by(DomainSetting.created_at.desc())
-        .limit(max(limit, 1))
-        .all()
+    settings = imports_settings.list_by_key_prefix(
+        db,
+        EXPORT_JOB_KEY_PREFIX,
     )
-    return [_parse_export_job_setting(item) for item in settings]
+    ordered = sorted(settings, key=lambda item: item.created_at, reverse=True)
+    return [_parse_export_job_setting(item) for item in ordered[: max(limit, 1)]]
 
 
 def get_export_job(db: Session, job_id: str) -> dict[str, Any] | None:
     key = f"{EXPORT_JOB_KEY_PREFIX}{job_id.strip()}"
-    setting = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.imports)
-        .filter(DomainSetting.key == key)
-        .filter(DomainSetting.is_active.is_(True))
-        .first()
-    )
+    setting = imports_settings.find_by_key(db, key)
     if not setting:
         return None
     return _parse_export_job_setting(setting)
 
 
 def list_export_templates(db: Session) -> list[dict[str, Any]]:
-    settings = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.imports)
-        .filter(DomainSetting.key.like(f"{EXPORT_TEMPLATE_KEY_PREFIX}%"))
-        .filter(DomainSetting.is_active.is_(True))
-        .order_by(DomainSetting.created_at.desc())
-        .all()
+    settings = imports_settings.list_by_key_prefix(
+        db,
+        EXPORT_TEMPLATE_KEY_PREFIX,
     )
-    return [_parse_template_setting(item) for item in settings]
+    ordered = sorted(settings, key=lambda item: item.created_at, reverse=True)
+    return [_parse_template_setting(item) for item in ordered]
 
 
 def get_export_template(db: Session, template_id: str) -> dict[str, Any] | None:
     key = f"{EXPORT_TEMPLATE_KEY_PREFIX}{template_id.strip()}"
-    setting = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.imports)
-        .filter(DomainSetting.key == key)
-        .filter(DomainSetting.is_active.is_(True))
-        .first()
-    )
+    setting = imports_settings.find_by_key(db, key)
     if not setting:
         return None
     return _parse_template_setting(setting)
@@ -686,34 +669,25 @@ def create_export_template(
         f"{_slugify(normalized_name)[:60]}-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
     )
     key = f"{EXPORT_TEMPLATE_KEY_PREFIX}{template_id}"
-    setting = DomainSetting(
-        domain=SettingDomain.imports,
-        key=key,
-        value_type=SettingValueType.json,
-        value_text=None,
-        value_json={"name": normalized_name, "config": config},
-        is_secret=False,
-        is_active=True,
+    setting = imports_settings.upsert_by_key(
+        db,
+        key,
+        DomainSettingUpdate(
+            value_type=SettingValueType.json,
+            value_json={"name": normalized_name, "config": config},
+            is_secret=False,
+            is_active=True,
+        ),
     )
-    db.add(setting)
-    db.commit()
-    db.refresh(setting)
     return _parse_template_setting(setting)
 
 
 def delete_export_template(db: Session, *, template_id: str) -> None:
     key = f"{EXPORT_TEMPLATE_KEY_PREFIX}{template_id.strip()}"
-    setting = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.imports)
-        .filter(DomainSetting.key == key)
-        .filter(DomainSetting.is_active.is_(True))
-        .first()
-    )
+    setting = imports_settings.find_by_key(db, key)
     if not setting:
         raise ValueError("Export template not found")
-    setting.is_active = False
-    db.commit()
+    imports_settings.upsert_by_key(db, key, DomainSettingUpdate(is_active=False))
 
 
 def create_export_job(
@@ -744,12 +718,12 @@ def create_export_job(
     now = datetime.now(UTC).isoformat()
     job_id = str(uuid4())
     key = f"{EXPORT_JOB_KEY_PREFIX}{job_id}"
-    setting = DomainSetting(
-        domain=SettingDomain.imports,
-        key=key,
-        value_type=SettingValueType.json,
-        value_text=None,
-        value_json={
+    setting = imports_settings.upsert_by_key(
+        db,
+        key,
+        DomainSettingUpdate(
+            value_type=SettingValueType.json,
+            value_json={
             "status": "queued",
             "row_count": int(row_count),
             "module": config["module"],
@@ -765,11 +739,10 @@ def create_export_job(
             "completed_at": "",
             "config": config,
         },
-        is_secret=False,
-        is_active=True,
+            is_secret=False,
+            is_active=True,
+        ),
     )
-    db.add(setting)
-    db.commit()
     return _parse_export_job_setting(setting)
 
 
@@ -777,21 +750,21 @@ def _set_export_job_state(
     db: Session, *, job_id: str, updates: dict[str, Any]
 ) -> dict[str, Any]:
     key = f"{EXPORT_JOB_KEY_PREFIX}{job_id.strip()}"
-    setting = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.imports)
-        .filter(DomainSetting.key == key)
-        .filter(DomainSetting.is_active.is_(True))
-        .first()
-    )
+    setting = imports_settings.find_by_key(db, key)
     if not setting:
         raise ValueError("Export job not found")
     payload = dict(setting.value_json) if isinstance(setting.value_json, dict) else {}
     payload.update(updates)
-    setting.value_json = payload
-    db.commit()
-    db.refresh(setting)
-    return _parse_export_job_setting(setting)
+    updated = imports_settings.upsert_by_key(
+        db,
+        key,
+        DomainSettingUpdate(
+            value_type=SettingValueType.json,
+            value_json=payload,
+            is_active=True,
+        ),
+    )
+    return _parse_export_job_setting(updated)
 
 
 def _write_export_job_file(job_id: str, extension: str, content: bytes) -> str:

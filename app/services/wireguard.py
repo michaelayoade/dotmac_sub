@@ -17,7 +17,7 @@ from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
-from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.domain_settings import SettingDomain
 from app.models.wireguard import (
     WireGuardConnectionLog,
     WireGuardPeer,
@@ -35,6 +35,7 @@ from app.schemas.wireguard import (
     WireGuardServerRead,
     WireGuardServerUpdate,
 )
+from app.services.settings_spec import resolve_value
 from app.services.wireguard_crypto import (
     decrypt_private_key,
     encrypt_private_key,
@@ -86,16 +87,13 @@ def _sanitize_interface_name(name: str, max_len: int = 15) -> str:
 
 
 def _get_default_vpn_address(db: Session) -> str:
-    setting = cast(
-        DomainSetting | None,
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.network)
-        .filter(DomainSetting.key == "wireguard_default_vpn_address")
-        .filter(DomainSetting.is_active.is_(True))
-        .first(),
+    raw = resolve_value(
+        db,
+        SettingDomain.network,
+        "wireguard_default_vpn_address",
     )
-    if setting and setting.value_text:
-        value = cast(str, setting.value_text).strip()
+    if raw is not None:
+        value = str(raw).strip()
         if value and value.lower() != "none":
             return value
     return "10.10.0.1/24"

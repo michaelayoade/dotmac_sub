@@ -34,7 +34,7 @@ from app.models.catalog import (
 from app.models.collections import DunningCase, DunningCaseStatus
 from app.models.communication_log import CommunicationLog
 from app.models.crm_sync_failure import CrmSyncFailure, CrmSyncFailureStatus
-from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.domain_settings import SettingDomain
 from app.models.gis import (
     CustomerLocationChangeRequest,
     CustomerLocationChangeRequestStatus,
@@ -61,6 +61,7 @@ from app.schemas.geocoding import GeocodePreviewRequest
 from app.services import catalog as catalog_service
 from app.services import geocoding as geocoding_service
 from app.services import notification as notification_service
+from app.services import settings_spec
 from app.services import subscriber as subscriber_service
 from app.services import web_customer_user_access as web_customer_user_access_service
 from app.services.audit_helpers import (
@@ -202,16 +203,7 @@ def _format_billing_value(key: str, value: object | None) -> str:
 
 def _billing_global_defaults(db: Session) -> dict[str, object | None]:
     keys = {"billing_enabled", "billing_day", "minimum_balance"}
-    rows = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.billing)
-        .filter(DomainSetting.key.in_(keys))
-        .all()
-    )
-    raw = {
-        row.key: row.value_json if row.value_json is not None else row.value_text
-        for row in rows
-    }
+    raw = settings_spec.resolve_values_atomic(db, SettingDomain.billing, list(keys))
     return {
         "billing_enabled": _coerce_setting_bool(raw.get("billing_enabled"), True),
         "billing_day": _coerce_setting_int(raw.get("billing_day")),

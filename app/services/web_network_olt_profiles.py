@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import re
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -17,7 +16,7 @@ from starlette.requests import Request
 
 from app.models.audit import AuditEvent
 from app.models.catalog import CatalogOffer
-from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.domain_settings import SettingDomain
 from app.models.network import (
     OLTDevice,
     OltLineProfile,
@@ -29,6 +28,7 @@ from app.models.network import (
     OltServiceProfile,
     OntProvisioningProfile,
 )
+from app.services import settings_spec
 from app.services.audit_helpers import log_audit_event
 from app.services.network import olt as olt_service
 from app.services.network.imported_service_ports import imported_service_port_summary
@@ -587,37 +587,20 @@ def check_profile_bundle_drift(
 
 
 def _profile_sync_worker_enabled(db: Session) -> bool:
-    raw = os.getenv("OLT_PROFILE_SYNC_WORKER_ENABLED", "")
-    if not raw:
-        raw = _domain_setting_text(db, "olt_profile_sync_worker_enabled") or ""
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
+    raw = settings_spec.resolve_value(
+        db, SettingDomain.network, "olt_profile_sync_worker_enabled"
+    )
+    return str(raw or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _profile_sync_worker_interval_seconds(db: Session) -> int:
-    raw = os.getenv("OLT_PROFILE_SYNC_INTERVAL_SECONDS", "")
-    if not raw:
-        raw = _domain_setting_text(db, "olt_profile_sync_interval_seconds") or ""
+    raw = settings_spec.resolve_value(
+        db, SettingDomain.network, "olt_profile_sync_interval_seconds"
+    )
     try:
-        return max(int(raw), 60)
+        return max(int(str(raw)), 60)
     except (TypeError, ValueError):
         return 300
-
-
-def _domain_setting_text(db: Session, key: str) -> str | None:
-    setting = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.network)
-        .filter(DomainSetting.key == key)
-        .filter(DomainSetting.is_active.is_(True))
-        .first()
-    )
-    if setting is None:
-        return None
-    if setting.value_text:
-        return str(setting.value_text)
-    if setting.value_json is not None:
-        return str(setting.value_json)
-    return None
 
 
 def _log_profile_sync_task_audit(

@@ -10,117 +10,23 @@ behavior should be defined here to allow operator tuning.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import fields
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import SettingDomain
-from app.services.settings_cache import SettingsCache
+from app.services import settings_spec
+from app.services.settings_specs.provisioning import (  # noqa: F401 - compatibility re-export
+    DEFAULTS,
+    ProvisioningDefaults,
+)
 
 logger = logging.getLogger(__name__)
 
 
-# Default values — used when settings are not configured in DB
-@dataclass(frozen=True)
-class ProvisioningDefaults:
-    """Default values for provisioning settings.
-
-    These are used when no DomainSetting is configured. Values can be
-    overridden by creating settings in the 'provisioning' domain.
-    """
-
-    # TR-069 bootstrap polling
-    tr069_bootstrap_timeout_sec: int = 120
-    tr069_bootstrap_poll_interval_sec: int = 10
-    tr069_task_ready_timeout_sec: int = 45
-    tr069_task_ready_poll_interval_sec: int = 5
-
-    # PPPoE push retries
-    pppoe_push_max_attempts: int = 3
-    pppoe_push_retry_delay_sec: int = 10
-
-    # Enforcement
-    stale_runtime_hours: int = 24
-    olt_write_mode_enabled: bool = False
-
-    # PPPoE provisioning method: "auto", "omci", or "tr069"
-    # - auto: Try OMCI first, fall back to TR-069 on failure
-    # - omci: Only use OLT OMCI commands (requires olt_write_mode_enabled)
-    # - tr069: Only use TR-069/GenieACS (skip OMCI entirely)
-    pppoe_provisioning_method: str = "auto"
-
-    # Async verification settings (Phase 2)
-    verification_interval_sec: int = 300  # 5 minutes
-    verification_staleness_minutes: int = 15
-    drift_handling_mode: str = "alert_only"  # or "auto_repair"
-
-    # Circuit breaker settings (Phase 4)
-    circuit_breaker_failure_threshold: int = 3
-    circuit_breaker_backoff_sec: int = 30
-
-    # Service-port allocator settings (Phase 1)
-    service_port_pool_min_index: int = 0
-    service_port_pool_max_index: int = 65535
-
-
-DEFAULTS = ProvisioningDefaults()
-
 # Setting keys in the 'provisioning' domain
-SETTING_KEYS = {
-    "tr069_bootstrap_timeout_sec": DEFAULTS.tr069_bootstrap_timeout_sec,
-    "tr069_bootstrap_poll_interval_sec": DEFAULTS.tr069_bootstrap_poll_interval_sec,
-    "tr069_task_ready_timeout_sec": DEFAULTS.tr069_task_ready_timeout_sec,
-    "tr069_task_ready_poll_interval_sec": DEFAULTS.tr069_task_ready_poll_interval_sec,
-    "pppoe_push_max_attempts": DEFAULTS.pppoe_push_max_attempts,
-    "pppoe_push_retry_delay_sec": DEFAULTS.pppoe_push_retry_delay_sec,
-    "stale_runtime_hours": DEFAULTS.stale_runtime_hours,
-    "olt_write_mode_enabled": DEFAULTS.olt_write_mode_enabled,
-    "pppoe_provisioning_method": DEFAULTS.pppoe_provisioning_method,
-    # Phase 2: Async verification
-    "verification_interval_sec": DEFAULTS.verification_interval_sec,
-    "verification_staleness_minutes": DEFAULTS.verification_staleness_minutes,
-    "drift_handling_mode": DEFAULTS.drift_handling_mode,
-    # Phase 4: Circuit breaker
-    "circuit_breaker_failure_threshold": DEFAULTS.circuit_breaker_failure_threshold,
-    "circuit_breaker_backoff_sec": DEFAULTS.circuit_breaker_backoff_sec,
-    # Phase 1: Service-port allocator
-    "service_port_pool_min_index": DEFAULTS.service_port_pool_min_index,
-    "service_port_pool_max_index": DEFAULTS.service_port_pool_max_index,
-}
-
-
-def _get_setting_from_cache(key: str) -> Any | None:
-    """Try to get a setting from Redis cache first."""
-    return SettingsCache.get(SettingDomain.provisioning.value, key)
-
-
-def _get_setting_from_db(db: Session, key: str) -> Any | None:
-    """Get a setting from the database and cache it."""
-    from app.models.domain_settings import DomainSetting
-
-    setting = (
-        db.query(DomainSetting)
-        .filter(
-            DomainSetting.domain == SettingDomain.provisioning,
-            DomainSetting.key == key,
-            DomainSetting.is_active.is_(True),
-        )
-        .first()
-    )
-    if not setting:
-        return None
-
-    # Extract value based on type
-    value: Any
-    if setting.value_json is not None:
-        value = setting.value_json
-    else:
-        value = setting.value_text
-
-    # Cache for future lookups
-    SettingsCache.set(SettingDomain.provisioning.value, key, value)
-    return value
+SETTING_KEYS = {field.name: getattr(DEFAULTS, field.name) for field in fields(DEFAULTS)}
 
 
 def get_setting(db: Session | None, key: str, default: Any = None) -> Any:
@@ -137,18 +43,8 @@ def get_setting(db: Session | None, key: str, default: Any = None) -> Any:
     if default is None:
         default = SETTING_KEYS.get(key)
 
-    # Try cache first
-    cached = _get_setting_from_cache(key)
-    if cached is not None:
-        return cached
-
-    # Try DB if session provided
-    if db is not None:
-        db_value = _get_setting_from_db(db, key)
-        if db_value is not None:
-            return db_value
-
-    return default
+    value = settings_spec.resolve_value(db, SettingDomain.provisioning, key)
+    return default if value is None else value
 
 
 def get_int_setting(db: Session | None, key: str, default: int | None = None) -> int:

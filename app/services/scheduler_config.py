@@ -5,9 +5,9 @@ from datetime import UTC, datetime, timedelta
 
 from celery.schedules import crontab
 
-from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.domain_settings import SettingDomain
 from app.models.scheduler import ScheduledTask, ScheduleType
-from app.services import control_registry
+from app.services import control_registry, settings_spec
 from app.services import integration as integration_service
 from app.services.db_session_adapter import db_session_adapter
 from app.services.settings_spec import resolve_value
@@ -56,20 +56,8 @@ def _env_int(name: str) -> int | None:
 
 
 def _get_setting_value(db, domain: SettingDomain, key: str) -> str | None:
-    setting = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == domain)
-        .filter(DomainSetting.key == key)
-        .filter(DomainSetting.is_active.is_(True))
-        .first()
-    )
-    if not setting:
-        return None
-    if setting.value_text:
-        return str(setting.value_text)
-    if setting.value_json is not None:
-        return str(setting.value_json)
-    return None
+    value = settings_spec.read_stored_value(db, domain, key)
+    return None if value is None else str(value)
 
 
 def _effective_bool(
@@ -87,6 +75,17 @@ def _effective_bool(
     if canonical is not None:
         return control_registry.is_enabled(db, canonical)
 
+    if settings_spec.get_spec(domain, key) is not None:
+        stored = settings_spec.read_stored_value(db, domain, key)
+        if stored is None:
+            env_value = _env_bool(env_key)
+            if env_value is not None:
+                return env_value
+        value = resolve_value(db, domain, key)
+        if value is None:
+            return default
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
     # Unregistered key: legacy env -> DB -> default.
     env_value = _env_bool(env_key)
     if env_value is not None:
@@ -100,6 +99,17 @@ def _effective_bool(
 def _effective_int(
     db, domain: SettingDomain, key: str, env_key: str, default: int
 ) -> int:
+    if settings_spec.get_spec(domain, key) is not None:
+        stored = settings_spec.read_stored_value(db, domain, key)
+        if stored is None:
+            env_value = _env_int(env_key)
+            if env_value is not None:
+                return env_value
+        value = resolve_value(db, domain, key)
+        try:
+            return int(str(value))
+        except (TypeError, ValueError):
+            return default
     env_value = _env_int(env_key)
     if env_value is not None:
         return env_value
@@ -125,6 +135,14 @@ def _resolve_int(db, domain: SettingDomain, key: str, default: int) -> int:
 def _effective_str(
     db, domain: SettingDomain, key: str, env_key: str, default: str | None
 ) -> str | None:
+    if settings_spec.get_spec(domain, key) is not None:
+        stored = settings_spec.read_stored_value(db, domain, key)
+        if stored is None:
+            env_value = _env_value(env_key)
+            if env_value is not None:
+                return env_value
+        value = resolve_value(db, domain, key)
+        return default if value is None else str(value)
     env_value = _env_value(env_key)
     if env_value is not None:
         return env_value

@@ -33,7 +33,7 @@ from app.models.catalog import (
     SubscriptionAddOn,
     SubscriptionStatus,
 )
-from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.domain_settings import SettingDomain
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.event_store import EventStore
 from app.models.network import (
@@ -243,16 +243,7 @@ def _enum_raw_value(value: object | None) -> str:
 
 def _billing_global_defaults(db: Session) -> dict[str, object | None]:
     keys = {"billing_enabled", "billing_day", "minimum_balance"}
-    rows = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.billing)
-        .filter(DomainSetting.key.in_(keys))
-        .all()
-    )
-    raw = {
-        row.key: row.value_json if row.value_json is not None else row.value_text
-        for row in rows
-    }
+    raw = settings_spec.resolve_values_atomic(db, SettingDomain.billing, list(keys))
     return {
         "billing_enabled": _coerce_setting_bool(raw.get("billing_enabled"), True),
         "billing_day": _coerce_setting_int(raw.get("billing_day")),

@@ -7,14 +7,14 @@ import logging
 from uuid import UUID
 
 from pydantic import ValidationError
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
-from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.domain_settings import SettingDomain
 from app.models.wireguard import WireGuardServer
 from app.schemas.wireguard import WireGuardServerCreate, WireGuardServerUpdate
 from app.services.audit_helpers import diff_dicts, log_audit_event, model_to_dict
+from app.services.settings_spec import resolve_values_atomic
 from app.services.wireguard_crypto import encrypt_private_key
 
 logger = logging.getLogger(__name__)
@@ -213,20 +213,14 @@ def get_vpn_defaults(db: Session) -> dict[str, object]:
         "wireguard_default_mtu": "mtu",
         "wireguard_default_interface_name": "interface_name",
     }
+    values = resolve_values_atomic(db, SettingDomain.network, list(key_map))
     for setting_key, default_key in key_map.items():
-        stmt = (
-            select(DomainSetting)
-            .where(DomainSetting.domain == SettingDomain.network)
-            .where(DomainSetting.key == setting_key)
-            .where(DomainSetting.is_active.is_(True))
-        )
-        setting = db.scalars(stmt).first()
-        if setting and setting.value_text:
-            value = setting.value_text
+        value = values.get(setting_key)
+        if value is not None:
             if default_key in ("listen_port", "mtu"):
                 try:
-                    defaults[default_key] = int(value)
-                except ValueError:
+                    defaults[default_key] = int(str(value))
+                except (TypeError, ValueError):
                     pass
             else:
                 defaults[default_key] = value

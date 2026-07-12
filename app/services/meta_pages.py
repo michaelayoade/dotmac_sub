@@ -16,7 +16,6 @@ from typing import Any, cast
 import httpx
 from sqlalchemy.orm import Session
 
-from app.config import settings
 from app.logging import get_logger
 from app.models.domain_settings import SettingDomain
 from app.models.oauth_token import OAuthToken
@@ -82,9 +81,7 @@ async def _request_with_retry(
 
 def _get_meta_graph_base_url(db: Session) -> str:
     version = resolve_value(db, SettingDomain.comms, "meta_graph_api_version")
-    if not version:
-        version = settings.meta_graph_api_version
-    return f"https://graph.facebook.com/{version}"
+    return f"https://graph.facebook.com/{version or 'v21.0'}"
 
 
 def _get_page_token_record(db: Session, page_id: str) -> OAuthToken | None:

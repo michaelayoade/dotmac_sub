@@ -33,7 +33,7 @@ from app.csrf import (
 )
 from app.errors import register_error_handlers
 from app.logging import configure_logging
-from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.domain_settings import SettingDomain
 from app.monitoring import setup_monitoring
 from app.observability import ObservabilityMiddleware
 from app.request_meta import client_ip
@@ -375,34 +375,9 @@ def _seed_startup_settings() -> None:
         ensure_storage_bucket,
     )
     from app.services.settings_seed import (
-        seed_audit_settings,
-        seed_auth_policy_settings,
-        seed_auth_settings,
-        seed_billing_settings,
-        seed_catalog_settings,
-        seed_collections_policy_settings,
-        seed_collections_settings,
-        seed_comms_settings,
-        seed_geocoding_settings,
-        seed_gis_settings,
-        seed_imports_settings,
-        seed_lifecycle_settings,
-        seed_network_monitoring_settings,
-        seed_network_policy_settings,
-        seed_network_settings,
-        seed_notification_settings,
         seed_notification_templates,
-        seed_provisioning_settings,
         seed_provisioning_workflows,
-        seed_radius_policy_settings,
-        seed_radius_settings,
-        seed_scheduler_settings,
-        seed_subscriber_settings,
-        seed_tr069_settings,
-        seed_usage_policy_settings,
-        seed_usage_settings,
-        seed_vas_settings,
-        seed_wireguard_settings,
+        seed_registered_settings,
     )
 
     if settings.enforce_credential_encryption:
@@ -428,34 +403,9 @@ def _seed_startup_settings() -> None:
         )
     db = SessionLocal()
     try:
-        seed_auth_settings(db)
-        seed_auth_policy_settings(db)
-        seed_audit_settings(db)
-        seed_billing_settings(db)
-        seed_catalog_settings(db)
-        seed_imports_settings(db)
-        seed_gis_settings(db)
-        seed_usage_settings(db)
-        seed_usage_policy_settings(db)
-        seed_notification_settings(db)
+        created_settings = seed_registered_settings(db)
         seed_notification_templates(db)
-        seed_collections_settings(db)
-        seed_collections_policy_settings(db)
-        seed_geocoding_settings(db)
-        seed_vas_settings(db)
-        seed_radius_settings(db)
-        seed_radius_policy_settings(db)
-        seed_scheduler_settings(db)
-        seed_subscriber_settings(db)
-        seed_provisioning_settings(db)
         seed_provisioning_workflows(db)
-        seed_tr069_settings(db)
-        seed_network_policy_settings(db)
-        seed_network_settings(db)
-        seed_network_monitoring_settings(db)
-        seed_lifecycle_settings(db)
-        seed_comms_settings(db)
-        seed_wireguard_settings(db)
     finally:
         db.close()
     logger.info(
@@ -463,6 +413,7 @@ def _seed_startup_settings() -> None:
         extra={
             "event": "startup_seed_complete",
             "duration_ms": round((monotonic() - started_at) * 1000.0, 2),
+            "settings_created": created_settings,
         },
     )
 
@@ -720,18 +671,17 @@ def _load_domain_routing(db: Session) -> dict[str, str]:
             "selfcare": _domain_routing_cache["selfcare"],
             "redirect": _domain_routing_cache["redirect"],
         }
-    from sqlalchemy import select
+    from app.services.settings_spec import resolve_values_atomic
 
-    from app.models.domain_settings import DomainSetting, SettingDomain
-
-    stmt = (
-        select(DomainSetting)
-        .where(DomainSetting.domain == SettingDomain.auth)
-        .where(DomainSetting.key.in_(["selfcare_domain", "selfcare_redirect_root"]))
+    values = resolve_values_atomic(
+        db,
+        SettingDomain.auth,
+        ["selfcare_domain", "selfcare_redirect_root"],
     )
-    rows = {r.key: (r.value_text or "") for r in db.scalars(stmt).all()}
-    _domain_routing_cache["selfcare"] = rows.get("selfcare_domain", "")
-    _domain_routing_cache["redirect"] = rows.get("selfcare_redirect_root", "/portal/")
+    _domain_routing_cache["selfcare"] = str(values.get("selfcare_domain") or "")
+    _domain_routing_cache["redirect"] = str(
+        values.get("selfcare_redirect_root") or "/portal/"
+    )
     _domain_routing_cache["ts"] = now
     return {
         "selfcare": _domain_routing_cache["selfcare"],
@@ -1341,13 +1291,19 @@ def _load_audit_settings(db: Session):
             return _AUDIT_SETTINGS_CACHE
     defaults = _default_audit_settings()
     _set_audit_settings_refresh_timeout(db)
-    rows = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.audit)
-        .filter(DomainSetting.is_active.is_(True))
-        .all()
+    from app.services.settings_spec import resolve_values_atomic
+
+    values = resolve_values_atomic(
+        db,
+        SettingDomain.audit,
+        [
+            "enabled",
+            "methods",
+            "skip_paths",
+            "read_trigger_header",
+            "read_trigger_query",
+        ],
     )
-    values = {row.key: row for row in rows}
     if "enabled" in values:
         defaults["enabled"] = _to_bool(values["enabled"])
     if "methods" in values:
@@ -1364,8 +1320,7 @@ def _load_audit_settings(db: Session):
     return defaults
 
 
-def _to_bool(setting: DomainSetting) -> bool:
-    value = setting.value_json if setting.value_json is not None else setting.value_text
+def _to_bool(value: object) -> bool:
     if isinstance(value, bool):
         return value
     if isinstance(value, str):
@@ -1373,15 +1328,13 @@ def _to_bool(setting: DomainSetting) -> bool:
     return False
 
 
-def _to_str(setting: DomainSetting) -> str:
-    value = setting.value_text if setting.value_text is not None else setting.value_json
+def _to_str(value: object) -> str:
     if value is None:
         return ""
     return str(value)
 
 
-def _to_list(setting: DomainSetting, upper: bool) -> set[str] | list[str]:
-    value = setting.value_json if setting.value_json is not None else setting.value_text
+def _to_list(value: object, upper: bool) -> set[str] | list[str]:
     items: list[str]
     if isinstance(value, list):
         items = [str(item).strip() for item in value if str(item).strip()]

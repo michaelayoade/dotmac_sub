@@ -23,6 +23,7 @@ def test_domain_sot_relationships_cover_expected_domains():
         "scheduler_control_plane",
         "network_access_control_plane",
         "service_intent_control_plane",
+        "settings_control_plane",
         "integration_control_plane",
     ]
 

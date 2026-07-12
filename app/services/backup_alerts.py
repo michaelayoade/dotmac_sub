@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
@@ -59,9 +58,7 @@ def queue_backup_failure_notification(
         db, SettingDomain.notification, "alert_notifications_enabled"
     )
     enabled = _coerce_bool(
-        enabled_raw
-        if enabled_raw is not None
-        else os.getenv("ALERT_NOTIFICATIONS_ENABLED", "true"),
+        enabled_raw,
         True,
     )
     if not enabled:
@@ -70,19 +67,13 @@ def queue_backup_failure_notification(
     recipient_raw = settings_spec.resolve_value(
         db, SettingDomain.notification, "alert_notifications_default_recipient"
     )
-    recipient = str(
-        recipient_raw
-        if recipient_raw is not None
-        else os.getenv("ALERT_NOTIFICATIONS_DEFAULT_RECIPIENT", "")
-    ).strip()
+    recipient = str(recipient_raw or "").strip()
     if not recipient:
         return False
 
     channel_raw = settings_spec.resolve_value(
         db, SettingDomain.notification, "alert_notifications_default_channel"
     )
-    if channel_raw is None:
-        channel_raw = os.getenv("ALERT_NOTIFICATIONS_DEFAULT_CHANNEL", "email")
     channel = _resolve_channel(channel_raw)
 
     now = datetime.now(UTC)

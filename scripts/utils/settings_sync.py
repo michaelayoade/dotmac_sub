@@ -4,6 +4,7 @@ import os
 from dotenv import load_dotenv
 
 from app.db import SessionLocal
+from app.models.domain_settings import SettingDomain
 from app.schemas.settings import DomainSettingUpdate
 from app.services.secrets import is_openbao_ref
 from app.services.settings_spec import (
@@ -37,6 +38,7 @@ def main():
     updated = 0
     skipped = 0
     errors: list[str] = []
+    pending: dict[SettingDomain, dict[str, DomainSettingUpdate]] = {}
     try:
         for spec in SETTINGS_SPECS:
             if not spec.env_var:
@@ -73,12 +75,15 @@ def main():
                 )
                 updated += 1
                 continue
-            service = DOMAIN_SETTINGS_SERVICE.get(spec.domain)
-            if not service:
+            if spec.domain not in DOMAIN_SETTINGS_SERVICE:
                 errors.append(f"{spec.domain.value}.{spec.key}: no domain service")
                 continue
-            service.upsert_by_key(db, spec.key, payload)
+            pending.setdefault(spec.domain, {})[spec.key] = payload
             updated += 1
+        if not args.dry_run and not errors:
+            for domain, payloads in pending.items():
+                service = DOMAIN_SETTINGS_SERVICE[domain]
+                service.upsert_many_by_key(db, payloads)
     finally:
         db.close()
 

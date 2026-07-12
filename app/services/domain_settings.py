@@ -1,4 +1,5 @@
 import builtins
+from collections.abc import Mapping
 from typing import Any
 
 from fastapi import HTTPException
@@ -74,16 +75,22 @@ class DomainSettings(ListResponseMixin):
     def _prepare_create_payload(
         self, db: Session, key: str, payload: DomainSettingCreate
     ) -> DomainSettingCreate:
+        domain = self._resolve_domain(payload.domain)
+        from app.services.settings_spec import get_spec
+
+        spec = get_spec(domain, key)
+        effective_is_secret = payload.is_secret or bool(spec and spec.is_secret)
         resolved = self._write_secret_ref(
             key=key,
             value_text=payload.value_text,
-            is_secret=payload.is_secret,
+            is_secret=effective_is_secret,
             allow_plain_fallback=self._allow_plain_secret_fallback(db),
         )
-        if resolved == payload.value_text:
+        if resolved == payload.value_text and effective_is_secret == payload.is_secret:
             return payload
         data = payload.model_dump()
         data["value_text"] = resolved
+        data["is_secret"] = effective_is_secret
         return DomainSettingCreate(**data)
 
     def _prepare_update_payload(
@@ -188,18 +195,151 @@ class DomainSettings(ListResponseMixin):
         SettingsCache.invalidate(setting.domain.value, setting.key)
         return setting
 
-    def get_by_key(self, db: Session, key: str):
+    def get_by_key(self, db: Session, key: str, *, include_inactive: bool = False):
         if not self.domain:
             raise HTTPException(status_code=400, detail="Setting domain is required")
-        setting = (
+        query = (
             db.query(DomainSetting)
             .filter(DomainSetting.domain == self.domain)
             .filter(DomainSetting.key == key)
-            .first()
         )
+        if not include_inactive:
+            query = query.filter(DomainSetting.is_active.is_(True))
+        setting = query.first()
         if not setting:
             raise HTTPException(status_code=404, detail="Setting not found")
         return setting
+
+    def find_by_key(
+        self, db: Session, key: str, *, include_inactive: bool = False
+    ) -> DomainSetting | None:
+        try:
+            return self.get_by_key(db, key, include_inactive=include_inactive)
+        except HTTPException as exc:
+            if exc.status_code == 404:
+                return None
+            raise
+
+    def list_by_key_prefix(
+        self, db: Session, prefix: str, *, include_inactive: bool = False
+    ) -> builtins.list[DomainSetting]:
+        if not self.domain:
+            raise HTTPException(status_code=400, detail="Setting domain is required")
+        query = (
+            db.query(DomainSetting)
+            .filter(DomainSetting.domain == self.domain)
+            .filter(DomainSetting.key.like(f"{prefix}%"))
+        )
+        if not include_inactive:
+            query = query.filter(DomainSetting.is_active.is_(True))
+        return query.order_by(DomainSetting.key.asc()).all()
+
+    def upsert_many_by_key(
+        self,
+        db: Session,
+        payloads: Mapping[str, DomainSettingUpdate],
+    ) -> builtins.list[DomainSetting]:
+        """Apply one domain's setting changes in a single database transaction."""
+        if not self.domain:
+            raise HTTPException(status_code=400, detail="Setting domain is required")
+        if not payloads:
+            return []
+
+        keys = list(payloads)
+        existing_rows = (
+            db.query(DomainSetting)
+            .filter(DomainSetting.domain == self.domain)
+            .filter(DomainSetting.key.in_(keys))
+            .all()
+        )
+        existing_by_key = {row.key: row for row in existing_rows}
+        changed: builtins.list[DomainSetting] = []
+
+        try:
+            for key, raw_payload in payloads.items():
+                existing = existing_by_key.get(key)
+                payload = self._prepare_update_payload(
+                    db,
+                    key,
+                    raw_payload,
+                    existing_is_secret=bool(existing and existing.is_secret),
+                )
+                if existing:
+                    data = payload.model_dump(exclude_unset=True)
+                    data.pop("domain", None)
+                    data.pop("key", None)
+                    for field, value in data.items():
+                        setattr(existing, field, value)
+                    changed.append(existing)
+                    continue
+
+                create_payload = self._prepare_create_payload(
+                    db,
+                    key,
+                    DomainSettingCreate(
+                        domain=self.domain,
+                        key=key,
+                        value_type=payload.value_type or SettingValueType.string,
+                        value_text=payload.value_text,
+                        value_json=payload.value_json,
+                        is_secret=payload.is_secret or False,
+                        is_active=(
+                            True if payload.is_active is None else payload.is_active
+                        ),
+                    ),
+                )
+                row = DomainSetting(**create_payload.model_dump())
+                db.add(row)
+                changed.append(row)
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+
+        for key in keys:
+            SettingsCache.invalidate(self.domain.value, key)
+        return changed
+
+    def stage_by_key(
+        self,
+        db: Session,
+        key: str,
+        payload: DomainSettingUpdate,
+    ) -> DomainSetting:
+        """Stage an upsert in the caller's transaction without committing it."""
+        if not self.domain:
+            raise HTTPException(status_code=400, detail="Setting domain is required")
+        existing = self.find_by_key(db, key, include_inactive=True)
+        prepared = self._prepare_update_payload(
+            db,
+            key,
+            payload,
+            existing_is_secret=bool(existing and existing.is_secret),
+        )
+        if existing:
+            data = prepared.model_dump(exclude_unset=True)
+            data.pop("domain", None)
+            data.pop("key", None)
+            for field, value in data.items():
+                setattr(existing, field, value)
+            return existing
+
+        create_payload = self._prepare_create_payload(
+            db,
+            key,
+            DomainSettingCreate(
+                domain=self.domain,
+                key=key,
+                value_type=prepared.value_type or SettingValueType.string,
+                value_text=prepared.value_text,
+                value_json=prepared.value_json,
+                is_secret=prepared.is_secret or False,
+                is_active=True if prepared.is_active is None else prepared.is_active,
+            ),
+        )
+        row = DomainSetting(**create_payload.model_dump())
+        db.add(row)
+        return row
 
     def upsert_by_key(self, db: Session, key: str, payload: DomainSettingUpdate):
         if not self.domain:
@@ -290,7 +430,7 @@ class DomainSettings(ListResponseMixin):
             raise
 
     def delete(self, db: Session, setting_id: str):
-        setting = db.get(DomainSetting, setting_id)
+        setting = db.get(DomainSetting, coerce_uuid(setting_id))
         if not setting or (self.domain and setting.domain != self.domain):
             raise HTTPException(status_code=404, detail="Setting not found")
         setting.is_active = False
@@ -328,3 +468,42 @@ gis_settings = DomainSettings(SettingDomain.gis)
 scheduler_settings = DomainSettings(SettingDomain.scheduler)
 modules_settings = DomainSettings(SettingDomain.modules)
 integration_settings = DomainSettings(SettingDomain.integration)
+workflow_settings = DomainSettings(SettingDomain.workflow)
+modules_settings = DomainSettings(SettingDomain.modules)
+field_settings = DomainSettings(SettingDomain.field)
+
+DOMAIN_SETTINGS_SERVICE: dict[SettingDomain, DomainSettings] = {
+    service.domain: service
+    for service in (
+        auth_settings,
+        audit_settings,
+        billing_settings,
+        catalog_settings,
+        subscriber_settings,
+        imports_settings,
+        network_settings,
+        network_monitoring_settings,
+        provisioning_settings,
+        geocoding_settings,
+        vas_settings,
+        usage_settings,
+        radius_settings,
+        notification_settings,
+        collections_settings,
+        lifecycle_settings,
+        workflow_settings,
+        projects_settings,
+        modules_settings,
+        inventory_settings,
+        comms_settings,
+        tr069_settings,
+        snmp_settings,
+        bandwidth_settings,
+        subscription_engine_settings,
+        gis_settings,
+        scheduler_settings,
+        field_settings,
+        integration_settings,
+    )
+    if service.domain is not None
+}

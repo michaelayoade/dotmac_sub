@@ -13,7 +13,6 @@ Configuration via environment variables or DomainSettings:
 """
 
 import logging
-import os
 import re
 from datetime import UTC, datetime
 from typing import Any
@@ -21,7 +20,7 @@ from typing import Any
 import httpx
 from sqlalchemy.orm import Session
 
-from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.domain_settings import SettingDomain
 from app.models.notification import (
     DeliveryStatus,
     NotificationChannel,
@@ -32,6 +31,8 @@ from app.models.notification import (
 from app.services.customer_identity_normalization import normalize_phone_identifier
 from app.services.notification import notifications as notification_records
 from app.services.notification_template_renderer import render_template_text
+from app.services.secrets import resolve_secret
+from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
 
@@ -41,22 +42,16 @@ _UNRESOLVED_TEMPLATE_RE = re.compile(r"\{\{?\s*[a-zA-Z0-9_]+\s*\}?\}")
 def _get_setting(
     db: Session, key: str, env_key: str | None = None, default: str | None = None
 ) -> str | None:
-    """Get setting from environment or database."""
-    if env_key:
-        env_value = os.getenv(env_key)
-        if env_value:
-            return env_value
-
-    setting = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.notification)
-        .filter(DomainSetting.key == key)
-        .filter(DomainSetting.is_active.is_(True))
-        .first()
-    )
-    if setting and setting.value_text:
-        return setting.value_text
-    return default
+    """Resolve SMS configuration through the notification settings registry."""
+    value = resolve_value(db, SettingDomain.notification, key)
+    if value is None:
+        return default
+    resolved = resolve_secret(str(value)) if key in {
+        "sms_api_key",
+        "sms_api_secret",
+        "sms_webhook_url",
+    } else str(value)
+    return resolved or default
 
 
 def _normalize_phone(phone: str) -> str:

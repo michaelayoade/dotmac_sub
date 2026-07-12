@@ -36,7 +36,7 @@ from enum import Enum
 
 from sqlalchemy.orm import Session
 
-from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.domain_settings import SettingDomain
 from app.services import module_manager
 
 logger = logging.getLogger(__name__)
@@ -700,18 +700,9 @@ def all_controls() -> Iterable[Control]:
 
 
 def _db_value(db: Session, domain: SettingDomain, key: str) -> object | None:
-    # query(...).filter(...).filter(...).filter(...).first() — the shape the
-    # scheduler tests mock; returns None for "no row".
-    setting = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == domain)
-        .filter(DomainSetting.key == key)
-        .filter(DomainSetting.is_active.is_(True))
-        .first()
-    )
-    if setting is None:
-        return None
-    return setting.value_json if setting.value_json is not None else setting.value_text
+    from app.services.settings_spec import read_stored_value
+
+    return read_stored_value(db, domain, key)
 
 
 def _resolve_own_flag(db: Session, control: Control) -> bool:

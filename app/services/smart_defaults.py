@@ -6,9 +6,9 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.domain_settings import SettingDomain
+from app.services import settings_spec
 from app.services.billing_settings import resolve_payment_due_days
-from app.services.settings_cache import SettingsCache
 
 logger = logging.getLogger(__name__)
 
@@ -23,36 +23,12 @@ class SmartDefaultsService:
         self.db = db
 
     def _get_setting(self, domain: SettingDomain, key: str, default: Any = None) -> Any:
-        """Get a setting value with Redis caching for thread safety."""
-        # Check Redis cache first
-        cached = SettingsCache.get(domain.value, key)
-        if cached is not None:
-            return cached
-
-        # Query database
-        setting = (
-            self.db.query(DomainSetting)
-            .filter(
-                DomainSetting.domain == domain,
-                DomainSetting.key == key,
-                DomainSetting.is_active.is_(True),
-            )
-            .first()
-        )
-
-        if setting:
-            value = (
-                setting.value_json
-                if setting.value_json is not None
-                else setting.value_text
-            )
-            SettingsCache.set(domain.value, key, value)
-            return value
-
-        # Cache the default value to avoid repeated DB queries
-        if default is not None:
-            SettingsCache.set(domain.value, key, default)
-        return default
+        """Get a setting value through the shared settings resolver."""
+        if settings_spec.get_spec(domain, key) is not None:
+            value = settings_spec.resolve_value(self.db, domain, key)
+        else:
+            value = settings_spec.read_stored_value(self.db, domain, key)
+        return default if value is None else value
 
     def get_invoice_defaults(self, subscriber: object | None = None) -> dict[str, Any]:
         """

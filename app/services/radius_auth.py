@@ -8,27 +8,26 @@ from pyrad.dictionary import Dictionary
 from pyrad.packet import AccessRequest
 from sqlalchemy.orm import Session
 
-from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.domain_settings import SettingDomain
 from app.models.radius import RadiusServer
+from app.services.secrets import resolve_secret
+from app.services.settings_spec import get_spec, read_stored_value, resolve_value
 
 logger = logging.getLogger(__name__)
 
 
 def _setting_value(db: Session, key: str) -> str | None:
-    setting = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.radius)
-        .filter(DomainSetting.key == key)
-        .filter(DomainSetting.is_active.is_(True))
-        .first()
+    spec = get_spec(SettingDomain.radius, key)
+    value = (
+        resolve_value(db, SettingDomain.radius, key)
+        if spec
+        else read_stored_value(db, SettingDomain.radius, key)
     )
-    if not setting:
+    if value is None:
         return None
-    if setting.value_text is not None:
-        return setting.value_text
-    if setting.value_json is not None:
-        return str(setting.value_json)
-    return None
+    if spec and spec.is_secret:
+        return resolve_secret(str(value))
+    return str(value)
 
 
 def _pick_radius_server(db: Session, server_id: str | None) -> RadiusServer:

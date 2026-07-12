@@ -22,7 +22,7 @@ from app.models.billing import (
     PaymentStatus,
     TopupIntent,
 )
-from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.domain_settings import SettingDomain
 from app.models.idempotency import IdempotencyKey
 from app.models.subscriber import Subscriber
 from app.services import billing as billing_service
@@ -42,7 +42,7 @@ from app.services.customer_portal_context import (
     get_invoice_billing_contact,
 )
 from app.services.payment_gateway_adapter import payment_gateway_adapter
-from app.services.settings_spec import resolve_value
+from app.services.settings_spec import resolve_value, resolve_values_atomic
 from app.services.topup_intents import set_topup_intent_status
 
 logger = logging.getLogger(__name__)
@@ -171,15 +171,8 @@ def direct_bank_transfer_settings(db: Session) -> dict[str, str]:
         "direct_bank_transfer_instructions",
         "direct_bank_transfer_accounts",
     ]
-    settings = dict.fromkeys(keys, "")
-    rows = db.scalars(
-        select(DomainSetting)
-        .where(DomainSetting.domain == SettingDomain.billing)
-        .where(DomainSetting.key.in_(keys))
-        .where(DomainSetting.is_active.is_(True))
-    ).all()
-    for row in rows:
-        settings[row.key] = str(row.value_text or "").strip()
+    values = resolve_values_atomic(db, SettingDomain.billing, keys)
+    settings = {key: str(values.get(key) or "").strip() for key in keys}
     settings["direct_bank_transfer_accounts_list"] = direct_bank_transfer_accounts(
         settings
     )

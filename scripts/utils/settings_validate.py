@@ -44,7 +44,9 @@ def main():
             if db_error:
                 errors.append(f"{spec.domain.value}.{spec.key}: db {db_error}")
                 continue
-            effective = env_value if env_raw is not None else db_value
+            # Runtime rows are authoritative. Environment values bootstrap
+            # settings only when no active database row exists.
+            effective = db_value if db_raw is not None else env_value
             if effective is None:
                 effective = spec.default
             if spec.required and effective is None:
