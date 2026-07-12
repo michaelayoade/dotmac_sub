@@ -75,6 +75,7 @@ from app.web.admin.network_tr069_presets import router as network_tr069_presets_
 from app.web.admin.network_tr069_provisions import (
     router as network_tr069_provisions_router,
 )
+from app.web.admin.network_uisp_control import router as network_uisp_control_router
 from app.web.admin.network_vendor_capabilities import (
     router as network_vendor_capabilities_router,
 )
@@ -277,6 +278,10 @@ router.include_router(
 )
 router.include_router(
     network_cpes_router,
+    dependencies=[Depends(module_manager_service.require_module_enabled("network"))],
+)
+router.include_router(
+    network_uisp_control_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("network"))],
 )
 router.include_router(

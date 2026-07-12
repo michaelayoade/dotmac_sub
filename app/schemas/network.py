@@ -37,6 +37,7 @@ class CPEDeviceBase(BaseModel):
         serialization_alias="account_id",
         description="Optional caller-supplied owner reference; not required for standalone OLT/ONT operation.",
     )
+    subscription_id: UUID | None = None
     service_address_id: UUID | None = None
     device_type: DeviceType = DeviceType.router
     status: DeviceStatus = DeviceStatus.active
@@ -58,6 +59,7 @@ class CPEDeviceUpdate(BaseModel):
     subscriber_id: UUID | None = Field(
         default=None, validation_alias="account_id", serialization_alias="account_id"
     )
+    subscription_id: UUID | None = None
     service_address_id: UUID | None = None
     device_type: DeviceType | None = None
     status: DeviceStatus | None = None

@@ -316,48 +316,55 @@ def _unique_ips(devices: list[dict]) -> set[str]:
     return {ip for ip, n in counts.items() if n == 1 and ip not in _SHARED_DEFAULT_IPS}
 
 
-def _active_subscriber_macs(session: Session) -> dict[str, set]:
-    """Normalized MAC -> distinct subscriber ids over ACTIVE subscriptions only.
+def _active_subscriber_macs(session: Session) -> dict[str, set[tuple[UUID, UUID]]]:
+    """Normalized MAC -> exact active (subscriber, subscription) services.
 
     The subscriptions table carries historical duplicate rows; scoping to
-    status='active' and collapsing to distinct subscribers means a MAC that
-    still maps to >1 subscriber is genuinely ambiguous and must stay unlinked.
+    status='active' prevents historical matches. Any MAC mapped to more than one
+    service remains ambiguous, including two services on the same customer.
     """
-    index: dict[str, set] = {}
+    index: dict[str, set[tuple[UUID, UUID]]] = {}
     rows = (
-        session.query(Subscription.mac_address, Subscription.subscriber_id)
+        session.query(
+            Subscription.mac_address,
+            Subscription.subscriber_id,
+            Subscription.id,
+        )
         .filter(
             Subscription.status == SubscriptionStatus.active,
             Subscription.mac_address.isnot(None),
         )
         .all()
     )
-    for mac, subscriber_id in rows:
+    for mac, subscriber_id, subscription_id in rows:
         normalized = _norm_mac(mac)
         if normalized:
-            index.setdefault(normalized, set()).add(subscriber_id)
+            index.setdefault(normalized, set()).add((subscriber_id, subscription_id))
     return index
 
 
-def _active_subscriber_ips(session: Session) -> dict[str, tuple[UUID, list[str]]]:
-    """Unique ``ipv4_address`` -> (subscriber id, name labels) over ACTIVE subs.
+def _active_subscriber_ips(
+    session: Session,
+) -> dict[str, tuple[UUID, UUID, list[str]]]:
+    """Unique IPv4 -> (subscriber, subscription, labels) over active services.
 
     The secondary IP+name arm keys on the DESIRED served IPv4
     (``Subscription.ipv4_address``), scoped to ACTIVE subscriptions. Because a
     stale radio mgmt IP can collide with a *different* live customer, an IP is
-    only usable when it maps to EXACTLY ONE distinct active subscriber: IPs
-    shared across >1 subscriber are dropped here (never surfaced to the caller),
+    only usable when it maps to EXACTLY ONE active subscription: shared IPs
+    are dropped here (never surfaced to the caller),
     as are the factory-default shared addresses. Each retained entry also
     carries the subscriber's name labels (display name, first+last, company) so
     the caller can score name corroboration against a single candidate without
     a second query.
     """
-    seen: dict[str, set[UUID]] = {}
+    seen: dict[str, set[tuple[UUID, UUID]]] = {}
     labels: dict[str, list[str]] = {}
     rows = (
         session.query(
             Subscription.ipv4_address,
             Subscription.subscriber_id,
+            Subscription.id,
             Subscriber.display_name,
             Subscriber.first_name,
             Subscriber.last_name,
@@ -370,20 +377,20 @@ def _active_subscriber_ips(session: Session) -> dict[str, tuple[UUID, list[str]]
         )
         .all()
     )
-    for ipv4, subscriber_id, display, first, last, company in rows:
+    for ipv4, subscriber_id, subscription_id, display, first, last, company in rows:
         ip = str(ipv4 or "").split("/", 1)[0].strip()
         if not ip or ip in _SHARED_DEFAULT_IPS:
             continue
-        seen.setdefault(ip, set()).add(subscriber_id)
+        seen.setdefault(ip, set()).add((subscriber_id, subscription_id))
         labels[ip] = [
             label
             for label in (display, f"{first or ''} {last or ''}", company)
             if _norm_name(label)
         ]
     return {
-        ip: (next(iter(subs)), labels[ip])
-        for ip, subs in seen.items()
-        if len(subs) == 1
+        ip: (*next(iter(services)), labels[ip])
+        for ip, services in seen.items()
+        if len(services) == 1
     }
 
 
@@ -471,11 +478,14 @@ def _blank_stats() -> Counter:
             "ports_created": 0,
             "onu_ports_set": 0,
             "onu_ports_moved": 0,
+            "onu_olts_moved": 0,
             "onu_ports_unchanged": 0,
             "port_fetch_failures": 0,
             "links_created": 0,
             "links_updated": 0,
             "links_pruned": 0,
+            "prune_guarded": 0,
+            "link_prune_guarded": 0,
             "links_skipped": 0,
             "link_fetch_failures": 0,
         }
@@ -595,9 +605,9 @@ def _adoption_candidates(session: Session, mac: str | None) -> list[CPEDevice]:
 
 
 def _match_by_ip_name(
-    station: dict, ip_index: dict[str, tuple[UUID, list[str]]]
-) -> tuple[UUID, str, float] | None:
-    """Corroborated bridge-mode match: (subscriber id, ip, score) or None.
+    station: dict, ip_index: dict[str, tuple[UUID, UUID, list[str]]]
+) -> tuple[UUID, UUID, str, float] | None:
+    """Corroborated bridge match: subscriber, subscription, IP, score.
 
     The station's UISP mgmt IP must UNIQUELY equal one ACTIVE subscription's
     ``ipv4_address`` (``ip_index`` already holds only unique, non-default IPs),
@@ -612,18 +622,18 @@ def _match_by_ip_name(
     entry = ip_index.get(ip)
     if entry is None:
         return None
-    subscriber_id, labels = entry
+    subscriber_id, subscription_id, labels = entry
     score = _name_similarity(_device_name(station), labels)
     if score < _IP_NAME_SIM_THRESHOLD:
         return None
-    return subscriber_id, ip, score
+    return subscriber_id, subscription_id, ip, score
 
 
 def _upsert_station(
     session: Session,
     station: dict,
-    mac_index: dict[str, set],
-    ip_index: dict[str, tuple[UUID, list[str]]],
+    mac_index: dict[str, set[tuple[UUID, UUID]]],
+    ip_index: dict[str, tuple[UUID, UUID, list[str]]],
     now: datetime,
     stats: Counter,
 ) -> tuple[CPEDevice | None, bool]:
@@ -643,8 +653,8 @@ def _upsert_station(
        (``ambiguous``), because inventing a third row would compound the
        duplication.
     2. MATCH-THEN-CREATE by MAC (unchanged): a new station's own MAC is
-       resolved against ACTIVE subscriptions (exact match, exactly one distinct
-       subscriber). An ambiguous MAC (>1 subscriber) creates nothing.
+       resolved against ACTIVE subscriptions (exactly one service). An
+       ambiguous MAC creates nothing, even within one multi-service customer.
     3. SECONDARY: corroborated IP+name (bridge-mode radios). Reached ONLY when
        the MAC arm found no subscriber — bridge-mode stations authenticate with
        the *customer router's* MAC (held in ``subscription.mac_address``), so
@@ -661,6 +671,7 @@ def _upsert_station(
     never touched.
     """
     uisp_id = _device_id(station)
+    mac = _norm_mac(_ident(station).get("mac"))
     cpe = (
         session.query(CPEDevice)
         .filter(CPEDevice.uisp_device_id == uisp_id)
@@ -670,7 +681,6 @@ def _upsert_station(
     adopted = False
     changed = False
     if cpe is None:
-        mac = _norm_mac(_ident(station).get("mac"))
         candidates = _adoption_candidates(session, mac)
         if len(candidates) > 1:
             logger.warning(
@@ -688,15 +698,17 @@ def _upsert_station(
             changed = True
             stats["adopted"] += 1
     if cpe is None:
-        subscribers = mac_index.get(mac or "", set())
-        if len(subscribers) > 1:
+        services = mac_index.get(mac or "", set())
+        if len(services) > 1:
             stats["ambiguous"] += 1
             return None, False
-        if len(subscribers) == 1:
+        if len(services) == 1:
+            subscriber_id, subscription_id = next(iter(services))
             created = True
             cpe = CPEDevice(
                 uisp_device_id=uisp_id,
-                subscriber_id=next(iter(subscribers)),
+                subscriber_id=subscriber_id,
+                subscription_id=subscription_id,
                 device_type=DeviceType.wireless_radio,
                 vendor="ubiquiti",
             )
@@ -710,17 +722,26 @@ def _upsert_station(
         if ip_match is None:
             stats["unmatched_no_subscriber"] += 1
             return None, False
-        subscriber_id, ip, score = ip_match
+        subscriber_id, subscription_id, ip, score = ip_match
         created = True
         cpe = CPEDevice(
             uisp_device_id=uisp_id,
             subscriber_id=subscriber_id,
+            subscription_id=subscription_id,
             device_type=DeviceType.wireless_radio,
             vendor="ubiquiti",
             notes=f"linked via UISP ip+name {ip} sim={score:.2f}",
         )
         session.add(cpe)
         stats["matched_by_ip_name"] += 1
+
+    if cpe.subscription_id is None:
+        services = mac_index.get(mac or _norm_mac(cpe.mac_address) or "", set())
+        if len(services) == 1:
+            subscriber_id, subscription_id = next(iter(services))
+            if subscriber_id == cpe.subscriber_id:
+                cpe.subscription_id = subscription_id
+                changed = True
 
     ident = _ident(station)
     changed |= _fill(cpe, "mac_address", ident.get("mac"))
@@ -855,6 +876,26 @@ def _upsert_onu(
     seen_onu_keys.add(key)
 
     ont = session.query(OntUnit).filter(OntUnit.uisp_device_id == uisp_id).one_or_none()
+    if ont is not None:
+        current_olt = (
+            session.get(OLTDevice, ont.olt_device_id)
+            if ont.olt_device_id is not None
+            else None
+        )
+        uisp_owned = str(ont.vendor or "").strip().lower() == "ubiquiti" or (
+            current_olt is not None
+            and current_olt.uisp_device_id is not None
+            and str(current_olt.vendor or "").strip().lower() == "ubiquiti"
+        )
+        if not uisp_owned:
+            logger.warning(
+                "uisp_sync_onu_foreign_owner_skipped uisp_id=%s ont=%s olt=%s",
+                uisp_id,
+                ont.id,
+                ont.olt_device_id,
+            )
+            stats["skipped"] += 1
+            return None
     if ont is None:
         ont = (
             session.query(OntUnit)
@@ -871,6 +912,35 @@ def _upsert_onu(
         session.add(ont)
     elif ont.olt_device_id is None:
         ont.olt_device_id = olt_id
+        changed = True
+    elif ont.olt_device_id != olt_id:
+        collision = (
+            session.query(OntUnit.id)
+            .filter(
+                OntUnit.olt_device_id == olt_id,
+                OntUnit.serial_number == serial,
+                OntUnit.id != ont.id,
+            )
+            .first()
+        )
+        if collision is not None:
+            stats["skipped"] += 1
+            return None
+        logger.info(
+            "uisp_sync_onu_olt_moved uisp_id=%s old_olt=%s new_olt=%s",
+            uisp_id,
+            ont.olt_device_id,
+            olt_id,
+            extra={
+                "event": "uisp_sync_onu_olt_moved",
+                "uisp_device_id": uisp_id,
+                "old_olt_id": str(ont.olt_device_id),
+                "new_olt_id": str(olt_id),
+            },
+        )
+        ont.olt_device_id = olt_id
+        ont.pon_port_id = None
+        stats["onu_olts_moved"] += 1
         changed = True
 
     changed |= _fill(ont, "name", ident.get("name"))
@@ -1102,6 +1172,22 @@ def _import_data_links(session: Session, client, now: datetime, stats: Counter) 
         logger.warning("uisp_data_links_fetch_failed: %s", exc)
         return
 
+    existing_active_links = (
+        session.query(NetworkTopologyLink)
+        .filter(
+            NetworkTopologyLink.source == _DATA_LINK_SOURCE,
+            NetworkTopologyLink.is_active.is_(True),
+        )
+        .count()
+    )
+    if not links and existing_active_links:
+        stats["link_prune_guarded"] += existing_active_links
+        logger.warning(
+            "uisp_data_links_empty_prune_guard active_links=%s",
+            existing_active_links,
+        )
+        return
+
     edges: dict[tuple[UUID, UUID], TopologyLinkMedium] = {}
     for link in links:
         if not isinstance(link, dict):
@@ -1324,15 +1410,35 @@ def sync(session: Session, client, now: datetime | None = None) -> dict:
         )
         .all()
     )
-    for cpe in stale:
-        if cpe.uisp_device_id not in seen_cpe_uisp_ids:
-            cpe.last_uisp_status = "vanished"
-            cpe.uisp_synced_at = now
-            stats["pruned"] += 1
+    if not stations and stale:
+        stats["prune_guarded"] += len(stale)
+        logger.warning("uisp_station_inventory_empty_prune_guard rows=%s", len(stale))
+    else:
+        for cpe in stale:
+            if cpe.uisp_device_id not in seen_cpe_uisp_ids:
+                if cpe.last_uisp_status == "missing":
+                    cpe.last_uisp_status = "vanished"
+                    stats["pruned"] += 1
+                else:
+                    cpe.last_uisp_status = "missing"
+                cpe.uisp_synced_at = now
     session.flush()
 
     # --- Backhaul topology: UISP data-links -> NetworkTopologyLink ---
     _import_data_links(session, client, now, stats)
+
+    # Reuse this exact inventory read for desired/observed convergence. The
+    # savepoint keeps an intent persistence failure from rolling back topology.
+    try:
+        from app.services.uisp_control_plane import reconcile_inventory
+
+        with session.begin_nested():
+            intent_result = reconcile_inventory(session, devices, now=now, commit=False)
+        for key, value in intent_result.items():
+            stats[f"intents_{key}"] += value
+    except Exception:
+        stats["intent_reconcile_failed"] += 1
+        logger.exception("uisp_intent_reconcile_failed")
 
     result = dict(stats)
     log_extra = {"event": "uisp_topology_sync_complete"}

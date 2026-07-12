@@ -732,6 +732,13 @@ from app.models.usage import (  # noqa: F401
     UsageRecord,
     UsageSource,
 )
+from app.models.uisp_control import (  # noqa: F401
+    UispConfigSnapshot,
+    UispDeviceIntent,
+    UispIntentStatus,
+    UispIntentTargetType,
+    UispSnapshotSource,
+)
 from app.models.vas import (  # noqa: F401
     VasEntryCategory,
     VasEntryType,

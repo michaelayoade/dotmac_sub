@@ -1,0 +1,34 @@
+{% extends "layouts/admin.html" %}
+{% block title %}UISP Intent - Admin{% endblock %}
+{% block content %}
+<div class="space-y-6">
+    <header>
+        <a href="/admin/network/uisp-control" class="text-sm font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400">UISP Control</a>
+        <div class="mt-2 flex flex-wrap items-center justify-between gap-3">
+            <div><h1 class="text-2xl font-semibold text-slate-900 dark:text-white">{{ intent.target_type.value | upper }} {{ intent.uisp_device_id or intent.target_id }}</h1><p class="mt-1 text-sm text-slate-500">Revision {{ intent.desired_revision }} · {{ intent.status.value | replace('_', ' ') | title }}</p></div>
+            {% if intent.status.value != 'verified' %}<form method="post" action="/admin/network/uisp-control/{{ intent.id }}/apply">{% include "components/forms/csrf_input.html" %}<button class="bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 dark:bg-white dark:text-slate-900">Record apply request</button></form>{% endif %}
+        </div>
+    </header>
+    {% if request.query_params.get('notice') %}<div class="border-l-4 border-amber-500 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:bg-amber-900/20 dark:text-amber-200">No supported UISP write adapter is configured. Operator action and a later inventory read are required.</div>{% endif %}
+    <section class="grid gap-6 lg:grid-cols-2">
+        <div><h2 class="mb-2 text-sm font-semibold uppercase text-slate-500">Desired</h2><pre class="min-h-48 overflow-auto border border-slate-200 bg-white p-4 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">{{ desired_redacted | tojson(indent=2) }}</pre></div>
+        <div><h2 class="mb-2 text-sm font-semibold uppercase text-slate-500">Observed</h2><pre class="min-h-48 overflow-auto border border-slate-200 bg-white p-4 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">{{ (intent.observed_config or {}) | tojson(indent=2) }}</pre></div>
+    </section>
+    <section class="border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+        <h2 class="text-sm font-semibold uppercase text-slate-500">Edit desired state</h2>
+        <form method="post" action="/admin/network/uisp-control/{{ intent.id }}/desired" class="mt-4 grid gap-4 md:grid-cols-3">
+            {% include "components/forms/csrf_input.html" %}
+            <label class="text-sm text-slate-600 dark:text-slate-300">Name<input name="name" value="{{ intent.desired_config.get('name', '') }}" class="mt-1 w-full border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-900"></label>
+            <label class="text-sm text-slate-600 dark:text-slate-300">Management IP<input name="management_ip" value="{{ intent.desired_config.get('management_ip', '') }}" class="mt-1 w-full border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-900"></label>
+            <label class="text-sm text-slate-600 dark:text-slate-300">Target firmware<input name="firmware_version" value="{{ intent.desired_config.get('firmware_version', '') }}" class="mt-1 w-full border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-900"></label>
+            <label class="text-sm text-slate-600 dark:text-slate-300">WiFi name<input name="wifi_ssid" maxlength="32" value="{{ intent.desired_config.get('wifi', {}).get('ssid', '') }}" class="mt-1 w-full border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-900"></label>
+            <label class="text-sm text-slate-600 dark:text-slate-300">New WiFi password<input name="wifi_password" type="password" minlength="8" maxlength="63" autocomplete="new-password" class="mt-1 w-full border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-900"></label>
+            <label class="text-sm text-slate-600 dark:text-slate-300">Lifecycle<select name="lifecycle_state" class="mt-1 w-full border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-900">{% for state in ['active', 'suspended', 'decommissioned'] %}<option value="{{ state }}" {% if intent.desired_config.get('lifecycle', {}).get('state', 'active') == state %}selected{% endif %}>{{ state | title }}</option>{% endfor %}</select></label>
+            <label class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300"><input type="checkbox" name="remote_access_enabled" value="true" {% if intent.desired_config.get('remote_access', {}).get('enabled') %}checked{% endif %}>Remote access desired</label>
+            <div class="md:col-span-2 md:text-right"><button class="bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">Stage revision</button></div>
+        </form>
+    </section>
+    <section><h2 class="mb-2 text-sm font-semibold uppercase text-slate-500">Drift</h2><pre class="overflow-auto border border-slate-200 bg-white p-4 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">{{ (intent.drift or {}) | tojson(indent=2) }}</pre></section>
+    <section class="border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800"><div class="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900 dark:border-slate-700 dark:text-white">Snapshots</div><div class="divide-y divide-slate-100 dark:divide-slate-700">{% for snapshot in intent.snapshots | sort(attribute='created_at', reverse=true) %}<div class="flex flex-wrap justify-between gap-2 px-4 py-3 text-sm"><span class="font-medium text-slate-800 dark:text-slate-200">{{ snapshot.source.value | title }}{% if snapshot.revision %} revision {{ snapshot.revision }}{% endif %}</span><time class="text-slate-500">{{ snapshot.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</time></div>{% else %}<p class="px-4 py-6 text-sm text-slate-500">No snapshots.</p>{% endfor %}</div></section>
+</div>
+{% endblock %}
