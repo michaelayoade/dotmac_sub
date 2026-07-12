@@ -383,25 +383,23 @@ def update_invoice_allocation_if_changed(
     current_invoice_id: str | None,
     requested_invoice_id: str | None,
 ) -> bool:
-    """Replace allocations when requested invoice differs from current."""
+    """Ask the payment owner to move this payment to a different invoice.
+
+    This used to hard-delete the allocations and write a new one for the full
+    payment amount, with no ledger entry, no cap against the target's balance,
+    and no recalculation of either invoice — so the released invoice kept
+    reading ``paid`` with no money behind it while the ledger still credited it.
+    Allocation, ledger credit and both invoices' totals must move together, and
+    only ``Payments.reallocate`` does that.
+    """
     invoice_changed = bool(
         requested_invoice_id and requested_invoice_id != current_invoice_id
     )
     if not invoice_changed:
         return False
-    for alloc in list(payment_obj.allocations):
-        db.delete(alloc)
-    db.flush()
-    from app.models.billing import PaymentAllocation
-
-    db.add(
-        PaymentAllocation(
-            payment_id=payment_obj.id,
-            invoice_id=UUID(requested_invoice_id),
-            amount=payment_obj.amount,
-        )
+    billing_service.payments.reallocate(
+        db, str(payment_obj.id), str(requested_invoice_id)
     )
-    db.commit()
     db.refresh(payment_obj)
     return True
 

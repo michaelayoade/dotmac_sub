@@ -68,6 +68,16 @@ class AuditEvents(ListResponseMixin):
         return pending_event
 
     @staticmethod
+    def stage(db: Session, payload: AuditEventCreate) -> AuditEvent:
+        """Stage an audit row in the caller's current transaction."""
+        data = payload.model_dump()
+        if payload.occurred_at is None:
+            data.pop("occurred_at", None)
+        event = AuditEvent(**data)
+        db.add(event)
+        return event
+
+    @staticmethod
     def get(db: Session, event_id: str):
         event = db.get(AuditEvent, event_id)
         if not event:

@@ -64,6 +64,24 @@ def test_audit_record_is_discarded_on_rollback(db_session):
     assert db_session.query(AuditEvent).count() == 0
 
 
+def test_audit_stage_is_atomic_with_caller_transaction(db_session):
+    event = audit_service.audit_events.stage(
+        db_session,
+        AuditEventCreate(
+            actor_type=AuditActorType.system,
+            action="credential_cleanup",
+            entity_type="NasDevice",
+            entity_id=str(uuid.uuid4()),
+        ),
+    )
+
+    db_session.flush()
+    assert db_session.get(AuditEvent, event.id) is event
+
+    db_session.rollback()
+    assert db_session.get(AuditEvent, event.id) is None
+
+
 def test_audit_record_in_nested_transaction_waits_for_outer_commit(db_session):
     subscriber = Subscriber(
         first_name="Audit",

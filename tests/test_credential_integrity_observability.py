@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 import pytest
 from cryptography.fernet import Fernet
+from sqlalchemy import event
 
 from app.models.catalog import AccessCredential, NasDevice
 from app.models.subscriber import Subscriber
@@ -91,6 +92,63 @@ def test_integrity_scan_reads_ont_credentials_through_network_owner(
 
     scope = "OntUnit.desired_config.wifi.password"
     assert result.counts[scope]["plaintext"] == 1
+
+
+def test_integrity_scan_selects_only_owned_credential_columns(db_session, monkeypatch):
+    key = Fernet.generate_key()
+    monkeypatch.setattr(key_rotation, "get_encryption_key", lambda: key)
+    monkeypatch.setattr(key_rotation, "get_previous_encryption_key", lambda: None)
+    statements: list[str] = []
+
+    def capture(_conn, _cursor, statement, _parameters, _context, _executemany):
+        statements.append(statement)
+
+    bind = db_session.get_bind()
+    event.listen(bind, "before_cursor_execute", capture)
+    try:
+        key_rotation.scan_credential_encryption_integrity(db_session)
+    finally:
+        event.remove(bind, "before_cursor_execute", capture)
+
+    access_query = next(
+        statement for statement in statements if "FROM access_credentials" in statement
+    )
+    assert "secret_hash" in access_query
+    assert "subscription_id" not in access_query
+
+
+def test_rotation_loads_only_owned_access_credential_columns(db_session, subscriber):
+    key = Fernet.generate_key()
+    credential = AccessCredential(
+        subscriber_id=subscriber.id,
+        username="schema-tolerant-rotation",
+        secret_hash="plain:secret",
+    )
+    db_session.add(credential)
+    db_session.commit()
+    statements: list[str] = []
+
+    def capture(_conn, _cursor, statement, _parameters, _context, _executemany):
+        statements.append(statement)
+
+    bind = db_session.get_bind()
+    event.listen(bind, "before_cursor_execute", capture)
+    try:
+        key_rotation._rotate_model_fields(
+            db_session,
+            AccessCredential,
+            ("secret_hash",),
+            old_key=key.decode("ascii"),
+            new_key=key.decode("ascii"),
+        )
+    finally:
+        event.remove(bind, "before_cursor_execute", capture)
+
+    access_query = next(
+        statement for statement in statements if "FROM access_credentials" in statement
+    )
+    assert "secret_hash" in access_query
+    assert "subscription_id" not in access_query
 
 
 def test_credential_remediation_dry_run_does_not_mutate(db_session, monkeypatch):
