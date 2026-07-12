@@ -10,6 +10,7 @@ from app.models.uisp_control import UispIntentTargetType
 from app.services.uisp import UispUnsupportedOperationError
 from app.services.uisp_control_plane import redact_config, stage_intent
 from app.services.uisp_write_adapter import (
+    UispPostWriteReadbackError,
     UispConfigurationWriteAdapter,
     UispWriteUnsupported,
 )
@@ -224,3 +225,40 @@ def test_unmapped_desired_field_refuses_entire_write(
         UispConfigurationWriteAdapter(client).apply(db_session, intent)
 
     assert client.put_payloads == []
+
+
+def test_non_client_readback_failure_after_an_accepted_write_is_recoverable(
+    db_session, subscriber, catalog_offer
+):
+    """A write that has already hit the device must never be recorded as a plain
+    failure, whatever the readback blows up with.
+
+    The post-write guard used to catch only UispClientError. An unexpected device
+    payload raising KeyError/TypeError inside the comparison escaped untranslated,
+    reached the task's generic handler with ``result`` still None, and was recorded
+    as `failed` -- a status the reconciler does not sweep. The device would then sit
+    silently diverged from its desired_state with nothing left to notice.
+    """
+    intent = _intent(
+        db_session,
+        subscriber,
+        catalog_offer,
+        {"name": "customer-radio"},
+    )
+
+    class ExplodingReadbackClient(FakeClient):
+        def get_device_configuration(self, *args, **kwargs):
+            # Not a UispClientError -- the kind of thing a malformed device
+            # response actually raises.
+            raise KeyError("unexpected payload shape")
+
+    client = ExplodingReadbackClient(_config())
+
+    with pytest.raises(UispPostWriteReadbackError):
+        UispConfigurationWriteAdapter(client, readback_delay_seconds=0).apply(
+            db_session, intent
+        )
+
+    # The write was still issued -- that is precisely why this must be recoverable
+    # rather than terminal.
+    assert client.put_payloads

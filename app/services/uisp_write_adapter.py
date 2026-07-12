@@ -304,7 +304,15 @@ class UispConfigurationWriteAdapter:
                 write_accepted=True,
                 response=response,
             )
-        except UispClientError as exc:
+        except Exception as exc:
+            # The write has already hit the device. Past this point *any*
+            # readback failure is a post-write readback failure -- not just a
+            # UispClientError. An unexpected device payload raising KeyError or
+            # TypeError in the comparison would otherwise escape untranslated,
+            # reach the task's generic handler with ``result`` still None, and
+            # be recorded as a plain `failed` intent. `failed` is not in the
+            # reconciliation filter, so the device would sit silently diverged
+            # from its desired_state with nothing left to notice.
             raise UispPostWriteReadbackError(
                 "UISP accepted the write but device readback failed"
             ) from exc
