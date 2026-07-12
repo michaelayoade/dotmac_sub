@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, TypeVar
 
 from fastapi import HTTPException, status
 from jose import JWTError, jwt
@@ -22,6 +23,18 @@ from app.services import auth_flow as auth_flow_service
 from app.services import team_inbox_realtime
 from app.services.common import coerce_uuid
 from app.websocket.events import EventType
+
+T = TypeVar("T")
+
+
+def _commit(db: Session, action: Callable[[], T]) -> T:
+    try:
+        result = action()
+        db.commit()
+        return result
+    except Exception:
+        db.rollback()
+        raise
 
 
 @dataclass(frozen=True)
@@ -368,6 +381,31 @@ def add_visitor_message(
     return payload
 
 
+def _require_session_match(principal: WidgetPrincipal, session_id: str) -> None:
+    if principal.session_id != session_id:
+        raise HTTPException(status_code=403, detail="Session mismatch")
+
+
+def add_visitor_message_committed(
+    db: Session,
+    *,
+    session_id: str,
+    principal: WidgetPrincipal,
+    body: str,
+    client_message_id: str | None = None,
+) -> dict[str, Any]:
+    _require_session_match(principal, session_id)
+    return _commit(
+        db,
+        lambda: add_visitor_message(
+            db,
+            principal=principal,
+            body=body,
+            client_message_id=client_message_id,
+        ),
+    )
+
+
 def mark_session_read(db: Session, *, principal: WidgetPrincipal) -> dict[str, bool]:
     conversation = db.get(InboxConversation, principal.conversation_id)
     if conversation is None:
@@ -377,3 +415,43 @@ def mark_session_read(db: Session, *, principal: WidgetPrincipal) -> dict[str, b
     conversation.metadata_ = metadata
     db.flush()
     return {"ok": True}
+
+
+def mark_session_read_committed(
+    db: Session,
+    *,
+    session_id: str,
+    principal: WidgetPrincipal,
+) -> dict[str, bool]:
+    _require_session_match(principal, session_id)
+    return _commit(db, lambda: mark_session_read(db, principal=principal))
+
+
+def record_session_satisfaction_committed(
+    db: Session,
+    *,
+    session_id: str,
+    principal: WidgetPrincipal,
+    rating: int,
+    comment: str | None = None,
+) -> dict[str, bool]:
+    from app.services import team_inbox_operations
+
+    _require_session_match(principal, session_id)
+
+    def _record() -> dict[str, bool]:
+        conversation = db.get(InboxConversation, principal.conversation_id)
+        if conversation is None:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        team_inbox_operations.set_satisfaction(
+            db,
+            conversation=conversation,
+            rating=rating,
+            comment=comment,
+            actor=principal.subscriber_id
+            or principal.reseller_id
+            or principal.session_id,
+        )
+        return {"ok": True}
+
+    return _commit(db, _record)

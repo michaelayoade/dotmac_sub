@@ -36,9 +36,13 @@ that obscure business behavior.
 2. Customer financial position owns read-side financial summaries.
 3. Billing/access resolvers own entitlement and service-state decisions.
 4. Dunning owns postpaid enforcement; prepaid enforcement owns prepaid access.
+5. Scheduled billing, collections, and payment-reconciliation services own DB
+   sessions, transaction outcomes, and operational logging for Celery runners.
 
 Rule: no module should infer access from draft invoices, ad hoc balances, or
-legacy import fields when a billing/access resolver exists.
+legacy import fields when a billing/access resolver exists. Celery tasks only
+apply scheduling, routing, idempotency, and feature-gate concerns before calling
+the owning financial service.
 
 ## Customer Context
 
@@ -53,9 +57,12 @@ services instead of rebuilding customer joins.
 ## Notifications and Communications
 
 1. Notification channel policy owns channel eligibility and preferences.
-2. Notification service owns notification rows and delivery lifecycle.
-3. Staff notification service owns internal/admin notification creation.
-4. Team inbox services own conversation notes, assignment, and collaboration.
+2. Event notification policy owns event enablement and balance-notification
+   suppression.
+3. Notification service owns notification rows and delivery lifecycle.
+4. Staff notification service owns internal/admin notification creation.
+5. Team inbox services own conversation notes, assignment, replies,
+   contact-linking, widget writes, inbound-channel ingestion, and collaboration.
 
 Rule: domain services request a notification outcome; they should not construct
 notification rows or choose email/SMS/WhatsApp directly.
@@ -84,11 +91,15 @@ should not write heartbeat/run rows directly unless they are the helper.
 Dependency order:
 
 1. `network.identity`: resolves cross-model network/customer links.
-2. `network.access_path`: resolves `subscriber/subscription -> access path`.
-3. `network.radius_sessions`: resolves online-now state from active sessions.
-4. `network.device_state`: resolves device state from admin/live/poll signals.
-5. `network.outage_impact`: resolves affected customers from topology.
-6. `network.events`: turns resolved state/impact into event decisions.
+2. `network.monitoring_inventory`: owns monitoring inventory, metric records,
+   alert rules, and alert state mutations.
+3. `network.access_path`: resolves `subscriber/subscription -> access path`.
+4. `network.radius_sessions`: resolves online-now state from active sessions.
+5. `network.device_state`: resolves device state from admin/live/poll signals.
+6. `network.outage_impact`: resolves affected customers from topology.
+7. `network.device_groups`: owns device-group mutations, membership, and bulk
+   action queueing.
+8. `network.events`: turns resolved state/impact into event decisions.
 
 Rule: pollers write observations; resolver services decide state; event services
 decide consequences. Customer-facing outage, SLA, expiry suppression, support
@@ -198,9 +209,11 @@ control plane. Task bodies execute work and report status.
 Network access:
 
 1. `access.control_resolution`: owns desired service access outcomes.
-2. `access.radius_state`: maps desired access to RADIUS groups/profiles.
-3. `access.radius_reject`: owns reject IP lifecycle.
-4. `access.session_enforcement`: applies CoA/disconnect outcomes.
+2. `access.event_policy`: owns event-driven enforcement settings, FUP action
+   policy, and overdue suspension policy reads.
+3. `access.radius_state`: maps desired access to RADIUS groups/profiles.
+4. `access.radius_reject`: owns reject IP lifecycle.
+5. `access.session_enforcement`: applies CoA/disconnect outcomes.
 
 Rule: billing, FUP, and admin actions resolve the desired access outcome once,
 map it to RADIUS state once, and let enforcement apply the network-side change.

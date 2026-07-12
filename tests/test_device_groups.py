@@ -1,7 +1,13 @@
 from types import SimpleNamespace
 
 from app.models.audit import AuditActorType, AuditEvent
-from app.models.network import CPEDevice, DeviceGroupMember, OntAssignment, OntUnit
+from app.models.network import (
+    CPEDevice,
+    DeviceGroup,
+    DeviceGroupMember,
+    OntAssignment,
+    OntUnit,
+)
 from app.services.network import device_groups
 
 
@@ -37,6 +43,19 @@ def test_device_group_adds_ont_member_once(db_session):
         .count()
         == 1
     )
+
+
+def test_create_device_group_committed_persists_group(db_session):
+    group = device_groups.create_device_group_committed(
+        db_session,
+        name="Committed Cohort",
+        created_by="admin",
+    )
+
+    persisted = db_session.get(DeviceGroup, group.id)
+
+    assert persisted is not None
+    assert persisted.name == "Committed Cohort"
 
 
 def test_enqueue_ont_group_action_queues_existing_bulk_task(db_session, monkeypatch):

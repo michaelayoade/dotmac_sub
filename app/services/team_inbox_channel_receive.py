@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any, TypeVar
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -33,6 +35,17 @@ _OPAQUE_CONTACT_CHANNELS = {
     InboxChannelType.instagram_dm.value,
     InboxChannelType.chat_widget.value,
 }
+T = TypeVar("T")
+
+
+def _commit(db: Session, action: Callable[[], T]) -> T:
+    try:
+        result = action()
+        db.commit()
+        return result
+    except Exception:
+        db.rollback()
+        raise
 
 
 @dataclass(frozen=True)
@@ -470,4 +483,55 @@ def receive_whatsapp_webhook(
                 "raw": normalized.get("raw"),
             },
         ),
+    )
+
+
+def receive_result_payload(
+    result: InboundChannelReceiveResult,
+) -> dict[str, object]:
+    return {
+        "kind": result.kind,
+        "conversation_id": result.conversation_id,
+        "message_id": result.message_id,
+        "resolution_status": result.resolution_status,
+        "subscriber_id": result.subscriber_id,
+        "reseller_id": result.reseller_id,
+    }
+
+
+def receive_whatsapp_webhook_batch_committed(
+    db: Session,
+    *,
+    provider: str,
+    payloads: list[dict[str, Any]],
+    status_items: list[dict[str, Any]] | None = None,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    def _process() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+        from app.services import team_inbox_outbound
+
+        results = [
+            receive_result_payload(
+                receive_whatsapp_webhook(db, provider=provider, payload=payload)
+            )
+            for payload in payloads
+        ]
+        statuses = [
+            team_inbox_outbound.apply_whatsapp_delivery_status(db, item)
+            for item in (status_items or [])
+        ]
+        return results, statuses
+
+    return _commit(db, _process)
+
+
+def receive_inbound_channel_batch_committed(
+    db: Session,
+    payloads: list[InboundChannelPayload],
+) -> list[dict[str, object]]:
+    return _commit(
+        db,
+        lambda: [
+            receive_result_payload(receive_inbound_channel(db, payload))
+            for payload in payloads
+        ],
     )
