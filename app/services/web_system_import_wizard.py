@@ -486,16 +486,35 @@ def _persist_row(
         db.add(obj)
         return obj
     if module == "payments":
-        obj = Payment(
-            account_id=parsed_row.account_id,
-            amount=parsed_row.amount,
-            currency=parsed_row.currency,
-            status=parsed_row.status,
-            memo=parsed_row.memo,
-            external_id=parsed_row.external_id,
+        # Imported cash is still cash. Constructing a Payment row directly left it
+        # an orphan: no PaymentAllocation, no LedgerEntry, no paid_at, no invoice
+        # recalculation — so the customer's invoices stayed open, the credit
+        # balance never saw the money, and dunning kept chasing them for it.
+        #
+        # Route through the payment owner, which allocates, posts the ledger
+        # credit, stamps paid_at and settles the invoices. commit=False keeps the
+        # caller's per-row SAVEPOINT intact so one bad row still cannot roll back
+        # the batch.
+        #
+        # NOTE: this is the NATIVE import path. Splynx-mirrored payments are a
+        # different thing and must not be routed here — they are mirrored, not
+        # posted, and legitimately carry no local allocation or ledger entry. That
+        # is why 3,116 of them look like "orphans" to a naive query and are not.
+        from app.schemas.billing import PaymentCreate
+        from app.services import billing as billing_service
+
+        return billing_service.payments.create(
+            db,
+            PaymentCreate(
+                account_id=parsed_row.account_id,
+                amount=parsed_row.amount,
+                currency=parsed_row.currency,
+                status=parsed_row.status,
+                memo=parsed_row.memo,
+                external_id=parsed_row.external_id,
+            ),
+            commit=False,
         )
-        db.add(obj)
-        return obj
     if module == "nas_devices":
         obj = NasDevice(
             name=parsed_row.name,
