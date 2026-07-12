@@ -110,6 +110,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="financial.prepaid_threshold",
+                module="app.services.prepaid_threshold",
+                owns=(
+                    "prepaid enforcement threshold",
+                    "unfunded prepaid renewal requirement",
+                ),
+                depends_on=("financial.billing_profile",),
+            ),
+            SOTService(
                 name="financial.access_resolution",
                 module="app.services.access_resolution",
                 owns=(
