@@ -161,9 +161,7 @@ def get_sidebar_stats(db: Session) -> dict:
     """Get stats for sidebar badges."""
     global _sidebar_stats_cached_at, _sidebar_stats_cache
 
-    from app.models.domain_settings import SettingDomain
     from app.services import module_manager as module_manager_service
-    from app.services import settings_spec
 
     now = monotonic()
     with _sidebar_stats_lock:
@@ -186,37 +184,19 @@ def get_sidebar_stats(db: Session) -> dict:
     except Exception:
         pending_location_requests = 0
 
+    resolved_brand = None
     try:
-        logo_raw = settings_spec.resolve_value(
-            db, SettingDomain.comms, "sidebar_logo_url"
-        )
-        sidebar_logo_url = str(logo_raw).strip() if logo_raw else ""
+        from app.services.brand_profiles import resolve_brand
+
+        resolved_brand = resolve_brand(db)
+        sidebar_logo_url = resolved_brand.logo_url
+        sidebar_logo_dark_url = resolved_brand.dark_logo_url
+        favicon_url = resolved_brand.favicon_url
+        app_name = resolved_brand.product_name
     except Exception:
         sidebar_logo_url = ""
-    try:
-        dark_logo_raw = settings_spec.resolve_value(
-            db, SettingDomain.comms, "sidebar_logo_dark_url"
-        )
-        sidebar_logo_dark_url = str(dark_logo_raw).strip() if dark_logo_raw else ""
-    except Exception:
         sidebar_logo_dark_url = ""
-    try:
-        favicon_raw = settings_spec.resolve_value(
-            db, SettingDomain.comms, "favicon_url"
-        )
-        favicon_url = str(favicon_raw).strip() if favicon_raw else ""
-    except Exception:
         favicon_url = ""
-    try:
-        from app.services import (
-            web_system_company_info as web_system_company_info_service,
-        )
-
-        app_name = (
-            web_system_company_info_service.get_company_info(db).get("company_name")
-            or ""
-        ).strip()
-    except Exception:
         app_name = ""
     try:
         module_states = module_manager_service.load_module_states(db)
@@ -233,6 +213,7 @@ def get_sidebar_stats(db: Session) -> dict:
         "sidebar_logo_dark_url": sidebar_logo_dark_url,
         "favicon_url": favicon_url,
         "app_name": app_name,
+        "brand": resolved_brand.to_dict() if resolved_brand else None,
         "module_states": module_states,
         "feature_states": feature_states,
     }

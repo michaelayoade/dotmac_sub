@@ -56,6 +56,7 @@ from app.models.billing import (  # noqa: F401
     TaxRate,
     TopupIntent,
 )
+from app.models.branding import BrandProfile  # noqa: F401
 from app.models.catalog import (  # noqa: F401
     AccessCredential,
     AccessType,
