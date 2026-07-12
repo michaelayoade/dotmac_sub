@@ -225,6 +225,32 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("network.identity",),
             ),
             SOTService(
+                name="network.nas_inventory",
+                module="app.services.nas.devices",
+                owns=("NAS administrative lifecycle state", "NAS inventory reads"),
+                depends_on=("network.identity",),
+            ),
+            SOTService(
+                name="network.nas_lifecycle",
+                module="app.services.nas_lifecycle",
+                owns=(
+                    "NAS lifecycle reconciliation plans",
+                    "subscription NAS relink decisions",
+                    "NAS lifecycle RADIUS projection commands",
+                ),
+                depends_on=(
+                    "network.identity",
+                    "network.access_path",
+                    "network.radius_sessions",
+                    "network.device_state",
+                    "network.nas_inventory",
+                    "service_intent.subscription_nas_assignment",
+                    "access.radius_state",
+                    "runtime.db_sessions",
+                    "observability.recording",
+                ),
+            ),
+            SOTService(
                 name="network.outage_impact",
                 module="app.services.network.outage_impact",
                 owns=("affected-customer impact", "outage scope impact"),
@@ -866,6 +892,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="service_intent.catalog_validation",
                 module="app.services.catalog.validation",
                 owns=("catalog mutation validation", "offer/profile consistency"),
+                depends_on=("service_intent.catalog_policy",),
+            ),
+            SOTService(
+                name="service_intent.subscription_nas_assignment",
+                module="app.services.catalog.subscriptions",
+                owns=(
+                    "subscription provisioning NAS assignment",
+                    "nonterminal services grouped by NAS",
+                ),
                 depends_on=("service_intent.catalog_policy",),
             ),
             SOTService(

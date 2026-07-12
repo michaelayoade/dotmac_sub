@@ -1178,6 +1178,30 @@ run plaintext remediation and confirm both `plaintext` and `undecryptable` are
 zero. Search the audit log for action `credential_lifecycle_cleanup` to review
 record-level evidence without exposing secrets in command output.
 
+NAS records recovered from authoritative FreeRADIUS may still have lifecycle
+or subscription-link drift. Use the NAS lifecycle reconciler rather than
+editing `status`, `is_active`, subscription NAS links, or RADIUS clients
+independently:
+
+```bash
+python -m scripts.one_off.reconcile_nas_lifecycle
+python -m scripts.one_off.reconcile_nas_lifecycle --details
+python -m scripts.one_off.reconcile_nas_lifecycle \
+  --execute --confirm-plan-digest <reviewed-digest>
+```
+
+The reconciler uses administrative intent, non-terminal subscriptions, exact
+subscription-bound live sessions, fresh native monitoring, and internal plus
+external RADIUS state. It can automatically reactivate only when live-session
+or fresh monitoring evidence supports the existing active intent. It can
+relink only when every affected subscription has one exact, active live-session
+NAS. FreeRADIUS presence alone never reactivates a device. Ambiguous records
+produce `manual_review`, block execution, publish the `nas_lifecycle`
+observability snapshot, and enter the admin-alert lifecycle. Detailed output
+contains network-device identity and aggregate service counts, never customer
+identity or credential values. Successful writes use action
+`nas_lifecycle_reconcile` in the transactional audit log.
+
 ### Rotation Order
 
 Rotate non-customer-facing secrets first, then payment, then authentication or network secrets. Keep one verified rollback path for each secret family before moving to the next.

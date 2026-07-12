@@ -22,6 +22,7 @@ from app.services.network.radius_sessions import (
     latest_open_accounting_session_for_subscription,
     latest_open_accounting_sessions_by_subscription,
     live_framed_ips_by_subscription,
+    live_nas_device_ids_for_subscription,
     resolve_subscriber_radius_sessions,
 )
 from app.services.network.sot_relationships import (
@@ -55,9 +56,20 @@ def test_network_sot_relationships_are_ordered():
         "access_path",
         "radius_sessions",
         "device_state",
+        "nas_inventory",
+        "subscription_nas_assignment",
+        "nas_lifecycle",
         "outage_impact",
         "events",
     ]
+    assert dependencies_for("nas_lifecycle") == (
+        "identity",
+        "access_path",
+        "radius_sessions",
+        "device_state",
+        "nas_inventory",
+        "subscription_nas_assignment",
+    )
     assert dependencies_for("outage_impact") == ("access_path", "device_state")
     assert dependencies_for("events") == (
         "device_state",
@@ -124,6 +136,59 @@ def test_radius_session_resolution_uses_freshest_session(
     assert resolution.primary_identity is not None
     assert resolution.primary_identity.kind == "nas"
     assert active_session_count_for_subscriber(db_session, subscriber.id) == 2
+
+
+def test_live_nas_evidence_can_require_exact_subscription_binding(
+    db_session, subscriber, catalog_offer
+):
+    first_nas, _ = _nas_node(db_session)
+    second_nas = NasDevice(name="NAS-SECOND", management_ip="10.0.0.2")
+    db_session.add(second_nas)
+    subscription = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=catalog_offer.id,
+        status=SubscriptionStatus.active,
+    )
+    db_session.add(subscription)
+    db_session.flush()
+    db_session.add_all(
+        [
+            RadiusActiveSession(
+                subscriber_id=subscriber.id,
+                subscription_id=subscription.id,
+                username="bound",
+                acct_session_id="bound-session",
+                nas_device_id=first_nas.id,
+                session_start=datetime.now(UTC),
+            ),
+            RadiusActiveSession(
+                subscriber_id=subscriber.id,
+                subscription_id=None,
+                username="unbound",
+                acct_session_id="unbound-session",
+                nas_device_id=second_nas.id,
+                session_start=datetime.now(UTC),
+            ),
+        ]
+    )
+    db_session.flush()
+
+    assert live_nas_device_ids_for_subscription(
+        db_session,
+        subscription.id,
+        subscription.subscriber_id,
+        allow_unbound=False,
+    ) == (first_nas.id,)
+    assert set(
+        live_nas_device_ids_for_subscription(
+            db_session,
+            subscription.id,
+            subscription.subscriber_id,
+        )
+    ) == {
+        first_nas.id,
+        second_nas.id,
+    }
 
 
 def test_open_accounting_session_helpers_use_newest_non_stop_session(

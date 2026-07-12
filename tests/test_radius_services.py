@@ -880,6 +880,58 @@ def test_external_nas_lifecycle_helpers_do_not_read_or_return_secrets(
     assert remaining == [("10.0.0.2",)]
 
 
+def test_radius_nas_lifecycle_projects_active_and_inactive_state(
+    db_session, radius_server, tmp_path, monkeypatch
+):
+    db_path = tmp_path / "radius-nas-reconcile.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "CREATE TABLE nas (nasname TEXT, shortname TEXT, type TEXT, "
+            "secret TEXT, description TEXT)"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    config = _fake_external_config(db_path)
+    monkeypatch.setattr(
+        radius_service, "_active_external_sync_configs", lambda _db: [config]
+    )
+    device = NasDevice(
+        name="lifecycle-router",
+        vendor=NasVendor.mikrotik,
+        nas_ip="10.40.0.1",
+        shared_secret="plain:radius-secret",
+        is_active=True,
+    )
+    db_session.add(device)
+    db_session.flush()
+
+    active = radius_service.apply_radius_nas_lifecycle(db_session, device, active=True)
+    db_session.flush()
+    # The linked client remains authoritative lifecycle evidence while a NAS IP
+    # correction is pending projection to the external store.
+    device.nas_ip = "10.40.0.2"
+    db_session.flush()
+    active_state = radius_service.radius_nas_lifecycle_state(db_session, device)
+
+    assert active.internal_clients_changed == 1
+    assert active.external_clients_changed == 1
+    assert active_state.internal_active_clients == 1
+    assert active_state.external_present is True
+
+    inactive = radius_service.apply_radius_nas_lifecycle(
+        db_session, device, active=False
+    )
+    db_session.flush()
+    inactive_state = radius_service.radius_nas_lifecycle_state(db_session, device)
+
+    assert inactive.internal_clients_changed == 1
+    assert inactive.external_clients_changed == 1
+    assert inactive_state.internal_active_clients == 0
+    assert inactive_state.external_present is False
+
+
 class TestBlockUnblockExternalRadiusCredentials:
     """Group-based blocking writes one Auth-Type:=Reject row in radcheck
     while leaving password/reply/group rows intact. Unblock deletes just
