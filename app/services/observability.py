@@ -8,6 +8,9 @@ place to record operational signals without each task reimplementing routing.
 from __future__ import annotations
 
 import logging
+import math
+import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -30,6 +33,127 @@ class Finding:
     summary: str
     details: dict[str, Any] = field(default_factory=dict)
     target_url: str = "/admin/system/health"
+
+
+@dataclass(frozen=True)
+class StateObservation:
+    signal: str
+    scope: str
+    value: float
+
+
+_STATE_SNAPSHOT_SPECS = {
+    "credentials": {"max_observations": 500, "ttl_seconds": 7 * 86_400},
+}
+_STATE_TOKEN = re.compile(r"^[A-Za-z0-9_.:-]+$")
+_STATE_STATUSES = frozenset({"ok", "degraded", "error"})
+
+
+def state_snapshot_domains() -> tuple[str, ...]:
+    """Registered bounded-cardinality state domains exported by /metrics."""
+    return tuple(sorted(_STATE_SNAPSHOT_SPECS))
+
+
+def _state_snapshot_key(domain: str) -> str:
+    from app.services.app_cache import cache_key
+
+    return cache_key("observability", "state", domain)
+
+
+def _validate_state_token(value: str, *, label: str, max_length: int) -> str:
+    normalized = str(value).strip()
+    if (
+        not normalized
+        or len(normalized) > max_length
+        or not _STATE_TOKEN.fullmatch(normalized)
+    ):
+        raise ValueError(f"Invalid observability {label}")
+    return normalized
+
+
+def publish_state_snapshot(
+    domain: str,
+    observations: Iterable[StateObservation],
+    *,
+    status: str = "ok",
+    now: datetime | None = None,
+) -> bool:
+    """Persist a redacted latest-state snapshot for web-process metric export."""
+    spec = _STATE_SNAPSHOT_SPECS.get(domain)
+    if spec is None:
+        raise ValueError("Unregistered observability state domain")
+    if status not in _STATE_STATUSES:
+        raise ValueError("Invalid observability snapshot status")
+
+    normalized: dict[tuple[str, str], float] = {}
+    for observation in observations:
+        signal = _validate_state_token(
+            observation.signal,
+            label="signal",
+            max_length=80,
+        )
+        scope = _validate_state_token(
+            observation.scope,
+            label="scope",
+            max_length=160,
+        )
+        value = float(observation.value)
+        if not math.isfinite(value):
+            raise ValueError("Observability state values must be finite")
+        normalized[(signal, scope)] = value
+    if len(normalized) > int(spec["max_observations"]):
+        raise ValueError("Observability snapshot exceeds registered cardinality")
+
+    payload = {
+        "domain": domain,
+        "status": status,
+        "observed_at": (now or datetime.now(UTC)).astimezone(UTC).isoformat(),
+        "observations": [
+            {"signal": signal, "scope": scope, "value": value}
+            for (signal, scope), value in sorted(normalized.items())
+        ],
+    }
+    from app.services.app_cache import set_json
+
+    stored = set_json(
+        _state_snapshot_key(domain),
+        payload,
+        int(spec["ttl_seconds"]),
+    )
+    logger.info(
+        "observability_state_snapshot domain=%s status=%s stored=%s "
+        "observations=%s nonzero=%s",
+        domain,
+        status,
+        stored,
+        len(normalized),
+        [
+            {"signal": signal, "scope": scope, "value": value}
+            for (signal, scope), value in sorted(normalized.items())
+            if value
+        ],
+    )
+    return stored
+
+
+def load_state_snapshot(domain: str) -> dict[str, Any] | None:
+    """Load a registered state snapshot; malformed cache data is ignored."""
+    if domain not in _STATE_SNAPSHOT_SPECS:
+        return None
+    try:
+        from app.services.app_cache import get_json
+
+        payload = get_json(_state_snapshot_key(domain))
+    except Exception:
+        logger.debug(
+            "observability_state_snapshot_load_failed domain=%s",
+            domain,
+            exc_info=True,
+        )
+        return None
+    if not isinstance(payload, dict) or payload.get("domain") != domain:
+        return None
+    return payload
 
 
 def record_task_run(

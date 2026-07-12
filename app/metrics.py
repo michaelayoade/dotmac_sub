@@ -133,6 +133,109 @@ class _SuspensionAuditCollector(Collector):
 REGISTRY.register(_SuspensionAuditCollector())
 
 
+class _ObservabilityStateCollector(Collector):
+    """Export Redis-backed domain state produced by worker-side services."""
+
+    def describe(self):  # noqa: ANN201 - prometheus collector protocol
+        yield _gauge_description(
+            "observability_state",
+            "Latest bounded domain state value",
+            labels=["domain", "signal", "scope"],
+        )
+        yield _gauge_description(
+            "observability_snapshot_age_seconds",
+            "Seconds since the latest domain state snapshot",
+            labels=["domain"],
+        )
+        yield _gauge_description(
+            "observability_snapshot_status",
+            "Latest domain state snapshot status",
+            labels=["domain", "status"],
+        )
+
+    def collect(self):  # noqa: ANN201 - prometheus collector protocol
+        from datetime import UTC, datetime
+
+        from prometheus_client.core import GaugeMetricFamily
+
+        try:
+            from app.services.observability import (
+                load_state_snapshot,
+                state_snapshot_domains,
+            )
+        except Exception:
+            return
+
+        state = GaugeMetricFamily(
+            "observability_state",
+            "Latest bounded domain state value",
+            labels=["domain", "signal", "scope"],
+        )
+        age = GaugeMetricFamily(
+            "observability_snapshot_age_seconds",
+            "Seconds since the latest domain state snapshot",
+            labels=["domain"],
+        )
+        status_metric = GaugeMetricFamily(
+            "observability_snapshot_status",
+            "Latest domain state snapshot status",
+            labels=["domain", "status"],
+        )
+        found = False
+        for domain in state_snapshot_domains():
+            try:
+                snapshot = load_state_snapshot(domain)
+            except Exception:
+                continue
+            if not snapshot:
+                continue
+            for observation in snapshot.get("observations") or []:
+                if not isinstance(observation, dict):
+                    continue
+                try:
+                    state.add_metric(
+                        [
+                            domain,
+                            str(observation["signal"]),
+                            str(observation["scope"]),
+                        ],
+                        float(observation["value"]),
+                    )
+                except (KeyError, TypeError, ValueError):
+                    continue
+                found = True
+
+            observed_at = snapshot.get("observed_at")
+            if observed_at:
+                try:
+                    recorded = datetime.fromisoformat(str(observed_at))
+                    if recorded.tzinfo is None:
+                        recorded = recorded.replace(tzinfo=UTC)
+                    snapshot_age = max(
+                        0.0,
+                        (datetime.now(UTC) - recorded).total_seconds(),
+                    )
+                    age.add_metric([domain], snapshot_age)
+                    found = True
+                except ValueError:
+                    pass
+            snapshot_status = str(snapshot.get("status") or "error")
+            for status in ("ok", "degraded", "error"):
+                status_metric.add_metric(
+                    [domain, status],
+                    1.0 if status == snapshot_status else 0.0,
+                )
+            found = True
+
+        if found:
+            yield state
+            yield age
+            yield status_metric
+
+
+REGISTRY.register(_ObservabilityStateCollector())
+
+
 class _DatabasePressureCollector(Collector):
     """Exports SQLAlchemy pool and PostgreSQL session pressure.
 

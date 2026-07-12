@@ -475,8 +475,9 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         SWEEP,
         GUARDED,
         HEALTH,
-        "Daily single-flight key lifecycle; OpenBao retains the previous key "
-        "through a grace period and reruns converge straggler ciphertext.",
+        "Daily single-flight credential integrity and key lifecycle; OpenBao "
+        "retains the previous key through a grace period and reruns converge "
+        "straggler ciphertext.",
     ),
     "app.tasks.topology_ufiber_link.run_ufiber_onu_link": _c(
         "network", SWEEP, IDEMP, HEALTH

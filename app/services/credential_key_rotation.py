@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select, text
@@ -27,8 +29,14 @@ from app.services.credential_crypto import (
     ENCRYPTED_MODEL_FIELDS,
     decrypt_credential_with_key,
     encrypt_credential_with_key,
+    get_encryption_key,
+    get_previous_encryption_key,
 )
-from app.services.network.ont_desired_config import rotate_desired_config_credentials
+from app.services.network.ont_desired_config import (
+    desired_config_values_for_paths,
+    rotate_desired_config_credentials,
+)
+from app.services.secrets import is_secret_ref
 from app.services.settings_cache import SettingsCache
 
 logger = logging.getLogger(__name__)
@@ -38,6 +46,37 @@ logger = logging.getLogger(__name__)
 class CredentialKeyRotationResult:
     updated_records: int
     updated_values: int
+
+
+_INTEGRITY_STATES = (
+    "encrypted",
+    "plaintext",
+    "undecryptable",
+    "reference",
+    "empty",
+)
+
+
+@dataclass(frozen=True)
+class CredentialIntegrityResult:
+    """Redacted credential inventory suitable for observability publication."""
+
+    counts: dict[str, dict[str, int]]
+    totals: dict[str, int]
+    scanned_at: datetime
+
+    @property
+    def values_scanned(self) -> int:
+        return sum(self.totals.values())
+
+    def observations(self) -> list[tuple[str, str, float]]:
+        values: list[tuple[str, str, float]] = []
+        for scope, states in sorted(self.counts.items()):
+            for state in _INTEGRITY_STATES:
+                values.append((state, scope, float(states.get(state, 0))))
+        for state in _INTEGRITY_STATES:
+            values.append((state, "all", float(self.totals.get(state, 0))))
+        return values
 
 
 _MODEL_BY_NAME: dict[str, type[Any]] = {
@@ -65,6 +104,109 @@ _MODEL_FIELDS: tuple[tuple[type[Any], tuple[str, ...]], ...] = tuple(
 _ONT_DESIRED_CONFIG_CREDENTIAL_PATHS: tuple[tuple[str, ...], ...] = (
     ("wifi", "password"),
 )
+
+
+def _empty_integrity_counts() -> dict[str, int]:
+    return dict.fromkeys(_INTEGRITY_STATES, 0)
+
+
+def _credential_state(value: Any, keys: tuple[bytes, ...]) -> str:
+    if value is None or value == "":
+        return "empty"
+    text_value = str(value)
+    if is_secret_ref(text_value):
+        return "reference"
+    if text_value.startswith("plain:") or not text_value.startswith("enc:"):
+        return "plaintext"
+    for key in keys:
+        try:
+            decrypt_credential_with_key(text_value, key)
+            return "encrypted"
+        except ValueError:
+            continue
+    return "undecryptable"
+
+
+def scan_credential_encryption_integrity(
+    db: Session,
+    *,
+    now: datetime | None = None,
+) -> CredentialIntegrityResult:
+    """Classify every rotation-owned value without exposing record identities."""
+    _validate_model_fields()
+    keys = tuple(
+        key
+        for key in (get_encryption_key(), get_previous_encryption_key())
+        if key is not None
+    )
+    counts: dict[str, dict[str, int]] = {}
+
+    def register(scope: str) -> None:
+        counts.setdefault(scope, _empty_integrity_counts())
+
+    def observe(scope: str, value: Any) -> None:
+        register(scope)
+        counts[scope][_credential_state(value, keys)] += 1
+
+    for model, fields in _MODEL_FIELDS:
+        for field in fields:
+            register(f"{model.__name__}.{field}")
+        for row in db.scalars(select(model)).all():
+            for field in fields:
+                observe(f"{model.__name__}.{field}", getattr(row, field, None))
+
+    nested_scopes = {
+        path: ".".join(("OntUnit", "desired_config", *path))
+        for path in _ONT_DESIRED_CONFIG_CREDENTIAL_PATHS
+    }
+    for scope in nested_scopes.values():
+        register(scope)
+    for path, value in desired_config_values_for_paths(
+        db, _ONT_DESIRED_CONFIG_CREDENTIAL_PATHS
+    ):
+        observe(nested_scopes[path], value)
+
+    settings_scope = "DomainSetting.value_text"
+    register(settings_scope)
+    settings_rows = db.scalars(
+        select(DomainSetting)
+        .where(DomainSetting.value_text.is_not(None))
+        .where(DomainSetting.is_active.is_(True))
+        .where(DomainSetting.is_secret.is_(True))
+    ).all()
+    for row in settings_rows:
+        observe(settings_scope, row.value_text)
+
+    hook_scopes = {
+        key: f"IntegrationHook.auth_config.{key}"
+        for key in sorted(_INTEGRATION_HOOK_SECRET_KEYS)
+    }
+    for scope in hook_scopes.values():
+        register(scope)
+    for hook in db.scalars(select(IntegrationHook)).all():
+        auth_config = hook.auth_config
+        if not isinstance(auth_config, dict):
+            continue
+        for key, scope in hook_scopes.items():
+            if key in auth_config and auth_config[key] is not None:
+                observe(scope, auth_config[key])
+
+    connector_scope = "ConnectorConfig.auth_config"
+    register(connector_scope)
+    connector_rows = db.execute(
+        text("SELECT auth_config FROM connector_configs WHERE auth_config IS NOT NULL")
+    ).all()
+    for row in connector_rows:
+        observe(connector_scope, row.auth_config)
+
+    totals = Counter(dict.fromkeys(_INTEGRITY_STATES, 0))
+    for states in counts.values():
+        totals.update(states)
+    return CredentialIntegrityResult(
+        counts=counts,
+        totals={state: int(totals[state]) for state in _INTEGRITY_STATES},
+        scanned_at=(now or datetime.now(UTC)).astimezone(UTC),
+    )
 
 
 def _rotate_value(
