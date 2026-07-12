@@ -1,10 +1,6 @@
 """Customer portal Refer & Earn page (RFC #73).
 
-Server-rendered. The page read runs behind the Phase 3
-``referrals_native_read_enabled`` read-flip flag (§4.2): OFF reads the local
-referral mirror (fast, resilient to a CRM outage), ON reads the native
-referral tables — same payload shape (§2.5). The refer-a-friend POST stays a
-mirror write-through until the Phase 3 write flip (§4.3, PR 14). Individual
+Server-rendered from Sub's native referral source of truth. Individual
 subscribers only (the customer portal is subscriber-scoped; reseller float
 wallets are never involved).
 """
@@ -12,13 +8,12 @@ wallets are never involved).
 import logging
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import referrals as referrals_service
-from app.services import referrals_mirror
 from app.services.customer_context import optional_customer_subscriber_id
 from app.web.customer.auth import get_current_customer_from_request
 from app.web.customer.branding import get_customer_templates
@@ -31,9 +26,7 @@ _LOGIN = "/portal/auth/login?next=/portal/refer-and-earn"
 
 
 def _summary(db: Session, subscriber_id: str) -> dict:
-    if referrals_service.native_read_enabled(db):
-        return referrals_service.referrals.read_for_subscriber(db, subscriber_id)
-    return referrals_mirror.read_for_subscriber(db, subscriber_id)
+    return referrals_service.referrals.read_for_subscriber(db, subscriber_id)
 
 
 @router.get("/refer-and-earn", response_class=HTMLResponse)
@@ -70,15 +63,16 @@ def customer_refer_a_friend(
 
     subscriber_id = str(optional_customer_subscriber_id(db, customer) or "")
     try:
-        referrals_mirror.refer_a_friend(
+        referrals_service.referrals.refer_a_friend(
             db,
             subscriber_id,
             name=name or None,
             email=email or None,
             phone=phone or None,
         )
-    except referrals_mirror.ReferralError as exc:
+    except HTTPException as exc:
+        message = exc.detail if isinstance(exc.detail, str) else "Referral failed"
         return RedirectResponse(
-            url=f"/portal/refer-and-earn?error={quote(exc.message)}", status_code=303
+            url=f"/portal/refer-and-earn?error={quote(message)}", status_code=303
         )
     return RedirectResponse(url="/portal/refer-and-earn?referred=1", status_code=303)

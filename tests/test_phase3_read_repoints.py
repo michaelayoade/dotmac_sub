@@ -1,12 +1,7 @@
 """Phase 3 PR 8 — read-surface repoints behind the §4.2 per-vertical flags.
 
-Every customer/reseller read surface for projects, quotes and referrals runs
-behind ``{vertical}_native_read_enabled`` (``SettingDomain.projects``, default
-OFF): OFF keeps serving the CRM mirrors unchanged; ON serves the native
-services. Write paths deliberately do NOT flip here — quote-request /
-deposit-verify stay on the PR 5 ``quotes_native_write_enabled`` flag and
-``POST /me|/portal referrals`` stays a mirror write-through until the §4.3
-write flip (PR 14).
+Project reads retain their transition flag. Quote/referral tests in this module
+also assert the completed native write cutover.
 """
 
 from __future__ import annotations
@@ -179,19 +174,26 @@ def test_me_referrals_flag_on_serves_native(monkeypatch):
     assert out["sid"] == principal["subscriber_id"]
 
 
-# ── write paths do NOT flip with the read flags (PR 5 / PR 14 own them) ───────
+# ── native write paths ────────────────────────────────────────────────────────
 
 
-def test_me_quote_request_stays_mirror_write_through_with_read_flag_on(monkeypatch):
+def test_me_quote_request_is_native(monkeypatch):
     principal = _subscriber_principal()
-    monkeypatch.setattr(selfserve_service, "native_read_enabled", lambda db: True)
     captured = {}
+    quote = object()
 
     def fake_request_quote(db, sid, **kw):
         captured["sid"] = sid
-        return {"id": "q1", "status": "draft"}
+        return quote
 
-    monkeypatch.setattr(me_api.quotes_mirror, "request_quote", fake_request_quote)
+    monkeypatch.setattr(
+        selfserve_service.selfserve_quotes, "request_quote", fake_request_quote
+    )
+    monkeypatch.setattr(
+        selfserve_service,
+        "build_portal_quote_payload",
+        lambda db, row: {"id": "q1", "status": "draft"},
+    )
     out = me_api.my_quote_request(
         payload=QuoteRequestCreate(latitude=9.07, longitude=7.49),
         db=None,
@@ -201,20 +203,15 @@ def test_me_quote_request_stays_mirror_write_through_with_read_flag_on(monkeypat
     assert captured["sid"] == principal["subscriber_id"]
 
 
-def test_me_refer_a_friend_stays_mirror_write_through_with_read_flag_on(monkeypatch):
+def test_me_refer_a_friend_is_native(monkeypatch):
     principal = _subscriber_principal()
-    monkeypatch.setattr(referrals_service, "native_read_enabled", lambda db: True)
     captured = {}
 
     def fake_refer(db, sid, **kw):
         captured["sid"] = sid
         return {"id": "r1", "status": "pending", "message": "Referral submitted"}
 
-    def native_refer(db, sid, **kw):  # pragma: no cover - must not run
-        raise AssertionError("native refer_a_friend must not run before PR 14")
-
-    monkeypatch.setattr(me_api.referrals_mirror, "refer_a_friend", fake_refer)
-    monkeypatch.setattr(referrals_service.referrals, "refer_a_friend", native_refer)
+    monkeypatch.setattr(referrals_service.referrals, "refer_a_friend", fake_refer)
     out = me_api.my_refer_a_friend(
         payload=ReferAFriendRequest(email="friend@example.com"),
         db=None,
@@ -224,10 +221,7 @@ def test_me_refer_a_friend_stays_mirror_write_through_with_read_flag_on(monkeypa
     assert captured["sid"] == principal["subscriber_id"]
 
 
-def test_web_refer_post_stays_mirror_write_through_with_read_flag_on(
-    db_session, monkeypatch
-):
-    monkeypatch.setattr(referrals_service, "native_read_enabled", lambda db: True)
+def test_web_refer_post_is_native(db_session):
     app = FastAPI()
     app.include_router(web_referrals.router)
     app.dependency_overrides[get_db] = lambda: db_session
@@ -238,7 +232,7 @@ def test_web_refer_post_stays_mirror_write_through_with_read_flag_on(
             return_value={"subscriber_id": "s1"},
         ),
         patch(
-            "app.web.customer.referrals.referrals_mirror.refer_a_friend",
+            "app.web.customer.referrals.referrals_service.referrals.refer_a_friend",
             return_value={"id": "r2", "status": "pending"},
         ) as refer,
     ):

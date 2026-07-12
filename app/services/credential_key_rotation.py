@@ -105,6 +105,12 @@ _ONT_DESIRED_CONFIG_CREDENTIAL_PATHS: tuple[tuple[str, ...], ...] = (
     ("wifi", "password"),
 )
 
+_RAW_ENCRYPTED_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("ConnectorConfig.headers", "connector_configs", "headers"),
+    ("OAuthToken.access_token", "oauth_tokens", "access_token"),
+    ("OAuthToken.refresh_token", "oauth_tokens", "refresh_token"),
+)
+
 
 def _empty_integrity_counts() -> dict[str, int]:
     return dict.fromkeys(_INTEGRITY_STATES, 0)
@@ -198,6 +204,17 @@ def scan_credential_encryption_integrity(
     ).all()
     for row in connector_rows:
         observe(connector_scope, row.auth_config)
+
+    for scope, table_name, column_name in _RAW_ENCRYPTED_COLUMNS:
+        register(scope)
+        rows = db.execute(
+            text(
+                f"SELECT {column_name} FROM {table_name} "
+                f"WHERE {column_name} IS NOT NULL"
+            )
+        ).all()
+        for row in rows:
+            observe(scope, row[0])
 
     totals = Counter(dict.fromkeys(_INTEGRITY_STATES, 0))
     for states in counts.values():
@@ -461,6 +478,37 @@ def _rotate_connector_auth_config(
     return updated_records, updated_values
 
 
+def _rotate_raw_encrypted_columns(
+    db: Session, *, old_key: str, new_key: str
+) -> tuple[int, int]:
+    """Rotate whole-blob/string encrypted columns without ORM decryption."""
+    updated_records = 0
+    updated_values = 0
+    for _scope, table_name, column_name in _RAW_ENCRYPTED_COLUMNS:
+        rows = db.execute(
+            text(
+                f"SELECT id, {column_name} FROM {table_name} "
+                f"WHERE {column_name} IS NOT NULL"
+            )
+        ).mappings()
+        for row in rows:
+            raw = row[column_name]
+            if not isinstance(raw, str) or not raw:
+                continue
+            rotated, changed = _rotate_value(raw, old_key=old_key, new_key=new_key)
+            if not changed:
+                continue
+            db.execute(
+                text(
+                    f"UPDATE {table_name} SET {column_name} = :value WHERE id = :id"
+                ),
+                {"value": rotated, "id": row["id"]},
+            )
+            updated_records += 1
+            updated_values += 1
+    return updated_records, updated_values
+
+
 def rotate_credential_encryption_material(
     db: Session,
     *,
@@ -496,6 +544,12 @@ def rotate_credential_encryption_material(
     updated_values += values
 
     records, values = _rotate_connector_auth_config(
+        db, old_key=old_key, new_key=new_key
+    )
+    updated_records += records
+    updated_values += values
+
+    records, values = _rotate_raw_encrypted_columns(
         db, old_key=old_key, new_key=new_key
     )
     updated_records += records

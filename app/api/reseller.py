@@ -26,12 +26,12 @@ from app.schemas.portal import (
 )
 from app.services import chat_session as chat_session_service
 from app.services import (
-    quotes_mirror,
     reseller_crm_views,
     reseller_portal,
     work_orders_mirror,
 )
 from app.services.auth_dependencies import require_user_auth
+from app.services.sales import selfserve as selfserve_service
 
 router = APIRouter(prefix="/reseller", tags=["reseller"])
 
@@ -876,7 +876,7 @@ def my_reseller_quote_request(
     account = reseller_portal._get_customer_account(db, reseller_id, account_id)
     if account is None:
         raise HTTPException(status_code=404, detail="Account not found")
-    return quotes_mirror.request_quote(
+    quote = selfserve_service.selfserve_quotes.request_quote(
         db,
         str(account.id),
         latitude=payload.latitude,
@@ -885,3 +885,4 @@ def my_reseller_quote_request(
         region=payload.region,
         note=payload.note,
     )
+    return selfserve_service.build_portal_quote_payload(db, quote)

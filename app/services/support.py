@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
@@ -2108,9 +2109,10 @@ class TicketAccessTokens:
             TicketAccessToken.purpose == purpose,
             TicketAccessToken.is_active.is_(True),
         ).update({"is_active": False, "responded_at": _now()})
+        raw_token = secrets.token_urlsafe(32)
         token_row = TicketAccessToken(
             ticket_id=ticket.id,
-            token=secrets.token_urlsafe(32),
+            token_hash=TicketAccessTokens._hash(raw_token),
             purpose=purpose,
             expires_at=_now()
             + timedelta(days=ttl_days or TicketAccessTokens._TTL_DAYS),
@@ -2118,7 +2120,12 @@ class TicketAccessTokens:
         )
         db.add(token_row)
         db.flush()
+        token_row.raw_token = raw_token
         return token_row
+
+    @staticmethod
+    def _hash(token: str) -> str:
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
     @staticmethod
     def get_by_token(db: Session, token: str) -> TicketAccessToken | None:
@@ -2128,7 +2135,7 @@ class TicketAccessTokens:
         return (
             db.query(TicketAccessToken)
             .options(selectinload(TicketAccessToken.ticket))
-            .filter(TicketAccessToken.token == cleaned)
+            .filter(TicketAccessToken.token_hash == TicketAccessTokens._hash(cleaned))
             .first()
         )
 
@@ -2161,7 +2168,9 @@ class TicketAccessTokens:
         )
         if not base_url:
             return {"confirm_url": None, "dispute_url": None}
-        token = token_row.token
+        token = token_row.raw_token
+        if not token:
+            return {"confirm_url": None, "dispute_url": None}
         page_url = f"{base_url}/ticket-confirm/{token}"
         return {
             "confirm_url": page_url,

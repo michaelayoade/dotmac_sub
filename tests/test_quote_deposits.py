@@ -1,8 +1,4 @@
-"""Quote deposit collection via the existing billing surface: initiate + verify.
-
-``verify_deposit`` runs behind the Phase 3 ``quotes_native_write_enabled``
-flag: OFF (default) write-through to the CRM via ``quotes_mirror.accept_quote``;
-ON native accept via ``sales.selfserve``. Both paths are covered here."""
+"""Native quote deposit collection through Sub's billing surface."""
 
 from __future__ import annotations
 
@@ -15,11 +11,13 @@ import pytest
 from fastapi import HTTPException
 
 from app.models.billing import InvoiceStatus, Payment
-from app.models.quote_mirror import QuoteMirror
 from app.models.sales import SalesOrder
 from app.models.subscriber import Subscriber
 from app.services import quote_deposits
 from app.services.sales import selfserve
+
+
+_FAP = SimpleNamespace(id=uuid.uuid4(), name="NAP-041")
 
 
 def _subscriber(db) -> Subscriber:
@@ -32,23 +30,6 @@ def _subscriber(db) -> Subscriber:
     return sub
 
 
-def _quote(db, sub, *, deposit="37500.00", paid=False) -> QuoteMirror:
-    row = QuoteMirror(
-        crm_quote_id=f"q-{uuid.uuid4().hex[:8]}",
-        subscriber_id=sub.id,
-        status="draft",
-        currency="NGN",
-        total="75000.00",
-        deposit_amount=deposit,
-        deposit_paid=paid,
-        payload={"id": "q1", "status": "draft", "deposit_amount": deposit},
-    )
-    db.add(row)
-    db.commit()
-    db.refresh(row)
-    return row
-
-
 def _customer(sub):
     return {
         "account_id": str(sub.id),
@@ -57,9 +38,23 @@ def _customer(sub):
     }
 
 
+def _native_quote(db, sub):
+    with patch(
+        "app.services.sales.selfserve._nearest_fiber_access_point",
+        return_value=(_FAP, 1300.0),
+    ):
+        return selfserve.selfserve_quotes.request_quote(
+            db,
+            str(sub.id),
+            latitude=9.0765,
+            longitude=7.3986,
+            address="12 Mississippi St, Maitama",
+        )
+
+
 def test_initiate_creates_invoice_and_returns_checkout(db_session):
     sub = _subscriber(db_session)
-    row = _quote(db_session, sub)
+    quote = _native_quote(db_session, sub)
     fake_invoice = SimpleNamespace(id=uuid.uuid4(), metadata_=None)
     intent = {
         "provider_type": "paystack",
@@ -78,7 +73,7 @@ def test_initiate_creates_invoice_and_returns_checkout(db_session):
         ) as intent_fn,
     ):
         out = quote_deposits.initiate_deposit(
-            db_session, _customer(sub), str(sub.id), row.crm_quote_id
+            db_session, _customer(sub), str(sub.id), str(quote.id)
         )
     assert out["amount"] == "37500.00"
     assert out["payment_reference"] == "ref_1"
@@ -88,207 +83,26 @@ def test_initiate_creates_invoice_and_returns_checkout(db_session):
 
 def test_initiate_rejects_when_already_paid(db_session):
     sub = _subscriber(db_session)
-    row = _quote(db_session, sub, paid=True)
+    quote = _native_quote(db_session, sub)
+    metadata = dict(quote.metadata_ or {})
+    metadata["deposit"] = {"amount": "37500.00", "paid": True}
+    quote.metadata_ = metadata
+    db_session.commit()
+
     with pytest.raises(HTTPException) as exc:
         quote_deposits.initiate_deposit(
-            db_session, _customer(sub), str(sub.id), row.crm_quote_id
+            db_session, _customer(sub), str(sub.id), str(quote.id)
         )
     assert exc.value.status_code == 409
 
 
-def test_initiate_rejects_when_no_deposit(db_session):
+def test_verify_paid_accepts_natively_and_is_idempotent(db_session):
     sub = _subscriber(db_session)
-    row = _quote(db_session, sub, deposit="0")
-    with pytest.raises(HTTPException) as exc:
-        quote_deposits.initiate_deposit(
-            db_session, _customer(sub), str(sub.id), row.crm_quote_id
-        )
-    assert exc.value.status_code == 400
-
-
-def test_verify_paid_accepts_quote(db_session):
-    sub = _subscriber(db_session)
-    row = _quote(db_session, sub)
+    quote = _native_quote(db_session, sub)
     paid_invoice = SimpleNamespace(status=InvoiceStatus.paid)
-    accepted = {"id": row.crm_quote_id, "status": "accepted", "deposit_paid": True}
-    with (
-        patch(
-            "app.services.quote_deposits.payments.verify_and_record_payment",
-            return_value={"invoice": paid_invoice, "amount": Decimal("37500.00")},
-        ),
-        patch(
-            "app.services.quote_deposits.quotes_mirror.accept_quote",
-            return_value=accepted,
-        ) as accept_fn,
-    ):
-        out = quote_deposits.verify_deposit(
-            db_session, _customer(sub), str(sub.id), row.crm_quote_id, reference="ref_1"
-        )
-    assert out["paid"] is True
-    assert out["quote"]["status"] == "accepted"
-    accept_fn.assert_called_once()
-
-
-def test_verify_unpaid_does_not_accept(db_session):
-    sub = _subscriber(db_session)
-    row = _quote(db_session, sub)
-    pending_invoice = SimpleNamespace(status=InvoiceStatus.issued)
-    with (
-        patch(
-            "app.services.quote_deposits.payments.verify_and_record_payment",
-            return_value={"invoice": pending_invoice, "amount": Decimal("0.00")},
-        ),
-        patch("app.services.quote_deposits.quotes_mirror.accept_quote") as accept_fn,
-    ):
-        out = quote_deposits.verify_deposit(
-            db_session, _customer(sub), str(sub.id), row.crm_quote_id, reference="ref_1"
-        )
-    assert out["paid"] is False
-    accept_fn.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# Phase 3 flip flag: quotes_native_write_enabled
-# ---------------------------------------------------------------------------
-
-_FAP = SimpleNamespace(id=uuid.uuid4(), name="NAP-041")
-
-
-def _native_quote(db, sub):
-    """A native draft quote created through the self-serve flow (75,000 total,
-    37,500 deposit at the default 50%)."""
     with patch(
-        "app.services.sales.selfserve._nearest_fiber_access_point",
-        return_value=(_FAP, 1300.0),
-    ):
-        return selfserve.selfserve_quotes.request_quote(
-            db,
-            str(sub.id),
-            latitude=9.0765,
-            longitude=7.3986,
-            address="12 Mississippi St, Maitama",
-        )
-
-
-def _flag_on():
-    return patch("app.services.quote_deposits._native_write_enabled", return_value=True)
-
-
-def test_native_write_flag_defaults_off(db_session):
-    # Spec default False — the CRM write-through stays the live path until
-    # the coordinated Phase 3 write flip.
-    assert quote_deposits._native_write_enabled(db_session) is False
-
-
-def test_verify_default_flag_uses_crm_write_through(db_session):
-    """Flag OFF: acceptance still goes through quotes_mirror.accept_quote
-    (the CRM portal accept) — the native service is not touched."""
-    sub = _subscriber(db_session)
-    row = _quote(db_session, sub)
-    paid_invoice = SimpleNamespace(status=InvoiceStatus.paid)
-    accepted = {"id": row.crm_quote_id, "status": "accepted", "deposit_paid": True}
-    with (
-        patch(
-            "app.services.quote_deposits.payments.verify_and_record_payment",
-            return_value={"invoice": paid_invoice, "amount": Decimal("37500.00")},
-        ),
-        patch(
-            "app.services.quote_deposits.quotes_mirror.accept_quote",
-            return_value=accepted,
-        ) as crm_accept,
-        patch.object(
-            selfserve.selfserve_quotes, "accept_with_deposit"
-        ) as native_accept,
-    ):
-        out = quote_deposits.verify_deposit(
-            db_session, _customer(sub), str(sub.id), row.crm_quote_id, reference="ref_1"
-        )
-    assert out["paid"] is True
-    crm_accept.assert_called_once()
-    native_accept.assert_not_called()
-
-
-def test_verify_native_flag_accepts_natively(db_session):
-    """Flag ON: the accept tail runs natively — quote accepted in sub's own
-    quotes table, sales order created and marked, no CRM hop."""
-    sub = _subscriber(db_session)
-    quote = _native_quote(db_session, sub)
-    paid_invoice = SimpleNamespace(status=InvoiceStatus.paid)
-    with (
-        _flag_on(),
-        patch(
-            "app.services.quote_deposits.payments.verify_and_record_payment",
-            return_value={"invoice": paid_invoice, "amount": Decimal("37500.00")},
-        ),
-        patch("app.services.quote_deposits.quotes_mirror.accept_quote") as crm_accept,
-    ):
-        out = quote_deposits.verify_deposit(
-            db_session, _customer(sub), str(sub.id), str(quote.id), reference="ref_1"
-        )
-
-    crm_accept.assert_not_called()
-    assert out["paid"] is True
-    assert out["quote"]["status"] == "accepted"
-    assert out["quote"]["deposit_paid"] is True
-    assert out["quote"]["deposit_reference"] == "ref_1"
-
-    db_session.refresh(quote)
-    assert quote.status == "accepted"
-    order = db_session.query(SalesOrder).filter(SalesOrder.quote_id == quote.id).one()
-    assert order.deposit_paid is True
-    assert order.amount_paid == Decimal("37500.00")
-    assert order.payment_status == "partial"
-    # Risk #2: exactly one ledger event per deposit — the (mocked) invoice
-    # payment. The native accept itself records no payment row.
-    assert db_session.query(Payment).count() == 0
-
-    # Transitional mirror write-back keeps mirror reads + initiate_deposit's
-    # already-paid check coherent until the PR 8 read flip.
-    mirror = (
-        db_session.query(QuoteMirror)
-        .filter(QuoteMirror.crm_quote_id == str(quote.id))
-        .one()
-    )
-    assert mirror.status == "accepted"
-    assert mirror.deposit_paid is True
-
-
-def test_verify_native_flag_unpaid_leaves_quote_draft(db_session):
-    sub = _subscriber(db_session)
-    quote = _native_quote(db_session, sub)
-    pending_invoice = SimpleNamespace(status=InvoiceStatus.issued)
-    with (
-        _flag_on(),
-        patch(
-            "app.services.quote_deposits.payments.verify_and_record_payment",
-            return_value={"invoice": pending_invoice, "amount": Decimal("0.00")},
-        ),
-    ):
-        out = quote_deposits.verify_deposit(
-            db_session, _customer(sub), str(sub.id), str(quote.id), reference="ref_1"
-        )
-    assert out["paid"] is False
-    assert out["quote"]["status"] == "draft"
-    db_session.refresh(quote)
-    assert quote.status == "draft"
-    assert (
-        db_session.query(SalesOrder).filter(SalesOrder.quote_id == quote.id).count()
-        == 0
-    )
-
-
-def test_verify_native_flag_retry_is_idempotent(db_session):
-    """A verify retry after a successful native accept returns the same
-    sales order and keeps the original deposit stamp."""
-    sub = _subscriber(db_session)
-    quote = _native_quote(db_session, sub)
-    paid_invoice = SimpleNamespace(status=InvoiceStatus.paid)
-    with (
-        _flag_on(),
-        patch(
-            "app.services.quote_deposits.payments.verify_and_record_payment",
-            return_value={"invoice": paid_invoice, "amount": Decimal("37500.00")},
-        ),
+        "app.services.quote_deposits.payments.verify_and_record_payment",
+        return_value={"invoice": paid_invoice, "amount": Decimal("37500.00")},
     ):
         first = quote_deposits.verify_deposit(
             db_session, _customer(sub), str(sub.id), str(quote.id), reference="ref_1"
@@ -300,27 +114,47 @@ def test_verify_native_flag_retry_is_idempotent(db_session):
             str(quote.id),
             reference="ref_1_retry",
         )
-    assert first["quote"]["already_accepted"] is False
+
+    assert first["paid"] is True
+    assert first["quote"]["status"] == "accepted"
+    assert first["quote"]["deposit_reference"] == "ref_1"
     assert second["quote"]["already_accepted"] is True
     assert second["quote"]["sales_order_id"] == first["quote"]["sales_order_id"]
     assert second["quote"]["deposit_reference"] == "ref_1"
-    assert (
-        db_session.query(SalesOrder).filter(SalesOrder.quote_id == quote.id).count()
-        == 1
-    )
+
+    order = db_session.query(SalesOrder).filter(SalesOrder.quote_id == quote.id).one()
+    assert order.deposit_paid is True
+    assert order.amount_paid == Decimal("37500.00")
+    assert order.payment_status == "partial"
+    assert db_session.query(Payment).count() == 0
 
 
-def test_verify_native_flag_is_subscriber_scoped(db_session):
+def test_verify_unpaid_leaves_native_quote_draft(db_session):
+    sub = _subscriber(db_session)
+    quote = _native_quote(db_session, sub)
+    pending_invoice = SimpleNamespace(status=InvoiceStatus.issued)
+    with patch(
+        "app.services.quote_deposits.payments.verify_and_record_payment",
+        return_value={"invoice": pending_invoice, "amount": Decimal("0.00")},
+    ):
+        out = quote_deposits.verify_deposit(
+            db_session, _customer(sub), str(sub.id), str(quote.id), reference="ref_1"
+        )
+    assert out["paid"] is False
+    assert out["quote"]["status"] == "draft"
+    assert db_session.query(SalesOrder).filter(SalesOrder.quote_id == quote.id).count() == 0
+
+
+def test_verify_is_subscriber_scoped(db_session):
     sub = _subscriber(db_session)
     other = _subscriber(db_session)
     quote = _native_quote(db_session, sub)
-    with _flag_on():
-        with pytest.raises(HTTPException) as exc:
-            quote_deposits.verify_deposit(
-                db_session,
-                _customer(other),
-                str(other.id),
-                str(quote.id),
-                reference="ref_1",
-            )
+    with pytest.raises(HTTPException) as exc:
+        quote_deposits.verify_deposit(
+            db_session,
+            _customer(other),
+            str(other.id),
+            str(quote.id),
+            reference="ref_1",
+        )
     assert exc.value.status_code == 404

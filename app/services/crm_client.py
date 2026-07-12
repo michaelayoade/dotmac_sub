@@ -398,23 +398,6 @@ class CRMClient:
             logger.error("CRM raw request error %s %s: %s", method, path, exc)
             raise CRMClientError(f"CRM connection error: {exc}") from exc
 
-    def post_signed_webhook(
-        self,
-        path: str,
-        *,
-        body: bytes,
-        signature: str,
-    ) -> httpx.Response:
-        return self._raw_request(
-            "POST",
-            path,
-            content=body,
-            headers={
-                "Content-Type": "application/json",
-                "X-Selfcare-Signature": signature,
-            },
-        )
-
     def _cached_get(
         self,
         path: str,
@@ -485,14 +468,6 @@ class CRMClient:
             f"/api/v1/subscribers/{subscriber_id}", None, self.cache_detail_ttl
         )
 
-    def update_subscriber(
-        self, subscriber_id: str, payload: dict[str, Any]
-    ) -> dict[str, Any]:
-        """Patch fields on a CRM subscriber (e.g. billing snapshot)."""
-        return self._request(
-            "PATCH", f"/api/v1/subscribers/{subscriber_id}", json_data=payload
-        )
-
     def list_subscribers(
         self,
         *,
@@ -549,14 +524,6 @@ class CRMClient:
             f"/api/v1/tickets/{ticket_id}", None, self.cache_detail_ttl
         )
 
-    def create_ticket(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """Create a new ticket in the CRM."""
-        return self._request("POST", "/api/v1/tickets", json_data=payload)
-
-    def update_ticket(self, ticket_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-        """Patch fields on a CRM ticket (e.g. re-point its subscriber)."""
-        return self._request("PATCH", f"/api/v1/tickets/{ticket_id}", json_data=payload)
-
     def list_ticket_comments(
         self, ticket_id: str, *, use_cache: bool = True
     ) -> list[dict[str, Any]]:
@@ -572,10 +539,6 @@ class CRMClient:
             else self._request("GET", "/api/v1/ticket-comments", params=params)
         )
         return data if isinstance(data, list) else data.get("items", [])
-
-    def create_ticket_comment(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """Add a comment to a ticket."""
-        return self._request("POST", "/api/v1/ticket-comments", json_data=payload)
 
     # ── Work Orders ──────────────────────────────────────────────────────
 
@@ -594,83 +557,6 @@ class CRMClient:
         return self._cached_get(
             f"/api/v1/work-orders/{work_order_id}", None, self.cache_detail_ttl
         )
-
-    def update_work_order(
-        self, work_order_id: str, payload: dict[str, Any]
-    ) -> dict[str, Any]:
-        """Patch fields on a CRM work order."""
-        return self._request(
-            "PATCH", f"/api/v1/work-orders/{work_order_id}", json_data=payload
-        )
-
-    def delete_subscriber(self, subscriber_id: str) -> None:
-        """Soft-delete a CRM subscriber (sets is_active=False CRM-side)."""
-        self._request("DELETE", f"/api/v1/subscribers/{subscriber_id}")
-
-    def create_widget_session(
-        self,
-        *,
-        config_id: str,
-        email: str,
-        name: str | None = None,
-        crm_subscriber_id: str | None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Mint an already-identified chat_widget visitor session (server-to-server).
-
-        The CRM trusts this caller (authenticated service JWT) to assert the
-        visitor's identity, so the client never calls the public, browser-driven
-        identify endpoint. Returns {session_id, visitor_token, conversation_id}.
-        """
-        payload: dict[str, Any] = {"config_id": config_id, "email": email}
-        if name:
-            payload["name"] = name
-        if crm_subscriber_id:
-            payload["crm_subscriber_id"] = crm_subscriber_id
-        if metadata:
-            payload["metadata"] = metadata
-        try:
-            data = self._request(
-                "POST", "/api/v1/widget/internal/session", json_data=payload
-            )
-            return data if isinstance(data, dict) else {}
-        except CRMClientError:
-            logger.warning(
-                "CRM internal widget session mint failed; falling back to public widget flow"
-            )
-
-        origin = os.getenv("APP_URL", "").rstrip("/") or "https://selfcare.dotmac.io"
-        session_data = self._request(
-            "POST",
-            f"/api/v1/widget/{config_id}/session",
-            json_data={"page_url": f"{origin}/mobile-chat"},
-            headers={"Origin": origin},
-        )
-        if not isinstance(session_data, dict):
-            return {}
-
-        session_id = str(session_data.get("session_id") or "")
-        visitor_token = str(session_data.get("visitor_token") or "")
-        if not session_id or not visitor_token:
-            return session_data
-
-        custom_fields = dict(metadata or {})
-        if crm_subscriber_id:
-            custom_fields["crm_subscriber_id"] = crm_subscriber_id
-        identify_payload: dict[str, Any] = {"email": email}
-        if name:
-            identify_payload["name"] = name
-        if custom_fields:
-            identify_payload["custom_fields"] = custom_fields
-        identify_data = self._request(
-            "POST",
-            f"/api/v1/widget/session/{session_id}/identify",
-            json_data=identify_payload,
-            headers={"Origin": origin, "X-Visitor-Token": visitor_token},
-        )
-        if isinstance(identify_data, dict) and identify_data.get("conversation_id"):
-            session_data["conversation_id"] = identify_data.get("conversation_id")
-        return session_data
 
     def create_portal_session(
         self,
@@ -815,59 +701,6 @@ class CRMClient:
         )
         return data if isinstance(data, dict) else {}
 
-    def submit_portal_technician_rating(
-        self,
-        crm_subscriber_id: str,
-        work_order_id: str,
-        *,
-        rating: int,
-        comment: str | None = None,
-        actor: str = "subscriber",
-    ) -> dict[str, Any]:
-        """Submit a technician rating for a completed work order (CSAT/Survey)."""
-        token = self._portal_token(
-            crm_subscriber_id, ["work_orders:write"], actor=actor
-        )
-        payload: dict[str, Any] = {"rating": rating}
-        if comment:
-            payload["comment"] = comment
-        data = self._request(
-            "POST",
-            f"/api/v1/portal/work-orders/{work_order_id}/rate-technician",
-            json_data=payload,
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        return data if isinstance(data, dict) else {}
-
-    def create_portal_referral(
-        self,
-        crm_subscriber_id: str,
-        *,
-        name: str | None = None,
-        email: str | None = None,
-        phone: str | None = None,
-        note: str | None = None,
-    ) -> dict[str, Any]:
-        """Refer-a-friend write-through to the CRM Portal API (server-side)."""
-        token = self._portal_token(crm_subscriber_id, ["referrals:write"])
-        payload: dict[str, Any] = {
-            k: v
-            for k, v in {
-                "name": name,
-                "email": email,
-                "phone": phone,
-                "note": note,
-            }.items()
-            if v
-        }
-        data = self._request(
-            "POST",
-            "/api/v1/portal/referrals",
-            json_data=payload,
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        return data if isinstance(data, dict) else {}
-
     def get_portal_quotes(self, crm_subscriber_id: str) -> dict[str, Any]:
         """Read a subscriber's self-serve quotes (feasibility, estimate, deposit,
         status) from the CRM Portal API (server-side). Used by the mirror reconcile."""
@@ -875,60 +708,6 @@ class CRMClient:
         data = self._request(
             "GET",
             "/api/v1/portal/quotes",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        return data if isinstance(data, dict) else {}
-
-    def request_portal_quote(
-        self,
-        crm_subscriber_id: str,
-        *,
-        latitude: float,
-        longitude: float,
-        address: str | None = None,
-        region: str | None = None,
-        note: str | None = None,
-    ) -> dict[str, Any]:
-        """Request a map-pinned installation quote (write-through to the CRM
-        Portal API). Returns the created quote payload (feasibility + estimate)."""
-        token = self._portal_token(crm_subscriber_id, ["quotes:write"])
-        payload: dict[str, Any] = {"latitude": latitude, "longitude": longitude}
-        if address:
-            payload["address"] = address
-        if region:
-            payload["region"] = region
-        if note:
-            payload["note"] = note
-        data = self._request(
-            "POST",
-            "/api/v1/portal/quote-request",
-            json_data=payload,
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        return data if isinstance(data, dict) else {}
-
-    def accept_portal_quote(
-        self,
-        crm_subscriber_id: str,
-        quote_id: str,
-        *,
-        deposit_reference: str,
-        deposit_amount: str,
-        provider: str | None = None,
-    ) -> dict[str, Any]:
-        """Accept a quote after the deposit is verified (write-through). The CRM
-        records the deposit and triggers the sales-order + install-project."""
-        token = self._portal_token(crm_subscriber_id, ["quotes:write"])
-        payload: dict[str, Any] = {
-            "deposit_reference": deposit_reference,
-            "deposit_amount": deposit_amount,
-        }
-        if provider:
-            payload["provider"] = provider
-        data = self._request(
-            "POST",
-            f"/api/v1/portal/quotes/{quote_id}/accept",
-            json_data=payload,
             headers={"Authorization": f"Bearer {token}"},
         )
         return data if isinstance(data, dict) else {}

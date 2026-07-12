@@ -12,7 +12,6 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime, timedelta
 
-from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -247,86 +246,6 @@ def read_for_subscriber(
         1 for r in rows if r.status not in ("accepted", "rejected", "expired")
     )
     return {"quotes": items, "total": len(items), "open": open_count}
-
-
-def request_quote(
-    db: Session,
-    subscriber_id: str,
-    *,
-    latitude: float,
-    longitude: float,
-    address: str | None = None,
-    region: str | None = None,
-    note: str | None = None,
-) -> dict:
-    """Write-through: request a map-pinned installation quote from the CRM, mirror
-    the result locally, and return it. Raises 400 if the account isn't CRM-linked."""
-    crm_subscriber_id = resolve_crm_subscriber_id(db, str(subscriber_id))
-    if not crm_subscriber_id:
-        raise HTTPException(status_code=400, detail="Account is not linked to the CRM")
-
-    try:
-        item = get_crm_client().request_portal_quote(
-            crm_subscriber_id,
-            latitude=latitude,
-            longitude=longitude,
-            address=address,
-            region=region,
-            note=note,
-        )
-    except CRMClientError as exc:
-        logger.warning("quote_request_failed subscriber=%s: %s", subscriber_id, exc)
-        raise HTTPException(
-            status_code=502, detail="Could not reach the quoting service"
-        ) from exc
-
-    sub_uuid = coerce_uuid(str(subscriber_id))
-    if isinstance(item, dict) and item.get("id"):
-        _upsert_row(db, subscriber_id=sub_uuid, item=item)
-        db.commit()
-    return item if isinstance(item, dict) else {}
-
-
-def accept_quote(
-    db: Session,
-    subscriber_id: str,
-    quote_id: str,
-    *,
-    deposit_reference: str,
-    deposit_amount: str,
-    provider: str | None = None,
-) -> dict:
-    """Write-through: accept a quote after the deposit is verified. The CRM
-    records the deposit + triggers the sales-order/install-project; mirror the
-    returned quote locally."""
-    crm_subscriber_id = resolve_crm_subscriber_id(db, str(subscriber_id))
-    if not crm_subscriber_id:
-        raise HTTPException(status_code=400, detail="Account is not linked to the CRM")
-
-    try:
-        item = get_crm_client().accept_portal_quote(
-            crm_subscriber_id,
-            quote_id,
-            deposit_reference=deposit_reference,
-            deposit_amount=deposit_amount,
-            provider=provider,
-        )
-    except CRMClientError as exc:
-        logger.warning(
-            "quote_accept_failed subscriber=%s quote=%s: %s",
-            subscriber_id,
-            quote_id,
-            exc,
-        )
-        raise HTTPException(
-            status_code=502, detail="Could not reach the quoting service"
-        ) from exc
-
-    sub_uuid = coerce_uuid(str(subscriber_id))
-    if isinstance(item, dict) and item.get("id"):
-        _upsert_row(db, subscriber_id=sub_uuid, item=item)
-        db.commit()
-    return item if isinstance(item, dict) else {}
 
 
 _STATUS_EVENTS = {
