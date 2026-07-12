@@ -68,6 +68,7 @@ from app.services.billing._common import (
     _validate_payment_channel,
     _validate_payment_linkages,
     _validate_payment_provider,
+    lock_account,
 )
 from app.services.common import (
     apply_ordering,
@@ -1652,6 +1653,145 @@ class Payments(ListResponseMixin):
             if invoice:
                 db.flush()
                 _finalize_invoice_payment_effects(db, invoice)
+        db.commit()
+        db.refresh(payment)
+        return payment
+
+    @staticmethod
+    def reallocate(db: Session, payment_id: str, invoice_id: str) -> Payment:
+        """Move a payment's allocation to a different invoice.
+
+        The canonical owner operation for "admin pointed this payment at the
+        wrong invoice". It must be used instead of rewriting ``PaymentAllocation``
+        rows directly: the money's effect is spread across the allocation, the
+        ledger credit, and the *two* invoices' derived totals, and all of them
+        have to move together.
+
+        For each invoice released, the payment ledger credit is deactivated and
+        the invoice is recomputed, so a released invoice cannot keep reading as
+        ``paid`` with no money behind it. The new allocation is then capped at
+        the target's ``balance_due`` — an over-payment becomes account credit
+        rather than an allocation larger than the debt it settles.
+        """
+        payment = get_by_id(db, Payment, payment_id)
+        if not payment:
+            raise HTTPException(status_code=404, detail="Payment not found")
+        if not payment.is_active:
+            raise HTTPException(
+                status_code=409, detail="Inactive payment cannot be reallocated"
+            )
+        if payment.status != PaymentStatus.succeeded:
+            raise HTTPException(
+                status_code=409,
+                detail="Only a succeeded payment can be reallocated",
+            )
+        if payment.account_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Consolidated payments require their dedicated allocation "
+                    "workflow and cannot be reallocated here"
+                ),
+            )
+
+        # Account lock first: every subscriber-scoped payment and invoice in
+        # this operation shares that serialization key. Then lock the payment
+        # and target rows so a concurrent edit cannot change either underneath
+        # the release-and-apply sequence.
+        lock_account(db, str(payment.account_id))
+        payment = (
+            db.query(Payment).filter(Payment.id == payment.id).with_for_update().one()
+        )
+        target = (
+            db.query(Invoice).filter(Invoice.id == invoice_id).with_for_update().first()
+        )
+        if not target or not target.is_active:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+        if str(target.account_id) != str(payment.account_id):
+            raise HTTPException(
+                status_code=400,
+                detail="Invoice belongs to a different account than the payment",
+            )
+        _validate_invoice_currency(target, payment.currency)
+        _assert_invoice_allocatable(target)
+        if target.status == InvoiceStatus.written_off:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot allocate a payment to a written_off invoice",
+            )
+
+        already_on_target = any(
+            allocation.is_active and str(allocation.invoice_id) == str(target.id)
+            for allocation in payment.allocations
+        )
+        if not already_on_target and round_money(
+            to_decimal(target.balance_due or Decimal("0.00"))
+        ) <= Decimal("0.00"):
+            raise HTTPException(status_code=400, detail="Invoice has no balance due")
+
+        released: list[Invoice] = []
+        for allocation in list(payment.allocations):
+            if not allocation.is_active:
+                continue
+            if str(allocation.invoice_id) == str(target.id):
+                # Already where it needs to be; nothing to move.
+                continue
+            previous = get_by_id(db, Invoice, allocation.invoice_id)
+            # Mirror PaymentAllocations.delete: drop the ledger credit with the
+            # allocation, never one without the other.
+            db.query(LedgerEntry).filter(
+                LedgerEntry.payment_id == allocation.payment_id,
+                LedgerEntry.invoice_id == allocation.invoice_id,
+                LedgerEntry.source == LedgerSource.payment,
+            ).update({"is_active": False})
+            allocation.is_active = False
+            if previous is not None:
+                released.append(previous)
+
+        db.flush()
+        for previous in released:
+            _finalize_invoice_payment_effects(db, previous)
+
+        db.flush()
+        db.refresh(target)
+
+        # Only the part of the payment that is not already allocated is free to
+        # move. Without this, re-pointing a payment at the invoice it is already
+        # allocated to would treat the whole amount as surplus and mint credit
+        # the customer never paid.
+        allocated = sum(
+            (
+                round_money(to_decimal(a.amount))
+                for a in payment.allocations
+                if a.is_active
+            ),
+            Decimal("0.00"),
+        )
+        amount = round_money(to_decimal(payment.amount))
+        unallocated = amount - allocated
+        if unallocated <= 0:
+            db.commit()
+            db.refresh(payment)
+            return payment
+
+        payable = round_money(to_decimal(target.balance_due or Decimal("0.00")))
+        applied = min(unallocated, payable) if payable > 0 else Decimal("0.00")
+
+        if applied > 0:
+            _apply_payment_allocation(
+                db,
+                payment,
+                target,
+                applied,
+                memo=f"Reallocated from payment {payment.id}",
+            )
+            db.flush()
+            _finalize_invoice_payment_effects(db, target)
+
+        # Anything the target could not absorb stays with the customer as credit
+        # instead of silently inflating the allocation.
+        _record_unallocated_payment_credit(db, payment, unallocated - applied)
+
         db.commit()
         db.refresh(payment)
         return payment
