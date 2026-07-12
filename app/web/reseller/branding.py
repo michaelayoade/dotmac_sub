@@ -86,9 +86,7 @@ def reseller_branding_context(request: Request) -> dict[str, object]:
             stats = {
                 **stats,
                 "sidebar_logo_url": str(request_brand.get("logo_url") or ""),
-                "sidebar_logo_dark_url": str(
-                    request_brand.get("dark_logo_url") or ""
-                ),
+                "sidebar_logo_dark_url": str(request_brand.get("dark_logo_url") or ""),
                 "favicon_url": str(request_brand.get("favicon_url") or ""),
                 "app_name": str(request_brand.get("product_name") or ""),
             }

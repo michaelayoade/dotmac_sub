@@ -141,9 +141,7 @@ def test_inactive_brand_profile_is_reactivated_instead_of_duplicated(db_session)
         scope_id=None,
         values={"product_name": "First"},
     )
-    deactivate_brand_profile_committed(
-        db_session, scope_type="platform", scope_id=None
-    )
+    deactivate_brand_profile_committed(db_session, scope_type="platform", scope_id=None)
 
     reactivated = upsert_brand_profile_committed(
         db_session,
