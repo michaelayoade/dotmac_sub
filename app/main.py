@@ -148,6 +148,8 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.scheduler", "router", "api", "user"),
     ("app.api.comms", "router", "api", "admin"),
     ("app.api.campaigns", "router", "api", "admin"),
+    # One-click unsubscribe is followed from a mail client with no session.
+    ("app.api.campaigns", "public_router", "api", "none"),
     ("app.api.ai_operations", "router", "api", "admin"),
     ("app.api.workqueue", "router", "api", "user"),
     ("app.api.analytics", "router", "api", "admin"),

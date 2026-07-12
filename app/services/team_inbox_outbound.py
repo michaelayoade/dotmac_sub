@@ -40,6 +40,30 @@ def _commit(db: Session, action: Callable[[], T]) -> T:
 
 
 @dataclass(frozen=True)
+class OutboundSenderOverride:
+    """Caller-supplied sender identity for an outbound email.
+
+    Lets campaigns (and anything else with its own sender profile) reuse this
+    module's message recording and provider handling instead of forking a
+    parallel sender. Ignored on the WhatsApp path.
+
+    - ``sender_key`` alone re-points the send at another configured SMTP sender
+      (resolved from domain settings, so notification tracking is preserved).
+    - ``smtp`` / ``from_*`` / ``reply_to`` overlay the resolved config and force
+      an explicit-config send.
+    """
+
+    sender_key: str | None = None
+    from_name: str | None = None
+    from_email: str | None = None
+    reply_to: str | None = None
+    smtp: dict[str, Any] | None = None
+
+    def has_config_overlay(self) -> bool:
+        return bool(self.smtp or self.from_name or self.from_email or self.reply_to)
+
+
+@dataclass(frozen=True)
 class InboxReplyPayload:
     body_html: str
     body_text: str | None = None
@@ -47,6 +71,7 @@ class InboxReplyPayload:
     to_email: str | None = None
     sent_by_person_id: str | UUID | None = None
     metadata: dict | None = None
+    sender_override: OutboundSenderOverride | None = None
 
 
 @dataclass(frozen=True)
@@ -131,6 +156,73 @@ def apply_whatsapp_delivery_status(
         "provider_message_id": provider_message_id,
         "status": status_item["status"],
     }
+
+
+def _apply_sender_override(
+    db: Session,
+    *,
+    sender: team_outbound.TeamEmailSenderResolution,
+    override: OutboundSenderOverride | None,
+) -> tuple[dict[str, Any], str | None]:
+    """Resolve the effective SMTP config + sender key for an outbound email."""
+    if override is None:
+        return dict(sender.config), sender.sender_key
+
+    sender_key = (override.sender_key or "").strip() or sender.sender_key
+    if sender_key != sender.sender_key:
+        config = dict(
+            email_service.get_smtp_config(
+                db, sender_key=sender_key, activity=sender.activity
+            )
+        )
+    else:
+        config = dict(sender.config)
+
+    if override.smtp:
+        config.update({k: v for k, v in override.smtp.items() if v is not None})
+    if override.from_name:
+        config["from_name"] = override.from_name
+    if override.from_email:
+        config["from_email"] = override.from_email
+    if override.reply_to:
+        config["reply_to"] = override.reply_to
+    config["sender_key"] = sender_key
+    return config, sender_key
+
+
+def _dispatch_email(
+    db: Session,
+    *,
+    config: dict[str, Any],
+    sender_key: str | None,
+    activity: str | None,
+    override: OutboundSenderOverride | None,
+    to_email: str,
+    subject: str,
+    body_html: str,
+    body_text: str | None,
+) -> bool:
+    # An explicit config overlay (custom relay / From identity) has to bypass
+    # the settings-resolved sender, so it goes out through send_email_with_config.
+    # Everything else keeps the settings-resolved path, which also writes the
+    # Notification tracking rows.
+    if override is not None and override.has_config_overlay():
+        return email_service.send_email_with_config(
+            config,
+            to_email=to_email,
+            subject=subject,
+            body_html=body_html,
+            body_text=body_text,
+        )
+    return email_service.send_email(
+        db,
+        to_email=to_email,
+        subject=subject,
+        body_html=body_html,
+        body_text=body_text,
+        sender_key=sender_key,
+        activity=activity,
+    )
 
 
 def _reply_subject(conversation: InboxConversation, explicit: str | None) -> str:
@@ -387,16 +479,22 @@ def send_inbox_reply(
         fallback_activity="support_ticket",
         metadata_override=owner_link.metadata_ if owner_link is not None else None,
     )
-    config = sender.config
-    subject = _reply_subject(conversation, payload.subject)
-    sent = email_service.send_email(
+    config, resolved_sender_key = _apply_sender_override(
         db,
+        sender=sender,
+        override=payload.sender_override,
+    )
+    subject = _reply_subject(conversation, payload.subject)
+    sent = _dispatch_email(
+        db,
+        config=config,
+        sender_key=resolved_sender_key,
+        activity=sender.activity,
+        override=payload.sender_override,
         to_email=to_email,
         subject=subject,
         body_html=body_html,
         body_text=payload.body_text,
-        sender_key=sender.sender_key,
-        activity=sender.activity,
     )
     if not sent:
         failed_message_id = None
