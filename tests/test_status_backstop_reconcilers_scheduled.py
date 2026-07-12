@@ -34,12 +34,13 @@ def test_both_reconcilers_declared_registered_and_contracted() -> None:
 
 
 def test_account_status_task_runs_in_apply_mode_and_commits() -> None:
+    from app.services import enforcement_scheduled
     from app.tasks import enforcement
 
     fake_db = MagicMock()
     summary = MagicMock(candidates=1, changed=1, errors=0)
     with (
-        patch.object(enforcement, "SessionLocal", return_value=fake_db),
+        patch.object(enforcement_scheduled, "SessionLocal", return_value=fake_db),
         patch(
             "app.services.account_status_reconcile.reconcile_cohort",
             return_value=summary,
@@ -54,6 +55,7 @@ def test_account_status_task_runs_in_apply_mode_and_commits() -> None:
 
 
 def test_overdue_lock_task_is_dry_run_and_writes_nothing() -> None:
+    from app.services import enforcement_scheduled
     from app.tasks import enforcement
 
     fake_db = MagicMock()
@@ -61,7 +63,7 @@ def test_overdue_lock_task_is_dry_run_and_writes_nothing() -> None:
         candidates=2, restored=0, lock_cleared_only=0, skipped=0
     )
     with (
-        patch.object(enforcement, "SessionLocal", return_value=fake_db),
+        patch.object(enforcement_scheduled, "SessionLocal", return_value=fake_db),
         patch(
             "app.services.stale_overdue_lock_reconcile.reconcile",
             return_value=reconcile_result,

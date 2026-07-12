@@ -542,6 +542,20 @@ def build_beat_schedule() -> dict:
                 "task": "app.tasks.vas.run_vas_review_requery",
                 "schedule": timedelta(hours=24),
             }
+        credential_rotation_enabled = _effective_bool(
+            session,
+            SettingDomain.auth,
+            "credential_rotation_enabled",
+            "CREDENTIAL_ROTATION_ENABLED",
+            True,
+        )
+        _sync_scheduled_task(
+            session,
+            name="credential_encryption_key_rotation",
+            task_name="app.tasks.security.run_scheduled_credential_rotation",
+            enabled=credential_rotation_enabled,
+            interval_seconds=86400,
+        )
         usage_enabled = _effective_bool(
             session,
             SettingDomain.usage,

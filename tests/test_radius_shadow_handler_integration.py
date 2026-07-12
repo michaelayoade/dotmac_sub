@@ -46,7 +46,7 @@ class TestShadowWriteFeatureFlagGate:
 
         with (
             patch(
-                "app.services.events.handlers.enforcement._setting_bool",
+                "app.services.enforcement_event_policy.group_routing_enabled",
                 return_value=False,
             ),
             patch(
@@ -69,7 +69,7 @@ class TestShadowWriteFeatureFlagGate:
 
         with (
             patch(
-                "app.services.events.handlers.enforcement._setting_bool",
+                "app.services.enforcement_event_policy.group_routing_enabled",
                 return_value=True,
             ),
             patch(
@@ -96,7 +96,7 @@ class TestShadowWriteFeatureFlagGate:
 
         with (
             patch(
-                "app.services.events.handlers.enforcement._setting_bool",
+                "app.services.enforcement_event_policy.group_routing_enabled",
                 return_value=True,
             ),
             patch(
@@ -123,7 +123,7 @@ class TestShadowWriteFeatureFlagGate:
 
         with (
             patch(
-                "app.services.events.handlers.enforcement._setting_bool",
+                "app.services.enforcement_event_policy.group_routing_enabled",
                 return_value=True,
             ),
             patch(
@@ -140,7 +140,7 @@ class TestShadowWriteFeatureFlagGate:
 
         with (
             patch(
-                "app.services.events.handlers.enforcement._setting_bool",
+                "app.services.enforcement_event_policy.group_routing_enabled",
                 return_value=True,
             ),
             patch(
@@ -186,10 +186,13 @@ class TestRestoreHandlerInvokesShadowWrite:
     @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
     @patch("app.services.events.handlers.enforcement.radius_service")
     @patch("app.services.events.handlers.enforcement.radius_reject_service")
-    @patch("app.services.events.handlers.enforcement.settings_spec")
+    @patch(
+        "app.services.enforcement_event_policy."
+        "refresh_sessions_on_profile_change_enabled"
+    )
     def test_restore_path_calls_shadow_write(
         self,
-        mock_settings,
+        mock_refresh,
         _mock_reject,
         _mock_radius,
         _mock_disconnect,
@@ -199,7 +202,7 @@ class TestRestoreHandlerInvokesShadowWrite:
         db = MagicMock()
         sub = _stub_subscription()
         db.get.return_value = sub
-        mock_settings.resolve_value.return_value = "true"
+        mock_refresh.return_value = True
         event = Event(
             event_type=EventType.subscription_resumed,
             payload={"subscription_id": str(sub.id)},

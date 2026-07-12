@@ -2,7 +2,15 @@ from __future__ import annotations
 
 import httpx
 
-from scripts.network.setup_genieacs import GenieACSSetup
+from scripts.network.setup_genieacs import CONFIG_ENTRIES, GenieACSSetup
+
+
+def test_connection_request_auth_uses_scalar_extension_credentials() -> None:
+    expression = CONFIG_ENTRIES["cwmp.connectionRequestAuth"]
+
+    assert expression.startswith("AUTH(")
+    assert 'EXT("auth", "connectionRequestUsername"' in expression
+    assert 'EXT("auth", "connectionRequestPassword"' in expression
 
 
 def test_setup_genieacs_deploy_config_reports_404_as_error(monkeypatch) -> None:

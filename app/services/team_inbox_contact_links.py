@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import TypeVar
 from uuid import UUID
 
 from sqlalchemy import or_
@@ -17,6 +19,10 @@ class ContactLinkError(ValueError):
     pass
 
 
+class ConversationContactLinkError(ContactLinkError):
+    pass
+
+
 @dataclass(frozen=True)
 class ContactLinkResult:
     contact_link_id: UUID
@@ -25,6 +31,19 @@ class ContactLinkResult:
     subscriber_id: UUID | None
     reseller_id: UUID | None
     previous_link_ids_deactivated: list[UUID]
+
+
+T = TypeVar("T")
+
+
+def _commit(db: Session, action: Callable[[], T]) -> T:
+    try:
+        result = action()
+        db.commit()
+        return result
+    except Exception:
+        db.rollback()
+        raise
 
 
 def _subscriber_label(row: Subscriber) -> str:
@@ -232,4 +251,51 @@ def link_conversation_contact(
         subscriber_id=contact_link.subscriber_id,
         reseller_id=contact_link.reseller_id,
         previous_link_ids_deactivated=deactivated,
+    )
+
+
+def link_conversation_contact_by_id(
+    db: Session,
+    *,
+    conversation_id: str | UUID,
+    subscriber_id: str | UUID | None = None,
+    reseller_id: str | UUID | None = None,
+    linked_by_person_id: str | UUID | None = None,
+    note: str | None = None,
+) -> ContactLinkResult:
+    conversation_uuid = coerce_uuid(conversation_id)
+    conversation = (
+        db.get(InboxConversation, conversation_uuid) if conversation_uuid else None
+    )
+    if conversation is None or not conversation.is_active:
+        raise ConversationContactLinkError("Conversation not found.")
+    return link_conversation_contact(
+        db,
+        conversation=conversation,
+        subscriber_id=subscriber_id,
+        reseller_id=reseller_id,
+        linked_by_person_id=linked_by_person_id,
+        note=note,
+    )
+
+
+def link_conversation_contact_by_id_committed(
+    db: Session,
+    *,
+    conversation_id: str | UUID,
+    subscriber_id: str | UUID | None = None,
+    reseller_id: str | UUID | None = None,
+    linked_by_person_id: str | UUID | None = None,
+    note: str | None = None,
+) -> ContactLinkResult:
+    return _commit(
+        db,
+        lambda: link_conversation_contact_by_id(
+            db,
+            conversation_id=conversation_id,
+            subscriber_id=subscriber_id,
+            reseller_id=reseller_id,
+            linked_by_person_id=linked_by_person_id,
+            note=note,
+        ),
     )

@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 from app.services import web_network_core_devices_views as core_devices_views
-from app.services.genieacs_client import GenieACSError
+from app.services.genieacs_client import GenieACSError, GenieACSTaskQueuedError
 from app.services.network import ont_action_wifi
 
 
@@ -387,7 +387,11 @@ def test_set_wifi_config_does_not_walk_to_other_ssid_instances_on_timeout(
             connection_request: bool = True,
         ):
             attempts.append(dict(params))
-            raise GenieACSError("setParameterValues task timed out")
+            raise GenieACSTaskQueuedError(
+                "delivery deferred",
+                task_id="spv-task",
+                reason="HTTP 401",
+            )
 
         def get_device(self, _device_id: str):
             doc: dict = {}
@@ -419,6 +423,12 @@ def test_set_wifi_config_does_not_walk_to_other_ssid_instances_on_timeout(
     result = ont_action_wifi.set_wifi_config(None, "ont-1", ssid="New")
 
     assert result.success is False
+    assert result.waiting is True
+    assert result.data == {
+        "delivery_status": "queued",
+        "task_id": "spv-task",
+        "reason": "HTTP 401",
+    }
     assert attempts == [
         {"InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID": "New"}
     ]

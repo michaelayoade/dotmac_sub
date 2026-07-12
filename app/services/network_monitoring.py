@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import builtins
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
-from typing import cast
+from typing import TypeVar, cast
 
 from fastapi import HTTPException
 from sqlalchemy import case, func, select
@@ -52,6 +53,18 @@ from app.services.common import (
 from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
+T = TypeVar("T")
+
+
+def _commit(db: Session, action: Callable[[], T]) -> T:
+    """Run a monitoring mutation and own the transaction boundary."""
+    try:
+        result = action()
+        db.commit()
+        return result
+    except Exception:
+        db.rollback()
+        raise
 
 
 def _round_percent(value: Decimal) -> Decimal:
@@ -543,6 +556,10 @@ class PopSites(ListResponseMixin):
         return site
 
     @staticmethod
+    def create_committed(db: Session, payload: PopSiteCreate):
+        return _commit(db, lambda: PopSites.create(db, payload))
+
+    @staticmethod
     def get(db: Session, site_id: str):
         site = db.get(PopSite, site_id)
         if not site:
@@ -584,12 +601,20 @@ class PopSites(ListResponseMixin):
         return site
 
     @staticmethod
+    def update_committed(db: Session, site_id: str, payload: PopSiteUpdate):
+        return _commit(db, lambda: PopSites.update(db, site_id, payload))
+
+    @staticmethod
     def delete(db: Session, site_id: str):
         site = db.get(PopSite, site_id)
         if not site:
             raise HTTPException(status_code=404, detail="PoP site not found")
         site.is_active = False
         db.flush()
+
+    @staticmethod
+    def delete_committed(db: Session, site_id: str):
+        return _commit(db, lambda: PopSites.delete(db, site_id))
 
 
 class NetworkDevices(ListResponseMixin):
@@ -600,6 +625,10 @@ class NetworkDevices(ListResponseMixin):
         db.flush()
         db.refresh(device)
         return device
+
+    @staticmethod
+    def create_committed(db: Session, payload: NetworkDeviceCreate):
+        return _commit(db, lambda: NetworkDevices.create(db, payload))
 
     @staticmethod
     def get(db: Session, device_id: str):
@@ -646,12 +675,20 @@ class NetworkDevices(ListResponseMixin):
         return device
 
     @staticmethod
+    def update_committed(db: Session, device_id: str, payload: NetworkDeviceUpdate):
+        return _commit(db, lambda: NetworkDevices.update(db, device_id, payload))
+
+    @staticmethod
     def delete(db: Session, device_id: str):
         device = db.get(NetworkDevice, device_id)
         if not device:
             raise HTTPException(status_code=404, detail="Network device not found")
         device.is_active = False
         db.flush()
+
+    @staticmethod
+    def delete_committed(db: Session, device_id: str):
+        return _commit(db, lambda: NetworkDevices.delete(db, device_id))
 
     @staticmethod
     def get_dashboard_stats(db: Session) -> dict:
@@ -956,6 +993,10 @@ class DeviceInterfaces(ListResponseMixin):
         return interface
 
     @staticmethod
+    def create_committed(db: Session, payload: DeviceInterfaceCreate):
+        return _commit(db, lambda: DeviceInterfaces.create(db, payload))
+
+    @staticmethod
     def get(db: Session, interface_id: str):
         interface = db.get(DeviceInterface, interface_id)
         if not interface:
@@ -995,12 +1036,22 @@ class DeviceInterfaces(ListResponseMixin):
         return interface
 
     @staticmethod
+    def update_committed(
+        db: Session, interface_id: str, payload: DeviceInterfaceUpdate
+    ):
+        return _commit(db, lambda: DeviceInterfaces.update(db, interface_id, payload))
+
+    @staticmethod
     def delete(db: Session, interface_id: str):
         interface = db.get(DeviceInterface, interface_id)
         if not interface:
             raise HTTPException(status_code=404, detail="Device interface not found")
         db.delete(interface)
         db.flush()
+
+    @staticmethod
+    def delete_committed(db: Session, interface_id: str):
+        return _commit(db, lambda: DeviceInterfaces.delete(db, interface_id))
 
 
 class DeviceMetrics(ListResponseMixin):
@@ -1013,6 +1064,10 @@ class DeviceMetrics(ListResponseMixin):
         db.flush()
         db.refresh(metric)
         return metric
+
+    @staticmethod
+    def create_committed(db: Session, payload: DeviceMetricCreate):
+        return _commit(db, lambda: DeviceMetrics.create(db, payload))
 
     @staticmethod
     def get(db: Session, metric_id: str):
@@ -1060,12 +1115,20 @@ class DeviceMetrics(ListResponseMixin):
         return metric
 
     @staticmethod
+    def update_committed(db: Session, metric_id: str, payload: DeviceMetricUpdate):
+        return _commit(db, lambda: DeviceMetrics.update(db, metric_id, payload))
+
+    @staticmethod
     def delete(db: Session, metric_id: str):
         metric = db.get(DeviceMetric, metric_id)
         if not metric:
             raise HTTPException(status_code=404, detail="Device metric not found")
         db.delete(metric)
         db.flush()
+
+    @staticmethod
+    def delete_committed(db: Session, metric_id: str):
+        return _commit(db, lambda: DeviceMetrics.delete(db, metric_id))
 
 
 class AlertRules(ListResponseMixin):
@@ -1076,6 +1139,10 @@ class AlertRules(ListResponseMixin):
         db.flush()
         db.refresh(rule)
         return rule
+
+    @staticmethod
+    def create_committed(db: Session, payload: AlertRuleCreate):
+        return _commit(db, lambda: AlertRules.create(db, payload))
 
     @staticmethod
     def get(db: Session, rule_id: str):
@@ -1145,12 +1212,20 @@ class AlertRules(ListResponseMixin):
         return rule
 
     @staticmethod
+    def update_committed(db: Session, rule_id: str, payload: AlertRuleUpdate):
+        return _commit(db, lambda: AlertRules.update(db, rule_id, payload))
+
+    @staticmethod
     def delete(db: Session, rule_id: str):
         rule = db.get(AlertRule, rule_id)
         if not rule:
             raise HTTPException(status_code=404, detail="Alert rule not found")
         rule.is_active = False
         db.flush()
+
+    @staticmethod
+    def delete_committed(db: Session, rule_id: str):
+        return _commit(db, lambda: AlertRules.delete(db, rule_id))
 
     @staticmethod
     def bulk_update(db: Session, payload: AlertRuleBulkUpdateRequest) -> int:
@@ -1171,6 +1246,12 @@ class AlertRules(ListResponseMixin):
     def bulk_update_response(db: Session, payload: AlertRuleBulkUpdateRequest) -> dict:
         updated = AlertRules.bulk_update(db, payload)
         return {"updated": updated}
+
+    @staticmethod
+    def bulk_update_response_committed(
+        db: Session, payload: AlertRuleBulkUpdateRequest
+    ) -> dict:
+        return _commit(db, lambda: AlertRules.bulk_update_response(db, payload))
 
 
 class Alerts(ListResponseMixin):
@@ -1236,6 +1317,12 @@ class Alerts(ListResponseMixin):
         return alert
 
     @staticmethod
+    def acknowledge_committed(
+        db: Session, alert_id: str, payload: AlertAcknowledgeRequest
+    ):
+        return _commit(db, lambda: Alerts.acknowledge(db, alert_id, payload))
+
+    @staticmethod
     def resolve(db: Session, alert_id: str, payload: AlertResolveRequest):
         alert = db.get(Alert, alert_id)
         if not alert:
@@ -1251,6 +1338,10 @@ class Alerts(ListResponseMixin):
         db.flush()
         db.refresh(alert)
         return alert
+
+    @staticmethod
+    def resolve_committed(db: Session, alert_id: str, payload: AlertResolveRequest):
+        return _commit(db, lambda: Alerts.resolve(db, alert_id, payload))
 
     @staticmethod
     def bulk_acknowledge(
@@ -1283,6 +1374,14 @@ class Alerts(ListResponseMixin):
         return {"updated": updated}
 
     @staticmethod
+    def bulk_acknowledge_response_committed(
+        db: Session, alert_ids: builtins.list[str], payload: AlertAcknowledgeRequest
+    ) -> dict[str, int]:
+        return _commit(
+            db, lambda: Alerts.bulk_acknowledge_response(db, alert_ids, payload)
+        )
+
+    @staticmethod
     def bulk_resolve(
         db: Session, alert_ids: builtins.list[str], payload: AlertResolveRequest
     ) -> int:
@@ -1311,6 +1410,12 @@ class Alerts(ListResponseMixin):
     ) -> dict[str, int]:
         updated = Alerts.bulk_resolve(db, alert_ids, payload)
         return {"updated": updated}
+
+    @staticmethod
+    def bulk_resolve_response_committed(
+        db: Session, alert_ids: builtins.list[str], payload: AlertResolveRequest
+    ) -> dict[str, int]:
+        return _commit(db, lambda: Alerts.bulk_resolve_response(db, alert_ids, payload))
 
 
 class AlertEvents(ListResponseMixin):

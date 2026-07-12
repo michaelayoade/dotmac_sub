@@ -38,6 +38,7 @@ from app.schemas.billing import (
     InvoiceRead,
     InvoiceRunRequest,
     InvoiceRunResponse,
+    InvoiceSyncRead,
     InvoiceUpdate,
     InvoiceWriteOffRequest,
     LedgerEntryCreate,
@@ -125,6 +126,36 @@ def billing_dashboard(db: Session = Depends(get_db)) -> dict:
 )
 def create_invoice(payload: InvoiceCreate, db: Session = Depends(get_db)):
     return billing_service.invoices.create(db, payload)
+
+
+@router.get(
+    "/invoices/sync",
+    response_model=ListResponse[InvoiceSyncRead],
+    tags=["invoices"],
+    dependencies=[Depends(require_permission("billing:invoice:read"))],
+)
+def sync_invoices(
+    account_id: str | None = None,
+    status: str | None = None,
+    is_active: bool | None = None,
+    updated_since: datetime | None = Query(
+        default=None,
+        description="Inclusive invoice updated_at watermark for ERP AR sync.",
+    ),
+    limit: int = Query(default=500, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    """Lightweight, deterministic invoice feed for accounting synchronization."""
+    return billing_service.invoices.sync_list_response(
+        db,
+        account_id=account_id,
+        status=status,
+        is_active=is_active,
+        updated_since=updated_since,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get(

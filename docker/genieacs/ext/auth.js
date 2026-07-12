@@ -138,6 +138,38 @@ exports.connectionRequest = function (args, callback) {
   }
 };
 
+function connectionRequestCredential(args, field, callback) {
+  const serialNumber = args[0] || "";
+
+  if (!serialNumber) {
+    callback(null, null);
+    return;
+  }
+
+  fetchCredentials(serialNumber, "connection_request", (err, creds) => {
+    if (err) {
+      console.error(`CR credential lookup failed for ${serialNumber}: ${err.message}`);
+    }
+
+    if (creds && creds.authorized && creds.username && creds.password) {
+      callback(null, creds[field]);
+      return;
+    }
+    callback(null, null);
+  });
+}
+
+// GenieACS connectionRequestAuth expressions consume scalar AUTH arguments.
+// Keep these separate exports so the expression evaluates to AUTH(user, pass),
+// while the shared lookup cache avoids duplicate API traffic.
+exports.connectionRequestUsername = function (args, callback) {
+  connectionRequestCredential(args, "username", callback);
+};
+
+exports.connectionRequestPassword = function (args, callback) {
+  connectionRequestCredential(args, "password", callback);
+};
+
 /**
  * Authenticate CPE device connecting to ACS
  *

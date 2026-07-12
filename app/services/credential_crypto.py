@@ -16,6 +16,7 @@ from cryptography.fernet import Fernet, InvalidToken
 
 # Environment variable for the encryption key
 _ENCRYPTION_KEY_ENV = "CREDENTIAL_ENCRYPTION_KEY"
+_PREVIOUS_ENCRYPTION_KEY_ENV = "CREDENTIAL_ENCRYPTION_PREVIOUS_KEY"
 _logger = logging.getLogger(__name__)
 _encryption_warning_logged = False
 _encryption_key_required = (
@@ -53,7 +54,33 @@ ENCRYPTED_MODEL_FIELDS: dict[str, tuple[str, ...]] = {
     "PaymentMethod": ("token",),
     "BankAccount": ("token",),
     "SystemUser": ("device_login_secret",),
+    "Router": ("rest_api_username", "rest_api_password"),
+    "JumpHost": ("ssh_key", "ssh_password"),
 }
+
+
+def _resolve_key_candidate(value: str | bytes | None) -> bytes | None:
+    if not value:
+        return None
+    if isinstance(value, bytes):
+        return value
+    if not isinstance(value, str):
+        return None
+    try:
+        from app.services.secrets import resolve_secret
+
+        resolved = resolve_secret(value)
+    except Exception:
+        _logger.debug(
+            "Credential encryption key reference lookup failed", exc_info=True
+        )
+        return None
+    if not resolved:
+        return None
+    try:
+        return str(resolved).encode("ascii")
+    except UnicodeEncodeError:
+        return None
 
 
 def get_encryption_key() -> bytes | None:
@@ -69,12 +96,10 @@ def get_encryption_key() -> bytes | None:
     """
     global _encryption_warning_logged
 
-    key_str: str | bytes | None = None
-
     # Explicit runtime config should not trigger OpenBao lookups during startup.
-    key_str = os.environ.get(_ENCRYPTION_KEY_ENV)
+    key = _resolve_key_candidate(os.environ.get(_ENCRYPTION_KEY_ENV))
 
-    if not key_str:
+    if not key:
         try:
             from app.models.domain_settings import SettingDomain
             from app.services.db_session_adapter import db_session_adapter
@@ -86,11 +111,7 @@ def get_encryption_key() -> bytes | None:
                     session, SettingDomain.auth, "credential_encryption_key"
                 )
                 if isinstance(raw, str):
-                    from app.services.secrets import resolve_secret
-
-                    resolved = resolve_secret(raw)
-                    if resolved:
-                        key_str = resolved
+                    key = _resolve_key_candidate(raw)
             finally:
                 session.close()
         except Exception:
@@ -99,19 +120,19 @@ def get_encryption_key() -> bytes | None:
                 exc_info=True,
             )
 
-    if not key_str:
+    if not key:
         try:
             from app.services.secrets import get_secret
 
             bao_val = get_secret("auth", "credential_encryption_key")
             if bao_val:
-                key_str = bao_val
+                key = _resolve_key_candidate(bao_val)
         except Exception:
             _logger.debug(
                 "OpenBao credential encryption key lookup failed", exc_info=True
             )
 
-    if not key_str:
+    if not key:
         if not _encryption_warning_logged:
             _logger.warning(
                 "CREDENTIAL_ENCRYPTION_KEY not configured. "
@@ -120,12 +141,42 @@ def get_encryption_key() -> bytes | None:
             _encryption_warning_logged = True
         return None
 
-    if isinstance(key_str, bytes):
-        return key_str
-    if not isinstance(key_str, str):
+    return key
+
+
+def get_previous_encryption_key() -> bytes | None:
+    """Return the temporary previous key retained during scheduled rotation."""
+    key = _resolve_key_candidate(os.environ.get(_PREVIOUS_ENCRYPTION_KEY_ENV))
+    if key:
+        return key
+    try:
+        from app.services.secrets import get_secret
+
+        value = get_secret("settings/auth", "credential_encryption_previous_key")
+        key = _resolve_key_candidate(value)
+        if key:
+            return key
+        return _resolve_key_candidate(
+            get_secret("auth", "credential_encryption_previous_key")
+        )
+    except Exception:
+        _logger.debug("Previous credential encryption key lookup failed", exc_info=True)
         return None
-    # Key should be URL-safe base64 encoded 32-byte key
-    return key_str.encode("ascii")
+
+
+def _decryption_keys(*, refresh: bool = False) -> tuple[bytes, ...]:
+    if refresh:
+        try:
+            from app.services.secrets import clear_cache
+
+            clear_cache()
+        except Exception:
+            pass
+    keys: list[bytes] = []
+    for key in (get_encryption_key(), get_previous_encryption_key()):
+        if key and key not in keys:
+            keys.append(key)
+    return tuple(keys)
 
 
 def generate_encryption_key() -> str:
@@ -332,7 +383,18 @@ def decrypt_credential(value: str | None) -> str | None:
         return value[6:]
 
     if value.startswith("enc:"):
-        return decrypt_credential_with_key(value, get_encryption_key())
+        last_error: ValueError | None = None
+        for refresh in (False, True):
+            for key in _decryption_keys(refresh=refresh):
+                try:
+                    return decrypt_credential_with_key(value, key)
+                except ValueError as exc:
+                    last_error = exc
+        if last_error:
+            raise last_error
+        raise ValueError(
+            "Encrypted credential found but CREDENTIAL_ENCRYPTION_KEY not set"
+        )
 
     # Legacy format (no prefix) - treat as plain
     return value

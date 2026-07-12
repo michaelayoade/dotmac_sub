@@ -183,3 +183,35 @@ def test_get_secret_uses_default_for_missing_secret(monkeypatch, caplog):
     assert result == ""
     assert "OpenBao secret missing at" in caplog.text
     assert "OpenBao request failed" not in caplog.text
+
+
+def test_openbao_cache_expires_across_time_buckets(monkeypatch):
+    monkeypatch.setenv("OPENBAO_ADDR", "https://vault.test.local:8200")
+    monkeypatch.setenv("OPENBAO_TOKEN", "test-token")
+    monkeypatch.setenv("OPENBAO_CACHE_TTL_SECONDS", "10")
+    clock = {"value": 1.0}
+    monkeypatch.setattr(secrets.time, "monotonic", lambda: clock["value"])
+    calls = {"count": 0}
+
+    def mock_get(_url, **_kwargs):
+        calls["count"] += 1
+        return FakeHTTPXResponse(
+            json_data={"data": {"data": {"value": f"v{calls['count']}"}}}
+        )
+
+    monkeypatch.setattr(httpx, "get", mock_get)
+
+    assert secrets.resolve_openbao_ref("bao://secret/cache#value") == "v1"
+    assert secrets.resolve_openbao_ref("bao://secret/cache#value") == "v1"
+    clock["value"] = 11.0
+    assert secrets.resolve_openbao_ref("bao://secret/cache#value") == "v2"
+    assert calls["count"] == 2
+
+
+def test_openbao_token_file_precedes_environment_token(monkeypatch, tmp_path):
+    token_file = tmp_path / "openbao-token"
+    token_file.write_text("file-token\n", encoding="utf-8")
+    monkeypatch.setenv("OPENBAO_TOKEN_FILE", str(token_file))
+    monkeypatch.setenv("OPENBAO_TOKEN", "environment-token")
+
+    assert secrets._read_openbao_token() == "file-token"

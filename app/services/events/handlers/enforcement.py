@@ -5,15 +5,13 @@ import logging
 from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription
-from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber
 from app.models.subscriber import SubscriberStatus as AccountStatus
+from app.services import enforcement_event_policy
 from app.services import radius as radius_service
 from app.services import radius_reject as radius_reject_service
-from app.services import settings_spec
 from app.services.enforcement import (
     _resolve_effective_profile,
-    _setting_bool,
     apply_radius_profile_to_account,
     disconnect_account_sessions,
     disconnect_subscription_sessions,
@@ -86,7 +84,7 @@ class EnforcementHandler:
             sub.access_state = target
             db.flush()
 
-        if not _setting_bool(db, SettingDomain.radius, "group_routing_enabled", False):
+        if not enforcement_event_policy.group_routing_enabled(db):
             return
         try:
             result = set_subscription_access_state(db, str(subscription_id), state)
@@ -177,7 +175,7 @@ class EnforcementHandler:
                 )
 
         # Phase 3 shadow write — mirror the derived state to radusergroup.
-        # No-op unless DomainSetting radius.group_routing_enabled is true.
+        # No-op unless the enforcement event policy enables group routing.
         self._shadow_write_access_state(db, str(subscription_id))
 
         # Slow NAS cleanup runs out-of-band so the authoritative DB/RADIUS
@@ -230,10 +228,9 @@ class EnforcementHandler:
         subscription_id = event.subscription_id or event.payload.get("subscription_id")
         if not subscription_id:
             return
-        refresh = settings_spec.resolve_value(
-            db, SettingDomain.radius, "refresh_sessions_on_profile_change"
+        refresh_enabled = (
+            enforcement_event_policy.refresh_sessions_on_profile_change_enabled(db)
         )
-        refresh_enabled = str(refresh).lower() not in {"0", "false", "no", "off"}
 
         subscription = db.get(Subscription, subscription_id)
 
@@ -284,7 +281,7 @@ class EnforcementHandler:
             )
 
         # Phase 3 shadow write — mirror the restored state to radusergroup.
-        # No-op unless DomainSetting radius.group_routing_enabled is true.
+        # No-op unless the enforcement event policy enables group routing.
         self._shadow_write_access_state(db, str(subscription_id))
 
         # Converge radcheck/radreply to the restored state within seconds
@@ -360,10 +357,9 @@ class EnforcementHandler:
                 account_id,
                 exc_info=True,
             )
-        refresh = settings_spec.resolve_value(
-            db, SettingDomain.radius, "refresh_sessions_on_profile_change"
+        refresh_enabled = (
+            enforcement_event_policy.refresh_sessions_on_profile_change_enabled(db)
         )
-        refresh_enabled = str(refresh).lower() not in {"0", "false", "no", "off"}
         try:
             if refresh_enabled:
                 disconnect_account_sessions(db, str(account_id), reason="throttle")
@@ -384,14 +380,7 @@ class EnforcementHandler:
                 account_id,
             )
             return
-        action = event.payload.get("action") or settings_spec.resolve_value(
-            db, SettingDomain.usage, "fup_action"
-        )
-        if action == "reduce_speed":
-            action = "throttle"
-        action = action or "throttle"
-        if action not in {"throttle", "suspend", "block", "none"}:
-            action = "throttle"
+        action = enforcement_event_policy.fup_action(db, event.payload.get("action"))
         if action == "none":
             return
 
@@ -485,8 +474,8 @@ class EnforcementHandler:
                     exc,
                 )
             return
-        throttle_profile_id = settings_spec.resolve_value(
-            db, SettingDomain.usage, "fup_throttle_radius_profile_id"
+        throttle_profile_id = enforcement_event_policy.fup_throttle_radius_profile_id(
+            db
         )
         if not throttle_profile_id:
             logger.warning(
@@ -507,15 +496,11 @@ class EnforcementHandler:
                 db, str(account_id), str(throttle_profile_id)
             )
             if updated:
-                refresh = settings_spec.resolve_value(
-                    db, SettingDomain.radius, "refresh_sessions_on_profile_change"
+                refresh_enabled = (
+                    enforcement_event_policy.refresh_sessions_on_profile_change_enabled(
+                        db
+                    )
                 )
-                refresh_enabled = str(refresh).lower() not in {
-                    "0",
-                    "false",
-                    "no",
-                    "off",
-                }
                 if refresh_enabled:
                     disconnect_account_sessions(
                         db, str(account_id), reason="fup_throttle"
@@ -688,11 +673,7 @@ class EnforcementHandler:
         if not account_id:
             return
         try:
-            # Check if auto-suspension on overdue is enabled
-            enabled = settings_spec.resolve_value(
-                db, SettingDomain.billing, "auto_suspend_on_overdue"
-            )
-            if str(enabled).lower() in {"0", "false", "no", "off", ""}:
+            if not enforcement_event_policy.auto_suspend_on_overdue_enabled(db):
                 return
 
             subscriber = db.get(Subscriber, account_id)
@@ -700,10 +681,7 @@ class EnforcementHandler:
                 return
 
             # Grace period: send warning first, suspend after N hours
-            grace_setting = settings_spec.resolve_value(
-                db, SettingDomain.billing, "suspension_grace_hours"
-            )
-            grace_hours = int(str(grace_setting or 48))
+            grace_hours = enforcement_event_policy.suspension_grace_hours(db)
 
             # Check if invoice just became overdue (within grace period)
             invoice_id = event.invoice_id or event.payload.get("invoice_id")

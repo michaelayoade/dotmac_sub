@@ -87,13 +87,27 @@ class DomainSettings(ListResponseMixin):
         return DomainSettingCreate(**data)
 
     def _prepare_update_payload(
-        self, db: Session, key: str, payload: DomainSettingUpdate
+        self,
+        db: Session,
+        key: str,
+        payload: DomainSettingUpdate,
+        *,
+        existing_is_secret: bool = False,
     ) -> DomainSettingUpdate:
         data = payload.model_dump(exclude_unset=True)
+        effective_is_secret = bool(data.get("is_secret", existing_is_secret))
+        if self.domain:
+            from app.services.settings_spec import get_spec
+
+            spec = get_spec(self.domain, key)
+            if spec and spec.is_secret:
+                effective_is_secret = True
+        if effective_is_secret:
+            data["is_secret"] = True
         resolved = self._write_secret_ref(
             key=key,
             value_text=data.get("value_text"),
-            is_secret=bool(data.get("is_secret")),
+            is_secret=effective_is_secret,
             allow_plain_fallback=self._allow_plain_secret_fallback(db),
         )
         if resolved is not None:
@@ -157,7 +171,12 @@ class DomainSettings(ListResponseMixin):
         setting = db.get(DomainSetting, coerce_uuid(setting_id))
         if not setting or (self.domain and setting.domain != self.domain):
             raise HTTPException(status_code=404, detail="Setting not found")
-        payload = self._prepare_update_payload(db, setting.key, payload)
+        payload = self._prepare_update_payload(
+            db,
+            setting.key,
+            payload,
+            existing_is_secret=setting.is_secret,
+        )
         data = payload.model_dump(exclude_unset=True)
         if "domain" in data and data["domain"] != setting.domain:
             raise HTTPException(status_code=400, detail="Setting domain mismatch")
@@ -185,12 +204,17 @@ class DomainSettings(ListResponseMixin):
     def upsert_by_key(self, db: Session, key: str, payload: DomainSettingUpdate):
         if not self.domain:
             raise HTTPException(status_code=400, detail="Setting domain is required")
-        payload = self._prepare_update_payload(db, key, payload)
         setting = (
             db.query(DomainSetting)
             .filter(DomainSetting.domain == self.domain)
             .filter(DomainSetting.key == key)
             .first()
+        )
+        payload = self._prepare_update_payload(
+            db,
+            key,
+            payload,
+            existing_is_secret=bool(setting and setting.is_secret),
         )
         if setting:
             data = payload.model_dump(exclude_unset=True)

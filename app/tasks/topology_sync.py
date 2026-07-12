@@ -33,21 +33,16 @@ def warm_topology_status() -> dict[str, Any]:
         warm_topology_status as _warm,
     )
 
-    db = db_session_adapter.create_session()
     try:
-        result = _warm(db)
-        db.commit()
+        with db_session_adapter.session() as db:
+            result = _warm(db)
         # Stamp the heartbeat only after a successful refresh so a stalled/failing
         # warmer ages out and stops good states being trusted (see selfcare).
         touch_warm_heartbeat()
         return result
     except SoftTimeLimitExceeded:
-        db.rollback()
         logger.warning("topology_status_warm_timed_out")
         return {"error": "topology_status_warm_timed_out"}
     except Exception as exc:  # noqa: BLE001 - report and roll back
-        db.rollback()
         logger.exception("topology_status_warm_failed")
         return {"error": str(exc)}
-    finally:
-        db.close()

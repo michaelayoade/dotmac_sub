@@ -1396,7 +1396,10 @@ def setup_genieacs(
                 results["config"] = {}
                 config_entries = {
                     "cwmp.auth": 'EXT("auth", "authenticateCpe", username, password, DeviceID.ID, DeviceID.SerialNumber)',
-                    "cwmp.connectionRequestAuth": 'EXT("auth", "connectionRequest", DeviceID.ID, DeviceID.SerialNumber)',
+                    "cwmp.connectionRequestAuth": (
+                        'AUTH(EXT("auth", "connectionRequestUsername", DeviceID.SerialNumber), '
+                        'EXT("auth", "connectionRequestPassword", DeviceID.SerialNumber))'
+                    ),
                 }
                 for key, value in config_entries.items():
                     try:

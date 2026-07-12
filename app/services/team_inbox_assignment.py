@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import TypeVar
 from uuid import UUID
 
 from sqlalchemy import func
@@ -13,12 +15,24 @@ from app.models.team_inbox import (
     InboxAgentPresenceStatus,
     InboxConversation,
     InboxConversationAssignment,
+    InboxConversationStatus,
     InboxConversationTeam,
     InboxTeamRole,
     InboxTeamSource,
 )
 
 DEFAULT_MAX_CONCURRENT_CONVERSATIONS = 3
+T = TypeVar("T")
+
+
+def _commit(db: Session, action: Callable[[], T]) -> T:
+    try:
+        result = action()
+        db.commit()
+        return result
+    except Exception:
+        db.rollback()
+        raise
 
 
 @dataclass(frozen=True)
@@ -390,4 +404,81 @@ def assign_conversation_to_available_agent(
         reason=reason,
         source=source,
         now=assigned_at,
+    )
+
+
+def escalate_conversation(
+    db: Session,
+    *,
+    conversation_id: str | UUID,
+    service_team_id: str | UUID,
+    assigned_person_id: str | UUID | None = None,
+    auto_assign: bool = False,
+    assigned_by_person_id: str | UUID | None = None,
+    reason: str | None = None,
+) -> InboxAssignmentResult:
+    conversation_uuid = _coerce_uuid(conversation_id)
+    conversation = (
+        db.get(InboxConversation, conversation_uuid) if conversation_uuid else None
+    )
+    if conversation is None or not conversation.is_active:
+        return InboxAssignmentResult(
+            kind="conversation_not_found",
+            service_team_id=None,
+            reason="Conversation not found",
+        )
+    if conversation.status == InboxConversationStatus.resolved.value:
+        return InboxAssignmentResult(
+            kind="conversation_resolved",
+            service_team_id=str(service_team_id) if service_team_id else None,
+            reason="Resolved conversations cannot be escalated",
+        )
+
+    if assigned_person_id is not None:
+        return assign_conversation_to_agent(
+            db,
+            conversation=conversation,
+            service_team_id=service_team_id,
+            person_id=assigned_person_id,
+            assigned_by_person_id=assigned_by_person_id,
+            reason=reason,
+        )
+    if auto_assign:
+        return assign_conversation_to_available_agent(
+            db,
+            conversation=conversation,
+            service_team_id=service_team_id,
+            assigned_by_person_id=assigned_by_person_id,
+            reason=reason,
+        )
+    return queue_conversation_for_team(
+        db,
+        conversation=conversation,
+        service_team_id=service_team_id,
+        assigned_by_person_id=assigned_by_person_id,
+        reason=reason,
+    )
+
+
+def escalate_conversation_committed(
+    db: Session,
+    *,
+    conversation_id: str | UUID,
+    service_team_id: str | UUID,
+    assigned_person_id: str | UUID | None = None,
+    auto_assign: bool = False,
+    assigned_by_person_id: str | UUID | None = None,
+    reason: str | None = None,
+) -> InboxAssignmentResult:
+    return _commit(
+        db,
+        lambda: escalate_conversation(
+            db,
+            conversation_id=conversation_id,
+            service_team_id=service_team_id,
+            assigned_person_id=assigned_person_id,
+            auto_assign=auto_assign,
+            assigned_by_person_id=assigned_by_person_id,
+            reason=reason,
+        ),
     )

@@ -499,7 +499,7 @@ class TestEnforcementHandler:
         "app.services.events.handlers.enforcement.remove_subscription_address_list_block"
     )
     @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
-    @patch("app.services.events.handlers.enforcement.settings_spec")
+    @patch("app.services.enforcement_event_policy.settings_spec")
     def test_subscription_activated_restores(
         self, mock_settings, mock_disconnect, mock_remove_block, db_session
     ):
@@ -520,7 +520,7 @@ class TestEnforcementHandler:
         "app.services.events.handlers.enforcement.remove_subscription_address_list_block"
     )
     @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
-    @patch("app.services.events.handlers.enforcement.settings_spec")
+    @patch("app.services.enforcement_event_policy.settings_spec")
     def test_subscription_resumed_restores(
         self, mock_settings, mock_disconnect, mock_remove_block, db_session
     ):
@@ -541,7 +541,7 @@ class TestEnforcementHandler:
         "app.services.events.handlers.enforcement.remove_subscription_address_list_block"
     )
     @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
-    @patch("app.services.events.handlers.enforcement.settings_spec")
+    @patch("app.services.enforcement_event_policy.settings_spec")
     @patch(
         "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
     )
@@ -576,7 +576,7 @@ class TestEnforcementHandler:
         "app.services.events.handlers.enforcement.remove_subscription_address_list_block"
     )
     @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
-    @patch("app.services.events.handlers.enforcement.settings_spec")
+    @patch("app.services.enforcement_event_policy.settings_spec")
     def test_subscription_restore_skips_disconnect_when_refresh_disabled(
         self, mock_settings, mock_disconnect, mock_remove_block, db_session
     ):
@@ -592,7 +592,7 @@ class TestEnforcementHandler:
         mock_remove_block.assert_called_once()
 
     @patch("app.services.events.handlers.enforcement.disconnect_account_sessions")
-    @patch("app.services.events.handlers.enforcement.settings_spec")
+    @patch("app.services.enforcement_event_policy.settings_spec")
     def test_subscriber_throttled_disconnects_sessions(
         self, mock_settings, mock_disconnect, db_session
     ):
@@ -609,7 +609,7 @@ class TestEnforcementHandler:
         )
 
     @patch("app.services.events.handlers.enforcement.disconnect_account_sessions")
-    @patch("app.services.events.handlers.enforcement.settings_spec")
+    @patch("app.services.enforcement_event_policy.settings_spec")
     def test_subscriber_throttled_skips_when_refresh_disabled(
         self, mock_settings, mock_disconnect, db_session
     ):
@@ -623,7 +623,7 @@ class TestEnforcementHandler:
         mock_disconnect.assert_not_called()
 
     @patch("app.services.events.handlers.enforcement.disconnect_account_sessions")
-    @patch("app.services.events.handlers.enforcement.settings_spec")
+    @patch("app.services.enforcement_event_policy.settings_spec")
     def test_subscriber_throttled_skips_without_account_id(
         self, mock_settings, mock_disconnect, db_session
     ):
@@ -633,7 +633,7 @@ class TestEnforcementHandler:
         mock_disconnect.assert_not_called()
 
     @patch("app.tasks.enforcement.cleanup_subscription_block_sessions.delay")
-    @patch("app.services.events.handlers.enforcement.settings_spec")
+    @patch("app.services.enforcement_event_policy.settings_spec")
     def test_usage_exhausted_block_action_opted_in_applies_captive(
         self, mock_settings, mock_cleanup, db_session, subscription
     ):
@@ -660,7 +660,7 @@ class TestEnforcementHandler:
         mock_cleanup.assert_called_once_with(str(subscription.id), reason="fup_block")
 
     @patch("app.tasks.enforcement.cleanup_subscription_block_sessions.delay")
-    @patch("app.services.events.handlers.enforcement.settings_spec")
+    @patch("app.services.enforcement_event_policy.settings_spec")
     def test_usage_exhausted_block_action_not_opted_in_hard_blocks(
         self, mock_settings, mock_cleanup, db_session, subscription
     ):
@@ -693,7 +693,7 @@ class TestEnforcementHandler:
         db_session.refresh(subscription)
         assert subscription.status == SubscriptionStatus.suspended
 
-    @patch("app.services.events.handlers.enforcement.settings_spec")
+    @patch("app.services.enforcement_event_policy.settings_spec")
     def test_usage_exhausted_payload_block_overrides_global_throttle(
         self, mock_settings, db_session, subscription
     ):
@@ -718,7 +718,7 @@ class TestEnforcementHandler:
         db_session.refresh(subscription)
         assert subscription.status == SubscriptionStatus.suspended
 
-    @patch("app.services.events.handlers.enforcement.settings_spec")
+    @patch("app.services.enforcement_event_policy.settings_spec")
     def test_usage_exhausted_none_action_is_noop(self, mock_settings, db_session):
         mock_settings.resolve_value.return_value = "none"
         handler = EnforcementHandler()
@@ -732,14 +732,14 @@ class TestEnforcementHandler:
         # Should not raise or do anything
         handler.handle(db_session, event)
 
-    @patch("app.services.events.handlers.enforcement.settings_spec")
+    @patch("app.services.enforcement_event_policy.settings_spec")
     def test_usage_exhausted_skips_without_ids(self, mock_settings, db_session):
         handler = EnforcementHandler()
         event = self._make_event(EventType.usage_exhausted)
         handler.handle(db_session, event)
         mock_settings.resolve_value.assert_not_called()
 
-    @patch("app.services.events.handlers.enforcement.settings_spec")
+    @patch("app.services.enforcement_event_policy.settings_spec")
     def test_usage_exhausted_suspend_action(
         self, mock_settings, db_session, subscription
     ):
@@ -774,7 +774,7 @@ class TestEnforcementHandler:
 
     @patch("app.services.events.handlers.enforcement.disconnect_account_sessions")
     @patch("app.services.events.handlers.enforcement.apply_radius_profile_to_account")
-    @patch("app.services.events.handlers.enforcement.settings_spec")
+    @patch("app.services.enforcement_event_policy.settings_spec")
     def test_usage_exhausted_throttle_action(
         self, mock_settings, mock_apply_profile, mock_disconnect, db_session
     ):
@@ -811,7 +811,7 @@ class TestEnforcementHandler:
 
     @patch("app.services.events.handlers.enforcement.disconnect_account_sessions")
     @patch("app.services.events.handlers.enforcement.apply_radius_profile_to_account")
-    @patch("app.services.events.handlers.enforcement.settings_spec")
+    @patch("app.services.enforcement_event_policy.settings_spec")
     def test_usage_exhausted_payload_reduce_speed_overrides_global_block(
         self, mock_settings, mock_apply_profile, mock_disconnect, db_session
     ):
@@ -848,7 +848,7 @@ class TestEnforcementHandler:
         )
 
     @patch("app.services.events.handlers.enforcement.apply_radius_profile_to_account")
-    @patch("app.services.events.handlers.enforcement.settings_spec")
+    @patch("app.services.enforcement_event_policy.settings_spec")
     def test_usage_exhausted_throttle_without_profile_is_noop(
         self, mock_settings, mock_apply_profile, db_session
     ):

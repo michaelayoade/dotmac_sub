@@ -12,6 +12,7 @@ def test_domain_sot_relationships_cover_expected_domains():
         "network",
         "subscriber_sessions",
         "application_sessions",
+        "secrets_credentials",
         "notifications_communications",
         "events_webhooks",
         "runtime_infrastructure",
@@ -31,13 +32,37 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "network.access_path",
         "network.device_state",
     )
+    assert sot_relationships.dependencies_for("network.device_groups") == (
+        "network.identity",
+    )
+    assert sot_relationships.dependencies_for("network.monitoring_inventory") == (
+        "network.identity",
+    )
     assert sot_relationships.dependencies_for("financial.dunning") == (
         "financial.access_resolution",
         "financial.ledger",
     )
+    assert sot_relationships.dependencies_for("financial.billing_scheduled") == (
+        "financial.ledger",
+        "financial.access_resolution",
+    )
+    assert sot_relationships.dependencies_for("financial.collections_scheduled") == (
+        "financial.dunning",
+        "financial.access_resolution",
+    )
     assert sot_relationships.dependencies_for(
         "communications.notification_service"
-    ) == ("communications.channel_policy",)
+    ) == ("communications.channel_policy", "communications.event_policy")
+    assert sot_relationships.dependencies_for("secrets.rotation") == (
+        "secrets.reference_store",
+        "secrets.credential_crypto",
+        "runtime.db_sessions",
+    )
+    assert sot_relationships.dependencies_for("communications.team_inbox") == (
+        "customer.identity_scope",
+        "communications.channel_policy",
+        "communications.notification_service",
+    )
     assert sot_relationships.dependencies_for("sessions.enforcement") == (
         "financial.access_resolution",
         "sessions.radius_resolution",
@@ -56,6 +81,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     )
     assert sot_relationships.dependencies_for("access.radius_state") == (
         "access.control_resolution",
+        "access.event_policy",
     )
     assert sot_relationships.dependencies_for("service_intent.catalog_to_network") == (
         "service_intent.catalog_policy",

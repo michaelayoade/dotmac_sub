@@ -1,7 +1,7 @@
 """Invoice and invoice line management services."""
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from fastapi import HTTPException
@@ -338,6 +338,43 @@ class Invoices(ListResponseMixin):
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
+    def list_for_sync(
+        db: Session,
+        account_id: str | None,
+        status: str | None,
+        is_active: bool | None,
+        limit: int,
+        offset: int,
+        *,
+        updated_since: datetime | None = None,
+    ):
+        """Return the ordered ERP invoice delta without detail-only relations."""
+        query = db.query(Invoice).options(
+            selectinload(Invoice.lines.and_(InvoiceLine.is_active.is_(True)))
+        )
+        if account_id:
+            query = query.filter(Invoice.account_id == account_id)
+        if status:
+            query = query.filter(
+                Invoice.status == validate_enum(status, InvoiceStatus, "status")
+            )
+        if is_active is None:
+            query = query.filter(Invoice.is_active.is_(True))
+        else:
+            query = query.filter(Invoice.is_active == is_active)
+        if updated_since is not None:
+            query = query.filter(Invoice.updated_at >= updated_since)
+        query = query.order_by(Invoice.updated_at.asc(), Invoice.id.asc())
+        return apply_pagination(query, limit, offset).all()
+
+    @classmethod
+    def sync_list_response(cls, db: Session, **kwargs):
+        limit = kwargs["limit"]
+        offset = kwargs["offset"]
+        items = cls.list_for_sync(db, **kwargs)
+        return {"items": items, "count": len(items), "limit": limit, "offset": offset}
+
+    @staticmethod
     def update(db: Session, invoice_id: str, payload: InvoiceUpdate):
         invoice = get_by_id(db, Invoice, invoice_id)
         if not invoice:
@@ -660,6 +697,7 @@ class InvoiceLines(ListResponseMixin):
             db.add(line)
             db.flush()
             _recalculate_invoice_totals(db, invoice)
+            invoice.updated_at = datetime.now(UTC)
             db.commit()
         except SQLAlchemyError:
             db.rollback()
@@ -720,6 +758,7 @@ class InvoiceLines(ListResponseMixin):
             if invoice:
                 db.flush()
                 _recalculate_invoice_totals(db, invoice)
+                invoice.updated_at = datetime.now(UTC)
             db.commit()
         except SQLAlchemyError:
             db.rollback()
@@ -737,4 +776,5 @@ class InvoiceLines(ListResponseMixin):
         if invoice:
             db.flush()
             _recalculate_invoice_totals(db, invoice)
+            invoice.updated_at = datetime.now(UTC)
         db.commit()

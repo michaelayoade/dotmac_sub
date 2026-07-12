@@ -18,6 +18,8 @@ from app.models.integration_hook import (
 from app.models.integration_hook import IntegrationHook
 from app.models.network import OLTDevice, OntProfileWanService, OntUnit
 from app.models.network_monitoring import NetworkDevice
+from app.models.router_management import JumpHost, Router
+from app.models.system_user import SystemUser
 from app.models.tr069 import Tr069AcsServer
 from app.models.vas import VasTransaction
 from app.models.webhook import WebhookEndpoint
@@ -27,14 +29,9 @@ from app.services.credential_crypto import (
     encrypt_credential_with_key,
 )
 from app.services.network.ont_desired_config import rotate_desired_config_credentials
-from app.services.secrets import clear_cache, read_secret_fields, write_secret
 from app.services.settings_cache import SettingsCache
 
 logger = logging.getLogger(__name__)
-
-_CREDENTIAL_KEY_SECRET_PATH = "settings/auth"
-_CREDENTIAL_KEY_SECRET_FIELD = "credential_encryption_key"
-_LEGACY_CREDENTIAL_KEY_SECRET_PATH = "auth"
 
 
 @dataclass(frozen=True)
@@ -55,6 +52,9 @@ _MODEL_BY_NAME: dict[str, type[Any]] = {
     "PaymentMethod": PaymentMethod,
     "BankAccount": BankAccount,
     "VasTransaction": VasTransaction,
+    "SystemUser": SystemUser,
+    "Router": Router,
+    "JumpHost": JumpHost,
 }
 
 _MODEL_FIELDS: tuple[tuple[type[Any], tuple[str, ...]], ...] = tuple(
@@ -83,6 +83,11 @@ def _rotate_value(
     - Corrupted/unrecoverable encrypted values raise ValueError
     """
     if not value:
+        return value, False
+
+    from app.services.secrets import is_secret_ref
+
+    if is_secret_ref(value):
         return value, False
 
     if value.startswith("plain:"):
@@ -225,6 +230,7 @@ def _rotate_domain_settings(
             select(DomainSetting)
             .where(DomainSetting.value_text.is_not(None))
             .where(DomainSetting.is_active.is_(True))
+            .where(DomainSetting.is_secret.is_(True))
         ).all()
     )
     for row in rows:
@@ -368,24 +374,3 @@ def rotate_credential_encryption_material(
         updated_records=updated_records,
         updated_values=updated_values,
     )
-
-
-def update_openbao_credential_encryption_key(new_key: str) -> bool:
-    try:
-        existing = read_secret_fields(_CREDENTIAL_KEY_SECRET_PATH)
-        payload = dict(existing)
-        payload[_CREDENTIAL_KEY_SECRET_FIELD] = new_key
-        success = write_secret(_CREDENTIAL_KEY_SECRET_PATH, payload)
-
-        legacy_existing = read_secret_fields(_LEGACY_CREDENTIAL_KEY_SECRET_PATH)
-        legacy_payload = dict(legacy_existing)
-        legacy_payload[_CREDENTIAL_KEY_SECRET_FIELD] = new_key
-        success = (
-            write_secret(_LEGACY_CREDENTIAL_KEY_SECRET_PATH, legacy_payload) and success
-        )
-        if success:
-            clear_cache()
-        return success
-    except Exception:
-        logger.exception("Failed to update OpenBao credential encryption key")
-        return False

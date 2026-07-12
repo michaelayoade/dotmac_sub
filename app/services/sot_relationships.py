@@ -118,6 +118,41 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
                 depends_on=("financial.access_resolution", "financial.ledger"),
             ),
+            SOTService(
+                name="financial.billing_scheduled",
+                module="app.services.billing.scheduled",
+                owns=(
+                    "scheduled invoice and overdue execution",
+                    "billing health and audit execution",
+                    "scheduled billing notification execution",
+                ),
+                depends_on=(
+                    "financial.ledger",
+                    "financial.access_resolution",
+                ),
+            ),
+            SOTService(
+                name="financial.collections_scheduled",
+                module="app.services.collections.scheduled",
+                owns=(
+                    "scheduled billing enforcement execution",
+                    "scheduled prepaid balance enforcement execution",
+                    "scheduled bundle-state reconciliation execution",
+                ),
+                depends_on=(
+                    "financial.dunning",
+                    "financial.access_resolution",
+                ),
+            ),
+            SOTService(
+                name="financial.payment_reconciliation",
+                module="app.services.payment_reconciliation",
+                owns=(
+                    "stranded top-up reconciliation",
+                    "scheduled top-up reconciliation execution",
+                ),
+                depends_on=("financial.ledger",),
+            ),
         ),
         entrypoints=(
             "app.services.billing_automation",
@@ -125,6 +160,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             "app.web.admin.billing_*",
             "app.api.billing",
             "app.tasks.billing",
+            "app.tasks.collections",
+            "app.tasks.enforcement",
+            "app.tasks.payment_reconciliation",
         ),
         rule=(
             "No caller infers access or balances from draft invoices, imported "
@@ -138,6 +176,16 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="network.identity",
                 module="app.services.network.identity",
                 owns=("cross-model network links", "device/entity identity"),
+            ),
+            SOTService(
+                name="network.monitoring_inventory",
+                module="app.services.network_monitoring",
+                owns=(
+                    "monitoring inventory mutations",
+                    "monitoring metric records",
+                    "alert rule and alert state mutations",
+                ),
+                depends_on=("network.identity",),
             ),
             SOTService(
                 name="network.access_path",
@@ -164,6 +212,16 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("network.access_path", "network.device_state"),
             ),
             SOTService(
+                name="network.device_groups",
+                module="app.services.network.device_groups",
+                owns=(
+                    "network device group mutations",
+                    "device group membership",
+                    "device group bulk action queueing",
+                ),
+                depends_on=("network.identity",),
+            ),
+            SOTService(
                 name="network.events",
                 module="app.services.network.events",
                 owns=("network event decisions",),
@@ -171,6 +229,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "network.device_state",
                     "network.outage_impact",
                     "network.radius_sessions",
+                    "network.device_groups",
                 ),
             ),
         ),
@@ -281,6 +340,63 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         ),
     ),
     DomainSOT(
+        domain="secrets_credentials",
+        services=(
+            SOTService(
+                name="secrets.reference_store",
+                module="app.services.secrets",
+                owns=(
+                    "secret reference parsing and resolution",
+                    "OpenBao read/write boundary",
+                    "bounded secret cache lifecycle",
+                ),
+            ),
+            SOTService(
+                name="secrets.settings_policy",
+                module="app.services.domain_settings",
+                owns=(
+                    "secret setting classification",
+                    "secret setting reference persistence",
+                ),
+                depends_on=("secrets.reference_store",),
+            ),
+            SOTService(
+                name="secrets.credential_crypto",
+                module="app.services.credential_crypto",
+                owns=(
+                    "database credential encryption",
+                    "credential field inventory",
+                    "current and previous decryption key resolution",
+                ),
+                depends_on=("secrets.reference_store",),
+            ),
+            SOTService(
+                name="secrets.rotation",
+                module="app.services.credential_rotation_schedule",
+                owns=(
+                    "scheduled credential key lifecycle",
+                    "rotation grace period",
+                    "credential re-encryption convergence",
+                ),
+                depends_on=(
+                    "secrets.reference_store",
+                    "secrets.credential_crypto",
+                    "runtime.db_sessions",
+                ),
+            ),
+        ),
+        entrypoints=(
+            "app.tasks.security",
+            "app.web.admin.system",
+            "app.services.*",
+        ),
+        rule=(
+            "Bootstrap secrets use environment or mounted files; application "
+            "secrets use references; high-cardinality credentials use the "
+            "declared encrypted-field inventory. Callers never choose storage."
+        ),
+    ),
+    DomainSOT(
         domain="notifications_communications",
         services=(
             SOTService(
@@ -295,10 +411,22 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("customer.identity_scope",),
             ),
             SOTService(
+                name="communications.event_policy",
+                module="app.services.event_notification_policy",
+                owns=(
+                    "event notification enablement",
+                    "balance notification suppression",
+                ),
+                depends_on=("communications.channel_policy",),
+            ),
+            SOTService(
                 name="communications.notification_service",
                 module="app.services.notification",
                 owns=("notification row lifecycle", "delivery state"),
-                depends_on=("communications.channel_policy",),
+                depends_on=(
+                    "communications.channel_policy",
+                    "communications.event_policy",
+                ),
             ),
             SOTService(
                 name="communications.staff_notifications",
@@ -309,8 +437,17 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             SOTService(
                 name="communications.team_inbox",
                 module="app.services.team_inbox_operations",
-                owns=("conversation collaboration", "conversation assignment"),
-                depends_on=("customer.identity_scope",),
+                owns=(
+                    "conversation collaboration",
+                    "conversation assignment",
+                    "inbox reply and contact-link workflows",
+                    "inbound channel ingestion",
+                ),
+                depends_on=(
+                    "customer.identity_scope",
+                    "communications.channel_policy",
+                    "communications.notification_service",
+                ),
             ),
         ),
         entrypoints=(
@@ -589,10 +726,20 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("financial.billing_profile",),
             ),
             SOTService(
+                name="access.event_policy",
+                module="app.services.enforcement_event_policy",
+                owns=(
+                    "event-driven enforcement feature policy",
+                    "FUP enforcement action settings",
+                    "overdue suspension event policy",
+                ),
+                depends_on=("control.settings_spec",),
+            ),
+            SOTService(
                 name="access.radius_state",
                 module="app.services.radius_access_state",
                 owns=("desired RADIUS state mapping", "RADIUS group/profile actions"),
-                depends_on=("access.control_resolution",),
+                depends_on=("access.control_resolution", "access.event_policy"),
             ),
             SOTService(
                 name="access.radius_reject",
