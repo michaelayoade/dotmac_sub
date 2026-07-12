@@ -164,6 +164,7 @@ def create_user_with_role_and_password(
     email: str,
     role_id: str,
     user_type: str | None = None,
+    role_source: str = "local",
 ) -> tuple[SystemUser, str]:
     """Create system user, assign role, and generate temp credential password."""
     role = rbac_service.roles.get(db, role_id)
@@ -178,7 +179,13 @@ def create_user_with_role_and_password(
     db.add(system_user)
     db.flush()
 
-    db.add(SystemUserRoleModel(system_user_id=system_user.id, role_id=role.id))
+    db.add(
+        SystemUserRoleModel(
+            system_user_id=system_user.id,
+            role_id=role.id,
+            source=role_source,
+        )
+    )
 
     temp_password = secrets.token_urlsafe(16)
     db.add(
