@@ -22,12 +22,13 @@ RETIRED_MUTATIONS = {
     "submit_portal_technician_rating",
 }
 
-#: The last remaining Sub -> CRM writes. They are the *write half* of a
-#: flag-gated cutover whose *read half* has not happened: quotes_mirror and
-#: referrals_mirror still serve reads behind `quotes_native_read_enabled` /
-#: `referrals_native_read_enabled`, both defaulting OFF. Deleting these before
-#: the reads are backfilled and cut over would leave portal quote requests and
-#: referrals with nowhere to go.
+#: The last remaining Sub -> CRM writes.
+#:
+#: They are the *write half* of a cutover whose *read half* has not happened:
+#: ``quotes_mirror`` and ``referrals_mirror`` still serve reads behind
+#: ``quotes_native_read_enabled`` / ``referrals_native_read_enabled``, both of
+#: which default OFF. Deleting these before the reads are backfilled and cut
+#: over would leave portal quote requests and referrals with nowhere to write.
 #:
 #: This set must only ever SHRINK. It goes to zero when the read cutover lands.
 DEFERRED_MUTATIONS = {
@@ -41,16 +42,24 @@ def test_retired_crm_mutations_are_gone() -> None:
     assert RETIRED_MUTATIONS.isdisjoint(dir(CRMClient))
 
 
-def test_deferred_mutations_are_the_only_remaining_writes() -> None:
-    """No new Sub -> CRM write may be added, and the deferred ones may not be
-    quietly forgotten.
+def test_deferred_mutations_are_still_present_and_tracked() -> None:
+    """The last Sub -> CRM writes must not be silently dropped OR silently kept.
 
-    Anything on CRMClient that looks like a mutation must be explicitly listed
-    in DEFERRED_MUTATIONS. A new write method fails this test; removing a
-    deferred one requires deleting it from the set, which is the visible signal
-    that the cutover advanced.
+    Removing one without doing the read cutover would break portal quote
+    requests and referrals -- the mirrors are still the read source. When the
+    cutover lands these disappear and this set goes to zero, and that deletion
+    is the visible signal that it happened.
     """
-    mutation_verbs = (
+    assert DEFERRED_MUTATIONS <= set(dir(CRMClient))
+
+
+def test_no_new_crm_business_writes_are_added() -> None:
+    """Guard against a new Sub -> CRM write creeping in.
+
+    ``create_portal_session`` is deliberately exempt: it mints an auth session,
+    not a business mutation. CRM stays readable; it just does not get written.
+    """
+    write_verbs = (
         "create_",
         "update_",
         "delete_",
@@ -59,14 +68,15 @@ def test_deferred_mutations_are_the_only_remaining_writes() -> None:
         "accept_",
         "request_",
     )
+    non_mutations = {"create_portal_session"}
     present = {
         name
         for name in dir(CRMClient)
-        if not name.startswith("_") and name.startswith(mutation_verbs)
+        if not name.startswith("_") and name.startswith(write_verbs)
     }
-    assert present == DEFERRED_MUTATIONS, (
-        "CRMClient write surface changed. Expected only the deferred portal "
-        f"writes, found: {sorted(present)}"
+    assert present - non_mutations == DEFERRED_MUTATIONS, (
+        "CRMClient's write surface changed. Expected only the deferred portal "
+        f"writes, found: {sorted(present - non_mutations)}"
     )
 
 
@@ -90,8 +100,9 @@ def test_outbound_crm_tasks_are_not_registered() -> None:
         assert forbidden not in sources
 
 
-def test_native_portal_writes_do_not_import_crm_mirrors() -> None:
-    for path in ("app/api/me.py", "app/api/reseller.py"):
-        source = (ROOT / path).read_text(encoding="utf-8")
-        assert "quotes_mirror.request_quote" not in source
-        assert "referrals_mirror.refer_a_friend" not in source
+# A guard asserting app/api/{me,reseller}.py no longer call
+# ``quotes_mirror.request_quote`` / ``referrals_mirror.refer_a_friend`` belongs
+# with the READ cutover, not here. Those calls are live and correct today: the
+# mirrors are still the read source (flags default OFF), so the portal must
+# still be able to write through them. Add that guard in the cutover PR, where
+# it will actually hold.

@@ -398,6 +398,7 @@ class CRMClient:
             logger.error("CRM raw request error %s %s: %s", method, path, exc)
             raise CRMClientError(f"CRM connection error: {exc}") from exc
 
+
     def _cached_get(
         self,
         path: str,
@@ -468,6 +469,7 @@ class CRMClient:
             f"/api/v1/subscribers/{subscriber_id}", None, self.cache_detail_ttl
         )
 
+
     def list_subscribers(
         self,
         *,
@@ -524,6 +526,8 @@ class CRMClient:
             f"/api/v1/tickets/{ticket_id}", None, self.cache_detail_ttl
         )
 
+
+
     def list_ticket_comments(
         self, ticket_id: str, *, use_cache: bool = True
     ) -> list[dict[str, Any]]:
@@ -539,6 +543,7 @@ class CRMClient:
             else self._request("GET", "/api/v1/ticket-comments", params=params)
         )
         return data if isinstance(data, list) else data.get("items", [])
+
 
     # ── Work Orders ──────────────────────────────────────────────────────
 
@@ -557,6 +562,9 @@ class CRMClient:
         return self._cached_get(
             f"/api/v1/work-orders/{work_order_id}", None, self.cache_detail_ttl
         )
+
+
+
 
     def create_portal_session(
         self,
@@ -701,6 +709,36 @@ class CRMClient:
         )
         return data if isinstance(data, dict) else {}
 
+
+    def create_portal_referral(
+        self,
+        crm_subscriber_id: str,
+        *,
+        name: str | None = None,
+        email: str | None = None,
+        phone: str | None = None,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        """Refer-a-friend write-through to the CRM Portal API (server-side)."""
+        token = self._portal_token(crm_subscriber_id, ["referrals:write"])
+        payload: dict[str, Any] = {
+            k: v
+            for k, v in {
+                "name": name,
+                "email": email,
+                "phone": phone,
+                "note": note,
+            }.items()
+            if v
+        }
+        data = self._request(
+            "POST",
+            "/api/v1/portal/referrals",
+            json_data=payload,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        return data if isinstance(data, dict) else {}
+
     def get_portal_quotes(self, crm_subscriber_id: str) -> dict[str, Any]:
         """Read a subscriber's self-serve quotes (feasibility, estimate, deposit,
         status) from the CRM Portal API (server-side). Used by the mirror reconcile."""
@@ -711,58 +749,6 @@ class CRMClient:
             headers={"Authorization": f"Bearer {token}"},
         )
         return data if isinstance(data, dict) else {}
-
-    def list_work_order_notes(self, work_order_id: str) -> list[dict[str, Any]]:
-        """List notes for a work order."""
-        data = self._cached_get(
-            "/api/v1/work-order-notes",
-            {"work_order_id": work_order_id, "limit": 500},
-            self.cache_detail_ttl,
-        )
-        return data if isinstance(data, list) else data.get("items", [])
-
-
-# ── Singleton ────────────────────────────────────────────────────────────
-
-_crm_client: CRMClient | None = None
-
-
-def get_crm_client(db: Session | None = None) -> CRMClient:
-    """Get a CRM client, DB-scoped when runtime settings are available."""
-    if db is not None:
-        return CRMClient(
-            base_url=settings.crm_base_url,
-            username=settings.crm_username,
-            password=settings.crm_password,
-            service_token=settings.crm_service_token,
-            settings_db=db,
-        )
-    global _crm_client
-    if _crm_client is None:
-        _crm_client = CRMClient(
-            base_url=settings.crm_base_url,
-            username=settings.crm_username,
-            password=settings.crm_password,
-            service_token=settings.crm_service_token,
-        )
-    return _crm_client
-
-    # ------------------------------------------------------------------
-    # DEFERRED outbound writes -- portal quote request/accept and referral
-    # creation.
-    #
-    # These are the last Sub -> CRM business writes. They are NOT part of the
-    # write-back closure because they are the *write half* of a flag-gated
-    # cutover whose *read half* has not happened yet: `quotes_mirror` and
-    # `referrals_mirror` still serve reads behind `quotes_native_read_enabled`
-    # / `referrals_native_read_enabled`, both of which default OFF. Deleting
-    # these without first backfilling and cutting over the reads would leave
-    # portal quote requests and referrals with nowhere to go.
-    #
-    # They are pinned by tests/architecture/test_no_crm_writeback.py, which
-    # asserts they are the ONLY remaining write methods -- so no new one can
-    # be added, and these must disappear when the read cutover lands.
-    # ------------------------------------------------------------------
 
     def request_portal_quote(
         self,
@@ -818,31 +804,37 @@ def get_crm_client(db: Session | None = None) -> CRMClient:
         )
         return data if isinstance(data, dict) else {}
 
-    def create_portal_referral(
-        self,
-        crm_subscriber_id: str,
-        *,
-        name: str | None = None,
-        email: str | None = None,
-        phone: str | None = None,
-        note: str | None = None,
-    ) -> dict[str, Any]:
-        """Refer-a-friend write-through to the CRM Portal API (server-side)."""
-        token = self._portal_token(crm_subscriber_id, ["referrals:write"])
-        payload: dict[str, Any] = {
-            k: v
-            for k, v in {
-                "name": name,
-                "email": email,
-                "phone": phone,
-                "note": note,
-            }.items()
-            if v
-        }
-        data = self._request(
-            "POST",
-            "/api/v1/portal/referrals",
-            json_data=payload,
-            headers={"Authorization": f"Bearer {token}"},
+    def list_work_order_notes(self, work_order_id: str) -> list[dict[str, Any]]:
+        """List notes for a work order."""
+        data = self._cached_get(
+            "/api/v1/work-order-notes",
+            {"work_order_id": work_order_id, "limit": 500},
+            self.cache_detail_ttl,
         )
-        return data if isinstance(data, dict) else {}
+        return data if isinstance(data, list) else data.get("items", [])
+
+
+# ── Singleton ────────────────────────────────────────────────────────────
+
+_crm_client: CRMClient | None = None
+
+
+def get_crm_client(db: Session | None = None) -> CRMClient:
+    """Get a CRM client, DB-scoped when runtime settings are available."""
+    if db is not None:
+        return CRMClient(
+            base_url=settings.crm_base_url,
+            username=settings.crm_username,
+            password=settings.crm_password,
+            service_token=settings.crm_service_token,
+            settings_db=db,
+        )
+    global _crm_client
+    if _crm_client is None:
+        _crm_client = CRMClient(
+            base_url=settings.crm_base_url,
+            username=settings.crm_username,
+            password=settings.crm_password,
+            service_token=settings.crm_service_token,
+        )
+    return _crm_client
