@@ -69,7 +69,7 @@ def _make_radacct(tmp_path, monkeypatch, *, ddl=_RADACCT_DDL):
     engine = create_engine(url)
     with engine.begin() as conn:
         conn.execute(text(ddl))
-    monkeypatch.setattr(usage_service, "_radius_accounting_db_url", lambda: url)
+    monkeypatch.setattr(usage_service, "_radius_accounting_db_url", lambda _db: url)
     # No Redis in unit tests — keeps the bandwidth-delta emit a no-op.
     monkeypatch.delenv("REDIS_URL", raising=False)
     return engine
