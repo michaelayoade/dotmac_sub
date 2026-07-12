@@ -212,6 +212,17 @@ cleanup-unrecoverable-credentials-execute: ## Execute the exact reviewed cleanup
 	poetry run python -m scripts.one_off.cleanup_unrecoverable_credentials \
 		--execute --confirm-plan-digest "$(PLAN_DIGEST)"
 
+reconcile-nas-lifecycle: ## Plan NAS lifecycle and subscription access-path repairs
+	poetry run python -m scripts.one_off.reconcile_nas_lifecycle
+
+reconcile-nas-lifecycle-details: ## Show bounded per-NAS review evidence
+	poetry run python -m scripts.one_off.reconcile_nas_lifecycle --details
+
+reconcile-nas-lifecycle-execute: ## Execute the exact reviewed NAS lifecycle plan
+	@test -n "$(PLAN_DIGEST)" || (echo "PLAN_DIGEST is required" && exit 2)
+	poetry run python -m scripts.one_off.reconcile_nas_lifecycle \
+		--execute --confirm-plan-digest "$(PLAN_DIGEST)"
+
 generate-encryption-key: ## Generate a new credential encryption key
 	@python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 
