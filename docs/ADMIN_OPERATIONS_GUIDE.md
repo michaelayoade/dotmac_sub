@@ -1128,12 +1128,15 @@ the shared observability service. Use these series in VictoriaMetrics/Grafana:
 
 - `observability_state{domain="credentials",signal="undecryptable",scope="all"}`
 - `observability_state{domain="credentials",signal="plaintext",scope="all"}`
+- `observability_state{domain="credentials",signal="one_way",scope="all"}`
 - `observability_snapshot_age_seconds{domain="credentials"}`
 - `observability_snapshot_status{domain="credentials",status="error"}`
 
 The scan never exports credential values or record identifiers. Non-zero
 plaintext or undecryptable totals also enter the standard admin-alert lifecycle;
 undecryptable values block automatic key rotation until corrected.
+The `one_way` state covers valid RADIUS crypt, PBKDF2, and opaque migrated hashes.
+These values are intentionally preserved and are not remediation candidates.
 
 Use the same inventory for one-time plaintext remediation. Dry-run first, then
 execute, then confirm a second dry-run reports zero plaintext candidates:

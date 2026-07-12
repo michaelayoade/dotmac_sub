@@ -25,6 +25,9 @@ from app.models.system_user import SystemUser
 from app.models.tr069 import Tr069AcsServer
 from app.models.vas import VasTransaction
 from app.models.webhook import WebhookEndpoint
+from app.services.access_credential_secret import (
+    is_one_way_access_credential_secret,
+)
 from app.services.credential_crypto import (
     ENCRYPTED_MODEL_FIELDS,
     decrypt_credential_with_key,
@@ -77,6 +80,7 @@ class CredentialRemediationResult:
 _INTEGRITY_STATES = (
     "encrypted",
     "plaintext",
+    "one_way",
     "undecryptable",
     "reference",
     "empty",
@@ -136,10 +140,17 @@ def _empty_integrity_counts() -> dict[str, int]:
     return dict.fromkeys(_INTEGRITY_STATES, 0)
 
 
-def _credential_state(value: Any, keys: tuple[bytes, ...]) -> str:
+def _credential_state(
+    value: Any,
+    keys: tuple[bytes, ...],
+    *,
+    preserve_one_way: bool = False,
+) -> str:
     if value is None or value == "":
         return "empty"
     text_value = str(value)
+    if preserve_one_way and is_one_way_access_credential_secret(text_value):
+        return "one_way"
     if is_secret_ref(text_value):
         return "reference"
     if text_value.startswith("plain:") or not text_value.startswith("enc:"):
@@ -170,16 +181,24 @@ def scan_credential_encryption_integrity(
     def register(scope: str) -> None:
         counts.setdefault(scope, _empty_integrity_counts())
 
-    def observe(scope: str, value: Any) -> None:
+    def observe(scope: str, value: Any, *, preserve_one_way: bool = False) -> None:
         register(scope)
-        counts[scope][_credential_state(value, keys)] += 1
+        counts[scope][
+            _credential_state(value, keys, preserve_one_way=preserve_one_way)
+        ] += 1
 
     for model, fields in _MODEL_FIELDS:
         for field in fields:
             register(f"{model.__name__}.{field}")
         for row in db.scalars(select(model)).all():
             for field in fields:
-                observe(f"{model.__name__}.{field}", getattr(row, field, None))
+                observe(
+                    f"{model.__name__}.{field}",
+                    getattr(row, field, None),
+                    preserve_one_way=(
+                        model is AccessCredential and field == "secret_hash"
+                    ),
+                )
 
     nested_scopes = {
         path: ".".join(("OntUnit", "desired_config", *path))
@@ -312,6 +331,11 @@ def _rotate_value(
         rotated = encrypt_credential_with_key(plain_value, new_key)
         return rotated, rotated != value
 
+    if value.lower().startswith("cleartext:"):
+        plain_value = value[10:]
+        rotated = encrypt_credential_with_key(plain_value, new_key)
+        return rotated, rotated != value
+
     if not value.startswith("enc:"):
         rotated = encrypt_credential_with_key(value, new_key)
         return rotated, rotated != value
@@ -383,6 +407,12 @@ def _rotate_model_fields(
         row_changed = False
         for field in fields:
             current = getattr(row, field, None)
+            if (
+                model is AccessCredential
+                and field == "secret_hash"
+                and is_one_way_access_credential_secret(current)
+            ):
+                continue
             try:
                 rotated, changed = _rotate_value(
                     current, old_key=old_key, new_key=new_key

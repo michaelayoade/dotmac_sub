@@ -7,7 +7,8 @@ from datetime import UTC, datetime
 import pytest
 from cryptography.fernet import Fernet
 
-from app.models.catalog import NasDevice
+from app.models.catalog import AccessCredential, NasDevice
+from app.models.subscriber import Subscriber
 from app.services import credential_key_rotation as key_rotation
 from app.services import credential_rotation_schedule as rotation_schedule
 from app.services.credential_crypto import (
@@ -27,6 +28,7 @@ def _integrity_result(
         "NasDevice.shared_secret": {
             "encrypted": 1,
             "plaintext": plaintext,
+            "one_way": 0,
             "undecryptable": undecryptable,
             "reference": 0,
             "empty": 0,
@@ -37,6 +39,7 @@ def _integrity_result(
         totals={
             "encrypted": 1,
             "plaintext": plaintext,
+            "one_way": 0,
             "undecryptable": undecryptable,
             "reference": 0,
             "empty": 0,
@@ -174,6 +177,43 @@ def test_credential_remediation_blocks_before_writes_on_corruption(
     assert result.reason == "undecryptable_credentials"
     assert result.undecryptable >= 1
     assert row.shared_secret == "legacy-secret"
+
+
+def test_credential_remediation_preserves_one_way_access_hash(db_session, monkeypatch):
+    key = Fernet.generate_key()
+    subscriber = Subscriber(
+        first_name="Opaque",
+        last_name="Credential",
+        email="opaque-credential@example.com",
+        user_type="customer",
+    )
+    db_session.add(subscriber)
+    db_session.flush()
+    credential = AccessCredential(
+        subscriber_id=subscriber.id,
+        username="opaque-credential",
+        secret_hash="YWJjZGVmZ2hpamtsbW5vcA==",
+    )
+    db_session.add(credential)
+    db_session.commit()
+    monkeypatch.setattr(key_rotation, "get_encryption_key", lambda: key)
+    monkeypatch.setattr(key_rotation, "get_previous_encryption_key", lambda: None)
+    monkeypatch.setattr(
+        key_rotation,
+        "publish_credential_integrity_snapshot",
+        lambda *_args, **_kwargs: True,
+    )
+
+    before = key_rotation.scan_credential_encryption_integrity(db_session)
+    result = key_rotation.remediate_credential_encryption(db_session, execute=True)
+    db_session.refresh(credential)
+
+    scope = "AccessCredential.secret_hash"
+    assert before.counts[scope]["one_way"] == 1
+    assert before.counts[scope]["plaintext"] == 0
+    assert result.status == "completed"
+    assert result.updated_values == 0
+    assert credential.secret_hash == "YWJjZGVmZ2hpamtsbW5vcA=="
 
 
 def test_shared_observability_snapshot_round_trip(monkeypatch):

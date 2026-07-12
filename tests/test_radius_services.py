@@ -145,6 +145,23 @@ def test_external_password_row_uses_cleartext_password_for_plain_prefixed_secret
     assert row[2] == "secret123"
 
 
+def test_external_password_row_strips_cleartext_marker():
+    credential = AccessCredential(
+        subscriber_id="00000000-0000-0000-0000-000000000001",
+        username="10005031",
+        secret_hash="cleartext:secret123",
+        is_active=True,
+    )
+
+    row = radius_service._external_password_row(
+        credential,
+        default_attribute="Cleartext-Password",
+        default_op=":=",
+    )
+
+    assert row == ("Cleartext-Password", ":=", "secret123")
+
+
 def test_external_password_row_keeps_crypt_password_for_legacy_sha512_crypt():
     credential = AccessCredential(
         subscriber_id="00000000-0000-0000-0000-000000000001",

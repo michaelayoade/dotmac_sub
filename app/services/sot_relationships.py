@@ -371,6 +371,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("secrets.reference_store",),
             ),
             SOTService(
+                name="secrets.access_credential_format",
+                module="app.services.access_credential_secret",
+                owns=(
+                    "access credential representation classification",
+                    "one-way RADIUS hash preservation policy",
+                    "explicit cleartext marker normalization",
+                ),
+            ),
+            SOTService(
                 name="secrets.credential_integrity",
                 module="app.services.credential_key_rotation",
                 owns=(
@@ -380,6 +389,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "credential re-encryption convergence",
                 ),
                 depends_on=(
+                    "secrets.access_credential_format",
                     "secrets.credential_crypto",
                     "observability.recording",
                     "runtime.db_sessions",
