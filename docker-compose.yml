@@ -652,4 +652,13 @@ networks:
     name: dotmac_sub_default
     ipam:
       config:
-      - subnet: 172.20.255.0/24
+      # Pinned, and deliberately inside 172.20.0.0/16: FreeRADIUS only accepts
+      # probe requests from clients in RADIUS_PROBE_CLIENT_SUBNET (which defaults
+      # to 172.20.0.0/16 -- see app/services/radius_population.py). Put the app
+      # containers outside that range and RADIUS silently stops recognising them.
+      #
+      # It is configurable because a host running more than one Dotmac stack will
+      # collide: dotmac_crm's compose also wants 172.20.255.0/24. On such a host
+      # set DOCKER_SUBNET to another /24 *within 172.20.0.0/16* -- not an
+      # arbitrary range, or you trade a collision for a broken RADIUS probe.
+      - subnet: ${DOCKER_SUBNET:-172.20.255.0/24}
