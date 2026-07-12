@@ -438,6 +438,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "Read-only RADIUS accounting/enforcement health pass; every run "
         "recomputes from source, so re-runs are idempotent.",
     ),
+    "app.tasks.security.run_scheduled_credential_rotation": _c(
+        "security",
+        SWEEP,
+        GUARDED,
+        HEALTH,
+        "Daily single-flight key lifecycle; OpenBao retains the previous key "
+        "through a grace period and reruns converge straggler ciphertext.",
+    ),
     "app.tasks.topology_ufiber_link.run_ufiber_onu_link": _c(
         "network", SWEEP, IDEMP, HEALTH
     ),

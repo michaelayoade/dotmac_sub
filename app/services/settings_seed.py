@@ -37,6 +37,34 @@ logger = logging.getLogger(__name__)
 
 
 def seed_auth_settings(db: Session) -> None:
+    rotation_enabled = os.getenv("CREDENTIAL_ROTATION_ENABLED", "true")
+    auth_settings.ensure_by_key(
+        db,
+        key="credential_rotation_enabled",
+        value_type=SettingValueType.boolean,
+        value_text=rotation_enabled,
+        value_json=rotation_enabled.lower() in {"1", "true", "yes", "on"},
+    )
+    rotation_auto_apply = os.getenv("CREDENTIAL_ROTATION_AUTO_APPLY", "true")
+    auth_settings.ensure_by_key(
+        db,
+        key="credential_rotation_auto_apply",
+        value_type=SettingValueType.boolean,
+        value_text=rotation_auto_apply,
+        value_json=rotation_auto_apply.lower() in {"1", "true", "yes", "on"},
+    )
+    auth_settings.ensure_by_key(
+        db,
+        key="credential_rotation_interval_days",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("CREDENTIAL_ROTATION_INTERVAL_DAYS", "90"),
+    )
+    auth_settings.ensure_by_key(
+        db,
+        key="credential_rotation_grace_days",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("CREDENTIAL_ROTATION_GRACE_DAYS", "7"),
+    )
     auth_settings.ensure_by_key(
         db,
         key="jwt_algorithm",

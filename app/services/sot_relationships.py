@@ -340,6 +340,63 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         ),
     ),
     DomainSOT(
+        domain="secrets_credentials",
+        services=(
+            SOTService(
+                name="secrets.reference_store",
+                module="app.services.secrets",
+                owns=(
+                    "secret reference parsing and resolution",
+                    "OpenBao read/write boundary",
+                    "bounded secret cache lifecycle",
+                ),
+            ),
+            SOTService(
+                name="secrets.settings_policy",
+                module="app.services.domain_settings",
+                owns=(
+                    "secret setting classification",
+                    "secret setting reference persistence",
+                ),
+                depends_on=("secrets.reference_store",),
+            ),
+            SOTService(
+                name="secrets.credential_crypto",
+                module="app.services.credential_crypto",
+                owns=(
+                    "database credential encryption",
+                    "credential field inventory",
+                    "current and previous decryption key resolution",
+                ),
+                depends_on=("secrets.reference_store",),
+            ),
+            SOTService(
+                name="secrets.rotation",
+                module="app.services.credential_rotation_schedule",
+                owns=(
+                    "scheduled credential key lifecycle",
+                    "rotation grace period",
+                    "credential re-encryption convergence",
+                ),
+                depends_on=(
+                    "secrets.reference_store",
+                    "secrets.credential_crypto",
+                    "runtime.db_sessions",
+                ),
+            ),
+        ),
+        entrypoints=(
+            "app.tasks.security",
+            "app.web.admin.system",
+            "app.services.*",
+        ),
+        rule=(
+            "Bootstrap secrets use environment or mounted files; application "
+            "secrets use references; high-cardinality credentials use the "
+            "declared encrypted-field inventory. Callers never choose storage."
+        ),
+    ),
+    DomainSOT(
         domain="notifications_communications",
         services=(
             SOTService(

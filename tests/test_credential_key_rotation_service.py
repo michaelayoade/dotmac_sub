@@ -16,7 +16,9 @@ from app.models.network import (
     OntProvisioningProfile,
     OntUnit,
 )
+from app.models.router_management import JumpHost, Router
 from app.models.subscriber import Subscriber
+from app.models.system_user import SystemUser
 from app.models.tr069 import Tr069AcsServer
 from app.models.webhook import WebhookEndpoint
 from app.services.credential_crypto import (
@@ -145,6 +147,42 @@ def test_rotate_credential_encryption_material_updates_known_storage_targets(
         is_secret=True,
         is_active=True,
     )
+    ordinary_setting = DomainSetting(
+        domain=SettingDomain.auth,
+        key="jwt_algorithm",
+        value_type=SettingValueType.string,
+        value_text="HS256",
+        is_secret=False,
+        is_active=True,
+    )
+    referenced_setting = DomainSetting(
+        domain=SettingDomain.auth,
+        key="jwt_secret",
+        value_type=SettingValueType.string,
+        value_text="bao://secret/settings/auth#jwt_secret",
+        is_secret=True,
+        is_active=True,
+    )
+    system_user = SystemUser(
+        first_name="Security",
+        last_name="Operator",
+        email="security-rotation@example.com",
+        device_login_secret=encrypt_credential_with_key("device-pass", old_key),
+    )
+    jump_host = JumpHost(
+        name="rotation-jump",
+        hostname="jump.example.com",
+        username="ops",
+        ssh_password=encrypt_credential_with_key("jump-pass", old_key),
+    )
+    router = Router(
+        name="rotation-router",
+        hostname="router.example.com",
+        management_ip="192.0.2.10",
+        rest_api_username=encrypt_credential_with_key("router-user", old_key),
+        rest_api_password=encrypt_credential_with_key("router-pass", old_key),
+        jump_host=jump_host,
+    )
 
     db_session.add_all(
         [
@@ -159,6 +197,11 @@ def test_rotate_credential_encryption_material_updates_known_storage_targets(
             wan,
             hook,
             setting,
+            ordinary_setting,
+            referenced_setting,
+            system_user,
+            jump_host,
+            router,
         ]
     )
     db_session.commit()
@@ -248,6 +291,32 @@ def test_rotate_credential_encryption_material_updates_known_storage_targets(
             db_session.get(IntegrationHook, hook.id).auth_config["token"], new_key
         )
         == "api-token"
+    )
+    assert (
+        decrypt_credential_with_key(
+            db_session.get(SystemUser, system_user.id).device_login_secret, new_key
+        )
+        == "device-pass"
+    )
+    refreshed_router = db_session.get(Router, router.id)
+    assert (
+        decrypt_credential_with_key(refreshed_router.rest_api_username, new_key)
+        == "router-user"
+    )
+    assert (
+        decrypt_credential_with_key(refreshed_router.rest_api_password, new_key)
+        == "router-pass"
+    )
+    assert (
+        decrypt_credential_with_key(
+            db_session.get(JumpHost, jump_host.id).ssh_password, new_key
+        )
+        == "jump-pass"
+    )
+    assert db_session.get(DomainSetting, ordinary_setting.id).value_text == "HS256"
+    assert (
+        db_session.get(DomainSetting, referenced_setting.id).value_text
+        == "bao://secret/settings/auth#jwt_secret"
     )
 
 

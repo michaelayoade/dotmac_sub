@@ -1076,7 +1076,8 @@ Permission format: `resource:action`
 
 | Path | Fields | Used By |
 |------|--------|---------|
-| secret/auth | jwt_secret, totp_encryption_key, credential_encryption_key, wireguard_key_encryption_key | Auth, crypto |
+| secret/auth | jwt_secret, totp_encryption_key, credential_encryption_key, wireguard_key_encryption_key | Legacy auth/bootstrap compatibility |
+| secret/settings/auth | credential_encryption_key, credential_encryption_previous_key, rotation timestamps | Scheduled credential rotation |
 | secret/paystack | secret_key, public_key | Payment gateway when configured |
 | secret/database | url, password | Database connection |
 | secret/redis | password, url, broker_url, result_backend | Cache/broker |
@@ -1094,9 +1095,28 @@ Example: Setting `paystack_secret_key` = `bao://secret/paystack#secret_key`
 
 ### Rotating Secrets
 
-1. Update value in OpenBao (via UI or CLI)
-2. Clear application cache: restart app or call `clear_cache()`
-3. Verify with test transaction
+Ordinary provider secrets can be updated in OpenBao. Application processes
+refresh cached values within `OPENBAO_CACHE_TTL_SECONDS` (60 seconds by
+default).
+
+The credential-at-rest Fernet key is different: do not replace it directly.
+`app.tasks.security.run_scheduled_credential_rotation` checks daily and rotates
+on the configured interval. It publishes the new current key together with the
+previous key, rewrites known encrypted fields, retains the previous key for the
+grace period, and runs a final convergence pass before retirement.
+
+Automatic rotation requires `CREDENTIAL_ENCRYPTION_KEY` to be unset or to be an
+OpenBao reference such as
+`bao://secret/settings/auth#credential_encryption_key`. A literal environment
+key makes the task report `blocked_static_environment_key`; this prevents one
+worker changing data while other processes remain pinned to an old key.
+
+For the one-time migration, set `CREDENTIAL_ENCRYPTION_KEY_SEED` to the current
+literal key and run `scripts/setup/openbao_init.sh`. Confirm
+`secret/settings/auth#credential_encryption_key`, change
+`CREDENTIAL_ENCRYPTION_KEY` to the reference above, remove the seed variable,
+and restart API and worker processes. Never rerun initialization with an old
+seed value.
 
 ### Rotation Order
 
@@ -1208,16 +1228,10 @@ Backup script:
 
 ### OpenBao Backup
 
-```bash
-# Export all secrets
-docker exec dotmac_sub_openbao sh -c '
-  export BAO_ADDR=http://127.0.0.1:8200
-  export BAO_TOKEN=dotmac-sub-dev-token
-  for path in auth database redis radius genieacs s3 migration; do
-    bao kv get -format=json secret/$path
-  done
-' > openbao_backup.json
-```
+Use the OpenBao storage backend's authenticated snapshot procedure and store the
+snapshot in encrypted backup storage. Do not export KV values into plaintext
+JSON. Supply the backup token at runtime or through a mounted token file; never
+place a default token in scripts or documentation.
 
 ---
 
