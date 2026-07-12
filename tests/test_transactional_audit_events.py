@@ -3,6 +3,8 @@ from __future__ import annotations
 import uuid
 from unittest.mock import patch
 
+from sqlalchemy import text
+
 from app.models.audit import AuditActorType, AuditEvent
 from app.models.event_store import EventHandlerAttempt, EventStatus, EventStore
 from app.models.subscriber import Subscriber
@@ -256,6 +258,44 @@ def test_dispatcher_persists_first_class_handler_attempts(db_session):
     assert len(attempts) == 1
     assert attempts[0].handler_name == "SuccessHandler"
     assert attempts[0].status == "success"
+
+
+def test_dispatcher_contains_handler_database_failures(db_session):
+    from app.services.events.dispatcher import EventDispatcher
+    from app.services.events.types import Event
+
+    handled: list[str] = []
+
+    class ArrangementHandler:
+        def handle(self, db, event):
+            db.execute(text("SELECT CAST('not-a-uuid' AS uuid)"))
+
+    class NotificationHandler:
+        def handle(self, db, event):
+            db.execute(text("SELECT 1"))
+            handled.append(event.event_type.value)
+
+    dispatcher = EventDispatcher()
+    dispatcher.register_handler(ArrangementHandler())
+    dispatcher.register_handler(NotificationHandler())
+    event = Event(event_type=EventType.payment_received, payload={"amount": 50})
+
+    dispatcher.dispatch(db_session, event)
+
+    stored_event = (
+        db_session.query(EventStore).filter(EventStore.event_id == event.event_id).one()
+    )
+    attempts = {
+        attempt.handler_name: attempt.status
+        for attempt in db_session.query(EventHandlerAttempt)
+        .filter(EventHandlerAttempt.event_store_id == stored_event.id)
+        .all()
+    }
+    assert handled == [EventType.payment_received.value]
+    assert attempts == {
+        "ArrangementHandler": "failed",
+        "NotificationHandler": "success",
+    }
 
 
 def test_retry_event_uses_first_class_handler_attempt_rows_as_source_of_truth(

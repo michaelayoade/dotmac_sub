@@ -27,6 +27,22 @@ from app.services.radius_access_state import (
 
 logger = logging.getLogger(__name__)
 
+HANDLED_EVENT_TYPES = frozenset(
+    {
+        EventType.subscription_suspended,
+        EventType.subscription_canceled,
+        EventType.subscription_expired,
+        EventType.subscription_activated,
+        EventType.subscription_resumed,
+        EventType.subscription_upgraded,
+        EventType.subscription_downgraded,
+        EventType.subscriber_throttled,
+        EventType.usage_exhausted,
+        EventType.payment_received,
+        EventType.invoice_overdue,
+    }
+)
+
 
 def _reject_reason_from_event_payload(payload: dict) -> str:
     raw = str((payload or {}).get("reason") or "").strip().lower()

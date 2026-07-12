@@ -55,6 +55,14 @@ class HandlerControl:
 
 
 @dataclass(frozen=True)
+class EventHandlerStep:
+    handler: Any
+    handler_name: str
+    stage: HandlerStage | None
+    dependencies: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class ControlFinding:
     code: str
     severity: str
@@ -192,9 +200,6 @@ HANDLER_CONTROLS: dict[str, HandlerControl] = {
         20,
         ("internal_integration_hooks",),
     ),
-    "CrmSyncHandler": HandlerControl(
-        "CrmSyncHandler", HandlerStage.external, 30, ("crm_compatibility_sync",)
-    ),
 }
 
 RELATIONSHIP_SETTING_KEYS = {
@@ -211,12 +216,24 @@ CHAINED_EVENT_TYPES = {
     "subscription.suspended",
     "subscription.resumed",
     "subscription.canceled",
+    "subscription.upgraded",
+    "subscription.downgraded",
     "subscription.expired",
-    "payment.received",
-    "invoice.overdue",
+    "usage.exhausted",
     "service_order.assigned",
     "provisioning.completed",
     "provisioning.failed",
+}
+
+# Dependencies within the same stage. Stage-to-stage dependencies are derived
+# automatically for chained events.
+EVENT_HANDLER_DEPENDENCIES: dict[str, dict[str, tuple[str, ...]]] = {
+    "subscription.activated": {
+        "EnforcementHandler": ("ProvisioningHandler",),
+    },
+    "subscription.resumed": {
+        "EnforcementHandler": ("ProvisioningHandler",),
+    },
 }
 
 
@@ -224,6 +241,186 @@ def event_relationship_mode(event_type: str) -> RelationshipMode:
     if event_type in CHAINED_EVENT_TYPES:
         return RelationshipMode.chain
     return RelationshipMode.fanout
+
+
+def handler_event_types(handler_name: str) -> frozenset[str] | None:
+    """Return the handler's executable event scope; ``None`` means wildcard."""
+    if handler_name == "IntegrationHookHandler":
+        return None
+    if handler_name == "LifecycleHandler":
+        from app.services.events.types import SUBSCRIPTION_LIFECYCLE_MAP
+
+        return frozenset(item.value for item in SUBSCRIPTION_LIFECYCLE_MAP)
+    if handler_name == "NotificationHandler":
+        from app.services.events.handlers.notification import EVENT_NOTIFICATION_SPECS
+
+        return frozenset(item.value for item in EVENT_NOTIFICATION_SPECS)
+    if handler_name == "WebhookHandler":
+        from app.services.events.handlers.webhook import EVENT_TYPE_TO_WEBHOOK
+
+        return frozenset(item.value for item in EVENT_TYPE_TO_WEBHOOK)
+    if handler_name == "ArrangementHandler":
+        from app.services.events.handlers.arrangements import HANDLED_EVENT_TYPES
+
+        return frozenset(item.value for item in HANDLED_EVENT_TYPES)
+    if handler_name == "EnforcementHandler":
+        from app.services.events.handlers.enforcement import HANDLED_EVENT_TYPES
+
+        return frozenset(item.value for item in HANDLED_EVENT_TYPES)
+    if handler_name == "ProvisioningHandler":
+        from app.services.events.handlers.provisioning import HANDLED_EVENT_TYPES
+
+        return frozenset(item.value for item in HANDLED_EVENT_TYPES)
+    if handler_name == "ReferralHandler":
+        from app.services.events.handlers.referral import REFERRAL_QUALIFY_EVENTS
+
+        return frozenset(item.value for item in REFERRAL_QUALIFY_EVENTS)
+    raise ControlRelationshipError(
+        f"Event handler {handler_name} has no executable event-scope declaration"
+    )
+
+
+def event_execution_plan(
+    event_type: str, handlers: Iterable[Any]
+) -> list[EventHandlerStep]:
+    """Build the ordered, dependency-aware plan for one event."""
+    resolved = list(handlers)
+    if resolved and all(
+        handler.__class__.__name__ in HANDLER_CONTROLS for handler in resolved
+    ):
+        resolved = sorted(
+            resolved,
+            key=lambda handler: (
+                HANDLER_CONTROLS[handler.__class__.__name__].stage,
+                HANDLER_CONTROLS[handler.__class__.__name__].order,
+            ),
+        )
+    applicable: list[Any] = []
+    for handler in resolved:
+        name = handler.__class__.__name__
+        if name not in HANDLER_CONTROLS:
+            applicable.append(handler)
+            continue
+        event_types = handler_event_types(name)
+        if event_types is None or event_type in event_types:
+            applicable.append(handler)
+
+    chained = event_relationship_mode(event_type) == RelationshipMode.chain
+    all_declared = all(
+        handler.__class__.__name__ in HANDLER_CONTROLS for handler in applicable
+    )
+    steps: list[EventHandlerStep] = []
+    for index, handler in enumerate(applicable):
+        name = handler.__class__.__name__
+        control = HANDLER_CONTROLS.get(name)
+        dependencies: list[str] = []
+        if chained and all_declared and control is not None:
+            dependencies.extend(
+                prior.__class__.__name__
+                for prior in applicable
+                if HANDLER_CONTROLS[prior.__class__.__name__].stage < control.stage
+            )
+            dependencies.extend(
+                dependency
+                for dependency in EVENT_HANDLER_DEPENDENCIES.get(event_type, {}).get(
+                    name, ()
+                )
+                if any(
+                    candidate.__class__.__name__ == dependency
+                    for candidate in applicable
+                )
+            )
+        elif chained:
+            # Preserve deterministic behavior for extensions/tests that have not
+            # entered the production control registry yet.
+            dependencies.extend(
+                prior.__class__.__name__ for prior in applicable[:index]
+            )
+        steps.append(
+            EventHandlerStep(
+                handler=handler,
+                handler_name=name,
+                stage=control.stage if control else None,
+                dependencies=tuple(dict.fromkeys(dependencies)),
+            )
+        )
+    return steps
+
+
+def validate_event_execution_policy(handlers: Iterable[Any]) -> None:
+    """Fail startup when scopes or chain dependencies are incomplete/cyclic."""
+    resolved = validate_and_order_handlers(handlers)
+    from app.services.events.types import EventType
+
+    valid_event_types = {item.value for item in EventType}
+    unknown_chained_events = sorted(CHAINED_EVENT_TYPES - valid_event_types)
+    if unknown_chained_events:
+        raise ControlRelationshipError(
+            "Unknown chained event types: " + ", ".join(unknown_chained_events)
+        )
+    for handler in resolved:
+        name = handler.__class__.__name__
+        event_types = handler_event_types(name)
+        unknown = sorted((event_types or frozenset()) - valid_event_types)
+        if unknown:
+            raise ControlRelationshipError(
+                f"Event handler {name} declares unknown event types: {', '.join(unknown)}"
+            )
+
+    non_chained_dependencies = sorted(
+        set(EVENT_HANDLER_DEPENDENCIES) - CHAINED_EVENT_TYPES
+    )
+    if non_chained_dependencies:
+        raise ControlRelationshipError(
+            "Event dependencies declared for non-chained events: "
+            + ", ".join(non_chained_dependencies)
+        )
+
+    for event_type in CHAINED_EVENT_TYPES:
+        dependencies_by_handler = EVENT_HANDLER_DEPENDENCIES.get(event_type, {})
+        plan = event_execution_plan(event_type, resolved)
+        if len(plan) < 2:
+            raise ControlRelationshipError(
+                f"Chained event {event_type} has fewer than two subscribed handlers"
+            )
+        plan_names = {step.handler_name for step in plan}
+        for handler_name, dependencies in dependencies_by_handler.items():
+            if handler_name not in plan_names:
+                raise ControlRelationshipError(
+                    f"Event {event_type} dependency target {handler_name} is not subscribed"
+                )
+            missing = sorted(set(dependencies) - plan_names)
+            if missing:
+                raise ControlRelationshipError(
+                    f"Event {event_type} dependencies are not subscribed: "
+                    f"{', '.join(missing)}"
+                )
+
+        graph = {step.handler_name: set(step.dependencies) for step in plan}
+        _validate_acyclic_handler_graph(event_type, graph)
+
+
+def _validate_acyclic_handler_graph(
+    event_type: str, graph: dict[str, set[str]]
+) -> None:
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(name: str) -> None:
+        if name in visiting:
+            raise ControlRelationshipError(
+                f"Event {event_type} handler dependency cycle includes {name}"
+            )
+        if name in visited:
+            return
+        visiting.add(name)
+        for dependency in graph.get(name, set()):
+            visit(dependency)
+        visiting.remove(name)
+        visited.add(name)
+
+    for name in graph:
+        visit(name)
 
 
 def validate_and_order_handlers(handlers: Iterable[Any]) -> list[Any]:
@@ -267,6 +464,11 @@ def event_topology() -> list[dict[str, object]]:
             "order": control.order,
             "relationship": control.relationship.value,
             "capabilities": list(control.capabilities),
+            "event_types": (
+                ["*"]
+                if handler_event_types(control.handler_name) is None
+                else sorted(handler_event_types(control.handler_name) or ())
+            ),
         }
         for control in sorted(
             HANDLER_CONTROLS.values(), key=lambda item: (item.stage, item.order)
@@ -275,12 +477,40 @@ def event_topology() -> list[dict[str, object]]:
 
 
 def event_policies() -> dict[str, object]:
+    handlers = [type(name, (), {})() for name in HANDLER_CONTROLS]
     return {
         "default": RelationshipMode.fanout.value,
-        "overrides": dict.fromkeys(
-            sorted(CHAINED_EVENT_TYPES), RelationshipMode.chain.value
-        ),
+        "overrides": {
+            event_type: {
+                "mode": RelationshipMode.chain.value,
+                "steps": [
+                    {
+                        "handler": step.handler_name,
+                        "stage": step.stage.name if step.stage else None,
+                        "dependencies": list(step.dependencies),
+                    }
+                    for step in event_execution_plan(event_type, handlers)
+                ],
+            }
+            for event_type in sorted(CHAINED_EVENT_TYPES)
+        },
     }
+
+
+def audit_event_relationships() -> list[ControlFinding]:
+    handlers = [type(name, (), {})() for name in HANDLER_CONTROLS]
+    try:
+        validate_event_execution_policy(handlers)
+    except ControlRelationshipError as exc:
+        return [
+            ControlFinding(
+                code="invalid_event_execution_policy",
+                severity="error",
+                message=str(exc),
+                members=tuple(HANDLER_CONTROLS),
+            )
+        ]
+    return []
 
 
 def _value(
