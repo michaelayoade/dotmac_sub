@@ -886,6 +886,38 @@ class TestUsageMeteringTask:
         work_session.commit.assert_called_once()
         work_session.close.assert_called_once()
 
+    def test_radius_accounting_import_fails_when_source_is_stale(self):
+        lock = MagicMock()
+        lock.__enter__.return_value = True
+        work_session = MagicMock()
+
+        with (
+            patch(
+                "app.tasks._postgres_lock.postgres_session_advisory_lock",
+                return_value=lock,
+            ),
+            patch(
+                "app.services.db_session_adapter.SessionLocal",
+                return_value=work_session,
+            ),
+            patch(
+                "app.services.usage.import_radius_accounting",
+                return_value={
+                    "ok": False,
+                    "processed": 0,
+                    "created_or_updated": 0,
+                    "source_status": "stale",
+                },
+            ),
+        ):
+            from app.tasks.usage import import_radius_accounting
+
+            with pytest.raises(
+                RuntimeError,
+                match="RADIUS accounting source is stale",
+            ):
+                import_radius_accounting()
+
     def test_meter_usage_queues_targeted_fup_for_changed_subscriptions(self):
         mock_session = MagicMock()
         changed = ["11111111-1111-1111-1111-111111111111"]

@@ -1217,8 +1217,17 @@ session identity. Recommendations are review classifications, not mutation
 authority: historical use can support reactivation or relink review, but only
 current exact live-session evidence can authorize automatic relinking.
 The command reports `source_stale` and exits `2` when the newest accounting
-observation is more than 24 hours old. Do not use its recommendations until the
-accounting import is healthy and the report has been rerun.
+observation exceeds `radius_accounting_source_stale_seconds` (one hour by
+default). Do not use its recommendations until the accounting import is healthy
+and the report has been rerun.
+
+FreeRADIUS uses dedicated `FREERADIUS_DB_*` environment variables. They must
+identify the same database as the active FreeRADIUS connector, never the app's
+`DATABASE_URL` or generic application database settings. Before deploying this
+change to an existing environment, seed those variables from the current
+connector target, run `freeradius -XC` in the container, and verify that both
+`radpostauth` and `radacct` advance. The accounting importer fails its task when
+the source is stale, allowing task-reliability alerting to remain authoritative.
 
 ### Rotation Order
 
