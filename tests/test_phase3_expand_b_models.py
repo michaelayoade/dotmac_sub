@@ -421,7 +421,7 @@ def test_migration_244_is_single_alembic_head():
     heads = script.get_heads()
     # The chain keeps advancing as later PRs stack on; ONT confirmation added
     # Phase 5 asset inventory now extends the current migration chain.
-    assert heads == ["269_ledger_reversal_link"]
+    assert heads == ["270_billing_portal_read_pressure_indexes"]
 
 
 def test_migration_244_source_recreates_leads_partial_unique():
