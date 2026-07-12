@@ -10,8 +10,8 @@ from app.models.uisp_control import UispIntentTargetType
 from app.services.uisp import UispUnsupportedOperationError
 from app.services.uisp_control_plane import redact_config, stage_intent
 from app.services.uisp_write_adapter import (
-    UispPostWriteReadbackError,
     UispConfigurationWriteAdapter,
+    UispPostWriteReadbackError,
     UispWriteUnsupported,
 )
 
