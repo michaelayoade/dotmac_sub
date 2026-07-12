@@ -13,8 +13,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "262_sot_safety_closure"
-down_revision = "261_system_user_role_source"
+revision = "268_sot_safety_closure"
+down_revision = "267_brand_profiles"
 branch_labels = None
 depends_on = None
 

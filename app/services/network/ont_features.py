@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+import os
+from datetime import UTC, datetime, timedelta
+from ipaddress import ip_network
 
 from sqlalchemy.orm import Session
 
@@ -13,9 +15,24 @@ from app.services.network.ont_action_common import (
     get_ont_or_error,
     get_ont_strict_or_error,
 )
-from app.services.network.ont_desired_config import set_access_flag
+from app.services.network.ont_desired_config import (
+    set_access_flag,
+    set_desired_config_values,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _remote_access_source_cidrs() -> tuple[str, ...]:
+    """Return validated CIDRs enforced by the upstream management firewall."""
+    raw = os.getenv("ONT_REMOTE_ACCESS_UPSTREAM_ACL_CIDRS", "")
+    values: list[str] = []
+    for item in raw.split(","):
+        candidate = item.strip()
+        if not candidate:
+            continue
+        values.append(str(ip_network(candidate, strict=False)))
+    return tuple(values)
 
 
 def _genieacs_service():
@@ -95,19 +112,8 @@ class OntFeatureService:
         enabled: bool | None = None,
         band: str | None = None,
     ) -> ActionResult:
-        """Set WiFi configuration through reconcile_ont.
-
-        Routes both SSID and PSK through the reconciler-wrapped setters
-        used by the admin UI. The legacy genieacs_service path is no
-        longer invoked here, so every write goes through the single
-        planner/applier pipeline and respects Hole 3 PSK push-gating.
-        """
-        from app.services.web_network_ont_actions.config_setters import (
-            set_wifi_password as _reconcile_set_wifi_password,
-        )
-        from app.services.web_network_ont_actions.config_setters import (
-            set_wifi_ssid as _reconcile_set_wifi_ssid,
-        )
+        """Apply SSID and PSK as one reconciled desired-state mutation."""
+        from app.services.network.reconcile import reconcile_ont
 
         ont, err = get_ont_or_error(db, ont_id)
         if err:
@@ -119,20 +125,52 @@ class OntFeatureService:
         if cap_err:
             return cap_err
 
-        if ssid is not None:
-            result = _reconcile_set_wifi_ssid(db, ont_id, ssid)
-            if not result.success:
-                return result
+        if enabled is not None or band is not None:
+            return ActionResult(
+                success=False,
+                message="WiFi radio and band changes are not yet reconciler-managed.",
+            )
+        if ssid is not None and not (1 <= len(ssid) <= 32):
+            return ActionResult(
+                success=False, message="WiFi name must be 1-32 characters."
+            )
+        if password is not None and not (8 <= len(password) <= 63):
+            return ActionResult(
+                success=False,
+                message="WiFi password must be 8-63 characters.",
+            )
 
+        proposed: dict[str, object] = {}
+        if ssid is not None:
+            proposed["wifi_ssid"] = ssid
         if password is not None:
-            result = _reconcile_set_wifi_password(db, ont_id, password)
-            if not result.success:
-                return result
+            proposed["wifi_password_ref"] = password
+        if not proposed:
+            return ActionResult(success=False, message="No WiFi change supplied.")
+
+        result = reconcile_ont(
+            db,
+            ont_id,
+            proposed_change=proposed,
+            mode="bootstrap" if password is not None else "sync",
+        )
+        if not result.success:
+            return ActionResult(
+                success=False,
+                message=result.failure.message
+                if result.failure
+                else "WiFi reconcile failed.",
+                data={"sync_status": result.sync_status},
+            )
 
         _set_sync_meta(ont, "tr069")
         db.commit()
         _emit_feature_event(db, ont_id, "wifi", enabled)
-        return ActionResult(success=True, message="WiFi configuration updated.")
+        return ActionResult(
+            success=True,
+            message="WiFi configuration applied and verified.",
+            data={"sync_status": result.sync_status},
+        )
 
     @staticmethod
     def toggle_voip(db: Session, ont_id: str, *, enabled: bool) -> ActionResult:
@@ -214,6 +252,24 @@ class OntFeatureService:
         if ont is None:
             return ActionResult(success=False, message="ONT not found.")
 
+        source_cidrs: tuple[str, ...] = ()
+        if enabled:
+            try:
+                source_cidrs = _remote_access_source_cidrs()
+            except ValueError as exc:
+                return ActionResult(
+                    success=False,
+                    message=f"Remote-access upstream ACL contains an invalid CIDR: {exc}",
+                )
+            if not source_cidrs:
+                return ActionResult(
+                    success=False,
+                    message=(
+                        "Remote SSH refused: configure the upstream-enforced "
+                        "ONT_REMOTE_ACCESS_UPSTREAM_ACL_CIDRS policy first."
+                    ),
+                )
+
         if type(ont).__module__.startswith("unittest.mock"):
             set_access_flag(ont, "wan_remote", enabled)
             _emit_feature_event(db, ont_id, "wan_remote_access", enabled)
@@ -232,16 +288,38 @@ class OntFeatureService:
             )
 
         # Push via TR-069
-        from app.services.network.ont_action_remote_access import (
-            set_wan_remote_access_best_effort,
-        )
+        from app.services.network.ont_action_remote_access import set_wan_remote_access
 
-        result = set_wan_remote_access_best_effort(
-            db, ont_id, enabled=enabled, protocol="ssh"
-        )
+        result = set_wan_remote_access(db, ont_id, enabled=enabled, protocol="ssh")
+
+        # Telnet must never remain exposed when the support SSH path is used.
+        if result.success and enabled:
+            telnet_result = set_wan_remote_access(
+                db, ont_id, enabled=False, protocol="telnet"
+            )
+            if not telnet_result.success:
+                set_wan_remote_access(db, ont_id, enabled=False, protocol="ssh")
+                return ActionResult(
+                    success=False,
+                    message=(
+                        "SSH was closed because Telnet could not be confirmed disabled: "
+                        f"{telnet_result.message}"
+                    ),
+                )
 
         if result.success:
             set_access_flag(ont, "wan_remote", enabled)
+            set_desired_config_values(
+                ont,
+                {
+                    "access.wan_remote_expires_at": (
+                        (datetime.now(UTC) + timedelta(hours=1)).isoformat()
+                        if enabled
+                        else None
+                    ),
+                    "access.wan_remote_source_cidrs": list(source_cidrs),
+                },
+            )
             _set_sync_meta(ont, "acs")
             db.commit()
             db.refresh(ont)

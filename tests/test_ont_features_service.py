@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from app.services.network.ont_action_common import ActionResult
@@ -85,6 +86,7 @@ class TestToggleWanRemoteAccess:
 
     @patch("app.services.network.ont_features._emit_feature_event")
     @patch("app.services.network.ont_features.get_ont_or_error")
+    @patch.dict("os.environ", {"ONT_REMOTE_ACCESS_UPSTREAM_ACL_CIDRS": "10.0.0.0/24"})
     def test_enables_remote_access(self, mock_get, mock_emit):
         ont = MagicMock()
         mock_get.return_value = (ont, None)
@@ -92,6 +94,57 @@ class TestToggleWanRemoteAccess:
         result = OntFeatureService.toggle_wan_remote_access(db, "ont-1", enabled=True)
         assert result.success is True
         assert ont.desired_config["access"]["wan_remote"] is True
+
+    @patch.dict("os.environ", {"ONT_REMOTE_ACCESS_UPSTREAM_ACL_CIDRS": "10.0.0.0/24"})
+    def test_verified_ssh_forces_telnet_off_and_sets_expiry(self):
+        ont = SimpleNamespace(
+            id="ont-1",
+            desired_config={},
+            last_sync_source=None,
+            last_sync_at=None,
+        )
+        db = MagicMock()
+        calls: list[tuple[bool, str]] = []
+
+        def _set_remote(db, ont_id, *, enabled, protocol):
+            calls.append((enabled, protocol))
+            return ActionResult(success=True, message="ok")
+
+        with (
+            patch(
+                "app.services.network.ont_features.get_ont_or_error",
+                return_value=(ont, None),
+            ),
+            patch(
+                "app.services.tr069.resolve_acs_server_for_ont",
+                return_value=object(),
+            ),
+            patch(
+                "app.services.network.ont_action_remote_access.set_wan_remote_access",
+                side_effect=_set_remote,
+            ),
+            patch("app.services.network.ont_features._emit_feature_event"),
+        ):
+            result = OntFeatureService.toggle_wan_remote_access(
+                db, "ont-1", enabled=True
+            )
+
+        assert result.success is True
+        assert calls == [(True, "ssh"), (False, "telnet")]
+        access = ont.desired_config["access"]
+        assert access["wan_remote"] is True
+        assert access["wan_remote_expires_at"]
+        assert access["wan_remote_source_cidrs"] == ["10.0.0.0/24"]
+
+    @patch("app.services.network.ont_features.get_ont_or_error")
+    def test_enable_is_refused_without_upstream_acl(self, mock_get):
+        mock_get.return_value = (SimpleNamespace(desired_config={}), None)
+        with patch.dict("os.environ", {}, clear=True):
+            result = OntFeatureService.toggle_wan_remote_access(
+                MagicMock(), "ont-1", enabled=True
+            )
+        assert result.success is False
+        assert "upstream-enforced" in result.message
 
 
 class TestOntNotFound:

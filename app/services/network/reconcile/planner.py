@@ -46,9 +46,11 @@ from .actions import (
     AcsAddObject,
     AcsDeleteObject,
     AcsSetDhcpServer,
+    AcsSetIpv6,
     AcsSetManagementServer,
     AcsSetNatEnabled,
     AcsSetPppoe,
+    AcsSetWanIp,
     AcsSetWifiPassword,
     AcsSetWifiSsid,
     Action,
@@ -457,6 +459,37 @@ def _plan_acs_side(
     if not wifi_only_change and desired.wan_mode == "pppoe" and not omci_wan_planned:
         _plan_acs_wan_ppp(desired, observed, device_id, actions, drifts)
 
+    if not wifi_only_change and desired.wan_mode in {"dhcp", "static"}:
+        if not observed.acs.acs_present or _wan_ip_differs(desired, observed):
+            actions.append(
+                AcsSetWanIp(
+                    device_id=device_id,
+                    data_model_root=(
+                        observed.acs.acs_data_model_root
+                        or desired.tr069_data_model_root
+                        or "InternetGatewayDevice"
+                    ),
+                    wcd_index=desired.wan_pppoe_wcd_index,
+                    instance_index=desired.wan_pppoe_instance_index,
+                    mode=desired.wan_mode,
+                    vlan=desired.wan_vlan or 0,
+                    nat_enabled=desired.nat_enabled,
+                    ip_address=desired.wan_static_ip,
+                    subnet_mask=desired.wan_static_subnet,
+                    gateway=desired.wan_static_gateway,
+                    dns_servers=desired.wan_static_dns,
+                )
+            )
+            drifts.append(
+                Drift(
+                    field="wan_ip_mode",
+                    surface="acs",
+                    desired=desired.wan_mode,
+                    observed=observed.acs.acs_observed_wan_addressing_type,
+                    repairable=True,
+                )
+            )
+
     # WiFi SSID — observable. Push when the read value differs OR when this
     # is a fresh bring-up (no ACS record yet — we have to seed it).
     push_ssid = _observed_differs(
@@ -528,6 +561,32 @@ def _plan_acs_side(
                         f"WANConnectionDevice.{stale_wcd}."
                         f"WANPPPConnection.{stale_inst}."
                     ),
+                )
+            )
+
+    if not wifi_only_change and (
+        not observed.acs.acs_present or _ipv6_differs(desired, observed)
+    ):
+        data_model_root = (
+            observed.acs.acs_data_model_root or desired.tr069_data_model_root
+        )
+        repairable = data_model_root == "Device"
+        drifts.append(
+            Drift(
+                field="ipv6_enabled",
+                surface="acs",
+                desired=desired.ipv6_enabled,
+                observed=observed.acs.acs_observed_ipv6_enabled,
+                repairable=repairable,
+            )
+        )
+        if repairable:
+            actions.append(
+                AcsSetIpv6(
+                    device_id=device_id,
+                    interface_index=desired.wan_pppoe_instance_index,
+                    enabled=desired.ipv6_enabled,
+                    request_prefixes=desired.ipv6_enabled,
                 )
             )
 
@@ -664,6 +723,44 @@ def _wan_ppp_differs(desired: OntDesiredState, observed: OntObservedState) -> bo
     if not acs.acs_present:
         return True
     return False
+
+
+def _wan_ip_differs(desired: OntDesiredState, observed: OntObservedState) -> bool:
+    acs = observed.acs
+    expected_type = "DHCP" if desired.wan_mode == "dhcp" else "Static"
+    if acs.acs_observed_wan_ip_enable is False:
+        return True
+    if _observed_differs(acs.acs_observed_wan_addressing_type, expected_type):
+        return True
+    if desired.wan_mode == "static":
+        return any(
+            (
+                _observed_differs(
+                    acs.acs_observed_wan_ip_address, desired.wan_static_ip
+                ),
+                _observed_differs(
+                    acs.acs_observed_wan_subnet_mask, desired.wan_static_subnet
+                ),
+                _observed_differs(
+                    acs.acs_observed_wan_gateway, desired.wan_static_gateway
+                ),
+            )
+        )
+    return False
+
+
+def _ipv6_differs(desired: OntDesiredState, observed: OntObservedState) -> bool:
+    acs = observed.acs
+    values = [acs.acs_observed_ipv6_enabled]
+    if desired.tr069_data_model_root == "Device" or acs.acs_data_model_root == "Device":
+        values.extend(
+            [
+                acs.acs_observed_dhcpv6_enabled,
+                acs.acs_observed_dhcpv6_request_prefixes,
+                acs.acs_observed_ra_enabled,
+            ]
+        )
+    return any(_observed_differs(value, desired.ipv6_enabled) for value in values)
 
 
 def _observed_wan_ppp_locations(

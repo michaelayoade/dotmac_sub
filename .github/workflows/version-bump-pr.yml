@@ -100,24 +100,41 @@ jobs:
       # on the base branch never report, and the PR is unmergeable except by an admin
       # bypass. That failure is silent, which is how main's VERSION drifted far behind
       # the bump PR's. Surface it here, and say so in the PR body, instead.
+      # "Present" must mean "works", not "non-empty". A secret set to a
+      # placeholder (or to an expired token) is worse than an unset one: the
+      # naive -n check passes, the warning below never fires, and the PR-creation
+      # step then fails authentication with no explanation. So actually exercise
+      # the token, and fall back to GITHUB_TOKEN if it does not authenticate.
       - name: Check PR-creation token
         if: steps.impact.outputs.bump != 'none'
         id: token
         env:
           VERSION_BUMP_TOKEN: ${{ secrets.VERSION_BUMP_TOKEN }}
         run: |
-          if [ -n "$VERSION_BUMP_TOKEN" ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
+          note_broken() {
             echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::warning title=VERSION_BUMP_TOKEN is not set::The bump PR will be created with GITHUB_TOKEN, so CI will not run on it and its required status checks can never report. It will sit unmergeable until VERSION_BUMP_TOKEN (a PAT or GitHub App token with contents:write + pull-requests:write) is configured."
+            echo "::warning title=VERSION_BUMP_TOKEN $1::The bump PR falls back to GITHUB_TOKEN, so CI will not run on it (GitHub does not trigger workflows for GITHUB_TOKEN events) and its required checks can never report. It will sit unmergeable until VERSION_BUMP_TOKEN is a PAT or GitHub App token with contents:write + pull-requests:write."
+          }
+
+          if [ -z "$VERSION_BUMP_TOKEN" ]; then
+            note_broken "is not set"
+          elif ! curl -sfL -o /dev/null \
+              -H "Authorization: Bearer $VERSION_BUMP_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              https://api.github.com/user; then
+            note_broken "is set but does not authenticate"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Create version bump PR
         if: steps.impact.outputs.bump != 'none'
         uses: peter-evans/create-pull-request@v6
         with:
-          token: ${{ secrets.VERSION_BUMP_TOKEN || secrets.GITHUB_TOKEN }}
+          # Select on the *validated* verdict, not on `|| secrets.GITHUB_TOKEN`.
+          # A junk VERSION_BUMP_TOKEN is non-empty, so the `||` fallback would
+          # happily pass it through and fail auth here instead of degrading.
+          token: ${{ steps.token.outputs.present == 'true' && secrets.VERSION_BUMP_TOKEN || secrets.GITHUB_TOKEN }}
           base: ${{ github.event.pull_request.base.ref }}
           branch: automation/version-bump-${{ github.event.pull_request.base.ref }}
           delete-branch: true

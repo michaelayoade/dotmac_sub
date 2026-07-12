@@ -788,6 +788,19 @@ class OntWriteService:
                     subscriber_id=current_assignment.subscriber_id
                     if current_assignment
                     else None,
+                    subscription_id=getattr(current_assignment, "subscription_id", None)
+                    if current_assignment
+                    else None,
+                    service_address_id=getattr(
+                        current_assignment, "service_address_id", None
+                    )
+                    if current_assignment
+                    else None,
+                    work_order_mirror_id=getattr(
+                        current_assignment, "work_order_mirror_id", None
+                    )
+                    if current_assignment
+                    else None,
                     active=True,
                     assigned_at=datetime.now(UTC),
                     notes=f"Moved from {ctx.fsp} to {target_fsp}",
@@ -861,6 +874,19 @@ def _move_ont_db_only(
                 ont_unit_id=ont.id,
                 pon_port_id=target_port.id,
                 subscriber_id=current_assignment.subscriber_id
+                if current_assignment
+                else None,
+                subscription_id=getattr(current_assignment, "subscription_id", None)
+                if current_assignment
+                else None,
+                service_address_id=getattr(
+                    current_assignment, "service_address_id", None
+                )
+                if current_assignment
+                else None,
+                work_order_mirror_id=getattr(
+                    current_assignment, "work_order_mirror_id", None
+                )
                 if current_assignment
                 else None,
                 active=True,

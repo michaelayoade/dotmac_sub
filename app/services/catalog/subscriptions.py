@@ -243,11 +243,13 @@ def _auto_generate_pppoe(
         db,
         str(subscription.subscriber_id),
         radius_profile_id=str(profile_id) if profile_id else None,
+        subscription_id=str(subscription.id),
     )
     active_credential = (
         db.query(AccessCredential)
         .filter(
             AccessCredential.subscriber_id == subscription.subscriber_id,
+            AccessCredential.subscription_id == subscription.id,
             AccessCredential.is_active.is_(True),
         )
         .first()

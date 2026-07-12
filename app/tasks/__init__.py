@@ -94,6 +94,7 @@ from app.tasks.ont_provisioning import (
     provision_ont,
     queue_bulk_provisioning,
 )
+from app.tasks.ont_reconcile import run_ont_reconcile_sweep
 from app.tasks.ont_signal_observations import record_ont_observations
 from app.tasks.operational_escalations import dispatch_operational_escalation_deliveries
 from app.tasks.payment_reconciliation import reconcile_topups
@@ -160,6 +161,7 @@ from app.tasks.tr069 import (
 from app.tasks.tr069 import (
     sync_all_acs_devices as tr069_sync_all_acs_devices,
 )
+from app.tasks.uisp_control import apply_uisp_intent, reconcile_uisp_config_readback
 from app.tasks.uisp_ip_backfill import run_uisp_mgmt_ip_backfill
 from app.tasks.unmatched_radio import run_unmatched_radio_review
 from app.tasks.usage import (
@@ -284,6 +286,8 @@ __all__ = [
     "reconcile_detected_outages",
     "run_uisp_topology_sync",
     "run_uisp_mgmt_ip_backfill",
+    "apply_uisp_intent",
+    "reconcile_uisp_config_readback",
     "run_ufiber_onu_link",
     "run_unmatched_radio_review",
     "export_topology_metrics",
@@ -299,6 +303,7 @@ __all__ = [
     "update_subscriber_counts",
     "check_nas_health",
     "execute_ont_bulk_action",
+    "run_ont_reconcile_sweep",
     "authorize_ont_task",
     "evaluate_alert_rules",
     "evaluate_infrastructure_alerts",

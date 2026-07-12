@@ -320,6 +320,9 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.ont_provisioning.queue_bulk_provisioning": _c(
         "provisioning", ITEMS, PER_ITEM, STATUS
     ),
+    "app.tasks.ont_reconcile.run_ont_reconcile_sweep": _c(
+        "network", SWEEP, IDEMP, HEALTH
+    ),
     "app.tasks.ont_signal_observations.record_ont_observations": _c(
         "network", SWEEP, IDEMP, HEALTH
     ),
@@ -475,6 +478,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         LOG,
         "One-shot inventory backfill; re-runs only stamp still-empty mgmt_ips, "
         "so redriving after a failure is safe.",
+    ),
+    "app.tasks.uisp_control.apply_uisp_intent": _c("network", STATE, STATEFUL, STATUS),
+    "app.tasks.uisp_control.reconcile_uisp_config_readback": _c(
+        "network",
+        SWEEP,
+        IDEMP,
+        HEALTH,
+        "Bounded mapped configuration readback; no writes and repeated reads converge.",
     ),
     "app.tasks.topology_uisp.run_uisp_topology_sync": _c(
         "network",

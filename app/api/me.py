@@ -47,6 +47,7 @@ from app.schemas.billing import (
     TopupVerifyRequest,
     TopupVerifyResponse,
 )
+from app.schemas.branding import ResolvedBrandRead
 from app.schemas.catalog import (
     AddonPurchaseRequest,
     AddonPurchaseResponse,
@@ -196,6 +197,16 @@ def _customer(db: Session, principal: dict) -> dict:
         "subscriber_id": sid,
         "username": getattr(subscriber, "email", "") or "",
     }
+
+
+@router.get("/branding", response_model=ResolvedBrandRead)
+def my_branding(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    from app.services.brand_profiles import resolve_brand
+
+    return resolve_brand(db, subscriber_id=_subscriber_id(principal))
 
 
 @router.get("/invoices", response_model=ListResponse[InvoiceRead])

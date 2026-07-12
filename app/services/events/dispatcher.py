@@ -105,9 +105,30 @@ class EventDispatcher:
                 logger.exception("event_persist_rollback_failed")
 
         # 2. Process all handlers, tracking failures
+        from app.services.control_relationships import (
+            RelationshipMode,
+            event_relationship_mode,
+        )
+
+        chained = (
+            event_relationship_mode(event.event_type.value) == RelationshipMode.chain
+        )
+        blocked_by: str | None = None
         failed_handlers: list[dict[str, str]] = []
         for handler in self._handlers:
             handler_name = handler.__class__.__name__
+            if blocked_by is not None:
+                error = f"blocked by failed chain handler {blocked_by}"
+                failed_handlers.append({"handler": handler_name, "error": error})
+                if event_record and event_record.id:
+                    event_store_service.record_handler_attempt(
+                        db,
+                        event_store_id=event_record.id,
+                        handler_name=handler_name,
+                        status="failed",
+                        error=error,
+                    )
+                continue
             try:
                 handler.handle(db, event)
                 if event_record and event_record.id:
@@ -132,6 +153,8 @@ class EventDispatcher:
                         "error": str(exc),
                     }
                 )
+                if chained:
+                    blocked_by = handler_name
                 if event_record and event_record.id:
                     try:
                         event_store_service.record_handler_attempt(
@@ -211,10 +234,31 @@ class EventDispatcher:
 
         # Retry only failed handlers (or all if no specific failures recorded)
         new_failures: list[dict] = []
+        from app.services.control_relationships import (
+            RelationshipMode,
+            event_relationship_mode,
+        )
+
+        chained = (
+            event_relationship_mode(event.event_type.value) == RelationshipMode.chain
+        )
+        blocked_by: str | None = None
         for handler in self._handlers:
             handler_name = handler.__class__.__name__
             # Only retry failed handlers, or all if we don't know which failed
             if failed_handler_names and handler_name not in failed_handler_names:
+                continue
+            if blocked_by is not None:
+                error = f"blocked by failed chain handler {blocked_by}"
+                new_failures.append({"handler": handler_name, "error": error})
+                event_store_service.record_handler_attempt(
+                    db,
+                    event_store_id=event_record.id,
+                    handler_name=handler_name,
+                    status="failed",
+                    error=error,
+                    retry_count=event_record.retry_count,
+                )
                 continue
             try:
                 handler.handle(db, event)
@@ -244,6 +288,8 @@ class EventDispatcher:
                         "error": str(exc),
                     }
                 )
+                if chained:
+                    blocked_by = handler_name
                 event_store_service.record_handler_attempt(
                     db,
                     event_store_id=event_record.id,
@@ -311,6 +357,10 @@ def _initialize_handlers(dispatcher: EventDispatcher) -> None:
     dispatcher.register_handler(EnforcementHandler())
     dispatcher.register_handler(ArrangementHandler())
     dispatcher.register_handler(ReferralHandler())
+
+    from app.services.control_relationships import validate_and_order_handlers
+
+    dispatcher._handlers = validate_and_order_handlers(dispatcher._handlers)
 
     logger.info(
         "Event handlers initialized: webhook, integration_hooks, lifecycle, notification, provisioning, enforcement, arrangements, referral",

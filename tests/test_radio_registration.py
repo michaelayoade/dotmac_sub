@@ -58,6 +58,7 @@ class TestRegisterRadioMac:
         assert result.created is True
         device = result.device
         assert device.subscriber_id == subscriber.id
+        assert device.subscription_id == subscription.id
         assert device.device_type == DeviceType.wireless_radio
         assert device.mac_address == MAC  # canonical form
         assert device.uisp_device_id is None
@@ -116,6 +117,35 @@ class TestRegisterRadioMac:
             .count()
             == 1
         )
+
+    def test_same_subscriber_different_service_conflict_opens_review(
+        self, db_session, subscriber, catalog_offer
+    ):
+        first_subscription = _subscription(db_session, subscriber, catalog_offer)
+        second_subscription = _subscription(db_session, subscriber, catalog_offer)
+        radio_registration.register_radio_mac(
+            db_session, subscription_id=str(first_subscription.id), mac=MAC
+        )
+
+        with pytest.raises(
+            radio_registration.MacConflictError,
+            match="another service on this subscriber",
+        ):
+            radio_registration.register_radio_mac(
+                db_session, subscription_id=str(second_subscription.id), mac=MAC
+            )
+
+        items = [
+            item
+            for item in unmatched_radio_queue.open_items(db_session)
+            if (item.metadata_ or {}).get("radio_mac") == MAC_COMPACT
+        ]
+        assert len(items) == 1
+        assert items[0].metadata_["conflicting_subscription_id"] == str(
+            first_subscription.id
+        )
+        db_session.refresh(second_subscription)
+        assert second_subscription.mac_address is None
 
     def test_cross_subscriber_conflict_rejected_via_subscription_mac(
         self, db_session, subscriber, catalog_offer

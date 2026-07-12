@@ -28,13 +28,13 @@ from __future__ import annotations
 
 import logging
 
+from app.services.credential_crypto import decrypt_credential
 from app.services.secrets import (
-    is_openbao_available,
     is_secret_ref,
     resolve_secret,
 )
 
-from .applier import SecretResolver, passthrough_secret
+from .applier import SecretResolver
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +76,16 @@ def openbao_secret_resolver(ref: str) -> str:
     return resolved
 
 
+def credential_secret_resolver(ref: str) -> str:
+    """Resolve OpenBao refs and local encryption-at-rest wrappers."""
+    if not ref:
+        return ""
+    try:
+        return decrypt_credential(ref) or ""
+    except Exception as exc:  # noqa: BLE001 - translate to reconciler failure
+        raise SecretResolutionError(ref, str(exc)) from exc
+
+
 def default_secret_resolver_from_env() -> SecretResolver:
     """Pick a resolver based on whether OpenBao is reachable from this
     process.
@@ -85,13 +95,12 @@ def default_secret_resolver_from_env() -> SecretResolver:
     long-running sweeper picks up a newly-configured OpenBao without
     restart.
     """
-    if is_openbao_available():
-        return openbao_secret_resolver
-    return passthrough_secret
+    return credential_secret_resolver
 
 
 __all__ = (
     "SecretResolutionError",
     "default_secret_resolver_from_env",
+    "credential_secret_resolver",
     "openbao_secret_resolver",
 )

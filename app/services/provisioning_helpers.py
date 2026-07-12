@@ -6,7 +6,7 @@ from typing import cast
 from urllib.parse import urlparse
 
 from fastapi import HTTPException
-from sqlalchemy import and_
+from sqlalchemy import and_, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -103,6 +103,24 @@ def _resolve_pool_for_version(
     pool_id: str | None,
     nas_device_id: str | None = None,
 ) -> IpPool | None:
+    nas = None
+    allowed_pool_ids: set[str] = set()
+    nas_uuid = None
+    if nas_device_id:
+        from app.models.catalog import NasDevice
+        from app.services.nas import radius_pool_ids_from_tags
+
+        try:
+            nas_uuid = coerce_uuid(nas_device_id)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=400, detail="Invalid NAS device ID."
+            ) from exc
+        nas = db.get(NasDevice, nas_uuid)
+        if nas is None:
+            raise HTTPException(status_code=404, detail="NAS device not found.")
+        allowed_pool_ids = set(radius_pool_ids_from_tags(nas.tags))
+
     if pool_id:
         try:
             pool_uuid = coerce_uuid(pool_id)
@@ -111,21 +129,32 @@ def _resolve_pool_for_version(
         pool = cast(IpPool | None, db.get(IpPool, pool_uuid))
         if not pool or pool.ip_version != ip_version:
             raise HTTPException(status_code=404, detail="IP pool not found.")
+        if nas_uuid is not None and not (
+            str(pool.id) in allowed_pool_ids or pool.nas_device_id == nas_uuid
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="IP pool is not assigned to the subscription's BNG.",
+            )
         return pool
 
-    # Prefer a pool linked to the subscriber's NAS device
-    if nas_device_id:
+    if nas_uuid is not None:
+        # NAS tags are the admin UI's many-to-many RADIUS pool assignment.
+        # The direct pool FK remains supported for legacy records. Never fall
+        # through to a global pool for a BNG-bound subscription.
+        ownership = [IpPool.nas_device_id == nas_uuid]
+        if allowed_pool_ids:
+            ownership.append(IpPool.id.in_([coerce_uuid(v) for v in allowed_pool_ids]))
         nas_pool = cast(
             IpPool | None,
             db.query(IpPool)
             .filter(IpPool.ip_version == ip_version)
             .filter(IpPool.is_active.is_(True))
-            .filter(IpPool.nas_device_id == coerce_uuid(nas_device_id))
+            .filter(or_(*ownership))
             .order_by(IpPool.name.asc())
             .first(),
         )
-        if nas_pool:
-            return nas_pool
+        return nas_pool
 
     # Fallback: first active pool (alphabetical)
     return cast(
@@ -559,14 +588,19 @@ def _ensure_ip_assignment_for_version(
         if (address.assignment and address.assignment.is_active)
         else None
     )
-    if (
-        active_assignment
-        and active_assignment.subscriber_id != subscription.subscriber_id
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail=f"{version_key} address is already assigned.",
+    if active_assignment:
+        same_subscription = active_assignment.subscription_id == subscription.id
+        legacy_same_subscriber = (
+            active_assignment.subscription_id is None
+            and active_assignment.subscriber_id == subscription.subscriber_id
         )
+        if not same_subscription and not legacy_same_subscriber:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{version_key} address is already assigned.",
+            )
+        if legacy_same_subscriber:
+            active_assignment.subscription_id = subscription.id
 
     if active_assignment:
         assignment = active_assignment

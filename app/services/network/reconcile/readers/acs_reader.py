@@ -47,6 +47,9 @@ _PROJECTION_PATHS: tuple[str, ...] = (
     "Device.ManagementServer.PeriodicInformInterval",
     "Device.ManagementServer.ConnectionRequestUsername",
     "Device.ManagementServer.ConnectionRequestPassword",
+    "Device.IP.Interface",
+    "Device.DHCPv6.Client",
+    "Device.RouterAdvertisement.InterfaceSettings",
 )
 
 
@@ -208,6 +211,9 @@ def _parse_device(device: dict[str, Any]) -> AcsObservedFields:
 
     wan_root = _path(igd, "WANDevice", "1", "WANConnectionDevice") or {}
     wcd_index, instance_index, wan_ppp, wan_ppp_locations = _resolve_wan_ppp(wan_root)
+    _ip_wcd_index, _ip_instance_index, wan_ip = _resolve_wan_ip(wan_root)
+    data_model_root = "Device" if dev_root else "InternetGatewayDevice"
+    tr181_interface_index = instance_index or 1
 
     return AcsObservedFields(
         acs_present=True,
@@ -251,6 +257,37 @@ def _parse_device(device: dict[str, Any]) -> AcsObservedFields:
         acs_observed_wan_wcd_index=wcd_index,
         acs_observed_wan_instance_index=instance_index,
         acs_observed_wan_ppp_locations=wan_ppp_locations,
+        acs_data_model_root=data_model_root,
+        acs_observed_ipv6_enabled=(
+            _value_bool(
+                _path(dev_root, "IP", "Interface", str(tr181_interface_index)),
+                "IPv6Enable",
+            )
+            if data_model_root == "Device"
+            else _value_bool(wan_ppp, "X_IPv6Enabled")
+        ),
+        acs_observed_wan_ip_enable=_value_bool(wan_ip, "Enable"),
+        acs_observed_wan_addressing_type=_value(wan_ip, "AddressingType"),
+        acs_observed_wan_ip_address=_value(wan_ip, "ExternalIPAddress"),
+        acs_observed_wan_subnet_mask=_value(wan_ip, "SubnetMask"),
+        acs_observed_wan_gateway=_value(wan_ip, "DefaultGateway"),
+        acs_observed_dhcpv6_enabled=_value_bool(
+            _path(dev_root, "DHCPv6", "Client", str(tr181_interface_index)),
+            "Enable",
+        ),
+        acs_observed_dhcpv6_request_prefixes=_value_bool(
+            _path(dev_root, "DHCPv6", "Client", str(tr181_interface_index)),
+            "RequestPrefixes",
+        ),
+        acs_observed_ra_enabled=_value_bool(
+            _path(
+                dev_root,
+                "RouterAdvertisement",
+                "InterfaceSettings",
+                str(tr181_interface_index),
+            ),
+            "Enable",
+        ),
     )
 
 
@@ -276,6 +313,16 @@ def _absent_fields() -> AcsObservedFields:
         acs_observed_wan_wcd_index=None,
         acs_observed_wan_instance_index=None,
         acs_observed_wan_ppp_locations=(),
+        acs_data_model_root=None,
+        acs_observed_ipv6_enabled=None,
+        acs_observed_wan_ip_enable=None,
+        acs_observed_wan_addressing_type=None,
+        acs_observed_wan_ip_address=None,
+        acs_observed_wan_subnet_mask=None,
+        acs_observed_wan_gateway=None,
+        acs_observed_dhcpv6_enabled=None,
+        acs_observed_dhcpv6_request_prefixes=None,
+        acs_observed_ra_enabled=None,
     )
 
 
@@ -309,6 +356,33 @@ def _resolve_wan_ppp(
                 continue
             return int(wcd_key), int(ppp_key), ppp_val, locations
     return None, None, None, locations
+
+
+def _resolve_wan_ip(
+    wan_connection_device: dict[str, Any],
+) -> tuple[int | None, int | None, dict[str, Any] | None]:
+    """Locate the internet WANIPConnection, avoiding the TR-069 management WAN."""
+    candidates: list[tuple[int, int, dict[str, Any]]] = []
+    for wcd_key, wcd_val in (wan_connection_device or {}).items():
+        if not wcd_key.isdigit() or not isinstance(wcd_val, dict):
+            continue
+        wan_ip_root = wcd_val.get("WANIPConnection")
+        if not isinstance(wan_ip_root, dict):
+            continue
+        for ip_key, ip_val in wan_ip_root.items():
+            if ip_key.isdigit() and isinstance(ip_val, dict):
+                candidates.append((int(wcd_key), int(ip_key), ip_val))
+    for candidate in candidates:
+        service_leaf = candidate[2].get("X_HW_SERVICELIST") or {}
+        service = str(service_leaf.get("_value") or "").upper()
+        if "INTERNET" in service:
+            return candidate
+    for candidate in candidates:
+        service_leaf = candidate[2].get("X_HW_SERVICELIST") or {}
+        service = str(service_leaf.get("_value") or "").upper()
+        if "TR069" not in service:
+            return candidate
+    return None, None, None
 
 
 def _wan_ppp_locations(

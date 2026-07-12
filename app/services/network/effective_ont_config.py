@@ -289,6 +289,7 @@ def _values_from_assignment(
             db,
             olt_id=olt_id,
             subscriber_id=getattr(active_assignment, "subscriber_id", None),
+            subscription_id=getattr(active_assignment, "subscription_id", None),
         )
         if active_assignment is not None
         else None
@@ -336,7 +337,7 @@ def _values_from_assignment(
     values = {
         "config_method": None,
         "onu_mode": asn_wan_mode,
-        "ip_protocol": None,
+        "ip_protocol": cfg("wan", "ip_protocol", default="ipv4"),
         "wan_mode": asn_ip_mode,
         "wan_vlan": internet_vlan_tag,
         "wan_vlan_id": str(wan_vlan.id) if wan_vlan and wan_vlan.id else None,

@@ -12,6 +12,7 @@ import logging
 import secrets
 import string
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from app.models.catalog import AccessCredential, ConnectionType
 from app.models.domain_settings import DomainSetting, SettingDomain
@@ -120,6 +121,7 @@ def auto_generate_pppoe_credential(
     subscriber_id: str,
     *,
     radius_profile_id: str | None = None,
+    subscription_id: str | None = None,
 ) -> AccessCredential | None:
     """Auto-generate a PPPoE AccessCredential if none exists.
 
@@ -135,15 +137,27 @@ def auto_generate_pppoe_credential(
     Returns:
         The newly created AccessCredential, or None if one already exists.
     """
+    subscription_key = UUID(subscription_id) if subscription_id else None
+
     # Check for existing active credentials
-    existing = (
-        db.query(AccessCredential)
-        .filter(
-            AccessCredential.subscriber_id == subscriber_id,
-            AccessCredential.is_active.is_(True),
-        )
-        .first()
+    existing_query = db.query(AccessCredential).filter(
+        AccessCredential.subscriber_id == subscriber_id,
+        AccessCredential.is_active.is_(True),
     )
+    if subscription_key is not None:
+        existing = existing_query.filter(
+            AccessCredential.subscription_id == subscription_key
+        ).first()
+        if existing is None:
+            legacy = existing_query.filter(
+                AccessCredential.subscription_id.is_(None)
+            ).all()
+            if len(legacy) == 1:
+                legacy[0].subscription_id = subscription_key
+                db.flush()
+                return legacy[0]
+    else:
+        existing = existing_query.first()
     if existing:
         logger.debug(
             "Subscriber %s already has active credential %s, skipping PPPoE auto-gen",
@@ -152,7 +166,19 @@ def auto_generate_pppoe_credential(
         )
         return None
 
-    username = _generate_pppoe_username(db, subscriber_id)
+    has_other_service_credential = (
+        subscription_key is not None
+        and existing_query.filter(
+            AccessCredential.subscription_id.is_not(None),
+            AccessCredential.subscription_id != subscription_key,
+        ).first()
+        is not None
+    )
+    username = (
+        _generate_pppoe_username_sequence(db)
+        if has_other_service_credential
+        else _generate_pppoe_username(db, subscriber_id)
+    )
     if not username:
         logger.warning(
             "PPPoE username derivation returned None for subscriber %s",
@@ -179,6 +205,7 @@ def auto_generate_pppoe_credential(
     if credential is None:
         credential = AccessCredential(
             subscriber_id=subscriber_id,
+            subscription_id=subscription_key,
             username=username,
             is_active=True,
             connection_type=ConnectionType.pppoe,
@@ -186,6 +213,7 @@ def auto_generate_pppoe_credential(
         db.add(credential)
 
     credential.secret_hash = encrypted_password
+    credential.subscription_id = subscription_key
     credential.is_active = True
     credential.connection_type = ConnectionType.pppoe
     if radius_profile_id:

@@ -16,6 +16,8 @@ from app.models.catalog import (
     PlanCategory,
     PriceBasis,
     ServiceType,
+    Subscription,
+    SubscriptionStatus,
 )
 from app.models.network import OLTDevice, OltProfileBundle, OltProfileSyncTask
 from app.services import web_network_olt_profiles
@@ -30,6 +32,7 @@ from app.services.network.profile_sync import (
     enqueue_offer_profile_sync_tasks,
     list_due_profile_sync_tasks,
     list_syncable_catalog_offers,
+    resolve_profile_bundle_for_active_subscription,
     retry_profile_sync_task,
     upsert_profile_bundle,
 )
@@ -277,6 +280,66 @@ def test_upsert_profile_bundle_updates_existing_record(db_session) -> None:
     assert second.download_kbps == 75_000
     assert second.upload_kbps == 30_000
     assert second.checksum == second_plan.bundle.checksum
+
+
+def test_profile_bundle_resolves_from_bound_subscription(
+    db_session, subscriber, catalog_offer
+) -> None:
+    catalog_offer.status = OfferStatus.active
+    catalog_offer.is_active = True
+    catalog_offer.plan_category = PlanCategory.internet
+    catalog_offer.speed_download_mbps = 50
+    catalog_offer.speed_upload_mbps = 20
+    olt = OLTDevice(name="Multi-service OLT", vendor="Huawei")
+    newer_offer = CatalogOffer(
+        name="Fiber 200",
+        code="F200-BOUND",
+        service_type=ServiceType.residential,
+        access_type=AccessType.fiber,
+        price_basis=PriceBasis.flat,
+        billing_cycle=BillingCycle.monthly,
+        billing_mode=BillingMode.prepaid,
+        plan_category=PlanCategory.internet,
+        status=OfferStatus.active,
+        is_active=True,
+        speed_download_mbps=200,
+        speed_upload_mbps=100,
+    )
+    db_session.add_all([olt, newer_offer])
+    db_session.flush()
+    bound = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=catalog_offer.id,
+        status=SubscriptionStatus.active,
+    )
+    newer = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=newer_offer.id,
+        status=SubscriptionStatus.active,
+    )
+    db_session.add_all([bound, newer])
+    db_session.flush()
+    expected = upsert_profile_bundle(
+        db_session,
+        olt=olt,
+        sync_plan=build_offer_profile_sync_plan(catalog_offer, vlan_id=203),
+    )
+    upsert_profile_bundle(
+        db_session,
+        olt=olt,
+        sync_plan=build_offer_profile_sync_plan(newer_offer, vlan_id=204),
+    )
+
+    resolved = resolve_profile_bundle_for_active_subscription(
+        db_session,
+        olt_id=olt.id,
+        subscriber_id=subscriber.id,
+        subscription_id=bound.id,
+    )
+
+    assert resolved is not None
+    assert resolved.id == expected.id
+    assert resolved.offer_id == catalog_offer.id
 
 
 def test_apply_saved_profile_bundle_reruns_snapshot_inventory_preflight(
