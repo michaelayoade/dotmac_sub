@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.db import get_db
+from app.services import referrals_mirror
 from app.web.customer.referrals import router
 
 
@@ -37,7 +38,7 @@ def test_post_refers_a_friend_and_redirects(db_session):
             return_value={"subscriber_id": "s1"},
         ),
         patch(
-            "app.web.customer.referrals.referrals_service.referrals.refer_a_friend",
+            "app.web.customer.referrals.referrals_mirror.refer_a_friend",
             return_value={"id": "r2", "status": "pending"},
         ) as refer,
     ):
@@ -60,10 +61,9 @@ def test_post_surfaces_referral_error(db_session):
             return_value={"subscriber_id": "s1"},
         ),
         patch(
-            "app.web.customer.referrals.referrals_service.referrals.refer_a_friend",
-            side_effect=HTTPException(
-                status_code=422,
-                detail="An email or phone number is required.",
+            "app.web.customer.referrals.referrals_mirror.refer_a_friend",
+            side_effect=referrals_mirror.ReferralError(
+                "An email or phone number is required.", status_code=422
             ),
         ),
     ):
