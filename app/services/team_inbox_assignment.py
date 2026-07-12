@@ -418,7 +418,9 @@ def escalate_conversation(
     reason: str | None = None,
 ) -> InboxAssignmentResult:
     conversation_uuid = _coerce_uuid(conversation_id)
-    conversation = db.get(InboxConversation, conversation_uuid) if conversation_uuid else None
+    conversation = (
+        db.get(InboxConversation, conversation_uuid) if conversation_uuid else None
+    )
     if conversation is None or not conversation.is_active:
         return InboxAssignmentResult(
             kind="conversation_not_found",
