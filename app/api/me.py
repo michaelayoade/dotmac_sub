@@ -764,7 +764,7 @@ def my_topup_verify(
     if payload.save_card:
         try:
             customer_cards.capture_card_after_payment(
-                db, account_id, payload.reference, None
+                db, account_id, payload.reference, result["provider_type"]
             )
             card_saved = True
             card_save_message = CARD_SAVE_SUCCESS_MESSAGE

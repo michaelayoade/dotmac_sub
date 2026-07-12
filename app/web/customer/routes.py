@@ -2064,7 +2064,7 @@ def customer_verify_payment(
             db,
             account_id=str(optional_customer_account_id(db, customer) or ""),
             reference=reference,
-            provider=provider,
+            provider=result["provider_type"],
             requested=save_card,
         )
         service_restored = bool(
@@ -2329,7 +2329,7 @@ def customer_verify_topup(
             db,
             account_id=str(optional_customer_account_id(db, customer) or ""),
             reference=reference,
-            provider=provider,
+            provider=result["provider_type"],
             requested=save_card,
         )
         service_restored = bool(

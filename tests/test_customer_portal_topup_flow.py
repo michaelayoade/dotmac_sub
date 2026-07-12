@@ -20,7 +20,9 @@ from app.models.billing import (
     PaymentStatus,
     TopupIntent,
 )
+from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscriber import Subscriber
+from app.models.subscription_engine import SettingValueType
 from app.schemas.billing import InvoiceCreate, PaymentMethodCreate
 from app.services import billing as billing_service
 from app.services.billing_payment_receipts import get_customer_payment_receipt_context
@@ -32,6 +34,53 @@ from app.services.customer_portal_flow_payments import (
     verify_and_record_payment,
     verify_and_record_topup,
 )
+from app.services.settings_cache import SettingsCache
+
+
+def _upsert_billing_setting(db_session, key: str, value: str) -> None:
+    setting = (
+        db_session.query(DomainSetting)
+        .filter_by(domain=SettingDomain.billing, key=key)
+        .first()
+    )
+    if setting is None:
+        setting = DomainSetting(domain=SettingDomain.billing, key=key)
+    setting.value_type = SettingValueType.string
+    setting.value_text = value
+    setting.value_json = None
+    setting.is_secret = "secret" in key
+    setting.is_active = True
+    db_session.add(setting)
+    db_session.commit()
+    SettingsCache.invalidate(SettingDomain.billing.value, key)
+
+
+@pytest.fixture(autouse=True)
+def _configure_paystack_route(db_session):
+    db_session.add(
+        PaymentProvider(
+            name="Paystack Test Route",
+            provider_type=PaymentProviderType.paystack,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    _upsert_billing_setting(db_session, "paystack_secret_key", "sk_test_portal")
+    _upsert_billing_setting(db_session, "paystack_public_key", "pk_test_portal")
+
+
+def _enable_flutterwave_route(db_session) -> None:
+    db_session.add(
+        PaymentProvider(
+            name="Flutterwave Test Route",
+            provider_type=PaymentProviderType.flutterwave,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    _upsert_billing_setting(db_session, "flutterwave_secret_key", "FLWSECK_TEST-portal")
+    _upsert_billing_setting(db_session, "flutterwave_public_key", "FLWPUBK_TEST-portal")
+    _upsert_billing_setting(db_session, "flutterwave_secret_hash", "portal-hash")
 
 
 def _make_invoice(
@@ -180,18 +229,9 @@ def test_get_topup_page_includes_saved_payment_methods(
 def test_get_topup_page_surfaces_active_flutterwave_provider(
     monkeypatch, db_session, subscriber
 ):
+    _enable_flutterwave_route(db_session)
     db_session.add_all(
         [
-            PaymentProvider(
-                name="Paystack",
-                provider_type=PaymentProviderType.paystack,
-                is_active=True,
-            ),
-            PaymentProvider(
-                name="Flutterwave",
-                provider_type=PaymentProviderType.flutterwave,
-                is_active=True,
-            ),
             PaymentProvider(
                 name="Manual",
                 provider_type=PaymentProviderType.manual,
@@ -543,6 +583,7 @@ def test_create_topup_intent_initializes_flutterwave_checkout(
     monkeypatch, db_session, subscriber
 ):
     _patch_topup_settings(monkeypatch)
+    _enable_flutterwave_route(db_session)
     monkeypatch.setattr(
         "app.services.customer_portal_flow_payments.payment_gateway_adapter.build_context",
         lambda *_args, **_kwargs: SimpleNamespace(
@@ -872,6 +913,7 @@ def test_create_invoice_payment_intent_initializes_flutterwave(
     monkeypatch, db_session, subscriber
 ):
     _patch_topup_settings(monkeypatch)
+    _enable_flutterwave_route(db_session)
     invoice = _make_invoice(
         db_session, subscriber.id, amount="2500.00", invoice_number="INV-PAY-5"
     )
@@ -969,6 +1011,7 @@ def test_create_invoice_payment_intent_rejects_saved_card_non_paystack(
     monkeypatch, db_session, subscriber
 ):
     _patch_topup_settings(monkeypatch)
+    _enable_flutterwave_route(db_session)
     invoice = _make_invoice(
         db_session, subscriber.id, amount="2500.00", invoice_number="INV-PAY-6"
     )
@@ -1115,6 +1158,25 @@ def test_verify_and_record_payment_allocates_invoice_and_credits_remainder(
         amount="3000.00",
         invoice_number="INV-PAY-1",
     )
+    provider_row = (
+        db_session.query(PaymentProvider)
+        .filter_by(provider_type=PaymentProviderType.paystack, is_active=True)
+        .one()
+    )
+    db_session.add(
+        TopupIntent(
+            account_id=subscriber.id,
+            reference="ref-pay-1",
+            provider_type="paystack",
+            requested_amount=Decimal("5000.00"),
+            metadata_={
+                "payment_flow": "invoice_payment",
+                "invoice_id": str(invoice.id),
+                "provider_id": str(provider_row.id),
+            },
+        )
+    )
+    db_session.commit()
     monkeypatch.setattr(
         "app.services.customer_portal_flow_payments.payment_gateway_adapter.verify",
         lambda *_args, **_kwargs: SimpleNamespace(
@@ -1159,6 +1221,41 @@ def test_verify_and_record_payment_allocates_invoice_and_credits_remainder(
     ]
     assert payment.amount == Decimal("5000.00")
     assert invoice.balance_due == Decimal("0.00")
+
+
+def test_verify_invoice_payment_requires_server_issued_intent(db_session, subscriber):
+    with pytest.raises(ValueError, match="was not issued"):
+        verify_and_record_payment(
+            db_session,
+            {"account_id": str(subscriber.id)},
+            "client-invented-reference",
+            provider="paystack",
+        )
+
+
+def test_verify_topup_rejects_provider_override_before_gateway_call(
+    monkeypatch, db_session, subscriber
+):
+    _patch_topup_settings(monkeypatch)
+    _create_intent(
+        monkeypatch,
+        db_session,
+        subscriber,
+        amount="5000.00",
+        reference="provider-locked-topup",
+    )
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.payment_gateway_adapter.verify",
+        lambda *_args, **_kwargs: pytest.fail("gateway must not be called"),
+    )
+
+    with pytest.raises(ValueError, match="does not match"):
+        verify_and_record_topup(
+            db_session,
+            {"account_id": str(subscriber.id)},
+            "provider-locked-topup",
+            provider="flutterwave",
+        )
 
 
 def test_verify_and_record_topup_rejects_reference_for_other_customer(

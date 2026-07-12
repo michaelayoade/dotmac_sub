@@ -1715,14 +1715,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.billing,
-        key="default_payment_provider_type",
-        env_var="BILLING_DEFAULT_PAYMENT_PROVIDER_TYPE",
-        value_type=SettingValueType.string,
-        default="paystack",
-        allowed={"paystack", "flutterwave"},
-    ),
-    SettingSpec(
-        domain=SettingDomain.billing,
         key="payment_gateway_failover_enabled",
         env_var="BILLING_PAYMENT_GATEWAY_FAILOVER_ENABLED",
         value_type=SettingValueType.boolean,
