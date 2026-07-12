@@ -57,7 +57,9 @@ def get_field_vendor(db: Session, vendor: Vendor) -> FieldVendor | None:
     )
 
 
-def count(db: Session, *, search: str | None = None, is_active: bool | None = None) -> int:
+def count(
+    db: Session, *, search: str | None = None, is_active: bool | None = None
+) -> int:
     query = db.query(func.count(Vendor.id))
     query = _apply_filters(query, search=search, is_active=is_active)
     return int(query.scalar() or 0)
@@ -89,12 +91,12 @@ def list_vendors(
 ) -> list[Vendor]:
     query = db.query(Vendor)
     query = _apply_filters(query, search=search, is_active=is_active)
-    return (
-        query.order_by(Vendor.name.asc()).limit(limit).offset(offset).all()
-    )
+    return query.order_by(Vendor.name.asc()).limit(limit).offset(offset).all()
 
 
-def _assert_code_free(db: Session, code: str | None, *, exclude_id: UUID | None) -> None:
+def _assert_code_free(
+    db: Session, code: str | None, *, exclude_id: UUID | None
+) -> None:
     """``Vendor.code`` and ``FieldVendor.code`` are both unique. Check before
     writing so a clash surfaces as a form error, not an IntegrityError 500."""
     if not code:
