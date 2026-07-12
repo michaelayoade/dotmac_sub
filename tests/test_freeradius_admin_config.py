@@ -86,6 +86,12 @@ def test_admin_secret_is_env_ref_not_hardcoded():
         )
 
 
+def test_compose_fails_fast_when_radius_secrets_are_missing():
+    compose = _read("docker-compose.yml")
+    assert "RADIUS_DB_PASS=${RADIUS_DB_PASS:?" in compose
+    assert "ADMIN_RADIUS_SECRET=${ADMIN_RADIUS_SECRET:?" in compose
+
+
 def test_admin_authorize_loads_password_before_mschap():
     """MS-CHAPv2 needs Cleartext-Password loaded before mschap runs, else it
     fails with 'mschap: No NT-Password. Cannot perform authentication'."""

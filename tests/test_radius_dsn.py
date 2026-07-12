@@ -70,6 +70,25 @@ def test_constructed_from_parts_when_no_url(monkeypatch):
     )
 
 
+def test_constructed_dsn_uses_configured_port_and_encodes_password(monkeypatch):
+    monkeypatch.setenv("RADIUS_DB_HOST", "rhost")
+    monkeypatch.setenv("RADIUS_DB_PORT", "5544")
+    monkeypatch.setenv("RADIUS_DB_NAME", "rdb")
+    monkeypatch.setenv("RADIUS_DB_USER", "ruser")
+    monkeypatch.setenv("RADIUS_DB_PASS", "slash/plus+at@colon:")
+    assert radius_dsn.resolve_radius_dsn() == (
+        "postgresql+psycopg://ruser:slash%2Fplus%2Bat%40colon%3A@rhost:5544/rdb"
+    )
+
+
+def test_constructed_dsn_has_no_embedded_password_fallback(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.secrets.get_env_or_secret",
+        lambda *_args, **_kwargs: "",
+    )
+    assert radius_dsn.resolve_radius_dsn() is None
+
+
 def test_both_writers_resolve_identical_target(monkeypatch):
     """The population sweep (libpq) and the sync path (SQLAlchemy) must point at
     the same database — same host/port/name/user, differing only by driver."""
