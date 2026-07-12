@@ -328,6 +328,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("sessions.radius_live_view",),
             ),
             SOTService(
+                name="sessions.radius_accounting_health",
+                module="app.services.radius_accounting_health",
+                owns=(
+                    "RADIUS accounting source freshness policy",
+                    "accounting source health classification",
+                ),
+                depends_on=("control.domain_settings", "runtime.db_sessions"),
+            ),
+            SOTService(
                 name="sessions.radius_resolution",
                 module="app.services.network.radius_sessions",
                 owns=("customer online-now resolution", "primary NAS session"),

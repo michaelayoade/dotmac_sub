@@ -723,6 +723,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.usage,
+        key="radius_accounting_source_stale_seconds",
+        env_var="RADIUS_ACCOUNTING_SOURCE_STALE_SECONDS",
+        value_type=SettingValueType.integer,
+        default=3600,
+        min_value=300,
+    ),
+    SettingSpec(
+        domain=SettingDomain.usage,
         key="radius_session_reap_enabled",
         env_var="RADIUS_SESSION_REAP_ENABLED",
         value_type=SettingValueType.boolean,

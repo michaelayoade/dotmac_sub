@@ -22,6 +22,7 @@ from app.services.network.radius_sessions import (
     latest_accounting_observation_at,
     recent_nas_history_by_subscription,
 )
+from app.services.radius_accounting_health import assess_freshness, stale_after_seconds
 from app.services.subscription_lifecycle_policy import TERMINAL_SERVICE_STATUSES
 
 
@@ -32,9 +33,6 @@ class NasEvidenceRecommendation(StrEnum):
     verify_radius_identity = "verify_radius_identity"
     investigate_mixed_paths = "investigate_mixed_paths"
     insufficient_evidence = "insufficient_evidence"
-
-
-_ACCOUNTING_FRESHNESS = timedelta(hours=24)
 
 
 @dataclass(frozen=True)
@@ -100,6 +98,7 @@ class NasAccessPathEvidenceReport:
     cutoff_at: datetime
     latest_accounting_at: datetime | None
     accounting_source_fresh: bool
+    accounting_stale_after_seconds: int
     evidence: tuple[NasAccessPathEvidence, ...]
 
     @property
@@ -131,6 +130,7 @@ class NasAccessPathEvidenceReport:
                 else None
             ),
             "accounting_source_fresh": self.accounting_source_fresh,
+            "accounting_stale_after_seconds": self.accounting_stale_after_seconds,
             "evidence_digest": self.digest,
             "nas_records": len(self.evidence),
             "recommendations": self.recommendation_counts,
@@ -178,14 +178,10 @@ def build_nas_access_path_evidence_report(
     cutoff_at = generated_at - timedelta(days=window_days)
     lifecycle_plan = build_nas_lifecycle_plan(db)
     latest_accounting_at = latest_accounting_observation_at(db)
-    accounting_age = (
-        generated_at - latest_accounting_at
-        if latest_accounting_at is not None
-        else None
-    )
-    accounting_source_fresh = bool(
-        accounting_age is not None
-        and timedelta(0) <= accounting_age <= _ACCOUNTING_FRESHNESS
+    accounting_freshness = assess_freshness(
+        latest_accounting_at,
+        checked_at=generated_at,
+        stale_seconds=stale_after_seconds(db),
     )
     blocked = tuple(
         item
@@ -198,7 +194,8 @@ def build_nas_access_path_evidence_report(
             window_days=window_days,
             cutoff_at=cutoff_at,
             latest_accounting_at=latest_accounting_at,
-            accounting_source_fresh=accounting_source_fresh,
+            accounting_source_fresh=accounting_freshness.fresh,
+            accounting_stale_after_seconds=(accounting_freshness.stale_after_seconds),
             evidence=(),
         )
 
@@ -331,6 +328,7 @@ def build_nas_access_path_evidence_report(
         window_days=window_days,
         cutoff_at=cutoff_at,
         latest_accounting_at=latest_accounting_at,
-        accounting_source_fresh=accounting_source_fresh,
+        accounting_source_fresh=accounting_freshness.fresh,
+        accounting_stale_after_seconds=accounting_freshness.stale_after_seconds,
         evidence=tuple(evidence),
     )

@@ -35,6 +35,9 @@ def import_radius_accounting():
 def _import_radius_accounting_locked():
     with db_session_adapter.session() as session:
         result = usage_service.import_radius_accounting(session)
+        if result.get("ok") is not True:
+            source_status = str(result.get("source_status") or "unavailable")
+            raise RuntimeError(f"RADIUS accounting source is {source_status}")
         return result
 
 

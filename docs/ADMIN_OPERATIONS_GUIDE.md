@@ -1217,8 +1217,33 @@ session identity. Recommendations are review classifications, not mutation
 authority: historical use can support reactivation or relink review, but only
 current exact live-session evidence can authorize automatic relinking.
 The command reports `source_stale` and exits `2` when the newest accounting
-observation is more than 24 hours old. Do not use its recommendations until the
-accounting import is healthy and the report has been rerun.
+observation exceeds `radius_accounting_source_stale_seconds` (one hour by
+default). Do not use its recommendations until the accounting import is healthy
+and the report has been rerun.
+
+FreeRADIUS uses dedicated `FREERADIUS_DB_*` environment variables. They must
+identify the same database as the active FreeRADIUS connector, never the app's
+`DATABASE_URL` or generic application database settings. Before deploying this
+change to an existing environment, seed those variables from the current
+connector target, run `freeradius -XC` in the container, and verify that both
+`radpostauth` and `radacct` advance. The accounting importer fails its task when
+the source is stale, allowing task-reliability alerting to remain authoritative.
+
+Existing RADIUS databases must also accept the full 253-octet NAS-Port-Id
+payload. Vendor interface descriptions longer than the historical 32-character
+default otherwise reject the complete accounting row. Apply the idempotent
+upgrade before or with the application deployment:
+
+```bash
+docker exec -i dotmac_radius_pg_test sh -lc \
+  'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+  < config/freeradius/upgrade_003_radacct_nasportid_capacity.sql
+```
+
+Verify `radacct.nasportid` reports `253` in `information_schema.columns`, then
+confirm `radius_radacct_schema_ok` is `1`. Rejected over-length writes are
+labelled in Loki as `event="radius_accounting_write_rejected"`; that event
+must remain absent after the upgrade.
 
 ### Rotation Order
 

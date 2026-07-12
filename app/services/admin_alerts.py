@@ -561,6 +561,24 @@ def _radius_health_findings(db: Session) -> list[AlertFinding]:
                 details=_json_safe(result),
             )
         )
+    elif "radacct_schema_ok" in result and not result.get("radacct_schema_ok"):
+        capacity = int(result.get("radacct_nasportid_capacity") or 0)
+        findings.append(
+            AlertFinding(
+                fingerprint=f"{prefix}radacct-schema-incompatible",
+                category="infrastructure",
+                source="radius-health",
+                severity=AlertSeverity.critical,
+                title="RADIUS accounting schema rejects valid sessions",
+                summary=(
+                    "radacct.nasportid accepts only "
+                    f"{capacity} characters; 253 are required for RADIUS "
+                    "NAS-Port-Id values. Longer vendor interface identifiers "
+                    "cause complete accounting rows to be dropped."
+                ),
+                details=_json_safe(result),
+            )
+        )
     elif open_sessions and (
         freshness is None or float(freshness) > freshness_alert_seconds
     ):

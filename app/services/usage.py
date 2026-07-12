@@ -55,6 +55,7 @@ from app.services import domain_settings as domain_settings_service
 from app.services.common import apply_ordering, apply_pagination, validate_enum
 from app.services.events import emit_event
 from app.services.events.types import EventType
+from app.services.radius_accounting_health import assess_freshness, stale_after_seconds
 from app.services.response import ListResponseMixin, list_response
 
 logger = logging.getLogger(__name__)
@@ -697,10 +698,18 @@ def import_radius_accounting(
     db: Session,
     *,
     limit: int | None = None,
-) -> dict[str, int | bool]:
+) -> dict[str, int | bool | str | None]:
     db_url = _radius_accounting_db_url(db)
     if not db_url:
-        return {"ok": False, "processed": 0, "created_or_updated": 0, "cursor": 0}
+        return {
+            "ok": False,
+            "processed": 0,
+            "created_or_updated": 0,
+            "cursor": 0,
+            "source_status": "unconfigured",
+            "source_latest_at": None,
+            "source_age_seconds": None,
+        }
 
     batch_size = max(limit or 500, 1)
     last_radacctid = _get_radius_accounting_cursor(db)
@@ -738,6 +747,14 @@ def import_radius_accounting(
         refresh_checked, refreshed = _refresh_open_sessions_from_radacct(
             db, conn, select_list, batch=_RADIUS_REFRESH_BATCH
         )
+        source_latest_at = _coerce_radacct_ts(
+            conn.execute(
+                text(
+                    "SELECT MAX(COALESCE(acctstoptime, acctupdatetime, "
+                    "acctstarttime)) FROM radacct"
+                )
+            ).scalar()
+        )
 
     db.commit()
     if refreshed:
@@ -746,12 +763,24 @@ def import_radius_accounting(
             refreshed,
             refresh_checked,
         )
+    freshness = assess_freshness(
+        source_latest_at,
+        stale_seconds=stale_after_seconds(db),
+    )
     return {
-        "ok": True,
+        "ok": freshness.fresh,
         "processed": processed,
         "created_or_updated": created_or_updated,
         "refreshed": refreshed,
         "cursor": cursor,
+        "source_status": freshness.state.value,
+        "source_latest_at": (
+            freshness.observed_at.isoformat()
+            if freshness.observed_at is not None
+            else None
+        ),
+        "source_age_seconds": freshness.age_seconds,
+        "source_stale_after_seconds": freshness.stale_after_seconds,
     }
 
 

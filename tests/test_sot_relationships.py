@@ -81,6 +81,10 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "financial.access_resolution",
         "sessions.radius_resolution",
     )
+    assert sot_relationships.dependencies_for("sessions.radius_accounting_health") == (
+        "control.domain_settings",
+        "runtime.db_sessions",
+    )
     assert sot_relationships.dependencies_for("runtime.infrastructure_polling") == (
         "runtime.db_sessions",
         "network.device_state",
