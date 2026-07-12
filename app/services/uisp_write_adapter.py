@@ -182,10 +182,10 @@ def _uisp_capability(
         raise UispWriteUnsupported(
             f"UISP configuration writes are not enabled for {vendor} {model}"
         )
-    if config.get("endpoint", "/devices/{device_id}/configuration") != (
-        "/devices/{device_id}/configuration"
-    ):
-        raise UispWriteUnsupported("Unsupported UISP configuration endpoint")
+    if config.get("transport") not in {"airos", "onu"}:
+        raise UispWriteUnsupported(
+            "UISP configuration transport must be explicitly mapped as airos or onu"
+        )
     return capability, config
 
 
@@ -259,8 +259,8 @@ class UispConfigurationWriteAdapter:
         self.sleeper = sleeper
 
     def apply(self, db: Session, intent: UispDeviceIntent) -> UispApplyResult:
-        target, device_id, mappings, expected = self._prepare(db, intent)
-        original = self.client.get_device_configuration(device_id)
+        target, device_id, transport, mappings, expected = self._prepare(db, intent)
+        original = self.client.get_device_configuration(device_id, transport=transport)
         proposed = copy.deepcopy(original)
         for canonical_name, value in expected.items():
             mapping = mappings[canonical_name]
@@ -269,6 +269,7 @@ class UispConfigurationWriteAdapter:
         if proposed == original:
             return self._readback(
                 device_id,
+                transport,
                 mappings,
                 expected,
                 write_accepted=False,
@@ -276,7 +277,9 @@ class UispConfigurationWriteAdapter:
             )
 
         try:
-            response = self.client.put_device_configuration(device_id, proposed)
+            response = self.client.put_device_configuration(
+                device_id, proposed, transport=transport
+            )
         except UispUnsupportedOperationError as exc:
             raise UispWriteUnsupported(
                 f"UISP does not implement configuration writes for {target.model}: {exc}"
@@ -290,6 +293,7 @@ class UispConfigurationWriteAdapter:
 
         return self._readback(
             device_id,
+            transport,
             mappings,
             expected,
             write_accepted=True,
@@ -298,9 +302,10 @@ class UispConfigurationWriteAdapter:
 
     def readback(self, db: Session, intent: UispDeviceIntent) -> UispApplyResult:
         """Read and compare mapped fields without issuing a write."""
-        _target, device_id, mappings, expected = self._prepare(db, intent)
+        _target, device_id, transport, mappings, expected = self._prepare(db, intent)
         return self._readback(
             device_id,
+            transport,
             mappings,
             expected,
             write_accepted=False,
@@ -311,6 +316,7 @@ class UispConfigurationWriteAdapter:
         self, db: Session, intent: UispDeviceIntent
     ) -> tuple[
         CPEDevice | OntUnit,
+        str,
         str,
         dict[str, UispFieldMapping],
         dict[str, Any],
@@ -323,6 +329,7 @@ class UispConfigurationWriteAdapter:
         _capability, config_spec = _uisp_capability(
             db, vendor=vendor, model=model, firmware=firmware
         )
+        transport = str(config_spec["transport"])
         desired_fields = _desired_fields(intent.desired_config or {})
         if not desired_fields:
             raise UispWriteUnsupported("UISP intent has no writable fields")
@@ -332,11 +339,12 @@ class UispConfigurationWriteAdapter:
             mapping = mappings[canonical_name]
             value = _materialize_value(canonical_name, desired_value, mapping)
             expected[canonical_name] = value
-        return target, device_id, mappings, expected
+        return target, device_id, transport, mappings, expected
 
     def _readback(
         self,
         device_id: str,
+        transport: str,
         mappings: dict[str, UispFieldMapping],
         expected: dict[str, Any],
         *,
@@ -348,7 +356,9 @@ class UispConfigurationWriteAdapter:
         for attempt in range(1, self.readback_attempts + 1):
             if attempt > 1 and self.readback_delay_seconds:
                 self.sleeper(self.readback_delay_seconds)
-            document = self.client.get_device_configuration(device_id)
+            document = self.client.get_device_configuration(
+                device_id, transport=transport
+            )
             observed: dict[str, Any] = {}
             drift: dict[str, Any] = {}
             for canonical_name, mapping in mappings.items():

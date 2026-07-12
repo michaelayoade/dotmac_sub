@@ -160,7 +160,7 @@ class UispClient:
         path: str,
         *,
         params: dict[str, Any] | None = None,
-        json_body: dict[str, Any] | None = None,
+        json_body: dict[str, Any] | list[Any] | None = None,
     ) -> Any:
         """Issue one authenticated v2.1 request and return parsed JSON."""
         if _REACHABILITY_CIRCUIT.is_open():
@@ -236,6 +236,9 @@ class UispClient:
     def _put(self, path: str, payload: dict[str, Any]) -> Any:
         return self._request("PUT", path, json_body=payload)
 
+    def _post(self, path: str, payload: dict[str, Any] | list[Any]) -> Any:
+        return self._request("POST", path, json_body=payload)
+
     def _get_list(
         self, path: str, params: dict[str, Any] | None = None
     ) -> list[dict[str, Any]]:
@@ -269,24 +272,60 @@ class UispClient:
         """All UISP data-links — device<->device backhaul topology edges."""
         return self._get_list("/data-links")
 
-    def get_device_configuration(self, device_id: str) -> dict[str, Any]:
-        """Read the installed device's UISP configuration document."""
-        data = self._get(f"/devices/{device_id}/configuration")
+    def get_device_configuration(
+        self, device_id: str, *, transport: str
+    ) -> dict[str, Any]:
+        """Read configuration through an explicit UISP device-family transport."""
+        if transport == "airos":
+            data = self._get(f"/devices/airos/{device_id}/configuration")
+        elif transport == "onu":
+            payload = self._post(
+                "/devices/get-configuration", {"deviceIds": [device_id]}
+            )
+            data = (
+                next(
+                    (
+                        item
+                        for item in payload
+                        if isinstance(item, dict) and item.get("deviceId") == device_id
+                    ),
+                    None,
+                )
+                if isinstance(payload, list)
+                else None
+            )
+        else:
+            raise UispConfigurationError(
+                f"Unsupported UISP configuration transport: {transport}"
+            )
         if not isinstance(data, dict):
             raise UispClientError("Invalid UISP device configuration result")
         return data
 
     def put_device_configuration(
-        self, device_id: str, configuration: dict[str, Any]
+        self,
+        device_id: str,
+        configuration: dict[str, Any],
+        *,
+        transport: str,
     ) -> dict[str, Any] | None:
-        """Replace a device configuration document through UISP.
+        """Write a device configuration through an explicit family transport.
 
         Callers must first GET the document, preserve unknown fields, and
         perform a later GET readback. This method deliberately exposes no
         arbitrary path or generic HTTP write surface.
         """
-        data = self._put(f"/devices/{device_id}/configuration", configuration)
+        if transport == "airos":
+            data = self._put(f"/devices/airos/{device_id}/configuration", configuration)
+        elif transport == "onu":
+            data = self._post("/devices/update-configuration", [configuration])
+        else:
+            raise UispConfigurationError(
+                f"Unsupported UISP configuration transport: {transport}"
+            )
         if data is not None and not isinstance(data, dict):
+            if transport == "onu" and isinstance(data, list):
+                return {"results": data}
             raise UispClientError("Invalid UISP configuration write result")
         return data
 

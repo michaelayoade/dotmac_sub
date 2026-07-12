@@ -23,7 +23,8 @@ class FakeClient:
         self.put_payloads = []
         self.get_calls = 0
 
-    def get_device_configuration(self, device_id):
+    def get_device_configuration(self, device_id, *, transport):
+        assert transport == "onu"
         self.get_calls += 1
         if self.get_calls == 1:
             return copy.deepcopy(self.initial)
@@ -31,7 +32,8 @@ class FakeClient:
             return copy.deepcopy(self.readbacks.pop(0))
         return copy.deepcopy(self.initial)
 
-    def put_device_configuration(self, device_id, configuration):
+    def put_device_configuration(self, device_id, configuration, *, transport):
+        assert transport == "onu"
         if self.put_error:
             raise self.put_error
         self.put_payloads.append(copy.deepcopy(configuration))
@@ -58,10 +60,11 @@ def _intent(db_session, subscriber, catalog_offer, desired):
         supported_features={
             "uisp": {
                 "configuration_write": True,
+                "transport": "onu",
                 "fields": {
                     "name": "/system/name",
                     "wifi.ssid": "/wireless/ssid",
-                    "wifi.password_ref": "/wireless/password",
+                    "wifi.password_ref": "/wireless/key",
                     "remote_access.enabled": "/services/ssh/enabled",
                 },
             }
@@ -82,7 +85,7 @@ def _config(*, name="old", ssid="old-ssid", wifi_secret=None, ssh=False):
         wifi_secret = "old-password"
     return {
         "system": {"name": name, "untouched": "preserve"},
-        "wireless": {"ssid": ssid, "password": wifi_secret, "channel": 6},
+        "wireless": {"ssid": ssid, "key": wifi_secret, "channel": 6},
         "services": {"ssh": {"enabled": ssh}},
     }
 
