@@ -1257,6 +1257,22 @@ class QuoteLineItems(ListResponseMixin):
         return item
 
     @staticmethod
+    def delete(db: Session, item_id: str) -> None:
+        """Remove a line and re-derive the quote's money from what is left.
+
+        A hard delete is right here: a line item has no history of its own, and
+        leaving a soft-deleted row behind would keep it in the subtotal.
+        """
+        item = db.get(QuoteLineItem, coerce_uuid(item_id))
+        if not item:
+            raise HTTPException(status_code=404, detail="Quote line item not found")
+        quote = db.get(Quote, item.quote_id)
+        db.delete(item)
+        db.commit()
+        if quote:
+            _recalculate_quote_totals(db, quote)
+
+    @staticmethod
     def list(
         db: Session,
         quote_id: str | None,

@@ -118,6 +118,31 @@ def test_a_quote_with_lines_can_still_be_sent_and_accepted(db_session, subscribe
     assert db_session.query(SalesOrder).count() == 1
 
 
+def test_removing_the_last_line_makes_the_quote_unsendable_again(
+    db_session, subscriber
+):
+    """Deleting a line must re-derive the totals, not leave stale money behind —
+    and a quote stripped back to nothing must fail the same guard as one that
+    never had lines."""
+    quote = _draft(db_session, subscriber)
+    _add_line(db_session, quote)
+    db_session.refresh(quote)
+    assert quote.total > 0
+
+    line = quote.line_items[0]
+    sales_service.quote_line_items.delete(db_session, str(line.id))
+
+    db_session.refresh(quote)
+    assert quote.line_items == []
+    assert quote.subtotal == 0
+    assert quote.total == 0
+
+    with pytest.raises(ValueError, match="at least one line item"):
+        sales_service.quotes.update(
+            db_session, str(quote.id), QuoteUpdate(status=QuoteStatus.sent)
+        )
+
+
 def test_a_zero_priced_line_is_allowed(db_session, subscriber):
     """The guard is 'has lines', not 'total > 0'. A deliberately free install
     (promo, goodwill, warranty rework) is a real quote with real lines; refusing
