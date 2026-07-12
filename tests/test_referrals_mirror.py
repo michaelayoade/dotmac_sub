@@ -1,4 +1,4 @@
-"""Read-only CRM referral mirror: reconcile, read, and inbound events."""
+"""Local referral mirror service (RFC #73): reconcile, read, write-through, events."""
 
 from __future__ import annotations
 
@@ -6,6 +6,8 @@ import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from app.models.referral import ReferralMirror, ReferralProgramCache
 from app.models.subscriber import Subscriber
@@ -138,6 +140,53 @@ def test_reconcile_noops_when_not_linked(db_session):
         "app.services.referrals_mirror.resolve_crm_subscriber_id", return_value=None
     ):
         assert referrals_mirror.reconcile_subscriber(db_session, str(sub.id)) is False
+
+
+# ── write-through (refer a friend) ──────────────────────────────────────────
+
+
+def test_refer_a_friend_writes_through_and_mirrors(db_session):
+    sub = _subscriber(db_session, crm_id=uuid.uuid4())
+    client = MagicMock()
+    client.create_portal_referral.return_value = {
+        "id": "r-new",
+        "status": "pending",
+        "created_at": "2026-06-20T09:00:00+00:00",
+    }
+    with (
+        patch("app.services.referrals_mirror.get_crm_client", return_value=client),
+        patch(
+            "app.services.referrals_mirror.resolve_crm_subscriber_id",
+            return_value="crm-1",
+        ),
+    ):
+        out = referrals_mirror.refer_a_friend(
+            db_session, str(sub.id), name="Friend", email="friend@example.com"
+        )
+    assert out["id"] == "r-new"
+    assert out["status"] == "pending"
+    row = db_session.query(ReferralMirror).filter_by(crm_referral_id="r-new").one()
+    assert row.referred_name == "Friend"
+    assert row.subscriber_id == sub.id
+
+
+def test_refer_a_friend_requires_contact(db_session):
+    sub = _subscriber(db_session, crm_id=uuid.uuid4())
+    with pytest.raises(referrals_mirror.ReferralError) as exc:
+        referrals_mirror.refer_a_friend(db_session, str(sub.id), name="No Contact")
+    assert exc.value.status_code == 422
+
+
+def test_refer_a_friend_requires_crm_link(db_session):
+    sub = _subscriber(db_session, crm_id=None)
+    with patch(
+        "app.services.referrals_mirror.resolve_crm_subscriber_id", return_value=None
+    ):
+        with pytest.raises(referrals_mirror.ReferralError) as exc:
+            referrals_mirror.refer_a_friend(
+                db_session, str(sub.id), email="x@example.com"
+            )
+    assert exc.value.status_code == 409
 
 
 # ── webhook application ─────────────────────────────────────────────────────

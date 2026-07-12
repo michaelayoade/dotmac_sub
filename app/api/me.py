@@ -147,6 +147,8 @@ from app.services import projects as projects_service
 from app.services import (
     projects_mirror,
     quote_deposits,
+    quotes_mirror,
+    referrals_mirror,
     web_support_tickets,
     work_orders_mirror,
 )
@@ -861,9 +863,14 @@ def my_referrals(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """The caller's native Refer & Earn summary."""
+    """The caller's Refer & Earn summary — code, share link, program terms, and
+    history. Behind the Phase 3 ``referrals_native_read_enabled`` read-flip
+    flag (§4.2): OFF serves the local CRM mirror (refreshed lazily), ON serves
+    the native referral tables — same shape either way (§2.5)."""
     subscriber_id = _subscriber_id(principal)
-    return referrals_service.referrals.read_for_subscriber(db, subscriber_id)
+    if referrals_service.native_read_enabled(db):
+        return referrals_service.referrals.read_for_subscriber(db, subscriber_id)
+    return referrals_mirror.read_for_subscriber(db, subscriber_id)
 
 
 @router.get("/projects", response_model=MyProjectsResponse)
@@ -943,9 +950,14 @@ def my_quotes(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """The caller's native self-serve installation quotes."""
+    """The caller's self-serve installation quotes — feasibility, estimate,
+    deposit, status. Behind the Phase 3 ``quotes_native_read_enabled``
+    read-flip flag (§4.2): OFF serves the local CRM mirror (refreshed lazily),
+    ON serves sub's native ``quotes`` table — same shape either way (§2.5)."""
     subscriber_id = _subscriber_id(principal)
-    return selfserve_service.selfserve_quotes.read_for_subscriber(db, subscriber_id)
+    if selfserve_service.native_read_enabled(db):
+        return selfserve_service.selfserve_quotes.read_for_subscriber(db, subscriber_id)
+    return quotes_mirror.read_for_subscriber(db, subscriber_id)
 
 
 @router.post("/quote-request", response_model=QuoteItem, status_code=201)
@@ -954,9 +966,11 @@ def my_quote_request(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """Request a native map-pinned installation quote."""
+    """Request a map-pinned installation quote. The dropped pin drives the CRM's
+    feasibility check (proximity to fiber) + estimate + deposit; the result is
+    mirrored locally and returned."""
     subscriber_id = _subscriber_id(principal)
-    quote = selfserve_service.selfserve_quotes.request_quote(
+    return quotes_mirror.request_quote(
         db,
         subscriber_id,
         latitude=payload.latitude,
@@ -965,7 +979,6 @@ def my_quote_request(
         region=payload.region,
         note=payload.note,
     )
-    return selfserve_service.build_portal_quote_payload(db, quote)
 
 
 @router.post(
@@ -1000,7 +1013,8 @@ def my_quote_deposit_verify(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """Verify the deposit and accept the native quote on settlement."""
+    """Verify the deposit payment; on full settlement the quote is accepted in the
+    CRM (which triggers the sales order + install project)."""
     subscriber_id = _subscriber_id(principal)
     customer = _customer(db, principal)
     return quote_deposits.verify_deposit(
@@ -1019,16 +1033,19 @@ def my_refer_a_friend(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """Refer a friend in Sub, the referral source of truth."""
+    """Refer a friend: capture in the CRM (source of truth), mirror locally."""
     subscriber_id = _subscriber_id(principal)
-    return referrals_service.referrals.refer_a_friend(
-        db,
-        subscriber_id,
-        name=payload.name,
-        email=payload.email,
-        phone=payload.phone,
-        note=payload.note,
-    )
+    try:
+        return referrals_mirror.refer_a_friend(
+            db,
+            subscriber_id,
+            name=payload.name,
+            email=payload.email,
+            phone=payload.phone,
+            note=payload.note,
+        )
+    except referrals_mirror.ReferralError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
 
 @router.get("/notifications", response_model=ListResponse[NotificationRead])

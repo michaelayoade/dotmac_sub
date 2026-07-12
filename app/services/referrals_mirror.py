@@ -285,6 +285,69 @@ def read_for_subscriber(
     }
 
 
+# ── writes ─────────────────────────────────────────────────────────────────
+
+
+class ReferralError(Exception):
+    """Domain error for refer-a-friend (maps to a 4xx at the edge)."""
+
+    def __init__(self, message: str, status_code: int = 502):
+        super().__init__(message)
+        self.message = message
+        self.status_code = status_code
+
+
+def refer_a_friend(
+    db: Session,
+    subscriber_id: str,
+    *,
+    name: str | None = None,
+    email: str | None = None,
+    phone: str | None = None,
+    note: str | None = None,
+) -> dict:
+    """Write-through refer-a-friend: capture in the CRM, then mirror locally."""
+    email = (email or "").strip() or None
+    phone = (phone or "").strip() or None
+    if not email and not phone:
+        raise ReferralError("An email or phone number is required.", status_code=422)
+
+    crm_subscriber_id = resolve_crm_subscriber_id(db, str(subscriber_id))
+    if not crm_subscriber_id:
+        raise ReferralError("Account is not yet linked to the CRM.", status_code=409)
+
+    try:
+        result = get_crm_client().create_portal_referral(
+            crm_subscriber_id, name=name, email=email, phone=phone, note=note
+        )
+    except CRMClientError as exc:
+        raise ReferralError(
+            "Couldn't submit the referral right now.", status_code=502
+        ) from exc
+
+    crm_referral_id = str(result.get("id") or "").strip()
+    if crm_referral_id:
+        _upsert_row(
+            db,
+            subscriber_id=coerce_uuid(str(subscriber_id)),
+            crm_referral_id=crm_referral_id,
+            referred_name=name,
+            status=str(result.get("status") or "pending"),
+            reward_amount=None,
+            reward_currency=None,
+            reward_status=None,
+            referral_created_at=_to_dt(result.get("created_at")) or datetime.now(UTC),
+            qualified_at=None,
+            rewarded_at=None,
+        )
+        db.commit()
+    return {
+        "id": crm_referral_id,
+        "status": str(result.get("status") or "pending"),
+        "message": str(result.get("message") or "Referral submitted"),
+    }
+
+
 # ── webhook application ─────────────────────────────────────────────────────
 
 

@@ -26,12 +26,12 @@ from app.schemas.portal import (
 )
 from app.services import chat_session as chat_session_service
 from app.services import (
+    quotes_mirror,
     reseller_crm_views,
     reseller_portal,
     work_orders_mirror,
 )
 from app.services.auth_dependencies import require_user_auth
-from app.services.sales import selfserve as selfserve_service
 
 router = APIRouter(prefix="/reseller", tags=["reseller"])
 
@@ -834,7 +834,8 @@ def my_reseller_quotes(
     principal: dict = Depends(require_user_auth),
 ) -> dict:
     """Self-serve installation quotes across all the reseller's customers,
-    each row tagged with its account. Served from Sub's native quote tables."""
+    each row tagged with its account. Served from the local CRM mirror, or
+    natively behind ``quotes_native_read_enabled`` (Phase 3 §4.2)."""
     reseller_id = _reseller_id(db, principal)
     return reseller_crm_views.quotes_for_reseller(db, reseller_id)
 
@@ -875,7 +876,7 @@ def my_reseller_quote_request(
     account = reseller_portal._get_customer_account(db, reseller_id, account_id)
     if account is None:
         raise HTTPException(status_code=404, detail="Account not found")
-    quote = selfserve_service.selfserve_quotes.request_quote(
+    return quotes_mirror.request_quote(
         db,
         str(account.id),
         latitude=payload.latitude,
@@ -884,4 +885,3 @@ def my_reseller_quote_request(
         region=payload.region,
         note=payload.note,
     )
-    return selfserve_service.build_portal_quote_payload(db, quote)

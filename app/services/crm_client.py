@@ -746,3 +746,103 @@ def get_crm_client(db: Session | None = None) -> CRMClient:
             service_token=settings.crm_service_token,
         )
     return _crm_client
+
+    # ------------------------------------------------------------------
+    # DEFERRED outbound writes -- portal quote request/accept and referral
+    # creation.
+    #
+    # These are the last Sub -> CRM business writes. They are NOT part of the
+    # write-back closure because they are the *write half* of a flag-gated
+    # cutover whose *read half* has not happened yet: `quotes_mirror` and
+    # `referrals_mirror` still serve reads behind `quotes_native_read_enabled`
+    # / `referrals_native_read_enabled`, both of which default OFF. Deleting
+    # these without first backfilling and cutting over the reads would leave
+    # portal quote requests and referrals with nowhere to go.
+    #
+    # They are pinned by tests/architecture/test_no_crm_writeback.py, which
+    # asserts they are the ONLY remaining write methods -- so no new one can
+    # be added, and these must disappear when the read cutover lands.
+    # ------------------------------------------------------------------
+
+    def request_portal_quote(
+        self,
+        crm_subscriber_id: str,
+        *,
+        latitude: float,
+        longitude: float,
+        address: str | None = None,
+        region: str | None = None,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        """Request a map-pinned installation quote (write-through to the CRM
+        Portal API). Returns the created quote payload (feasibility + estimate)."""
+        token = self._portal_token(crm_subscriber_id, ["quotes:write"])
+        payload: dict[str, Any] = {"latitude": latitude, "longitude": longitude}
+        if address:
+            payload["address"] = address
+        if region:
+            payload["region"] = region
+        if note:
+            payload["note"] = note
+        data = self._request(
+            "POST",
+            "/api/v1/portal/quote-request",
+            json_data=payload,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        return data if isinstance(data, dict) else {}
+
+    def accept_portal_quote(
+        self,
+        crm_subscriber_id: str,
+        quote_id: str,
+        *,
+        deposit_reference: str,
+        deposit_amount: str,
+        provider: str | None = None,
+    ) -> dict[str, Any]:
+        """Accept a quote after the deposit is verified (write-through). The CRM
+        records the deposit and triggers the sales-order + install-project."""
+        token = self._portal_token(crm_subscriber_id, ["quotes:write"])
+        payload: dict[str, Any] = {
+            "deposit_reference": deposit_reference,
+            "deposit_amount": deposit_amount,
+        }
+        if provider:
+            payload["provider"] = provider
+        data = self._request(
+            "POST",
+            f"/api/v1/portal/quotes/{quote_id}/accept",
+            json_data=payload,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        return data if isinstance(data, dict) else {}
+
+    def create_portal_referral(
+        self,
+        crm_subscriber_id: str,
+        *,
+        name: str | None = None,
+        email: str | None = None,
+        phone: str | None = None,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        """Refer-a-friend write-through to the CRM Portal API (server-side)."""
+        token = self._portal_token(crm_subscriber_id, ["referrals:write"])
+        payload: dict[str, Any] = {
+            k: v
+            for k, v in {
+                "name": name,
+                "email": email,
+                "phone": phone,
+                "note": note,
+            }.items()
+            if v
+        }
+        data = self._request(
+            "POST",
+            "/api/v1/portal/referrals",
+            json_data=payload,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        return data if isinstance(data, dict) else {}

@@ -5,8 +5,12 @@ helpers aggregate the per-subscriber quotes / projects / work orders across the
 reseller's whole customer set, tagging each row with its account so the
 reseller can see "which customer".
 
-Quotes read from Sub's native tables. Projects retain their temporary read
-flip and work orders remain inbound mirrors until their cutovers.
+Phase 3 (§4.2): the quote and project reads run behind the per-vertical
+``{quotes,projects}_native_read_enabled`` read-flip flags — OFF (default)
+serves the local CRM mirrors (the reconcile task keeps them fresh, so a
+reseller dashboard never fans out N CRM calls and works during a CRM outage),
+ON serves sub's native tables. Response shells and item shapes are identical
+(§2.5). Work orders stay mirror-only until the Phase 2 flip.
 """
 
 from __future__ import annotations
@@ -18,9 +22,10 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models.project import Project
 from app.models.project_mirror import ProjectMirror
+from app.models.quote_mirror import QuoteMirror
 from app.models.work_order_mirror import WorkOrderMirror
 from app.services import projects as projects_service
-from app.services import reseller_portal
+from app.services import quotes_mirror, reseller_portal
 from app.services.sales import selfserve as selfserve_service
 from app.services.work_order_views import row_to_item
 
@@ -46,24 +51,43 @@ def quotes_for_reseller(db: Session, reseller_id: str) -> dict:
     if not names:
         return {"quotes": [], "total": 0, "open": 0}
 
-    quotes = selfserve_service.selfserve_quotes.list_for_subscribers(
-        db, [str(s) for s in names]
-    )
-    project_ids = selfserve_service._find_project_ids_for_quotes(
-        db, [q.id for q in quotes]
-    )
-    items: list[dict] = []
-    for quote in quotes:
-        item = selfserve_service.build_portal_quote_payload(
-            db, quote, project_id=project_ids.get(str(quote.id))
+    if selfserve_service.native_read_enabled(db):
+        quotes = selfserve_service.selfserve_quotes.list_for_subscribers(
+            db, [str(s) for s in names]
         )
-        item["account_id"] = str(quote.subscriber_id)
-        item["account_name"] = names.get(quote.subscriber_id)
+        # H1: batch-resolve install-project ids for the whole subtree in one
+        # query instead of a per-quote metadata scan.
+        project_ids = selfserve_service._find_project_ids_for_quotes(
+            db, [q.id for q in quotes]
+        )
+        native_items: list[dict] = []
+        for q in quotes:
+            item = selfserve_service.build_portal_quote_payload(
+                db, q, project_id=project_ids.get(str(q.id))
+            )
+            item["account_id"] = str(q.subscriber_id)
+            item["account_name"] = names.get(q.subscriber_id)
+            native_items.append(item)
+        open_count = sum(
+            1
+            for i in native_items
+            if i["status"] not in selfserve_service._PORTAL_CLOSED_QUOTE_STATUSES
+        )
+        return {"quotes": native_items, "total": len(native_items), "open": open_count}
+
+    rows = db.scalars(
+        select(QuoteMirror)
+        .where(QuoteMirror.subscriber_id.in_(list(names)))
+        .order_by(QuoteMirror.created_at.desc())
+    ).all()
+    items: list[dict] = []
+    for r in rows:
+        item = quotes_mirror._row_to_item(r)
+        item["account_id"] = str(r.subscriber_id)
+        item["account_name"] = names.get(r.subscriber_id)
         items.append(item)
     open_count = sum(
-        1
-        for item in items
-        if item["status"] not in selfserve_service._PORTAL_CLOSED_QUOTE_STATUSES
+        1 for r in rows if r.status not in ("accepted", "rejected", "expired")
     )
     return {"quotes": items, "total": len(items), "open": open_count}
 

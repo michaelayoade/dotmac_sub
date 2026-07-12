@@ -1,4 +1,4 @@
-"""Read-only CRM quote mirror: reconcile, read, and inbound webhooks."""
+"""Local self-serve quote mirror service: reconcile, read, request, webhooks."""
 
 from __future__ import annotations
 
@@ -102,6 +102,40 @@ def test_read_serves_mirror_when_crm_unreachable(db_session):
     ):
         out = quotes_mirror.read_for_subscriber(db_session, str(sub.id))
     assert out["total"] == 0
+
+
+def test_request_quote_write_through_mirrors_result(db_session):
+    sub = _subscriber(db_session, crm_id=uuid.uuid4())
+    client = MagicMock()
+    client.request_portal_quote.return_value = _crm_quote(id="qNEW", status="draft")
+    with (
+        patch("app.services.quotes_mirror.get_crm_client", return_value=client),
+        patch(
+            "app.services.quotes_mirror.resolve_crm_subscriber_id", return_value="crm-1"
+        ),
+    ):
+        out = quotes_mirror.request_quote(
+            db_session, str(sub.id), latitude=9.07, longitude=7.49, address="12 Test St"
+        )
+    assert out["id"] == "qNEW"
+    client.request_portal_quote.assert_called_once()
+    row = db_session.query(QuoteMirror).filter_by(crm_quote_id="qNEW").one()
+    assert row.feasibility_coverage == "covered"
+
+
+def test_request_quote_requires_crm_link(db_session):
+    import pytest
+    from fastapi import HTTPException
+
+    sub = _subscriber(db_session)  # no crm_subscriber_id
+    with patch(
+        "app.services.quotes_mirror.resolve_crm_subscriber_id", return_value=None
+    ):
+        with pytest.raises(HTTPException) as exc:
+            quotes_mirror.request_quote(
+                db_session, str(sub.id), latitude=1.0, longitude=2.0
+            )
+    assert exc.value.status_code == 400
 
 
 def test_webhook_accepted_upserts_and_pushes(db_session):
