@@ -77,6 +77,16 @@ _TR069_TASK_READY_POLL_INTERVAL_SEC = (
 )
 _TR069_BINDING_READBACK_RETRY_DELAY_SEC = 2.0
 
+_QUEUED_ACS_DELIVERY_MARKERS = (
+    "setparametervalues queued but connection request failed",
+    "setparametervalues task timed out",
+)
+
+
+def _is_queued_acs_delivery(message: object) -> bool:
+    normalized = str(message or "").casefold()
+    return any(marker in normalized for marker in _QUEUED_ACS_DELIVERY_MARKERS)
+
 
 def _validate_olt_profile_dependencies(
     db: Session,
@@ -831,13 +841,28 @@ def apply_saved_service_config(
     steps: list[dict[str, object]] = []
     needs_input: list[str] = []
     hard_failures: list[str] = []
+    pending_deliveries: list[str] = []
 
     def _append(name: str, result) -> None:
         success = bool(getattr(result, "success", False))
         message = str(getattr(result, "message", ""))
-        steps.append({"step": name, "success": success, "message": message})
+        waiting = bool(getattr(result, "waiting", False)) or (
+            not success and _is_queued_acs_delivery(message)
+        )
+        steps.append(
+            {
+                "step": name,
+                "success": success,
+                "waiting": waiting,
+                "message": message,
+            }
+        )
         if not success:
-            hard_failures.append(f"{name}: {message}")
+            detail = f"{name}: {message}"
+            if waiting:
+                pending_deliveries.append(detail)
+            else:
+                hard_failures.append(detail)
 
     cr_username = effective_values.get("cr_username")
     cr_password = _decrypt_optional_secret(effective_values.get("cr_password"))
@@ -866,10 +891,16 @@ def apply_saved_service_config(
             )
         )
         for step in wan_instance_steps:
-            step.pop("waiting", None)  # Sync-only: no waiting semantics
+            if not step.get("success") and _is_queued_acs_delivery(step.get("message")):
+                step["waiting"] = True
+                pending_deliveries.append(f"{step.get('step')}: {step.get('message')}")
             steps.append(step)
         needs_input.extend(wan_instance_needs)
-        hard_failures.extend(wan_instance_failures)
+        hard_failures.extend(
+            failure
+            for failure in wan_instance_failures
+            if not _is_queued_acs_delivery(failure)
+        )
         logger.info(
             "ONT %s: Provisioned %d WAN desired-config steps",
             ont.serial_number,
@@ -955,6 +986,24 @@ def apply_saved_service_config(
             critical=False,
             waiting=False,  # Sync-only: no waiting semantics
             data={"steps": steps, "needs_input": needs_input},
+        )
+    if pending_deliveries:
+        set_provisioning_status(
+            ont, OntProvisioningStatus.pending_service_config, strict=False
+        )
+        db.add(ont)
+        return StepResult(
+            "apply_saved_service_config",
+            False,
+            "Saved ONT service config is queued and awaiting the next Inform.",
+            ms,
+            critical=False,
+            waiting=True,
+            data={
+                "steps": steps,
+                "needs_input": needs_input,
+                "pending_deliveries": pending_deliveries,
+            },
         )
     if not steps and not needs_input:
         set_desired_config_values(ont, {"delivery.pending_apply": None})
