@@ -442,6 +442,15 @@ ignore_imports = [
     # but the relocation is out of scope for the reconciler work.
     "app.services.network.subscriber_ont_adapter -> app.models.subscriber",
     "app.services.network.subscriber_ont_adapter -> app.models.catalog",
+    # identity.py / access_path.py: the domain source-of-truth resolvers that
+    # answer "what network object does this subscription/session point at?" and
+    # "what is the customer-to-network access path?". Cross-domain by name (the
+    # SOT relationship layer registered in app.services.sot_relationships sits
+    # above both domains), so they read the real Subscription/NasDevice models.
+    # Same carve-out reasoning as subscriber_ont_adapter; the relocation to a
+    # neutral higher layer is out of scope for the SOT reconciler work.
+    "app.services.network.identity -> app.models.catalog",
+    "app.services.network.access_path -> app.models.catalog",
 ]
 unmatched_ignore_imports_alerting = "none"
 allow_indirect_imports = "true"
