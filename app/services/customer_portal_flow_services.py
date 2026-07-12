@@ -45,7 +45,6 @@ from app.services.customer_portal_flow_common import (
 from app.services.network.radius_sessions import (
     latest_open_accounting_session_for_subscription,
 )
-from app.services.web_network_ont_actions import config_setters as ont_config_setters
 from app.services.web_network_ont_actions import device_actions as ont_device_actions
 
 logger = logging.getLogger(__name__)
@@ -1253,19 +1252,20 @@ def update_customer_subscription_wifi(
     if password_value or password_confirm_value:
         if password_value != password_confirm_value:
             return False, "WiFi passwords do not match"
-        if len(password_value) < 8:
-            return False, "WiFi password must be at least 8 characters"
+        if not (8 <= len(password_value) <= 63):
+            return False, "WiFi password must be 8-63 characters"
 
     ont = _resolve_customer_subscription_ont(db, subscription)
     if ont is None:
         return False, "No active ONT is linked to this service"
 
-    result = ont_config_setters.set_wifi_config(
+    from app.services.network.ont_features import OntFeatureService
+
+    result = OntFeatureService.set_wifi_config(
         db,
         str(ont.id),
         ssid=ssid_value,
         password=password_value or None,
-        request=None,
     )
     return bool(result.success), str(result.message or "WiFi update submitted")
 

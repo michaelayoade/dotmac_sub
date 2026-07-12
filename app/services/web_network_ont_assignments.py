@@ -197,6 +197,7 @@ def parse_form_values(form) -> dict[str, object]:
     return {
         "pon_port_id": form.get("pon_port_id", "").strip(),
         "account_id": form.get("account_id", "").strip() or None,
+        "subscription_id": form.get("subscription_id", "").strip() or None,
         "service_address_id": form.get("service_address_id", "").strip() or None,
         "notes": form.get("notes", "").strip() or None,
     }
@@ -316,6 +317,11 @@ def create_assignment(db: Session, ont, values: dict[str, object]) -> None:
         ont_unit_id=ont.id,
         pon_port_id=pon_port_id,
         subscriber_id=coerce_uuid(subscriber_id_str) if subscriber_id_str else None,
+        subscription_id=(
+            coerce_uuid(str(values["subscription_id"]))
+            if values.get("subscription_id")
+            else None
+        ),
         service_address_id=(
             coerce_uuid(service_address_id_str) if service_address_id_str else None
         ),
@@ -354,6 +360,11 @@ def claim_existing_assignment(
     payload = OntAssignmentUpdate(
         pon_port_id=pon_port_id,
         subscriber_id=coerce_uuid(subscriber_id_str) if subscriber_id_str else None,
+        subscription_id=(
+            coerce_uuid(str(values["subscription_id"]))
+            if values.get("subscription_id")
+            else None
+        ),
         service_address_id=(
             coerce_uuid(service_address_id_str) if service_address_id_str else None
         ),
@@ -375,6 +386,8 @@ def form_payload(
     result = {
         "pon_port_id": values.get("pon_port_id"),
         "account_id": values.get("account_id"),
+        "subscription_id": values.get("subscription_id"),
+        "subscription_label": "",
         "account_label": "",
         "service_address_id": values.get("service_address_id"),
         "notes": values.get("notes"),
@@ -399,6 +412,20 @@ def form_payload(
                     result["account_label"] = label
         except Exception:
             pass  # Keep empty label on lookup failure
+    if db and values.get("subscription_id"):
+        try:
+            from app.models.catalog import Subscription
+
+            subscription = db.get(Subscription, values["subscription_id"])
+            if subscription:
+                offer = getattr(subscription, "offer", None)
+                result["subscription_label"] = (
+                    getattr(subscription, "login", None)
+                    or getattr(offer, "name", None)
+                    or str(subscription.id)
+                )
+        except Exception:
+            pass
     return result
 
 
@@ -409,6 +436,12 @@ def assignment_form_payload_from_assignment(assignment) -> dict[str, object]:
     return {
         "pon_port_id": str(assignment.pon_port_id) if assignment.pon_port_id else "",
         "account_id": str(assignment.subscriber_id) if assignment.subscriber_id else "",
+        "subscription_id": (
+            str(assignment.subscription_id) if assignment.subscription_id else ""
+        ),
+        "subscription_label": (
+            getattr(getattr(assignment, "subscription", None), "login", None) or ""
+        ),
         "account_label": account_label,
         "service_address_id": (
             str(assignment.service_address_id) if assignment.service_address_id else ""
@@ -529,6 +562,11 @@ def update_assignment_from_form(
         pon_port_id=resolved_pon_port_id,
         subscriber_id=(
             coerce_uuid(str(values["account_id"])) if values.get("account_id") else None
+        ),
+        subscription_id=(
+            coerce_uuid(str(values["subscription_id"]))
+            if values.get("subscription_id")
+            else None
         ),
         service_address_id=(
             coerce_uuid(str(values["service_address_id"]))

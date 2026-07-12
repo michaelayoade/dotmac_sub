@@ -411,6 +411,80 @@ def test_synced_ont_no_proposed_change_is_a_noop(
     assert acs.spv_calls == []
 
 
+def test_dual_stack_tr181_reconciles_and_persists_verified_observation(
+    db_session, ont, stub_ont_status, monkeypatch
+):
+    desired = _make_desired(
+        ont,
+        ipv6_enabled=True,
+        tr069_data_model_root="Device",
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core.desired_from_ont_unit",
+        lambda db, target_ont: desired,
+    )
+
+    def leaf(value):
+        return {"_value": value, "_object": False, "_writable": True}
+
+    device = _synced_acs_device(ont)
+    device["Device"] = {
+        "DeviceInfo": {"SoftwareVersion": leaf("FW-TR181")},
+        "ManagementServer": {
+            "PeriodicInformInterval": leaf("300"),
+            "ConnectionRequestUsername": leaf("admin"),
+            "ConnectionRequestPassword": leaf("admin"),
+        },
+        "IP": {"Interface": {"1": {"IPv6Enable": leaf("false")}}},
+        "DHCPv6": {
+            "Client": {
+                "1": {
+                    "Enable": leaf("false"),
+                    "RequestPrefixes": leaf("false"),
+                }
+            }
+        },
+        "RouterAdvertisement": {"InterfaceSettings": {"1": {"Enable": leaf("false")}}},
+    }
+
+    class _Ipv6Acs(_StubAcsClient):
+        def set_parameter_values(self, device_id, params, **kwargs):
+            result = super().set_parameter_values(device_id, params, **kwargs)
+            if "Device.IP.Interface.1.IPv6Enable" in params:
+                self._device["Device"]["IP"]["Interface"]["1"]["IPv6Enable"] = leaf(
+                    params["Device.IP.Interface.1.IPv6Enable"]
+                )
+                self._device["Device"]["DHCPv6"]["Client"]["1"]["Enable"] = leaf(
+                    params["Device.DHCPv6.Client.1.Enable"]
+                )
+                self._device["Device"]["DHCPv6"]["Client"]["1"]["RequestPrefixes"] = (
+                    leaf(params["Device.DHCPv6.Client.1.RequestPrefixes"])
+                )
+                self._device["Device"]["RouterAdvertisement"]["InterfaceSettings"]["1"][
+                    "Enable"
+                ] = leaf(
+                    params["Device.RouterAdvertisement.InterfaceSettings.1.Enable"]
+                )
+            return result
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="sweep",
+        olt_adapter=_StubOltAdapter(present=True),
+        acs_client=_Ipv6Acs(device=device),
+    )
+
+    assert result.success is True
+    assert any(action.field == "acs_ipv6_enabled" for action in result.actions_applied)
+    observation = db_session.query(OntObservation).filter_by(ont_unit_id=ont.id).one()
+    assert observation.acs_data_model_root == "Device"
+    assert observation.acs_observed_ipv6_enabled is True
+    assert observation.acs_observed_dhcpv6_enabled is True
+    assert observation.acs_observed_dhcpv6_request_prefixes is True
+    assert observation.acs_observed_ra_enabled is True
+
+
 def test_wifi_password_change_on_synced_ont_pushes_once(
     db_session, ont, stub_desired, stub_ont_status
 ):

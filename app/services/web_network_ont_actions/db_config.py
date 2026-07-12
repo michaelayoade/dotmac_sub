@@ -25,7 +25,6 @@ from app.services.web_network_ont_actions._common import (
 from app.services.web_network_ont_actions.config_setters import (
     set_lan_config,
     set_mgmt_remote_access,
-    set_wan_config,
     set_wifi_config,
 )
 
@@ -253,22 +252,33 @@ def update_ont_config(
             )
         )
         if wan_push_requested:
-            action_wan_mode = (
-                "bridge" if wan_mode in {"setup_via_onu", "bridged"} else wan_mode
-            )
-            if action_wan_mode == "static_ip":
-                action_wan_mode = "static"
-            result = set_wan_config(
-                db,
-                ont_id,
-                wan_mode=action_wan_mode or "dhcp",
-                pppoe_username=pppoe_username.strip() if pppoe_username else None,
-                pppoe_password=pppoe_password.strip() if pppoe_password else None,
-                ip_address=wan_static_ip.strip() if wan_static_ip else None,
-                subnet_mask=wan_static_subnet.strip() if wan_static_subnet else None,
-                gateway=wan_static_gateway.strip() if wan_static_gateway else None,
-                dns_servers=wan_static_dns.strip() if wan_static_dns else None,
-                request=request,
+            from app.services.network.reconcile import reconcile_ont
+
+            reconciled = reconcile_ont(db, ont_id, mode="sync")
+            result = ActionResult(
+                success=reconciled.success,
+                message=(
+                    "WAN configuration applied and verified."
+                    if reconciled.success
+                    else (
+                        reconciled.failure.message
+                        if reconciled.failure
+                        else "WAN reconciliation failed."
+                    )
+                ),
+                data={
+                    "sync_status": reconciled.sync_status,
+                    "actions_applied": [
+                        action.field for action in reconciled.actions_applied
+                    ],
+                    "failure_reason": (
+                        reconciled.failure.reason if reconciled.failure else None
+                    ),
+                    "delivery_pending": bool(
+                        reconciled.failure
+                        and reconciled.failure.reason == "acs_cr_failed"
+                    ),
+                },
             )
             raw_result = result
             delivered_result = _delivery_pending_result(result)

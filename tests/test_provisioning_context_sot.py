@@ -124,3 +124,54 @@ def test_olt_service_port_executor_uses_operations_context(monkeypatch):
     assert result.detail == (
         "VLAN ID is required in step config for OLT service-port creation."
     )
+
+
+def test_provisioning_context_selects_ont_by_exact_subscription(
+    db_session, subscriber, catalog_offer
+):
+    from app.models.catalog import Subscription, SubscriptionStatus
+    from app.models.network import OntAssignment, OntUnit
+    from app.services.network.subscriber_ont_adapter import (
+        resolve_provisioning_context,
+    )
+
+    first_subscription = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=catalog_offer.id,
+        status=SubscriptionStatus.pending,
+    )
+    second_subscription = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=catalog_offer.id,
+        status=SubscriptionStatus.pending,
+    )
+    first_ont = OntUnit(serial_number="PROV-SUB-ONE", is_active=True)
+    second_ont = OntUnit(serial_number="PROV-SUB-TWO", is_active=True)
+    db_session.add_all([first_subscription, second_subscription, first_ont, second_ont])
+    db_session.flush()
+    db_session.add_all(
+        [
+            OntAssignment(
+                ont_unit_id=first_ont.id,
+                subscriber_id=subscriber.id,
+                subscription_id=first_subscription.id,
+                active=True,
+            ),
+            OntAssignment(
+                ont_unit_id=second_ont.id,
+                subscriber_id=subscriber.id,
+                subscription_id=second_subscription.id,
+                active=True,
+            ),
+        ]
+    )
+    db_session.flush()
+
+    context = resolve_provisioning_context(
+        db_session,
+        subscriber_id=str(subscriber.id),
+        subscription_id=str(second_subscription.id),
+    )
+
+    assert context.subscription_id == str(second_subscription.id)
+    assert context.ont_id == str(second_ont.id)

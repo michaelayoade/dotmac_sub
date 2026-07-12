@@ -1769,23 +1769,54 @@ def _sync_ipv4_assignments_for_subscription(
 def _additional_route_form_rows(
     db: Session,
     *,
-    subscriber_id,
+    subscription_id,
 ) -> tuple[list[str], list[str]]:
-    if not subscriber_id:
+    if not subscription_id:
         return [""], [""]
-    routes = (
-        db.query(SubscriberAdditionalRoute)
-        .filter(SubscriberAdditionalRoute.subscriber_id == subscriber_id)
-        .filter(SubscriberAdditionalRoute.is_active.is_(True))
-        .order_by(SubscriberAdditionalRoute.cidr.asc())
-        .all()
+    subscription = db.get(Subscription, subscription_id)
+    query = db.query(SubscriberAdditionalRoute).filter(
+        SubscriberAdditionalRoute.subscription_id == subscription_id
     )
+    routes = query.filter(SubscriberAdditionalRoute.is_active.is_(True)).all()
+    if (
+        not routes
+        and subscription is not None
+        and _legacy_route_scope_is_unambiguous(db, subscription)
+    ):
+        routes = (
+            db.query(SubscriberAdditionalRoute)
+            .filter(
+                SubscriberAdditionalRoute.subscriber_id == subscription.subscriber_id,
+                SubscriberAdditionalRoute.subscription_id.is_(None),
+                SubscriberAdditionalRoute.is_active.is_(True),
+            )
+            .all()
+        )
+    routes.sort(key=lambda route: str(route.cidr or ""))
     if not routes:
         return [""], [""]
     return (
         [str(route.cidr or "") for route in routes],
         [str(route.metric or 1) for route in routes],
     )
+
+
+def _legacy_route_scope_is_unambiguous(
+    db: Session,
+    subscription_obj: Subscription,
+) -> bool:
+    count = (
+        db.query(func.count(Subscription.id))
+        .filter(
+            Subscription.subscriber_id == subscription_obj.subscriber_id,
+            Subscription.status.in_(
+                (SubscriptionStatus.pending, SubscriptionStatus.active)
+            ),
+        )
+        .scalar()
+        or 0
+    )
+    return count == 1
 
 
 def normalize_additional_routes(
@@ -1888,19 +1919,32 @@ def _validate_additional_routes_available(
                 f"Additional routed IP block {desired} cannot start at .0."
             )
 
+    legacy_scope = _legacy_route_scope_is_unambiguous(db, subscription_obj)
     assigned_networks = _active_route_networks(
         db,
-        current_subscriber_id=subscription_obj.subscriber_id,
+        current_subscriber_id=(
+            subscription_obj.subscriber_id if legacy_scope else None
+        ),
+        current_subscription_id=subscription_obj.id,
     )
     current_subscriber_routes: list[ipaddress.IPv4Network] = []
     current_routes = (
         db.query(SubscriberAdditionalRoute)
-        .filter(
-            SubscriberAdditionalRoute.subscriber_id == subscription_obj.subscriber_id
-        )
+        .filter(SubscriberAdditionalRoute.subscription_id == subscription_obj.id)
         .filter(SubscriberAdditionalRoute.is_active.is_(True))
         .all()
     )
+    if not current_routes and legacy_scope:
+        current_routes = (
+            db.query(SubscriberAdditionalRoute)
+            .filter(
+                SubscriberAdditionalRoute.subscriber_id
+                == subscription_obj.subscriber_id,
+                SubscriberAdditionalRoute.subscription_id.is_(None),
+                SubscriberAdditionalRoute.is_active.is_(True),
+            )
+            .all()
+        )
     for route in current_routes:
         try:
             route_network = ipaddress.ip_network(str(route.cidr), strict=False)
@@ -2127,11 +2171,21 @@ def sync_additional_routes_for_subscription(
     )
     existing = (
         db.query(SubscriberAdditionalRoute)
-        .filter(
-            SubscriberAdditionalRoute.subscriber_id == subscription_obj.subscriber_id
-        )
+        .filter(SubscriberAdditionalRoute.subscription_id == subscription_obj.id)
         .all()
     )
+    if not existing and _legacy_route_scope_is_unambiguous(db, subscription_obj):
+        existing = (
+            db.query(SubscriberAdditionalRoute)
+            .filter(
+                SubscriberAdditionalRoute.subscriber_id
+                == subscription_obj.subscriber_id,
+                SubscriberAdditionalRoute.subscription_id.is_(None),
+            )
+            .all()
+        )
+        for route in existing:
+            route.subscription_id = subscription_obj.id
     existing_by_cidr = {str(route.cidr): route for route in existing}
     # Routed blocks are provisioning state. A recurring public-IP charge is
     # created only when an explicit public-IP billing add-on is selected.
@@ -2150,11 +2204,12 @@ def sync_additional_routes_for_subscription(
             )
 
     for cidr, (prefix_length, metric) in desired_map.items():
-        route = existing_by_cidr.get(cidr)
-        if route is None:
+        existing_route = existing_by_cidr.get(cidr)
+        if existing_route is None:
             db.add(
                 SubscriberAdditionalRoute(
                     subscriber_id=subscription_obj.subscriber_id,
+                    subscription_id=subscription_obj.id,
                     cidr=cidr,
                     prefix_length=prefix_length,
                     metric=metric,
@@ -2163,11 +2218,11 @@ def sync_additional_routes_for_subscription(
                 )
             )
             continue
-        route.prefix_length = prefix_length
-        route.metric = metric
-        route.is_active = True
-        if not route.source:
-            route.source = "admin_subscription_form"
+        existing_route.prefix_length = prefix_length
+        existing_route.metric = metric
+        existing_route.is_active = True
+        if not existing_route.source:
+            existing_route.source = "admin_subscription_form"
 
     for route in existing:
         if str(route.cidr) not in desired_map and route.is_active:
@@ -2309,6 +2364,7 @@ def _active_route_networks(
     db: Session,
     *,
     current_subscriber_id: object | None = None,
+    current_subscription_id: object | None = None,
 ) -> list[ipaddress.IPv4Network]:
     query = db.query(SubscriberAdditionalRoute).filter(
         SubscriberAdditionalRoute.is_active.is_(True)
@@ -2316,6 +2372,13 @@ def _active_route_networks(
     if current_subscriber_id:
         query = query.filter(
             SubscriberAdditionalRoute.subscriber_id != current_subscriber_id
+        )
+    if current_subscription_id:
+        query = query.filter(
+            or_(
+                SubscriberAdditionalRoute.subscription_id.is_(None),
+                SubscriberAdditionalRoute.subscription_id != current_subscription_id,
+            )
         )
     networks: list[ipaddress.IPv4Network] = []
     for route in query.all():
@@ -2913,7 +2976,7 @@ def edit_form_data(db: Session, subscription_obj: Subscription) -> dict[str, obj
     )
     additional_route_cidrs, additional_route_metrics = _additional_route_form_rows(
         db,
-        subscriber_id=subscription_obj.subscriber_id,
+        subscription_id=subscription_obj.id,
     )
     ip_addon_id, ip_addon_quantity = _subscription_public_ip_addon_form_row(
         db,

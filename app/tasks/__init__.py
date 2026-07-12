@@ -101,6 +101,7 @@ from app.tasks.ont_provisioning import (
     provision_ont,
     queue_bulk_provisioning,
 )
+from app.tasks.ont_reconcile import run_ont_reconcile_sweep
 from app.tasks.ont_signal_observations import record_ont_observations
 from app.tasks.operational_escalations import dispatch_operational_escalation_deliveries
 from app.tasks.payment_reconciliation import reconcile_topups
@@ -311,6 +312,7 @@ __all__ = [
     "update_subscriber_counts",
     "check_nas_health",
     "execute_ont_bulk_action",
+    "run_ont_reconcile_sweep",
     "authorize_ont_task",
     "evaluate_alert_rules",
     "evaluate_infrastructure_alerts",

@@ -121,12 +121,29 @@ def _check_mode_contradictions(target: OntDesiredState) -> Validation:
         return Validation(False, "bridge mode is incompatible with nat_enabled=True")
     if target.wan_mode == "pppoe" and target.mgmt_vlan is None:
         return Validation(False, "wan_mode=pppoe requires a management VLAN")
-    if target.wan_pppoe_provisioning_method == "omci":
+    if target.wan_mode == "pppoe" and target.wan_pppoe_provisioning_method == "omci":
         if target.wan_config_profile_id is None or target.wan_config_profile_id <= 0:
             return Validation(
                 False,
                 "wan_pppoe_provisioning_method=omci requires "
                 "wan_config_profile_id to be a positive integer",
+            )
+    if target.wan_mode in {"dhcp", "static"} and target.wan_vlan is None:
+        return Validation(False, f"wan_mode={target.wan_mode} requires a WAN VLAN")
+    if target.wan_mode == "static":
+        if not (
+            target.wan_static_ip
+            and target.wan_static_subnet
+            and target.wan_static_gateway
+        ):
+            return Validation(
+                False,
+                "wan_mode=static requires IP address, subnet mask, and gateway",
+            )
+        if target.tr069_data_model_root == "Device":
+            return Validation(
+                False,
+                "TR-181 static WAN is unsupported until model-specific gateway and DNS paths are mapped",
             )
     return Validation(True)
 
