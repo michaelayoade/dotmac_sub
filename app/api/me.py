@@ -1304,10 +1304,6 @@ def my_create_ticket(
             ) from exc
         support_service.tickets.add_attachments(db, str(ticket.id), uploaded)
         db.refresh(ticket)
-    from app.services.crm_ticket_push import enqueue_crm_ticket_push
-
-    if getattr(ticket, "id", None):
-        enqueue_crm_ticket_push(ticket.id, source="me_ticket_create")
     return ticket
 
 
@@ -1384,10 +1380,6 @@ def my_add_ticket_comment(
         actor_id=subscriber_id,
         request=request,
     )
-    from app.services.crm_ticket_push import enqueue_crm_comment_push
-
-    if getattr(comment, "id", None):
-        enqueue_crm_comment_push(comment.id, source="me_ticket_comment")
     return comment
 
 

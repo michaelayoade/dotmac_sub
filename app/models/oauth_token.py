@@ -16,6 +16,7 @@ from sqlalchemy.dialects.postgresql import JSON, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
+from app.models.types import EncryptedText
 
 
 class OAuthToken(Base):
@@ -60,9 +61,9 @@ class OAuthToken(Base):
     external_account_id: Mapped[str] = mapped_column(String(120), nullable=False)
     external_account_name: Mapped[str | None] = mapped_column(String(255))
 
-    # Token storage (may be Vault reference like "vault://path#field")
-    access_token: Mapped[str | None] = mapped_column(Text)
-    refresh_token: Mapped[str | None] = mapped_column(Text)
+    # Token storage (may be a secret reference); encrypted transparently at rest.
+    access_token: Mapped[str | None] = mapped_column(EncryptedText)
+    refresh_token: Mapped[str | None] = mapped_column(EncryptedText)
     token_type: Mapped[str | None] = mapped_column(String(64))
     token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

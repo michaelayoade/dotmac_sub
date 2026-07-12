@@ -8,7 +8,6 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import cast
-from urllib.parse import urlparse, urlunparse
 
 from fastapi import HTTPException
 from sqlalchemy import and_, bindparam, create_engine, func, or_, text
@@ -213,14 +212,6 @@ def _normalize_radius_db_url(value: str | None) -> str | None:
         return None
     if db_url.startswith("postgresql://"):
         db_url = "postgresql+psycopg://" + db_url[len("postgresql://") :]
-    parsed = urlparse(db_url)
-    hostname = parsed.hostname or ""
-    if hostname in {"localhost", "127.0.0.1"} and parsed.port == 5437:
-        db_url = urlunparse(
-            parsed._replace(
-                netloc="radius:l2f3clS-Ws9WgTXcsW3HoznBnEq3n7N-@radius-db:5432"
-            )
-        )
     return db_url
 
 
@@ -231,9 +222,7 @@ def _radius_accounting_db_url() -> str | None:
     host = (os.getenv("RADIUS_DB_HOST") or "radius-db").strip()
     database = (os.getenv("RADIUS_DB_NAME") or "radius").strip()
     username = (os.getenv("RADIUS_DB_USER") or "radius").strip()
-    password = (
-        os.getenv("RADIUS_DB_PASS") or "l2f3clS-Ws9WgTXcsW3HoznBnEq3n7N-"
-    ).strip()
+    password = (os.getenv("RADIUS_DB_PASS") or "").strip()
     if not all([host, database, username, password]):
         return None
     return f"postgresql+psycopg://{username}:{password}@{host}:5432/{database}"

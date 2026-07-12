@@ -105,6 +105,30 @@ _ONT_DESIRED_CONFIG_CREDENTIAL_PATHS: tuple[tuple[str, ...], ...] = (
     ("wifi", "password"),
 )
 
+_RAW_ENCRYPTED_COLUMNS: tuple[tuple[str, str, str, str, str], ...] = (
+    (
+        "ConnectorConfig.headers",
+        "headers",
+        "SELECT headers FROM connector_configs WHERE headers IS NOT NULL",
+        "SELECT id, headers FROM connector_configs WHERE headers IS NOT NULL",
+        "UPDATE connector_configs SET headers = :value WHERE id = :id",
+    ),
+    (
+        "OAuthToken.access_token",
+        "access_token",
+        "SELECT access_token FROM oauth_tokens WHERE access_token IS NOT NULL",
+        "SELECT id, access_token FROM oauth_tokens WHERE access_token IS NOT NULL",
+        "UPDATE oauth_tokens SET access_token = :value WHERE id = :id",
+    ),
+    (
+        "OAuthToken.refresh_token",
+        "refresh_token",
+        "SELECT refresh_token FROM oauth_tokens WHERE refresh_token IS NOT NULL",
+        "SELECT id, refresh_token FROM oauth_tokens WHERE refresh_token IS NOT NULL",
+        "UPDATE oauth_tokens SET refresh_token = :value WHERE id = :id",
+    ),
+)
+
 
 def _empty_integrity_counts() -> dict[str, int]:
     return dict.fromkeys(_INTEGRITY_STATES, 0)
@@ -198,6 +222,18 @@ def scan_credential_encryption_integrity(
     ).all()
     for row in connector_rows:
         observe(connector_scope, row.auth_config)
+
+    for (
+        scope,
+        _column_name,
+        integrity_sql,
+        _rotation_sql,
+        _update_sql,
+    ) in _RAW_ENCRYPTED_COLUMNS:
+        register(scope)
+        rows = db.execute(text(integrity_sql)).all()
+        for row in rows:
+            observe(scope, row[0])
 
     totals = Counter(dict.fromkeys(_INTEGRITY_STATES, 0))
     for states in counts.values():
@@ -461,6 +497,33 @@ def _rotate_connector_auth_config(
     return updated_records, updated_values
 
 
+def _rotate_raw_encrypted_columns(
+    db: Session, *, old_key: str, new_key: str
+) -> tuple[int, int]:
+    """Rotate whole-blob/string encrypted columns without ORM decryption."""
+    updated_records = 0
+    updated_values = 0
+    for (
+        _scope,
+        column_name,
+        _integrity_sql,
+        rotation_sql,
+        update_sql,
+    ) in _RAW_ENCRYPTED_COLUMNS:
+        rows = db.execute(text(rotation_sql)).mappings()
+        for row in rows:
+            raw = row[column_name]
+            if not isinstance(raw, str) or not raw:
+                continue
+            rotated, changed = _rotate_value(raw, old_key=old_key, new_key=new_key)
+            if not changed:
+                continue
+            db.execute(text(update_sql), {"value": rotated, "id": row["id"]})
+            updated_records += 1
+            updated_values += 1
+    return updated_records, updated_values
+
+
 def rotate_credential_encryption_material(
     db: Session,
     *,
@@ -496,6 +559,12 @@ def rotate_credential_encryption_material(
     updated_values += values
 
     records, values = _rotate_connector_auth_config(
+        db, old_key=old_key, new_key=new_key
+    )
+    updated_records += records
+    updated_values += values
+
+    records, values = _rotate_raw_encrypted_columns(
         db, old_key=old_key, new_key=new_key
     )
     updated_records += records
