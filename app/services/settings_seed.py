@@ -4,7 +4,7 @@ import os
 
 from sqlalchemy.orm import Session
 
-from app.models.domain_settings import SettingDomain
+from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
 from app.services.domain_settings import (
@@ -1571,6 +1571,18 @@ def seed_radius_settings(db: Session) -> None:
 
 
 def seed_billing_settings(db: Session) -> None:
+    legacy_provider = (
+        db.query(DomainSetting)
+        .filter(
+            DomainSetting.domain == SettingDomain.billing,
+            DomainSetting.key == "default_payment_provider_type",
+            DomainSetting.is_active.is_(True),
+        )
+        .first()
+    )
+    legacy_primary = str(getattr(legacy_provider, "value_text", "") or "").strip()
+    if legacy_primary not in {"paystack", "flutterwave"}:
+        legacy_primary = "paystack"
     billing_settings.ensure_by_key(
         db,
         key="default_currency",
@@ -1595,12 +1607,6 @@ def seed_billing_settings(db: Session) -> None:
         value_type=SettingValueType.string,
         value_text=os.getenv("BILLING_DEFAULT_PAYMENT_METHOD_TYPE", "card"),
     )
-    billing_settings.ensure_by_key(
-        db,
-        key="default_payment_provider_type",
-        value_type=SettingValueType.string,
-        value_text=os.getenv("BILLING_DEFAULT_PAYMENT_PROVIDER_TYPE", "paystack"),
-    )
     payment_failover_enabled_raw = os.getenv(
         "BILLING_PAYMENT_GATEWAY_FAILOVER_ENABLED", "true"
     )
@@ -1615,7 +1621,9 @@ def seed_billing_settings(db: Session) -> None:
         db,
         key="payment_gateway_primary_provider",
         value_type=SettingValueType.string,
-        value_text=os.getenv("BILLING_PAYMENT_GATEWAY_PRIMARY_PROVIDER", "paystack"),
+        value_text=os.getenv(
+            "BILLING_PAYMENT_GATEWAY_PRIMARY_PROVIDER", legacy_primary
+        ),
     )
     billing_settings.ensure_by_key(
         db,
@@ -1891,6 +1899,7 @@ def seed_billing_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text=os.getenv("BILLING_INVOICE_NUMBER_PADDING", "6"),
     )
+
     billing_settings.ensure_by_key(
         db,
         key="invoice_number_start",
@@ -1957,6 +1966,10 @@ def seed_billing_settings(db: Session) -> None:
         value_text=os.getenv("FLUTTERWAVE_SECRET_HASH", ""),
         is_secret=True,
     )
+
+    from app.services.payment_routing import backfill_legacy_provider_routes
+
+    backfill_legacy_provider_routes(db)
 
 
 def seed_catalog_settings(db: Session) -> None:

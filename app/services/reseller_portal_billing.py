@@ -11,7 +11,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.billing import (
@@ -28,9 +28,9 @@ from app.services import customer_portal_flow_payment_methods as customer_cards
 from app.services.common import coerce_uuid, round_money, to_decimal
 from app.services.customer_portal_flow_payments import (
     _provider_uuid,
-    _resolve_payment_provider,
 )
 from app.services.payment_gateway_adapter import payment_gateway_adapter
+from app.services.payment_routing import provider_for_intent, select_checkout_provider
 from app.services.topup_intents import set_topup_intent_status
 
 logger = logging.getLogger(__name__)
@@ -114,7 +114,8 @@ def start_consolidated_payment(
     if requested_amount <= Decimal("0.00"):
         raise ValueError("Payment amount must be greater than 0")
 
-    provider_type = provider or _resolve_payment_provider(db)
+    route = select_checkout_provider(db, provider)
+    provider_type = route.provider_type.value
 
     # Card ownership (Layer 3 #329): subscriber-backed reseller login keys cards
     # on the login subscriber; a subscriber-less reseller_user keys them on the
@@ -146,7 +147,10 @@ def start_consolidated_payment(
         db, provider_type=provider_type
     )
 
-    intent_metadata = {"payment_flow": "reseller_consolidated"}
+    intent_metadata = {
+        "payment_flow": "reseller_consolidated",
+        "provider_id": route.provider_id,
+    }
     if save_card:
         intent_metadata["save_card"] = "1"
         if login_subscriber_id:
@@ -225,6 +229,10 @@ def verify_and_record_consolidated_payment(
         raise ValueError("Payment reference was not issued for this billing account")
     if intent.billing_account_id != ba.id:
         raise ValueError("Payment reference does not belong to this billing account")
+    provider_type = provider_for_intent(intent, provider).value
+    provider_id = coerce_uuid(
+        (intent.metadata_ or {}).get("provider_id")
+    ) or _provider_uuid(db, provider_type)
 
     if intent.completed_payment_id:
         payment = db.get(Payment, intent.completed_payment_id)
@@ -235,17 +243,28 @@ def verify_and_record_consolidated_payment(
             "already_recorded": True,
         }
 
-    provider_type = intent.provider_type or provider or _resolve_payment_provider(db)
     tx = payment_gateway_adapter.verify(
         db, provider_type=provider_type, reference=reference
     )
     amount = round_money(tx.amount)
     external_id = tx.external_id
+    tx_metadata = dict(tx.metadata or {})
+    metadata_intent_id = str(tx_metadata.get("topup_intent_id") or "")
+    metadata_billing_account_id = str(tx_metadata.get("billing_account_id") or "")
+    if metadata_intent_id and metadata_intent_id != str(intent.id):
+        raise ValueError("Verified payment did not match the original checkout session")
+    if metadata_billing_account_id and metadata_billing_account_id != str(
+        intent.billing_account_id
+    ):
+        raise ValueError("Verified payment did not match the billing account")
 
     # Idempotency: if a payment already exists for this gateway transaction,
     # link the intent to it rather than creating a duplicate.
     existing = db.scalars(
-        select(Payment).where(Payment.external_id == external_id)
+        select(Payment)
+        .where(Payment.external_id == external_id)
+        .where(or_(Payment.provider_id == provider_id, Payment.provider_id.is_(None)))
+        .order_by((Payment.provider_id == provider_id).desc())
     ).first()
     if existing is not None:
         intent.completed_payment_id = existing.id
@@ -266,7 +285,7 @@ def verify_and_record_consolidated_payment(
         amount=amount,
         currency=tx.currency,
         status=PaymentStatus.succeeded,
-        provider_id=_provider_uuid(db, provider_type),
+        provider_id=provider_id,
         external_id=external_id,
         memo=f"Reseller consolidated payment ref: {reference}",
         paid_at=datetime.now(UTC),
@@ -419,9 +438,13 @@ def get_payment_methods_page(
 ) -> dict:
     """Context for the reseller payment-methods management page."""
     summary = get_billing_account_summary(db, reseller_id)
+    try:
+        default_route = select_checkout_provider(db)
+    except ValueError:
+        default_route = None
     return {
         "saved_cards": list_payment_methods(db, login_subscriber_id, reseller_id),
-        "provider_type": _resolve_payment_provider(db),
+        "provider_type": default_route.provider_type.value if default_route else None,
         "total_outstanding": summary["total_outstanding"],
         "billing_account": summary["billing_account"],
     }

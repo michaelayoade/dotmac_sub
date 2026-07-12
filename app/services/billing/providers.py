@@ -18,7 +18,6 @@ from app.models.billing import (
     PaymentProviderType,
     PaymentStatus,
 )
-from app.models.domain_settings import SettingDomain
 from app.schemas.billing import (
     PaymentAllocationApply,
     PaymentCreate,
@@ -26,7 +25,6 @@ from app.schemas.billing import (
     PaymentProviderEventIngest,
     PaymentProviderUpdate,
 )
-from app.services import settings_spec
 from app.services.billing._common import (
     _resolve_collection_account,
     _resolve_payment_channel,
@@ -51,15 +49,6 @@ class PaymentProviders(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: PaymentProviderCreate):
         data = payload.model_dump()
-        fields_set = payload.model_fields_set
-        if "provider_type" not in fields_set:
-            default_provider_type = settings_spec.resolve_value(
-                db, SettingDomain.billing, "default_payment_provider_type"
-            )
-            if default_provider_type:
-                data["provider_type"] = validate_enum(
-                    default_provider_type, PaymentProviderType, "provider_type"
-                )
         provider = PaymentProvider(**data)
         db.add(provider)
         db.commit()

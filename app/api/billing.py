@@ -1290,7 +1290,7 @@ def verify_payment(
         account_id = require_customer_account_id(db, customer)
         try:
             customer_cards.capture_card_after_payment(
-                db, account_id, payload.reference, payload.provider
+                db, account_id, payload.reference, result["provider_type"]
             )
             card_saved = True
             card_save_message = CARD_SAVE_SUCCESS_MESSAGE

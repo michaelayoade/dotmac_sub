@@ -143,6 +143,7 @@ class TestPaymentSuccessBanner:
             "invoice": SimpleNamespace(id="inv-1", invoice_number="INV-1"),
             "amount": 5000,
             "reference": "ref-1",
+            "provider_type": "paystack",
         }
 
         template_response = MagicMock(name="template_response")
@@ -189,6 +190,7 @@ class TestPaymentSuccessBanner:
             "invoice": SimpleNamespace(id="inv-2", invoice_number="INV-2"),
             "amount": 1000,
             "reference": "ref-2",
+            "provider_type": "paystack",
         }
 
         template_response = MagicMock(name="template_response")
@@ -513,6 +515,7 @@ class TestCustomerTopupRoutes:
             "payment": SimpleNamespace(receipt_number="RCT-T1"),
             "amount": 5000,
             "reference": "ref-topup-1",
+            "provider_type": "paystack",
             "already_recorded": False,
             "allocated_to_invoices": [],
             "allocated_total": 0,
@@ -607,6 +610,7 @@ class TestSaveCardOnVerify:
             "invoice": SimpleNamespace(id="inv-1", invoice_number="INV-1"),
             "amount": 5000,
             "reference": "ref-1",
+            "provider_type": "paystack",
         }
 
     @staticmethod
@@ -615,6 +619,7 @@ class TestSaveCardOnVerify:
             "payment": SimpleNamespace(receipt_number="RCT-T1"),
             "amount": 5000,
             "reference": "ref-topup-1",
+            "provider_type": "paystack",
             "already_recorded": False,
             "allocated_to_invoices": [],
             "allocated_total": 0,

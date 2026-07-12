@@ -49,6 +49,9 @@ class PaymentGatewayAdapter:
                 reference=generate_reference(invoice_number),
             )
 
+        if provider_type != "paystack":
+            raise ValueError(f"Unsupported payment provider {provider_type!r}")
+
         from app.services.paystack import generate_reference, get_public_key
 
         return PaymentGatewayContext(
@@ -81,6 +84,9 @@ class PaymentGatewayAdapter:
                 memo_prefix="Flutterwave",
                 raw=dict(tx),
             )
+
+        if provider_type != "paystack":
+            raise ValueError(f"Unsupported payment provider {provider_type!r}")
 
         from app.services.paystack import kobo_to_naira, verify_transaction
 

@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 from fastapi import HTTPException
 
+from app.models.billing import PaymentProvider, PaymentProviderType, TopupIntent
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscriber import Subscriber
 from app.models.subscription_engine import SettingValueType
@@ -15,6 +16,53 @@ from app.models.vas import VasEntryCategory
 from app.schemas.settings import DomainSettingUpdate
 from app.services import vas_wallet
 from app.services.domain_settings import billing_settings, vas_settings
+from app.services.settings_cache import SettingsCache
+
+
+def _billing_setting(db_session, key: str, value: str) -> None:
+    setting = (
+        db_session.query(DomainSetting)
+        .filter_by(domain=SettingDomain.billing, key=key)
+        .first()
+    )
+    if setting is None:
+        setting = DomainSetting(domain=SettingDomain.billing, key=key)
+    setting.value_type = SettingValueType.string
+    setting.value_text = value
+    setting.value_json = None
+    setting.is_secret = "secret" in key
+    setting.is_active = True
+    db_session.add(setting)
+    db_session.commit()
+    SettingsCache.invalidate(SettingDomain.billing.value, key)
+
+
+@pytest.fixture(autouse=True)
+def _configure_paystack_route(db_session):
+    db_session.add(
+        PaymentProvider(
+            name="VAS Paystack Route",
+            provider_type=PaymentProviderType.paystack,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    _billing_setting(db_session, "paystack_secret_key", "sk_test_vas")
+    _billing_setting(db_session, "paystack_public_key", "pk_test_vas")
+
+
+def _enable_flutterwave_route(db_session) -> None:
+    db_session.add(
+        PaymentProvider(
+            name="VAS Flutterwave Route",
+            provider_type=PaymentProviderType.flutterwave,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    _billing_setting(db_session, "flutterwave_secret_key", "FLWSECK_TEST-vas")
+    _billing_setting(db_session, "flutterwave_public_key", "FLWPUBK_TEST-vas")
+    _billing_setting(db_session, "flutterwave_secret_hash", "vas-hash")
 
 
 def _enable_vas(db_session):
@@ -45,8 +93,29 @@ def _bind_intent(db_session, subscriber, reference, amount="2500.00"):
     from app.models.vas import VasTopupIntent
 
     wallet = vas_wallet.get_or_create_wallet(db_session, str(subscriber.id))
+    vas_intent = VasTopupIntent(
+        reference=reference, wallet_id=wallet.id, amount=Decimal(amount)
+    )
+    db_session.add(vas_intent)
+    db_session.flush()
+    provider = (
+        db_session.query(PaymentProvider)
+        .filter_by(provider_type=PaymentProviderType.paystack, is_active=True)
+        .one()
+    )
     db_session.add(
-        VasTopupIntent(reference=reference, wallet_id=wallet.id, amount=Decimal(amount))
+        TopupIntent(
+            account_id=subscriber.id,
+            reference=reference,
+            provider_type="paystack",
+            requested_amount=Decimal(amount),
+            metadata_={
+                "payment_flow": "vas_wallet_topup",
+                "vas_topup_intent_id": str(vas_intent.id),
+                "vas_wallet_id": str(wallet.id),
+                "provider_id": str(provider.id),
+            },
+        )
     )
     db_session.commit()
     return wallet
@@ -365,21 +434,10 @@ class TestTopupPaymentOptions:
         ]
 
     def test_surfaces_active_flutterwave_provider(self, db_session):
-        from app.models.billing import PaymentProvider, PaymentProviderType
-
         _enable_vas(db_session)
+        _enable_flutterwave_route(db_session)
         db_session.add_all(
             [
-                PaymentProvider(
-                    name="Paystack",
-                    provider_type=PaymentProviderType.paystack,
-                    is_active=True,
-                ),
-                PaymentProvider(
-                    name="Flutterwave",
-                    provider_type=PaymentProviderType.flutterwave,
-                    is_active=True,
-                ),
                 PaymentProvider(
                     name="Disabled Flutterwave",
                     provider_type=PaymentProviderType.flutterwave,
@@ -403,6 +461,7 @@ class TestTopupPaymentOptions:
 
     def test_initiate_threads_chosen_provider(self, db_session):
         _enable_vas(db_session)
+        _enable_flutterwave_route(db_session)
         subscriber = _subscriber(db_session)
         seen: dict[str, str] = {}
 
