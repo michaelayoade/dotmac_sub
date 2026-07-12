@@ -1,7 +1,7 @@
 """HTTP client for DotMac ERP (erp.dotmac.io).
 
 Ported from ``dotmac_crm/app/services/dotmac_erp/client.py`` for the ERP re-home:
-sub becomes a new ``X-API-Key`` client of ERP's existing ``/sync/crm/*`` API.
+sub becomes an ``X-API-Key`` client of ERP's neutral ``/sync/sub/*`` API.
 
 PR 1 ships the reusable substrate only: a generic ``post``/``get`` surface plus
 the ``DotMacERPTransientError`` / permanent-error split the outbox keys its
@@ -306,7 +306,7 @@ class DotMacERPClient:
     ) -> dict:
         """POST a field expense request to ERP as an expense claim.
 
-        ``POST /sync/crm/expense-claims`` — idempotent create-and-submit: an
+        ``POST /sync/sub/expense-claims`` — idempotent create-and-submit: an
         identical resend of the same ``omni_id`` returns the existing claim
         (200); a first create returns 201. The ``idempotency_key`` is sent as the
         ``Idempotency-Key`` header so re-delivery of a row ERP already saw is a
@@ -314,7 +314,7 @@ class DotMacERPClient:
         (``claim_id``/``claim_number``/``status``/``omni_id``).
         """
         return self.post(
-            "/sync/crm/expense-claims",
+            "/api/v1/sync/sub/expense-claims",
             payload,
             idempotency_key=idempotency_key,
             expected_status_codes={200, 201},
@@ -323,22 +323,22 @@ class DotMacERPClient:
     def get_expense_claim_status(self, omni_id: str) -> dict | None:
         """Poll ERP for an expense claim's approval/payment status.
 
-        ``GET /sync/crm/expense-claims/{omni_id}`` where ``omni_id`` is sub's
+        ``GET /sync/sub/expense-claims/{omni_id}`` where ``omni_id`` is sub's
         ``FieldExpenseRequest.id``. Returns the status body, or ``None`` when the
         claim is not (yet) known to ERP (404) — callers degrade rather than error.
         """
         try:
-            return self.get(f"/sync/crm/expense-claims/{omni_id}")
+            return self.get(f"/api/v1/sync/sub/expense-claims/{omni_id}")
         except DotMacERPNotFoundError:
             return None
 
     def get_expense_categories(self) -> list[dict]:
         """List active ERP expense categories for field expense capture.
 
-        ``GET /sync/crm/expense-categories`` → unwraps the ``items`` envelope to a
+        ``GET /sync/sub/expense-categories`` unwraps the ``items`` envelope to a
         plain list (empty when absent).
         """
-        result = self.get("/sync/crm/expense-categories")
+        result = self.get("/api/v1/sync/sub/expense-categories")
         items = result.get("items")
         return items if isinstance(items, list) else []
 
@@ -355,7 +355,7 @@ class DotMacERPClient:
     ) -> dict:
         """POST an approved field material request to ERP as an ISSUE.
 
-        ``POST /sync/crm/material-requests`` — idempotent create-and-issue: an
+        ``POST /sync/sub/material-requests`` — idempotent create-and-issue: an
         identical resend of the same ``omni_id`` returns the existing request
         (200); a first create returns 201. The ``idempotency_key`` is sent as the
         ``Idempotency-Key`` header so re-delivery of a row ERP already saw is a
@@ -363,7 +363,7 @@ class DotMacERPClient:
         (``request_id``/``request_number``/``status``/``omni_id``).
         """
         return self.post(
-            "/sync/crm/material-requests",
+            "/api/v1/sync/sub/material-requests",
             payload,
             idempotency_key=idempotency_key,
             expected_status_codes={200, 201},
@@ -372,13 +372,13 @@ class DotMacERPClient:
     def get_material_request_status(self, omni_id: str) -> dict | None:
         """Poll ERP for a material request's fulfillment/stock status.
 
-        ``GET /sync/crm/material-requests/{omni_id}`` where ``omni_id`` is sub's
+        ``GET /sync/sub/material-requests/{omni_id}`` where ``omni_id`` is sub's
         ``FieldMaterialRequest.id``. Returns the status body, or ``None`` when the
         request is not (yet) known to ERP (404) — callers degrade rather than
         error.
         """
         try:
-            return self.get(f"/sync/crm/material-requests/{omni_id}")
+            return self.get(f"/api/v1/sync/sub/material-requests/{omni_id}")
         except DotMacERPNotFoundError:
             return None
 
@@ -392,18 +392,112 @@ class DotMacERPClient:
     ) -> dict:
         """List available ERP serials for one item in one warehouse.
 
-        ``GET /sync/crm/inventory/serials/available`` — read-only serial-pick aid
+        ``GET /sync/sub/inventory/serials/available`` is the serial-pick aid
         for building a serialized ISSUE payload. Ports CRM's
         ``list_available_serials``. Returns the ERP body (``{}`` when absent).
         """
         return self.get(
-            "/sync/crm/inventory/serials/available",
+            "/api/v1/sync/sub/inventory/serials/available",
             params={
                 "item_code": item_code,
                 "warehouse_code": warehouse_code,
                 "limit": limit,
                 "offset": offset,
             },
+        )
+
+    # ============ Purchase invoice surface ============
+
+    def create_purchase_invoice(
+        self, payload: dict, idempotency_key: str | None = None
+    ) -> dict:
+        return self.post(
+            "/api/v1/sync/sub/purchase-invoices",
+            payload,
+            idempotency_key=idempotency_key,
+            expected_status_codes={200, 201},
+        )
+
+    def upload_purchase_invoice_attachment(
+        self,
+        purchase_invoice_id: str,
+        payload: dict,
+        idempotency_key: str | None = None,
+    ) -> dict:
+        return self.post(
+            f"/api/v1/sync/sub/purchase-invoices/{purchase_invoice_id}/attachments",
+            payload,
+            idempotency_key=idempotency_key,
+            expected_status_codes={200, 201},
+        )
+
+    # ============ Inventory read surface (ERP remains stock SoR) ============
+
+    def list_inventory(
+        self,
+        *,
+        search: str | None = None,
+        category_code: str | None = None,
+        warehouse_id: str | None = None,
+        include_zero_stock: bool = False,
+        only_below_reorder: bool = False,
+        only_with_available_serials: bool = False,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict:
+        params: dict[str, object] = {"limit": limit, "offset": offset}
+        optional = {
+            "search": search,
+            "category_code": category_code,
+            "warehouse_id": warehouse_id,
+        }
+        params.update({key: value for key, value in optional.items() if value})
+        if include_zero_stock:
+            params["include_zero_stock"] = True
+        if only_below_reorder:
+            params["only_below_reorder"] = True
+        if only_with_available_serials:
+            params["only_with_available_serials"] = True
+        result = self._request(
+            "GET", "/api/v1/sync/sub/inventory", params=params
+        )
+        if isinstance(result, dict):
+            return result
+        return {"items": result if isinstance(result, list) else []}
+
+    def get_inventory_item(self, item_id: str) -> dict | None:
+        try:
+            result = self._request(
+                "GET", f"/api/v1/sync/sub/inventory/{item_id}"
+            )
+        except DotMacERPNotFoundError:
+            return None
+        return result if isinstance(result, dict) else None
+
+    def list_inventory_warehouses(self) -> list[dict]:
+        result = self._request(
+            "GET", "/api/v1/sync/sub/inventory/meta/warehouses"
+        )
+        if isinstance(result, dict):
+            rows = result.get("warehouses") or result.get("items") or []
+            return rows if isinstance(rows, list) else []
+        return result if isinstance(result, list) else []
+
+    def list_inventory_categories(self) -> list[dict]:
+        result = self._request(
+            "GET", "/api/v1/sync/sub/inventory/meta/categories"
+        )
+        if isinstance(result, dict):
+            rows = result.get("categories") or result.get("items") or []
+            return rows if isinstance(rows, list) else []
+        return result if isinstance(result, list) else []
+
+    def sync_operational_domains(self, payload: dict) -> dict:
+        """Push native Sub project/ticket/work-order context to ERP."""
+        return self.post(
+            "/api/v1/sync/sub/bulk",
+            payload,
+            expected_status_codes={200},
         )
 
 

@@ -2,7 +2,7 @@
 
 Field-service money-path actions ``enqueue`` an intent here with a stable
 idempotency key; ``deliver_pending`` posts each pending row to ERP's existing
-``/sync/crm/*`` API and records the terminal outcome.
+``/sync/sub/*`` API and records the terminal outcome.
 
 Two invariants make this safe on the money path:
 
@@ -47,12 +47,12 @@ logger = logging.getLogger(__name__)
 # the beat re-runs deliver_pending, so this bounds attempts across runs.
 DEFAULT_MAX_ATTEMPTS = 8
 
-# ERP endpoint each flow POSTs to (mirrors the CRM client's paths verbatim).
+# Neutral ERP endpoint used by each Sub-owned flow.
 FLOW_ENDPOINTS: dict[str, str] = {
-    FieldErpSyncFlow.expense_claim.value: "/sync/crm/expense-claims",
-    FieldErpSyncFlow.material_request.value: "/sync/crm/material-requests",
-    FieldErpSyncFlow.purchase_order.value: "/api/v1/sync/crm/purchase-orders",
-    FieldErpSyncFlow.purchase_invoice.value: "/api/v1/sync/crm/purchase-invoices",
+    FieldErpSyncFlow.expense_claim.value: "/api/v1/sync/sub/expense-claims",
+    FieldErpSyncFlow.material_request.value: "/api/v1/sync/sub/material-requests",
+    FieldErpSyncFlow.purchase_order.value: "/api/v1/sync/sub/purchase-orders",
+    FieldErpSyncFlow.purchase_invoice.value: "/api/v1/sync/sub/purchase-invoices",
 }
 
 # Response signals that mean ERP made a terminal REJECT decision.
@@ -211,6 +211,15 @@ def deliver_pending(
                 result.dead += 1
                 continue
 
+            if row.flow == FieldErpSyncFlow.purchase_invoice.value:
+                from app.services.dotmac_erp.purchase_invoice_sync import event_ready
+
+                if not event_ready(db, row):
+                    # A PO is an ordering prerequisite, not a failed delivery.
+                    # Leave the event pending without consuming retry budget.
+                    db.commit()
+                    continue
+
             if owned_client is None:
                 owned_client = build_erp_client(db)
                 created_client = True
@@ -280,6 +289,17 @@ def _dispatch_flow_writeback(db: Session, row: FieldErpSyncEvent) -> None:
     elif row.flow == FieldErpSyncFlow.purchase_order.value:
         try:
             from app.services.dotmac_erp.purchase_order_sync import apply_erp_response
+
+            apply_erp_response(db, row)
+        except Exception:  # noqa: BLE001 — write-back must not fail delivery
+            logger.exception(
+                "field_erp_sync: write-back failed for %s event %s",
+                row.flow,
+                row.id,
+            )
+    elif row.flow == FieldErpSyncFlow.purchase_invoice.value:
+        try:
+            from app.services.dotmac_erp.purchase_invoice_sync import apply_erp_response
 
             apply_erp_response(db, row)
         except Exception:  # noqa: BLE001 — write-back must not fail delivery

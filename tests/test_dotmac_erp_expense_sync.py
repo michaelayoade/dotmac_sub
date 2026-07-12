@@ -302,7 +302,7 @@ def test_delivery_accepted_writes_erp_fields_back(db_session, monkeypatch):
     assert request.erp_claim_status == "submitted"
     # Non-terminal ERP status leaves the sub row in submitted.
     assert request.status == "submitted"
-    assert client.posts[0]["path"] == "/sync/crm/expense-claims"
+    assert client.posts[0]["path"] == "/api/v1/sync/sub/expense-claims"
 
 
 def test_delivery_approved_maps_terminal_status(db_session, monkeypatch):

@@ -349,12 +349,14 @@ class FieldMaterialRequestItemCreate(BaseModel):
     item_id: UUID
     quantity: int = Field(gt=0)
     notes: str | None = Field(default=None, max_length=1000)
+    serial_numbers: list[str] = Field(default_factory=list, max_length=100)
 
 
 class FieldMaterialRequestCreate(BaseModel):
     crm_work_order_id: str = Field(min_length=1, max_length=64)
     priority: Literal["low", "medium", "high", "urgent"] = "medium"
     notes: str | None = Field(default=None, max_length=2000)
+    source_warehouse_code: str = Field(min_length=1, max_length=100)
     items: list[FieldMaterialRequestItemCreate] = Field(min_length=1, max_length=50)
 
 
@@ -366,6 +368,7 @@ class FieldMaterialRequestItemRead(BaseModel):
     unit: str | None = None
     quantity: int
     notes: str | None = None
+    serial_numbers: list[str] = Field(default_factory=list)
 
 
 class FieldMaterialRequestRead(BaseModel):
@@ -377,6 +380,7 @@ class FieldMaterialRequestRead(BaseModel):
     status: str
     priority: str
     notes: str | None = None
+    source_warehouse_code: str | None = None
     submitted_at: datetime | None = None
     approved_at: datetime | None = None
     rejected_at: datetime | None = None

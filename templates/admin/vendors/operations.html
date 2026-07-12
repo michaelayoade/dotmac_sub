@@ -1,0 +1,17 @@
+{% extends "admin/base.html" %}
+{% block title %}Vendor operations{% endblock %}
+{% block content %}
+<div class="space-y-6">
+  <div><p class="text-sm font-semibold text-teal-700 dark:text-teal-400">FIELD SERVICES</p><h1 class="text-2xl font-bold">Vendor review queue</h1></div>
+  <div class="grid gap-6 xl:grid-cols-2">
+    <section class="rounded-md border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+      <header class="border-b border-slate-200 px-5 py-4 dark:border-slate-800"><h2 class="font-bold">Quotes awaiting review</h2></header>
+      {% for quote in quotes %}<article class="border-b border-slate-100 p-5 last:border-0 dark:border-slate-800"><div class="mb-3 flex justify-between gap-3"><div><strong>{{ quote.vendor.name }}</strong><p class="text-sm text-slate-500">{{ quote.project.project.name if quote.project and quote.project.project else quote.project_id }}</p></div><strong>{{ quote.currency }} {{ quote.total }}</strong></div><form class="space-y-3" method="post"><input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}"><textarea name="review_notes" rows="2" placeholder="Review notes" class="w-full rounded-md border-slate-300 text-sm"></textarea><div class="flex justify-end gap-2"><button formaction="/admin/vendors/operations/quotes/{{ quote.id }}/request-revision" class="rounded-md border border-amber-500 px-3 py-2 text-sm font-semibold text-amber-700">Request revision</button><button formaction="/admin/vendors/operations/quotes/{{ quote.id }}/approve" class="rounded-md bg-teal-600 px-3 py-2 text-sm font-semibold text-white">Approve</button></div></form></article>{% else %}<p class="p-8 text-center text-sm text-slate-500">No quotes waiting.</p>{% endfor %}
+    </section>
+    <section class="rounded-md border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+      <header class="border-b border-slate-200 px-5 py-4 dark:border-slate-800"><h2 class="font-bold">Invoices awaiting review</h2></header>
+      {% for invoice in invoices %}<article class="border-b border-slate-100 p-5 last:border-0 dark:border-slate-800"><div class="mb-3 flex justify-between gap-3"><div><strong>{{ invoice.invoice_number }}</strong><p class="text-sm text-slate-500">{{ invoice.vendor_id }} · {{ invoice.project_id }}</p></div><strong>{{ invoice.currency }} {{ invoice.total }}</strong></div><form class="space-y-3" method="post"><input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}"><textarea name="review_notes" rows="2" placeholder="Review notes" class="w-full rounded-md border-slate-300 text-sm"></textarea><div class="flex justify-end gap-2"><button formaction="/admin/vendors/operations/invoices/{{ invoice.id }}/request-revision" class="rounded-md border border-amber-500 px-3 py-2 text-sm font-semibold text-amber-700">Request revision</button><button formaction="/admin/vendors/operations/invoices/{{ invoice.id }}/approve" class="rounded-md bg-teal-600 px-3 py-2 text-sm font-semibold text-white">Approve</button></div></form></article>{% else %}<p class="p-8 text-center text-sm text-slate-500">No invoices waiting.</p>{% endfor %}
+    </section>
+  </div>
+</div>
+{% endblock %}

@@ -4211,20 +4211,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=False,
         label="Referrals: native read path (Phase 3 read-flip flag)",
     ),
-    # Phase 3 write-flip flag (§4.3 step 6, risk #6): OFF = nothing is relayed;
-    # ON = a sub-native project whose type is vendor-relevant
-    # (fiber_optics_installation / air_fiber_installation) pushes a stub row into
-    # CRM `projects` so the vendor wrapper's `installation_projects` FK (+
-    # wireless_surveys / material_requests / expense_requests) keeps resolving.
-    # Transitional glue, hard-deleted at the Phase 5 vendor port.
-    SettingSpec(
-        domain=SettingDomain.projects,
-        key="vendor_project_relay_enabled",
-        env_var="VENDOR_PROJECT_RELAY_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=False,
-        label="Projects: vendor project-stub relay to CRM (Phase 3 write-flip; deleted at Phase 5)",
-    ),
 ]
 
 DOMAIN_SETTINGS_SERVICE = {

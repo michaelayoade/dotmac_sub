@@ -17,11 +17,18 @@ from app.schemas.field import (
     FieldManagerTechniciansResponse,
     FieldMaterialRequestRead,
 )
+from app.schemas.vendor_portal import VendorReview
+from app.schemas.vendor_purchase_invoice import (
+    VendorPurchaseInvoiceRead,
+    VendorPurchaseInvoiceReview,
+)
 from app.services.auth_dependencies import require_any_permission, require_permission
 from app.services.field.equipment_custody import field_equipment_custody
 from app.services.field.expense_requests import field_expense_requests
 from app.services.field.manager import field_manager
 from app.services.field.material_requests import field_material_requests
+from app.services.vendor_portal_operations import vendor_portal_operations
+from app.services.vendor_purchase_invoices import vendor_purchase_invoices
 
 router = APIRouter(prefix="/manager", tags=["field-manager"])
 
@@ -58,6 +65,10 @@ _asset_custody_read = require_any_permission(
 _asset_custody_write = require_any_permission(
     "operations:asset_custody:write",
     "inventory:write",
+)
+_purchase_invoice_read = require_any_permission("inventory:read", "finance:ap:read")
+_purchase_invoice_write = require_any_permission(
+    "inventory:write", "finance:ap:write"
 )
 
 
@@ -301,4 +312,108 @@ def field_manager_return_equipment(
         status=payload.status,
         condition_on_return=payload.condition_on_return,
         notes=payload.notes,
+    )
+
+
+@router.get(
+    "/vendor-purchase-invoices",
+    response_model=ListResponse[VendorPurchaseInvoiceRead],
+)
+def field_manager_vendor_purchase_invoices(
+    status_filter: str | None = Query(default="submitted", alias="status"),
+    vendor_id: str | None = None,
+    project_id: str | None = None,
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    _auth: dict = Depends(_purchase_invoice_read),
+    db: Session = Depends(get_db),
+):
+    items = vendor_purchase_invoices.list(
+        db,
+        vendor_id=vendor_id,
+        project_id=project_id,
+        status=status_filter,
+        limit=limit,
+        offset=offset,
+    )
+    return {"items": items, "count": len(items), "limit": limit, "offset": offset}
+
+
+@router.get(
+    "/vendor-purchase-invoices/{invoice_id}",
+    response_model=VendorPurchaseInvoiceRead,
+)
+def field_manager_vendor_purchase_invoice(
+    invoice_id: str,
+    _auth: dict = Depends(_purchase_invoice_read),
+    db: Session = Depends(get_db),
+):
+    return vendor_purchase_invoices.get(db, invoice_id)
+
+
+@router.post(
+    "/vendor-purchase-invoices/{invoice_id}/approve",
+    response_model=VendorPurchaseInvoiceRead,
+)
+def field_manager_approve_vendor_purchase_invoice(
+    invoice_id: str,
+    payload: VendorPurchaseInvoiceReview,
+    auth: dict = Depends(_purchase_invoice_write),
+    db: Session = Depends(get_db),
+):
+    return vendor_purchase_invoices.approve(
+        db,
+        invoice_id,
+        reviewer_system_user_id=str(auth["principal_id"]),
+        review_notes=payload.review_notes,
+    )
+
+
+@router.post(
+    "/vendor-purchase-invoices/{invoice_id}/reject",
+    response_model=VendorPurchaseInvoiceRead,
+)
+def field_manager_reject_vendor_purchase_invoice(
+    invoice_id: str,
+    payload: VendorPurchaseInvoiceReview,
+    auth: dict = Depends(_purchase_invoice_write),
+    db: Session = Depends(get_db),
+):
+    return vendor_purchase_invoices.reject(
+        db,
+        invoice_id,
+        reviewer_system_user_id=str(auth["principal_id"]),
+        review_notes=payload.review_notes,
+    )
+
+
+@router.post("/vendor-quotes/{quote_id}/approve")
+def field_manager_approve_vendor_quote(
+    quote_id: str,
+    payload: VendorReview,
+    auth: dict = Depends(_purchase_invoice_write),
+    db: Session = Depends(get_db),
+):
+    return vendor_portal_operations.review_quote(
+        db,
+        quote_id,
+        reviewer_id=str(auth["principal_id"]),
+        approve=True,
+        notes=payload.review_notes,
+    )
+
+
+@router.post("/vendor-quotes/{quote_id}/request-revision")
+def field_manager_request_vendor_quote_revision(
+    quote_id: str,
+    payload: VendorReview,
+    auth: dict = Depends(_purchase_invoice_write),
+    db: Session = Depends(get_db),
+):
+    return vendor_portal_operations.review_quote(
+        db,
+        quote_id,
+        reviewer_id=str(auth["principal_id"]),
+        approve=False,
+        notes=payload.review_notes,
     )

@@ -111,3 +111,25 @@ def refresh_material_request_statuses() -> dict:
 
     logger.info("REFRESH_MATERIAL_REQUEST_STATUSES_COMPLETE %s", results)
     return results
+
+
+@celery_app.task(name="app.tasks.dotmac_erp_outbox.repair_purchase_invoice_sync")
+def repair_purchase_invoice_sync() -> dict:
+    """Queue PO-ready invoices and retry attachment uploads."""
+    from app.db import task_session
+    from app.services.dotmac_erp.purchase_invoice_sync import (
+        repair_purchase_invoice_sync as repair,
+    )
+
+    with task_session() as db:
+        return repair(db)
+
+
+@celery_app.task(name="app.tasks.dotmac_erp_outbox.sync_erp_operational_domains")
+def sync_erp_operational_domains() -> dict:
+    """Push native project, ticket and work-order context to ERP."""
+    from app.db import task_session
+    from app.services.dotmac_erp.domain_sync import sync_operational_domains
+
+    with task_session() as db:
+        return sync_operational_domains(db)

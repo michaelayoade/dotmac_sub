@@ -159,6 +159,7 @@ from app.models.enforcement_lock import (  # noqa: F401
     EnforcementLock,
     EnforcementReason,
 )
+from app.models.erp_domain_sync import ErpDomainSyncCursor  # noqa: F401
 from app.models.event_store import (  # noqa: F401
     EventHandlerAttempt,
     EventStatus,
@@ -742,6 +743,9 @@ from app.models.vendor_routes import (  # noqa: F401
     VariationType,
     Vendor,
     VendorAssignmentType,
+    VendorPurchaseInvoice,
+    VendorPurchaseInvoiceLineItem,
+    VendorPurchaseInvoiceStatus,
     VendorUser,
 )
 from app.models.webhook import (  # noqa: F401

@@ -90,6 +90,7 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.web_domains", "router", "web", "none"),
     ("app.web.customer", "router", "web", "none"),
     ("app.web.reseller", "router", "web", "none"),
+    ("app.web.vendor_portal", "router", "web", "none"),
     ("app.web.public", "router", "web", "none"),
     ("app.web.admin.network_routers", "router", "admin", "none"),
     ("app.websocket.router", "router", "ws", "none"),
@@ -125,6 +126,7 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.dispatch", "router", "api", "perm:operations:dispatch"),
     ("app.api.field.config", "router", "api", "none"),
     ("app.api.field", "router", "api", "user"),
+    ("app.api.vendor_portal", "router", "api", "user"),
     ("app.api.tables", "router", "api", "user"),
     ("app.api.domains_provisioning", "router", "api", "user"),
     ("app.api.domains_monitoring", "router", "api", "user"),
@@ -796,7 +798,14 @@ async def domain_routing_middleware(request: Request, call_next):
 
 
 # CSRF Protection paths - protect all web portals and auth forms
-_CSRF_PROTECTED_PATHS = ["/admin/", "/web/", "/portal/", "/reseller/", "/auth/"]
+_CSRF_PROTECTED_PATHS = [
+    "/admin/",
+    "/web/",
+    "/portal/",
+    "/reseller/",
+    "/vendor/",
+    "/auth/",
+]
 _CSRF_EXEMPT_PATHS = ["/api/", "/health", "/metrics", "/static/"]
 _CSRF_EXEMPT_EXACT_PATHS = {"/portal/auth/logout"}
 _WEB_AUTH_REFRESH_PATHS = ("/admin/", "/web/")

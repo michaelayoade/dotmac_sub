@@ -97,6 +97,7 @@ from app.web.admin.system_whats_new import router as system_whats_new_router
 from app.web.admin.usage import legacy_router as usage_legacy_router
 from app.web.admin.usage import router as usage_router
 from app.web.admin.vas import router as vas_router
+from app.web.admin.vendor_operations import router as vendor_operations_router
 from app.web.admin.vendor_routes import router as vendor_routes_router
 from app.web.admin.wireguard import legacy_router as wireguard_legacy_router
 from app.web.admin.wireguard import router as wireguard_router
@@ -388,6 +389,7 @@ router.include_router(sales_router)
 router.include_router(support_automation_router)
 router.include_router(support_assignment_rules_router)
 router.include_router(projects_router)
+router.include_router(vendor_operations_router)
 router.include_router(
     wireguard_router,
     prefix="/network",

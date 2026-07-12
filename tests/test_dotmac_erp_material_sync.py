@@ -149,6 +149,7 @@ def _make_approved_request(
         crm_work_order_id=crm_work_order_id,
         priority="high",
         notes="Need connectors for the drop",
+        source_warehouse_code="WH-LAGOS",
         items=[{"item_id": str(item.id), "quantity": 5, "notes": "cat6"}],
     )
     field_material_requests.submit(db, _auth(user), str(created["id"]))
@@ -213,15 +214,14 @@ def test_payload_mapping_matches_crm_shape(db_session):
     assert line["item_code"] == "RJ45-CAT6"
     assert line["quantity"] == 5
     assert line["uom"] == "PCS"
-    # No warehouse tracking in sub → None (ERP requires it; see gap note).
-    assert line["from_warehouse_code"] is None
+    assert line["from_warehouse_code"] == "WH-LAGOS"
     # No serials tracked → key omitted.
     assert "serial_numbers" not in line
 
 
-def test_payload_sources_serials_and_warehouse_from_metadata(db_session):
+def test_payload_supports_legacy_serials_and_warehouse_metadata(db_session):
     request = _make_approved_request(db_session)
-    # Best-effort: serials on the item metadata, warehouse on the request metadata.
+    request.source_warehouse_code = None
     request.metadata_ = {"from_warehouse_code": "WH-LAGOS"}
     request.items[0].metadata_ = {"serial_numbers": ["SN-1", " SN-2 ", ""]}
     db_session.flush()
@@ -315,7 +315,7 @@ def test_delivery_accepted_writes_erp_fields_back(db_session, monkeypatch):
     assert request.erp_material_status == "issued"
     # Non-terminal ERP status leaves the sub row in approved.
     assert request.status == "approved"
-    assert client.posts[0]["path"] == "/sync/crm/material-requests"
+    assert client.posts[0]["path"] == "/api/v1/sync/sub/material-requests"
 
 
 def test_delivery_fulfilled_maps_terminal_status(db_session, monkeypatch):

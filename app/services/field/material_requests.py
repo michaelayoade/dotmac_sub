@@ -37,6 +37,7 @@ def serialize_material_request(request: FieldMaterialRequest) -> dict:
         "status": request.status,
         "priority": request.priority,
         "notes": request.notes,
+        "source_warehouse_code": request.source_warehouse_code,
         "erp_material_request_id": request.erp_material_request_id,
         "erp_material_status": request.erp_material_status,
         "client_ref": request.client_ref,
@@ -55,6 +56,7 @@ def serialize_material_request(request: FieldMaterialRequest) -> dict:
                 "unit": item.item.unit if item.item else None,
                 "quantity": item.quantity,
                 "notes": item.notes,
+                "serial_numbers": item.serial_numbers or [],
             }
             for item in request.items
         ],
@@ -114,6 +116,7 @@ class FieldMaterialRequests:
         priority: str,
         notes: str | None,
         items: list[dict[str, Any]],
+        source_warehouse_code: str | None = None,
     ) -> dict:
         if not items:
             raise HTTPException(status_code=422, detail="At least one item is required")
@@ -135,15 +138,17 @@ class FieldMaterialRequests:
             status="draft",
             priority=_priority(priority),
             notes=(notes or "").strip() or None,
+            source_warehouse_code=(source_warehouse_code or "").strip() or None,
         )
         db.add(request)
         db.flush()
-        for item, quantity, notes in planned_items:
+        for item, quantity, notes, serial_numbers in planned_items:
             request.items.append(
                 FieldMaterialRequestItem(
                     item_id=item.id,
                     quantity=quantity,
                     notes=notes,
+                    serial_numbers=serial_numbers,
                 )
             )
         _mark_sub_authoritative(row)
@@ -372,8 +377,8 @@ def _item(db: Session, item_id) -> FieldInventoryItem:
 
 def _validate_items(
     db: Session, items: list[dict[str, Any]]
-) -> list[tuple[FieldInventoryItem, int, str | None]]:
-    planned: list[tuple[FieldInventoryItem, int, str | None]] = []
+) -> list[tuple[FieldInventoryItem, int, str | None, list[str]]]:
+    planned: list[tuple[FieldInventoryItem, int, str | None, list[str]]] = []
     seen: set[str] = set()
     for entry in items:
         item = _item(db, entry.get("item_id"))
@@ -381,11 +386,19 @@ def _validate_items(
         if item_key in seen:
             raise HTTPException(status_code=422, detail="Duplicate item_id in request")
         seen.add(item_key)
+        serial_numbers = [
+            str(value).strip()
+            for value in (entry.get("serial_numbers") or [])
+            if str(value).strip()
+        ]
+        if len(serial_numbers) != len(set(serial_numbers)):
+            raise HTTPException(status_code=422, detail="Duplicate serial number")
         planned.append(
             (
                 item,
                 _quantity(entry.get("quantity")),
                 (entry.get("notes") or "").strip() or None,
+                serial_numbers,
             )
         )
     return planned

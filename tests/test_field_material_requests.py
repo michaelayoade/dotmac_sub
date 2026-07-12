@@ -257,6 +257,7 @@ def test_material_request_api(db_session):
         json={
             "crm_work_order_id": "wo-material-request-api",
             "priority": "high",
+            "source_warehouse_code": "WH-LAGOS",
             "items": [{"item_id": str(item.id), "quantity": 3}],
         },
     )

@@ -25,15 +25,9 @@ master flag ``dotmac_erp_sync_enabled`` is on, and delivery is additionally gate
 per-flow by ``sync_flow_ownership.material_request`` (seeded ``crm``). Both must
 flip at cutover before a single request reaches ERP.
 
-SERIALS / WAREHOUSE GAP (see PR description): sub's ``FieldMaterialRequest`` has
-no first-class serial-number or source-warehouse tracking, whereas CRM sources
-``serial_numbers`` from ``item.serial_numbers`` and ``from_warehouse_code`` from
-``mr.source_location``. Here both are read best-effort from the request/item
-``metadata`` JSON when present and omitted otherwise — no serials-tracking
-subsystem is invented. ERP's ``CRMMaterialRequestItemPayload.from_warehouse_code``
-is a REQUIRED field, so a serialized/warehoused ISSUE cannot be delivered until
-sub grows those (a separate inventory-decision item). This is safe today because
-the flow is inert until cutover.
+Warehouse and serial selection are first-class Sub fields. Stock and serial
+availability remain read-only ERP data, but each approved ISSUE records the
+selected warehouse and exact serialized units for an auditable handoff.
 """
 
 from __future__ import annotations
@@ -91,34 +85,21 @@ def _requester_email(request: FieldMaterialRequest) -> str | None:
     return email or None
 
 
-def _metadata(obj: object) -> dict:
-    data = getattr(obj, "metadata_", None)
-    return data if isinstance(data, dict) else {}
-
-
 def _item_serial_numbers(item: FieldMaterialRequestItem) -> list[str]:
-    """Best-effort serials for a line — read from item ``metadata`` (see gap note).
-
-    Mirrors CRM's read of ``item.serial_numbers``. Sub has no first-class serials
-    column, so serials only flow when a caller has stashed them on the item
-    ``metadata`` JSON; absent, the line is sent without serials.
-    """
-    raw = _metadata(item).get("serial_numbers")
+    raw = item.serial_numbers
+    if not raw and isinstance(item.metadata_, dict):
+        raw = item.metadata_.get("serial_numbers")
     if not isinstance(raw, list):
         return []
     return [str(serial).strip() for serial in raw if str(serial).strip()]
 
 
 def _from_warehouse_code(request: FieldMaterialRequest) -> str | None:
-    """Best-effort source warehouse — read from request ``metadata`` (see gap note).
-
-    Mirrors CRM's ``mr.source_location.code``. Sub has no source-location model,
-    so this comes from the request ``metadata`` JSON when a caller supplied it;
-    absent, ``None`` (ERP requires it, so such a payload cannot deliver until sub
-    grows warehouse tracking — a separate inventory-decision item).
-    """
-    meta = _metadata(request)
-    code = meta.get("from_warehouse_code") or meta.get("warehouse_code")
+    code = request.source_warehouse_code
+    if not code and isinstance(request.metadata_, dict):
+        code = request.metadata_.get("from_warehouse_code") or request.metadata_.get(
+            "warehouse_code"
+        )
     cleaned = str(code).strip() if code else ""
     return cleaned or None
 
@@ -190,6 +171,15 @@ def material_request_eligibility_error(request: FieldMaterialRequest) -> str | N
         return f"Material request {request.id} has no items — cannot sync to ERP"
     if not _requester_email(request):
         return "Requester has no email address; ERP needs it to match the employee"
+    if not _from_warehouse_code(request):
+        return "A source warehouse is required before ERP material issue"
+    for item in request.items:
+        serials = _item_serial_numbers(item)
+        if serials and len(serials) != item.quantity:
+            return (
+                f"Material request item {item.id} has {len(serials)} serials for "
+                f"quantity {item.quantity}"
+            )
     return None
 
 

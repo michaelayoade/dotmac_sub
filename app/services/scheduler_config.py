@@ -2472,6 +2472,33 @@ def build_beat_schedule() -> dict:
             interval_seconds=max(dotmac_erp_material_refresh_interval, 120),
         )
 
+        # Purchase invoices may become eligible after their PO write-back and
+        # attachment delivery is deliberately independent from AP creation.
+        _sync_scheduled_task(
+            session,
+            name="dotmac_erp_purchase_invoice_repair",
+            task_name="app.tasks.dotmac_erp_outbox.repair_purchase_invoice_sync",
+            enabled=dotmac_erp_sync_enabled,
+            interval_seconds=max(dotmac_erp_outbox_interval, 60),
+        )
+
+        # Non-money operational context replaces ERP's legacy pull from CRM.
+        # It has a separate switch so money-flow cutovers remain independent.
+        dotmac_erp_domain_sync_enabled = _effective_bool(
+            session,
+            SettingDomain.integration,
+            "dotmac_erp_domain_sync_enabled",
+            "DOTMAC_ERP_DOMAIN_SYNC_ENABLED",
+            False,
+        )
+        _sync_scheduled_task(
+            session,
+            name="dotmac_erp_operational_domain_sync",
+            task_name="app.tasks.dotmac_erp_outbox.sync_erp_operational_domains",
+            enabled=dotmac_erp_domain_sync_enabled,
+            interval_seconds=300,
+        )
+
         # NOTE: the OLT deferred-operations queue + SSH circuit-breaker
         # subsystem was removed (it was never wired — the queue had no
         # producers and the real write paths bypassed the breaker, so it gave
