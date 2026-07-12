@@ -16,10 +16,10 @@ backfill explicitly instead, in the same shape as ``encrypt_nas_credentials.py``
 
 Usage:
     # Dry run (show what would be changed)
-    python scripts/one_off/encrypt_router_jump_host_credentials.py --dry-run
+    python -m scripts.one_off.encrypt_router_jump_host_credentials --dry-run
 
     # Execute encryption
-    python scripts/one_off/encrypt_router_jump_host_credentials.py --execute
+    python -m scripts.one_off.encrypt_router_jump_host_credentials --execute
 
 Requirements:
     - CREDENTIAL_ENCRYPTION_KEY must resolve to a real key before running.
