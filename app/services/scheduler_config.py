@@ -1359,6 +1359,37 @@ def build_beat_schedule() -> dict:
             enabled=notification_queue_enabled,
             interval_seconds=notification_queue_interval_seconds,
         )
+        campaign_processing_enabled = _effective_bool(
+            session,
+            SettingDomain.comms,
+            "campaign_processing_enabled",
+            "CAMPAIGN_PROCESSING_ENABLED",
+            False,
+        )
+        campaign_processing_interval_seconds = max(
+            _effective_int(
+                session,
+                SettingDomain.comms,
+                "campaign_processing_interval_seconds",
+                "CAMPAIGN_PROCESSING_INTERVAL_SECONDS",
+                60,
+            ),
+            30,
+        )
+        _sync_scheduled_task(
+            session,
+            name="campaign_due_runner",
+            task_name="app.tasks.campaigns.process_due_campaigns",
+            enabled=campaign_processing_enabled,
+            interval_seconds=campaign_processing_interval_seconds,
+        )
+        _sync_scheduled_task(
+            session,
+            name="campaign_sequence_runner",
+            task_name="app.tasks.campaigns.process_due_campaign_steps",
+            enabled=campaign_processing_enabled,
+            interval_seconds=campaign_processing_interval_seconds,
+        )
         operational_escalation_delivery_enabled = _effective_bool(
             session,
             SettingDomain.notification,

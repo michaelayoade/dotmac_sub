@@ -52,6 +52,8 @@ class CampaignRecipientStatus(enum.StrEnum):
     failed = "failed"
     skipped = "skipped"
     replied = "replied"
+    # Terminal: the address was on the suppression list at build or send time.
+    suppressed = "suppressed"
 
 
 class CampaignSender(Base):
@@ -122,6 +124,12 @@ class Campaign(Base):
     whatsapp_template_components: Mapped[dict | None] = mapped_column(JSON)
     segment_filter: Mapped[dict | None] = mapped_column(JSON)
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Optional send window: sends are only released between these local hours
+    # (inclusive start, exclusive end) in `send_window_timezone`. A window that
+    # wraps past midnight (e.g. 20 -> 6) is supported.
+    send_window_start_hour: Mapped[int | None] = mapped_column(Integer)
+    send_window_end_hour: Mapped[int | None] = mapped_column(Integer)
+    send_window_timezone: Mapped[str | None] = mapped_column(String(64))
     sending_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     total_recipients: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -181,7 +189,12 @@ class CampaignStep(Base):
     subject: Mapped[str | None] = mapped_column(String(200))
     body_html: Mapped[str | None] = mapped_column(Text)
     body_text: Mapped[str | None] = mapped_column(Text)
+    # Wait time *after the previous stage* (the initial send for step 0, else
+    # the preceding step's due time). Effective offset from `sending_started_at`
+    # is therefore the running sum across steps, not this value alone.
     delay_days: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    delay_hours: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -201,16 +214,29 @@ class CampaignRecipient(Base):
         UniqueConstraint(
             "campaign_id", "subscriber_id", "step_id", name="uq_campaign_sub_step"
         ),
+        # Partial unique indexes: `sqlite_where` mirrors `postgresql_where` so the
+        # SQLite test harness enforces the same rule as production. Without it,
+        # SQLite drops the predicate and the index becomes unconditional — which
+        # would forbid a subscriber from ever receiving a second sequence step.
         Index(
             "uq_campaign_sub_null_step",
             "campaign_id",
             "subscriber_id",
             unique=True,
             postgresql_where=text("step_id IS NULL"),
+            sqlite_where=text("step_id IS NULL"),
         ),
         Index("ix_campaign_recipients_status", "campaign_id", "status"),
         Index("ix_campaign_recipients_subscriber", "subscriber_id"),
         Index("ix_campaign_recipients_conversation", "conversation_id"),
+        Index("ix_campaign_recipients_step", "campaign_id", "step_id"),
+        Index(
+            "uq_campaign_recipients_unsubscribe_token",
+            "unsubscribe_token",
+            unique=True,
+            postgresql_where=text("unsubscribe_token IS NOT NULL"),
+            sqlite_where=text("unsubscribe_token IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -246,6 +272,13 @@ class CampaignRecipient(Base):
     clicked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     open_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     click_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Campaign enqueue tracking. Provider retry attempts belong to the
+    # notification outbox and are deliberately not duplicated here.
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    suppressed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # One-click unsubscribe secret, minted per recipient row.
+    unsubscribe_token: Mapped[str | None] = mapped_column(String(64))
     metadata_: Mapped[dict | None] = mapped_column(
         "metadata", MutableDict.as_mutable(JSON())
     )

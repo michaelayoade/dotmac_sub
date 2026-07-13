@@ -22,6 +22,12 @@ Projection order is account override, active service (including collections stat
 - `notification_deliveries` and `notifications.status` own provider outcomes.
 - `inbox_messages` and `campaign_recipients` are projections linked by `notification_id`; they do not invoke providers.
 - `app.tasks.notifications` is the customer transport consumer. Operational escalation retains its separate durable delivery queue.
+- Campaigns own audience, sequence, content, and a canonical sender-key request.
+  Email delivery owns sender-key resolution and SMTP configuration; campaigns
+  never store relay credentials or override transport configuration.
+- Periodic campaign release is a separate cutover gate. The
+  `comms.campaign_processing_enabled` control defaults off so merging the
+  implementation cannot release dormant imported or scheduled campaigns.
 
 The processing order is:
 
