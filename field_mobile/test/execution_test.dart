@@ -11,6 +11,7 @@ import 'package:dotmac_field/core/offline/database.dart';
 import 'package:dotmac_field/core/offline/sync_service.dart';
 import 'package:dotmac_field/features/execution/completion_state.dart';
 import 'package:dotmac_field/features/execution/execution_controller.dart';
+import 'package:dotmac_field/features/jobs/job_models.dart';
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -245,18 +246,43 @@ void main() {
     );
   });
 
-  group('completion gating mirrors the server gate', () {
-    test('blocked until checklist + photo + sign-off', () {
+  group('completion gating consumes the server contract', () {
+    test('blocks only on server-required photo and sign-off', () {
       var state = const CompletionState();
       expect(state.canComplete, isFalse);
-      expect(state.blockers.length, 3);
+      expect(state.blockers.length, 2);
 
-      state = state.copyWith(checklistDone: true, photoCount: 1);
+      state = state.copyWith(photoCount: 1);
       expect(state.canComplete, isFalse);
       expect(state.blockers.single, contains('signature'));
 
       expect(state.copyWith(hasSignature: true).canComplete, isTrue);
     });
+
+    test('advisory checklist never creates a client-only completion gate', () {
+      final state = const CompletionState(photoCount: 1, hasSignature: true);
+
+      expect(state.checklistDone, isFalse);
+      expect(state.canComplete, isTrue);
+      expect(state.blockers, isEmpty);
+    });
+
+    test(
+      'disabled server evidence policy permits completion without evidence',
+      () {
+        const requirements = JobCompletionRequirements(
+          evidenceRequired: false,
+          minimumPhotoCount: 0,
+          customerSignoffRequired: false,
+          signatureUnavailableReasonAllowed: false,
+        );
+
+        const state = CompletionState(requirements: requirements);
+
+        expect(state.canComplete, isTrue);
+        expect(state.blockers, isEmpty);
+      },
+    );
 
     test('signature fallback reason satisfies sign-off', () {
       final state = const CompletionState(
@@ -286,6 +312,22 @@ void main() {
         photoCount: 1,
       ).copyWith(signatureUnavailableReason: '   ');
       expect(state.canComplete, isFalse);
+    });
+
+    test('fallback does not satisfy a contract that disallows it', () {
+      const requirements = JobCompletionRequirements(
+        evidenceRequired: true,
+        minimumPhotoCount: 1,
+        customerSignoffRequired: true,
+        signatureUnavailableReasonAllowed: false,
+      );
+      final state = const CompletionState(
+        requirements: requirements,
+        photoCount: 1,
+      ).copyWith(signatureUnavailableReason: 'customer absent');
+
+      expect(state.canComplete, isFalse);
+      expect(state.blockers.single, 'Capture a customer signature');
     });
   });
 }

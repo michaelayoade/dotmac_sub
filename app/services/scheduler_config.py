@@ -542,6 +542,13 @@ def build_beat_schedule() -> dict:
                 "task": "app.tasks.vas.run_vas_review_requery",
                 "schedule": timedelta(hours=24),
             }
+        # In-flight refunds remain money-moving obligations even when new VAS
+        # activity is disabled, so their backstop must never share the feature
+        # gate used by catalog and purchase work.
+        schedule["vas_refund_reconcile"] = {
+            "task": "app.tasks.vas.reconcile_refund_requests",
+            "schedule": timedelta(minutes=5),
+        }
         credential_rotation_enabled = _effective_bool(
             session,
             SettingDomain.auth,

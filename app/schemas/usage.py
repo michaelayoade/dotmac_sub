@@ -144,12 +144,16 @@ class UsageSummaryResponse(BaseModel):
     period: str = Field(description="hour | today | week | cycle | all")
     start: datetime
     end: datetime
+    # Zero is a valid measured total, never a missing-data sentinel. Consumers
+    # use source/authority metadata to decide whether a headline is suitable;
+    # they must not replace zero with a locally reconstructed value.
     total_bytes: int
     # Where the headline total came from: "samples" (integrated throughput),
     # "sessions" (RADIUS accounting octets), or "quota" (rated billing usage).
     total_source: str
     # True when the total is billing-grade (quota / session octets) rather than
-    # reconstructed from the throughput series.
+    # reconstructed from the throughput series. Authoritative zero remains an
+    # available, complete headline for the requested window.
     is_authoritative: bool
     # Bucket width of the series: "minute" | "hour" | "day" | None (no chart).
     bucket: str | None = None

@@ -71,10 +71,6 @@ class Subscription {
 
   bool get isCurrent => currentStatuses.contains(status);
 
-  /// Out of service for a reason the customer can fix by paying:
-  /// blocked = non-payment block, suspended = generic suspension.
-  bool get needsPayment => status == 'blocked' || status == 'suspended';
-
   String get displayName =>
       offerName ?? serviceDescription ?? 'Subscription ${id.substring(0, 8)}';
 

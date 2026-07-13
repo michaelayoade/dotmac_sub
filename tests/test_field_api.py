@@ -100,6 +100,12 @@ def test_field_api_me_jobs_and_detail(db_session):
     assert detail.status_code == 200
     assert detail.json()["job"]["title"] == "Fibre install"
     assert detail.json()["customer"]["name"] == "Adaeze Nwosu"
+    assert detail.json()["completion_requirements"] == {
+        "evidence_required": True,
+        "minimum_photo_count": 1,
+        "customer_signoff_required": True,
+        "signature_unavailable_reason_allowed": True,
+    }
 
     destinations = client.get("/api/v1/field/jobs/wo-field-api/destinations")
     assert destinations.status_code == 200

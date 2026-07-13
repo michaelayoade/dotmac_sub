@@ -747,6 +747,8 @@ from app.models.vas import (  # noqa: F401
     VasEntryType,
     VasPartyType,
     VasRateCard,
+    VasRefundRequest,
+    VasRefundStatus,
     VasService,
     VasServiceVariation,
     VasTopupIntent,

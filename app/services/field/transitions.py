@@ -15,6 +15,7 @@ from app.models.field_attachment import FieldAttachment
 from app.models.field_job_event import FIELD_JOB_EVENTS, FieldJobEvent
 from app.models.field_worklog import FieldWorkLog
 from app.models.work_order_mirror import WorkOrderMirror
+from app.schemas.field import FieldCompletionRequirements
 from app.services.common import coerce_uuid
 from app.services.field.jobs import _profile_from_principal, _scoped_query
 from app.services.field.source import mark_sub_authoritative
@@ -74,6 +75,11 @@ def serialize_event(event: FieldJobEvent) -> dict:
 
 
 class FieldTransitions:
+    @staticmethod
+    def completion_requirements(db: Session) -> FieldCompletionRequirements:
+        """Return the same completion policy enforced by ``apply``."""
+        return resolve_completion_requirements(db)
+
     @staticmethod
     def list_for_job(
         db: Session,
@@ -292,10 +298,22 @@ def _completion_gate_enabled(db: Session) -> bool:
     return str(value).lower() not in {"false", "0", "no"}
 
 
+def resolve_completion_requirements(db: Session) -> FieldCompletionRequirements:
+    """Resolve the canonical field completion contract from domain settings."""
+    evidence_required = _completion_gate_enabled(db)
+    return FieldCompletionRequirements(
+        evidence_required=evidence_required,
+        minimum_photo_count=1 if evidence_required else 0,
+        customer_signoff_required=evidence_required,
+        signature_unavailable_reason_allowed=evidence_required,
+    )
+
+
 def _check_completion_gate(
     db: Session, row: WorkOrderMirror, payload: dict[str, Any]
 ) -> None:
-    if not _completion_gate_enabled(db):
+    requirements = resolve_completion_requirements(db)
+    if not requirements.evidence_required:
         return
     attachments = (
         db.query(FieldAttachment)
@@ -303,13 +321,21 @@ def _check_completion_gate(
         .filter(FieldAttachment.is_active.is_(True))
         .all()
     )
-    has_photo = any(attachment.kind == "photo" for attachment in attachments)
+    photo_count = sum(attachment.kind == "photo" for attachment in attachments)
     has_signature = any(attachment.kind == "signature" for attachment in attachments)
-    if not has_photo:
+    if photo_count < requirements.minimum_photo_count:
         raise HTTPException(
             status_code=422, detail="Completion requires at least one photo"
         )
-    if not has_signature and not payload.get("signature_unavailable_reason"):
+    has_allowed_fallback = bool(
+        requirements.signature_unavailable_reason_allowed
+        and payload.get("signature_unavailable_reason")
+    )
+    if (
+        requirements.customer_signoff_required
+        and not has_signature
+        and not has_allowed_fallback
+    ):
         raise HTTPException(
             status_code=422,
             detail="Completion requires a customer signature or a signature_unavailable_reason",

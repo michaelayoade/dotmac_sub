@@ -407,6 +407,7 @@ class FieldJobs:
 
         return FieldJobDetail(
             job=_summary(row),
+            completion_requirements=field_transitions.completion_requirements(db),
             customer=_customer(row, subscriber),
             location=_location(row),
             ticket_ref=row.crm_ticket_id,

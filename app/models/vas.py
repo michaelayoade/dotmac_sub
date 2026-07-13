@@ -136,6 +136,97 @@ class VasTransactionStatus(enum.Enum):
     review = "review"
 
 
+class VasRefundStatus(enum.Enum):
+    """Durable refund-to-source lifecycle owned by VAS reconciliation."""
+
+    prepared = "prepared"
+    submitting = "submitting"
+    accepted = "accepted"
+    succeeded = "succeeded"
+    failed = "failed"
+    needs_attention = "needs_attention"
+
+
+class VasRefundRequest(Base):
+    """One durable refund-to-source request per wallet top-up.
+
+    The wallet debit and this row are committed together before a gateway is
+    called. Gateway observations then advance this row, while terminal failure
+    creates one explicit compensating wallet credit. This makes replay and
+    crash recovery converge on persisted state rather than an HTTP response.
+    """
+
+    __tablename__ = "vas_refund_requests"
+    __table_args__ = (
+        CheckConstraint("amount > 0", name="ck_vas_refund_requests_amount_positive"),
+        UniqueConstraint(
+            "provider",
+            "provider_refund_id",
+            name="uq_vas_refund_requests_provider_refund",
+        ),
+        Index(
+            "ix_vas_refund_requests_status_updated",
+            "status",
+            "updated_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    topup_entry_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("vas_wallet_entries.id"),
+        nullable=False,
+        unique=True,
+    )
+    wallet_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("vas_wallets.id"), nullable=False
+    )
+    wallet_debit_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("vas_wallet_entries.id"), unique=True
+    )
+    wallet_reversal_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("vas_wallet_entries.id"), unique=True
+    )
+    provider: Mapped[str] = mapped_column(String(40), nullable=False)
+    funding_reference: Mapped[str] = mapped_column(String(120), nullable=False)
+    provider_transaction_id: Mapped[str | None] = mapped_column(String(120))
+    provider_refund_id: Mapped[str | None] = mapped_column(String(120))
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="NGN")
+    status: Mapped[VasRefundStatus] = mapped_column(
+        Enum(VasRefundStatus, native_enum=False, length=32),
+        nullable=False,
+        default=VasRefundStatus.prepared,
+    )
+    provider_status: Mapped[str | None] = mapped_column(String(80))
+    provider_response: Mapped[dict | None] = mapped_column(JSON)
+    submit_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    reconcile_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_reconciled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    topup_entry = relationship("VasWalletEntry", foreign_keys=[topup_entry_id])
+    wallet = relationship("VasWallet")
+    wallet_debit_entry = relationship(
+        "VasWalletEntry", foreign_keys=[wallet_debit_entry_id]
+    )
+    wallet_reversal_entry = relationship(
+        "VasWalletEntry", foreign_keys=[wallet_reversal_entry_id]
+    )
+
+
 class VasService(Base):
     """A purchasable VTPass service (synced from their catalog)."""
 

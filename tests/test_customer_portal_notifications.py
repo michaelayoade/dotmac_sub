@@ -195,6 +195,120 @@ class TestPortalNotificationsPage:
         assert page["unread_notifications_count"] == 0
         assert preview["unread_notifications_count"] == 0
 
+    def test_mobile_read_mutation_updates_web_and_api_read_state(
+        self, db_session, subscriber
+    ) -> None:
+        from app.models.notification import (
+            Notification,
+            NotificationChannel,
+            NotificationStatus,
+        )
+        from app.schemas.notification import CustomerInboxNotificationRead
+        from app.services.customer_portal_notifications import (
+            apply_notification_read_state,
+            get_notifications_page,
+            mark_api_notifications_read,
+        )
+        from app.services.notification import notifications
+
+        notice = Notification(
+            subscriber_id=subscriber.id,
+            channel=NotificationChannel.push,
+            recipient=subscriber.email,
+            event_type="service_restored",
+            category="service",
+            body="Your service is back online",
+            status=NotificationStatus.delivered,
+        )
+        db_session.add(notice)
+        db_session.commit()
+
+        api_response = notifications.list_response_for_subscriber(
+            db_session, subscriber.id, 50, 0
+        )
+        apply_notification_read_state(
+            db_session,
+            subscriber_id=str(subscriber.id),
+            notifications=api_response["items"],
+        )
+        assert api_response["items"][0].is_read is False
+
+        marked = mark_api_notifications_read(
+            db_session,
+            subscriber_id=str(subscriber.id),
+            notification_ids=[notice.id],
+        )
+        portal_page = get_notifications_page(
+            db_session,
+            {"subscriber_id": str(subscriber.id)},
+            page=1,
+            per_page=10,
+        )
+        refreshed_api = notifications.list_response_for_subscriber(
+            db_session, subscriber.id, 50, 0
+        )
+        apply_notification_read_state(
+            db_session,
+            subscriber_id=str(subscriber.id),
+            notifications=refreshed_api["items"],
+        )
+
+        assert marked == 1
+        assert portal_page["notifications"][0].is_read is True
+        assert portal_page["unread_notifications_count"] == 0
+        assert refreshed_api["items"][0].is_read is True
+        assert (
+            CustomerInboxNotificationRead.model_validate(
+                refreshed_api["items"][0]
+            ).is_read
+            is True
+        )
+
+    def test_mobile_read_mutation_ignores_another_subscribers_ids(
+        self, db_session, subscriber
+    ) -> None:
+        from app.models.notification import (
+            Notification,
+            NotificationChannel,
+            NotificationStatus,
+        )
+        from app.models.subscriber import Subscriber
+        from app.services.customer_portal_notifications import (
+            apply_notification_read_state,
+            mark_api_notifications_read,
+        )
+
+        other = Subscriber(
+            first_name="Other",
+            last_name="Customer",
+            email="other-read-state@example.com",
+        )
+        db_session.add(other)
+        db_session.flush()
+        other_notice = Notification(
+            subscriber_id=other.id,
+            channel=NotificationChannel.email,
+            recipient=other.email,
+            body="Other customer only",
+            status=NotificationStatus.delivered,
+        )
+        db_session.add(other_notice)
+        db_session.commit()
+
+        marked = mark_api_notifications_read(
+            db_session,
+            subscriber_id=str(subscriber.id),
+            notification_ids=[other_notice.id],
+        )
+        apply_notification_read_state(
+            db_session,
+            subscriber_id=str(other.id),
+            notifications=[other_notice],
+        )
+
+        assert marked == 0
+        assert other_notice.is_read is False
+
     def test_notifications_page_prefers_subscriber_id_and_hides_non_visible_statuses(
         self, db_session, subscriber
     ) -> None:
