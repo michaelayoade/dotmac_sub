@@ -362,6 +362,10 @@ def verify_proof(
             allocations=allocations or None,
         ),
         auto_allocate=auto_allocate,
+        # Keep the account lock until the proof and payment commit together.
+        # The owner's default commit would release the lock while this proof was
+        # still submitted, reopening the concurrent double-credit race.
+        commit=False,
     )
     proof.status = PaymentProofStatus.verified
     proof.verified_amount = value
@@ -404,12 +408,34 @@ def _verify_consolidated_proof(
     ``amount`` (reviewer-confirmed) is the *net cash* received; the account is
     credited ``net + wht`` so the withheld tax stays a tracked, reclaimable
     receivable rather than vanishing from the reseller's balance."""
+    from sqlalchemy import select
+
     from app.schemas.billing import PaymentCreate
     from app.services import billing as billing_service
 
-    ba = db.get(BillingAccount, proof.billing_account_id)
+    # Serialize concurrent reviews of this proof, then re-check its status under
+    # the lock — exactly what the subscriber path does, and what this one never did.
+    #
+    # The status check before the dispatch is an UNLOCKED read, so two reviewers
+    # clicking Verify at the same time both passed it and both created a succeeded
+    # Payment for the gross value: the reseller's balance was credited TWICE, with
+    # two WithholdingTaxRecord rows to match. No database constraint caught it
+    # either — uq_payments_active_external_id only fires when provider_id IS NOT
+    # NULL, and a proof-backed payment has none.
+    #
+    # Lock the billing account this credits (the subscriber path locks the
+    # subscriber it credits) so the loser of the race sees "already reviewed".
+    ba = db.scalar(
+        select(BillingAccount)
+        .where(BillingAccount.id == proof.billing_account_id)
+        .with_for_update()
+    )
     if ba is None:
         raise HTTPException(status_code=404, detail="Billing account not found")
+
+    db.refresh(proof)
+    if proof.status != PaymentProofStatus.submitted:
+        raise HTTPException(status_code=400, detail="Proof already reviewed")
 
     try:
         net_value = round_money(
@@ -459,6 +485,9 @@ def _verify_consolidated_proof(
             allocations=None,
         ),
         auto_allocate=False,
+        # The billing-account lock is only useful while it spans the proof state
+        # transition too. Commit payment + proof + WHT once, below.
+        commit=False,
     )
     proof.status = PaymentProofStatus.verified
     proof.verified_amount = net_value
