@@ -4582,6 +4582,7 @@ def branding_page(request: Request, db: Session = Depends(get_db)):
 )
 def control_relationship_diagnostics(db: Session = Depends(get_db)):
     from app.services.control_relationships import (
+        audit_event_relationships,
         audit_setting_relationships,
         event_policies,
         event_topology,
@@ -4594,6 +4595,9 @@ def control_relationship_diagnostics(db: Session = Depends(get_db)):
         "event_policies": event_policies(),
         "settings_findings": [
             finding.to_dict() for finding in audit_setting_relationships(db)
+        ],
+        "event_findings": [
+            finding.to_dict() for finding in audit_event_relationships()
         ],
     }
 
