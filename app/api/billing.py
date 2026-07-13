@@ -27,6 +27,7 @@ from app.schemas.billing import (
     CreditNoteLineRead,
     CreditNoteLineUpdate,
     CreditNoteRead,
+    CreditNoteSyncRead,
     CreditNoteUpdate,
     InvoiceBulkActionResponse,
     InvoiceBulkVoidRequest,
@@ -63,6 +64,7 @@ from app.schemas.billing import (
     PaymentProviderRead,
     PaymentProviderUpdate,
     PaymentRead,
+    PaymentSyncRead,
     PaymentUpdate,
     PaymentVerifyRequest,
     PaymentVerifyResponse,
@@ -78,6 +80,7 @@ from app.services import billing_automation as billing_automation_service
 from app.services import customer_portal_flow_payments as customer_payments
 from app.services.auth_dependencies import require_permission, require_user_auth
 from app.services.customer_context import require_customer_account_id
+from app.services.sync_feeds import SYNC_FEED_MAX_PAGE_SIZE
 
 router = APIRouter()
 
@@ -330,6 +333,40 @@ def create_credit_note(payload: CreditNoteCreate, db: Session = Depends(get_db))
 
 
 @router.get(
+    "/credit-notes/sync",
+    response_model=ListResponse[CreditNoteSyncRead],
+    tags=["credit-notes"],
+    dependencies=[Depends(require_permission("billing:credit_note:read"))],
+)
+def sync_credit_notes(
+    account_id: str | None = None,
+    status: str | None = None,
+    is_active: bool | None = None,
+    updated_since: datetime | None = Query(
+        default=None,
+        description="Inclusive credit-note updated_at watermark for ERP sync.",
+    ),
+    limit: int = Query(
+        default=SYNC_FEED_MAX_PAGE_SIZE, ge=1, le=SYNC_FEED_MAX_PAGE_SIZE
+    ),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    return finish_read_response(
+        db,
+        billing_service.credit_notes.sync_list_response(
+            db,
+            account_id=account_id,
+            status=status,
+            is_active=is_active,
+            updated_since=updated_since,
+            limit=limit,
+            offset=offset,
+        ),
+    )
+
+
+@router.get(
     "/credit-notes/{credit_note_id}",
     response_model=CreditNoteRead,
     tags=["credit-notes"],
@@ -507,6 +544,33 @@ def create_payment_channel(
     payload: PaymentChannelCreate, db: Session = Depends(get_db)
 ):
     return billing_service.payment_channels.create(db, payload)
+
+
+@router.get(
+    "/payment-channels/sync",
+    response_model=ListResponse[PaymentChannelRead],
+    tags=["payment-channels"],
+    dependencies=[Depends(require_permission("billing:channel:read"))],
+)
+def sync_payment_channels(
+    is_active: bool | None = None,
+    updated_since: datetime | None = Query(default=None),
+    limit: int = Query(
+        default=SYNC_FEED_MAX_PAGE_SIZE, ge=1, le=SYNC_FEED_MAX_PAGE_SIZE
+    ),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    return finish_read_response(
+        db,
+        billing_service.payment_channels.sync_list_response(
+            db,
+            is_active=is_active,
+            updated_since=updated_since,
+            limit=limit,
+            offset=offset,
+        ),
+    )
 
 
 @router.get(
@@ -1201,6 +1265,40 @@ def create_payment(payload: PaymentCreate, db: Session = Depends(get_db)):
     return billing_service.payments.create(db, payload)
 
 
+@router.get(
+    "/payments/sync",
+    response_model=ListResponse[PaymentSyncRead],
+    tags=["payments"],
+    dependencies=[Depends(require_permission("billing:payment:read"))],
+)
+def sync_payments(
+    account_id: str | None = None,
+    status: str | None = None,
+    is_active: bool | None = None,
+    updated_since: datetime | None = Query(
+        default=None,
+        description="Inclusive payment updated_at watermark for ERP sync.",
+    ),
+    limit: int = Query(
+        default=SYNC_FEED_MAX_PAGE_SIZE, ge=1, le=SYNC_FEED_MAX_PAGE_SIZE
+    ),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    return finish_read_response(
+        db,
+        billing_service.payments.sync_list_response(
+            db,
+            account_id=account_id,
+            status=status,
+            is_active=is_active,
+            updated_since=updated_since,
+            limit=limit,
+            offset=offset,
+        ),
+    )
+
+
 # --- Customer-initiated online payment (hosted checkout) ------------------
 # Self-scoped to the authenticated subscriber; intentionally NOT gated by a
 # billing:* permission so a customer can pay their own invoice from the mobile
@@ -1515,6 +1613,33 @@ def create_tax_rate(payload: TaxRateCreate, db: Session = Depends(get_db)):
 
 
 @router.get(
+    "/tax-rates/sync",
+    response_model=ListResponse[TaxRateRead],
+    tags=["tax-rates"],
+    dependencies=[Depends(require_permission("billing:tax:read"))],
+)
+def sync_tax_rates(
+    is_active: bool | None = None,
+    updated_since: datetime | None = Query(default=None),
+    limit: int = Query(
+        default=SYNC_FEED_MAX_PAGE_SIZE, ge=1, le=SYNC_FEED_MAX_PAGE_SIZE
+    ),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    return finish_read_response(
+        db,
+        billing_service.tax_rates.sync_list_response(
+            db,
+            is_active=is_active,
+            updated_since=updated_since,
+            limit=limit,
+            offset=offset,
+        ),
+    )
+
+
+@router.get(
     "/tax-rates/{rate_id}",
     response_model=TaxRateRead,
     tags=["tax-rates"],
@@ -1566,6 +1691,35 @@ def delete_tax_rate(rate_id: str, db: Session = Depends(get_db)):
 
 
 # --- Billing accounts (consolidated reseller billing) ---
+
+
+@router.get(
+    "/billing-accounts/sync",
+    response_model=ListResponse[BillingAccountRead],
+    tags=["billing-accounts"],
+    dependencies=[Depends(require_permission("billing_account:read"))],
+)
+def sync_billing_accounts(
+    reseller_id: str | None = None,
+    is_active: bool | None = None,
+    updated_since: datetime | None = Query(default=None),
+    limit: int = Query(
+        default=SYNC_FEED_MAX_PAGE_SIZE, ge=1, le=SYNC_FEED_MAX_PAGE_SIZE
+    ),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    return finish_read_response(
+        db,
+        billing_service.billing_accounts.sync_list_response(
+            db,
+            reseller_id=reseller_id,
+            is_active=is_active,
+            updated_since=updated_since,
+            limit=limit,
+            offset=offset,
+        ),
+    )
 
 
 @router.get(

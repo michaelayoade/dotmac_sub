@@ -40,6 +40,7 @@ from app.services.common import (
     to_decimal,
 )
 from app.services.response import ListResponseMixin
+from app.services.sync_feeds import apply_sync_page, sync_page_response
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,34 @@ class BillingAccounts(ListResponseMixin):
             },
         )
         return apply_pagination(query, limit, offset).all()
+
+    @staticmethod
+    def list_for_sync(
+        db: Session,
+        *,
+        reseller_id: str | None,
+        is_active: bool | None,
+        updated_since: datetime | None,
+        limit: int,
+        offset: int,
+    ) -> builtins.list[BillingAccount]:
+        query = db.query(BillingAccount)
+        if reseller_id:
+            query = query.filter(BillingAccount.reseller_id == coerce_uuid(reseller_id))
+        if is_active is not None:
+            query = query.filter(BillingAccount.is_active == is_active)
+        return apply_sync_page(
+            query,
+            BillingAccount,
+            updated_since=updated_since,
+            limit=limit,
+            offset=offset,
+        ).all()
+
+    @classmethod
+    def sync_list_response(cls, db: Session, **kwargs):
+        items = cls.list_for_sync(db, **kwargs)
+        return sync_page_response(items, limit=kwargs["limit"], offset=kwargs["offset"])
 
     @staticmethod
     def count(

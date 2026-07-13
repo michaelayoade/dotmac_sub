@@ -1144,6 +1144,18 @@ _API_SYNC_PRESSURE_DEFAULT_EXEMPT_PREFIXES = (
     "/api/v1/webhooks/",
 )
 _API_SYNC_PRESSURE_DEFAULT_OFFENDER_IPS = ("149.102.158.167",)
+_API_SYNC_FEED_PATHS = frozenset(
+    {
+        "/api/v1/billing-accounts/sync",
+        "/api/v1/credit-notes/sync",
+        "/api/v1/invoices/sync",
+        "/api/v1/payment-channels/sync",
+        "/api/v1/payments/sync",
+        "/api/v1/resellers/sync",
+        "/api/v1/subscribers/sync",
+        "/api/v1/tax-rates/sync",
+    }
+)
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -1286,7 +1298,10 @@ async def api_sync_pressure_guard_middleware(request: Request, call_next):
             _API_SYNC_PRESSURE_DEFAULT_OFFENDER_IPS,
         )
     )
-    if ip_address in offender_ips:
+    if path in _API_SYNC_FEED_PATHS:
+        bucket = "feed"
+        limit = _env_int("API_SYNC_PRESSURE_FEED_LIMIT", 60)
+    elif ip_address in offender_ips:
         bucket = "listed"
         limit = _env_int("API_SYNC_PRESSURE_OFFENDER_LIMIT", 10)
     else:

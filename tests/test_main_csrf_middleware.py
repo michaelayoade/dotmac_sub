@@ -142,6 +142,31 @@ def test_api_sync_pressure_guard_blocks_listed_sync_ip(monkeypatch):
     assert calls == [("api-v1-pressure:listed:149.102.158.167", 12, 30)]
 
 
+def test_api_sync_pressure_guard_uses_bounded_feed_bucket(monkeypatch):
+    request = _build_request(
+        path="/api/v1/payments/sync",
+        headers=[(b"x-forwarded-for", b"149.102.158.167")],
+    )
+    calls: list[tuple[str, int, int]] = []
+
+    def fake_allow_operation(key: str, *, limit: int, window_seconds: int, now=None):
+        calls.append((key, limit, window_seconds))
+        return SimpleNamespace(allowed=True, retry_after_seconds=None)
+
+    monkeypatch.setenv("API_SYNC_PRESSURE_FEED_LIMIT", "75")
+    monkeypatch.setattr(
+        "app.services.rate_limiter_adapter.allow_operation", fake_allow_operation
+    )
+
+    async def call_next(_request: Request) -> Response:
+        return Response("ok", status_code=200)
+
+    response = _run_async(api_sync_pressure_guard_middleware(request, call_next))
+
+    assert response.status_code == 200
+    assert calls == [("api-v1-pressure:feed:149.102.158.167", 75, 60)]
+
+
 def test_api_sync_pressure_guard_allows_admin_without_rate_limit(monkeypatch):
     request = _build_request(path="/admin/customers")
 
