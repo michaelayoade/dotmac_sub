@@ -35,8 +35,14 @@ that obscure business behavior.
 
 1. Ledger and billing account services own money movement and balances.
 2. Customer financial position owns read-side financial summaries.
-3. Billing/access resolvers own entitlement and service-state decisions.
+3. `financial.access_resolution` owns financial suspension/restoration
+   eligibility. For prepaid service, both directions compare the customer
+   financial position with the single `financial.prepaid_threshold`; the
+   existence or size of one payment is never itself permission to restore.
 4. Dunning owns postpaid enforcement; prepaid enforcement owns prepaid access.
+   Both converge on the account lifecycle writer, which re-checks billing
+   profile validity, payment-arrangement/proof/extension shields, and billing
+   enforcement health immediately before a financial suspension.
 5. Scheduled billing, collections, and payment-reconciliation services own DB
    sessions, transaction outcomes, and operational logging for Celery runners.
 

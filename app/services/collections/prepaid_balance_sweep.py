@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import or_
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
@@ -30,13 +30,17 @@ from app.models.domain_settings import SettingDomain
 from app.models.enforcement_lock import EnforcementReason
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services import control_registry, enforcement_window, settings_spec
+from app.services.access_resolution import (
+    PrepaidFundingDecision,
+    resolve_prepaid_funding,
+)
 from app.services.billing_profile import resolve_billing_profile
 from app.services.collections._core import (
     _clear_prepaid_dunning_flags,
     _effective_billing_mode_for_account,
     _get_account_email,
+    _restore_prepaid_if_funded,
     _suspend_account,
-    get_available_balance,
 )
 from app.services.common import coerce_uuid
 
@@ -121,17 +125,6 @@ def _resolve_config(db: Session) -> _SweepConfig:
     )
 
 
-def _prepaid_threshold(
-    db: Session, account: Subscriber, *, now: datetime | None = None
-) -> Decimal:
-    # Reuse the read-side threshold resolver (account override -> settings
-    # default) so enforcement and the customer-facing projection agree.
-    # Deferred import avoids a service_status <-> collections import cycle.
-    from app.services.service_status import _prepaid_threshold as _resolver
-
-    return _resolver(db, account, now=now)
-
-
 def _candidate_account_ids(db: Session) -> set:
     """Prepaid accounts to reconcile: those with an operationally-relevant
     subscription, plus any still carrying prepaid timers (to clear stale ones)."""
@@ -211,45 +204,6 @@ def _send_notice(
     )
 
 
-def _restore_prepaid(db: Session, account: Subscriber) -> int:
-    """Resolve prepaid enforcement locks and restore the account's services.
-
-    Uses the ``top_up`` trigger, which is authorized to clear ``prepaid`` locks
-    (see ``account_lifecycle.ALLOWED_RESTORERS``); scoping to
-    ``reason=prepaid`` leaves any unrelated (e.g. overdue) lock in place.
-    """
-    from app.services.account_lifecycle import restore_subscription
-
-    subs = (
-        db.query(Subscription)
-        .filter(Subscription.subscriber_id == account.id)
-        .filter(
-            Subscription.status.in_(
-                (SubscriptionStatus.suspended, SubscriptionStatus.blocked)
-            )
-        )
-        .all()
-    )
-    restored = 0
-    for sub in subs:
-        try:
-            if restore_subscription(
-                db,
-                str(sub.id),
-                trigger="top_up",
-                resolved_by=f"{_SOURCE}:{account.id}",
-                reason=EnforcementReason.prepaid,
-            ):
-                restored += 1
-        except Exception:
-            logger.warning(
-                "prepaid_balance_sweep restore failed for subscription %s",
-                sub.id,
-                exc_info=True,
-            )
-    return restored
-
-
 def _deactivation_deferred(db: Session, now: datetime, cfg: _SweepConfig) -> bool:
     """Whether the DEACTIVATION step must wait (skip-day / outside window).
 
@@ -274,13 +228,20 @@ def _deactivation_deferred(db: Session, now: datetime, cfg: _SweepConfig) -> boo
     return reason is not None
 
 
-def _reconcile_funded(db: Session, account: Subscriber) -> str:
+def _reconcile_funded(
+    db: Session, account: Subscriber, funding: PrepaidFundingDecision
+) -> str:
     """Balance is at/above threshold: undo any prepaid enforcement. Idempotent."""
     had_timers = (
         account.prepaid_low_balance_at is not None
         or account.prepaid_deactivation_at is not None
     )
-    restored = _restore_prepaid(db, account)
+    restored = _restore_prepaid_if_funded(
+        db,
+        account,
+        funding,
+        resolved_by=f"{_SOURCE}:{account.id}",
+    )
     if had_timers:
         _clear_prepaid_dunning_flags(db, str(account.id))
     if had_timers or restored:
@@ -369,6 +330,11 @@ def _reconcile_low(
 def _process_account(
     db: Session, account: Subscriber, now: datetime, cfg: _SweepConfig
 ) -> str:
+    # Serialize the funding decision and any restore/suspend mutation against
+    # payment-driven access reconciliation, which locks the same account row.
+    account = db.execute(
+        select(Subscriber).where(Subscriber.id == account.id).with_for_update()
+    ).scalar_one()
     profile = resolve_billing_profile(db, account)
     if not profile.automation_safe and profile.has_collectible_subscriptions:
         logger.warning(
@@ -390,11 +356,17 @@ def _process_account(
             return "restored"
         return "ok"
 
-    balance = get_available_balance(db, str(account.id))
-    threshold = _prepaid_threshold(db, account, now=now)
-    if balance >= threshold:
-        return _reconcile_funded(db, account)
-    return _reconcile_low(db, account, now, cfg, balance, threshold)
+    funding = resolve_prepaid_funding(db, account, now=now)
+    if funding.funded:
+        return _reconcile_funded(db, account, funding)
+    return _reconcile_low(
+        db,
+        account,
+        now,
+        cfg,
+        funding.available_balance,
+        funding.required_balance,
+    )
 
 
 def run_prepaid_balance_sweep(

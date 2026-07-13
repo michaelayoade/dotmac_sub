@@ -125,8 +125,13 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "billable service classification",
                     "RADIUS access decision",
                     "postpaid/prepaid enforcement cohorts",
+                    "financial suspension/restoration eligibility",
                 ),
-                depends_on=("financial.billing_profile",),
+                depends_on=(
+                    "financial.billing_profile",
+                    "financial.prepaid_threshold",
+                    "customer.financial_position",
+                ),
             ),
             SOTService(
                 name="financial.dunning",
