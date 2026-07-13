@@ -405,8 +405,21 @@ def list_customer_financial_events(
         .filter(LedgerEntry.is_active.is_(True))
         .filter(
             or_(
-                LedgerEntry.source.in_(
-                    [LedgerSource.adjustment, LedgerSource.refund, LedgerSource.other]
+                LedgerEntry.source.in_([LedgerSource.adjustment, LedgerSource.other]),
+                # A refund entry that carries a payment_id is the LEDGER's
+                # representation of a refund this reader has already counted on the
+                # Payment document, via ``net_amount = amount - refunded_amount``
+                # (see _payment_event). Counting both subtracted the refund TWICE:
+                # refunding NGN X dropped the customer's available balance by NGN 2X,
+                # which on a prepaid account is a false under-funding and a wrongful
+                # suspension of someone we had just refunded.
+                #
+                # This mirrors the payment clause immediately below, which has always
+                # required payment_id IS NULL for exactly the same reason. A refund
+                # NOT linked to a payment (a bare ledger adjustment) is still counted.
+                and_(
+                    LedgerEntry.source == LedgerSource.refund,
+                    LedgerEntry.payment_id.is_(None),
                 ),
                 and_(
                     LedgerEntry.source == LedgerSource.invoice,

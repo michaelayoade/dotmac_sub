@@ -106,6 +106,15 @@ _ALLOWED_PAYMENT_TRANSITIONS: dict[PaymentStatus, set[PaymentStatus]] = {
         PaymentStatus.refunded,
         PaymentStatus.partially_refunded,
     },
+    # succeeded -> failed is deliberately ABSENT. This table guards ``mark_status``,
+    # which is what provider webhooks drive, and a replayed or out-of-order webhook
+    # must never regress a succeeded payment to failed
+    # (see tests/test_payment_mark_status_guard.py).
+    #
+    # A genuine chargeback or bank reversal is a deliberate domain operation, not a
+    # status flip, and goes through ``Refunds.reverse_payment`` — which has its own
+    # guard and posts the reversing ledger entry. The escape hatch is the domain op,
+    # not a hole in the table.
     PaymentStatus.partially_refunded: {PaymentStatus.refunded},
     PaymentStatus.refunded: set(),
     PaymentStatus.canceled: set(),
@@ -1865,6 +1874,25 @@ class Payments(ListResponseMixin):
                 payment_id,
             )
             return payment
+
+        # A refund is a MONEY MOVEMENT, not a status flip. Setting the status alone
+        # posted no refund ledger entry and set no refunded_amount, so the payment
+        # still counted at its FULL value: the cash left the business and the
+        # customer kept a phantom credit for the same amount. The admin Refund
+        # button did exactly this.
+        #
+        # Delegate to the owner op, which posts the ledger entry, records
+        # refunded_amount, releases the allocations with their ledger credits, and
+        # recomputes the invoices. Every caller — admin UI, API, provider webhook —
+        # gets the same, correct effect.
+        if normalized == PaymentStatus.refunded and previous_status in (
+            PaymentStatus.succeeded,
+            PaymentStatus.partially_refunded,
+        ):
+            return Refunds.process_refund(
+                db, str(payment.id), reason="refund via status change"
+            )
+
         payment.status = normalized
         if normalized == PaymentStatus.succeeded:
             payment.paid_at = datetime.now(UTC)
@@ -2370,9 +2398,23 @@ class Refunds:
         for allocation in payment.allocations:
             invoice = get_by_id(db, Invoice, allocation.invoice_id)
             if invoice:
-                # For full refunds, remove the allocation effect
-                if is_full_refund:
-                    db.delete(allocation)
+                # A full refund removes the allocation's effect. It used to
+                # db.delete() the allocation, which (a) destroyed the audit row,
+                # (b) defeated _find_inactive_payment_allocation, which exists to
+                # reuse a soft-deleted allocation after a reversal, and (c) left
+                # the paired payment ledger CREDIT active and orphaned — money
+                # justified by an allocation that no longer existed.
+                #
+                # Soft-delete the allocation and drop its ledger credit with it,
+                # exactly as PaymentAllocations.delete and Payments.reallocate do.
+                # Never one without the other.
+                if is_full_refund and allocation.is_active:
+                    db.query(LedgerEntry).filter(
+                        LedgerEntry.payment_id == allocation.payment_id,
+                        LedgerEntry.invoice_id == allocation.invoice_id,
+                        LedgerEntry.source == LedgerSource.payment,
+                    ).update({"is_active": False}, synchronize_session=False)
+                    allocation.is_active = False
                 db.flush()
                 _finalize_invoice_payment_effects(db, invoice)
 
