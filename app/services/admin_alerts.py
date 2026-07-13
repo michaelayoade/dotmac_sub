@@ -620,19 +620,30 @@ def _radius_health_findings(db: Session) -> list[AlertFinding]:
             )
         )
 
-    suspended_active = int(result.get("suspended_with_session") or 0)
-    if suspended_active:
+    blocked_subscriptions = int(
+        result.get("blocked_access_subscriptions")
+        or result.get("suspended_with_session")
+        or 0
+    )
+    blocked_sessions = int(
+        result.get("blocked_access_sessions") or blocked_subscriptions
+    )
+    blocked_accounts = int(
+        result.get("blocked_access_accounts") or blocked_subscriptions
+    )
+    if blocked_sessions:
         findings.append(
             AlertFinding(
                 fingerprint=f"{prefix}enforcement-drift",
                 category="infrastructure",
                 source="radius-health",
                 severity=AlertSeverity.warning,
-                title="Suspended customers still hold live sessions",
+                title="Access-blocked customers still hold live sessions",
                 summary=(
-                    f"{suspended_active} suspended/blocked subscriptions have "
-                    "an active RADIUS session — enforcement is not landing on "
-                    "the NAS (CoA/disconnect path)."
+                    f"{blocked_accounts} account(s), {blocked_subscriptions} "
+                    f"subscription(s), and {blocked_sessions} session(s) "
+                    "disagree with the access resolver - enforcement is not "
+                    "landing on the NAS (CoA/disconnect path)."
                 ),
                 details=_json_safe(result),
             )

@@ -23,12 +23,11 @@ def cleanup_subscription_block_sessions(
 
 @celery_app.task(name="app.tasks.enforcement.reconcile_account_status_drift")
 def reconcile_account_status_drift() -> dict[str, int]:
-    """Repair subscriber-level ``blocked`` drift: subscribers walled-gardened at
-    the BNG while ALL their subscriptions are active (a stale account flag that
-    ``compute_account_status`` would derive as active). Applies the fix, then
-    rebuilds RADIUS once and CoA-kicks the affected sessions. The all-active
-    cohort filter is the guard; mixed-status accounts are excluded. Pure
-    service-state - no money writes. Beat-rerun self-heals on the next pass."""
+    """Repair safe ``new``/``blocked`` parent drift for all-active services.
+
+    The all-active cohort filter is the guard; mixed-status accounts are
+    excluded. Pure service-state - no money writes.
+    """
     return enforcement_scheduled.reconcile_account_status_drift()
 
 

@@ -672,8 +672,48 @@ def _credit_covers_open_ar(db: Session, subscriber_id: str) -> bool:
         return False
 
 
+def derive_account_status(db: Session, subscriber_id: str) -> SubscriberStatus:
+    """Return the subscriber status implied by authoritative service state.
+
+    This is the read-only half of ``compute_account_status``. Audits and
+    enforcement planners must be able to report projection drift without
+    temporarily mutating an ORM object or relying on a transaction rollback.
+    """
+    subscriber = db.get(Subscriber, subscriber_id)
+    if not subscriber:
+        raise ValueError(f"Subscriber {subscriber_id} not found")
+
+    subs = list(
+        db.scalars(
+            select(Subscription).where(Subscription.subscriber_id == subscriber.id)
+        ).all()
+    )
+
+    if not subs:
+        return SubscriberStatus.new
+    if any(s.status == SubscriptionStatus.active for s in subs):
+        return (
+            SubscriberStatus.delinquent
+            if _has_open_dunning_case(db, str(subscriber.id))
+            and not _credit_covers_open_ar(db, str(subscriber.id))
+            else SubscriberStatus.active
+        )
+    if any(s.status == SubscriptionStatus.suspended for s in subs):
+        return SubscriberStatus.suspended
+    if any(
+        s.status in {SubscriptionStatus.blocked, SubscriptionStatus.stopped}
+        for s in subs
+    ):
+        return SubscriberStatus.blocked
+    if any(s.status == SubscriptionStatus.pending for s in subs):
+        return SubscriberStatus.new
+    if all(s.status == SubscriptionStatus.disabled for s in subs):
+        return SubscriberStatus.disabled
+    return SubscriberStatus.canceled
+
+
 def compute_account_status(db: Session, subscriber_id: str) -> SubscriberStatus:
-    """Derive subscriber status from subscription states.
+    """Derive and persist subscriber status from subscription states.
 
     Priority order:
       1. Any subscription active →
@@ -701,35 +741,7 @@ def compute_account_status(db: Session, subscriber_id: str) -> SubscriberStatus:
     if not subscriber:
         raise ValueError(f"Subscriber {subscriber_id} not found")
 
-    subs = list(
-        db.scalars(
-            select(Subscription).where(Subscription.subscriber_id == subscriber.id)
-        ).all()
-    )
-
-    if not subs:
-        new_status = SubscriberStatus.new
-    elif any(s.status == SubscriptionStatus.active for s in subs):
-        new_status = (
-            SubscriberStatus.delinquent
-            if _has_open_dunning_case(db, str(subscriber.id))
-            and not _credit_covers_open_ar(db, str(subscriber.id))
-            else SubscriberStatus.active
-        )
-    elif any(s.status == SubscriptionStatus.suspended for s in subs):
-        new_status = SubscriberStatus.suspended
-    elif any(
-        s.status in {SubscriptionStatus.blocked, SubscriptionStatus.stopped}
-        for s in subs
-    ):
-        new_status = SubscriberStatus.blocked
-    elif any(s.status == SubscriptionStatus.pending for s in subs):
-        new_status = SubscriberStatus.new
-    elif all(s.status == SubscriptionStatus.disabled for s in subs):
-        new_status = SubscriberStatus.disabled
-    else:
-        # All terminal (canceled, expired, disabled, hidden, archived)
-        new_status = SubscriberStatus.canceled
+    new_status = derive_account_status(db, subscriber_id)
 
     if subscriber.status != new_status:
         logger.info(

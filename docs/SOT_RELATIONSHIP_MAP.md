@@ -39,11 +39,15 @@ that obscure business behavior.
    eligibility. For prepaid service, both directions compare the customer
    financial position with the single `financial.prepaid_threshold`; the
    existence or size of one payment is never itself permission to restore.
-4. Dunning owns postpaid enforcement; prepaid enforcement owns prepaid access.
+4. `financial.prepaid_enforcement` owns the prepaid candidate cohort and the
+   warn/suspend/restore plan consumed by both dry-run and execution. It consumes
+   the funding decision from `financial.access_resolution`; it does not create
+   another balance or threshold rule.
+5. Dunning owns postpaid enforcement; prepaid enforcement owns prepaid access.
    Both converge on the account lifecycle writer, which re-checks billing
    profile validity, payment-arrangement/proof/extension shields, and billing
    enforcement health immediately before a financial suspension.
-5. Scheduled billing, collections, and payment-reconciliation services own DB
+6. Scheduled billing, collections, and payment-reconciliation services own DB
    sessions, transaction outcomes, and operational logging for Celery runners.
 
 Rule: no module should infer access from draft invoices, ad hoc balances, or
