@@ -745,7 +745,7 @@ def test_authorization_duration_includes_olt_baseline_work(db_session, monkeypat
         completed_authorization=True,
         duration_ms=1,
     )
-    ticks = iter([10.0, 15.0])
+    ticks = iter([10.0] * 11 + [15.0])
 
     monkeypatch.setattr(ont_authorization, "monotonic", lambda: next(ticks))
     monkeypatch.setattr(
@@ -768,3 +768,10 @@ def test_authorization_duration_includes_olt_baseline_work(db_session, monkeypat
 
     assert response.duration_ms == 5000
     assert [step.name for step in response.steps] == ["Apply Authorization Baseline"]
+    assert [phase["phase"] for phase in response.phase_timings] == [
+        "core_authorization",
+        "post_authorization_commit",
+        "authorization_baseline",
+        "post_baseline_commit",
+        "audit",
+    ]
