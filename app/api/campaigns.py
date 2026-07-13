@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models.notification import SuppressionReason, SuppressionScope
 from app.schemas.campaigns import (
     CampaignAudienceBuildRead,
     CampaignCreate,
@@ -21,13 +22,12 @@ from app.schemas.campaigns import (
     CampaignStepCreate,
     CampaignStepRead,
     CampaignStepUpdate,
-    SuppressionCreate,
-    SuppressionRead,
     CampaignUnsubscribeRead,
     CampaignUpdate,
+    SuppressionCreate,
+    SuppressionRead,
 )
 from app.schemas.common import ListResponse
-from app.models.notification import SuppressionReason, SuppressionScope
 from app.services import comms_campaigns, communication_eligibility
 from app.services.auth_dependencies import require_user_auth
 from app.services.response import list_response

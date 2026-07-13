@@ -241,6 +241,7 @@ class SuppressionCreate(BaseModel):
     sending their invoice. A hard bounce or an erasure request sets ``all``, and
     that is not something this endpoint does.
     """
+
     model_config = ConfigDict(str_strip_whitespace=True)
 
     channel: str = "email"

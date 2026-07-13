@@ -5,7 +5,6 @@ import re
 import secrets
 import zoneinfo
 from collections import Counter
-from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
@@ -23,8 +22,6 @@ from app.models.comms_campaign import (
     CampaignSmtpConfig,
     CampaignStatus,
     CampaignStep,
-    CampaignSuppression,
-    CampaignSuppressionReason,
     CampaignType,
 )
 from app.models.notification import (
@@ -142,9 +139,7 @@ def _validate_campaign_values(campaign: Campaign) -> None:
 MARKETING_CATEGORY = "marketing"
 
 
-def _blocked_addresses(
-    db: Session, *, channel, addresses: list[str]
-) -> set[str]:
+def _blocked_addresses(db: Session, *, channel, addresses: list[str]) -> set[str]:
     """Addresses the platform ledger says we may not send MARKETING to.
 
     One helper, used by every campaign path that needs the answer. Three inline
@@ -163,7 +158,6 @@ def _blocked_addresses(
         )
     )
     return {a for a in clean if a not in eligible}
-
 
 
 def _segment_query(db: Session, campaign: Campaign):
@@ -236,20 +230,6 @@ def _recipient_address(
 # ---------------------------------------------------------------------------
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def unsubscribe_by_token(
     db: Session, token: str, *, source: str = "unsubscribe_link"
 ) -> CommunicationSuppression:
@@ -306,8 +286,6 @@ def unsubscribe_by_token(
         )
     )
     return suppression
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -1486,10 +1464,6 @@ def update_smtp_config_committed(
     db.commit()
     db.refresh(config)
     return config
-
-
-
-
 
 
 def unsubscribe_by_token_committed(
