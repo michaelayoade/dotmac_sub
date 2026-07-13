@@ -80,6 +80,17 @@ def _pagination(
     return page, per_page, {"page": page, "per_page": per_page}
 
 
+def _materialized_page(
+    request: Request,
+    items: list[dict[str, Any]],
+    *,
+    max_per_page: int = 500,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    page, per_page, meta = _pagination(request, max_per_page=max_per_page)
+    start = (page - 1) * per_page
+    return items[start : start + per_page], {**meta, "total": len(items)}
+
+
 def _finish_read_response(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
     bind = db.get_bind()
     if (
@@ -230,11 +241,14 @@ def search_subscribers(
 
 
 @router.get("/subscribers/online", dependencies=[Depends(require_crm_bearer)])
-def online_subscribers(db: Session = Depends(get_db)) -> dict[str, Any]:
+def online_subscribers(
+    request: Request, db: Session = Depends(get_db)
+) -> dict[str, Any]:
     # Online state is inferred from open, fresh RADIUS accounting sessions.
     # It is not an authoritative real-time device poll; subscribers whose NAS
     # has not sent interim accounting inside ONLINE_FRESH_SECONDS are excluded.
-    return _finish_read_response(db, _envelope(crm_api.online_subscribers(db)))
+    data, meta = _materialized_page(request, crm_api.online_subscribers(db))
+    return _finish_read_response(db, _envelope(data, meta))
 
 
 @router.get("/subscribers/{subscriber_id}", dependencies=[Depends(require_crm_bearer)])
@@ -334,8 +348,9 @@ def update_subscriber_status(
 
 
 @router.get("/locations", dependencies=[Depends(require_crm_bearer)])
-def locations(db: Session = Depends(get_db)) -> dict[str, Any]:
-    return _finish_read_response(db, _envelope(crm_api.locations(db)))
+def locations(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
+    data, meta = _materialized_page(request, crm_api.locations(db))
+    return _finish_read_response(db, _envelope(data, meta))
 
 
 @router.get("/billing-risk-source", dependencies=[Depends(require_crm_bearer)])

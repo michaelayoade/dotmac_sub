@@ -318,8 +318,8 @@ def test_locations_uses_short_cache(db_session, crm_auth):
 
     event.listen(engine, "before_cursor_execute", count_statement)
     try:
-        first = _call_route(crm_routes.locations, db_session)
-        second = _call_route(crm_routes.locations, db_session)
+        first = _call_route(crm_routes.locations, _request(), db_session)
+        second = _call_route(crm_routes.locations, _request(), db_session)
     finally:
         event.remove(engine, "before_cursor_execute", count_statement)
         crm_api._locations_cache = None
@@ -329,6 +329,51 @@ def test_locations_uses_short_cache(db_session, crm_auth):
     assert first.json() == second.json()
     assert any(item["name"] == subscriber.city for item in first.json()["data"])
     assert len(statements) == 2
+
+
+@pytest.mark.parametrize(
+    "route,service_name",
+    [
+        (crm_routes.locations, "locations"),
+        (crm_routes.online_subscribers, "online_subscribers"),
+    ],
+)
+def test_materialized_crm_endpoints_paginate_and_terminate(
+    db_session, monkeypatch, route, service_name
+):
+    rows = [
+        {"id": "first", "name": "First"},
+        {"id": "second", "name": "Second"},
+    ]
+    monkeypatch.setattr(crm_api, service_name, lambda db: rows)
+
+    first = _call_route(
+        route,
+        _request({"page": "1", "per_page": "1"}),
+        db_session,
+    )
+    second = _call_route(
+        route,
+        _request({"page": "2", "per_page": "1"}),
+        db_session,
+    )
+    final = _call_route(
+        route,
+        _request({"page": "3", "per_page": "1"}),
+        db_session,
+    )
+
+    assert first.status_code == 200
+    assert first.json() == {
+        "data": [rows[0]],
+        "meta": {"page": 1, "per_page": 1, "total": 2},
+    }
+    assert second.json() == {
+        "data": [rows[1]],
+        "meta": {"page": 2, "per_page": 1, "total": 2},
+    }
+    assert final.json()["data"] == []
+    assert final.json()["meta"] == {"page": 3, "per_page": 1, "total": 2}
 
 
 def test_invalid_query_parameters_return_400_field_errors(crm_auth):
