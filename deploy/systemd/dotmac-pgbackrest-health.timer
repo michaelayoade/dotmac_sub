@@ -1,0 +1,11 @@
+[Unit]
+Description=Check pgBackRest backup and WAL health every fifteen minutes
+
+[Timer]
+OnBootSec=10m
+OnUnitActiveSec=15m
+Persistent=true
+Unit=dotmac-pgbackrest-health.service
+
+[Install]
+WantedBy=timers.target

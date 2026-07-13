@@ -1,0 +1,11 @@
+[Unit]
+Description=Run a weekly pgBackRest full backup
+
+[Timer]
+OnCalendar=Sun *-*-* 02:20:00
+Persistent=true
+RandomizedDelaySec=10m
+Unit=dotmac-pgbackrest-backup@full.service
+
+[Install]
+WantedBy=timers.target

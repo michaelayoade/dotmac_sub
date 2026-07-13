@@ -166,7 +166,7 @@ prod-migrate: ## Apply DB migrations in the prod stack (alembic baked into the i
 # a host-build fallback for air-gapped / registry-down situations only.
 #
 # `make deploy TAG=sha-<shortsha>` runs the hardened scripts/deploy.sh:
-#   verify image on GHCR -> DB backup -> pin APP_IMAGE -> pull ->
+#   verify image on GHCR -> backup/WAL health gate -> pin APP_IMAGE -> pull ->
 #   alembic upgrade heads -> recreate app+workers -> health gate -> auto-rollback.
 # CI (.github/workflows/ghcr.yml) pushes ghcr.io/<owner>/dotmac_sub per main push;
 # the host must `docker login ghcr.io` (PAT with read:packages) once.

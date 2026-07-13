@@ -1,0 +1,18 @@
+[Unit]
+Description=DotMac pgBackRest isolated restore verification
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/default/dotmac-pgbackrest
+ExecStart=/usr/bin/bash ${DOTMAC_SUB_DIR}/scripts/backup/pgbackrest_restore_verify.sh
+Nice=15
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+CPUWeight=10
+IOWeight=10
+TimeoutStartSec=12h
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dotmac-pgbackrest-restore-verify

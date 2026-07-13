@@ -4,7 +4,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 backup_script="${script_dir}/backup_dotmac_sub_dbs_to_rclone.sh"
-cron_line="0 18 * * * ${backup_script} >> /var/log/dotmac_sub_db_backup.log 2>&1"
+cron_line="40 3 * * * flock -n /var/lock/dotmac_sub_offsite_backup.lock nice -n 15 ionice -c 2 -n 7 ${backup_script} >> /var/log/dotmac_sub_db_backup.log 2>&1"
 
 current_crontab="$(mktemp)"
 trap 'rm -f "${current_crontab}"' EXIT
@@ -15,10 +15,9 @@ else
   : > "${current_crontab}"
 fi
 
-if ! grep -Fqx "${cron_line}" "${current_crontab}"; then
-  printf '%s\n' "${cron_line}" >> "${current_crontab}"
-  crontab "${current_crontab}"
-  printf 'Installed cron entry: %s\n' "${cron_line}"
-else
-  printf 'Cron entry already present: %s\n' "${cron_line}"
-fi
+# This installer owns the one line invoking this exact script. Remove legacy
+# schedules (including the old 18:00 business-hours run) before installing it.
+sed -i "\|${backup_script}|d" "${current_crontab}"
+printf '%s\n' "${cron_line}" >> "${current_crontab}"
+crontab "${current_crontab}"
+printf 'Installed cron entry: %s\n' "${cron_line}"

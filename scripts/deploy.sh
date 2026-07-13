@@ -9,7 +9,7 @@
 # Usage:
 #   deploy.sh sha-abc1234        deploy this image tag (CI builds one per commit on main)
 #   deploy.sh --status           show pinned vs running image
-#   SKIP_BACKUP=1 deploy.sh ...  skip the pre-migration DB backup (NOT recommended)
+#   SKIP_BACKUP_CHECK=1 deploy.sh ...  emergency-only recoverability gate override
 #
 # RUN IT DETACHED over SSH -- `nohup ./scripts/deploy.sh sha-... &` or inside
 # tmux. A dropped SSH session sends SIGHUP and kills the deploy mid-flight; the
@@ -17,7 +17,7 @@
 # upgrade heads` still leaves the schema half-applied.
 #
 # Procedure:
-#   verify image on GHCR -> DB backup -> pin APP_IMAGE in .env -> pull ->
+#   verify image on GHCR -> backup/WAL health gate -> pin APP_IMAGE -> pull ->
 #   alembic upgrade heads (one-off container) -> recreate app+workers -> health gate.
 #
 # On a failed health gate the previous image is re-pinned and the services are
@@ -66,14 +66,13 @@ if ! flock -n 9; then
   exit 1
 fi
 
-# A pg_dump left behind by a deploy that died (e.g. its SSH session dropped)
-# outlives its parent and keeps hammering the DB. The lock will not catch that
-# -- the dead process released it. Refuse to pile a second dump on top.
+# Do not migrate while a legacy/offsite pg_dump is reading the same database.
+# Deploys no longer start pg_dump themselves, but this also catches an old or
+# orphaned job while the scheduled backup migration is being completed.
 if pgrep -f "pg_dump .*-d ${DB_NAME:-dotmac_sub}" >/dev/null 2>&1; then
-  echo "REFUSING TO DEPLOY: a pg_dump is already running against ${DB_NAME:-dotmac_sub}." >&2
+  echo "REFUSING TO DEPLOY: a logical backup is running against ${DB_NAME:-dotmac_sub}." >&2
   pgrep -af "pg_dump" | sed "s/^/  /" >&2
-  echo "It is probably orphaned from a deploy that died. Kill it, then retry:" >&2
-  echo "  pkill -f pg_dump; docker exec ${DB_CONTAINER} pkill -f pg_dump" >&2
+  echo "Wait for it to complete. If it is orphaned, verify that before terminating it." >&2
   exit 1
 fi
 
@@ -124,28 +123,10 @@ log "Deploying ${IMAGE} (currently pinned: ${PREV_IMAGE:-none})"
 log "Verifying image exists on registry"
 docker manifest inspect "${IMAGE}" >/dev/null
 
-# If this script is killed mid-backup -- an SSH session dropping is enough --
-# the pg_dump it started does NOT die with it. It keeps running, and the next
-# deploy attempt piles another one on top. Take the whole child tree down.
-cleanup_children() {
-  local rc=$?
-  if [[ -n "${BACKUP_PID:-}" ]] && kill -0 "${BACKUP_PID}" 2>/dev/null; then
-    kill -TERM "${BACKUP_PID}" 2>/dev/null || true
-  fi
-  # pg_dump runs inside the DB container via `docker exec`; it survives the
-  # exec client, so signal it there too.
-  docker exec "${DB_CONTAINER}" sh -c "pkill -f pg_dump" >/dev/null 2>&1 || true
-  return $rc
-}
-trap 'cleanup_children; echo "Deploy interrupted -- backup child terminated, nothing pinned or migrated" >&2; exit 130' INT TERM HUP
+trap 'echo "Deploy interrupted -- nothing pinned or migrated" >&2; exit 130' INT TERM HUP
 
-if [[ "${SKIP_BACKUP:-0}" != "1" ]]; then
-  log "Backing up database before migrations (SKIP_BACKUP=1 to skip)"
-  bash "${REPO_DIR}/scripts/db_backup.sh" &
-  BACKUP_PID=$!
-  wait "${BACKUP_PID}"
-  BACKUP_PID=""
-fi
+log "Verifying recent recoverable backup and WAL archive"
+bash "${REPO_DIR}/scripts/backup/deploy_backup_gate.sh"
 
 repin_prev() {
   [[ -n "${PREV_IMAGE}" ]] && sed -i "s|^APP_IMAGE=.*|APP_IMAGE=${PREV_IMAGE}|" "${DEPLOY_DIR}/.env"
@@ -155,7 +136,7 @@ trap 'repin_prev; echo "Deploy FAILED — APP_IMAGE restored to ${PREV_IMAGE:-no
 # From here on APP_IMAGE may already be pinned, so an interrupt must restore it
 # too -- not just terminate the backup child. (Migrations are NOT reverted; new
 # revisions must stay backward-compatible with the previous release.)
-trap 'cleanup_children; repin_prev; echo "Deploy interrupted — APP_IMAGE restored to ${PREV_IMAGE:-none}" >&2; exit 130' INT TERM HUP
+trap 'repin_prev; echo "Deploy interrupted — APP_IMAGE restored to ${PREV_IMAGE:-none}" >&2; exit 130' INT TERM HUP
 
 log "Pinning APP_IMAGE=${IMAGE}"
 if grep -q '^APP_IMAGE=' .env; then

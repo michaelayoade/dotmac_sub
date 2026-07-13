@@ -1,0 +1,18 @@
+[Unit]
+Description=DotMac pgBackRest %i backup
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/default/dotmac-pgbackrest
+ExecStart=/usr/bin/bash ${DOTMAC_SUB_DIR}/scripts/backup/pgbackrest_backup.sh %i
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+CPUWeight=20
+IOWeight=20
+TimeoutStartSec=12h
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dotmac-pgbackrest-backup

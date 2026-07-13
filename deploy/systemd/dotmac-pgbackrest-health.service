@@ -1,0 +1,13 @@
+[Unit]
+Description=DotMac pgBackRest repository and WAL health check
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/default/dotmac-pgbackrest
+ExecStart=/usr/bin/bash ${DOTMAC_SUB_DIR}/scripts/backup/pgbackrest_health.sh
+TimeoutStartSec=10m
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dotmac-pgbackrest-health

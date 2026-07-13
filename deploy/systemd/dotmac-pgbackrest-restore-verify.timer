@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the monthly pgBackRest isolated restore drill
+
+[Timer]
+OnCalendar=Sun *-*-01..07 04:00:00
+Persistent=true
+RandomizedDelaySec=30m
+Unit=dotmac-pgbackrest-restore-verify.service
+
+[Install]
+WantedBy=timers.target

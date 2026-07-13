@@ -1,0 +1,11 @@
+[Unit]
+Description=Run a pgBackRest differential backup Monday through Saturday
+
+[Timer]
+OnCalendar=Mon..Sat *-*-* 02:20:00
+Persistent=true
+RandomizedDelaySec=10m
+Unit=dotmac-pgbackrest-backup@diff.service
+
+[Install]
+WantedBy=timers.target

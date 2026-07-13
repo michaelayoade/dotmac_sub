@@ -12,6 +12,20 @@ clients:
       server: 149.102.135.97
 
 scrape_configs:
+  - job_name: dotmac-operations
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: dotmac-operations
+          component: pgbackrest
+          __path__: /var/log/dotmac_sub/pgbackrest-operations.log
+    pipeline_stages:
+      - regex:
+          expression: 'event=(?P<event>[a-z_]+) status=(?P<status>[a-z_]+)'
+      - labels:
+          event:
+          status:
+
   # Docker container logs via docker socket
   - job_name: docker
     docker_sd_configs:

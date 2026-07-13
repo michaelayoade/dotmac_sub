@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Pre-migration DB backup for dotmac_sub (a fast local dump for rollback).
+# Legacy/manual logical DB backup for dotmac_sub.
 #
 # Separate from the offsite rclone backups in scripts/backup/* — this is the
-# quick, on-box snapshot deploy.sh takes right before `alembic upgrade heads`,
-# so a bad migration can be restored without waiting on remote storage.
+# retained only for transitional/manual exports. deploy.sh never invokes this:
+# it verifies pgBackRest backup/WAL health without creating database load.
 #
 # Dumps via DATABASE_URL from .env, run inside the DB container (which ships
 # pg_dump and can reach the DB whether it's postgres-local or external).

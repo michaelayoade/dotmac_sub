@@ -2,6 +2,15 @@
 
 set -euo pipefail
 
+ROOT_DIR="${ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+ENV_FILE="${ENV_FILE:-${ROOT_DIR}/.env}"
+if [[ -f "${ENV_FILE}" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "${ENV_FILE}"
+  set +a
+fi
+
 REMOTE_NAME="${REMOTE_NAME:-Backup}"
 REMOTE_BASE_PATH="${REMOTE_BASE_PATH:-db.backup/dotmac_sub}"
 KEEP_LAST="${KEEP_LAST:-3}"
@@ -24,6 +33,19 @@ require_cmd() {
     printf 'Missing required command: %s\n' "$1" >&2
     exit 1
   fi
+}
+
+compose_container() {
+  local service_name="$1"
+  local fallback_name="$2"
+  local resolved
+  resolved="$(
+    docker ps \
+      --filter 'label=com.docker.compose.project=dotmac_sub' \
+      --filter "label=com.docker.compose.service=${service_name}" \
+      --format '{{.Names}}' | head -1
+  )"
+  printf '%s\n' "${resolved:-${fallback_name}}"
 }
 
 trim_remote_backups() {
@@ -59,7 +81,7 @@ backup_postgres() {
     "${container_name}" \
     sh -lc '
     export PGPASSWORD="${POSTGRES_PASSWORD}"
-    exec pg_dump -U "${POSTGRES_USER}" -d "${BACKUP_DB_NAME}"
+    exec nice -n 15 pg_dump -U "${POSTGRES_USER}" -d "${BACKUP_DB_NAME}"
   ' | gzip > "${local_backup_path}"
 
   rclone copyto "${local_backup_path}" "${REMOTE_NAME}:${remote_path}/${backup_name}"
@@ -107,11 +129,19 @@ backup_mongodb() {
 require_cmd docker
 require_cmd rclone
 
-backup_postgres "dotmac_sub_db" "dotmac_sub" "dotmac_sub_db"
-backup_postgres "dotmac_sub_radius_db" "radius" "dotmac_sub_radius_db"
+PRIMARY_DB_CONTAINER="${PRIMARY_DB_BACKUP_CONTAINER:-$(compose_container postgres-local dotmac_pg_local)}"
+RADIUS_DB_CONTAINER="${RADIUS_DB_BACKUP_CONTAINER:-$(compose_container radius-db dotmac_sub_radius_db)}"
+MONGODB_CONTAINER="${GENIEACS_MONGODB_BACKUP_CONTAINER:-$(compose_container genieacs-mongodb dotmac_sub_genieacs_mongodb)}"
+
+if [[ "${BACKUP_PRIMARY_POSTGRES_LOGICAL:-true}" == "true" ]]; then
+  backup_postgres "${PRIMARY_DB_CONTAINER}" "dotmac_sub" "dotmac_sub_db"
+else
+  printf 'Primary logical backup disabled; pgBackRest off-host repository must be proven.\n'
+fi
+backup_postgres "${RADIUS_DB_CONTAINER}" "radius" "dotmac_sub_radius_db"
 backup_mongodb \
-  "dotmac_sub_genieacs_mongodb" \
+  "${MONGODB_CONTAINER}" \
   "genieacs" \
   "dotmac_sub_genieacs_mongodb" \
   "${GENIEACS_MONGODB_USER:-genieacs}" \
-  "${GENIEACS_MONGODB_PASSWORD:-$(grep '^GENIEACS_MONGODB_PASSWORD=' /opt/dotmac_sub/.env | cut -d= -f2-)}"
+  "${GENIEACS_MONGODB_PASSWORD:-$(grep '^GENIEACS_MONGODB_PASSWORD=' "${ENV_FILE}" | cut -d= -f2-)}"
