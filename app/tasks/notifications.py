@@ -16,6 +16,7 @@ from app.models.notification import (
     NotificationDelivery,
     NotificationStatus,
 )
+from app.services import communication_eligibility
 from app.services import email as email_service
 from app.services import push as push_service
 from app.services import sms as sms_service
@@ -209,6 +210,7 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
     retried = 0
     failed = 0
     reclaimed = 0
+    suppressed = 0
     stuck_dropped = 0
     rate_limited = 0
     channel_counts: dict[NotificationChannel, int] = {}
@@ -251,6 +253,31 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                 notification.retry_count,
                 max_retries,
             )
+        # The consent gate. This is the ONLY place all four transports are
+        # called, so it is the only place the check is guaranteed to run --
+        # putting it in each caller means the one that forgets is the one that
+        # mails an unsubscribed customer.
+        #
+        # A marketing suppression stops marketing and nothing else: an
+        # unsubscribe must never stop an invoice. `may_send` owns that rule.
+        if not communication_eligibility.may_send(
+            db,
+            channel=notification.channel,
+            address=notification.recipient,
+            category=notification.category,
+        ):
+            notification.status = NotificationStatus.canceled
+            notification.last_error = "suppressed"
+            suppressed += 1
+            logger.info(
+                "Notification %s suppressed (channel=%s category=%s)",
+                notification.id,
+                notification.channel.value,
+                notification.category,
+            )
+            db.commit()
+            continue
+
         # Update status before sending
         notification.status = NotificationStatus.sending
         db.commit()
@@ -408,6 +435,7 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
         "failed": failed,
         "expired": expired,
         "reclaimed": reclaimed,
+        "suppressed": suppressed,
         "stuck_dropped": stuck_dropped,
         "rate_limited": rate_limited,
     }
