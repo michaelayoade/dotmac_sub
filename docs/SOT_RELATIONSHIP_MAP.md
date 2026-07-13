@@ -94,6 +94,9 @@ in forms, or rotate key material directly.
 4. Staff notification service owns internal/admin notification creation.
 5. Team inbox services own conversation notes, assignment, replies,
    contact-linking, widget writes, inbound-channel ingestion, and collaboration.
+6. Campaign services own marketing audience, sequence, and content decisions.
+   They request a canonical sender key; email delivery alone resolves that key
+   to SMTP identity and credentials.
 
 Rule: domain services request a notification outcome; they should not construct
 notification rows or choose email/SMS/WhatsApp directly.

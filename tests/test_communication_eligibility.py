@@ -295,3 +295,33 @@ def test_an_escalation_survives_without_a_commit(db_session):
     assert not eligibility.may_send(
         db_session, channel=EMAIL, address="bounced@example.com", category="billing"
     )
+
+
+def test_campaign_unsuppress_cannot_clear_an_all_scope_suppression(db_session):
+    row = eligibility.suppress(
+        db_session,
+        channel=EMAIL,
+        address="complaint@example.com",
+        scope=SuppressionScope.all,
+        reason=SuppressionReason.complaint,
+    )
+
+    assert not eligibility.unsuppress_marketing(
+        db_session, channel=EMAIL, address="complaint@example.com"
+    )
+    assert db_session.get(CommunicationSuppression, row.id) is row
+
+
+def test_campaign_unsuppress_can_clear_a_marketing_suppression(db_session):
+    row = eligibility.suppress(
+        db_session,
+        channel=EMAIL,
+        address="promo@example.com",
+        scope=SuppressionScope.marketing,
+        reason=SuppressionReason.unsubscribe,
+    )
+
+    assert eligibility.unsuppress_marketing(
+        db_session, channel=EMAIL, address="promo@example.com"
+    )
+    assert db_session.get(CommunicationSuppression, row.id) is None

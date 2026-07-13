@@ -278,6 +278,7 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                 notification.channel.value,
                 notification.category,
             )
+            record_delivery_outcome(db, notification)
             db.commit()
             continue
 

@@ -1,4 +1,4 @@
-"""Campaign parity: steps, senders, SMTP, scheduling, delivery, suppression.
+"""Campaign parity: steps, canonical senders, scheduling, delivery, suppression.
 
 The suppression tests are the load-bearing ones: a suppressed or unsubscribed
 address must never be handed to the transport, whether it was suppressed before
@@ -27,11 +27,11 @@ from app.models.subscriber import Subscriber, SubscriberStatus
 from app.schemas.campaigns import (
     CampaignCreate,
     CampaignSenderCreate,
-    CampaignSmtpConfigCreate,
     CampaignStepCreate,
 )
 from app.services import comms_campaigns
 from app.services import communication_eligibility as eligibility
+from app.tasks import notifications as notification_tasks
 
 
 def _subscriber(db_session, *, email: str, first_name: str = "Ada") -> Subscriber:
@@ -65,28 +65,25 @@ def _at(value: datetime | None) -> datetime | None:
 
 @pytest.fixture
 def captured_email(monkeypatch) -> list[dict]:
-    """Capture every email the campaign sender hands to the transport."""
+    """Capture emails only when the notification outbox reaches the transport."""
     sent: list[dict] = []
 
     def _fake_send_email(*args, **kwargs):
         sent.append(kwargs)
         return True
 
-    def _fake_send_email_with_config(config, **kwargs):
-        sent.append({**kwargs, "config": config})
-        return True
-
     monkeypatch.setattr(
-        comms_campaigns.team_inbox_outbound.email_service,
+        notification_tasks.email_service,
         "send_email",
         _fake_send_email,
     )
-    monkeypatch.setattr(
-        comms_campaigns.team_inbox_outbound.email_service,
-        "send_email_with_config",
-        _fake_send_email_with_config,
-    )
     return sent
+
+
+def _deliver_queued(db_session) -> dict[str, int]:
+    return notification_tasks._deliver_notification_queue_stats(  # noqa: SLF001
+        db_session, batch_size=100
+    )
 
 
 def _campaign(db_session, **overrides):
@@ -123,7 +120,9 @@ def test_suppressed_address_is_excluded_from_the_audience(db_session, captured_e
 
     assert audience.created == 1
     assert audience.skipped_reasons["suppressed"] == 1
-    assert result.sent == 1
+    assert result.queued == 1
+    assert captured_email == []
+    assert _deliver_queued(db_session)["delivered"] == 1
     assert [item["to_email"] for item in captured_email] == ["keep@example.com"]
 
 
@@ -152,8 +151,8 @@ def test_address_suppressed_after_the_build_is_never_sent_to(
             CampaignRecipient.campaign_id == campaign.id
         )
     }
-    assert [item["to_email"] for item in captured_email] == ["keep@example.com"]
-    assert result.sent == 1
+    assert captured_email == []
+    assert result.queued == 1
     # The ledger does not reach into campaign tables to retire recipients -- it
     # does not know campaigns exist. The send gate is what blocks, which is why
     # this counts as suppressed here rather than being quietly pre-retired.
@@ -166,6 +165,8 @@ def test_address_suppressed_after_the_build_is_never_sent_to(
     assert recipients["late@example.com"].attempt_count == 0
     # Suppressed rows do not inflate the audience counter.
     assert campaign.total_recipients == 1
+    assert _deliver_queued(db_session)["delivered"] == 1
+    assert [item["to_email"] for item in captured_email] == ["keep@example.com"]
 
 
 def test_send_batch_rechecks_suppression_it_did_not_retire(db_session, captured_email):
@@ -194,7 +195,7 @@ def test_send_batch_rechecks_suppression_it_did_not_retire(db_session, captured_
         .one()
     )
     assert captured_email == []
-    assert result.sent == 0
+    assert result.queued == 0
     assert result.suppressed == 1
     assert recipient.status == CampaignRecipientStatus.suppressed.value
 
@@ -231,7 +232,7 @@ def test_unsubscribe_token_suppresses_the_address_globally(db_session, captured_
 
     assert audience.created == 0
     assert audience.skipped_reasons["suppressed"] == 1
-    assert result.sent == 0
+    assert result.queued == 0
     assert captured_email == []
 
 
@@ -240,6 +241,8 @@ def test_unsubscribe_link_is_appended_to_the_email_body(db_session, captured_ema
     campaign = _campaign(db_session)
     comms_campaigns.build_recipient_list(db_session, campaign.id)
     comms_campaigns.send_campaign_batch(db_session, campaign.id)
+    assert captured_email == []
+    assert _deliver_queued(db_session)["delivered"] == 1
 
     recipient = (
         db_session.query(CampaignRecipient)
@@ -250,6 +253,30 @@ def test_unsubscribe_link_is_appended_to_the_email_body(db_session, captured_ema
     assert "Hello Ada" in body_html  # variable substitution ran
     assert recipient.unsubscribe_token in body_html
     assert "/campaigns/public/unsubscribe/" in body_html
+
+
+def test_suppression_after_queue_cancels_without_calling_transport(
+    db_session, captured_email
+):
+    subscriber = _subscriber(db_session, email="queued@example.com")
+    campaign = _campaign(db_session)
+    comms_campaigns.build_recipient_list(db_session, campaign.id)
+    result = comms_campaigns.send_campaign_batch(db_session, campaign.id)
+    assert result.queued == 1
+
+    eligibility.suppress(
+        db_session,
+        channel=NotificationChannel.email,
+        address=subscriber.email,
+        reason=SuppressionReason.unsubscribe,
+    )
+    stats = _deliver_queued(db_session)
+
+    recipient = db_session.query(CampaignRecipient).one()
+    assert stats["suppressed"] == 1
+    assert captured_email == []
+    assert recipient.status == CampaignRecipientStatus.skipped.value
+    assert campaign.status == CampaignStatus.completed.value
 
 
 def test_unknown_unsubscribe_token_is_a_404(db_session):
@@ -312,6 +339,33 @@ def test_a_complaint_escalates_an_unsubscribe_and_is_never_downgraded(db_session
 # ---------------------------------------------------------------------------
 
 
+def test_step_waits_for_the_previous_outbox_stage_to_finish(db_session, captured_email):
+    _subscriber(db_session, email="queued-stage@example.com")
+    campaign = _campaign(db_session, name="Drip", campaign_type="nurture")
+    comms_campaigns.create_campaign_step(
+        db_session,
+        campaign.id,
+        CampaignStepCreate(subject="Next", body_html="<p>Next</p>"),
+    )
+    start = datetime(2026, 7, 1, 10, 0, tzinfo=UTC)
+    comms_campaigns.build_recipient_list(db_session, campaign.id)
+    comms_campaigns.send_campaign_batch(db_session, campaign.id, now=start)
+
+    waiting = comms_campaigns.process_due_campaign_steps(db_session, now=start)
+    assert waiting["advanced"] == 0
+    assert (
+        db_session.query(CampaignRecipient)
+        .filter(CampaignRecipient.step_id.is_not(None))
+        .count()
+        == 0
+    )
+
+    assert _deliver_queued(db_session)["delivered"] == 1
+    advanced = comms_campaigns.process_due_campaign_steps(db_session, now=start)
+    assert advanced["advanced"] == 1
+    assert advanced["queued"] == 1
+
+
 def test_steps_fire_in_order_and_only_when_due(db_session, captured_email):
     _subscriber(db_session, email="lead@example.com")
     campaign = _campaign(db_session, name="Onboarding", campaign_type="nurture")
@@ -338,7 +392,9 @@ def test_steps_fire_in_order_and_only_when_due(db_session, captured_email):
 
     start = datetime(2026, 7, 1, 10, 0, tzinfo=UTC)
     comms_campaigns.build_recipient_list(db_session, campaign.id)
-    comms_campaigns.send_campaign_batch(db_session, campaign.id, now=start)
+    initial = comms_campaigns.send_campaign_batch(db_session, campaign.id, now=start)
+    assert initial.queued == 1
+    assert _deliver_queued(db_session)["delivered"] == 1
     assert campaign.status == CampaignStatus.completed.value
     captured_email.clear()
 
@@ -354,7 +410,9 @@ def test_steps_fire_in_order_and_only_when_due(db_session, captured_email):
         db_session, now=start + timedelta(days=3)
     )
     assert first["advanced"] == 1
-    assert first["sent"] == 1
+    assert first["queued"] == 1
+    assert captured_email == []
+    assert _deliver_queued(db_session)["delivered"] == 1
     assert captured_email[-1]["body_html"].startswith("<p>Step one</p>")
     assert campaign.status == CampaignStatus.completed.value
 
@@ -371,7 +429,8 @@ def test_steps_fire_in_order_and_only_when_due(db_session, captured_email):
         db_session, now=start + timedelta(days=6)
     )
     assert second["advanced"] == 1
-    assert second["sent"] == 1
+    assert second["queued"] == 1
+    assert _deliver_queued(db_session)["delivered"] == 1
     assert captured_email[-1]["body_html"].startswith("<p>Step two</p>")
 
     # Nothing left to advance, and no step is ever materialized twice.
@@ -388,7 +447,9 @@ def test_steps_fire_in_order_and_only_when_due(db_session, captured_email):
         .all()
     )
     assert len(step_rows) == 2
-    assert all(row.status == CampaignRecipientStatus.sent.value for row in step_rows)
+    assert all(
+        row.status == CampaignRecipientStatus.delivered.value for row in step_rows
+    )
 
 
 def test_a_step_does_not_roll_forward_to_an_unsubscribed_recipient(
@@ -408,6 +469,7 @@ def test_a_step_does_not_roll_forward_to_an_unsubscribed_recipient(
     start = datetime(2026, 7, 1, 10, 0, tzinfo=UTC)
     comms_campaigns.build_recipient_list(db_session, campaign.id)
     comms_campaigns.send_campaign_batch(db_session, campaign.id, now=start)
+    assert _deliver_queued(db_session)["delivered"] == 2
 
     leaver = (
         db_session.query(CampaignRecipient)
@@ -422,6 +484,9 @@ def test_a_step_does_not_roll_forward_to_an_unsubscribed_recipient(
     )
 
     assert result["created"] == 1
+    assert result["queued"] == 1
+    assert captured_email == []
+    assert _deliver_queued(db_session)["delivered"] == 1
     assert [item["to_email"] for item in captured_email] == ["stays@example.com"]
     step_addresses = {
         row.address
@@ -444,14 +509,15 @@ def test_step_content_falls_back_to_the_campaign_subject(db_session, captured_em
     start = datetime(2026, 7, 1, 10, 0, tzinfo=UTC)
     comms_campaigns.build_recipient_list(db_session, campaign.id)
     comms_campaigns.send_campaign_batch(db_session, campaign.id, now=start)
+    assert _deliver_queued(db_session)["delivered"] == 1
     captured_email.clear()
 
     comms_campaigns.process_due_campaign_steps(
         db_session, now=start + timedelta(days=2)
     )
+    assert _deliver_queued(db_session)["delivered"] == 1
 
-    # The step has no subject, so the campaign's is reused (with the Re: prefix
-    # team_inbox_outbound applies to a reply on an existing thread).
+    # The step has no subject, so the campaign's subject is reused.
     assert "Faster fibre in July" in captured_email[0]["subject"]
     assert captured_email[0]["body_html"].startswith("<p>Only a body</p>")
 
@@ -469,6 +535,7 @@ def test_a_step_with_recipients_cannot_be_deleted(db_session, captured_email):
     start = datetime(2026, 7, 1, 10, 0, tzinfo=UTC)
     comms_campaigns.build_recipient_list(db_session, campaign.id)
     comms_campaigns.send_campaign_batch(db_session, campaign.id, now=start)
+    assert _deliver_queued(db_session)["delivered"] == 1
     comms_campaigns.process_due_campaign_steps(
         db_session, now=start + timedelta(days=2)
     )
@@ -479,34 +546,30 @@ def test_a_step_with_recipients_cannot_be_deleted(db_session, captured_email):
 
 
 # ---------------------------------------------------------------------------
-# Sender profiles + SMTP configuration
+# Canonical sender profiles
 # ---------------------------------------------------------------------------
 
 
-def test_campaign_sends_through_its_sender_profile_and_smtp_relay(
-    db_session, captured_email
+def test_campaign_queues_its_canonical_sender_key(
+    db_session, captured_email, monkeypatch
 ):
     _subscriber(db_session, email="target@example.com")
-    smtp = comms_campaigns.create_smtp_config(
-        db_session,
-        CampaignSmtpConfigCreate(
-            name="Bulk relay",
-            host="bulk.smtp.dotmac.io",
-            port=2525,
-            username="bulk",
-            password="s3cret",  # noqa: S106
-            use_tls=True,
-        ),
+
+    def _configured_sender(_db, *, sender_key=None, activity=None):
+        return {
+            "sender_key": sender_key,
+            "from_email": "marketing@dotmac.io",
+            "activity": activity,
+        }
+
+    monkeypatch.setattr(
+        comms_campaigns.email_service, "get_smtp_config", _configured_sender
     )
     sender = comms_campaigns.create_sender(
         db_session,
         CampaignSenderCreate(
             name="Dotmac Marketing",
             sender_key="marketing",
-            from_name="Dotmac",
-            from_email="hello@dotmac.io",
-            reply_to="support@dotmac.io",
-            campaign_smtp_config_id=smtp.id,
         ),
     )
     campaign = _campaign(db_session, campaign_sender_id=sender.id)
@@ -514,78 +577,70 @@ def test_campaign_sends_through_its_sender_profile_and_smtp_relay(
     comms_campaigns.build_recipient_list(db_session, campaign.id)
     result = comms_campaigns.send_campaign_batch(db_session, campaign.id)
 
-    assert result.sent == 1
-    config = captured_email[0]["config"]
-    assert config["host"] == "bulk.smtp.dotmac.io"
-    assert config["port"] == 2525
-    assert config["from_email"] == "hello@dotmac.io"
-    assert config["from_name"] == "Dotmac"
-    assert config["reply_to"] == "support@dotmac.io"
-    assert config["sender_key"] == "marketing"
+    assert result.queued == 1
+    assert captured_email == []
+    assert _deliver_queued(db_session)["delivered"] == 1
+    assert captured_email[0]["sender_key"] == "marketing"
+    assert captured_email[0]["to_email"] == "target@example.com"
 
 
-def test_campaign_smtp_config_overrides_the_sender_profile_relay(
-    db_session, captured_email
-):
+def test_unconfigured_campaign_sender_fails_closed(db_session, monkeypatch):
+    from fastapi import HTTPException
+
     _subscriber(db_session, email="target@example.com")
-    sender_relay = comms_campaigns.create_smtp_config(
-        db_session,
-        CampaignSmtpConfigCreate(name="Sender relay", host="sender.smtp.test"),
-    )
-    campaign_relay = comms_campaigns.create_smtp_config(
-        db_session,
-        CampaignSmtpConfigCreate(name="Campaign relay", host="campaign.smtp.test"),
-    )
     sender = comms_campaigns.create_sender(
         db_session,
-        CampaignSenderCreate(
-            name="Marketing",
-            sender_key="marketing",
-            from_email="hello@dotmac.io",
-            campaign_smtp_config_id=sender_relay.id,
-        ),
+        CampaignSenderCreate(name="Marketing", sender_key="marketing"),
     )
-    campaign = _campaign(
-        db_session,
-        campaign_sender_id=sender.id,
-        campaign_smtp_config_id=campaign_relay.id,
-    )
-
+    campaign = _campaign(db_session, campaign_sender_id=sender.id)
     comms_campaigns.build_recipient_list(db_session, campaign.id)
-    comms_campaigns.send_campaign_batch(db_session, campaign.id)
 
-    assert captured_email[0]["config"]["host"] == "campaign.smtp.test"
+    monkeypatch.setattr(
+        comms_campaigns.email_service,
+        "get_smtp_config",
+        lambda _db, **_kwargs: {
+            "sender_key": "default",
+            "from_email": "billing@dotmac.io",
+        },
+    )
+
+    with pytest.raises(HTTPException) as excinfo:
+        comms_campaigns.send_campaign_batch(db_session, campaign.id)
+    assert excinfo.value.status_code == 409
 
 
-def test_campaign_without_a_sender_profile_uses_the_team_sender(
-    db_session, captured_email
-):
+def test_campaign_without_a_profile_queues_the_team_sender(db_session, captured_email):
     _subscriber(db_session, email="target@example.com")
     campaign = _campaign(db_session)
 
     comms_campaigns.build_recipient_list(db_session, campaign.id)
-    comms_campaigns.send_campaign_batch(db_session, campaign.id)
+    result = comms_campaigns.send_campaign_batch(db_session, campaign.id)
 
-    # No override -> the settings-resolved send_email path, which keeps
-    # notification tracking. `config` is only present on the explicit path.
-    assert "config" not in captured_email[0]
+    assert result.queued == 1
+    assert captured_email == []
+    assert _deliver_queued(db_session)["delivered"] == 1
     assert captured_email[0]["to_email"] == "target@example.com"
 
 
-def test_an_inactive_smtp_relay_is_ignored(db_session, captured_email):
+def test_inactive_campaign_sender_fails_closed(db_session):
+    from fastapi import HTTPException
+
     _subscriber(db_session, email="target@example.com")
-    smtp = comms_campaigns.create_smtp_config(
+    sender = comms_campaigns.create_sender(
         db_session,
-        CampaignSmtpConfigCreate(
-            name="Retired relay", host="old.smtp.test", is_active=False
-        ),
+        CampaignSenderCreate(name="Marketing", sender_key="marketing"),
     )
-    campaign = _campaign(db_session, campaign_smtp_config_id=smtp.id)
-
+    campaign = _campaign(db_session, campaign_sender_id=sender.id)
     comms_campaigns.build_recipient_list(db_session, campaign.id)
-    comms_campaigns.send_campaign_batch(db_session, campaign.id)
+    sender.is_active = False
+    db_session.flush()
 
-    assert "config" not in captured_email[0]
+    with pytest.raises(HTTPException) as excinfo:
+        comms_campaigns.send_campaign_batch(db_session, campaign.id)
+    assert excinfo.value.status_code == 409
+    recipient = db_session.query(CampaignRecipient).one()
+    assert recipient.status == CampaignRecipientStatus.pending.value
+    assert recipient.attempt_count == 0
 
 
 # ---------------------------------------------------------------------------
@@ -609,7 +664,9 @@ def test_scheduled_campaign_is_picked_up_when_due(db_session, captured_email):
         db_session, now=scheduled_at + timedelta(minutes=1)
     )
     assert due["built"] == 1
-    assert due["sent"] == 1
+    assert due["queued"] == 1
+    assert captured_email == []
+    assert _deliver_queued(db_session)["delivered"] == 1
     assert campaign.status == CampaignStatus.completed.value
 
 
@@ -638,7 +695,8 @@ def test_a_due_campaign_outside_its_send_window_is_deferred(db_session, captured
     inside = comms_campaigns.process_due_campaigns(
         db_session, now=datetime(2026, 7, 2, 10, 0, tzinfo=UTC)
     )
-    assert inside["sent"] == 1
+    assert inside["queued"] == 1
+    assert _deliver_queued(db_session)["delivered"] == 1
     assert campaign.status == CampaignStatus.completed.value
 
 
@@ -667,6 +725,43 @@ def test_a_campaign_without_a_window_always_sends(db_session):
     )
 
 
+def test_send_window_requires_both_bounds_and_a_valid_timezone(db_session):
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as incomplete:
+        _campaign(db_session, send_window_start_hour=9)
+    assert incomplete.value.status_code == 400
+
+    with pytest.raises(HTTPException) as invalid_timezone:
+        _campaign(
+            db_session,
+            send_window_start_hour=9,
+            send_window_end_hour=17,
+            send_window_timezone="Not/A_Timezone",
+        )
+    assert invalid_timezone.value.status_code == 400
+
+
+def test_due_campaign_processing_continues_a_second_batch(db_session):
+    for index in range(101):
+        _subscriber(db_session, email=f"batch-{index}@example.com")
+    scheduled_at = datetime(2026, 7, 1, 9, 0, tzinfo=UTC)
+    campaign = _campaign(db_session, scheduled_at=scheduled_at)
+
+    first = comms_campaigns.process_due_campaigns(
+        db_session, now=scheduled_at + timedelta(minutes=1)
+    )
+    second = comms_campaigns.process_due_campaigns(
+        db_session, now=scheduled_at + timedelta(minutes=2)
+    )
+
+    assert first["built"] == 1
+    assert first["queued"] == 100
+    assert second["built"] == 0
+    assert second["queued"] == 1
+    assert campaign.status == CampaignStatus.sending.value
+
+
 # ---------------------------------------------------------------------------
 # Delivery tracking
 # ---------------------------------------------------------------------------
@@ -678,7 +773,7 @@ def test_delivery_attempts_and_confirmation_are_tracked(db_session, captured_ema
     now = datetime(2026, 7, 1, 9, 0, tzinfo=UTC)
 
     comms_campaigns.build_recipient_list(db_session, campaign.id)
-    comms_campaigns.send_campaign_batch(db_session, campaign.id, now=now)
+    result = comms_campaigns.send_campaign_batch(db_session, campaign.id, now=now)
 
     recipient = (
         db_session.query(CampaignRecipient)
@@ -687,40 +782,46 @@ def test_delivery_attempts_and_confirmation_are_tracked(db_session, captured_ema
     )
     assert recipient.attempt_count == 1
     assert _at(recipient.last_attempt_at) == now
-    assert _at(recipient.sent_at) == now
+    assert recipient.status == CampaignRecipientStatus.queued.value
+    assert recipient.sent_at is None
     assert recipient.delivered_at is None
-    assert campaign.sent_count == 1
+    assert result.queued == 1
+    assert campaign.sent_count == 0
     assert campaign.delivered_count == 0
+    assert captured_email == []
 
-    delivered_at = now + timedelta(seconds=30)
-    comms_campaigns.mark_recipient_delivered(db_session, recipient.id, now=delivered_at)
+    assert _deliver_queued(db_session)["delivered"] == 1
 
     assert recipient.status == CampaignRecipientStatus.delivered.value
-    assert _at(recipient.delivered_at) == delivered_at
+    assert recipient.delivered_at is not None
     assert campaign.delivered_count == 1
     assert campaign.sent_count == 0
+    assert campaign.status == CampaignStatus.completed.value
 
 
 def test_a_failed_send_records_the_reason_and_the_attempt(db_session, monkeypatch):
     _subscriber(db_session, email="target@example.com")
 
     monkeypatch.setattr(
-        comms_campaigns.team_inbox_outbound.email_service,
+        notification_tasks.email_service,
         "send_email",
         lambda *args, **kwargs: False,
     )
+    monkeypatch.setattr(notification_tasks, "_max_retries", lambda _db: 1)
     campaign = _campaign(db_session)
     now = datetime(2026, 7, 1, 9, 0, tzinfo=UTC)
 
     comms_campaigns.build_recipient_list(db_session, campaign.id)
     result = comms_campaigns.send_campaign_batch(db_session, campaign.id, now=now)
+    stats = _deliver_queued(db_session)
 
     recipient = (
         db_session.query(CampaignRecipient)
         .filter(CampaignRecipient.campaign_id == campaign.id)
         .one()
     )
-    assert result.failed == 1
+    assert result.queued == 1
+    assert stats["failed"] == 1
     assert recipient.status == CampaignRecipientStatus.failed.value
     assert recipient.failed_reason
     assert recipient.attempt_count == 1

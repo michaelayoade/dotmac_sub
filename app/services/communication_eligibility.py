@@ -270,6 +270,38 @@ def unsuppress_committed(
     return removed
 
 
+def unsuppress_marketing(
+    db: Session, *, channel: NotificationChannel | str, address: str
+) -> bool:
+    """Remove only a marketing-scoped suppression.
+
+    Campaign administration is not authority to clear a hard bounce,
+    complaint, or erasure row whose ``all`` scope also protects transactional
+    delivery. Those rows are managed by the canonical notifications surface.
+    """
+    resolved = _coerce_channel(channel)
+    normalized = normalize_address(resolved, address)
+    row = db.scalars(
+        select(CommunicationSuppression).where(
+            CommunicationSuppression.channel == resolved,
+            CommunicationSuppression.address == normalized,
+        )
+    ).first()
+    if row is None or row.scope is not SuppressionScope.marketing:
+        return False
+    db.delete(row)
+    db.flush()
+    return True
+
+
+def unsuppress_marketing_committed(
+    db: Session, *, channel: NotificationChannel | str, address: str
+) -> bool:
+    removed = unsuppress_marketing(db, channel=channel, address=address)
+    db.commit()
+    return removed
+
+
 def unsuppress_by_id(db: Session, suppression_id: UUID | str) -> bool:
     """Remove a suppression by its durable identifier."""
     row = db.get(CommunicationSuppression, UUID(str(suppression_id)))

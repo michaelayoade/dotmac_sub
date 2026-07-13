@@ -13,7 +13,6 @@ from sqlalchemy.orm import Session, load_only
 
 from app.models.billing import BankAccount, PaymentMethod
 from app.models.catalog import AccessCredential, NasDevice
-from app.models.comms_campaign import CampaignSmtpConfig
 from app.models.domain_settings import DomainSetting
 from app.models.integration_hook import (
     SECRET_AUTH_CONFIG_KEYS as _INTEGRATION_HOOK_SECRET_KEYS,
@@ -126,7 +125,6 @@ _MODEL_BY_NAME: dict[str, type[Any]] = {
     "SystemUser": SystemUser,
     "Router": Router,
     "JumpHost": JumpHost,
-    "CampaignSmtpConfig": CampaignSmtpConfig,
 }
 
 _MODEL_FIELDS: tuple[tuple[type[Any], tuple[str, ...]], ...] = tuple(

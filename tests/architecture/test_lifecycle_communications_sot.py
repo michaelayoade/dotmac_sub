@@ -38,6 +38,7 @@ def test_lifecycle_status_assignments_are_owned_by_account_lifecycle():
 def test_campaign_and_inbox_write_only_to_communication_outbox():
     prohibited = (
         "email_service.send_email",
+        "email_service.send_email_with_config",
         "sms_service.send_sms",
         "push_service.send_push",
         "whatsapp_connector.send_text_message",
@@ -51,6 +52,14 @@ def test_campaign_and_inbox_write_only_to_communication_outbox():
         source = (ROOT / relative).read_text()
         found = [name for name in prohibited if name in source]
         assert found == [], f"{relative} bypasses the outbox: {found}"
+
+
+def test_campaign_requests_canonical_delivery_without_owning_smtp_credentials():
+    source = (APP / "services" / "comms_campaigns.py").read_text()
+    model_source = (APP / "models" / "comms_campaign.py").read_text()
+    assert "CommunicationIntent(" in source
+    assert "submit(" in source
+    assert "CampaignSmtpConfig" not in model_source
 
 
 def test_notification_owner_wraps_unowned_customer_deliveries_in_intents():

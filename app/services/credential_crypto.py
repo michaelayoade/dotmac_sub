@@ -24,12 +24,6 @@ _encryption_key_required = (
 )
 
 ENCRYPTED_MODEL_FIELDS: dict[str, tuple[str, ...]] = {
-    # Campaign relay credentials. Marketing mail leaves through a different SMTP
-    # relay than transactional mail (so a spam complaint on a promo cannot poison
-    # the reputation of the domain that delivers invoices) -- but that relay's
-    # password was being stored in plaintext, while every other SMTP credential
-    # on the platform resolves through env -> domain setting -> OpenBao.
-    "CampaignSmtpConfig": ("password",),
     "NasDevice": (
         "shared_secret",
         "ssh_password",

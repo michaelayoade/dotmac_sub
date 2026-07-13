@@ -1,7 +1,7 @@
-"""Campaign parity: SMTP configs, suppression list, step + delivery tracking.
+"""Campaign parity: send windows, sequence steps, and delivery tracking.
 
-Revision ID: 273_campaign_parity
-Revises: 272_radius_nas_port_id_capacity
+Revision ID: 278_campaign_parity
+Revises: 277_lifecycle_comms_sot
 Create Date: 2026-07-12
 """
 
@@ -9,12 +9,11 @@ from __future__ import annotations
 
 import sqlalchemy as sa
 from sqlalchemy import inspect
-from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "274_campaign_parity"
-down_revision = "273_communication_suppressions"
+revision = "278_campaign_parity"
+down_revision = "277_lifecycle_comms_sot"
 branch_labels = None
 depends_on = None
 
@@ -37,18 +36,6 @@ def _has_index(table_name: str, index_name: str) -> bool:
     return index_name in {
         index["name"] for index in inspect(op.get_bind()).get_indexes(table_name)
     }
-
-
-def _json_type() -> sa.types.TypeEngine:
-    if op.get_bind().dialect.name == "postgresql":
-        return postgresql.JSONB(astext_type=sa.Text())
-    return sa.JSON()
-
-
-def _uuid_type() -> sa.types.TypeEngine:
-    if op.get_bind().dialect.name == "postgresql":
-        return postgresql.UUID(as_uuid=True)
-    return sa.String(length=36)
 
 
 def _add_column_once(table_name: str, column: sa.Column) -> None:
@@ -79,58 +66,7 @@ def upgrade() -> None:
     if bind.dialect.name == "sqlite":
         return
 
-    uuid_type = _uuid_type()
-    json_type = _json_type()
-
-    # --- Named SMTP relays for campaign mail -------------------------------
-    if not _has_table("campaign_smtp_configs"):
-        op.create_table(
-            "campaign_smtp_configs",
-            sa.Column("id", uuid_type, primary_key=True),
-            sa.Column("name", sa.String(length=160), nullable=False),
-            sa.Column("host", sa.String(length=255), nullable=False),
-            sa.Column("port", sa.Integer(), nullable=False, server_default="587"),
-            sa.Column("username", sa.String(length=255)),
-            sa.Column("password", sa.String(length=255)),
-            sa.Column(
-                "use_tls", sa.Boolean(), nullable=False, server_default=sa.true()
-            ),
-            sa.Column(
-                "use_ssl", sa.Boolean(), nullable=False, server_default=sa.false()
-            ),
-            sa.Column(
-                "is_active", sa.Boolean(), nullable=False, server_default=sa.true()
-            ),
-            sa.Column("metadata", json_type),
-            sa.Column("created_at", sa.DateTime(timezone=True)),
-            sa.Column("updated_at", sa.DateTime(timezone=True)),
-            sa.UniqueConstraint("name", name="uq_campaign_smtp_configs_name"),
-        )
-    _create_index_once(
-        "campaign_smtp_configs",
-        "ix_campaign_smtp_configs_active",
-        ["is_active", "name"],
-    )
-
-    # --- Sender profiles can point at a relay ------------------------------
-    _add_column_once(
-        "campaign_senders",
-        sa.Column(
-            "campaign_smtp_config_id",
-            uuid_type,
-            sa.ForeignKey("campaign_smtp_configs.id"),
-        ),
-    )
-
-    # --- Campaigns: relay + scheduled send window --------------------------
-    _add_column_once(
-        "campaigns",
-        sa.Column(
-            "campaign_smtp_config_id",
-            uuid_type,
-            sa.ForeignKey("campaign_smtp_configs.id"),
-        ),
-    )
+    # --- Campaigns: scheduled send window ----------------------------------
     _add_column_once("campaigns", sa.Column("send_window_start_hour", sa.Integer()))
     _add_column_once("campaigns", sa.Column("send_window_end_hour", sa.Integer()))
     _add_column_once(
@@ -160,6 +96,20 @@ def upgrade() -> None:
     )
     _add_column_once(
         "campaign_recipients", sa.Column("unsubscribe_token", sa.String(length=64))
+    )
+    # Pending recipients created before this migration still need a functional
+    # unsubscribe link when released afterward. Two random UUIDs provide a
+    # non-guessable 256-bit token without depending on a new extension.
+    op.execute(
+        sa.text(
+            """
+            UPDATE campaign_recipients
+               SET unsubscribe_token =
+                   replace(gen_random_uuid()::text, '-', '') ||
+                   replace(gen_random_uuid()::text, '-', '')
+             WHERE unsubscribe_token IS NULL
+            """
+        )
     )
     _create_index_once(
         "campaign_recipients",
@@ -203,17 +153,6 @@ def downgrade() -> None:
         "send_window_timezone",
         "send_window_end_hour",
         "send_window_start_hour",
-        "campaign_smtp_config_id",
     ):
         if _has_column("campaigns", column_name):
             op.drop_column("campaigns", column_name)
-
-    if _has_column("campaign_senders", "campaign_smtp_config_id"):
-        op.drop_column("campaign_senders", "campaign_smtp_config_id")
-
-    if _has_index("campaign_smtp_configs", "ix_campaign_smtp_configs_active"):
-        op.drop_index(
-            "ix_campaign_smtp_configs_active", table_name="campaign_smtp_configs"
-        )
-    if _has_table("campaign_smtp_configs"):
-        op.drop_table("campaign_smtp_configs")

@@ -3521,6 +3521,23 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.comms,
+        key="campaign_processing_enabled",
+        env_var="CAMPAIGN_PROCESSING_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=False,
+        label="Scheduled campaign processing",
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="campaign_processing_interval_seconds",
+        env_var="CAMPAIGN_PROCESSING_INTERVAL_SECONDS",
+        value_type=SettingValueType.integer,
+        default=60,
+        min_value=30,
+        label="Campaign processing interval (seconds)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
         key="sidebar_logo_url",
         env_var="SIDEBAR_LOGO_URL",
         value_type=SettingValueType.string,

@@ -56,46 +56,6 @@ class CampaignRecipientStatus(enum.StrEnum):
     suppressed = "suppressed"
 
 
-class CampaignSmtpConfig(Base):
-    """A named SMTP endpoint a campaign (or a sender profile) delivers through.
-
-    Sub already resolves SMTP credentials per ``sender_key`` from domain
-    settings (``app.services.email``). This table is the *campaign-scoped*
-    override for the cases where marketing mail must leave through a different
-    relay than transactional mail, without polluting the global settings.
-    """
-
-    __tablename__ = "campaign_smtp_configs"
-    __table_args__ = (
-        UniqueConstraint("name", name="uq_campaign_smtp_configs_name"),
-        Index("ix_campaign_smtp_configs_active", "is_active", "name"),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    name: Mapped[str] = mapped_column(String(160), nullable=False)
-    host: Mapped[str] = mapped_column(String(255), nullable=False)
-    port: Mapped[int] = mapped_column(Integer, default=587, nullable=False)
-    username: Mapped[str | None] = mapped_column(String(255))
-    # Stored server-side only; never serialised back out of the API.
-    password: Mapped[str | None] = mapped_column(String(255))
-    use_tls: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    use_ssl: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    metadata_: Mapped[dict | None] = mapped_column(
-        "metadata", MutableDict.as_mutable(JSON())
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
-        onupdate=lambda: datetime.now(UTC),
-    )
-
-
 class CampaignSender(Base):
     __tablename__ = "campaign_senders"
     __table_args__ = (
@@ -111,9 +71,6 @@ class CampaignSender(Base):
     from_name: Mapped[str | None] = mapped_column(String(160))
     from_email: Mapped[str | None] = mapped_column(String(255))
     reply_to: Mapped[str | None] = mapped_column(String(255))
-    campaign_smtp_config_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("campaign_smtp_configs.id")
-    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     metadata_: Mapped[dict | None] = mapped_column(
         "metadata", MutableDict.as_mutable(JSON())
@@ -126,8 +83,6 @@ class CampaignSender(Base):
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
     )
-
-    smtp_config = relationship("CampaignSmtpConfig")
 
 
 class Campaign(Base):
@@ -189,9 +144,6 @@ class Campaign(Base):
     campaign_sender_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("campaign_senders.id")
     )
-    campaign_smtp_config_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("campaign_smtp_configs.id")
-    )
     service_team_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("service_teams.id")
     )
@@ -212,7 +164,6 @@ class Campaign(Base):
     )
 
     sender = relationship("CampaignSender")
-    smtp_config = relationship("CampaignSmtpConfig")
     service_team = relationship("ServiceTeam")
     connector_config = relationship("ConnectorConfig")
     steps = relationship(
@@ -321,8 +272,8 @@ class CampaignRecipient(Base):
     clicked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     open_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     click_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    # Delivery tracking: how many times we handed this recipient to the
-    # transport, and when we last did so (regardless of outcome).
+    # Campaign enqueue tracking. Provider retry attempts belong to the
+    # notification outbox and are deliberately not duplicated here.
     attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     suppressed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

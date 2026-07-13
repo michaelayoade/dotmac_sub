@@ -122,7 +122,6 @@ from app.models.comms_campaign import (  # noqa: F401
     CampaignRecipient,
     CampaignRecipientStatus,
     CampaignSender,
-    CampaignSmtpConfig,
     CampaignStatus,
     CampaignStep,
     CampaignType,

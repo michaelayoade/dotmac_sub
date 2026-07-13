@@ -39,7 +39,6 @@ def _subscriber(
         phone=phone,
         status=status,
         is_active=is_active,
-        marketing_opt_in=True,
         reseller=reseller,
         marketing_opt_in=marketing_opt_in,
     )
@@ -145,10 +144,35 @@ def test_campaign_rechecks_consent_before_delayed_send(db_session):
     recipient = db_session.query(CampaignRecipient).one()
 
     assert audience.created == 1
-    assert result.skipped == 1
+    assert result.suppressed == 1
     assert result.completed is True
-    assert recipient.status == CampaignRecipientStatus.skipped.value
+    assert recipient.status == CampaignRecipientStatus.suppressed.value
     assert recipient.failed_reason == "marketing_opt_out"
+    assert db_session.query(Notification).count() == 0
+
+
+def test_campaign_rechecks_subscriber_lifecycle_before_delayed_send(db_session):
+    subscriber = _subscriber(db_session, email="disabled-late@example.com")
+    campaign = comms_campaigns.create_campaign(
+        db_session,
+        CampaignCreate(
+            name="Delayed offer",
+            channel="email",
+            subject="Offer",
+            body_text="An offer",
+        ),
+    )
+    audience = comms_campaigns.build_recipient_list(db_session, campaign.id)
+    subscriber.status = SubscriberStatus.disabled
+    db_session.flush()
+
+    result = comms_campaigns.send_campaign_batch(db_session, campaign.id)
+    recipient = db_session.query(CampaignRecipient).one()
+
+    assert audience.created == 1
+    assert result.skipped == 1
+    assert recipient.status == CampaignRecipientStatus.skipped.value
+    assert recipient.failed_reason == "inactive_subscriber"
     assert db_session.query(Notification).count() == 0
 
 

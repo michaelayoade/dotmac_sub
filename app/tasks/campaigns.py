@@ -60,6 +60,7 @@ def send_campaign_batch(
             "sent": result.sent,
             "failed": result.failed,
             "skipped": result.skipped,
+            "suppressed": result.suppressed,
             "completed": result.completed,
         }
         logger.info(

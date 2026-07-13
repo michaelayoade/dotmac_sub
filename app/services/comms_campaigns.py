@@ -19,7 +19,6 @@ from app.models.comms_campaign import (
     CampaignRecipient,
     CampaignRecipientStatus,
     CampaignSender,
-    CampaignSmtpConfig,
     CampaignStatus,
     CampaignStep,
     CampaignType,
@@ -43,12 +42,11 @@ from app.models.team_inbox import (
 )
 from app.services import (
     communication_eligibility,
-    team_inbox_outbound,
     team_inbox_routing,
     team_outbound,
 )
+from app.services import email as email_service
 from app.services.common import coerce_uuid
-from app.services.communication_eligibility import suppression_reason
 from app.services.communication_intents import (
     CommunicationClass,
     CommunicationIntent,
@@ -102,6 +100,15 @@ class CampaignStepMaterializeResult:
     suppressed: int
 
 
+@dataclass(frozen=True)
+class RenderedCampaignMessage:
+    subject: str
+    body_html: str | None
+    body_text: str | None
+    metadata: dict[str, object]
+    from_address: str | None
+
+
 def _now() -> datetime:
     return datetime.now(UTC)
 
@@ -109,6 +116,19 @@ def _now() -> datetime:
 def _campaign_or_404(db: Session, campaign_id: str | UUID) -> Campaign:
     campaign = db.get(Campaign, coerce_uuid(campaign_id))
     if campaign is None or not campaign.is_active:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return campaign
+
+
+def _campaign_for_update_or_404(db: Session, campaign_id: str | UUID) -> Campaign:
+    campaign = (
+        db.query(Campaign)
+        .filter(Campaign.id == coerce_uuid(campaign_id))
+        .filter(Campaign.is_active.is_(True))
+        .with_for_update()
+        .one_or_none()
+    )
+    if campaign is None:
         raise HTTPException(status_code=404, detail="Campaign not found")
     return campaign
 
@@ -131,6 +151,20 @@ def _validate_campaign_values(campaign: Campaign) -> None:
             status_code=400,
             detail="WhatsApp campaign needs body_text or a template name",
         )
+    has_window_start = campaign.send_window_start_hour is not None
+    has_window_end = campaign.send_window_end_hour is not None
+    if has_window_start != has_window_end:
+        raise HTTPException(
+            status_code=400,
+            detail="Send window start and end must be configured together",
+        )
+    if campaign.send_window_timezone:
+        try:
+            zoneinfo.ZoneInfo(campaign.send_window_timezone.strip())
+        except (zoneinfo.ZoneInfoNotFoundError, ValueError) as exc:
+            raise HTTPException(
+                status_code=400, detail="Invalid send window timezone"
+            ) from exc
 
 
 #: Everything a campaign sends is marketing. This is what makes an unsubscribe
@@ -269,29 +303,11 @@ def unsubscribe_by_token(
         note=f"campaign={campaign.id} source={source}",
         created_by=source,
     )
-    # Stop the ones already queued for this campaign. The delivery gate would
-    # catch them anyway -- this just keeps the campaign's own counts honest.
-    (
-        db.query(CampaignRecipient)
-        .filter(CampaignRecipient.address == recipient.address)
-        .filter(
-            CampaignRecipient.status.in_(
-                [
-                    CampaignRecipientStatus.pending.value,
-                    CampaignRecipientStatus.queued.value,
-                ]
-            )
-        )
-        .update(
-            {CampaignRecipient.status: CampaignRecipientStatus.suppressed.value},
-            synchronize_session=False,
-        )
-    )
     return suppression
 
 
 # ---------------------------------------------------------------------------
-# Sender profiles and SMTP configuration
+# Sender profiles
 # ---------------------------------------------------------------------------
 
 
@@ -311,23 +327,10 @@ def _sender_or_404(db: Session, sender_id: str | UUID) -> CampaignSender:
     return sender
 
 
-def _smtp_config_or_404(db: Session, smtp_config_id: str | UUID) -> CampaignSmtpConfig:
-    config = db.get(CampaignSmtpConfig, coerce_uuid(smtp_config_id))
-    if config is None:
-        raise HTTPException(status_code=404, detail="SMTP configuration not found")
-    return config
-
-
 def create_sender(db: Session, payload) -> CampaignSender:
-    if payload.campaign_smtp_config_id is not None:
-        _smtp_config_or_404(db, payload.campaign_smtp_config_id)
     sender = CampaignSender(
         name=payload.name,
         sender_key=payload.sender_key.strip().lower(),
-        from_name=payload.from_name,
-        from_email=payload.from_email,
-        reply_to=payload.reply_to,
-        campaign_smtp_config_id=payload.campaign_smtp_config_id,
         is_active=payload.is_active,
         metadata_=payload.metadata or {},
     )
@@ -341,109 +344,12 @@ def update_sender(db: Session, sender_id: str | UUID, payload) -> CampaignSender
     for field_name, value in payload.model_dump(exclude_unset=True).items():
         if field_name == "metadata":
             sender.metadata_ = value or {}
-        elif field_name == "campaign_smtp_config_id":
-            if value is not None:
-                _smtp_config_or_404(db, value)
-            sender.campaign_smtp_config_id = value
         elif field_name == "sender_key" and value is not None:
             sender.sender_key = value.strip().lower()
         else:
             setattr(sender, field_name, value)
     db.flush()
     return sender
-
-
-def list_smtp_configs(
-    db: Session, *, is_active: bool | None = None, limit: int = 50, offset: int = 0
-) -> list[CampaignSmtpConfig]:
-    query = db.query(CampaignSmtpConfig)
-    if is_active is not None:
-        query = query.filter(CampaignSmtpConfig.is_active.is_(is_active))
-    return (
-        query.order_by(CampaignSmtpConfig.name.asc()).limit(limit).offset(offset).all()
-    )
-
-
-def create_smtp_config(db: Session, payload) -> CampaignSmtpConfig:
-    config = CampaignSmtpConfig(
-        name=payload.name,
-        host=payload.host,
-        port=payload.port,
-        username=payload.username,
-        password=payload.password,
-        use_tls=payload.use_tls,
-        use_ssl=payload.use_ssl,
-        is_active=payload.is_active,
-        metadata_=payload.metadata or {},
-    )
-    db.add(config)
-    db.flush()
-    return config
-
-
-def update_smtp_config(
-    db: Session, smtp_config_id: str | UUID, payload
-) -> CampaignSmtpConfig:
-    config = _smtp_config_or_404(db, smtp_config_id)
-    for field_name, value in payload.model_dump(exclude_unset=True).items():
-        if field_name == "metadata":
-            config.metadata_ = value or {}
-        elif field_name == "password":
-            # An omitted password keeps the stored one; an explicit null clears it.
-            config.password = value
-        else:
-            setattr(config, field_name, value)
-    db.flush()
-    return config
-
-
-def _smtp_overlay(config: CampaignSmtpConfig) -> dict[str, object]:
-    return {
-        "host": config.host,
-        "port": config.port,
-        "username": config.username,
-        "password": config.password,
-        "use_tls": config.use_tls,
-        "use_ssl": config.use_ssl,
-    }
-
-
-def resolve_sender_override(
-    db: Session, campaign: Campaign
-) -> team_inbox_outbound.OutboundSenderOverride | None:
-    """Turn the campaign's sender profile + SMTP config into a transport override.
-
-    Precedence: the campaign's own SMTP config beats the sender profile's, and
-    both beat the team-resolved default that `team_inbox_outbound` would pick.
-    """
-    sender: CampaignSender | None = None
-    if campaign.campaign_sender_id is not None:
-        sender = db.get(CampaignSender, campaign.campaign_sender_id)
-        if sender is not None and not sender.is_active:
-            sender = None
-
-    smtp_config: CampaignSmtpConfig | None = None
-    if campaign.campaign_smtp_config_id is not None:
-        smtp_config = db.get(CampaignSmtpConfig, campaign.campaign_smtp_config_id)
-    elif sender is not None and sender.campaign_smtp_config_id is not None:
-        smtp_config = db.get(CampaignSmtpConfig, sender.campaign_smtp_config_id)
-    if smtp_config is not None and not smtp_config.is_active:
-        smtp_config = None
-
-    from_name = campaign.from_name or (sender.from_name if sender else None)
-    from_email = campaign.from_email or (sender.from_email if sender else None)
-    reply_to = campaign.reply_to or (sender.reply_to if sender else None)
-    sender_key = sender.sender_key if sender else None
-
-    if not any([from_name, from_email, reply_to, sender_key, smtp_config]):
-        return None
-    return team_inbox_outbound.OutboundSenderOverride(
-        sender_key=sender_key,
-        from_name=from_name,
-        from_email=from_email,
-        reply_to=reply_to,
-        smtp=_smtp_overlay(smtp_config) if smtp_config is not None else None,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -482,6 +388,8 @@ def _validate_step_content(campaign: Campaign, step: CampaignStep) -> None:
 
 def create_campaign_step(db: Session, campaign_id: str | UUID, payload) -> CampaignStep:
     campaign = _campaign_or_404(db, campaign_id)
+    if campaign.campaign_type != CampaignType.nurture.value:
+        raise HTTPException(status_code=409, detail="Only nurture campaigns have steps")
     if campaign.status == CampaignStatus.sending.value:
         raise HTTPException(
             status_code=409, detail="Sending campaigns cannot be edited"
@@ -526,6 +434,20 @@ def update_campaign_step(
 ) -> CampaignStep:
     campaign = _campaign_or_404(db, campaign_id)
     step = _step_or_404(db, campaign.id, step_id)
+    if campaign.status == CampaignStatus.sending.value:
+        raise HTTPException(
+            status_code=409, detail="Sending campaigns cannot be edited"
+        )
+    if (
+        db.query(CampaignRecipient.id)
+        .filter(CampaignRecipient.step_id == step.id)
+        .first()
+        is not None
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Step already has recipients and cannot be edited",
+        )
     for field_name, value in payload.model_dump(exclude_unset=True).items():
         setattr(step, field_name, value)
     _validate_step_content(campaign, step)
@@ -558,10 +480,7 @@ def delete_campaign_step(
 
 def _send_window_timezone(campaign: Campaign) -> zoneinfo.ZoneInfo:
     name = (campaign.send_window_timezone or DEFAULT_SEND_WINDOW_TIMEZONE).strip()
-    try:
-        return zoneinfo.ZoneInfo(name)
-    except (zoneinfo.ZoneInfoNotFoundError, ValueError):
-        return zoneinfo.ZoneInfo(DEFAULT_SEND_WINDOW_TIMEZONE)
+    return zoneinfo.ZoneInfo(name)
 
 
 def within_send_window(campaign: Campaign, now: datetime) -> bool:
@@ -605,15 +524,12 @@ def create_campaign(
         send_window_timezone=payload.send_window_timezone,
         created_by_system_user_id=coerce_uuid(created_by_system_user_id),
         campaign_sender_id=payload.campaign_sender_id,
-        campaign_smtp_config_id=payload.campaign_smtp_config_id,
         service_team_id=payload.service_team_id,
         connector_config_id=payload.connector_config_id,
         metadata_=payload.metadata or {},
     )
     if payload.campaign_sender_id is not None:
         _sender_or_404(db, payload.campaign_sender_id)
-    if payload.campaign_smtp_config_id is not None:
-        _smtp_config_or_404(db, payload.campaign_smtp_config_id)
     _validate_campaign_values(campaign)
     db.add(campaign)
     db.flush()
@@ -629,6 +545,8 @@ def update_campaign(db: Session, campaign_id: str | UUID, payload) -> Campaign:
     for field_name, value in payload.model_dump(exclude_unset=True).items():
         if field_name == "metadata":
             campaign.metadata_ = value or {}
+        elif field_name == "campaign_sender_id" and value is not None:
+            campaign.campaign_sender_id = _sender_or_404(db, value).id
         else:
             setattr(campaign, field_name, value)
     _validate_campaign_values(campaign)
@@ -877,20 +795,68 @@ def _append_unsubscribe_footer(
     )
 
 
-def _payload_for_recipient(
+def _sender_delivery_metadata(
+    db: Session, campaign: Campaign
+) -> tuple[dict[str, object], str | None]:
+    if campaign.channel != CampaignChannel.email.value:
+        return (
+            {
+                "service_team_id": (
+                    str(campaign.service_team_id) if campaign.service_team_id else None
+                )
+            },
+            None,
+        )
+    default_sender = team_outbound.resolve_team_email_sender(
+        db,
+        service_team_id=campaign.service_team_id,
+        fallback_activity="notification_queue",
+    )
+    activity = default_sender.activity or "notification_queue"
+    if campaign.sender is not None:
+        if not campaign.sender.is_active:
+            raise HTTPException(status_code=409, detail="Campaign sender is inactive")
+        requested_key = campaign.sender.sender_key
+        config = email_service.get_smtp_config(
+            db,
+            sender_key=requested_key,
+            activity=activity,
+        )
+    else:
+        requested_key = default_sender.sender_key
+        config = default_sender.config
+    resolved_key = str(config.get("sender_key") or "") or None
+    if requested_key and resolved_key != requested_key:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Campaign sender is not configured: {requested_key}",
+        )
+    return (
+        {
+            "sender_key": resolved_key,
+            "activity": activity,
+            "service_team_id": (
+                str(campaign.service_team_id) if campaign.service_team_id else None
+            ),
+        },
+        str(config.get("from_email") or config.get("from_addr") or "") or None,
+    )
+
+
+def _render_message_for_recipient(
     db: Session,
     campaign: Campaign,
     recipient: CampaignRecipient,
     *,
+    delivery_metadata: dict[str, object],
+    from_address: str | None,
     step: CampaignStep | None = None,
-    sender_override: team_inbox_outbound.OutboundSenderOverride | None = None,
-):
+) -> RenderedCampaignMessage:
     metadata: dict[str, object] = {
         "source_route": "native_campaign",
         "campaign_id": str(campaign.id),
         "campaign_recipient_id": str(recipient.id),
-        "body_html": campaign.body_html,
-        "body_text": campaign.body_text,
+        **delivery_metadata,
     }
     if step is not None:
         metadata["campaign_step_id"] = str(step.id)
@@ -929,13 +895,14 @@ def _payload_for_recipient(
     ):
         body_html, body_text = _append_unsubscribe_footer(body_html, body_text, link)
 
-    return team_inbox_outbound.InboxReplyPayload(
-        body_html=body_html or body_text or "",
-        body_text=body_text,
+    metadata["body_html"] = body_html
+    metadata["body_text"] = body_text
+    return RenderedCampaignMessage(
         subject=subject or campaign.name,
-        to_email=recipient.email,
+        body_html=body_html,
+        body_text=body_text,
         metadata=metadata,
-        sender_override=sender_override,
+        from_address=from_address,
     )
 
 
@@ -946,7 +913,7 @@ def send_campaign_batch(
     batch_size: int = 100,
     now: datetime | None = None,
 ) -> CampaignSendResult:
-    campaign = _campaign_or_404(db, campaign_id)
+    campaign = _campaign_for_update_or_404(db, campaign_id)
     _validate_campaign_values(campaign)
     current_time = now or _now()
     if campaign.status in {
@@ -975,11 +942,27 @@ def send_campaign_batch(
         channel=campaign.channel,
         addresses=[recipient.address for recipient in recipients],
     )
-    sender_override = resolve_sender_override(db, campaign)
     steps = {step.id: step for step in list_campaign_steps(db, campaign.id)}
+    delivery_metadata, from_address = (
+        _sender_delivery_metadata(db, campaign) if recipients else ({}, None)
+    )
 
-    sent = failed = skipped = suppressed = 0
+    queued = sent = failed = skipped = suppressed = 0
     for recipient in recipients:
+        subscriber = recipient.subscriber
+        if (
+            not subscriber.is_active
+            or subscriber.status.value in NON_CONTACTABLE_STATUSES
+        ):
+            recipient.status = CampaignRecipientStatus.skipped.value
+            recipient.failed_reason = "inactive_subscriber"
+            skipped += 1
+            continue
+        if subscriber.reseller is not None and not subscriber.reseller.is_active:
+            recipient.status = CampaignRecipientStatus.skipped.value
+            recipient.failed_reason = "inactive_reseller"
+            skipped += 1
+            continue
         if recipient.address in blocked:
             recipient.status = CampaignRecipientStatus.suppressed.value
             recipient.suppressed_at = current_time
@@ -989,24 +972,32 @@ def send_campaign_batch(
 
         recipient.attempt_count += 1
         recipient.last_attempt_at = current_time
-        conversation = _conversation_for_recipient(
-            db, campaign=campaign, recipient=recipient, now=current_time
+        rendered = _render_message_for_recipient(
+            db,
+            campaign,
+            recipient,
+            delivery_metadata=delivery_metadata,
+            from_address=from_address,
+            step=steps.get(recipient.step_id) if recipient.step_id else None,
         )
-        metadata = _intent_metadata(db, campaign, recipient)
+        channel = NotificationChannel(campaign.channel)
         result = submit(
             db,
-            conversation=conversation,
-            payload=_payload_for_recipient(
-                db,
-                campaign,
-                recipient,
-                step=steps.get(recipient.step_id) if recipient.step_id else None,
-                sender_override=sender_override,
+            CommunicationIntent(
+                subscriber_id=recipient.subscriber_id,
+                event_type="campaign.send",
+                category=MARKETING_CATEGORY,
+                communication_class=CommunicationClass.marketing,
+                subject=rendered.subject,
+                body=rendered.body_text or rendered.body_html,
+                channels=(channel,),
+                include_reseller=False,
+                persist_policy_suppressions=False,
+                subscriber_recipients={channel: recipient.address},
+                metadata=rendered.metadata,
+                dedupe_key=f"campaign:recipient:{recipient.id}",
             ),
-            now=current_time,
-            record_failure=True,
         )
-        recipient.conversation_id = conversation.id
         notification = next(
             (
                 item
@@ -1017,23 +1008,31 @@ def send_campaign_batch(
             None,
         )
         if notification is None:
-            recipient.status = CampaignRecipientStatus.skipped.value
             recipient.failed_reason = ",".join(result.suppressed) or "policy_suppressed"
-            skipped += 1
+            if result.suppressed:
+                recipient.status = CampaignRecipientStatus.suppressed.value
+                recipient.suppressed_at = current_time
+                suppressed += 1
+            else:
+                recipient.status = CampaignRecipientStatus.skipped.value
+                skipped += 1
         else:
+            conversation = _conversation_for_recipient(
+                db, campaign=campaign, recipient=recipient, now=current_time
+            )
+            recipient.conversation_id = conversation.id
             message = InboxMessage(
                 conversation_id=conversation.id,
                 notification_id=notification.id,
                 channel_type=campaign.channel,
                 direction=InboxMessageDirection.outbound.value,
-                subject=campaign.subject or campaign.name,
-                body=campaign.body_html or campaign.body_text,
+                subject=rendered.subject,
+                body=rendered.body_html or rendered.body_text,
                 external_thread_id=conversation.external_thread_id,
-                from_address=campaign.from_email
-                or (campaign.sender.from_email if campaign.sender else None),
+                from_address=rendered.from_address,
                 to_addresses=[recipient.address],
                 cc_addresses=[],
-                metadata_={**metadata, "delivery_status": "queued"},
+                metadata_={**rendered.metadata, "delivery_status": "queued"},
             )
             db.add(message)
             db.flush()
@@ -1076,30 +1075,6 @@ def send_campaign_batch(
         completed=completed,
         suppressed=suppressed,
     )
-
-
-def mark_recipient_delivered(
-    db: Session,
-    recipient_id: str | UUID,
-    *,
-    now: datetime | None = None,
-) -> CampaignRecipient:
-    """Record a downstream delivery confirmation for a recipient."""
-    recipient = db.get(CampaignRecipient, coerce_uuid(recipient_id))
-    if recipient is None:
-        raise HTTPException(status_code=404, detail="Campaign recipient not found")
-    if recipient.status != CampaignRecipientStatus.sent.value:
-        raise HTTPException(
-            status_code=409, detail="Only sent recipients can be marked delivered"
-        )
-    recipient.status = CampaignRecipientStatus.delivered.value
-    recipient.delivered_at = now or _now()
-    db.flush()
-    campaign = db.get(Campaign, recipient.campaign_id)
-    if campaign is not None:
-        _refresh_counts(db, campaign)
-    db.flush()
-    return recipient
 
 
 def _refresh_counts(db: Session, campaign: Campaign) -> None:
@@ -1152,31 +1127,39 @@ def process_due_campaigns(
     campaigns = (
         db.query(Campaign)
         .filter(Campaign.is_active.is_(True))
-        .filter(Campaign.status == CampaignStatus.scheduled.value)
         .filter(
-            and_(
-                Campaign.scheduled_at.is_not(None),
-                Campaign.scheduled_at <= current_time,
+            or_(
+                and_(
+                    Campaign.status == CampaignStatus.scheduled.value,
+                    Campaign.scheduled_at.is_not(None),
+                    Campaign.scheduled_at <= current_time,
+                ),
+                Campaign.status == CampaignStatus.sending.value,
             )
         )
         .order_by(Campaign.scheduled_at.asc())
         .limit(limit)
+        .with_for_update(skip_locked=True)
         .all()
     )
-    built = sent = failed = deferred = 0
+    built = queued = sent = failed = deferred = 0
     for campaign in campaigns:
         # Outside its send window the campaign simply stays `scheduled` and is
         # picked up by a later beat.
         if not within_send_window(campaign, current_time):
             deferred += 1
             continue
+        was_scheduled = campaign.status == CampaignStatus.scheduled.value
         try:
-            build_recipient_list(db, campaign.id)
-            result = send_campaign_batch(db, campaign.id, now=current_time)
-            built += 1
-            queued += result.queued
-            sent += result.sent
-            failed += result.failed
+            with db.begin_nested():
+                if was_scheduled:
+                    build_recipient_list(db, campaign.id)
+                result = send_campaign_batch(db, campaign.id, now=current_time)
+                queued += result.queued
+                sent += result.sent
+                failed += result.failed
+            if was_scheduled:
+                built += 1
         except Exception:
             campaign.status = CampaignStatus.failed.value
             metadata = dict(campaign.metadata_ or {})
@@ -1186,6 +1169,7 @@ def process_due_campaigns(
     return {
         "campaigns": len(campaigns),
         "built": built,
+        "queued": queued,
         "sent": sent,
         "failed": failed,
         "deferred": deferred,
@@ -1282,13 +1266,12 @@ def materialize_step_recipients(
         created += 1
     db.flush()
 
-    if created:
-        metadata = dict(campaign.metadata_ or {})
-        materialized = dict(metadata.get("materialized_steps") or {})
-        materialized[str(step.id)] = current_time.isoformat()
-        metadata["materialized_steps"] = materialized
-        campaign.metadata_ = metadata
-        db.flush()
+    metadata = dict(campaign.metadata_ or {})
+    materialized = dict(metadata.get("materialized_steps") or {})
+    materialized[str(step.id)] = current_time.isoformat()
+    metadata["materialized_steps"] = materialized
+    campaign.metadata_ = metadata
+    db.flush()
 
     return CampaignStepMaterializeResult(
         campaign_id=campaign.id,
@@ -1299,7 +1282,8 @@ def materialize_step_recipients(
 
 
 def _step_is_materialized(db: Session, campaign: Campaign, step: CampaignStep) -> bool:
-    return (
+    materialized = dict((campaign.metadata_ or {}).get("materialized_steps") or {})
+    return str(step.id) in materialized or (
         db.query(CampaignRecipient.id)
         .filter(CampaignRecipient.campaign_id == campaign.id)
         .filter(CampaignRecipient.step_id == step.id)
@@ -1321,18 +1305,19 @@ def process_due_campaign_steps(
         db.query(Campaign)
         .filter(Campaign.is_active.is_(True))
         .filter(Campaign.campaign_type == CampaignType.nurture.value)
-        .filter(
-            Campaign.status.in_(
-                [CampaignStatus.sending.value, CampaignStatus.completed.value]
-            )
-        )
+        # A sequence advances only after the notification outbox has projected
+        # the previous stage to a terminal campaign state. Processing `sending`
+        # campaigns would materialize a zero-recipient step while the prior
+        # stage was merely queued, permanently skipping it.
+        .filter(Campaign.status == CampaignStatus.completed.value)
         .filter(Campaign.sending_started_at.is_not(None))
         .order_by(Campaign.sending_started_at.asc())
         .limit(limit)
+        .with_for_update(skip_locked=True)
         .all()
     )
 
-    advanced = created = sent = deferred = 0
+    advanced = created = queued = sent = deferred = 0
     for campaign in campaigns:
         if not within_send_window(campaign, current_time):
             deferred += 1
@@ -1354,6 +1339,7 @@ def process_due_campaign_steps(
             campaign.status = CampaignStatus.sending.value
             campaign.completed_at = None
             send_result = send_campaign_batch(db, campaign.id, now=current_time)
+            queued += send_result.queued
             sent += send_result.sent
             # One step per beat keeps a long backlog from firing a whole
             # sequence into a subscriber's inbox at once.
@@ -1363,6 +1349,7 @@ def process_due_campaign_steps(
         "campaigns": len(campaigns),
         "advanced": advanced,
         "created": created,
+        "queued": queued,
         "sent": sent,
         "deferred": deferred,
     }
@@ -1452,22 +1439,6 @@ def update_sender_committed(
     return sender
 
 
-def create_smtp_config_committed(db: Session, payload) -> CampaignSmtpConfig:
-    config = create_smtp_config(db, payload)
-    db.commit()
-    db.refresh(config)
-    return config
-
-
-def update_smtp_config_committed(
-    db: Session, smtp_config_id: str | UUID, payload
-) -> CampaignSmtpConfig:
-    config = update_smtp_config(db, smtp_config_id, payload)
-    db.commit()
-    db.refresh(config)
-    return config
-
-
 def unsubscribe_by_token_committed(
     db: Session, token: str, *, source: str = "unsubscribe_link"
 ) -> CommunicationSuppression:
@@ -1475,15 +1446,6 @@ def unsubscribe_by_token_committed(
     db.commit()
     db.refresh(suppression)
     return suppression
-
-
-def mark_recipient_delivered_committed(
-    db: Session, recipient_id: str | UUID, *, now: datetime | None = None
-) -> CampaignRecipient:
-    recipient = mark_recipient_delivered(db, recipient_id, now=now)
-    db.commit()
-    db.refresh(recipient)
-    return recipient
 
 
 def process_due_campaign_steps_committed(

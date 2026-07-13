@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.models.notification import NotificationChannel
+
 
 class CampaignCreate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
@@ -15,9 +17,6 @@ class CampaignCreate(BaseModel):
     subject: str | None = Field(default=None, max_length=200)
     body_html: str | None = None
     body_text: str | None = None
-    from_name: str | None = Field(default=None, max_length=160)
-    from_email: str | None = Field(default=None, max_length=255)
-    reply_to: str | None = Field(default=None, max_length=255)
     whatsapp_template_name: str | None = Field(default=None, max_length=200)
     whatsapp_template_language: str | None = Field(default="en", max_length=10)
     whatsapp_template_components: dict | None = None
@@ -27,7 +26,6 @@ class CampaignCreate(BaseModel):
     send_window_end_hour: int | None = Field(default=None, ge=0, le=23)
     send_window_timezone: str | None = Field(default=None, max_length=64)
     campaign_sender_id: UUID | None = None
-    campaign_smtp_config_id: UUID | None = None
     service_team_id: UUID | None = None
     connector_config_id: UUID | None = None
     metadata: dict | None = None
@@ -41,9 +39,6 @@ class CampaignUpdate(BaseModel):
     subject: str | None = Field(default=None, max_length=200)
     body_html: str | None = None
     body_text: str | None = None
-    from_name: str | None = Field(default=None, max_length=160)
-    from_email: str | None = Field(default=None, max_length=255)
-    reply_to: str | None = Field(default=None, max_length=255)
     whatsapp_template_name: str | None = Field(default=None, max_length=200)
     whatsapp_template_language: str | None = Field(default=None, max_length=10)
     whatsapp_template_components: dict | None = None
@@ -53,7 +48,6 @@ class CampaignUpdate(BaseModel):
     send_window_end_hour: int | None = Field(default=None, ge=0, le=23)
     send_window_timezone: str | None = Field(default=None, max_length=64)
     campaign_sender_id: UUID | None = None
-    campaign_smtp_config_id: UUID | None = None
     service_team_id: UUID | None = None
     connector_config_id: UUID | None = None
     metadata: dict | None = None
@@ -80,7 +74,6 @@ class CampaignRead(BaseModel):
     opened_count: int
     clicked_count: int
     campaign_sender_id: UUID | None = None
-    campaign_smtp_config_id: UUID | None = None
     service_team_id: UUID | None = None
     metadata: dict | None = None
     created_at: datetime
@@ -153,10 +146,6 @@ class CampaignSenderCreate(BaseModel):
 
     name: str = Field(min_length=1, max_length=160)
     sender_key: str = Field(min_length=1, max_length=120)
-    from_name: str | None = Field(default=None, max_length=160)
-    from_email: str | None = Field(default=None, max_length=255)
-    reply_to: str | None = Field(default=None, max_length=255)
-    campaign_smtp_config_id: UUID | None = None
     is_active: bool = True
     metadata: dict | None = None
 
@@ -166,10 +155,6 @@ class CampaignSenderUpdate(BaseModel):
 
     name: str | None = Field(default=None, max_length=160)
     sender_key: str | None = Field(default=None, max_length=120)
-    from_name: str | None = Field(default=None, max_length=160)
-    from_email: str | None = Field(default=None, max_length=255)
-    reply_to: str | None = Field(default=None, max_length=255)
-    campaign_smtp_config_id: UUID | None = None
     is_active: bool | None = None
     metadata: dict | None = None
 
@@ -178,55 +163,6 @@ class CampaignSenderRead(BaseModel):
     id: UUID
     name: str
     sender_key: str
-    from_name: str | None = None
-    from_email: str | None = None
-    reply_to: str | None = None
-    campaign_smtp_config_id: UUID | None = None
-    is_active: bool
-    metadata: dict | None = None
-    created_at: datetime
-    updated_at: datetime
-
-
-class CampaignSmtpConfigCreate(BaseModel):
-    model_config = ConfigDict(str_strip_whitespace=True)
-
-    name: str = Field(min_length=1, max_length=160)
-    host: str = Field(min_length=1, max_length=255)
-    port: int = Field(default=587, ge=1, le=65535)
-    username: str | None = Field(default=None, max_length=255)
-    password: str | None = Field(default=None, max_length=255)
-    use_tls: bool = True
-    use_ssl: bool = False
-    is_active: bool = True
-    metadata: dict | None = None
-
-
-class CampaignSmtpConfigUpdate(BaseModel):
-    model_config = ConfigDict(str_strip_whitespace=True)
-
-    name: str | None = Field(default=None, max_length=160)
-    host: str | None = Field(default=None, max_length=255)
-    port: int | None = Field(default=None, ge=1, le=65535)
-    username: str | None = Field(default=None, max_length=255)
-    password: str | None = Field(default=None, max_length=255)
-    use_tls: bool | None = None
-    use_ssl: bool | None = None
-    is_active: bool | None = None
-    metadata: dict | None = None
-
-
-class CampaignSmtpConfigRead(BaseModel):
-    """SMTP profile as returned by the API — the password is never serialised."""
-
-    id: UUID
-    name: str
-    host: str
-    port: int
-    username: str | None = None
-    has_password: bool = False
-    use_tls: bool
-    use_ssl: bool
     is_active: bool
     metadata: dict | None = None
     created_at: datetime
@@ -244,25 +180,10 @@ class SuppressionCreate(BaseModel):
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    channel: str = "email"
+    channel: NotificationChannel = NotificationChannel.email
     address: str = Field(min_length=1, max_length=255)
-    reason: str = "manual"
-    source: str | None = Field(default=None, max_length=80)
     subscriber_id: UUID | None = None
-    campaign_id: UUID | None = None
-    notes: str | None = None
-
-
-class SuppressionRead(BaseModel):
-    id: UUID
-    channel: str
-    address: str
-    reason: str
-    source: str | None = None
-    subscriber_id: UUID | None = None
-    campaign_id: UUID | None = None
-    notes: str | None = None
-    created_at: datetime
+    note: str | None = None
 
 
 class CampaignUnsubscribeRead(BaseModel):
