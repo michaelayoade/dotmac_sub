@@ -154,7 +154,10 @@ def test_address_suppressed_after_the_build_is_never_sent_to(
     }
     assert [item["to_email"] for item in captured_email] == ["keep@example.com"]
     assert result.sent == 1
-    assert result.suppressed == 0  # already retired by suppress_address
+    # The ledger does not reach into campaign tables to retire recipients -- it
+    # does not know campaigns exist. The send gate is what blocks, which is why
+    # this counts as suppressed here rather than being quietly pre-retired.
+    assert result.suppressed == 1
     assert (
         recipients["late@example.com"].status
         == CampaignRecipientStatus.suppressed.value
