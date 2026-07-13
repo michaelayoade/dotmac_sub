@@ -104,6 +104,7 @@ celery_app.conf.task_routes = {
     "app.tasks.ont_signal_observations.record_ont_observations": {"queue": "ingestion"},
     "app.tasks.ont_runtime_status.dispatch_huawei_ont_status": {"queue": "ingestion"},
     "app.tasks.ont_runtime_status.refresh_huawei_olt_status": {"queue": "ingestion"},
+    "app.tasks.ont_runtime_status.refresh_single_ont_status": {"queue": "ingestion"},
     "app.tasks.usage.import_radius_accounting": {"queue": "ingestion"},
     "app.tasks.usage.reap_stale_radius_sessions": {"queue": "ingestion"},
     "app.tasks.radius.reap_radacct_ghosts": {"queue": "ingestion"},

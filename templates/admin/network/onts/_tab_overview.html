@@ -67,7 +67,7 @@
             {% endif %}
             {% else %}
             <div class="mt-2 text-xl font-bold text-slate-400 dark:text-slate-500">No data</div>
-            <button type="button" hx-get="/admin/network/onts/{{ ont.id }}/refresh-status" hx-swap="none" data-refresh-status-action class="mt-1 text-sm text-cyan-600 hover:text-cyan-700 dark:text-cyan-400">Refresh &rarr;</button>
+            <button type="button" hx-post="/admin/network/onts/{{ ont.id }}/refresh" hx-swap="none" hx-disabled-elt="this" data-refresh-status-action class="mt-1 text-sm text-cyan-600 hover:text-cyan-700 dark:text-cyan-400">Refresh &rarr;</button>
             {% endif %}
         </div>
 
@@ -196,7 +196,7 @@
             <svg class="mx-auto h-12 w-12 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
             <h3 class="mt-2 text-sm font-medium text-slate-900 dark:text-white">No Signal Data</h3>
             <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">No signal sample has been recorded for this ONT.</p>
-            <button type="button" hx-get="/admin/network/onts/{{ ont.id }}/refresh-status" hx-swap="none" data-refresh-status-action class="mt-4 inline-flex items-center gap-2 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-700">
+            <button type="button" hx-post="/admin/network/onts/{{ ont.id }}/refresh" hx-swap="none" hx-disabled-elt="this" data-refresh-status-action class="mt-4 inline-flex items-center gap-2 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-700">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
                 Refresh Status
             </button>

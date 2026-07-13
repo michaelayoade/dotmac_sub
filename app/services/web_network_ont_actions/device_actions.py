@@ -6,10 +6,14 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
 from app.models.network_operation import (
+    NetworkOperation,
+    NetworkOperationStatus,
     NetworkOperationTargetType,
     NetworkOperationType,
 )
@@ -19,7 +23,7 @@ from app.services.events.types import EventType
 from app.services.genieacs_service import genieacs_service
 from app.services.genieacs_service_intent import genieacs_service_intent
 from app.services.network.ont_actions import ActionResult, OntActions
-from app.services.network_operations import run_tracked_action
+from app.services.network_operations import network_operations, run_tracked_action
 from app.services.web_network_ont_actions._common import (
     _log_action_audit,
     actor_name_from_request,
@@ -94,6 +98,141 @@ def execute_refresh(
         metadata={"success": result.success},
     )
     return result
+
+
+@dataclass(frozen=True)
+class QueuedRefreshResult:
+    success: bool
+    waiting: bool
+    message: str
+    operation_id: str | None = None
+
+
+def queue_refresh(
+    db: Session, ont_id: str, *, request: Request | None = None
+) -> QueuedRefreshResult:
+    """Create a durable refresh operation and enqueue device work."""
+    ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+    if ont is None:
+        return QueuedRefreshResult(False, False, "ONT not found.")
+
+    correlation_key = f"ont_status_refresh:{ont_id}"
+    initiated_by = actor_name_from_request(request)
+    try:
+        operation = network_operations.start(
+            db,
+            NetworkOperationType.olt_ont_sync,
+            NetworkOperationTargetType.ont,
+            ont_id,
+            correlation_key=correlation_key,
+            input_payload={"action": "status_refresh"},
+            initiated_by=initiated_by,
+        )
+        db.commit()
+    except HTTPException as exc:
+        if exc.status_code != 409:
+            raise
+        operation = db.scalars(
+            select(NetworkOperation)
+            .where(
+                NetworkOperation.correlation_key == correlation_key,
+                NetworkOperation.status.in_(
+                    {
+                        NetworkOperationStatus.pending,
+                        NetworkOperationStatus.running,
+                        NetworkOperationStatus.waiting,
+                    }
+                ),
+            )
+            .order_by(NetworkOperation.created_at.desc())
+            .limit(1)
+        ).first()
+        if operation is None:
+            return QueuedRefreshResult(
+                False,
+                False,
+                "A refresh conflict occurred; retry the request.",
+            )
+        return QueuedRefreshResult(
+            True,
+            True,
+            "ONT status refresh is already in progress.",
+            str(operation.id),
+        )
+
+    try:
+        from app.tasks.ont_runtime_status import refresh_single_ont_status
+
+        refresh_single_ont_status.delay(ont_id, str(operation.id))
+    except Exception as exc:
+        network_operations.mark_failed(
+            db,
+            str(operation.id),
+            f"Unable to queue ONT status refresh: {exc}",
+        )
+        db.commit()
+        logger.exception("Failed to queue ONT status refresh for %s", ont_id)
+        return QueuedRefreshResult(
+            False,
+            False,
+            "Unable to queue ONT status refresh.",
+            str(operation.id),
+        )
+
+    _log_action_audit(
+        db,
+        request=request,
+        action="queue_refresh",
+        ont_id=ont_id,
+        metadata={"operation_id": str(operation.id), "queued": True},
+        status_code=202,
+    )
+    return QueuedRefreshResult(
+        True,
+        True,
+        "ONT status refresh queued.",
+        str(operation.id),
+    )
+
+
+def refresh_operation_status(
+    db: Session, ont_id: str, operation_id: str
+) -> dict[str, object]:
+    """Return read-only progress for one queued ONT status refresh."""
+    operation = network_operations.get(db, operation_id)
+    input_payload = operation.input_payload or {}
+    if (
+        str(operation.target_id) != ont_id
+        or operation.target_type != NetworkOperationTargetType.ont
+        or input_payload.get("action") != "status_refresh"
+    ):
+        raise HTTPException(status_code=404, detail="Refresh operation not found")
+
+    status = operation.status.value
+    terminal = status in {"succeeded", "warning", "failed", "canceled"}
+    output = operation.output_payload or {}
+    default_messages = {
+        "pending": "ONT status refresh is queued.",
+        "running": "Polling OLT and TR-069 status.",
+        "waiting": operation.waiting_reason or "Waiting for the device.",
+        "succeeded": "ONT status refresh completed.",
+        "warning": "ONT status refresh completed with a warning.",
+        "failed": "ONT status refresh failed.",
+        "canceled": "ONT status refresh was canceled.",
+    }
+    return {
+        "success": status == "succeeded",
+        "done": terminal,
+        "waiting": not terminal,
+        "phase": status,
+        "message": str(
+            output.get("message")
+            or operation.error
+            or default_messages.get(status, "ONT status refresh is in progress.")
+        ),
+        "operation_id": str(operation.id),
+        "result": output.get("result"),
+    }
 
 
 def execute_config_snapshot_refresh(

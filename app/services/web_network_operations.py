@@ -38,6 +38,13 @@ OPERATION_DISPLAY: dict[str, str] = {
 
 def _operation_title(op: Any) -> str:
     op_type_val = op.operation_type.value if op.operation_type else ""
+    input_payload = getattr(op, "input_payload", None) or {}
+    if (
+        op_type_val == "olt_ont_sync"
+        and isinstance(input_payload, dict)
+        and input_payload.get("action") == "status_refresh"
+    ):
+        return "ONT Status Refresh"
     payload = getattr(op, "output_payload", None) or {}
     if (
         op_type_val == "olt_ont_sync"
