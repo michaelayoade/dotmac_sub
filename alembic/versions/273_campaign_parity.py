@@ -1,7 +1,7 @@
 """Campaign parity: SMTP configs, suppression list, step + delivery tracking.
 
-Revision ID: 262_campaign_parity
-Revises: 261_system_user_role_source
+Revision ID: 273_campaign_parity
+Revises: 272_radius_nas_port_id_capacity
 Create Date: 2026-07-12
 """
 
@@ -13,8 +13,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "262_campaign_parity"
-down_revision = "261_system_user_role_source"
+revision = "273_campaign_parity"
+down_revision = "272_radius_nas_port_id_capacity"
 branch_labels = None
 depends_on = None
 
