@@ -12,8 +12,20 @@ ordering for deterministic forward paging.
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from app.models.billing import CreditNote, InvoiceLine, Payment
-from app.schemas.billing import InvoiceCreate, InvoiceLineUpdate, InvoiceSyncRead
+from app.models.billing import (
+    CreditNote,
+    CreditNoteLine,
+    InvoiceLine,
+    Payment,
+    PaymentAllocation,
+)
+from app.schemas.billing import (
+    CreditNoteSyncRead,
+    InvoiceCreate,
+    InvoiceLineUpdate,
+    InvoiceSyncRead,
+    PaymentSyncRead,
+)
 from app.services import billing as billing_service
 
 _T0 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
@@ -240,3 +252,90 @@ def test_credit_note_updated_since_filters(db_session, subscriber_account):
     ids = {r.id for r in rows}
     assert new.id in ids
     assert old.id not in ids
+
+
+def test_payment_sync_feed_is_lightweight_and_watermarked(
+    db_session, subscriber_account
+):
+    invoice = _make_invoice(db_session, subscriber_account.id, _T0)
+    old = Payment(
+        account_id=subscriber_account.id,
+        amount=Decimal("10.00"),
+        currency="NGN",
+        updated_at=_T0,
+    )
+    current = Payment(
+        account_id=subscriber_account.id,
+        amount=Decimal("20.00"),
+        currency="NGN",
+        updated_at=_T0 + timedelta(days=1),
+    )
+    db_session.add_all([old, current])
+    db_session.flush()
+    db_session.add(
+        PaymentAllocation(
+            payment_id=current.id,
+            invoice_id=invoice.id,
+            amount=Decimal("5.00"),
+        )
+    )
+    db_session.flush()
+
+    response = billing_service.payments.sync_list_response(
+        db_session,
+        account_id=None,
+        status=None,
+        is_active=None,
+        updated_since=_T0 + timedelta(days=1),
+        limit=500,
+        offset=0,
+    )
+
+    assert [row.id for row in response["items"]] == [current.id]
+    payload = PaymentSyncRead.model_validate(response["items"][0]).model_dump()
+    assert payload["allocations"][0]["invoice_id"] == invoice.id
+    assert "provider_events" not in payload
+    assert "created_at" not in payload
+
+
+def test_credit_note_sync_feed_only_loads_active_lines(db_session, subscriber_account):
+    note = CreditNote(
+        account_id=subscriber_account.id,
+        currency="NGN",
+        subtotal=Decimal("100.00"),
+        tax_total=Decimal("0.00"),
+        total=Decimal("100.00"),
+        updated_at=_T0 + timedelta(days=1),
+    )
+    db_session.add(note)
+    db_session.flush()
+    db_session.add_all(
+        [
+            CreditNoteLine(
+                credit_note_id=note.id,
+                description="Valid correction",
+                amount=Decimal("100.00"),
+            ),
+            CreditNoteLine(
+                credit_note_id=note.id,
+                description="Removed correction",
+                amount=Decimal("50.00"),
+                is_active=False,
+            ),
+        ]
+    )
+    db_session.flush()
+
+    response = billing_service.credit_notes.sync_list_response(
+        db_session,
+        account_id=None,
+        status=None,
+        is_active=None,
+        updated_since=_T0 + timedelta(days=1),
+        limit=500,
+        offset=0,
+    )
+
+    payload = CreditNoteSyncRead.model_validate(response["items"][0]).model_dump()
+    assert [line["description"] for line in payload["lines"]] == ["Valid correction"]
+    assert "applications" not in payload

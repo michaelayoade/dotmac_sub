@@ -49,6 +49,7 @@ from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.nin_matching import normalize_nin
 from app.services.response import ListResponseMixin
+from app.services.sync_feeds import apply_sync_page, sync_page_response
 
 logger = logging.getLogger(__name__)
 _UNSPECIFIED_IPV4 = ParsedIPv4Address(0)
@@ -309,6 +310,31 @@ class Resellers(ListResponseMixin):
             query = query.filter(Reseller.is_active == is_active)
         query = apply_ordering(query, order_by, order_dir, {"name": Reseller.name})
         return apply_pagination(query, limit, offset).all()
+
+    @staticmethod
+    def list_for_sync(
+        db: Session,
+        *,
+        is_active: bool | None,
+        updated_since: datetime | None,
+        limit: int,
+        offset: int,
+    ) -> builtins.list[Reseller]:
+        query = db.query(Reseller)
+        if is_active is not None:
+            query = query.filter(Reseller.is_active == is_active)
+        return apply_sync_page(
+            query,
+            Reseller,
+            updated_since=updated_since,
+            limit=limit,
+            offset=offset,
+        ).all()
+
+    @classmethod
+    def sync_list_response(cls, db: Session, **kwargs):
+        items = cls.list_for_sync(db, **kwargs)
+        return sync_page_response(items, limit=kwargs["limit"], offset=kwargs["offset"])
 
     @staticmethod
     def count(db: Session, is_active: bool | None) -> int:
@@ -753,6 +779,40 @@ class Subscribers(ListResponseMixin):
             },
         )
         return apply_pagination(query, limit, offset).all()
+
+    @staticmethod
+    def list_for_sync(
+        db: Session,
+        *,
+        subscriber_type: str | None,
+        updated_since: datetime | None,
+        limit: int,
+        offset: int,
+    ) -> builtins.list[Subscriber]:
+        query = db.query(Subscriber).filter(
+            Subscriber.user_type != UserType.system_user,
+            not_(splynx_deleted_import_clause()),
+        )
+        if subscriber_type:
+            normalized = subscriber_type.strip().lower()
+            if normalized == "person":
+                query = query.filter(not_(_is_business_clause()))
+            elif normalized == "business":
+                query = query.filter(_is_business_clause())
+            else:
+                raise HTTPException(status_code=400, detail="Invalid subscriber_type")
+        return apply_sync_page(
+            query,
+            Subscriber,
+            updated_since=updated_since,
+            limit=limit,
+            offset=offset,
+        ).all()
+
+    @classmethod
+    def sync_list_response(cls, db: Session, **kwargs):
+        items = cls.list_for_sync(db, **kwargs)
+        return sync_page_response(items, limit=kwargs["limit"], offset=kwargs["offset"])
 
     @staticmethod
     def list_active_by_ids(

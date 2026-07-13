@@ -932,13 +932,18 @@ def search_subscribers(
     return rows, int(total)
 
 
-def locations(db: Session) -> list[dict[str, Any]]:
+def locations(
+    db: Session, *, page: int, per_page: int
+) -> tuple[list[dict[str, Any]], int]:
     global _locations_cache
     now = monotonic()
     if _locations_cache is not None:
         cached_at, cached = _locations_cache
         if now - cached_at < LOCATIONS_CACHE_TTL_SECONDS:
-            return [dict(item) for item in cached]
+            start = (page - 1) * per_page
+            return [dict(item) for item in cached[start : start + per_page]], len(
+                cached
+            )
 
     result: dict[str, dict[str, str]] = {}
     for pop in db.scalars(
@@ -954,7 +959,8 @@ def locations(db: Session) -> list[dict[str, Any]]:
         result.setdefault(key, {"id": key, "name": str(label)})
     ordered = sorted(result.values(), key=lambda item: item["name"].lower())
     _locations_cache = (now, [dict(item) for item in ordered])
-    return ordered
+    start = (page - 1) * per_page
+    return ordered[start : start + per_page], len(ordered)
 
 
 def billing_risk_rows(
@@ -1011,52 +1017,63 @@ def billing_risk_rows(
     return rows, total
 
 
-def online_subscribers(db: Session) -> list[dict[str, Any]]:
+def online_subscribers(
+    db: Session, *, page: int, per_page: int
+) -> tuple[list[dict[str, Any]], int]:
     cutoff = cutoff_ago(ONLINE_FRESH_SECONDS)
-    rows = list(
-        db.query(Subscriber, RadiusAccountingSession)
+    last_seen = func.coalesce(
+        RadiusAccountingSession.last_update_at,
+        RadiusAccountingSession.session_start,
+        RadiusAccountingSession.created_at,
+    )
+    ranked = (
+        select(
+            Subscriber.id.label("subscriber_id"),
+            Subscriber.subscriber_number,
+            Subscriber.account_number,
+            Subscriber.status,
+            last_seen.label("last_seen"),
+            func.row_number()
+            .over(partition_by=Subscriber.id, order_by=last_seen.desc())
+            .label("session_rank"),
+        )
         .join(Subscription, Subscription.subscriber_id == Subscriber.id)
         .join(
             RadiusAccountingSession,
             RadiusAccountingSession.subscription_id == Subscription.id,
         )
-        .filter(Subscription.status == SubscriptionStatus.active)
-        .filter(RadiusAccountingSession.status_type != AccountingStatus.stop)
-        .filter(RadiusAccountingSession.session_end.is_(None))
-        .filter(
-            func.coalesce(
-                RadiusAccountingSession.last_update_at,
-                RadiusAccountingSession.session_start,
-                RadiusAccountingSession.created_at,
-            )
-            >= cutoff
+        .where(
+            Subscription.status == SubscriptionStatus.active,
+            RadiusAccountingSession.status_type != AccountingStatus.stop,
+            RadiusAccountingSession.session_end.is_(None),
+            last_seen >= cutoff,
         )
-        .order_by(
-            Subscriber.id,
-            func.coalesce(
-                RadiusAccountingSession.last_update_at,
-                RadiusAccountingSession.session_start,
-                RadiusAccountingSession.created_at,
-            ).desc(),
-        )
-        .all()
+        .subquery()
     )
-    seen: set[uuid.UUID] = set()
-    result: list[dict[str, Any]] = []
-    for subscriber, session in rows:
-        if subscriber.id in seen:
-            continue
-        seen.add(subscriber.id)
-        result.append(
+    latest = select(ranked).where(ranked.c.session_rank == 1).subquery()
+    rows = db.execute(
+        select(latest, func.count().over().label("total"))
+        .order_by(latest.c.subscriber_id)
+        .offset((page - 1) * per_page)
+        .limit(per_page)
+    ).all()
+    total = (
+        int(rows[0].total)
+        if rows
+        else int(db.scalar(select(func.count()).select_from(latest)) or 0)
+    )
+    return (
+        [
             {
-                "id": str(subscriber.id),
-                "subscriber_number": subscriber.subscriber_number
-                or subscriber.account_number,
-                "status": enum_value(subscriber.status),
-                "last_seen": utc_iso(session_last_seen(session)),
+                "id": str(row.subscriber_id),
+                "subscriber_number": row.subscriber_number or row.account_number,
+                "status": enum_value(row.status),
+                "last_seen": utc_iso(row.last_seen),
             }
-        )
-    return result
+            for row in rows
+        ],
+        total,
+    )
 
 
 def transaction_rows(

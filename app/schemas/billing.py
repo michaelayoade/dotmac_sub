@@ -430,6 +430,30 @@ class PaymentRead(PaymentBase):
     allocations: list[PaymentAllocationRead] = Field(default_factory=list)
 
 
+class PaymentSyncRead(BaseModel):
+    """Minimal payment contract used by the ERP bulk sync feed."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    account_id: UUID | None = None
+    billing_account_id: UUID | None = None
+    payment_method_id: UUID | None = None
+    payment_channel_id: UUID | None = None
+    collection_account_id: UUID | None = None
+    provider_id: UUID | None = None
+    amount: Decimal
+    refunded_amount: Decimal = Decimal("0")
+    provider_fee: Decimal = Decimal("0")
+    currency: str
+    status: PaymentStatus
+    paid_at: datetime | None = None
+    external_id: str | None = None
+    memo: str | None = None
+    updated_at: datetime
+    allocations: list[PaymentAllocationRead] = Field(default_factory=list)
+
+
 # --- Customer-initiated online payment (hosted checkout) ------------------
 # These power the self-care mobile/SPA flow: the client initiates a provider
 # checkout for one of *its own* invoices, completes payment with the provider
@@ -786,6 +810,40 @@ class CreditNoteRead(CreditNoteBase):
     updated_at: datetime
     lines: list[CreditNoteLineRead] = Field(default_factory=list)
     applications: list[CreditNoteApplicationRead] = Field(default_factory=list)
+
+
+class CreditNoteSyncLineRead(BaseModel):
+    """Minimal credit-note line contract used by the ERP sync feed."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    description: str
+    quantity: Decimal
+    unit_price: Decimal
+    amount: Decimal | None = None
+    tax_rate_id: UUID | None = None
+
+
+class CreditNoteSyncRead(BaseModel):
+    """Accounting fields required to mirror a credit note into DotMac ERP."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    account_id: UUID
+    invoice_id: UUID | None = None
+    credit_number: str | None = None
+    status: CreditNoteStatus
+    currency: str
+    subtotal: Decimal
+    tax_total: Decimal
+    total: Decimal
+    applied_total: Decimal
+    memo: str | None = None
+    issued_at: datetime | None = None
+    updated_at: datetime
+    lines: list[CreditNoteSyncLineRead] = Field(default_factory=list)
 
 
 class InvoiceWriteOffRequest(BaseModel):

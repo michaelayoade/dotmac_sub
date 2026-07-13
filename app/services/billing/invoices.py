@@ -45,6 +45,7 @@ from app.services.common import (
 from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.response import ListResponseMixin
+from app.services.sync_feeds import apply_sync_page, sync_page_response
 
 logger = logging.getLogger(__name__)
 
@@ -362,17 +363,20 @@ class Invoices(ListResponseMixin):
             query = query.filter(Invoice.is_active.is_(True))
         else:
             query = query.filter(Invoice.is_active == is_active)
-        if updated_since is not None:
-            query = query.filter(Invoice.updated_at >= updated_since)
-        query = query.order_by(Invoice.updated_at.asc(), Invoice.id.asc())
-        return apply_pagination(query, limit, offset).all()
+        return apply_sync_page(
+            query,
+            Invoice,
+            updated_since=updated_since,
+            limit=limit,
+            offset=offset,
+        ).all()
 
     @classmethod
     def sync_list_response(cls, db: Session, **kwargs):
         limit = kwargs["limit"]
         offset = kwargs["offset"]
         items = cls.list_for_sync(db, **kwargs)
-        return {"items": items, "count": len(items), "limit": limit, "offset": offset}
+        return sync_page_response(items, limit=limit, offset=offset)
 
     @staticmethod
     def update(db: Session, invoice_id: str, payload: InvoiceUpdate):
