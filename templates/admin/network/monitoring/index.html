@@ -264,13 +264,13 @@
         {% include "admin/network/monitoring/_bandwidth_partial.html" %}
     </div>
 
-    {# Device Health Table #}
+    {# Compact telemetry snapshot; the operational inventory with actions follows. #}
     {% if device_health %}
     <div class="overflow-hidden rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 130ms;">
         <div class="border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
             <h2 class="flex items-center gap-2 text-lg font-display font-bold text-slate-900 dark:text-white">
                 <svg class="h-5 w-5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
-                Device Health
+                Device Metrics Snapshot
             </h2>
         </div>
         <div class="overflow-x-auto">
@@ -479,6 +479,12 @@
                     class="w-full rounded-lg border border-slate-300 bg-white py-2 pl-3 pr-3 text-sm text-slate-900 placeholder-slate-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white dark:placeholder-slate-500"
                 />
             </div>
+            <label for="monitoring_per_page" class="sr-only">Rows per page</label>
+            <select id="monitoring_per_page" name="per_page" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                {% for size in [25, 50, 100] %}
+                <option value="{{ size }}" {% if device_health_pagination.per_page == size %}selected{% endif %}>{{ size }} rows</option>
+                {% endfor %}
+            </select>
             <button type="submit" class="inline-flex items-center rounded-lg border border-primary-300 bg-primary-50 px-3 py-2 text-sm font-medium text-primary-700 hover:bg-primary-100 dark:border-primary-700 dark:bg-primary-900/20 dark:text-primary-300">Search</button>
             {% if query %}
             <a href="/admin/network/monitoring" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Clear</a>
@@ -620,7 +626,22 @@
             </tbody>
         {% endcall %}
         </div>{# /device-bulk-container #}
-        <p class="mt-3 text-xs text-slate-500 dark:text-slate-400">Showing {{ device_health_total }} device{{ '' if device_health_total == 1 else 's' }}{% if query %} matching "{{ query }}"{% endif %}.</p>
+        <div class="mt-3 flex flex-col items-center justify-between gap-3 sm:flex-row">
+            <p class="text-xs text-slate-500 dark:text-slate-400">
+                Showing {{ (device_health_pagination.page - 1) * device_health_pagination.per_page + 1 }} to {{ [device_health_pagination.page * device_health_pagination.per_page, device_health_pagination.total] | min }} of {{ device_health_total }} device{{ '' if device_health_total == 1 else 's' }}{% if query %} matching "{{ query }}"{% endif %}.
+            </p>
+            {% if device_health_pagination.total_pages > 1 %}
+            <nav class="flex items-center gap-2" aria-label="Monitoring device pagination">
+                {% if device_health_pagination.has_prev %}
+                <a href="{{ request.url.include_query_params(page=device_health_pagination.page - 1, per_page=device_health_pagination.per_page) }}" class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Previous</a>
+                {% endif %}
+                <span class="px-2 text-sm text-slate-600 dark:text-slate-400">Page {{ device_health_pagination.page }} of {{ device_health_pagination.total_pages }}</span>
+                {% if device_health_pagination.has_next %}
+                <a href="{{ request.url.include_query_params(page=device_health_pagination.page + 1, per_page=device_health_pagination.per_page) }}" class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Next</a>
+                {% endif %}
+            </nav>
+            {% endif %}
+        </div>
         {% else %}
         {% if query %}
         {{ empty_state("No matching devices", "Try a different search term or clear the filter.") }}

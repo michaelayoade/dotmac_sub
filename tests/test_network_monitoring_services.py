@@ -22,6 +22,7 @@ from app.models.network_monitoring import (
     AlertStatus,
     DeviceMetric,
     MetricType,
+    NetworkDevice,
     PopSite,
 )
 from app.models.subscription_engine import SettingValueType
@@ -907,6 +908,37 @@ def test_get_device_health_table_uses_latest_metrics(db_session, network_device)
     assert row["ip"] == str(network_device.mgmt_ip or "")
     assert row["cpu"] == 71.0
     assert row["memory"] == 84.0
+
+
+def test_get_device_health_page_paginates_and_clamps(db_session, network_device):
+    db_session.add_all(
+        [
+            NetworkDevice(
+                name=f"Page Device {index:02d}",
+                hostname=f"page-device-{index:02d}",
+                mgmt_ip=f"203.0.113.{index + 1}",
+                is_active=True,
+            )
+            for index in range(10)
+        ]
+    )
+    db_session.commit()
+
+    rows, pagination = web_network_monitoring_service._get_device_health_page(
+        db_session,
+        page=999,
+        per_page=10,
+    )
+
+    assert pagination == {
+        "page": 2,
+        "per_page": 10,
+        "total": 11,
+        "total_pages": 2,
+        "has_prev": True,
+        "has_next": False,
+    }
+    assert len(rows) == 1
 
 
 def test_poll_onu_signal_strength_reads_zabbix_ingested_inventory(

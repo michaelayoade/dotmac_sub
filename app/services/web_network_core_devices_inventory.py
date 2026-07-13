@@ -434,15 +434,17 @@ def olts_list_page_data(
     *,
     search: str | None = None,
     status: str | None = None,
+    page: int = 1,
+    per_page: int = 50,
 ) -> dict[str, object]:
     """Return OLT list payload with per-OLT stats."""
-    raw_olts = network_service.olt_devices.list(
-        db=db,
-        is_active=True,
-        order_by="name",
-        order_dir="asc",
-        limit=100,
-        offset=0,
+    per_page = min(max(int(per_page or 50), 10), 200)
+    raw_olts = list(
+        db.scalars(
+            select(OLTDevice)
+            .where(OLTDevice.is_active.is_(True))
+            .order_by(OLTDevice.name.asc())
+        ).all()
     )
 
     olt_stats = {}
@@ -646,6 +648,12 @@ def olts_list_page_data(
             if item.get("runtime_operational_status") == "offline"
         ]
 
+    filtered_total = len(filtered_olts)
+    total_pages = max(1, (filtered_total + per_page - 1) // per_page)
+    current_page = min(max(page, 1), total_pages)
+    page_start = (current_page - 1) * per_page
+    paged_olts = filtered_olts[page_start : page_start + per_page]
+
     attention_items = [
         item for item in olts if item.get("runtime_health_state") == "attention"
     ]
@@ -658,7 +666,7 @@ def olts_list_page_data(
     total_pon_ports = sum(int(item.get("pon_ports") or 0) for item in olts)  # type: ignore[call-overload]
 
     stats = {
-        "total": len(filtered_olts),
+        "total": filtered_total,
         "fleet_total": len(olts),
         "active": sum(1 for o in filtered_olts if o["is_active"]),
         "attention": len(attention_items),
@@ -671,12 +679,20 @@ def olts_list_page_data(
     attention_summary = attention_items[:6]
 
     return {
-        "olts": filtered_olts,
+        "olts": paged_olts,
         "olt_stats": olt_stats,
         "stats": stats,
         "attention_summary": attention_summary,
         "filters": {
             "search": search or "",
             "status": normalized_status,
+        },
+        "pagination": {
+            "page": current_page,
+            "per_page": per_page,
+            "total": filtered_total,
+            "total_pages": total_pages,
+            "has_prev": current_page > 1,
+            "has_next": current_page < total_pages,
         },
     }

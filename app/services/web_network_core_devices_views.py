@@ -1447,56 +1447,60 @@ def onts_list_page_data(
     elif status_filter == "inactive":
         is_active = False
 
-    authorization_filter = (authorization or "authorized").strip().lower()
+    authorization_filter = (authorization or "all").strip().lower()
     if authorization_filter not in {"authorized", "unauthorized", "all"}:
-        authorization_filter = "authorized"
+        authorization_filter = "all"
     query_authorization = (
         None if authorization_filter == "all" else authorization_filter
     )
 
-    # Calculate pagination offset
-    offset = (max(page, 1) - 1) * per_page
-
-    # Use advanced query with all filters
-    onts: Sequence[OntUnit]
-    onts, total_filtered = network_service.ont_units.list_advanced(
-        db,
-        olt_id=olt_id,
-        pon_port_id=pon_port_id,
-        pon_hint=pon_hint,
-        zone_id=zone_id,
-        signal_quality=signal_quality,
-        olt_status=online_status,
-        authorization_status=query_authorization,
-        vendor=vendor,
-        search=search,
-        is_active=is_active,
-        order_by=order_by,
-        order_dir=order_dir,
-        limit=per_page,
-        offset=offset,
-    )
-
+    requested_page = max(page, 1)
+    current_page = requested_page
+    onts: Sequence[OntUnit] = ()
+    total_filtered = 0
     diagnostics_onts: Sequence[OntUnit] = ()
     diagnostics_total = 0
+
+    if normalized_view != "unconfigured":
+        query_order_by = "signal" if normalized_view == "diagnostics" else order_by
+        query_order_dir = "asc" if normalized_view == "diagnostics" else order_dir
+
+        def _load_page(page_number: int) -> tuple[Sequence[OntUnit], int]:
+            return network_service.ont_units.list_advanced(
+                db,
+                olt_id=olt_id,
+                pon_port_id=pon_port_id,
+                pon_hint=pon_hint,
+                zone_id=zone_id,
+                signal_quality=signal_quality,
+                olt_status=online_status,
+                authorization_status=query_authorization,
+                vendor=vendor,
+                search=search,
+                is_active=is_active,
+                order_by=query_order_by,
+                order_dir=query_order_dir,
+                limit=per_page,
+                offset=(page_number - 1) * per_page,
+            )
+
+        page_rows, page_total = _load_page(requested_page)
+        page_total_pages = max(1, (page_total + per_page - 1) // per_page)
+        current_page = min(requested_page, page_total_pages)
+        if current_page != requested_page:
+            page_rows, page_total = _load_page(current_page)
+
+        if normalized_view == "diagnostics":
+            diagnostics_onts, diagnostics_total = page_rows, page_total
+        else:
+            onts, total_filtered = page_rows, page_total
+
     if normalized_view == "diagnostics":
-        diagnostics_onts, diagnostics_total = network_service.ont_units.list_advanced(
-            db,
-            olt_id=olt_id,
-            pon_port_id=pon_port_id,
-            pon_hint=pon_hint,
-            zone_id=zone_id,
-            signal_quality=signal_quality,
-            olt_status=online_status,
-            authorization_status=query_authorization,
-            vendor=vendor,
-            search=search,
-            is_active=is_active,
-            order_by="signal",
-            order_dir="asc",
-            limit=per_page,
-            offset=offset,
-        )
+        diagnostics_total_pages = max(1, (diagnostics_total + per_page - 1) // per_page)
+        total_pages = 1
+    else:
+        total_pages = max(1, (total_filtered + per_page - 1) // per_page)
+        diagnostics_total_pages = 1
 
     # Signal threshold classification for displayed ONTs
     warn, crit = get_signal_thresholds(db)
@@ -1811,10 +1815,6 @@ def onts_list_page_data(
                 "topology_source": "ont",
             }
 
-    # Pagination metadata
-    total_pages = max(1, (total_filtered + per_page - 1) // per_page)
-    diagnostics_total_pages = max(1, (diagnostics_total + per_page - 1) // per_page)
-
     # Distinct vendors for filter dropdown
     vendor_rows = db.scalars(
         select(OntUnit.vendor)
@@ -1855,20 +1855,20 @@ def onts_list_page_data(
         },
         # Pagination
         "pagination": {
-            "page": page,
+            "page": current_page,
             "per_page": per_page,
             "total": total_filtered,
             "total_pages": total_pages,
-            "has_prev": page > 1,
-            "has_next": page < total_pages,
+            "has_prev": current_page > 1,
+            "has_next": current_page < total_pages,
         },
         "diagnostics_pagination": {
-            "page": page,
+            "page": current_page,
             "per_page": per_page,
             "total": diagnostics_total,
             "total_pages": diagnostics_total_pages,
-            "has_prev": page > 1,
-            "has_next": page < diagnostics_total_pages,
+            "has_prev": current_page > 1,
+            "has_next": current_page < diagnostics_total_pages,
         },
     }
 
