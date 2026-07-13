@@ -12,6 +12,7 @@ from fastapi import HTTPException
 from pyrad.client import Client, Timeout
 from pyrad.dictionary import Dictionary
 from pyrad.packet import CoARequest, DisconnectNAK, DisconnectRequest
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.catalog import (
@@ -1493,10 +1494,40 @@ def cleanup_subscription_on_suspend(
         ru.is_active = False
         stats["radius_users_deactivated"] += 1
 
-    # 3. Remove credentials from external RADIUS DB
+    # 3. Remove THIS SUBSCRIPTION's credentials from the external RADIUS DB.
+    #
+    # This used to query by subscriber_id and hard-DELETE radcheck/radreply/
+    # radusergroup for every credential the subscriber owned — so suspending one
+    # service (for any reason, including a correct prepaid suspension) took the
+    # customer's OTHER PAID SERVICES offline too, until the next populate() sweep
+    # rebuilt them. Step 2 above already scopes to subscription.id; step 3 did not.
+    #
+    # Legacy credentials predate the subscription link and carry a NULL
+    # subscription_id. Those still have to be removed, or suspension would stop
+    # working for the customers who have them — but only when this is the
+    # subscriber's ONLY live subscription, so an unlinked credential can never be
+    # attributed to a sibling service that is still paid for.
+    # A sibling that should still be ON. A suspended sibling needs no protection —
+    # its own credentials are meant to be gone.
+    other_serving_subscription = (
+        db.query(Subscription.id)
+        .filter(Subscription.subscriber_id == subscription.subscriber_id)
+        .filter(Subscription.id != subscription.id)
+        .filter(
+            Subscription.status.in_(
+                (SubscriptionStatus.active, SubscriptionStatus.pending)
+            )
+        )
+        .first()
+    )
+    credential_scope = [AccessCredential.subscription_id == subscription.id]
+    if other_serving_subscription is None:
+        credential_scope.append(AccessCredential.subscription_id.is_(None))
+
     credentials = (
         db.query(AccessCredential)
         .filter(AccessCredential.subscriber_id == subscription.subscriber_id)
+        .filter(or_(*credential_scope))
         .filter(AccessCredential.is_active.is_(True))
         .all()
     )

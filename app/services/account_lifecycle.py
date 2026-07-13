@@ -330,7 +330,9 @@ def restore_subscription(
         emit=emit,
     )
 
-    if resolved_count == 0:
+    if resolved_count == 0 and remaining is not None:
+        # Locks exist but this trigger may not clear them. Refusing is correct:
+        # e.g. a payment must not lift a fraud block.
         logger.warning(
             "No locks resolved for subscription %s with trigger %r "
             "(active_locks=%d, trigger not authorized)",
@@ -339,6 +341,14 @@ def restore_subscription(
             len(get_active_locks(db, subscription_id=str(subscription.id))),
         )
         return False
+
+    # resolved_count == 0 with NO remaining lock means the subscription is
+    # suspended with nothing holding it down — a lock resolved out of band, or
+    # legacy split-brain drift. That IS restorable, and the owner says so once,
+    # here. Previously it returned False and every caller invented its own
+    # fallback: the reseller portal raw-wrote ``status = active``, which emitted
+    # no event, so the IP was never re-provisioned and RADIUS never re-synced —
+    # the UI said active while the customer stayed offline.
 
     restored = False
     if remaining is None:
