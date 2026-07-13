@@ -8,6 +8,7 @@ from unittest import mock
 import pytest
 
 from app.services.router_management import config_export as ce
+from app.services.router_management import connection as router_connection
 
 
 def _router(ip="10.0.0.1", name="R1"):
@@ -129,34 +130,32 @@ def test_key_rejected_without_password_reraises(monkeypatch):
 
 
 def test_fetch_config_export_uses_ssh_when_enabled(monkeypatch):
-    from app.tasks import router_sync as rs
-
     monkeypatch.setattr(
-        rs, "settings", types.SimpleNamespace(router_config_export_via_ssh=True)
+        ce, "settings", types.SimpleNamespace(router_config_export_via_ssh=True)
     )
-    monkeypatch.setattr(rs, "export_config_via_ssh", lambda router: "SSH-CONFIG")
+    monkeypatch.setattr(ce, "export_config_via_ssh", lambda router: "SSH-CONFIG")
     # REST path must NOT be called
     monkeypatch.setattr(
-        rs.RouterConnectionService,
+        router_connection.RouterConnectionService,
         "execute",
         mock.Mock(side_effect=AssertionError("REST should not be used")),
     )
-    assert rs._fetch_config_export(_router()) == "SSH-CONFIG"
+    assert ce.fetch_config_export(_router()) == "SSH-CONFIG"
 
 
 def test_fetch_config_export_rest_fallback_when_disabled(monkeypatch):
-    from app.tasks import router_sync as rs
-
     monkeypatch.setattr(
-        rs, "settings", types.SimpleNamespace(router_config_export_via_ssh=False)
+        ce, "settings", types.SimpleNamespace(router_config_export_via_ssh=False)
     )
     monkeypatch.setattr(
-        rs.RouterConnectionService, "execute", lambda *a, **k: ["/ip", "add x"]
+        router_connection.RouterConnectionService,
+        "execute",
+        lambda *a, **k: ["/ip", "add x"],
     )
     monkeypatch.setattr(
-        rs, "export_config_via_ssh", mock.Mock(side_effect=AssertionError("no SSH"))
+        ce, "export_config_via_ssh", mock.Mock(side_effect=AssertionError("no SSH"))
     )
-    assert rs._fetch_config_export(_router()) == "/ip\nadd x"
+    assert ce.fetch_config_export(_router()) == "/ip\nadd x"
 
 
 def test_host_key_policy_tofu_pins_and_persists(monkeypatch, tmp_path):

@@ -96,6 +96,8 @@ celery_app.conf.task_routes = {
     # Operator-triggered writes must not wait behind long inventory and
     # topology jobs. Unrouted apply tasks use the default worker queue.
     "app.tasks.uisp_control.reconcile_uisp_config_readback": {"queue": "ingestion"},
+    "router_sync.reconcile_config_push_readback": {"queue": "ingestion"},
+    "router_sync.reconcile_nas_vlan_readback": {"queue": "ingestion"},
     "app.tasks.topology_ufiber_link.run_ufiber_onu_link": {"queue": "ingestion"},
     "app.tasks.topology_metrics.export_topology_metrics": {"queue": "ingestion"},
     "app.tasks.olt_mac_harvest.run_olt_mac_harvest": {"queue": "ingestion"},

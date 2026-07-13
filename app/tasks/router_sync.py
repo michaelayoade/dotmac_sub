@@ -1,4 +1,3 @@
-import json
 import logging
 import time
 from datetime import UTC, datetime
@@ -7,10 +6,16 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
 
 from app.celery_app import celery_app
-from app.config import settings
+from app.models.network_operation import (
+    NetworkOperation,
+    NetworkOperationStatus,
+    NetworkOperationTargetType,
+    NetworkOperationType,
+)
 from app.models.router_management import (
     Router,
     RouterConfigPush,
+    RouterConfigPushResult,
     RouterConfigPushStatus,
     RouterConfigSnapshot,
     RouterPushResultStatus,
@@ -18,51 +23,25 @@ from app.models.router_management import (
     RouterStatus,
 )
 from app.services.db_session_adapter import db_session_adapter
+from app.services.network_operations import network_operations
 from app.services.router_management.config import RouterConfigService
-from app.services.router_management.config_export import export_config_via_ssh
+from app.services.router_management.config_export import fetch_config_export
 from app.services.router_management.connection import RouterConnectionService
 from app.services.router_management.inventory import RouterInventory
+from app.services.router_management.write_adapter import (
+    RouterConfigurationWriteAdapter,
+    RouterPostWriteReadbackError,
+    RouterWriteRejected,
+    parse_routeros_rest_command,
+    parse_routeros_rest_commands,
+)
 
 logger = logging.getLogger(__name__)
 
 
 def _fetch_config_export(router) -> str:
-    """Pull a router's full config as text.
-
-    Prefers SSH ``/export`` (``ROUTER_CONFIG_EXPORT_VIA_SSH``, default on):
-    RouterOS 7.x cannot return config text over REST — inline ``POST /rest/export``
-    comes back empty and file-exports aren't readable back over REST — so SSH is
-    the only transport that actually delivers the config. Uses the dotmac-ops SSH
-    key, not the REST identity.
-
-    Falls back to REST ``POST /export`` only when SSH is disabled. ``/export`` is a
-    RouterOS *command* (POST, not GET) and the REST user needs ``sensitive``; the
-    response is a JSON array of config lines (or text) normalised to a blob.
-    """
-    if settings.router_config_export_via_ssh:
-        return export_config_via_ssh(router)  # raises on empty/failure
-    data = RouterConnectionService.execute(router, "POST", "/export")
-    text = _export_to_text(data)
-    # Never bank a blank snapshot (false DR confidence): an empty REST export
-    # means the user lacks the ``sensitive`` policy. Fail so the caller skips it.
-    if not text.strip():
-        raise RuntimeError(
-            f"Router {router.name} returned an empty config export — the REST API "
-            "user's group is likely missing the 'sensitive' policy"
-        )
-    return text
-
-
-def _export_to_text(data) -> str:
-    if isinstance(data, str):
-        return data
-    if isinstance(data, list):
-        return "\n".join(
-            item if isinstance(item, str) else json.dumps(item) for item in data
-        )
-    if isinstance(data, dict):
-        return json.dumps(data)
-    return str(data)
+    """Compatibility wrapper around the canonical snapshot transport."""
+    return fetch_config_export(router)
 
 
 @celery_app.task(name="router_sync.sync_all_system_info")
@@ -183,12 +162,10 @@ def cleanup_idle_tunnels() -> dict:
     return {"closed": closed}
 
 
-def _capture_post_snapshot(db, router: Router) -> RouterConfigSnapshot | None:
-    """Best-effort post-change snapshot of the router's CURRENT state.
-
-    Returns ``None`` (rather than raising) when the export fails, so a push
-    result is still recorded even if the router is now unreachable.
-    """
+def _capture_post_snapshot(
+    db, router: Router, *, required: bool = False
+) -> RouterConfigSnapshot | None:
+    """Capture current state; successful writes require this audit evidence."""
     try:
         post_text = _fetch_config_export(router)
         return RouterConfigService.store_snapshot(
@@ -196,39 +173,129 @@ def _capture_post_snapshot(db, router: Router) -> RouterConfigSnapshot | None:
             router_id=router.id,
             config_export=post_text,
             source=RouterSnapshotSource.post_change,
+            commit=False,
         )
     except Exception as exc:
         logger.warning("Post-change snapshot failed for %s: %s", router.name, exc)
+        if required:
+            raise RouterPostWriteReadbackError(
+                f"Device readback completed, but post-change snapshot failed: {exc}"
+            ) from exc
         return None
 
 
-def _parse_routeros_rest_command(cmd: str) -> tuple[str, dict | None, str | None]:
-    """Parse one push command into RouterOS REST path and optional JSON payload."""
-    parts = cmd.strip().split(" ", 1)
-    path = parts[0]
-    payload: dict | None = None
-    warning: str | None = None
-    if len(parts) == 2:
-        try:
-            parsed = json.loads(parts[1])
-            if isinstance(parsed, dict):
-                payload = parsed
-            else:
-                warning = "Payload JSON is not an object; sending without payload."
-        except json.JSONDecodeError:
-            warning = "Payload JSON could not be parsed; sending without payload."
-    return path, payload, warning
+def _parse_routeros_rest_command(cmd: str) -> tuple[str, dict, None]:
+    plan = parse_routeros_rest_command(cmd)
+    return plan.path, plan.payload, None
 
 
 def _preview_commands(commands: list[str]) -> list[dict[str, object]]:
-    preview = []
-    for cmd in commands:
-        path, payload, warning = _parse_routeros_rest_command(cmd)
-        row: dict[str, object] = {"command": cmd, "path": path, "payload": payload}
-        if warning:
-            row["warning"] = warning
-        preview.append(row)
-    return preview
+    return [plan.preview() for plan in parse_routeros_rest_commands(commands)]
+
+
+def _active_operation(db, operation_id) -> bool:
+    if not operation_id:
+        return False
+    operation = network_operations.get(db, str(operation_id))
+    return operation.status in {
+        NetworkOperationStatus.pending,
+        NetworkOperationStatus.running,
+        NetworkOperationStatus.waiting,
+    }
+
+
+def _mark_result_failed(db, result: RouterConfigPushResult, message: str) -> None:
+    result.status = RouterPushResultStatus.failed
+    result.error_message = message[:500]
+    if _active_operation(db, result.operation_id):
+        network_operations.mark_failed(
+            db,
+            str(result.operation_id),
+            message,
+            output_payload={"push_result_id": str(result.id), "verified": False},
+        )
+
+
+def _mark_result_skipped(db, result: RouterConfigPushResult, message: str) -> None:
+    result.status = RouterPushResultStatus.skipped
+    result.error_message = message[:500]
+    if _active_operation(db, result.operation_id):
+        network_operations.mark_warning(
+            db,
+            str(result.operation_id),
+            message,
+            output_payload={"push_result_id": str(result.id), "skipped": True},
+        )
+
+
+def _mark_result_pending_readback(
+    db,
+    result: RouterConfigPushResult,
+    message: str,
+    *,
+    response_data: dict | list | None = None,
+) -> None:
+    result.status = RouterPushResultStatus.pending_readback
+    result.error_message = message[:500]
+    if response_data is not None:
+        result.response_data = response_data
+    if _active_operation(db, result.operation_id):
+        network_operations.mark_waiting(db, str(result.operation_id), message)
+
+
+def _derive_push_status(push: RouterConfigPush) -> RouterConfigPushStatus:
+    statuses = {result.status for result in push.results}
+    if RouterPushResultStatus.running in statuses:
+        return RouterConfigPushStatus.running
+    if RouterPushResultStatus.pending_readback in statuses:
+        return RouterConfigPushStatus.pending_readback
+    if RouterPushResultStatus.pending in statuses:
+        return RouterConfigPushStatus.pending
+    has_failed = RouterPushResultStatus.failed in statuses
+    has_success = RouterPushResultStatus.success in statuses
+    has_skipped = RouterPushResultStatus.skipped in statuses
+    if (has_failed or has_skipped) and has_success:
+        return RouterConfigPushStatus.partial_failure
+    if has_failed or has_skipped:
+        return RouterConfigPushStatus.failed
+    return RouterConfigPushStatus.completed
+
+
+def _refresh_parent_operation(db, push: RouterConfigPush) -> None:
+    if push.operation_id:
+        network_operations.update_parent_status(db, str(push.operation_id))
+
+
+def _recover_pending_readback(
+    db,
+    result_id,
+    message: str,
+    response_data: dict | list | None,
+) -> None:
+    """Persist an ambiguity marker in a fresh transaction after audit failure."""
+    db.rollback()
+    recovery_db = db_session_adapter.create_session()
+    try:
+        result = recovery_db.get(RouterConfigPushResult, result_id)
+        if result is None:
+            raise RuntimeError(f"Router push result {result_id} no longer exists")
+        _mark_result_pending_readback(
+            recovery_db,
+            result,
+            message,
+            response_data=response_data,
+        )
+        push = recovery_db.get(RouterConfigPush, result.push_id)
+        if push is not None:
+            push.status = RouterConfigPushStatus.pending_readback
+            push.completed_at = None
+            _refresh_parent_operation(recovery_db, push)
+        recovery_db.commit()
+    except Exception:
+        recovery_db.rollback()
+        raise
+    finally:
+        recovery_db.close()
 
 
 @celery_app.task(name="router_sync.execute_config_push")
@@ -239,19 +306,44 @@ def execute_config_push(push_id: str) -> dict:
         if not push:
             return {"error": "Push not found"}
 
+        try:
+            plans = parse_routeros_rest_commands(push.commands)
+        except Exception as exc:
+            message = f"Stored RouterOS command is not verifiable: {exc}"
+            for result in push.results:
+                _mark_result_failed(db, result, message)
+            push.status = RouterConfigPushStatus.failed
+            push.completed_at = datetime.now(UTC)
+            _refresh_parent_operation(db, push)
+            db.commit()
+            return {
+                "push_id": push_id,
+                "status": push.status.value,
+                "success": 0,
+                "failed": len(push.results),
+                "pending_readback": 0,
+                "skipped": 0,
+                "dry_run": push.dry_run,
+                "failure_policy": push.failure_policy,
+            }
         push.status = RouterConfigPushStatus.running
+        if _active_operation(db, push.operation_id):
+            network_operations.mark_running(db, str(push.operation_id))
         db.commit()
 
         success_count = 0
         fail_count = 0
+        pending_readback_count = 0
         skipped_count = 0
         abort_remaining = False
+        adapter = RouterConfigurationWriteAdapter()
 
         for result in push.results:
             if abort_remaining:
-                result.status = RouterPushResultStatus.skipped
-                result.error_message = (
-                    "Skipped because failure policy aborted after a prior failure."
+                _mark_result_skipped(
+                    db,
+                    result,
+                    "Skipped because failure policy aborted after a prior failure.",
                 )
                 db.commit()
                 skipped_count += 1
@@ -259,14 +351,17 @@ def execute_config_push(push_id: str) -> dict:
 
             router = db.get(Router, result.router_id)
             if not router or not router.is_active:
-                result.status = RouterPushResultStatus.skipped
-                result.error_message = "Router inactive or not found"
+                _mark_result_skipped(db, result, "Router inactive or not found")
                 db.commit()
                 skipped_count += 1
                 continue
 
             start_time = time.time()
-            responses: list = []
+            apply_payload: dict | None = None
+            result.status = RouterPushResultStatus.running
+            if _active_operation(db, result.operation_id):
+                network_operations.mark_running(db, str(result.operation_id))
+            db.commit()
             try:
                 pre_text = _fetch_config_export(router)
                 pre_snap = RouterConfigService.store_snapshot(
@@ -281,45 +376,104 @@ def execute_config_push(push_id: str) -> dict:
                 if push.dry_run:
                     result.response_data = {
                         "dry_run": True,
-                        "planned_commands": _preview_commands(push.commands),
+                        "planned_commands": [plan.preview() for plan in plans],
+                        "verified": False,
+                        "write_accepted": False,
                     }
                     result.status = RouterPushResultStatus.success
                     result.duration_ms = int((time.time() - start_time) * 1000)
+                    if _active_operation(db, result.operation_id):
+                        network_operations.mark_succeeded(
+                            db,
+                            str(result.operation_id),
+                            output_payload={
+                                "dry_run": True,
+                                "write_accepted": False,
+                                "verified": False,
+                            },
+                        )
                     db.commit()
                     success_count += 1
                     continue
 
-                # Each command is a RouterOS REST API path, optionally followed
-                # by a single space and a JSON object payload, e.g.:
-                #   /ip/address/add {"address":"192.168.1.1/24","interface":"ether1"}
-                for cmd in push.commands:
-                    path, payload, warning = _parse_routeros_rest_command(cmd)
-                    if warning:
-                        logger.warning("%s Command: %r", warning, cmd)
-                    resp = RouterConnectionService.execute(
-                        router, "POST", path, payload=payload
+                apply_result = adapter.apply(router, plans)
+                apply_payload = apply_result.to_dict()
+                result.response_data = apply_payload
+                if not apply_result.verified:
+                    raise RuntimeError(
+                        "RouterOS readback does not match the requested configuration"
                     )
-                    responses.append(resp)
-
-                post_snap = _capture_post_snapshot(db, router)
-                if post_snap is not None:
-                    result.post_snapshot_id = post_snap.id
-                result.response_data = responses
+                post_snap = _capture_post_snapshot(db, router, required=True)
+                result.post_snapshot_id = post_snap.id if post_snap else None
                 result.status = RouterPushResultStatus.success
                 result.duration_ms = int((time.time() - start_time) * 1000)
                 router.last_config_change_at = datetime.now(UTC)
+                if _active_operation(db, result.operation_id):
+                    network_operations.mark_succeeded(
+                        db,
+                        str(result.operation_id),
+                        output_payload={
+                            **apply_payload,
+                            "post_snapshot_id": str(post_snap.id)
+                            if post_snap
+                            else None,
+                        },
+                    )
                 db.commit()
                 success_count += 1
 
-            except Exception as exc:
-                result.status = RouterPushResultStatus.failed
-                result.error_message = str(exc)[:500]
+            except RouterPostWriteReadbackError as exc:
                 result.duration_ms = int((time.time() - start_time) * 1000)
-                # An earlier command may already have mutated the router before
-                # the failure. Persist the partial responses and snapshot the
-                # router's current state so the partial application is auditable.
-                if responses:
-                    result.response_data = responses
+                if exc.partial_result is not None:
+                    apply_payload = exc.partial_result.to_dict()
+                _mark_result_pending_readback(
+                    db,
+                    result,
+                    str(exc),
+                    response_data=apply_payload,
+                )
+                post_snap = _capture_post_snapshot(db, router)
+                if post_snap is not None:
+                    result.post_snapshot_id = post_snap.id
+                db.commit()
+                pending_readback_count += 1
+                logger.warning("Push to %s is pending readback: %s", router.name, exc)
+                if push.failure_policy == "abort":
+                    abort_remaining = True
+            except RouterWriteRejected as exc:
+                result.duration_ms = int((time.time() - start_time) * 1000)
+                if exc.partial_result is not None:
+                    apply_payload = exc.partial_result.to_dict()
+                _mark_result_failed(db, result, str(exc))
+                if apply_payload is not None:
+                    result.response_data = apply_payload
+                post_snap = _capture_post_snapshot(db, router)
+                if post_snap is not None:
+                    result.post_snapshot_id = post_snap.id
+                db.commit()
+                fail_count += 1
+                if push.failure_policy == "abort":
+                    abort_remaining = True
+            except Exception as exc:
+                result.duration_ms = int((time.time() - start_time) * 1000)
+                if apply_payload and apply_payload.get("verified") is True:
+                    recovery_message = (
+                        "RouterOS write and readback completed, but atomic audit "
+                        f"persistence failed: {exc}"
+                    )
+                    _recover_pending_readback(
+                        db,
+                        result.id,
+                        recovery_message,
+                        apply_payload,
+                    )
+                    pending_readback_count += 1
+                    if push.failure_policy == "abort":
+                        abort_remaining = True
+                    continue
+                _mark_result_failed(db, result, str(exc))
+                if apply_payload is not None:
+                    result.response_data = apply_payload
                 post_snap = _capture_post_snapshot(db, router)
                 if post_snap is not None:
                     result.post_snapshot_id = post_snap.id
@@ -329,13 +483,14 @@ def execute_config_push(push_id: str) -> dict:
                 if push.failure_policy == "abort":
                     abort_remaining = True
 
-        if fail_count == 0:
-            push.status = RouterConfigPushStatus.completed
-        elif success_count == 0:
-            push.status = RouterConfigPushStatus.failed
-        else:
-            push.status = RouterConfigPushStatus.partial_failure
-        push.completed_at = datetime.now(UTC)
+        push.status = _derive_push_status(push)
+        if push.status not in {
+            RouterConfigPushStatus.pending,
+            RouterConfigPushStatus.running,
+            RouterConfigPushStatus.pending_readback,
+        }:
+            push.completed_at = datetime.now(UTC)
+        _refresh_parent_operation(db, push)
         db.commit()
 
         return {
@@ -343,9 +498,197 @@ def execute_config_push(push_id: str) -> dict:
             "status": push.status.value,
             "success": success_count,
             "failed": fail_count,
+            "pending_readback": pending_readback_count,
             "skipped": skipped_count,
             "dry_run": push.dry_run,
             "failure_policy": push.failure_policy,
         }
+    finally:
+        db.close()
+
+
+@celery_app.task(name="router_sync.reconcile_config_push_readback")
+def reconcile_config_push_readback(max_results: int = 25) -> dict[str, int]:
+    """Retry readback and snapshot capture for writes with ambiguous outcomes."""
+    db = db_session_adapter.create_session()
+    stats = {"checked": 0, "verified": 0, "drifted": 0, "pending": 0}
+    try:
+        rows = list(
+            db.scalars(
+                select(RouterConfigPushResult)
+                .where(
+                    RouterConfigPushResult.status
+                    == RouterPushResultStatus.pending_readback
+                )
+                .order_by(RouterConfigPushResult.created_at.asc())
+                .limit(max_results)
+            ).all()
+        )
+        adapter = RouterConfigurationWriteAdapter()
+        touched_pushes: set[str] = set()
+        for result in rows:
+            stats["checked"] += 1
+            push = db.get(RouterConfigPush, result.push_id)
+            router = db.get(Router, result.router_id)
+            if push is None or router is None or not router.is_active:
+                _mark_result_failed(
+                    db, result, "Readback target is inactive or missing"
+                )
+                stats["drifted"] += 1
+                db.commit()
+                continue
+            touched_pushes.add(str(push.id))
+            try:
+                readback = adapter.readback(
+                    router, parse_routeros_rest_commands(push.commands)
+                )
+                payload = readback.to_dict()
+                result.response_data = payload
+                if not readback.verified:
+                    _mark_result_failed(
+                        db,
+                        result,
+                        "RouterOS reconciliation found configuration drift",
+                    )
+                    stats["drifted"] += 1
+                else:
+                    post_snap = _capture_post_snapshot(db, router, required=True)
+                    result.post_snapshot_id = post_snap.id if post_snap else None
+                    result.status = RouterPushResultStatus.success
+                    result.error_message = None
+                    if _active_operation(db, result.operation_id):
+                        network_operations.mark_succeeded(
+                            db,
+                            str(result.operation_id),
+                            output_payload={
+                                **payload,
+                                "reconciled": True,
+                                "post_snapshot_id": (
+                                    str(post_snap.id) if post_snap else None
+                                ),
+                            },
+                        )
+                    stats["verified"] += 1
+                db.commit()
+            except RouterPostWriteReadbackError as exc:
+                _mark_result_pending_readback(db, result, str(exc))
+                db.commit()
+                stats["pending"] += 1
+            except Exception as exc:
+                _mark_result_failed(
+                    db, result, f"RouterOS reconciliation failed: {exc}"
+                )
+                db.commit()
+                stats["drifted"] += 1
+
+        for push_id in touched_pushes:
+            push = db.get(RouterConfigPush, push_id)
+            if push is None:
+                continue
+            push.status = _derive_push_status(push)
+            if push.status not in {
+                RouterConfigPushStatus.pending,
+                RouterConfigPushStatus.running,
+                RouterConfigPushStatus.pending_readback,
+            }:
+                push.completed_at = datetime.now(UTC)
+            _refresh_parent_operation(db, push)
+        db.commit()
+        return stats
+    finally:
+        db.close()
+
+
+@celery_app.task(name="router_sync.reconcile_nas_vlan_readback")
+def reconcile_nas_vlan_readback(max_operations: int = 25) -> dict[str, int]:
+    """Resolve waiting MikroTik NAS VLAN operations from live RouterOS state."""
+    from app.models.catalog import NasDevice
+    from app.services.nas._mikrotik_vlan import get_vlan_status
+
+    db = db_session_adapter.create_session()
+    stats = {"checked": 0, "verified": 0, "drifted": 0, "pending": 0}
+    try:
+        operations = list(
+            db.scalars(
+                select(NetworkOperation)
+                .where(
+                    NetworkOperation.status == NetworkOperationStatus.waiting,
+                    NetworkOperation.operation_type
+                    == NetworkOperationType.nas_vlan_provision,
+                    NetworkOperation.target_type == NetworkOperationTargetType.nas,
+                    NetworkOperation.correlation_key.like("nas-vlan:%"),
+                )
+                .order_by(NetworkOperation.created_at.asc())
+                .limit(max_operations)
+            ).all()
+        )
+        for operation in operations:
+            stats["checked"] += 1
+            desired = operation.input_payload or {}
+            nas = db.get(NasDevice, operation.target_id)
+            if nas is None:
+                network_operations.mark_failed(
+                    db, str(operation.id), "NAS readback target no longer exists"
+                )
+                stats["drifted"] += 1
+                db.commit()
+                continue
+            try:
+                observed = get_vlan_status(
+                    nas,
+                    vlan_id=int(desired["vlan_id"]),
+                    parent_interface=str(desired["parent_interface"]),
+                )
+            except Exception as exc:
+                network_operations.mark_waiting(
+                    db, str(operation.id), f"NAS VLAN readback failed: {exc}"
+                )
+                stats["pending"] += 1
+                db.commit()
+                continue
+            if observed.get("error"):
+                network_operations.mark_waiting(
+                    db,
+                    str(operation.id),
+                    f"NAS VLAN readback failed: {observed['error']}",
+                )
+                stats["pending"] += 1
+                db.commit()
+                continue
+
+            expected_service = desired.get("pppoe_service_name")
+            verified = (
+                observed.get("has_vlan") is True
+                and observed.get("has_ip") is True
+                and observed.get("ip_address") == desired.get("ip_address")
+                and observed.get("has_pppoe") is True
+                and (
+                    not expected_service
+                    or observed.get("pppoe_service") == expected_service
+                )
+            )
+            payload = {
+                "verified": verified,
+                "desired": desired,
+                "observed": observed,
+                "reconciled": True,
+            }
+            if verified:
+                network_operations.mark_succeeded(
+                    db, str(operation.id), output_payload=payload
+                )
+                stats["verified"] += 1
+            else:
+                network_operations.mark_failed(
+                    db,
+                    str(operation.id),
+                    "NAS VLAN reconciliation found configuration drift",
+                    output_payload=payload,
+                )
+                stats["drifted"] += 1
+            if operation.parent_id:
+                network_operations.update_parent_status(db, str(operation.parent_id))
+            db.commit()
+        return stats
     finally:
         db.close()

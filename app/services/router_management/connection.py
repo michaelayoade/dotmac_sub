@@ -18,6 +18,24 @@ DANGEROUS_COMMANDS = [
     "/disk/format-drive",
     "/file/remove",
     "/user/remove",
+    "/user/set",
+    "/ip/service/set",
+    "/interface/disable",
+    "/interface/remove",
+    "/routing/bgp/remove",
+    "/routing/bgp/set",
+    "/routing/ospf/remove",
+    "/routing/ospf/set",
+    "/ip/route/remove",
+    "/ip/route/set",
+    "/ipv6/route/remove",
+    "/ipv6/route/set",
+    "/ip/firewall/filter/remove",
+    "/ip/firewall/filter/set",
+    "/ipv6/firewall/filter/remove",
+    "/ipv6/firewall/filter/set",
+    "/ip/firewall/nat/remove",
+    "/ip/firewall/nat/set",
 ]
 
 # Fallback defaults — the live values come from SettingDomain.network via
@@ -29,6 +47,10 @@ READ_TIMEOUT = 30.0
 MAX_RETRIES = 3
 RETRY_BACKOFF_BASE = 2.0
 RouterResponse = dict | list | str
+
+
+class RouterTransportError(RuntimeError):
+    """Router transport failed with an outcome that may be ambiguous for writes."""
 
 
 def _rest_tunables() -> tuple[float, float, int, float]:
@@ -245,7 +267,7 @@ class RouterConnectionService:
                     f"{exc.response.text[:200]}"
                 ) from exc
 
-        raise RuntimeError(
+        raise RouterTransportError(
             f"Router {router.name} unreachable after {max_retries} attempts: {last_error}"
         )
 

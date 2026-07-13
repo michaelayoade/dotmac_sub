@@ -25,6 +25,8 @@ class VlanProvisioningResult:
     success: bool
     message: str
     created: bool = False
+    verified: bool = False
+    pending_readback: bool = False
     details: dict[str, Any] | None = None
 
 
@@ -418,6 +420,43 @@ def provision_vlan_full(
     if result.created:
         created_items.append("PPPoE server")
 
+    observed = get_vlan_status(
+        device, vlan_id=vlan_id, parent_interface=parent_interface
+    )
+    if observed.get("error"):
+        return VlanProvisioningResult(
+            success=False,
+            message=(
+                "NAS writes may have applied, but final RouterOS readback failed: "
+                f"{observed['error']}"
+            ),
+            created=bool(created_items),
+            pending_readback=True,
+            details={"created": created_items, "observed": observed},
+        )
+    drift: dict[str, Any] = {}
+    if not observed.get("has_vlan") or observed.get("vlan_name") != iface_name:
+        drift["vlan"] = {"expected": iface_name, "observed": observed.get("vlan_name")}
+    if not observed.get("has_ip") or observed.get("ip_address") != ip_address:
+        drift["ip_address"] = {
+            "expected": ip_address,
+            "observed": observed.get("ip_address"),
+        }
+    if not observed.get("has_pppoe"):
+        drift["pppoe_server"] = {"expected": True, "observed": False}
+    if pppoe_service_name and observed.get("pppoe_service") != pppoe_service_name:
+        drift["pppoe_service"] = {
+            "expected": pppoe_service_name,
+            "observed": observed.get("pppoe_service"),
+        }
+    if drift:
+        return VlanProvisioningResult(
+            success=False,
+            message="NAS VLAN provisioning readback does not match desired state.",
+            created=bool(created_items),
+            details={"created": created_items, "observed": observed, "drift": drift},
+        )
+
     if created_items:
         msg = f"Provisioned on {device.name}: {', '.join(created_items)}."
     else:
@@ -427,11 +466,14 @@ def provision_vlan_full(
         success=True,
         message=msg,
         created=bool(created_items),
+        verified=True,
         details={
             "vlan_id": vlan_id,
             "interface_name": iface_name,
             "ip_address": ip_address,
             "created": created_items,
+            "observed": observed,
+            "drift": {},
         },
     )
 
@@ -511,9 +553,25 @@ def remove_vlan_interface(
                 parent_interface,
             )
 
+        remaining_vlans = vlan_resource.get()
+        remaining = [
+            item
+            for item in (remaining_vlans if isinstance(remaining_vlans, list) else [])
+            if isinstance(item, dict)
+            and str(item.get("vlan-id") or item.get("vlan_id") or "") == str(vlan_id)
+            and str(item.get("interface") or "") == parent_interface
+        ]
+        if remaining:
+            return VlanProvisioningResult(
+                success=False,
+                message=f"VLAN {vlan_id} is still present after removal.",
+                details={"observed": remaining},
+            )
+
         return VlanProvisioningResult(
             success=True,
             message=f"VLAN {vlan_id} ({vlan_name}) removed from {device.name}.",
+            verified=True,
             details={"vlan_id": vlan_id, "name": vlan_name},
         )
     except Exception as exc:
