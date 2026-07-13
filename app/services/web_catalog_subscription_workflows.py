@@ -305,15 +305,32 @@ def admin_resume_vacation_hold_redirect(
 
     admin_ref = f"admin:{actor_id or 'unknown'}"
     try:
-        restore_subscription(
+        # ``trigger`` is matched against ALLOWED_RESTORERS by exact membership, so
+        # it must be the bare authority name. This passed the interpolated
+        # "admin:<uuid>", which is never in {"customer", "admin"} — so
+        # resolve_locks_for_trigger cleared ZERO locks, restore_subscription
+        # returned False, the return value was discarded, and the admin was told
+        # "Service resumed successfully" while the customer stayed offline.
+        # ``resolved_by`` is the free-text audit field; that is where the actor
+        # identity belongs.
+        restored = restore_subscription(
             db,
             subscription_id,
-            trigger=admin_ref,
+            trigger="admin",
             resolved_by=admin_ref,
             reason=EnforcementReason.customer_hold,
         )
         db.commit()
-        notice = "Vacation hold has been cleared. Service resumed successfully."
+        if restored:
+            notice = "Vacation hold has been cleared. Service resumed successfully."
+        else:
+            # Never claim success the owner did not give us. It declines for real
+            # reasons — another active lock it cannot clear, or an active login on
+            # the same login name.
+            notice = (
+                "Vacation hold could not be resumed. The service may still be held "
+                "by another enforcement lock — check the subscription's locks."
+            )
         query = f"notice={quote_plus(notice)}"
     except Exception as exc:
         db.rollback()

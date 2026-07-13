@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 
 from sqlalchemy.orm import Session
@@ -15,6 +16,8 @@ from app.models.billing import (
 )
 from app.models.catalog import BillingMode, Subscription
 from app.services.common import round_money, to_decimal
+
+logger = logging.getLogger(__name__)
 
 
 def ensure_prepaid_entitlements_for_paid_invoice(
@@ -72,6 +75,57 @@ def ensure_prepaid_entitlements_for_paid_invoice(
     if created:
         db.flush()
     return created
+
+
+def revoke_prepaid_entitlements_for_unpaid_invoice(
+    db: Session, invoice: Invoice
+) -> list[ServiceEntitlement]:
+    """Revoke the entitlements an invoice funded, once it is no longer paid.
+
+    The mirror of ``ensure_prepaid_entitlements_for_paid_invoice``. Entitlements
+    were granted when a prepaid invoice was paid and then **never revoked** —
+    ``ServiceEntitlementStatus.void``/``reversed`` were written nowhere in the
+    codebase. So a refund or chargeback reopened the invoice (``paid`` →
+    ``issued``/``overdue``) while the entitlement it had funded stayed ``active``,
+    and ``resolve_prepaid_funding`` counts active entitlements as paid coverage:
+    the customer kept the service they had just been refunded for, free, for the
+    whole period.
+
+    Called from the one place every payment effect funnels through, so refunds,
+    reversals and allocation changes are all covered by construction.
+
+    ``reversed`` (not ``void``) is the right terminal state: the entitlement was
+    real and was earned back, which is different from one that should never have
+    existed.
+    """
+    if invoice.status == InvoiceStatus.paid:
+        return []
+
+    entitlements = (
+        db.query(ServiceEntitlement)
+        .filter(ServiceEntitlement.source_invoice_id == invoice.id)
+        .filter(ServiceEntitlement.status == ServiceEntitlementStatus.active)
+        .all()
+    )
+    if not entitlements:
+        return []
+
+    for entitlement in entitlements:
+        entitlement.status = ServiceEntitlementStatus.reversed
+        metadata = dict(entitlement.metadata_ or {})
+        metadata["revoked_reason"] = "source_invoice_no_longer_paid"
+        metadata["revoked_invoice_status"] = (
+            invoice.status.value if invoice.status else None
+        )
+        entitlement.metadata_ = metadata
+    db.flush()
+    logger.info(
+        "Revoked %d prepaid entitlement(s) for invoice %s (status=%s)",
+        len(entitlements),
+        invoice.id,
+        invoice.status.value if invoice.status else None,
+    )
+    return entitlements
 
 
 def ensure_prepaid_entitlement_for_wallet_debit(
