@@ -864,6 +864,45 @@ def rollback_import(
 
     deleted_rows = 0
     missing_rows = 0
+
+    # PASS 1 — undo the money, through its owner.
+    #
+    # This must run BEFORE any invoice row is deleted: an invoice still carrying a
+    # payment allocation cannot be deleted, and clearing that allocation is exactly
+    # what the owner does. It also cannot be a db.delete(): imported payments now
+    # have a LedgerEntry and usually a PaymentAllocation beneath them (they became
+    # real payments when the import was routed through Payments.create), and
+    # neither child FK carries an ondelete. A hard delete would either raise
+    # IntegrityError — leaving the batch half-rolled-back and unrecoverable — or
+    # orphan a live ledger credit while the invoice it settled stayed paid with
+    # balance_due = 0.
+    for record in created_records:
+        if not isinstance(record, dict):
+            continue
+        if str(record.get("module") or entry.get("module") or "") != "payments":
+            continue
+        raw_payment_id = str(record.get("id") or "").strip()
+        if not raw_payment_id:
+            missing_rows += 1
+            continue
+        try:
+            payment_id = UUID(raw_payment_id)
+        except ValueError:
+            missing_rows += 1
+            continue
+        if db.get(Payment, payment_id) is None:
+            missing_rows += 1
+            continue
+
+        from app.services import billing as billing_service
+
+        # Soft-deletes the payment, drops its allocations and ledger credits
+        # together, and recomputes every invoice it had settled — so the invoice
+        # goes back to unpaid instead of staying paid with no money behind it.
+        billing_service.payments.delete(db, str(payment_id))
+        deleted_rows += 1
+
+    # PASS 2 — everything else.
     for record in created_records:
         if not isinstance(record, dict):
             continue
@@ -886,6 +925,11 @@ def rollback_import(
         if obj is None:
             missing_rows += 1
             continue
+
+        # Already undone through the payment owner in pass 1.
+        if module == "payments":
+            continue
+
         db.delete(obj)
         deleted_rows += 1
 
