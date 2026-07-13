@@ -1,5 +1,7 @@
 """Tests for provisioning step executors."""
 
+import uuid
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from app.services.provisioning_step_executors import (
@@ -180,15 +182,28 @@ def test_ensure_nas_vlan_fails_device_not_found() -> None:
     assert "not found" in result.detail
 
 
+@patch("app.services.network_operations.network_operations.mark_succeeded")
+@patch("app.services.network_operations.network_operations.mark_running")
+@patch("app.services.network_operations.network_operations.start")
 @patch("app.services.nas._mikrotik_vlan.provision_vlan_full")
-def test_ensure_nas_vlan_success(mock_provision: MagicMock) -> None:
+def test_ensure_nas_vlan_success(
+    mock_provision: MagicMock,
+    mock_start: MagicMock,
+    _mock_running: MagicMock,
+    mock_succeeded: MagicMock,
+) -> None:
     from app.services.nas._mikrotik_vlan import VlanProvisioningResult
 
     db = MagicMock()
     nas = MagicMock()
     db.get.return_value = nas
+    operation_id = uuid.uuid4()
+    mock_start.return_value = SimpleNamespace(id=operation_id)
     mock_provision.return_value = VlanProvisioningResult(
-        success=True, message="VLAN 203 provisioned", created=True
+        success=True,
+        message="VLAN 203 provisioned",
+        created=True,
+        verified=True,
     )
 
     result = execute_ensure_nas_vlan(
@@ -197,4 +212,7 @@ def test_ensure_nas_vlan_success(mock_provision: MagicMock) -> None:
     assert result.status == "ok"
     assert result.payload is not None
     assert result.payload["nas_vlan_provisioned"] is True
+    assert result.payload["verified"] is True
+    assert result.payload["operation_id"] == str(operation_id)
     mock_provision.assert_called_once()
+    mock_succeeded.assert_called_once()

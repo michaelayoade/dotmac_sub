@@ -152,7 +152,7 @@ def test_destructive_actions_have_confirmations():
     assert "Factory reset CPE" in cpe
     assert "confirmTr069BulkAction" in tr069
     assert "const confirmed = confirm(message)" in router_push
-    assert "Blocked-command override is enabled" in router_push
+    assert "allowDangerousCommands" not in router_push
     assert "Regenerate keys for VPN server" in vpn
     assert "rotates the stored API credentials" in nas
     assert "Import PPPoE credentials now" in radius

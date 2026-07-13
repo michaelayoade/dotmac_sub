@@ -1734,6 +1734,20 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(topology_uisp_minutes * 60, 300),
         )
+        _sync_scheduled_task(
+            session,
+            name="router_config_readback",
+            task_name="router_sync.reconcile_config_push_readback",
+            enabled=True,
+            interval_seconds=300,
+        )
+        _sync_scheduled_task(
+            session,
+            name="mikrotik_nas_vlan_readback",
+            task_name="router_sync.reconcile_nas_vlan_readback",
+            enabled=True,
+            interval_seconds=300,
+        )
         # UFiber ONU -> subscriber link: net-new, auth-safe association pass.
         # Router-mode UF-Wifi ONUs carry the customer router MAC as their own
         # MAC (from UISP), so a direct MAC match to an ACTIVE subscription

@@ -33,6 +33,8 @@ def test_vlan_provisioning_result_dataclass() -> None:
     assert result.success is True
     assert result.message == "ok"
     assert result.created is False
+    assert result.verified is False
+    assert result.pending_readback is False
     assert result.details is None
 
 
@@ -138,6 +140,7 @@ def test_ensure_pppoe_server_skips_when_exists(mock_get_api: MagicMock) -> None:
     assert "already bound" in result.message
 
 
+@patch("app.services.nas._mikrotik_vlan.get_vlan_status")
 @patch("app.services.nas._mikrotik_vlan.ensure_pppoe_server")
 @patch("app.services.nas._mikrotik_vlan.ensure_vlan_ip_address")
 @patch("app.services.nas._mikrotik_vlan.ensure_vlan_interface")
@@ -145,6 +148,7 @@ def test_provision_vlan_full_orchestrates_all_steps(
     mock_vlan: MagicMock,
     mock_ip: MagicMock,
     mock_pppoe: MagicMock,
+    mock_status: MagicMock,
 ) -> None:
     """provision_vlan_full should call all three ensure functions."""
     mock_vlan.return_value = VlanProvisioningResult(
@@ -156,6 +160,14 @@ def test_provision_vlan_full_orchestrates_all_steps(
     mock_pppoe.return_value = VlanProvisioningResult(
         success=True, message="ok", created=True
     )
+    mock_status.return_value = {
+        "has_vlan": True,
+        "vlan_name": "vlan203",
+        "has_ip": True,
+        "ip_address": "172.16.110.1/24",
+        "has_pppoe": True,
+        "pppoe_service": "pppoe-vlan203",
+    }
 
     device = MagicMock()
     device.name = "Test-NAS"
@@ -168,10 +180,12 @@ def test_provision_vlan_full_orchestrates_all_steps(
     )
     assert result.success is True
     assert result.created is True
+    assert result.verified is True
     assert "VLAN 203" in result.message
     mock_vlan.assert_called_once()
     mock_ip.assert_called_once()
     mock_pppoe.assert_called_once()
+    mock_status.assert_called_once()
 
 
 @patch("app.services.nas._mikrotik_vlan.ensure_vlan_ip_address")
@@ -194,3 +208,63 @@ def test_provision_vlan_full_stops_on_failure(
     )
     assert result.success is False
     mock_ip.assert_not_called()
+
+
+def test_waiting_nas_vlan_operation_is_reconciled(db_session, monkeypatch) -> None:
+    from app.models.catalog import NasDevice, NasVendor
+    from app.models.network_operation import (
+        NetworkOperationStatus,
+        NetworkOperationTargetType,
+        NetworkOperationType,
+    )
+    from app.services.network_operations import network_operations
+    from app.tasks.router_sync import reconcile_nas_vlan_readback
+
+    nas = NasDevice(
+        name="reconcile-nas",
+        vendor=NasVendor.mikrotik,
+        management_ip="192.0.2.10",
+    )
+    db_session.add(nas)
+    db_session.flush()
+    operation = network_operations.start(
+        db_session,
+        NetworkOperationType.nas_vlan_provision,
+        NetworkOperationTargetType.nas,
+        str(nas.id),
+        correlation_key=f"nas-vlan:{nas.id}:203",
+        input_payload={
+            "vlan_id": 203,
+            "parent_interface": "ether3",
+            "ip_address": "172.16.110.1/24",
+            "pppoe_service_name": "internet-203",
+        },
+    )
+    network_operations.mark_waiting(
+        db_session, str(operation.id), "initial readback failed"
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "app.tasks.router_sync.db_session_adapter.create_session",
+        lambda: db_session,
+    )
+    monkeypatch.setattr(db_session, "close", lambda: None)
+    monkeypatch.setattr(
+        "app.services.nas._mikrotik_vlan.get_vlan_status",
+        lambda *args, **kwargs: {
+            "has_vlan": True,
+            "vlan_name": "vlan203",
+            "has_ip": True,
+            "ip_address": "172.16.110.1/24",
+            "has_pppoe": True,
+            "pppoe_service": "internet-203",
+        },
+    )
+
+    stats = reconcile_nas_vlan_readback.run()
+
+    db_session.refresh(operation)
+    assert stats == {"checked": 1, "verified": 1, "drifted": 0, "pending": 0}
+    assert operation.status == NetworkOperationStatus.succeeded
+    assert operation.output_payload["verified"] is True

@@ -65,8 +65,8 @@
     {% if recent_pushes %}
     <div class="space-y-3">
         {% for push in recent_pushes %}
-        {% set push_colors = {'completed': 'emerald', 'partial_failure': 'amber', 'failed': 'red', 'pending': 'slate', 'running': 'blue', 'rolled_back': 'orange'} %}
-        {% set push_statuses = {'completed': 'active', 'partial_failure': 'warning', 'failed': 'error', 'pending': 'neutral', 'running': 'neutral', 'rolled_back': 'warning'} %}
+        {% set push_colors = {'completed': 'emerald', 'partial_failure': 'amber', 'failed': 'red', 'pending': 'slate', 'running': 'blue', 'pending_readback': 'amber'} %}
+        {% set push_statuses = {'completed': 'active', 'partial_failure': 'warning', 'failed': 'error', 'pending': 'neutral', 'running': 'neutral', 'pending_readback': 'warning'} %}
         <a href="/admin/network/routers/push/{{ push.id }}"
            class="block p-4 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
             <div class="flex justify-between items-start gap-4">

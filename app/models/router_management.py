@@ -1,6 +1,7 @@
 import enum
 import uuid
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     BigInteger,
@@ -18,6 +19,9 @@ from sqlalchemy.dialects.postgresql import JSON, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
+
+if TYPE_CHECKING:
+    from app.models.network_operation import NetworkOperation
 
 
 class RouterStatus(enum.Enum):
@@ -55,6 +59,7 @@ class RouterTemplateCategory(enum.Enum):
 class RouterConfigPushStatus(enum.Enum):
     pending = "pending"
     running = "running"
+    pending_readback = "pending_readback"
     completed = "completed"
     partial_failure = "partial_failure"
     failed = "failed"
@@ -63,6 +68,8 @@ class RouterConfigPushStatus(enum.Enum):
 
 class RouterPushResultStatus(enum.Enum):
     pending = "pending"
+    running = "running"
+    pending_readback = "pending_readback"
     success = "success"
     failed = "failed"
     skipped = "skipped"
@@ -288,6 +295,11 @@ class RouterConfigPush(Base):
         Boolean, default=False, nullable=False
     )
     initiated_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    operation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("network_operations.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     status: Mapped[RouterConfigPushStatus] = mapped_column(
         Enum(
             RouterConfigPushStatus,
@@ -304,6 +316,9 @@ class RouterConfigPush(Base):
     )
 
     template: Mapped[RouterConfigTemplate | None] = relationship()
+    operation: Mapped["NetworkOperation | None"] = relationship(
+        foreign_keys=[operation_id]
+    )
     results: Mapped[list["RouterConfigPushResult"]] = relationship(
         back_populates="push", cascade="all, delete-orphan"
     )
@@ -323,6 +338,11 @@ class RouterConfigPushResult(Base):
     )
     router_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("routers.id"), nullable=False
+    )
+    operation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("network_operations.id", ondelete="SET NULL"),
+        nullable=True,
     )
     status: Mapped[RouterPushResultStatus] = mapped_column(
         Enum(
@@ -351,6 +371,9 @@ class RouterConfigPushResult(Base):
 
     push: Mapped[RouterConfigPush] = relationship(back_populates="results")
     router: Mapped[Router] = relationship()
+    operation: Mapped["NetworkOperation | None"] = relationship(
+        foreign_keys=[operation_id]
+    )
     pre_snapshot: Mapped[RouterConfigSnapshot | None] = relationship(
         foreign_keys=[pre_snapshot_id]
     )

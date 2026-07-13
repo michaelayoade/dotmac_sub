@@ -117,6 +117,8 @@ from app.tasks.router_sync import (
     capture_scheduled_snapshots,
     cleanup_idle_tunnels,
     execute_config_push,
+    reconcile_config_push_readback,
+    reconcile_nas_vlan_readback,
     sync_all_interfaces,
     sync_all_system_info,
 )
@@ -321,6 +323,8 @@ __all__ = [
     "capture_scheduled_snapshots",
     "cleanup_idle_tunnels",
     "execute_config_push",
+    "reconcile_config_push_readback",
+    "reconcile_nas_vlan_readback",
     "sync_all_interfaces",
     "sync_all_system_info",
     "run_scheduled_credential_rotation",
