@@ -85,6 +85,7 @@ from app.services.response import ListResponseMixin
 from app.services.service_entitlements import (
     ensure_prepaid_entitlement_for_wallet_debit,
     ensure_prepaid_entitlements_for_paid_invoice,
+    revoke_prepaid_entitlements_for_unpaid_invoice,
 )
 
 logger = logging.getLogger(__name__)
@@ -915,6 +916,13 @@ def _finalize_invoice_payment_effects(db: Session, invoice: Invoice) -> None:
             collections_service.restore_account_services(
                 db, str(invoice.account_id), invoice_id=str(invoice.id)
             )
+    else:
+        # The invoice stopped being paid — a refund, a chargeback, or an
+        # allocation moved away. The service it funded has to stop being funded
+        # too. Without this the entitlement stayed active forever and prepaid
+        # funding kept counting it as paid coverage, so a refunded customer kept
+        # the service free for the whole period.
+        revoke_prepaid_entitlements_for_unpaid_invoice(db, invoice)
 
     from app.services.account_lifecycle import compute_account_status
 
