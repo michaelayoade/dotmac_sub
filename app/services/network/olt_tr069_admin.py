@@ -415,6 +415,8 @@ def get_tr069_profiles_context(
     )
     onts = db.scalars(stmt).all()
     ont_rows = []
+    from app.services.network.ont_status import resolve_effective_ont_status
+
     for ont in onts:
         onu_index = extract_onu_index(ont)
         if onu_index is None:
@@ -427,7 +429,7 @@ def get_tr069_profiles_context(
                 "port": ont.port or "",
                 "onu_index": onu_index,
                 "name": ont.name or "",
-                "online": ont.olt_status.value if ont.olt_status else "unknown",
+                "online": resolve_effective_ont_status(ont).status.value,
                 "subscriber_name": getattr(ont, "address_or_comment", "") or "",
             }
         )

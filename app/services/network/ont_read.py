@@ -12,7 +12,10 @@ from sqlalchemy.orm import Session
 
 from app.models.network import OntAssignment, OntUnit
 from app.services.network.ont_action_common import get_ont_strict_or_error
-from app.services.network.ont_status import resolve_effective_last_seen_at
+from app.services.network.ont_status import (
+    resolve_effective_last_seen_at,
+    resolve_effective_ont_status,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,10 +33,6 @@ def _classify_signal(dbm: float | None) -> str | None:
     if dbm >= _SIGNAL_WARNING:
         return "warning"
     return "critical"
-
-
-def _binary_status(value: str | None) -> str:
-    return "online" if value == "online" else "offline"
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
@@ -68,10 +67,8 @@ class OntReadFacade:
 
             raise HTTPException(status_code=404, detail="ONT not found.")
 
-        # The live runtime status/signal source (Zabbix) was retired with the
-        # native monitoring cutover; degrade to the same offline/empty values
-        # the unconfigured path already produced.
-        runtime_status = _binary_status(None)
+        effective_status = resolve_effective_ont_status(ont)
+        runtime_status = effective_status.status.value
         acs_last_inform_at = _as_utc(getattr(ont, "acs_last_inform_at", None))
         effective_last_seen_at = resolve_effective_last_seen_at(
             ont, acs_last_inform_at=acs_last_inform_at
@@ -83,17 +80,18 @@ class OntReadFacade:
             "model": ont.model,
             "firmware_version": ont.firmware_version,
             "olt_status": runtime_status,
-            "status_source": "zabbix",
+            "status_source": effective_status.source.value,
             "status": runtime_status,
+            "status_reason": effective_status.reason,
+            "status_retry_pending": effective_status.retry_pending,
             "acs_last_inform_at": acs_last_inform_at,
             "last_seen_at": effective_last_seen_at,
             "name": ont.name,
-            # Signal (live source retired: mirrors the unconfigured empties)
-            "olt_rx_signal_dbm": None,
-            "onu_rx_signal_dbm": None,
-            "signal_quality": _classify_signal(None),
+            "olt_rx_signal_dbm": ont.olt_rx_signal_dbm,
+            "onu_rx_signal_dbm": ont.onu_rx_signal_dbm,
+            "signal_quality": _classify_signal(ont.olt_rx_signal_dbm),
             "distance_meters": ont.distance_meters,
-            "signal_updated_at": None,
+            "signal_updated_at": ont.signal_updated_at,
             # Observed runtime
             "observed_wan_ip": ont.observed_wan_ip,
             "observed_pppoe_status": ont.observed_pppoe_status,

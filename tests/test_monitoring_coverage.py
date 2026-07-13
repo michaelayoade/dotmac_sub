@@ -7,7 +7,6 @@ from types import SimpleNamespace
 
 from app.services.device_operational_status import (
     DOWN,
-    UNMONITORED,
     UP,
     derive_operational_status,
 )
@@ -53,14 +52,15 @@ def _dev(live, ip):
     return SimpleNamespace(status=None, live_status=live, mgmt_ip=ip)
 
 
-def test_no_path_device_is_unmonitored_not_down():
+def test_no_path_device_is_offline_while_retrying():
     cov = MonitoringCoverage(["172.16.0.0/16"], loaded=True)
     # device in an off-tunnel subnet, Zabbix says down -> blind spot
     op = derive_operational_status(
         _dev("down", "172.21.4.1"), warm_stale=False, coverage=cov
     )
-    assert op.status == UNMONITORED
-    assert op.reason == "no_path"
+    assert op.status == DOWN
+    assert op.reason == "no_path_retry_pending"
+    assert op.alarming is False
 
 
 def test_covered_down_device_still_down():

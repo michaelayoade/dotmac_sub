@@ -31,11 +31,11 @@ def test_worklist_groups_mismatches_by_reason_with_owner(db_session):
     assert set(by_reason) == {
         "admin_online_observed_down",
         "admin_offline_observed_up",
-        "active_but_unmonitored",
+        "active_retry_pending",
     }
     assert by_reason["admin_online_observed_down"]["owner"] == "Field ops"
     assert by_reason["admin_offline_observed_up"]["owner"] == "Inventory hygiene"
-    assert by_reason["active_but_unmonitored"]["owner"] == "Net-eng / VPN"
+    assert by_reason["active_retry_pending"]["owner"] == "Net-eng / VPN"
     # the agreeing device is absent
     names = {r["name"] for g in wl["groups"] for r in g["rows"]}
     assert "R4" not in names

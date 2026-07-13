@@ -323,6 +323,12 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.ont_reconcile.run_ont_reconcile_sweep": _c(
         "network", SWEEP, IDEMP, HEALTH
     ),
+    "app.tasks.ont_runtime_status.dispatch_huawei_ont_status": _c(
+        "network", SWEEP, IDEMP, HEALTH
+    ),
+    "app.tasks.ont_runtime_status.refresh_huawei_olt_status": _c(
+        "network", AUTORETRY, IDEMP, STATUS
+    ),
     "app.tasks.ont_signal_observations.record_ont_observations": _c(
         "network", SWEEP, IDEMP, HEALTH
     ),

@@ -230,6 +230,8 @@ def _build_equipment_snapshot(db: Session, subscriber_id) -> dict[str, object]:
     """Collect ONT/CPE devices and direct management links for subscriber detail."""
     equipment: list[dict[str, object]] = []
     context = get_customer_network_context(db, subscriber_id)
+    from app.services.network.ont_status import resolve_effective_ont_status
+
     try:
         for assignment in context.ont_assignments:
             ont = assignment.ont_unit
@@ -240,10 +242,7 @@ def _build_equipment_snapshot(db: Session, subscriber_id) -> dict[str, object]:
                     "type": "ONT",
                     "model": ont.model or ont.name or "ONT",
                     "serial": ont.serial_number or "-",
-                    # The live ONT status source (Zabbix) was retired with the
-                    # native monitoring cutover; ONTs list as offline here,
-                    # matching the unconfigured behaviour.
-                    "online": False,
+                    "online": resolve_effective_ont_status(ont).is_online,
                     "detail_url": f"/admin/network/onts/{ont.id}",
                     "tr069_url": f"/admin/network/onts/{ont.id}?tab=diagnostics",
                 }

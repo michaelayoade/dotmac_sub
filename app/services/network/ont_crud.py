@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import and_, exists, func, or_, select
+from sqlalchemy import and_, exists, func, not_, or_, select
 from sqlalchemy.orm import Session, aliased, defer, joinedload
 
 from app.models.network import (
@@ -301,15 +301,14 @@ class OntUnits(CRUDManager[OntUnit]):
             stmt = _apply_ordering(stmt, order_by, order_dir, allowed)
 
         if runtime_status_filter is not None:
-            # The live runtime-status source (Zabbix) was retired with the
-            # native monitoring cutover: every ONT reads offline, matching the
-            # unconfigured behaviour ("online" matches nothing).
-            ordered_results = list(db.scalars(stmt).all())
-            filtered_results = (
-                [] if runtime_status_filter == "online" else ordered_results
+            from app.services.network.ont_status import effective_ont_online_clause
+
+            online_clause = effective_ont_online_clause()
+            stmt = stmt.where(
+                online_clause
+                if runtime_status_filter == "online"
+                else not_(online_clause)
             )
-            total = len(filtered_results)
-            return filtered_results[offset : offset + limit], total
 
         count_stmt = select(func.count()).select_from(stmt.order_by(None).subquery())
         total = db.scalar(count_stmt) or 0

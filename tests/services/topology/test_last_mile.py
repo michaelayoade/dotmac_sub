@@ -69,6 +69,7 @@ def _ont(
     ont = OntUnit(
         serial_number=uuid.uuid4().hex[:12],
         olt_status=status,
+        olt_status_seen_at=NOW,
         onu_rx_signal_dbm=rx,
         olt_device_id=olt_device_id,
         offline_reason=offline_reason,
@@ -208,6 +209,7 @@ def test_fiber_power_when_ont_absent_and_plant_up(db_session, catalog_offer):
         olt_device_id=olt.id,
         status=OnuOnlineStatus.offline,
         offline_reason=OnuOfflineReason.power_fail,
+        acs_age=None,
     )
     out = diagnose_last_mile(db_session, sub, now=NOW, plant_cache={node.id: True})
     assert out["verdict"] == POWER
@@ -225,6 +227,7 @@ def test_fiber_absent_but_plant_down_is_upstream_not_customer(
         sub.subscriber_id,
         olt_device_id=olt.id,
         status=OnuOnlineStatus.offline,
+        acs_age=None,
     )
     # Plant is down -> P1 owns it; do NOT blame the customer's power.
     out = diagnose_last_mile(db_session, sub, now=NOW, plant_cache={node.id: False})
@@ -240,6 +243,7 @@ def test_fiber_los_note_on_absent(db_session, catalog_offer):
         olt_device_id=olt.id,
         status=OnuOnlineStatus.offline,
         offline_reason=OnuOfflineReason.los,
+        acs_age=None,
     )
     out = diagnose_last_mile(db_session, sub, now=NOW, plant_cache={node.id: True})
     assert out["verdict"] == POWER

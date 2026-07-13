@@ -12,6 +12,12 @@ from sqlalchemy.orm import Session
 from app.models.network import OLTDevice
 from app.models.network_monitoring import DeviceInterface, NetworkDevice
 from app.services import network as network_service
+from app.services.device_operational_status import (
+    DEGRADED,
+    UP,
+    derive_olt_operational_status,
+    warmer_is_stale,
+)
 from app.services.network import cpe as cpe_service
 from app.services.network.imported_service_ports import imported_service_port_summary
 
@@ -124,10 +130,10 @@ def _monitoring_retired_probe_status() -> dict[str, str | None]:
     # columns / operational status instead.
     reason = "Legacy probe source is not configured"
     return {
-        "ping_label": "Not monitored",
+        "ping_label": "Refresh pending",
         "ping_state": "unknown",
         "ping_reason": reason,
-        "snmp_label": "Not monitored",
+        "snmp_label": "Refresh pending",
         "snmp_state": "unknown",
         "snmp_reason": reason,
     }
@@ -139,8 +145,8 @@ def _build_legacy_probe_statuses(
     """Degraded ICMP/SNMP probe states for Network Devices core rows.
 
     The Zabbix probe source was retired with the native monitoring cutover, so
-    every row degrades to a fixed "not monitored" placeholder (matching the
-    empty state the page already showed while Zabbix was unconfigured).
+    every row degrades to a fixed refresh-pending placeholder until native
+    reachability data is available.
     """
     return {
         device_id: _monitoring_retired_probe_status()
@@ -487,6 +493,8 @@ def olts_list_page_data(
         if linked is not None:
             linked_monitoring_by_olt_id[str(olt.id)] = linked
 
+    warm_stale = warmer_is_stale()
+
     linked_ids = [d.id for d in linked_monitoring_by_olt_id.values() if d.id]
     interfaces_by_device_id: dict[str, list[DeviceInterface]] = {}
     if linked_ids:
@@ -536,22 +544,28 @@ def olts_list_page_data(
             enabled=bool(linked and linked.snmp_enabled),
             last_ok=(linked.last_snmp_ok if linked else None),
         )
-        if ping_state == "fail" or snmp_state == "fail":
+        linked_live_status = getattr(linked, "live_status", None)
+        linked_live_status = getattr(linked_live_status, "value", linked_live_status)
+        operational = derive_olt_operational_status(
+            olt,
+            linked_live_status=linked_live_status,
+            warm_stale=warm_stale,
+        )
+        operational_status = (
+            "online" if operational.status in {UP, DEGRADED} else "offline"
+        )
+        if operational.alarming:
             health_state = "attention"
             health_label = "Attention"
-            health_reason = "Failed local ping or SNMP check"
-        elif ping_state == "ok" and snmp_state in {"ok", "unknown", "disabled"}:
+            health_reason = operational.reason.replace("_", " ").capitalize()
+        elif operational.retry_pending:
+            health_state = "retry_pending"
+            health_label = "Refresh pending"
+            health_reason = "Reachability evidence is stale or missing; refresh queued"
+        else:
             health_state = "healthy"
             health_label = "Healthy"
-            health_reason = "Local monitoring check is OK"
-        elif ping_state == "unknown" and snmp_state == "unknown":
-            health_state = "unknown"
-            health_label = "Unknown"
-            health_reason = "No local monitoring result"
-        else:
-            health_state = "unknown"
-            health_label = "Unknown"
-            health_reason = "Monitoring result is incomplete"
+            health_reason = "Current reachability evidence is positive"
 
         # The legacy runtime-health overlay (Zabbix telemetry) was retired
         # with the native monitoring cutover: rows keep their local monitoring
@@ -572,6 +586,9 @@ def olts_list_page_data(
                 "runtime_health_label": health_label,
                 "runtime_health_state": health_state,
                 "runtime_health_reason": health_reason,
+                "runtime_operational_status": operational_status,
+                "runtime_operational_reason": operational.reason,
+                "runtime_retry_pending": operational.retry_pending,
                 "runtime_ping_label": ping_label,
                 "runtime_ping_state": ping_state,
                 "runtime_snmp_label": snmp_label,
@@ -616,27 +633,27 @@ def olts_list_page_data(
             for item in filtered_olts
             if item.get("runtime_health_state") == "attention"
         ]
-    elif normalized_status == "healthy":
+    elif normalized_status in {"online", "healthy"}:
         filtered_olts = [
             item
             for item in filtered_olts
-            if item.get("runtime_health_state") == "healthy"
+            if item.get("runtime_operational_status") == "online"
         ]
-    elif normalized_status == "unmonitored":
+    elif normalized_status == "offline":
         filtered_olts = [
             item
             for item in filtered_olts
-            if item.get("runtime_health_state") == "unknown"
+            if item.get("runtime_operational_status") == "offline"
         ]
 
     attention_items = [
         item for item in olts if item.get("runtime_health_state") == "attention"
     ]
-    healthy_count = sum(
-        1 for item in olts if item.get("runtime_health_state") == "healthy"
+    online_count = sum(
+        1 for item in olts if item.get("runtime_operational_status") == "online"
     )
-    unmonitored_count = sum(
-        1 for item in olts if item.get("runtime_health_state") == "unknown"
+    offline_count = sum(
+        1 for item in olts if item.get("runtime_operational_status") == "offline"
     )
     total_pon_ports = sum(int(item.get("pon_ports") or 0) for item in olts)  # type: ignore[call-overload]
 
@@ -645,8 +662,9 @@ def olts_list_page_data(
         "fleet_total": len(olts),
         "active": sum(1 for o in filtered_olts if o["is_active"]),
         "attention": len(attention_items),
-        "healthy": healthy_count,
-        "unmonitored": unmonitored_count,
+        "online": online_count,
+        "healthy": online_count,
+        "offline": offline_count,
         "total_pon_ports": total_pon_ports,
     }
 

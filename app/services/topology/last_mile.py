@@ -41,7 +41,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 from app.models.catalog import Subscription
-from app.models.network import OnuOfflineReason, OnuOnlineStatus
+from app.models.network import OnuOfflineReason
 from app.models.network_monitoring import NetworkDevice
 from app.models.radius_error import RadiusAuthError
 from app.services.topology.affected import affected_customers
@@ -207,9 +207,14 @@ def _diagnose_fiber(
     plant_cache: dict | None,
 ) -> dict:
     ont = path.ont
+    from app.services.network.ont_status import resolve_effective_ont_status
+
+    effective = resolve_effective_ont_status(ont, now=now) if ont is not None else None
     ev: dict = {
         "rung": "fiber",
         "olt_status": getattr(ont.olt_status, "value", None) if ont else None,
+        "effective_status": effective.status.value if effective else None,
+        "status_retry_pending": effective.retry_pending if effective else False,
         "offline_reason": (
             getattr(ont.offline_reason, "value", None)
             if ont and ont.offline_reason is not None
@@ -225,7 +230,9 @@ def _diagnose_fiber(
     rx = ont.onu_rx_signal_dbm if ont else None
 
     # Rung: present at node? ONT offline on the OLT ⟹ not present.
-    if ont is None or ont.olt_status != OnuOnlineStatus.online:
+    if ont is None or effective is None or not effective.is_online:
+        if effective is not None and effective.retry_pending:
+            return _result(UNKNOWN, MEDIUM_FIBER, rx, ev)
         plant_up = _plant_is_up(session, path.node, plant_cache)
         ev["plant_up"] = plant_up
         if plant_up is False:
