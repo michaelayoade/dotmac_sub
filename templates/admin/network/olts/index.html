@@ -88,6 +88,12 @@
             <option value="offline" {% if filters.status == 'offline' %}selected{% endif %}>Offline</option>
             <option value="attention" {% if filters.status == 'attention' %}selected{% endif %}>Needs Attention</option>
         </select>
+        <label for="olt_fleet_per_page" class="sr-only">Rows per page</label>
+        <select id="olt_fleet_per_page" name="per_page" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            {% for size in [25, 50, 100, 200] %}
+            <option value="{{ size }}" {% if pagination.per_page == size %}selected{% endif %}>{{ size }} rows</option>
+            {% endfor %}
+        </select>
         <button type="submit" class="rounded-xl bg-gradient-to-r from-violet-500 to-purple-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5">Apply</button>
         {% if filters.search or filters.status %}
         <a href="/admin/network/olts" class="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Clear</a>
@@ -232,6 +238,24 @@
         </tbody>
         </table>
         </div>
+        {% if pagination.total_pages > 1 %}
+        <div class="flex flex-col items-center justify-between gap-3 border-t border-slate-200 px-4 py-3 dark:border-slate-700 sm:flex-row">
+            <p class="text-sm text-slate-600 dark:text-slate-400">
+                Showing {{ (pagination.page - 1) * pagination.per_page + 1 }} to {{ [pagination.page * pagination.per_page, pagination.total] | min }} of {{ pagination.total }} OLTs
+            </p>
+            <nav class="flex items-center gap-2" aria-label="OLT pagination">
+                {% if pagination.has_prev %}
+                <a href="{{ request.url.include_query_params(page=pagination.page - 1, per_page=pagination.per_page) }}"
+                   class="inline-flex items-center rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300">Previous</a>
+                {% endif %}
+                <span class="px-2 text-sm text-slate-600 dark:text-slate-400">Page {{ pagination.page }} of {{ pagination.total_pages }}</span>
+                {% if pagination.has_next %}
+                <a href="{{ request.url.include_query_params(page=pagination.page + 1, per_page=pagination.per_page) }}"
+                   class="inline-flex items-center rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300">Next</a>
+                {% endif %}
+            </nav>
+        </div>
+        {% endif %}
     </section>
 </div>
 <script>

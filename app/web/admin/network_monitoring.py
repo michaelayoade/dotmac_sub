@@ -628,6 +628,8 @@ def monitoring_page(
     request: Request,
     q: str | None = None,
     refresh: str | None = None,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=10, le=100),
     db: Session = Depends(get_db),
 ):
     force_refresh = (refresh or "").strip().lower() in {"1", "true", "yes", "on"}
@@ -641,6 +643,8 @@ def monitoring_page(
         format_duration=_format_duration,
         format_bps=_format_bps,
         query=q,
+        page=page,
+        per_page=per_page,
     )
     context = _base_context(request, db, active_page="monitoring")
     context.update(page_data)

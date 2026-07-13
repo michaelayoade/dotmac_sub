@@ -2588,6 +2588,97 @@ def test_olts_list_page_data_uses_binary_operational_status(db_session):
     assert [item["name"] for item in online_payload["olts"]] == ["OLT Online"]
 
 
+def test_olts_list_page_data_paginates_and_clamps_out_of_range_page(db_session):
+    db_session.add_all(
+        [
+            OLTDevice(
+                name=f"OLT Page {index:02d}",
+                mgmt_ip=f"198.51.100.{index + 1}",
+                is_active=True,
+            )
+            for index in range(11)
+        ]
+    )
+    db_session.commit()
+
+    payload = web_network_core_devices_service.olts_list_page_data(
+        db_session,
+        page=999,
+        per_page=10,
+    )
+
+    assert payload["pagination"] == {
+        "page": 2,
+        "per_page": 10,
+        "total": 11,
+        "total_pages": 2,
+        "has_prev": True,
+        "has_next": False,
+    }
+    assert len(payload["olts"]) == 1
+
+
+def test_onts_list_defaults_to_all_authorization_states_and_clamps_page(db_session):
+    onts = [
+        OntUnit(
+            serial_number=f"ONT-PAGE-{index:02d}",
+            is_active=True,
+            authorization_status=(
+                OntAuthorizationStatus.authorized
+                if index == 0
+                else OntAuthorizationStatus.pending
+            ),
+        )
+        for index in range(11)
+    ]
+    db_session.add_all(onts)
+    db_session.commit()
+
+    payload = core_devices_views.onts_list_page_data(
+        db_session,
+        page=999,
+        per_page=10,
+    )
+
+    assert payload["filters"]["authorization"] == "all"
+    assert payload["pagination"]["page"] == 2
+    assert payload["pagination"]["total"] == 11
+    assert len(payload["onts"]) == 1
+
+
+def test_onts_diagnostics_view_runs_one_inventory_query(db_session, monkeypatch):
+    db_session.add(
+        OntUnit(
+            serial_number="ONT-DIAGNOSTICS-ONE-QUERY",
+            is_active=True,
+            authorization_status=OntAuthorizationStatus.authorized,
+        )
+    )
+    db_session.commit()
+
+    original = network_service.ont_units.list_advanced
+    calls = 0
+
+    def counted_list_advanced(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(
+        network_service.ont_units, "list_advanced", counted_list_advanced
+    )
+
+    payload = core_devices_views.onts_list_page_data(
+        db_session,
+        view="diagnostics",
+        per_page=50,
+    )
+
+    assert calls == 1
+    assert payload["onts"] == ()
+    assert len(payload["diagnostics_onts"]) == 1
+
+
 def test_olt_detail_page_data_pon_rows_link_to_specific_pon(db_session):
     olt = OLTDevice(name="OLT-PON-LINK", mgmt_ip="198.51.100.120")
     db_session.add(olt)

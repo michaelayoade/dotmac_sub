@@ -6,7 +6,7 @@ import json
 import logging
 from urllib.parse import quote_plus
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -232,6 +232,8 @@ def olts_list(
     request: Request,
     search: str | None = None,
     status: str | None = None,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=10, le=200),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     """List all OLT devices."""
@@ -239,6 +241,8 @@ def olts_list(
         db,
         search=search,
         status=status,
+        page=page,
+        per_page=per_page,
     )
     context = _base_context(request, db, active_page="olts")
     context.update(page_data)
