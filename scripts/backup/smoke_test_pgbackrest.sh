@@ -8,22 +8,21 @@ TEST_ID="$$"
 PRIMARY="dotmac_pgbackrest_smoke_${TEST_ID}"
 RESTORED="dotmac_pgbackrest_restore_smoke_${TEST_ID}"
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/dotmac-pgbackrest-smoke.XXXXXX")"
+HOST_UID="$(id -u)"
+HOST_GID="$(id -g)"
 
-if [[ "$(id -u)" -ne 0 ]]; then
-  echo "Run as root so bind-mounted PostgreSQL directories can be owned by uid 70" >&2
-  exit 1
-fi
 cleanup() {
   docker rm -f "${RESTORED}" "${PRIMARY}" >/dev/null 2>&1 || true
+  docker run --rm -v "${TEST_ROOT}:/test" "${IMAGE}" \
+    sh -c "chown -R ${HOST_UID}:${HOST_GID} /test" >/dev/null 2>&1 || true
   rm -rf "${TEST_ROOT}"
 }
 trap cleanup EXIT
 
 mkdir -p "${TEST_ROOT}"/{data,repo,spool,log,restore,conf.d}
-chown -R 70:70 "${TEST_ROOT}"
 printf '[global]\nrepo1-cipher-pass=smoke-test-only-not-a-production-secret\n' > "${TEST_ROOT}/conf.d/secret.conf"
-chown 70:70 "${TEST_ROOT}/conf.d/secret.conf"
 chmod 0600 "${TEST_ROOT}/conf.d/secret.conf"
+docker run --rm -v "${TEST_ROOT}:/test" "${IMAGE}" chown -R 70:70 /test
 
 docker run -d --rm \
   --name "${PRIMARY}" \
