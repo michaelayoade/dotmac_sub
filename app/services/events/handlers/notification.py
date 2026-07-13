@@ -16,6 +16,7 @@ from app.models.notification import (
 )
 from app.schemas.notification import NotificationCreate
 from app.services import event_notification_policy
+from app.services.communication_intents import CommunicationIntent, submit
 from app.services.customer_notification_policy import (
     channel_disabled_in_config,
     resolve_subscriber_id_for_recipient,
@@ -590,20 +591,38 @@ class NotificationHandler:
                 )
                 continue
 
-            notification = notification_service.queue_event_notification(
-                db,
-                NotificationCreate(
-                    template_id=template.id if template else None,
-                    subscriber_id=subscriber_id,
-                    channel=channel,
-                    event_type=spec.template_code,
-                    category=spec.category,
-                    recipient=recipient,
-                    subject=subject,
-                    body=body,
-                ),
-            )
-            if notification is None:
+            if subscriber_id is None:
+                notification_service.queue_internal_notification(
+                    db,
+                    NotificationCreate(
+                        template_id=template.id,
+                        channel=channel,
+                        event_type=spec.template_code,
+                        category=spec.category,
+                        recipient=recipient,
+                        subject=subject,
+                        body=body,
+                    ),
+                )
+                queued_count = 1
+            else:
+                result = submit(
+                    db,
+                    CommunicationIntent(
+                        subscriber_id=subscriber_id,
+                        event_type=spec.template_code,
+                        category=spec.category,
+                        template_id=template.id,
+                        template_code=spec.template_code,
+                        subject=subject,
+                        body=body,
+                        channels=(channel,),
+                        persist_policy_suppressions=False,
+                        subscriber_recipients={channel: recipient},
+                    ),
+                )
+                queued_count = len(result.queued)
+            if queued_count == 0:
                 logger.info(
                     "Suppressed notification for event %s on %s to %s by shared policy",
                     event.event_type.value,

@@ -4,14 +4,31 @@ import io
 import zipfile
 from datetime import UTC, datetime, timedelta
 
-from app.models.billing import Invoice, Payment
+from app.models.billing import Invoice, LedgerEntry, Payment, PaymentAllocation
 from app.models.catalog import Subscription
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.network import IpPool
 from app.models.network_monitoring import NetworkDevice
 from app.models.subscriber import Subscriber
 from app.models.subscription_engine import SettingValueType
+from app.services import import_runs
 from app.services import web_system_import_wizard as import_wizard_service
+
+
+def _stage_and_apply(db, *, module: str, raw_text: str, source_name: str):
+    dry = import_runs.create_import_run(
+        db,
+        module=module,
+        raw_text=raw_text,
+        data_format="json" if source_name.endswith(".json") else "csv",
+        source_name=source_name,
+        dry_run=True,
+    )
+    dry = import_runs.process_import_run(db, dry.id)
+    assert dry.status.value == "dry_run_ready"
+    applied = import_runs.apply_from_dry_run(db, dry.id)
+    assert applied.failed_rows == 0, [row.error_message for row in applied.rows]
+    return applied
 
 
 def _build_inline_xlsx(headers: list[str], rows: list[list[str]]) -> bytes:
@@ -81,6 +98,17 @@ def _build_inline_xlsx(headers: list[str], rows: list[list[str]]) -> bytes:
         zf.writestr("xl/_rels/workbook.xml.rels", workbook_rels)
         zf.writestr("xl/worksheets/sheet1.xml", worksheet)
     return output.getvalue()
+
+
+def test_payment_import_requires_external_id_during_validation(subscriber):
+    valid, errors = import_wizard_service._validate_rows(
+        "payments",
+        [{"account_id": str(subscriber.id), "amount": "1000.00"}],
+    )
+
+    assert valid == []
+    assert len(errors) == 1
+    assert "external_id" in errors[0]["detail"]
 
 
 def test_execute_import_dry_run_does_not_persist(db_session):
@@ -206,17 +234,15 @@ def test_execute_import_subscribers_from_xlsx_upload(db_session):
 def test_execute_import_subscriptions_json(db_session, subscriber, catalog_offer):
     payload = f'[{{"subscriber_id": "{subscriber.id}", "offer_id": "{catalog_offer.id}", "status": "pending"}}]'
 
-    result = import_wizard_service.execute_import(
+    result = _stage_and_apply(
         db_session,
         module="subscriptions",
-        data_format="json",
         raw_text=payload,
         source_name="subscriptions.json",
-        dry_run=False,
     )
 
-    assert result["status"] == "success"
-    assert result["imported_rows"] == 1
+    assert result.status.value == "completed"
+    assert result.ok_rows == 1
     assert (
         db_session.query(Subscription)
         .filter(Subscription.subscriber_id == subscriber.id)
@@ -234,16 +260,14 @@ def test_execute_import_subscriptions_preserves_next_billing_date(
         f"{subscriber.id},{catalog_offer.id},active,postpaid,2026-08-15T00:00:00+00:00\n"
     )
 
-    result = import_wizard_service.execute_import(
+    result = _stage_and_apply(
         db_session,
         module="subscriptions",
-        data_format="csv",
         raw_text=payload,
         source_name="splynx_subscriptions.csv",
-        dry_run=False,
     )
 
-    assert result["status"] == "success"
+    assert result.status.value == "completed"
     imported = (
         db_session.query(Subscription)
         .filter(Subscription.subscriber_id == subscriber.id)
@@ -262,7 +286,7 @@ def test_execute_import_invoices_payments_ip_pools_and_network_equipment(
 ):
     invoice_payload = (
         "account_id,invoice_number,status,billing_mode,currency,subtotal,tax_total,total,balance_due,memo\n"
-        f"{subscriber.id},INV-1,draft,prepaid,NGN,100,0,100,100,Imported\n"
+        f"{subscriber.id},INV-1,issued,prepaid,NGN,100,0,100,100,Imported\n"
     )
     payment_payload = (
         "account_id,amount,currency,status,memo,external_id\n"
@@ -271,21 +295,17 @@ def test_execute_import_invoices_payments_ip_pools_and_network_equipment(
     pool_payload = "name,ip_version,cidr\nImport Pool,ipv4,10.30.0.0/24\n"
     device_payload = "name,hostname,role,status\nSwitch 1,switch-1,edge,offline\n"
 
-    invoice_result = import_wizard_service.execute_import(
+    invoice_result = _stage_and_apply(
         db_session,
         module="invoices",
-        data_format="csv",
         raw_text=invoice_payload,
         source_name="inv.csv",
-        dry_run=False,
     )
-    payment_result = import_wizard_service.execute_import(
+    payment_result = _stage_and_apply(
         db_session,
         module="payments",
-        data_format="csv",
         raw_text=payment_payload,
         source_name="pay.csv",
-        dry_run=False,
     )
     pool_result = import_wizard_service.execute_import(
         db_session,
@@ -304,8 +324,8 @@ def test_execute_import_invoices_payments_ip_pools_and_network_equipment(
         dry_run=False,
     )
 
-    assert invoice_result["imported_rows"] == 1
-    assert payment_result["imported_rows"] == 1
+    assert invoice_result.ok_rows == 1
+    assert payment_result.ok_rows == 1
     assert pool_result["imported_rows"] == 1
     assert device_result["imported_rows"] == 1
     imported_invoice = (
@@ -315,7 +335,7 @@ def test_execute_import_invoices_payments_ip_pools_and_network_equipment(
         .first()
     )
     assert imported_invoice is not None
-    assert imported_invoice.metadata_["imported_via"] == "system_import_wizard"
+    assert imported_invoice.metadata_["imported_via"] == "system_import_run"
     assert imported_invoice.metadata_["source_name"] == "inv.csv"
     assert imported_invoice.metadata_["billing_mode"] == "prepaid"
 
@@ -323,11 +343,48 @@ def test_execute_import_invoices_payments_ip_pools_and_network_equipment(
         db_session.query(Invoice).filter(Invoice.invoice_number == "INV-1").count() == 1
     )
     assert db_session.query(Payment).filter(Payment.external_id == "ref-1").count() == 1
+    imported_payment = (
+        db_session.query(Payment).filter(Payment.external_id == "ref-1").one()
+    )
+    assert (
+        db_session.query(LedgerEntry)
+        .filter(LedgerEntry.payment_id == imported_payment.id)
+        .count()
+        == 1
+    )
+    assert (
+        db_session.query(PaymentAllocation)
+        .filter(PaymentAllocation.payment_id == imported_payment.id)
+        .count()
+        == 1
+    )
+    db_session.refresh(imported_invoice)
+    assert imported_invoice.balance_due == 50
+    assert imported_invoice.status.value == "partially_paid"
     assert db_session.query(IpPool).filter(IpPool.name == "Import Pool").count() == 1
     assert (
         db_session.query(NetworkDevice).filter(NetworkDevice.name == "Switch 1").count()
         == 1
     )
+
+
+def test_legacy_wizard_cannot_apply_financial_rows_directly(db_session, subscriber):
+    payload = (
+        "account_id,invoice_number,status,currency,total,balance_due\n"
+        f"{subscriber.id},INV-STAGED,issued,NGN,10,10\n"
+    )
+
+    import pytest
+
+    with pytest.raises(ValueError, match="durable dry run"):
+        import_wizard_service.execute_import(
+            db_session,
+            module="invoices",
+            data_format="csv",
+            raw_text=payload,
+            source_name="staged.csv",
+            dry_run=False,
+        )
 
 
 def test_history_and_template_helpers(db_session):

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from app.models.imports import ImportRowStatus, ImportRunStatus
+from app.models.billing import LedgerEntry, Payment
+from app.models.imports import ImportRowStatus, ImportRun, ImportRunStatus
 from app.models.network import IpPool
 from app.services import import_runs
 
@@ -91,6 +92,59 @@ def test_apply_from_dry_run(db_session):
     # Re-applying a now-completed run is rejected (only dry_run_ready can apply).
     with pytest.raises(ValueError):
         import_runs.apply_from_dry_run(db_session, applied.id)
+    with pytest.raises(ValueError, match="already applied"):
+        import_runs.apply_from_dry_run(db_session, dry.id)
+
+
+def test_financial_apply_run_cannot_bypass_dry_run(db_session):
+    with pytest.raises(ValueError, match="validated as a dry run"):
+        import_runs.create_import_run(
+            db_session,
+            module="payments",
+            raw_text="account_id,amount,external_id\n",
+            dry_run=False,
+        )
+
+    bypass = ImportRun(
+        module="payments",
+        status=ImportRunStatus.pending,
+        dry_run=False,
+        data_format="csv",
+        input_text="account_id,amount,external_id\n",
+    )
+    db_session.add(bypass)
+    db_session.commit()
+    with pytest.raises(ValueError, match="missing its validated source"):
+        import_runs.process_import_run(db_session, bypass.id)
+
+
+def test_repeated_payment_source_is_idempotent_across_runs(db_session, subscriber):
+    csv = (
+        "account_id,amount,status,external_id\n"
+        f"{subscriber.id},25,succeeded,bank-import-001\n"
+    )
+
+    for _ in range(2):
+        dry = import_runs.create_import_run(
+            db_session,
+            module="payments",
+            raw_text=csv,
+            source_name="bank.csv",
+            dry_run=True,
+        )
+        import_runs.process_import_run(db_session, dry.id)
+        applied = import_runs.apply_from_dry_run(db_session, dry.id)
+        assert applied.failed_rows == 0
+
+    payment = (
+        db_session.query(Payment).filter(Payment.external_id == "bank-import-001").one()
+    )
+    assert (
+        db_session.query(LedgerEntry)
+        .filter(LedgerEntry.payment_id == payment.id)
+        .count()
+        == 1
+    )
 
 
 def test_ipv4_assignments_import_dry_run_then_apply(db_session):

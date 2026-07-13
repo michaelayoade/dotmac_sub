@@ -24,6 +24,11 @@ from app.models.network_monitoring import PopSite
 from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
 from app.services import domain_settings as domain_settings_service
 from app.services import job_log_store
+from app.services.account_lifecycle import (
+    activate_subscription,
+    clear_account_lifecycle_override,
+    transition_subscription_status,
+)
 from app.services.audit_adapter import record_audit_event
 from app.services.auth_flow import hash_service_secret
 from app.services.catalog.subscriptions import apply_offer_radius_profile
@@ -421,6 +426,7 @@ def execute_job(db: Session, *, job_id: str) -> dict[str, Any]:
                     target = Subscription(
                         subscriber_id=subscriber.id,
                         offer_id=offer.id,
+                        status=SubscriptionStatus.pending,
                     )
                     apply_offer_radius_profile(db, target, sync_credentials=False)
                     db.add(target)
@@ -434,7 +440,7 @@ def execute_job(db: Session, *, job_id: str) -> dict[str, Any]:
                     )
                 elif target.radius_profile_id is None:
                     apply_offer_radius_profile(db, target)
-                target.status = (
+                desired_status = (
                     SubscriptionStatus.active
                     if activation_at <= datetime.now(UTC)
                     else SubscriptionStatus.pending
@@ -455,13 +461,35 @@ def execute_job(db: Session, *, job_id: str) -> dict[str, Any]:
                 _upsert_access_credential(
                     db, subscriber=subscriber, username=login, password=password
                 )
-                if target.status == SubscriptionStatus.active:
+                db.flush()
+                if desired_status == SubscriptionStatus.active:
+                    if target.status == SubscriptionStatus.pending:
+                        activate_subscription(
+                            db, str(target.id), start_at=activation_at, emit=False
+                        )
+                    elif target.status != SubscriptionStatus.active:
+                        transition_subscription_status(
+                            db,
+                            str(target.id),
+                            SubscriptionStatus.active,
+                            reason="Bulk provisioning activation",
+                            source=f"bulk_activation:{job_id}",
+                            emit=False,
+                        )
                     from app.services.radius import sync_account_credentials_to_radius
 
-                    db.flush()
                     sync_account_credentials_to_radius(db, subscriber.id)
+                elif target.status != SubscriptionStatus.pending:
+                    raise ValueError(
+                        "Existing subscription cannot be moved back to pending"
+                    )
                 if mapping.set_subscribers_active:
-                    subscriber.status = SubscriberStatus.active
+                    clear_account_lifecycle_override(
+                        db,
+                        str(subscriber.id),
+                        reason="Bulk provisioning activation",
+                        source=f"bulk_activation:{job_id}",
+                    )
                 activated += 1
             db.commit()
         except Exception:

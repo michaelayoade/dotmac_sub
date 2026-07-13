@@ -16,14 +16,20 @@
             <p class="text-sm text-slate-500 dark:text-slate-400">Status <strong>{{ run.status.value }}</strong> — {{ run.total_rows }} rows, {{ run.ok_rows }} ok, {{ run.failed_rows }} failed.</p>
             {% if run.error_message %}<p class="mt-1 text-sm text-red-600">{{ run.error_message }}</p>{% endif %}
         </div>
-        {% if run.status.value == "dry_run_ready" %}
+        {% if run.status.value == "dry_run_ready" and not run.applied_run %}
         <form method="post" action="/admin/system/import-runs/{{ run.id }}/apply"
               onsubmit="return confirm('Apply this import? {{ run.ok_rows }} valid rows will be written.');">
             {% include "components/forms/csrf_input.html" %}
             <button type="submit" class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700">Apply {{ run.ok_rows }} valid rows</button>
         </form>
+        {% elif run.applied_run %}
+        <a href="/admin/system/import-runs/{{ run.applied_run.id }}" class="text-sm font-semibold text-primary-600 hover:underline">View applied run</a>
         {% endif %}
     </div>
+
+    {% if run.source_run %}
+    <p class="text-sm text-slate-500 dark:text-slate-400">Applied from validated run <a href="/admin/system/import-runs/{{ run.source_run.id }}" class="font-medium text-primary-600 hover:underline">{{ run.source_run.id }}</a>.</p>
+    {% endif %}
 
     <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
         <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">

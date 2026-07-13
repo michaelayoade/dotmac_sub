@@ -5,7 +5,13 @@ from datetime import UTC, datetime, timedelta
 
 from app.models.ai_insight import AIInsightStatus
 from app.models.comms_campaign import CampaignRecipient, CampaignRecipientStatus
-from app.models.service_team import ServiceTeam, ServiceTeamType
+from app.models.notification import Notification
+from app.models.service_team import (
+    ServiceTeam,
+    ServiceTeamMember,
+    ServiceTeamMemberRole,
+    ServiceTeamType,
+)
 from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
 from app.models.support import Ticket
 from app.models.team_inbox import InboxConversation, InboxMessage
@@ -13,6 +19,7 @@ from app.models.workqueue import WorkqueueSnooze
 from app.schemas.ai_operations import AIInsightCreate, AiIntakeConfigUpsert
 from app.schemas.campaigns import CampaignCreate
 from app.services import ai_operations, comms_campaigns, workqueue
+from app.tasks import notifications as notification_tasks
 
 
 def _subscriber(
@@ -23,6 +30,7 @@ def _subscriber(
     status: SubscriberStatus = SubscriberStatus.active,
     is_active: bool = True,
     reseller: Reseller | None = None,
+    marketing_opt_in: bool = True,
 ) -> Subscriber:
     subscriber = Subscriber(
         first_name="Ada",
@@ -32,6 +40,7 @@ def _subscriber(
         status=status,
         is_active=is_active,
         reseller=reseller,
+        marketing_opt_in=marketing_opt_in,
     )
     db_session.add(subscriber)
     db_session.flush()
@@ -76,7 +85,7 @@ def test_campaign_build_skips_inactive_and_sends_through_native_inbox(
         return True
 
     monkeypatch.setattr(
-        comms_campaigns.team_inbox_outbound.email_service,
+        notification_tasks.email_service,
         "send_email",
         _fake_send_email,
     )
@@ -95,19 +104,51 @@ def test_campaign_build_skips_inactive_and_sends_through_native_inbox(
 
     audience = comms_campaigns.build_recipient_list(db_session, campaign.id)
     result = comms_campaigns.send_campaign_batch(db_session, campaign.id)
-
+    delivery = notification_tasks._deliver_notification_queue_stats(db_session)
+    db_session.refresh(campaign)
     recipients = db_session.query(CampaignRecipient).all()
     message = db_session.query(InboxMessage).one()
     conversation = db_session.query(InboxConversation).one()
     assert audience.created == 1
     assert audience.total_recipients == 1
-    assert result.sent == 1
+    assert result.queued == 1
+    assert result.sent == 0
+    assert result.completed is False
+    assert delivery["delivered"] == 1
     assert recipients[0].subscriber_id == active.id
-    assert recipients[0].status == CampaignRecipientStatus.sent.value
+    assert recipients[0].status == CampaignRecipientStatus.delivered.value
     assert conversation.subscriber_id == active.id
     assert conversation.primary_service_team_id == team.id
     assert message.metadata_["source_route"] == "native_campaign"
+    assert message.metadata_["delivery_status"] == "delivered"
+    assert message.notification_id == recipients[0].notification_id
+    assert campaign.status == "completed"
     assert sent[0]["to_email"] == "ada@example.com"
+
+
+def test_campaign_rechecks_consent_before_delayed_send(db_session):
+    subscriber = _subscriber(db_session, email="revoked@example.com")
+    campaign = comms_campaigns.create_campaign(
+        db_session,
+        CampaignCreate(
+            name="Delayed offer",
+            channel="email",
+            subject="Offer",
+            body_text="An offer",
+        ),
+    )
+    audience = comms_campaigns.build_recipient_list(db_session, campaign.id)
+    subscriber.marketing_opt_in = False
+    db_session.flush()
+    result = comms_campaigns.send_campaign_batch(db_session, campaign.id)
+    recipient = db_session.query(CampaignRecipient).one()
+
+    assert audience.created == 1
+    assert result.skipped == 1
+    assert result.completed is True
+    assert recipient.status == CampaignRecipientStatus.skipped.value
+    assert recipient.failed_reason == "marketing_opt_out"
+    assert db_session.query(Notification).count() == 0
 
 
 def test_ai_insight_acknowledge_expire_and_intake_config(db_session):
@@ -182,9 +223,30 @@ def test_workqueue_aggregates_native_items_and_respects_snooze(db_session):
     db_session.add_all([conversation, ticket])
     db_session.flush()
 
+    # list_workqueue() now scopes reads to what the principal may actually see;
+    # the old signature took a bare user_id and applied no authorization at all.
+    # This user is an ordinary member of the team, which is what the original
+    # test implied: they see their own assigned ticket plus the team's
+    # unassigned conversation.
+    db_session.add(
+        ServiceTeamMember(
+            team_id=team.id,
+            person_id=user_id,
+            role=ServiceTeamMemberRole.member.value,
+        )
+    )
+    db_session.flush()
+    principal = workqueue.WorkqueuePrincipal(
+        person_id=user_id,
+        roles=frozenset(),
+        scopes=frozenset(),
+        can_view=True,
+        can_act=True,
+    )
+
     items = workqueue.list_workqueue(
         db_session,
-        user_id=user_id,
+        principal,
         service_team_id=team.id,
     )
     workqueue.snooze_item(
@@ -196,7 +258,7 @@ def test_workqueue_aggregates_native_items_and_respects_snooze(db_session):
     )
     unsnoozed = workqueue.list_workqueue(
         db_session,
-        user_id=user_id,
+        principal,
         service_team_id=team.id,
     )
 

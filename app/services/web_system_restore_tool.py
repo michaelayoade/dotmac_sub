@@ -163,8 +163,16 @@ def _apply_soft_delete_cascade(db: Session, subscriber_id: UUID) -> dict[str, in
     ).all()
     for subscription in subscriptions:
         if subscription.status != SubscriptionStatus.canceled:
-            subscription.status = SubscriptionStatus.canceled
-            subscription.canceled_at = subscription.canceled_at or now
+            from app.services.account_lifecycle import cancel_subscription
+
+            cancel_subscription(
+                db,
+                str(subscription.id),
+                "System restore soft-delete cascade",
+                "system_restore_tool",
+                emit=False,
+                generate_credit=False,
+            )
             touched["subscriptions"] += 1
 
     invoices = db.scalars(

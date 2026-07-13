@@ -41,6 +41,7 @@ def send_campaign_batch(
         session.commit()
         payload = {
             "campaign_id": str(result.campaign_id),
+            "queued": result.queued,
             "sent": result.sent,
             "failed": result.failed,
             "skipped": result.skipped,

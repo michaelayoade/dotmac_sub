@@ -445,9 +445,6 @@ def bulk_update_customers(
                     is_active=is_active,
                     source=f"admin:bulk_update:{scope}:{subscriber.id}",
                 )
-                subscriber.status = (
-                    SubscriberStatus.active if is_active else SubscriberStatus.suspended
-                )
 
             if "preferred_contact_method" in updates:
                 subscriber.preferred_contact_method = updates[
@@ -1125,61 +1122,23 @@ def _apply_subscriber_activation_state(
     is_active: bool,
     source: str,
 ) -> None:
-    from app.models.enforcement_lock import EnforcementReason
     from app.services.account_lifecycle import (
-        compute_account_status,
-        restore_subscription,
-        suspend_subscription,
+        transition_account_status,
     )
 
-    subscriber.is_active = is_active
-    subscriptions = (
-        db.query(Subscription).filter(Subscription.subscriber_id == subscriber.id).all()
+    transition_account_status(
+        db,
+        str(subscriber.id),
+        SubscriberStatus.active if is_active else SubscriberStatus.suspended,
+        reason="Administrative account activation"
+        if is_active
+        else "Administrative account suspension",
+        source=source,
     )
-
-    if is_active:
-        for subscription in subscriptions:
-            if subscription.status == SubscriptionStatus.suspended:
-                try:
-                    restore_subscription(
-                        db,
-                        str(subscription.id),
-                        trigger="admin",
-                        resolved_by=source,
-                    )
-                except ValueError as exc:
-                    logger.info(
-                        "Skipped restoring subscription %s: %s",
-                        subscription.id,
-                        exc,
-                    )
-    else:
-        for subscription in subscriptions:
-            if subscription.status in (
-                SubscriptionStatus.active,
-                SubscriptionStatus.pending,
-            ):
-                try:
-                    suspend_subscription(
-                        db,
-                        str(subscription.id),
-                        reason=EnforcementReason.admin,
-                        source=source,
-                    )
-                except ValueError as exc:
-                    logger.info(
-                        "Skipped suspending subscription %s: %s",
-                        subscription.id,
-                        exc,
-                    )
+    if not is_active:
         db.query(UserCredential).filter(
             UserCredential.subscriber_id == subscriber.id
         ).update({"is_active": False}, synchronize_session=False)
-
-    compute_account_status(db, str(subscriber.id))
-    # Keep explicit admin activation/deactivation authoritative over the
-    # derived default portal eligibility computed from subscription status.
-    subscriber.is_active = is_active
     db.flush()
 
 

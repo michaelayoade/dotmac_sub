@@ -29,6 +29,7 @@ from app.models.notification import (
     NotificationStatus,
     NotificationTemplate,
 )
+from app.schemas.notification import NotificationCreate
 from app.services.customer_identity_normalization import normalize_phone_identifier
 from app.services.notification import notifications as notification_records
 from app.services.notification_template_renderer import render_template_text
@@ -233,6 +234,20 @@ def send_sms(
     Returns:
         True if SMS was sent successfully
     """
+    if track and notification_id is None:
+        queued = notification_records.create_customer_notification(
+            db,
+            NotificationCreate(
+                channel=NotificationChannel.sms,
+                recipient=_normalize_phone(to_phone),
+                body=body,
+                event_type="direct.sms",
+                category="general",
+                metadata_={"source": "sms_service"},
+            ),
+        )
+        return queued.status == NotificationStatus.queued
+
     # Check if SMS is disabled
     sms_enabled = _get_setting(db, "sms_enabled", "SMS_ENABLED", "true") or "true"
     if sms_enabled.lower() in ("false", "0", "no", "disabled"):

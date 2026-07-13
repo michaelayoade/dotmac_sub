@@ -14,6 +14,8 @@ from app.services.events.types import Event, EventType
 
 logger = logging.getLogger(__name__)
 
+HANDLED_EVENT_TYPES = frozenset({EventType.payment_received})
+
 
 class ArrangementHandler:
     """Handler that applies received payments to active arrangements."""

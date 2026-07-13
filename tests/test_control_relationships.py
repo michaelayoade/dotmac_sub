@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from unittest.mock import MagicMock
 
 import pytest
@@ -10,10 +11,15 @@ from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
 from app.services.control_relationships import (
     ControlRelationshipError,
+    audit_event_relationships,
     audit_setting_relationships,
+    event_execution_plan,
+    event_policies,
     event_topology,
+    handler_event_types,
     relationship_manifest,
     validate_and_order_handlers,
+    validate_event_execution_policy,
     validate_setting_change,
 )
 from app.services.domain_settings import billing_settings
@@ -133,3 +139,147 @@ def test_fanout_event_failure_does_not_block_later_handlers():
     )
 
     second.handle.assert_called_once()
+
+
+def test_payment_and_overdue_events_are_independent_fanout_consequences():
+    handlers = [
+        _handler("ArrangementHandler"),
+        _handler("EnforcementHandler"),
+        _handler("NotificationHandler"),
+        _handler("WebhookHandler"),
+        _handler("IntegrationHookHandler"),
+    ]
+
+    for event_type in (EventType.payment_received, EventType.invoice_overdue):
+        plan = event_execution_plan(event_type.value, handlers)
+        assert plan
+        assert all(step.dependencies == () for step in plan)
+
+
+def test_activation_plan_keeps_state_peers_independent_and_stages_outputs():
+    handlers = validate_and_order_handlers(
+        [
+            _handler("IntegrationHookHandler"),
+            _handler("WebhookHandler"),
+            _handler("NotificationHandler"),
+            _handler("EnforcementHandler"),
+            _handler("ProvisioningHandler"),
+            _handler("ReferralHandler"),
+            _handler("LifecycleHandler"),
+        ]
+    )
+
+    plan = event_execution_plan(EventType.subscription_activated.value, handlers)
+    by_name = {step.handler_name: step for step in plan}
+
+    assert by_name["LifecycleHandler"].dependencies == ()
+    assert by_name["ReferralHandler"].dependencies == ()
+    assert by_name["ProvisioningHandler"].dependencies == ()
+    assert by_name["EnforcementHandler"].dependencies == ("ProvisioningHandler",)
+    assert set(by_name["NotificationHandler"].dependencies) == {
+        "LifecycleHandler",
+        "ReferralHandler",
+        "ProvisioningHandler",
+        "EnforcementHandler",
+    }
+    assert "NotificationHandler" in by_name["WebhookHandler"].dependencies
+    assert "NotificationHandler" in by_name["IntegrationHookHandler"].dependencies
+
+
+def test_chained_state_failure_does_not_block_independent_state_peer():
+    lifecycle = _handler("LifecycleHandler")
+    lifecycle.handle = MagicMock(side_effect=RuntimeError("audit failed"))
+    referral = _handler("ReferralHandler")
+    referral.handle = MagicMock()
+    notification = _handler("NotificationHandler")
+    notification.handle = MagicMock()
+    dispatcher = EventDispatcher()
+    dispatcher.register_handler(lifecycle)
+    dispatcher.register_handler(referral)
+    dispatcher.register_handler(notification)
+
+    dispatcher.dispatch(
+        MagicMock(),
+        Event(event_type=EventType.subscription_activated, payload={}),
+    )
+
+    referral.handle.assert_called_once()
+    notification.handle.assert_not_called()
+
+
+def test_dispatcher_skips_handlers_outside_their_event_scope():
+    arrangement = _handler("ArrangementHandler")
+    arrangement.handle = MagicMock()
+    integration = _handler("IntegrationHookHandler")
+    integration.handle = MagicMock()
+    dispatcher = EventDispatcher()
+    dispatcher.register_handler(arrangement)
+    dispatcher.register_handler(integration)
+
+    dispatcher.dispatch(
+        MagicMock(), Event(event_type=EventType.subscriber_created, payload={})
+    )
+
+    arrangement.handle.assert_not_called()
+    integration.handle.assert_called_once()
+
+
+def test_retry_runs_failed_predecessor_before_blocked_dependent():
+    order: list[str] = []
+    lifecycle = _handler("LifecycleHandler")
+    lifecycle.handle = MagicMock()
+    provisioning = _handler("ProvisioningHandler")
+    provisioning.handle = MagicMock(
+        side_effect=lambda *_args: order.append("provisioning")
+    )
+    enforcement = _handler("EnforcementHandler")
+    enforcement.handle = MagicMock(
+        side_effect=lambda *_args: order.append("enforcement")
+    )
+    dispatcher = EventDispatcher()
+    dispatcher.register_handler(lifecycle)
+    dispatcher.register_handler(provisioning)
+    dispatcher.register_handler(enforcement)
+
+    event_record = MagicMock()
+    event_record.id = uuid.uuid4()
+    event_record.event_id = uuid.uuid4()
+    event_record.event_type = EventType.subscription_activated.value
+    event_record.payload = {}
+    event_record.actor = None
+    event_record.subscriber_id = None
+    event_record.account_id = None
+    event_record.subscription_id = None
+    event_record.invoice_id = None
+    event_record.service_order_id = None
+    event_record.failed_handlers = [
+        {"handler": "ProvisioningHandler", "error": "failed"},
+        {
+            "handler": "EnforcementHandler",
+            "error": "blocked",
+            "blocked_by": "ProvisioningHandler",
+        },
+    ]
+    event_record.retry_count = 0
+
+    assert dispatcher.retry_event(MagicMock(), event_record) is True
+    lifecycle.handle.assert_not_called()
+    provisioning.handle.assert_called_once()
+    enforcement.handle.assert_called_once()
+    assert order == ["provisioning", "enforcement"]
+
+
+def test_event_policy_manifest_and_scopes_are_executable():
+    handlers = [type(name, (), {})() for name in event_topology_handler_names()]
+    validate_event_execution_policy(handlers)
+
+    assert handler_event_types("IntegrationHookHandler") is None
+    assert EventType.payment_received.value in (
+        handler_event_types("ArrangementHandler") or frozenset()
+    )
+    assert event_policies()["overrides"]["subscription.activated"]["steps"]
+    assert audit_event_relationships() == []
+
+
+def event_topology_handler_names() -> list[str]:
+    return [str(item["handler"]) for item in event_topology()]

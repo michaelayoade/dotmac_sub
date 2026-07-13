@@ -920,7 +920,7 @@ def retry_failed_outbound_batch(
             skipped.append({"message_id": str(message.id), "reason": "max_retries"})
             continue
         result = team_inbox_outbound.retry_outbound_message(db, message=message)
-        if result.kind == "sent":
+        if result.kind in {"sent", "queued"}:
             retried.append(str(message.id))
         else:
             skipped.append(

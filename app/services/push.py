@@ -22,7 +22,10 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.models.device_token import DeviceToken
+from app.models.notification import NotificationChannel, NotificationStatus
+from app.schemas.notification import NotificationCreate
 from app.services.common import coerce_uuid
+from app.services.notification import notifications as notification_records
 
 logger = logging.getLogger(__name__)
 
@@ -200,6 +203,22 @@ def send_push(
     configured) — both are non-error outcomes for the delivery queue. Returns
     False only on a real transport failure (so the queue retries).
     """
+    if notification_id is None:
+        queued = notification_records.create_customer_notification(
+            db,
+            NotificationCreate(
+                subscriber_id=coerce_uuid(subscriber_id),
+                channel=NotificationChannel.push,
+                recipient=str(subscriber_id),
+                subject=title,
+                body=body,
+                event_type="direct.push",
+                category="general",
+                metadata_={"data": data or {}, "source": "push_service"},
+            ),
+        )
+        return queued.status == NotificationStatus.queued
+
     tokens = active_tokens(db, str(subscriber_id))
     if not tokens:
         logger.info("push: no active device tokens for subscriber %s", subscriber_id)
