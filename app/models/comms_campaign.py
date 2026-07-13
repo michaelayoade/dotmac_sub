@@ -56,8 +56,6 @@ class CampaignRecipientStatus(enum.StrEnum):
     suppressed = "suppressed"
 
 
-
-
 class CampaignSmtpConfig(Base):
     """A named SMTP endpoint a campaign (or a sender profile) delivers through.
 
@@ -343,5 +341,3 @@ class CampaignRecipient(Base):
     notification = relationship("Notification")
     conversation = relationship("InboxConversation")
     message = relationship("InboxMessage")
-
-

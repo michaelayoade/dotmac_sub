@@ -175,12 +175,10 @@ def upgrade() -> None:
     )
 
 
-
 def downgrade() -> None:
     bind = op.get_bind()
     if bind.dialect.name == "sqlite":
         return
-
 
     for index_name in (
         "uq_campaign_recipients_unsubscribe_token",
