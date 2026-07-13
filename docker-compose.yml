@@ -462,11 +462,11 @@ services:
     - ./config/freeradius/dictionary.mikrotik:/etc/raddb/dictionary.mikrotik
     - ./config/freeradius/dictionary:/etc/raddb/dictionary
     environment:
-    - RADIUS_DB_HOST=${RADIUS_DB_HOST:-radius-db}
-    - RADIUS_DB_PORT=${RADIUS_DB_PORT:-5432}
-    - RADIUS_DB_NAME=${RADIUS_DB_NAME:-radius}
-    - RADIUS_DB_USER=${RADIUS_DB_USER:-postgres}
-    - RADIUS_DB_PASS=${RADIUS_DB_PASS:?RADIUS_DB_PASS must be set}
+    - FREERADIUS_DB_HOST=${FREERADIUS_DB_HOST:?FREERADIUS_DB_HOST must be set}
+    - FREERADIUS_DB_PORT=${FREERADIUS_DB_PORT:-5432}
+    - FREERADIUS_DB_NAME=${FREERADIUS_DB_NAME:?FREERADIUS_DB_NAME must be set}
+    - FREERADIUS_DB_USER=${FREERADIUS_DB_USER:?FREERADIUS_DB_USER must be set}
+    - FREERADIUS_DB_PASS=${FREERADIUS_DB_PASS:?FREERADIUS_DB_PASS must be set}
     # Shared secret for the admin-login realm (1822/1823) clients; each router's
     # /radius service=login entry must use the same value.
     - ADMIN_RADIUS_SECRET=${ADMIN_RADIUS_SECRET:?ADMIN_RADIUS_SECRET must be set}
@@ -652,4 +652,13 @@ networks:
     name: dotmac_sub_default
     ipam:
       config:
-      - subnet: 172.20.255.0/24
+      # Pinned, and deliberately inside 172.20.0.0/16: FreeRADIUS only accepts
+      # probe requests from clients in RADIUS_PROBE_CLIENT_SUBNET (which defaults
+      # to 172.20.0.0/16 -- see app/services/radius_population.py). Put the app
+      # containers outside that range and RADIUS silently stops recognising them.
+      #
+      # It is configurable because a host running more than one Dotmac stack will
+      # collide: dotmac_crm's compose also wants 172.20.255.0/24. On such a host
+      # set DOCKER_SUBNET to another /24 *within 172.20.0.0/16* -- not an
+      # arbitrary range, or you trade a collision for a broken RADIUS probe.
+      - subnet: ${DOCKER_SUBNET:-172.20.255.0/24}

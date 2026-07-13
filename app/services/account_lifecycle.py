@@ -40,7 +40,12 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 
-from app.models.catalog import Subscription, SubscriptionAddOn, SubscriptionStatus
+from app.models.catalog import (
+    BillingMode,
+    Subscription,
+    SubscriptionAddOn,
+    SubscriptionStatus,
+)
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services.events import emit_event as _emit_event
@@ -64,7 +69,10 @@ def emit_event(db, event_type, payload, **kwargs):  # noqa: ANN001, ANN201
 ALLOWED_RESTORERS: dict[EnforcementReason, set[str]] = {
     EnforcementReason.overdue: {"payment", "collections_resolution", "admin"},
     EnforcementReason.fup: {"cap_reset", "top_up", "admin"},
-    EnforcementReason.prepaid: {"top_up", "payment", "admin"},
+    # A payment is only an observation that money moved; it says nothing about
+    # whether the prepaid funding threshold was reached.  The access-resolution
+    # owner authorizes a reason-scoped ``top_up`` restore only after that gate.
+    EnforcementReason.prepaid: {"top_up", "admin"},
     EnforcementReason.admin: {"admin"},
     EnforcementReason.customer_hold: {"customer", "admin"},
     EnforcementReason.fraud: {"admin"},
@@ -629,13 +637,16 @@ def _has_open_dunning_case(db: Session, subscriber_id: str) -> bool:
 def _credit_covers_open_ar(db: Session, subscriber_id: str) -> bool:
     """True when the account's available balance covers its open AR.
 
-    A prepaid customer sitting in net credit is not "past due" even if an
-    individual invoice's ``balance_due`` is still open: enforcement already
-    treats them as covered (``prepaid_balance_available``) and never suspends
-    them. Deriving ``delinquent`` off that same net figure keeps status/display
-    from diverging from enforcement — the "has balance but shows outstanding"
-    class of bug. Deferred import avoids a collections<->lifecycle cycle.
+    A prepaid customer whose financial position meets the canonical access
+    threshold is not "past due" even if an individual invoice's
+    ``balance_due`` is still open: enforcement already treats them as covered
+    and never suspends them. Deriving ``delinquent`` from that same decision
+    keeps status/display from diverging from enforcement. Postpaid legacy
+    handling retains its non-negative net-credit check. Deferred imports avoid
+    a collections<->lifecycle cycle.
     """
+    from app.services.access_resolution import resolve_prepaid_funding
+    from app.services.billing_profile import resolve_billing_profile
     from app.services.collections._core import get_available_balance
     from app.services.customer_financial_ledger import list_customer_financial_events
 
@@ -643,6 +654,14 @@ def _credit_covers_open_ar(db: Session, subscriber_id: str) -> bool:
         events = list_customer_financial_events(db, subscriber_id, currency=None)
         if not any(event.signed_amount > 0 for event in events):
             return False
+        account = db.get(Subscriber, subscriber_id)
+        if account is not None:
+            profile = resolve_billing_profile(db, account)
+            if profile.effective_mode == BillingMode.prepaid:
+                return (
+                    profile.automation_safe
+                    and resolve_prepaid_funding(db, account).funded
+                )
         return get_available_balance(db, subscriber_id) >= 0
     except Exception:  # never let a balance-calc hiccup wedge status derivation
         logger.warning(
@@ -653,8 +672,48 @@ def _credit_covers_open_ar(db: Session, subscriber_id: str) -> bool:
         return False
 
 
+def derive_account_status(db: Session, subscriber_id: str) -> SubscriberStatus:
+    """Return the subscriber status implied by authoritative service state.
+
+    This is the read-only half of ``compute_account_status``. Audits and
+    enforcement planners must be able to report projection drift without
+    temporarily mutating an ORM object or relying on a transaction rollback.
+    """
+    subscriber = db.get(Subscriber, subscriber_id)
+    if not subscriber:
+        raise ValueError(f"Subscriber {subscriber_id} not found")
+
+    subs = list(
+        db.scalars(
+            select(Subscription).where(Subscription.subscriber_id == subscriber.id)
+        ).all()
+    )
+
+    if not subs:
+        return SubscriberStatus.new
+    if any(s.status == SubscriptionStatus.active for s in subs):
+        return (
+            SubscriberStatus.delinquent
+            if _has_open_dunning_case(db, str(subscriber.id))
+            and not _credit_covers_open_ar(db, str(subscriber.id))
+            else SubscriberStatus.active
+        )
+    if any(s.status == SubscriptionStatus.suspended for s in subs):
+        return SubscriberStatus.suspended
+    if any(
+        s.status in {SubscriptionStatus.blocked, SubscriptionStatus.stopped}
+        for s in subs
+    ):
+        return SubscriberStatus.blocked
+    if any(s.status == SubscriptionStatus.pending for s in subs):
+        return SubscriberStatus.new
+    if all(s.status == SubscriptionStatus.disabled for s in subs):
+        return SubscriberStatus.disabled
+    return SubscriberStatus.canceled
+
+
 def compute_account_status(db: Session, subscriber_id: str) -> SubscriberStatus:
-    """Derive subscriber status from subscription states.
+    """Derive and persist subscriber status from subscription states.
 
     Priority order:
       1. Any subscription active →
@@ -682,35 +741,7 @@ def compute_account_status(db: Session, subscriber_id: str) -> SubscriberStatus:
     if not subscriber:
         raise ValueError(f"Subscriber {subscriber_id} not found")
 
-    subs = list(
-        db.scalars(
-            select(Subscription).where(Subscription.subscriber_id == subscriber.id)
-        ).all()
-    )
-
-    if not subs:
-        new_status = SubscriberStatus.new
-    elif any(s.status == SubscriptionStatus.active for s in subs):
-        new_status = (
-            SubscriberStatus.delinquent
-            if _has_open_dunning_case(db, str(subscriber.id))
-            and not _credit_covers_open_ar(db, str(subscriber.id))
-            else SubscriberStatus.active
-        )
-    elif any(s.status == SubscriptionStatus.suspended for s in subs):
-        new_status = SubscriberStatus.suspended
-    elif any(
-        s.status in {SubscriptionStatus.blocked, SubscriptionStatus.stopped}
-        for s in subs
-    ):
-        new_status = SubscriberStatus.blocked
-    elif any(s.status == SubscriptionStatus.pending for s in subs):
-        new_status = SubscriberStatus.new
-    elif all(s.status == SubscriptionStatus.disabled for s in subs):
-        new_status = SubscriberStatus.disabled
-    else:
-        # All terminal (canceled, expired, disabled, hidden, archived)
-        new_status = SubscriberStatus.canceled
+    new_status = derive_account_status(db, subscriber_id)
 
     if subscriber.status != new_status:
         logger.info(

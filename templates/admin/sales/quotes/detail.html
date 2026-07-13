@@ -27,7 +27,43 @@
             </div>
             <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Quote ID: {{ quote.id }}</p>
         </div>
+
+        <div class="flex flex-wrap items-center gap-2">
+            <form method="post" action="/admin/sales/quotes/{{ quote.id }}/status" class="flex items-center gap-2">
+                {% include "components/forms/csrf_input.html" %}
+                <select name="status" aria-label="Quote status"
+                        class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    {% for value in quote_status_variants.keys() %}
+                    <option value="{{ value }}" {% if status_val == value %}selected{% endif %}>{{ value|title }}</option>
+                    {% endfor %}
+                </select>
+                <button type="submit"
+                        class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                    Update Status
+                </button>
+            </form>
+
+            <a href="/admin/sales/quotes/{{ quote.id }}/edit"
+               class="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-cyan-700">
+                Edit
+            </a>
+
+            <form method="post" action="/admin/sales/quotes/{{ quote.id }}/delete"
+                  onsubmit="return confirm('Deactivate this quote?');">
+                {% include "components/forms/csrf_input.html" %}
+                <button type="submit"
+                        class="rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 dark:border-red-900/40 dark:bg-slate-800 dark:text-red-300">
+                    Delete
+                </button>
+            </form>
+        </div>
     </div>
+
+    {% if error %}
+    <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-200">
+        {{ error }}
+    </div>
+    {% endif %}
 
     {% if is_accepted %}
     <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-200">
@@ -160,6 +196,9 @@
                     <th class="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Unit Price</th>
                     <th class="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Discount</th>
                     <th class="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Amount</th>
+                    {% if not is_accepted %}
+                    <th class="px-4 py-2.5"><span class="sr-only">Remove</span></th>
+                    {% endif %}
                 </tr>
             </thead>
             <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
@@ -175,14 +214,54 @@
                     <td class="px-4 py-2.5 text-right tabular-nums text-slate-600 dark:text-slate-300">{{ quote.currency }} {{ "{:,.2f}".format(item.unit_price or 0) }}</td>
                     <td class="px-4 py-2.5 text-right tabular-nums text-slate-600 dark:text-slate-300">{% if item.discount_percent %}{{ item.discount_percent }}%{% else %}-{% endif %}</td>
                     <td class="px-4 py-2.5 text-right tabular-nums text-slate-700 dark:text-slate-200">{{ quote.currency }} {{ "{:,.2f}".format(item.amount or 0) }}</td>
+                    {% if not is_accepted %}
+                    <td class="px-4 py-2.5 text-right">
+                        <form method="post" action="/admin/sales/quotes/{{ quote.id }}/line-items/{{ item.id }}/delete"
+                              onsubmit="return confirm('Remove this line?');">
+                            {% include "components/forms/csrf_input.html" %}
+                            <button type="submit" class="text-xs font-medium text-red-600 hover:underline dark:text-red-400">Remove</button>
+                        </form>
+                    </td>
+                    {% endif %}
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="5" class="px-4 py-12 text-center text-sm text-slate-500 dark:text-slate-400">No line items on this quote.</td>
+                    <td colspan="{{ 5 if is_accepted else 6 }}" class="px-4 py-8 text-center text-sm text-slate-500 dark:text-slate-400">
+                        No line items — this quote is worth {{ quote.currency }} 0.00 and cannot be sent or accepted until it has at least one line.
+                    </td>
                 </tr>
                 {% endfor %}
             </tbody>
         </table>
+
+        {% if not is_accepted %}
+        <form method="post" action="/admin/sales/quotes/{{ quote.id }}/line-items"
+              class="flex flex-wrap items-end gap-3 border-t border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-700 dark:bg-slate-800/60">
+            {% include "components/forms/csrf_input.html" %}
+            <div class="min-w-[180px] flex-1">
+                <label for="li-description" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Description</label>
+                <input id="li-description" type="text" name="description" required
+                       class="block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                       placeholder="e.g. Fibre drop, 120m">
+            </div>
+            <div class="w-24">
+                <label for="li-qty" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Qty</label>
+                <input id="li-qty" type="text" inputmode="decimal" name="quantity" value="1"
+                       class="block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm tabular-nums focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div class="w-32">
+                <label for="li-price" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Unit Price</label>
+                <input id="li-price" type="text" inputmode="decimal" name="unit_price" value="0"
+                       class="block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm tabular-nums focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div class="w-24">
+                <label for="li-discount" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Disc %</label>
+                <input id="li-discount" type="text" inputmode="decimal" name="discount_percent" value="0"
+                       class="block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm tabular-nums focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <button type="submit" class="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-cyan-700">Add Line</button>
+        </form>
+        {% endif %}
     </div>
 
     {% if quote.notes %}

@@ -12,19 +12,12 @@ CRM/field API) records the radio MAC at turn-up. Registration:
 - stamps ``subscriptions.mac_address`` when it is empty, so the EXISTING
   uisp_sync MAC matcher (built from active subscriptions) links the radio on
   its next run without any change to uisp_sync,
-- on a cross-subscriber conflict, rejects the registration AND opens a
+- on an ownership conflict, rejects the registration AND opens a
   deduped ops-queue item (see app/services/unmatched_radio_queue.py) so the
   ambiguity becomes a work item instead of a silent failure.
 
-KNOWN LIMITATION (uisp_sync adoption hook — follow-up contract): uisp_sync's
-``_upsert_station`` looks rows up by ``uisp_device_id`` only, so until the
-adoption hook lands (match an existing ``cpe_devices`` row by normalized MAC
-where ``uisp_device_id IS NULL`` before creating a new one) the sync will
-create its own row for a radio registered here once the subscription MAC
-matches. The hourly unmatched-radio review retires the manual placeholder as
-soon as a UISP-confirmed row for the same MAC/subscriber appears, so the
-duplicate is transient. The expected end state is captured by an xfail test
-in tests/test_unmatched_radio_queue.py.
+UISP topology sync adopts the pre-registered CPE row by normalized MAC and
+stamps its UISP device id, preserving this exact subscription ownership.
 """
 
 from __future__ import annotations
@@ -55,15 +48,21 @@ class InvalidMacError(ValueError):
 
 
 class MacConflictError(Exception):
-    """The MAC is already bound to a different subscriber."""
+    """The MAC is already bound to another subscriber or service."""
 
-    def __init__(self, mac_display: str, conflicting_subscriber_ids: set):
+    def __init__(
+        self,
+        mac_display: str,
+        conflicting_subscriber_ids: set,
+        *,
+        conflict_label: str = "another subscriber",
+    ):
         self.mac_display = mac_display
         self.conflicting_subscriber_ids = {
             str(value) for value in conflicting_subscriber_ids
         }
         super().__init__(
-            f"MAC {mac_display} is already associated with another subscriber; "
+            f"MAC {mac_display} is already associated with {conflict_label}; "
             "an ops review item has been opened."
         )
 
@@ -266,6 +265,59 @@ def register_radio_mac(
         db.commit()
         raise MacConflictError(canonical, owners)
 
+    device = next(
+        (
+            row
+            for row in _cpe_rows_for_mac(db, compact)
+            if row.subscriber_id == subscription.subscriber_id
+        ),
+        None,
+    )
+    if (
+        device is not None
+        and device.subscription_id is not None
+        and device.subscription_id != subscription.id
+    ):
+        unmatched_radio_queue.open_item(
+            db,
+            mac_compact=compact,
+            reason=unmatched_radio_queue.REASON_CONFLICT,
+            title=f"Radio MAC service conflict: {canonical}",
+            description=(
+                f"Registration of radio MAC {canonical} for subscription "
+                f"{subscription.id} was rejected because CPE {device.id} is "
+                f"already owned by subscription {device.subscription_id}."
+            ),
+            subscriber_id=subscription.subscriber_id,
+            details={
+                "subscription_id": str(subscription.id),
+                "conflicting_subscription_id": str(device.subscription_id),
+                "attempted_subscriber_id": str(subscription.subscriber_id),
+                "source": source,
+            },
+        )
+        log_audit_event(
+            db=db,
+            request=request,
+            action="radio_mac_register_service_conflict",
+            entity_type="subscription",
+            entity_id=str(subscription.id),
+            actor_id=actor_id,
+            metadata={
+                "mac_address": canonical,
+                "conflicting_subscription_id": str(device.subscription_id),
+                "source": source,
+            },
+            status_code=409,
+            is_success=False,
+        )
+        db.commit()
+        raise MacConflictError(
+            canonical,
+            {device.subscriber_id},
+            conflict_label="another service on this subscriber",
+        )
+
     warnings: list[str] = []
     stamped = False
     existing_sub_mac = compact_mac(subscription.mac_address)
@@ -280,18 +332,11 @@ def register_radio_mac(
             f"({subscription.mac_address}); it was left unchanged."
         )
 
-    device = next(
-        (
-            row
-            for row in _cpe_rows_for_mac(db, compact)
-            if row.subscriber_id == subscription.subscriber_id
-        ),
-        None,
-    )
     created = device is None
     if device is None:
         device = CPEDevice(
             subscriber_id=subscription.subscriber_id,
+            subscription_id=subscription.id,
             service_address_id=subscription.service_address_id,
             device_type=DeviceType.wireless_radio,
             mac_address=canonical,
@@ -300,6 +345,8 @@ def register_radio_mac(
         )
         db.add(device)
         db.flush()
+    elif device.subscription_id is None:
+        device.subscription_id = subscription.id
     elif device.device_type in (None, DeviceType.other):
         device.device_type = DeviceType.wireless_radio
 
@@ -328,6 +375,17 @@ def register_radio_mac(
             "source": source,
         },
     )
+    try:
+        with db.begin_nested():
+            from app.services.uisp_control_plane import (
+                stage_pending_orders_for_subscription,
+            )
+
+            stage_pending_orders_for_subscription(db, subscription.id, commit=False)
+    except Exception:
+        logger.exception(
+            "uisp_radio_order_staging_failed subscription_id=%s", subscription.id
+        )
     db.commit()
     db.refresh(device)
     return RadioRegistration(

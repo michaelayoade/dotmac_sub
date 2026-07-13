@@ -8,7 +8,6 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import cast
-from urllib.parse import urlparse, urlunparse
 
 from fastapi import HTTPException
 from sqlalchemy import and_, bindparam, create_engine, func, or_, text
@@ -56,6 +55,7 @@ from app.services import domain_settings as domain_settings_service
 from app.services.common import apply_ordering, apply_pagination, validate_enum
 from app.services.events import emit_event
 from app.services.events.types import EventType
+from app.services.radius_accounting_health import assess_freshness, stale_after_seconds
 from app.services.response import ListResponseMixin, list_response
 
 logger = logging.getLogger(__name__)
@@ -205,38 +205,10 @@ def _write_subscription_ips_from_accounting(
         subscription.ipv6_address = ipv6
 
 
-def _normalize_radius_db_url(value: str | None) -> str | None:
-    if not value:
-        return None
-    db_url = value.strip()
-    if not db_url:
-        return None
-    if db_url.startswith("postgresql://"):
-        db_url = "postgresql+psycopg://" + db_url[len("postgresql://") :]
-    parsed = urlparse(db_url)
-    hostname = parsed.hostname or ""
-    if hostname in {"localhost", "127.0.0.1"} and parsed.port == 5437:
-        db_url = urlunparse(
-            parsed._replace(
-                netloc="radius:l2f3clS-Ws9WgTXcsW3HoznBnEq3n7N-@radius-db:5432"
-            )
-        )
-    return db_url
+def _radius_accounting_db_url(db: Session) -> str | None:
+    from app.services.radius import authoritative_external_radius_db_url
 
-
-def _radius_accounting_db_url() -> str | None:
-    dsn = _normalize_radius_db_url(os.getenv("RADIUS_DB_DSN"))
-    if dsn:
-        return dsn
-    host = (os.getenv("RADIUS_DB_HOST") or "radius-db").strip()
-    database = (os.getenv("RADIUS_DB_NAME") or "radius").strip()
-    username = (os.getenv("RADIUS_DB_USER") or "radius").strip()
-    password = (
-        os.getenv("RADIUS_DB_PASS") or "l2f3clS-Ws9WgTXcsW3HoznBnEq3n7N-"
-    ).strip()
-    if not all([host, database, username, password]):
-        return None
-    return f"postgresql+psycopg://{username}:{password}@{host}:5432/{database}"
+    return authoritative_external_radius_db_url(db)
 
 
 def _get_radius_accounting_cursor(db: Session) -> int:
@@ -726,10 +698,18 @@ def import_radius_accounting(
     db: Session,
     *,
     limit: int | None = None,
-) -> dict[str, int | bool]:
-    db_url = _radius_accounting_db_url()
+) -> dict[str, int | bool | str | None]:
+    db_url = _radius_accounting_db_url(db)
     if not db_url:
-        return {"ok": False, "processed": 0, "created_or_updated": 0, "cursor": 0}
+        return {
+            "ok": False,
+            "processed": 0,
+            "created_or_updated": 0,
+            "cursor": 0,
+            "source_status": "unconfigured",
+            "source_latest_at": None,
+            "source_age_seconds": None,
+        }
 
     batch_size = max(limit or 500, 1)
     last_radacctid = _get_radius_accounting_cursor(db)
@@ -767,6 +747,14 @@ def import_radius_accounting(
         refresh_checked, refreshed = _refresh_open_sessions_from_radacct(
             db, conn, select_list, batch=_RADIUS_REFRESH_BATCH
         )
+        source_latest_at = _coerce_radacct_ts(
+            conn.execute(
+                text(
+                    "SELECT MAX(COALESCE(acctstoptime, acctupdatetime, "
+                    "acctstarttime)) FROM radacct"
+                )
+            ).scalar()
+        )
 
     db.commit()
     if refreshed:
@@ -775,12 +763,24 @@ def import_radius_accounting(
             refreshed,
             refresh_checked,
         )
+    freshness = assess_freshness(
+        source_latest_at,
+        stale_seconds=stale_after_seconds(db),
+    )
     return {
-        "ok": True,
+        "ok": freshness.fresh,
         "processed": processed,
         "created_or_updated": created_or_updated,
         "refreshed": refreshed,
         "cursor": cursor,
+        "source_status": freshness.state.value,
+        "source_latest_at": (
+            freshness.observed_at.isoformat()
+            if freshness.observed_at is not None
+            else None
+        ),
+        "source_age_seconds": freshness.age_seconds,
+        "source_stale_after_seconds": freshness.stale_after_seconds,
     }
 
 

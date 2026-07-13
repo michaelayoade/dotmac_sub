@@ -183,9 +183,6 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.collections.run_bundle_reconcile": _c(
         "collections", STATE, GUARDED, HEALTH
     ),
-    "app.tasks.crm_billing_push.push_crm_billing_snapshots": _c(
-        "crm", DLQ, PER_ITEM, DEAD
-    ),
     "app.tasks.crm_native_sync.pull_crm_phase3_native_delta": _c(
         "crm",
         SWEEP,
@@ -195,16 +192,8 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "pass, all upserts ON CONFLICT on CRM UUIDs; the next beat run "
         "re-covers anything a failed run missed.",
     ),
-    "app.tasks.crm_sync.push_subscriber_change": _c("crm", AUTORETRY, GUARDED, DEAD),
-    "app.tasks.crm_sync.redrive_crm_dead_letters": _c("crm", DLQ, IDEMP, DEAD),
     "app.tasks.crm_ticket_pull.pull_crm_tickets": _c("crm", SWEEP, IDEMP, HEALTH),
     "app.tasks.crm_ticket_pull.sync_crm_ticket": _c("crm", SWEEP, IDEMP, STATUS),
-    "app.tasks.crm_ticket_push.push_comment_to_crm": _c(
-        "crm", AUTORETRY, GUARDED, STATUS
-    ),
-    "app.tasks.crm_ticket_push.push_ticket_to_crm": _c(
-        "crm", AUTORETRY, GUARDED, STATUS
-    ),
     "app.tasks.cross_app_drift.run_cross_app_drift_detection": _c(
         "monitoring",
         SWEEP,
@@ -338,6 +327,9 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     ),
     "app.tasks.ont_provisioning.queue_bulk_provisioning": _c(
         "provisioning", ITEMS, PER_ITEM, STATUS
+    ),
+    "app.tasks.ont_reconcile.run_ont_reconcile_sweep": _c(
+        "network", SWEEP, IDEMP, HEALTH
     ),
     "app.tasks.ont_signal_observations.record_ont_observations": _c(
         "network", SWEEP, IDEMP, HEALTH
@@ -494,6 +486,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         LOG,
         "One-shot inventory backfill; re-runs only stamp still-empty mgmt_ips, "
         "so redriving after a failure is safe.",
+    ),
+    "app.tasks.uisp_control.apply_uisp_intent": _c("network", STATE, STATEFUL, STATUS),
+    "app.tasks.uisp_control.reconcile_uisp_config_readback": _c(
+        "network",
+        SWEEP,
+        IDEMP,
+        HEALTH,
+        "Bounded mapped configuration readback; no writes and repeated reads converge.",
     ),
     "app.tasks.topology_uisp.run_uisp_topology_sync": _c(
         "network",

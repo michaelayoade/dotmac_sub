@@ -16,7 +16,7 @@ from collections.abc import Iterator
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -39,6 +39,9 @@ from app.services.object_storage import (
     StreamResult,
     get_s3_storage,
 )
+
+if TYPE_CHECKING:
+    from app.services.brand_profiles import ResolvedBrand
 
 STALE_EXPORT_SECONDS = 20
 # Naira sign (U+20A6). DejaVu Sans (used by both WeasyPrint and the PIL
@@ -118,8 +121,27 @@ def _company_lines(company_info: dict[str, str]) -> list[str]:
     return [line for line in lines if line]
 
 
-def _logo_src(db: Session) -> str | None:
-    raw_logo = settings_spec.resolve_value(db, SettingDomain.comms, "sidebar_logo_url")
+def _branded_company_info(
+    company_info: dict[str, str], brand: ResolvedBrand
+) -> dict[str, str]:
+    address = brand.legal_address or {}
+    return {
+        **company_info,
+        "company_name": brand.legal_name,
+        "company_email": brand.support_email,
+        "company_phone": brand.support_phone,
+        "company_address_street1": address.get("street1", ""),
+        "company_address_street2": address.get("street2", ""),
+        "company_address_city": address.get("city", ""),
+        "company_address_zip": address.get("postal_code", ""),
+        "company_address_country": address.get("country", ""),
+    }
+
+
+def _logo_src(db: Session, configured_logo: str | None = None) -> str | None:
+    raw_logo = configured_logo or settings_spec.resolve_value(
+        db, SettingDomain.comms, "sidebar_logo_url"
+    )
     logo_value = str(raw_logo or "").strip()
     if not logo_value:
         return None
@@ -145,13 +167,13 @@ def _logo_src(db: Session) -> str | None:
     return logo_value
 
 
-def _decode_logo_image(db: Session):
+def _decode_logo_image(db: Session, configured_logo: str | None = None):
     try:
         from PIL import Image
     except Exception:
         return None
 
-    logo_src = _logo_src(db)
+    logo_src = _logo_src(db, configured_logo)
     if not logo_src:
         return None
     if not logo_src.startswith("data:"):
@@ -222,15 +244,15 @@ def _render_invoice_html(invoice: Invoice, db: Session) -> str:
     status = html.escape(
         invoice.status.value.replace("_", " ").title() if invoice.status else "Draft"
     )
-    logo_src = _logo_src(db)
-    company_info = company_info_service.get_company_info(db)
-    # White-label: fall back to the configured brand legal name (brand.json)
-    # rather than a generic placeholder when company-info is unset.
-    from app.services.branding_config import get_brand
+    from app.services.brand_profiles import resolve_brand
 
-    company_name = html.escape(
-        (company_info.get("company_name") or "").strip() or get_brand()["legal_name"]
+    account_id = getattr(getattr(invoice, "account", None), "id", None)
+    brand = resolve_brand(db, subscriber_id=account_id)
+    logo_src = _logo_src(db, brand.logo_url)
+    company_info = _branded_company_info(
+        company_info_service.get_company_info(db), brand
     )
+    company_name = html.escape(brand.legal_name)
     accent_invoice_id = invoice.invoice_number or str(invoice.id)
     tax_label = "Tax"
     vat_number = html.escape((company_info.get("company_vat_number") or "").strip())
@@ -588,8 +610,12 @@ def _build_branded_fallback_pdf(db: Session, invoice: Invoice) -> bytes:
     page = Image.new("RGB", (width, height), "#ffffff")
     draw = ImageDraw.Draw(page)
 
-    green_900 = "#166534"
-    green_700 = "#16a34a"
+    from app.services.brand_profiles import resolve_brand
+
+    account_id = getattr(getattr(invoice, "account", None), "id", None)
+    brand = resolve_brand(db, subscriber_id=account_id)
+    green_900 = brand.primary_color
+    green_700 = brand.secondary_color
     green_50 = "#f0fdf4"
     red_700 = "#b91c1c"
     slate_900 = "#0f172a"
@@ -614,10 +640,12 @@ def _build_branded_fallback_pdf(db: Session, invoice: Invoice) -> bytes:
     draw.rounded_rectangle((36, 36, width - 36, 350), radius=28, fill=green_900)
     draw.rectangle((36, 220, width - 36, 350), fill=green_900)
 
-    company_info = company_info_service.get_company_info(db)
-    company_name = (company_info.get("company_name") or "").strip() or "Your Company"
+    company_info = _branded_company_info(
+        company_info_service.get_company_info(db), brand
+    )
+    company_name = brand.legal_name
     customer_name = _display_account_name(invoice)
-    logo_image = _decode_logo_image(db)
+    logo_image = _decode_logo_image(db, brand.logo_url)
     if logo_image is not None:
         logo = logo_image.copy()
         logo.thumbnail((220, 100))

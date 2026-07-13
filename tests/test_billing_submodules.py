@@ -826,7 +826,13 @@ class TestLedgerEntryCRUD:
         for e in results:
             assert e.entry_type == LedgerEntryType.credit
 
-    def test_update_ledger_entry(self, db_session, subscriber):
+    def test_update_ledger_entry_is_refused(self, db_session, subscriber):
+        """The ledger is append-only: a posted entry cannot be mutated.
+
+        This previously asserted that ``update`` rewrote the entry. It accepted
+        ``amount``/``entry_type``/``is_active`` too, so it could silently rewrite
+        money that had already been counted. Correct the entry by reversing it.
+        """
         entry = billing_service.ledger_entries.create(
             db_session,
             LedgerEntryCreate(
@@ -836,23 +842,20 @@ class TestLedgerEntryCRUD:
                 amount=Decimal("30.00"),
             ),
         )
-        updated = billing_service.ledger_entries.update(
-            db_session,
-            str(entry.id),
-            LedgerEntryUpdate(memo="Updated memo"),
-        )
-        assert updated.memo == "Updated memo"
-
-    def test_update_ledger_entry_not_found(self, db_session):
         with pytest.raises(HTTPException) as exc:
             billing_service.ledger_entries.update(
                 db_session,
-                str(uuid.uuid4()),
-                LedgerEntryUpdate(memo="nope"),
+                str(entry.id),
+                LedgerEntryUpdate(memo="Updated memo"),
             )
-        assert exc.value.status_code == 404
+        assert exc.value.status_code == 409
 
-    def test_delete_ledger_entry_soft(self, db_session, subscriber):
+        db_session.refresh(entry)
+        assert entry.amount == Decimal("30.00")
+        assert entry.is_active is True
+
+    def test_delete_ledger_entry_is_refused(self, db_session, subscriber):
+        """Deleting a posted entry moved the balance with no record of why."""
         entry = billing_service.ledger_entries.create(
             db_session,
             LedgerEntryCreate(
@@ -862,14 +865,12 @@ class TestLedgerEntryCRUD:
                 amount=Decimal("5.00"),
             ),
         )
-        billing_service.ledger_entries.delete(db_session, str(entry.id))
-        db_session.refresh(entry)
-        assert entry.is_active is False
-
-    def test_delete_ledger_entry_not_found(self, db_session):
         with pytest.raises(HTTPException) as exc:
-            billing_service.ledger_entries.delete(db_session, str(uuid.uuid4()))
-        assert exc.value.status_code == 404
+            billing_service.ledger_entries.delete(db_session, str(entry.id))
+        assert exc.value.status_code == 409
+
+        db_session.refresh(entry)
+        assert entry.is_active is True
 
     def test_create_ledger_entry_with_invoice(self, db_session, subscriber):
         invoice = _make_invoice(db_session, subscriber.id)

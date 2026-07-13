@@ -324,6 +324,7 @@ def ip_pool_edit(request: Request, pool_id: str, db: Session = Depends(get_db)):
             "action_url": f"/admin/network/ip-management/pools/{pool_id}",
             "olt_devices": web_network_ip_service.list_active_olts(db),
             "vlans": web_network_ip_service.list_active_vlans(db),
+            "nas_devices": web_network_ip_service.list_active_nas_devices(db),
         }
     )
     return templates.TemplateResponse(

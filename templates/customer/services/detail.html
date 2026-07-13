@@ -336,6 +336,13 @@
                 </button>
             </form>
         </div>
+        {% elif uisp_control_status %}
+        <div class="border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800">
+            <h2 class="text-lg font-display font-semibold text-stone-900 dark:text-white">WiFi Settings</h2>
+            <p class="mt-2 text-sm text-stone-600 dark:text-stone-300">
+                Device control status: <span class="font-semibold">{{ uisp_control_status | replace('_', ' ') | title }}</span>
+            </p>
+        </div>
         {% endif %}
         <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800">
             <h2 class="text-lg font-display font-semibold text-stone-900 dark:text-white">Plan Summary</h2>

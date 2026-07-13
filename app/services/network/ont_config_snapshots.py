@@ -24,6 +24,31 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_SECRET_KEY_MARKERS = (
+    "password",
+    "passphrase",
+    "pre_shared_key",
+    "presharedkey",
+    "keypassphrase",
+    "secret",
+)
+
+
+def redact_snapshot_secrets(value):
+    """Recursively remove credentials before snapshot persistence or display."""
+    if isinstance(value, dict):
+        return {
+            key: (
+                "[redacted]"
+                if any(marker in str(key).lower() for marker in _SECRET_KEY_MARKERS)
+                else redact_snapshot_secrets(item)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [redact_snapshot_secrets(item) for item in value]
+    return value
+
 
 def _safe_uuid(value: str, label: str = "ID") -> uuid.UUID:
     """Validate and coerce a string to UUID, raising 400 on failure."""
@@ -74,10 +99,10 @@ class OntConfigSnapshots:
             ont_unit_id=ont_uuid,
             source=source,
             label=label,
-            device_info=result.data.get("device_info"),
-            wan=result.data.get("wan"),
-            optical=result.data.get("optical"),
-            wifi=result.data.get("wifi"),
+            device_info=redact_snapshot_secrets(result.data.get("device_info")),
+            wan=redact_snapshot_secrets(result.data.get("wan")),
+            optical=redact_snapshot_secrets(result.data.get("optical")),
+            wifi=redact_snapshot_secrets(result.data.get("wifi")),
         )
         db.add(snapshot)
         try:

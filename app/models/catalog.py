@@ -1190,6 +1190,12 @@ class AccessCredential(Base):
     subscriber_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
     )
+    subscription_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("subscriptions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     username: Mapped[str] = mapped_column(String(120), nullable=False)
     secret_hash: Mapped[str | None] = mapped_column(String(512))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -1215,6 +1221,7 @@ class AccessCredential(Base):
     )
 
     subscriber = relationship("Subscriber", back_populates="access_credentials")
+    subscription = relationship("Subscription")
     radius_profile = relationship("RadiusProfile", back_populates="access_credentials")
     radius_users = relationship("RadiusUser", back_populates="access_credential")
 

@@ -47,6 +47,17 @@ class AccessCredentials(CRUDManager[AccessCredential]):
         subscriber = db.get(Subscriber, payload.subscriber_id)
         if not subscriber:
             raise HTTPException(status_code=404, detail="Subscriber not found")
+        if payload.subscription_id:
+            from app.models.catalog import Subscription
+
+            subscription = db.get(Subscription, payload.subscription_id)
+            if not subscription:
+                raise HTTPException(status_code=404, detail="Subscription not found")
+            if subscription.subscriber_id != payload.subscriber_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Subscription does not belong to the credential subscriber",
+                )
         if payload.radius_profile_id:
             profile = db.get(RadiusProfile, payload.radius_profile_id)
             if not profile:
@@ -101,6 +112,18 @@ class AccessCredentials(CRUDManager[AccessCredential]):
             subscriber = db.get(Subscriber, data["subscriber_id"])
             if not subscriber:
                 raise HTTPException(status_code=404, detail="Subscriber not found")
+        target_subscriber_id = data.get("subscriber_id", credential.subscriber_id)
+        if "subscription_id" in data and data["subscription_id"]:
+            from app.models.catalog import Subscription
+
+            subscription = db.get(Subscription, data["subscription_id"])
+            if not subscription:
+                raise HTTPException(status_code=404, detail="Subscription not found")
+            if subscription.subscriber_id != target_subscriber_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Subscription does not belong to the credential subscriber",
+                )
         if "radius_profile_id" in data and data["radius_profile_id"]:
             profile = db.get(RadiusProfile, data["radius_profile_id"])
             if not profile:

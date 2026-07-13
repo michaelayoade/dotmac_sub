@@ -32,6 +32,7 @@
     'topology': 'network', 'weathermap': 'network', 'network-backups': 'network',
     'onu-types': 'network', 'speed-profiles': 'network',
     'vendor-capabilities': 'network',
+    'uisp-control': 'network',
     'vpn': 'vpn', 'wireguard': 'vpn', 'wireguard-peers': 'vpn',
     'reports': 'reports', 'reports-revenue': 'reports', 'reports-customers': 'reports', 'reports-subscribers': 'reports',
     'reports-network': 'reports', 'reports-billing': 'reports',
@@ -204,6 +205,8 @@
     {% endif %}
     {{ nav_link("Field Live Map", "/admin/dispatch/live-map", icon_gis, "field-live-map",
         active_pages=["field-live-map", "field-movement-playback"]) }}
+    {{ nav_link("Vendors", "/admin/vendors", icon_network, "vendors") }}
+    {{ nav_link("Vendor Review Queue", "/admin/vendors/operations", icon_network, "vendor-operations") }}
     {{ nav_link("Vendor Routes", "/admin/vendors/routes", icon_network, "vendor-routes") }}
 
     {{ section_label("ADMIN") }}

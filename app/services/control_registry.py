@@ -556,17 +556,6 @@ _FEATURE_CONTROLS: tuple[Control, ...] = (
         description="Pull work orders from CRM (webhook + reconcile + lazy refresh).",
     ),
     Control(
-        key="crm.billing_push",
-        layer=Layer.feature,
-        owner_module="crm",
-        default=False,
-        on_missing=False,
-        legacy=(
-            LegacyAlias(_SCH, "crm_billing_push_enabled", "CRM_BILLING_PUSH_ENABLED"),
-        ),
-        description="Push billing snapshots to CRM.",
-    ),
-    Control(
         key="crm.phase3_native_sync",
         layer=Layer.feature,
         owner_module="crm",

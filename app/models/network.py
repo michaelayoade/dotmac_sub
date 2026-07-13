@@ -353,6 +353,12 @@ class CPEDevice(Base):
         ForeignKey("subscribers.id", ondelete="SET NULL"),
         nullable=False,
     )
+    subscription_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("subscriptions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     service_address_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("addresses.id")
     )
@@ -393,6 +399,7 @@ class CPEDevice(Base):
     )
 
     subscriber = relationship("Subscriber", back_populates="cpe_devices")
+    subscription = relationship("Subscription")
     service_address = relationship("Address")
     parent_network_device = relationship("NetworkDevice")
     ports = relationship(
@@ -648,6 +655,12 @@ class SubscriberAdditionalRoute(Base):
         ForeignKey("subscribers.id", ondelete="CASCADE"),
         nullable=False,
     )
+    subscription_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("subscriptions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     # Normalised network/prefix, e.g. "160.119.125.104/29" or "102.0.2.5/32".
     cidr: Mapped[str] = mapped_column(String(64), nullable=False)
     prefix_length: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -668,6 +681,7 @@ class SubscriberAdditionalRoute(Base):
     )
 
     subscriber = relationship("Subscriber")
+    subscription = relationship("Subscription")
 
 
 class IpPool(Base):
@@ -723,6 +737,7 @@ class IpPool(Base):
     ipv4_addresses = relationship("IPv4Address", back_populates="pool")
     ipv6_addresses = relationship("IPv6Address", back_populates="pool")
     delegated_prefixes = relationship("Ipv6DelegatedPrefix", back_populates="pool")
+    nas_device = relationship("NasDevice", foreign_keys=[nas_device_id])
     olt_device = relationship(
         "OLTDevice", back_populates="ip_pools", foreign_keys=[olt_device_id]
     )
@@ -2271,6 +2286,12 @@ class OntAssignment(Base):
     subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id")
     )
+    subscription_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("subscriptions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     work_order_mirror_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("work_order_mirror.id", ondelete="SET NULL")
     )
@@ -2360,6 +2381,7 @@ class OntAssignment(Base):
     ont_unit = relationship("OntUnit", back_populates="assignments")
     pon_port = relationship("PonPort", back_populates="ont_assignments")
     subscriber = relationship("Subscriber", back_populates="ont_assignments")
+    subscription = relationship("Subscription")
     work_order_mirror = relationship("WorkOrderMirror")
     service_address = relationship("Address")
 

@@ -1,0 +1,60 @@
+{% extends "layouts/admin.html" %}
+{% block title %}UISP Control - Admin{% endblock %}
+{% block content %}
+<div class="space-y-6">
+    <header class="flex flex-wrap items-end justify-between gap-4">
+        <div>
+            <a href="/admin/network" class="text-sm font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400">Network</a>
+            <h1 class="mt-2 text-2xl font-semibold text-slate-900 dark:text-white">UISP Control</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Desired state, observed state, and device confirmation.</p>
+        </div>
+        <form method="get">
+            <label for="status" class="sr-only">Status</label>
+            <select id="status" name="status" onchange="this.form.submit()" class="border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                <option value="">All statuses</option>
+                {% for value in ['applying', 'pending_readback', 'verified', 'drifted', 'manual_required', 'pending_observation', 'staged', 'failed'] %}
+                <option value="{{ value }}" {% if status_filter == value %}selected{% endif %}>{{ value | replace('_', ' ') | title }}</option>
+                {% endfor %}
+            </select>
+        </form>
+    </header>
+
+    <section class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4" aria-label="UISP status counts">
+        {% for value, label in [('verified', 'Verified'), ('drifted', 'Drifted'), ('manual_required', 'Manual required'), ('pending_observation', 'Pending observation')] %}
+        <div class="border-l-4 {% if value == 'verified' %}border-emerald-500{% elif value == 'drifted' %}border-rose-500{% else %}border-amber-500{% endif %} bg-white px-4 py-3 dark:bg-slate-800">
+            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">{{ label }}</p>
+            <p class="mt-1 text-2xl font-semibold text-slate-900 dark:text-white">{{ counts.get(value, 0) }}</p>
+        </div>
+        {% endfor %}
+    </section>
+
+    <section class="border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
+        <div class="flex flex-wrap gap-x-6 gap-y-2 border-b border-slate-200 px-4 py-3 text-xs dark:border-slate-700">
+            {% for key, value in capabilities.items() %}
+            <span class="text-slate-500 dark:text-slate-400">{{ key | replace('_', ' ') }}: <strong class="{% if value == true %}text-emerald-600{% elif value == false %}text-rose-600{% else %}text-amber-600{% endif %}">{{ value }}</strong></span>
+            {% endfor %}
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
+                <thead class="bg-slate-50 text-left text-xs uppercase text-slate-500 dark:bg-slate-900/40 dark:text-slate-400">
+                    <tr><th class="px-4 py-3">Target</th><th class="px-4 py-3">Subscription</th><th class="px-4 py-3">Revision</th><th class="px-4 py-3">Status</th><th class="px-4 py-3">Observed</th><th class="px-4 py-3"></th></tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+                    {% for intent in intents %}
+                    <tr>
+                        <td class="px-4 py-3"><span class="font-medium text-slate-900 dark:text-white">{{ intent.target_type.value | upper }}</span><br><span class="font-mono text-xs text-slate-500">{{ intent.uisp_device_id or intent.target_id }}</span></td>
+                        <td class="px-4 py-3 font-mono text-xs text-slate-600 dark:text-slate-300">{{ intent.subscription_id or '-' }}</td>
+                        <td class="px-4 py-3 text-slate-600 dark:text-slate-300">{{ intent.verified_revision or '-' }} / {{ intent.desired_revision }}</td>
+                        <td class="px-4 py-3 font-medium {% if intent.status.value == 'verified' %}text-emerald-600{% elif intent.status.value == 'drifted' %}text-rose-600{% else %}text-amber-600{% endif %}">{{ intent.status.value | replace('_', ' ') | title }}</td>
+                        <td class="px-4 py-3 text-slate-600 dark:text-slate-300">{{ intent.last_observed_at.strftime('%Y-%m-%d %H:%M') if intent.last_observed_at else '-' }}</td>
+                        <td class="px-4 py-3 text-right"><a href="/admin/network/uisp-control/{{ intent.id }}" class="font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400">Inspect</a></td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="6" class="px-4 py-10 text-center text-slate-500">No UISP intents match this filter.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+</div>
+{% endblock %}

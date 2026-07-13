@@ -16,14 +16,13 @@ from app.services.credential_crypto import (
 )
 from app.services.credential_key_rotation import (
     CredentialIntegrityResult,
+    publish_credential_integrity_snapshot,
     rotate_credential_encryption_material,
     scan_credential_encryption_integrity,
 )
 from app.services.db_session_adapter import db_session_adapter
 from app.services.observability import (
     Finding,
-    StateObservation,
-    publish_state_snapshot,
     record_finding,
     resolve_findings,
 )
@@ -357,50 +356,21 @@ def _publish_integrity_state(
     key_source: str,
     rotation_result: dict[str, object],
 ) -> None:
-    observations = [
-        StateObservation(signal=signal, scope=scope, value=value)
-        for signal, scope, value in integrity.observations()
+    extra_observations: list[tuple[str, str, float]] = [
+        ("managed_key_source", key_source, 1.0 if managed else 0.0),
     ]
-    observations.append(
-        StateObservation(
-            signal="managed_key_source",
-            scope=key_source,
-            value=1.0 if managed else 0.0,
-        )
-    )
     rotation_status = str(rotation_result.get("status") or "error")
-    observations.append(
-        StateObservation(
-            signal="rotation_status",
-            scope=rotation_status,
-            value=1.0,
-        )
-    )
     due_at = _parse_datetime(rotation_result.get("next_rotation_at"))
     if due_at is not None:
-        observations.append(
-            StateObservation(
-                signal="rotation_next_due_timestamp_seconds",
-                scope="all",
-                value=due_at.timestamp(),
-            )
+        extra_observations.append(
+            ("rotation_next_due_timestamp_seconds", "all", due_at.timestamp())
         )
-
-    if rotation_status == "blocked" or integrity.totals["undecryptable"] > 0:
-        snapshot_status = "error"
-    elif integrity.totals["plaintext"] > 0:
-        snapshot_status = "degraded"
-    else:
-        snapshot_status = "ok"
-    try:
-        publish_state_snapshot(
-            "credentials",
-            observations,
-            status=snapshot_status,
-            now=integrity.scanned_at,
-        )
-    except Exception:
-        logger.exception("credential_integrity_snapshot_publish_failed")
+    publish_credential_integrity_snapshot(
+        integrity,
+        operation="rotation",
+        operation_status=rotation_status,
+        extra_observations=tuple(extra_observations),
+    )
 
     try:
         _sync_integrity_findings(db, integrity, rotation_result)

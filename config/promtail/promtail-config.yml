@@ -68,6 +68,15 @@ scrape_configs:
       - labels:
           level:
 
+      # Dedicated RADIUS PostgreSQL runs in a production compose override and
+      # is collected by this generic job. Make rejected accounting writes a
+      # low-cardinality Loki event instead of an unstructured database error.
+      - match:
+          selector: '{container=~"dotmac_.*radius.*pg.*"} |~ "ERROR:.*value too long.*character varying"'
+          stages:
+            - static_labels:
+                event: radius_accounting_write_rejected
+
       # Output the original log line
       - output:
           source: log

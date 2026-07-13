@@ -16,8 +16,8 @@ from types import SimpleNamespace
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, func, or_
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, exists, func, or_
+from sqlalchemy.orm import Session, load_only
 
 from app.models.billing import (
     CreditNote,
@@ -110,12 +110,15 @@ def _memo_is_internal(memo: str | None) -> bool:
 
 
 def _has_legacy_mirror(db: Session, account_id: UUID) -> bool:
-    return (
-        db.query(SplynxBillingTransaction.id)
-        .filter(SplynxBillingTransaction.subscriber_id == account_id)
-        .filter(SplynxBillingTransaction.deleted.is_(False))
-        .first()
-        is not None
+    return bool(
+        db.query(
+            exists().where(
+                and_(
+                    SplynxBillingTransaction.subscriber_id == account_id,
+                    SplynxBillingTransaction.deleted.is_(False),
+                )
+            )
+        ).scalar()
     )
 
 
@@ -266,6 +269,20 @@ def list_customer_financial_events(
     if has_legacy_mirror:
         legacy_query = (
             db.query(SplynxBillingTransaction)
+            .options(
+                load_only(
+                    SplynxBillingTransaction.id,
+                    SplynxBillingTransaction.subscriber_id,
+                    SplynxBillingTransaction.entry_type,
+                    SplynxBillingTransaction.amount,
+                    SplynxBillingTransaction.category_name,
+                    SplynxBillingTransaction.description,
+                    SplynxBillingTransaction.transaction_date,
+                    SplynxBillingTransaction.splynx_invoice_id,
+                    SplynxBillingTransaction.splynx_payment_id,
+                    SplynxBillingTransaction.splynx_credit_note_id,
+                )
+            )
             .filter(SplynxBillingTransaction.subscriber_id == account_uuid)
             .filter(SplynxBillingTransaction.deleted.is_(False))
             .filter(SplynxBillingTransaction.transaction_date.isnot(None))

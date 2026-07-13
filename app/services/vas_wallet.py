@@ -20,6 +20,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.models.billing import TopupIntent
 from app.models.domain_settings import SettingDomain
 from app.models.subscription_engine import SettingValueType
 from app.models.vas import (
@@ -35,6 +36,8 @@ from app.services.billing._common import lock_account
 from app.services.common import coerce_uuid
 from app.services.domain_settings import vas_settings
 from app.services.payment_gateway_adapter import payment_gateway_adapter
+from app.services.payment_routing import provider_for_intent, select_checkout_provider
+from app.services.topup_intents import set_topup_intent_status
 
 logger = logging.getLogger(__name__)
 
@@ -296,13 +299,32 @@ def _initiate_topup_for_wallet(
         raise HTTPException(
             status_code=400, detail="Daily wallet funding limit reached"
         )
+    route = select_checkout_provider(db, provider)
     context = payment_gateway_adapter.build_context(
-        db, provider_type=provider or _provider(db)
+        db, provider_type=route.provider_type.value
     )
     # Bind the reference to THIS wallet — verify refuses unknown references,
     # so a leaked/stolen reference can never credit a different wallet.
+    vas_intent = VasTopupIntent(
+        reference=context.reference, wallet_id=wallet.id, amount=amount
+    )
+    db.add(vas_intent)
+    db.flush()
     db.add(
-        VasTopupIntent(reference=context.reference, wallet_id=wallet.id, amount=amount)
+        TopupIntent(
+            account_id=wallet.subscriber_id,
+            reference=context.reference,
+            provider_type=context.provider_type,
+            currency=currency_code(db),
+            requested_amount=amount,
+            status="pending",
+            metadata_={
+                "payment_flow": "vas_wallet_topup",
+                "vas_topup_intent_id": str(vas_intent.id),
+                "vas_wallet_id": str(wallet.id),
+                "provider_id": route.provider_id,
+            },
+        )
     )
     db.commit()
     return {
@@ -314,26 +336,16 @@ def _initiate_topup_for_wallet(
     }
 
 
-def _provider(db: Session) -> str:
-    value = settings_spec.resolve_value(
-        db, SettingDomain.billing, "default_payment_provider"
-    )
-    return str(value) if value else "paystack"
-
-
 def topup_payment_options(db: Session) -> list[dict[str, str]]:
     """Online-gateway options for VAS float top-up checkout.
 
-    Reuses the consolidated-billing active-provider selection so VAS honours the
-    same rule: Paystack is the baseline, Flutterwave appears only when an active
-    Flutterwave ``PaymentProvider`` row exists, and the configured default is
-    surfaced first. Bank transfer is billing-only and is not offered here.
+    Uses the canonical billing provider policy. Bank transfer is billing-only.
     """
     from app.services.customer_portal_flow_payments import (
         online_gateway_payment_options,
     )
 
-    return online_gateway_payment_options(db, _provider(db))
+    return online_gateway_payment_options(db)
 
 
 def verify_topup(
@@ -373,12 +385,29 @@ def _verify_topup_for_wallet(
             )
         return {
             "amount": existing.amount,
+            "provider_type": None,
             "already_recorded": True,
             "balance": wallet_balance(db, wallet.id),
         }
 
+    gateway_intent = db.scalars(
+        select(TopupIntent).where(TopupIntent.reference == reference)
+    ).first()
+    gateway_metadata = dict(gateway_intent.metadata_ or {}) if gateway_intent else {}
+    if (
+        gateway_intent is None
+        or gateway_metadata.get("payment_flow") != "vas_wallet_topup"
+        or gateway_metadata.get("vas_topup_intent_id") != str(intent.id)
+        or gateway_metadata.get("vas_wallet_id") != str(wallet.id)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Payment checkout provenance is missing; start a new wallet top-up",
+        )
+    provider_type = provider_for_intent(gateway_intent, provider).value
+
     tx = payment_gateway_adapter.verify(
-        db, provider_type=provider or _provider(db), reference=reference
+        db, provider_type=provider_type, reference=reference
     )
     amount = Decimal(str(tx.amount)).quantize(Decimal("0.01"))
     entry = credit_wallet(
@@ -389,6 +418,12 @@ def _verify_topup_for_wallet(
         reference=reference,
         memo=f"Wallet top-up via {tx.provider_type}",
     )
+    gateway_intent.actual_amount = amount
+    gateway_intent.external_id = tx.external_id
+    gateway_intent.completed_at = datetime.now(UTC)
+    set_topup_intent_status(gateway_intent, "completed", source="vas_wallet_verify")
+    db.add(gateway_intent)
+    db.commit()
     logger.info(
         "vas_wallet_topup credited wallet=%s amount=%s ref=%s",
         wallet.id,
@@ -397,6 +432,7 @@ def _verify_topup_for_wallet(
     )
     return {
         "amount": entry.amount,
+        "provider_type": provider_type,
         "already_recorded": False,
         "balance": wallet_balance(db, wallet.id),
     }
@@ -758,4 +794,7 @@ def funding_provider_for_entry(db: Session, entry: VasWalletEntry) -> str:
         provider = memo.removeprefix(prefix).strip()
         if provider:
             return provider
-    return _provider(db)
+    try:
+        return select_checkout_provider(db).provider_type.value
+    except ValueError:
+        return "unknown"

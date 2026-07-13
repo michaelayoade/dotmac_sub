@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from fastapi import UploadFile
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -17,7 +17,6 @@ from app.models.billing import (
     Payment,
     PaymentAllocation,
     PaymentMethodType,
-    PaymentProvider,
     PaymentProviderType,
     PaymentStatus,
     TopupIntent,
@@ -42,6 +41,11 @@ from app.services.customer_portal_context import (
     get_invoice_billing_contact,
 )
 from app.services.payment_gateway_adapter import payment_gateway_adapter
+from app.services.payment_routing import (
+    eligible_routes,
+    provider_for_intent,
+    select_checkout_provider,
+)
 from app.services.settings_spec import resolve_value
 from app.services.topup_intents import set_topup_intent_status
 
@@ -55,14 +59,6 @@ _DIRECT_TRANSFER_PROVIDER = "direct_bank_transfer"
 _DIRECT_TRANSFER_LABEL = "Direct bank transfer"
 _DIRECT_TRANSFER_TTL = timedelta(days=7)
 _DEFAULT_TOPUP_PRESET_AMOUNTS = (1000, 2000, 5000, 10000, 20000, 50000)
-
-
-def _resolve_payment_provider(db: Session) -> str:
-    """Return the configured payment provider type ('paystack' or 'flutterwave')."""
-    val = resolve_value(db, SettingDomain.billing, "default_payment_provider_type")
-    if val and str(val) == "flutterwave":
-        return "flutterwave"
-    return "paystack"
 
 
 def _provider_uuid(db: Session, provider_type: str) -> uuid.UUID | None:
@@ -81,61 +77,44 @@ def _provider_uuid(db: Session, provider_type: str) -> uuid.UUID | None:
     return provider.id if provider else None
 
 
+def _payment_by_gateway_identity(
+    db: Session,
+    *,
+    external_id: str,
+    provider_id: uuid.UUID | None,
+) -> Payment | None:
+    query = select(Payment).where(Payment.external_id == external_id)
+    if provider_id is not None:
+        query = query.where(
+            or_(Payment.provider_id == provider_id, Payment.provider_id.is_(None))
+        ).order_by((Payment.provider_id == provider_id).desc())
+    return db.scalars(query).first()
+
+
 def online_gateway_payment_options(
     db: Session,
-    default_provider: str,
+    _legacy_default_provider: str | None = None,
 ) -> list[dict[str, str]]:
-    """Return active online-gateway options (``{provider_type, label}``).
-
-    Paystack is always offered as the baseline gateway (it works even with no
-    ``PaymentProvider`` row). Flutterwave only appears when an active
-    Flutterwave provider row exists, because it needs configured API keys —
-    listing it without keys would hand the customer a checkout that can't
-    complete. The configured default provider is surfaced first.
-
-    Shared by consolidated billing (:func:`_topup_payment_options`) and VAS
-    float top-up (``vas_wallet.topup_payment_options``) so both honour the same
-    active-provider rule — and the module-manager on/off toggle that flips
-    ``PaymentProvider.is_active``.
-    """
-    active: list[str] = []
-    try:
-        rows = db.scalars(
-            select(PaymentProvider.provider_type)
-            .where(PaymentProvider.is_active.is_(True))
-            .where(
-                PaymentProvider.provider_type.in_(
-                    [PaymentProviderType.paystack, PaymentProviderType.flutterwave]
-                )
-            )
-            .order_by(PaymentProvider.name)
-        ).all()
-        for provider_type in rows:
-            value = getattr(provider_type, "value", str(provider_type))
-            if value in _ONLINE_PROVIDER_LABELS and value not in active:
-                active.append(value)
-    except Exception:
-        logger.debug("Failed to resolve active payment providers", exc_info=True)
-
-    if "paystack" not in active:
-        active.append("paystack")
-    if default_provider in active:
-        active.remove(default_provider)
-        active.insert(0, default_provider)
-
+    """Return healthy gateways in canonical routing order."""
     return [
         {
-            "provider_type": provider_type,
-            "label": _ONLINE_PROVIDER_LABELS[provider_type],
+            "provider_type": route.provider_type.value,
+            "label": _ONLINE_PROVIDER_LABELS[route.provider_type.value],
         }
-        for provider_type in active
-        if provider_type in _ONLINE_PROVIDER_LABELS
+        for route in eligible_routes(db)
     ]
+
+
+def _default_online_route(db: Session):
+    try:
+        return select_checkout_provider(db)
+    except ValueError:
+        return None
 
 
 def _topup_payment_options(
     db: Session,
-    default_provider: str,
+    _legacy_default_provider: str | None = None,
     *,
     direct_transfer_enabled: bool | None = None,
 ) -> list[dict[str, str]]:
@@ -147,7 +126,7 @@ def _topup_payment_options(
     Pass ``direct_transfer_enabled`` when the caller has already resolved it to
     avoid re-running the bank-transfer settings query.
     """
-    options = online_gateway_payment_options(db, default_provider)
+    options = online_gateway_payment_options(db)
     if direct_transfer_enabled is None:
         direct_transfer_enabled = direct_bank_transfer_enabled(db)
     if direct_transfer_enabled:
@@ -450,6 +429,7 @@ def _build_topup_result(
         "payment": payment,
         "amount": amount,
         "reference": reference,
+        "provider_type": intent.provider_type,
         "already_recorded": already_recorded,
         "policy_warnings": _topup_policy_warnings(intent),
         **_build_topup_summary(db, payment),
@@ -528,8 +508,6 @@ def get_payment_page(
     ):
         return None
 
-    provider_type = _resolve_payment_provider(db)
-
     billing_contact = get_invoice_billing_contact(db, invoice, customer)
     email = billing_contact["billing_email"] or _resolve_customer_email(db, customer)
 
@@ -555,23 +533,32 @@ def get_payment_page(
     # endpoint (mirroring the top-up flow). The bearer API
     # (``initiate_payment``) instead consumes a single pre-minted gateway
     # context, so keep ``provider_public_key``/``payment_reference`` for it.
-    gateway_context = payment_gateway_adapter.build_context(
-        db,
-        provider_type=provider_type,
-        invoice_number=getattr(invoice, "invoice_number", None),
-    )
     dbt_enabled = direct_bank_transfer_enabled(db)
+    default_route = _default_online_route(db)
+    gateway_context = None
+    if default_route:
+        gateway_context = payment_gateway_adapter.build_context(
+            db,
+            provider_type=default_route.provider_type.value,
+            invoice_number=getattr(invoice, "invoice_number", None),
+        )
     return {
         "invoice": invoice,
         "amount": amount_due,
-        "provider_type": gateway_context.provider_type,
-        "provider_public_key": gateway_context.public_key,
+        "provider_type": (
+            gateway_context.provider_type
+            if gateway_context
+            else _DIRECT_TRANSFER_PROVIDER
+            if dbt_enabled
+            else None
+        ),
+        "provider_public_key": gateway_context.public_key if gateway_context else None,
         "paystack_public_key": gateway_context.public_key
-        if gateway_context.provider_type == "paystack"
+        if gateway_context and gateway_context.provider_type == "paystack"
         else None,
-        "payment_reference": gateway_context.reference,
+        "payment_reference": gateway_context.reference if gateway_context else None,
         "payment_options": _topup_payment_options(
-            db, provider_type, direct_transfer_enabled=dbt_enabled
+            db, direct_transfer_enabled=dbt_enabled
         ),
         "payment_methods": payment_methods,
         "direct_bank_transfer_enabled": dbt_enabled,
@@ -737,6 +724,7 @@ def _charge_saved_card_for_invoice(
     amount: Decimal,
     payment_method_id: str,
     checkout_metadata: dict,
+    provider_id: str,
     idempotency_key: str | None,
 ) -> dict:
     """Charge a saved card server-side for an invoice (Paystack only).
@@ -776,6 +764,15 @@ def _charge_saved_card_for_invoice(
         if replayed is not None:
             return replayed
 
+    intent = _record_invoice_checkout_intent(
+        db,
+        account_id=account_id,
+        reference=reference,
+        provider_type=gateway_context.provider_type,
+        amount=amount,
+        metadata={**checkout_metadata, "provider_id": provider_id},
+    )
+
     from app.services import paystack
 
     try:
@@ -790,6 +787,9 @@ def _charge_saved_card_for_invoice(
     except Exception:
         # Release the key so the customer can retry with a different card.
         _release_charge_idempotency_key(db, reservation)
+        set_topup_intent_status(intent, "failed", source="saved_card_charge")
+        db.add(intent)
+        db.commit()
         raise
     _commit_charge_idempotency_ref(db, reservation, reference)
 
@@ -849,14 +849,12 @@ def create_invoice_payment_intent(
     if amount <= Decimal("0.00"):
         raise ValueError("Invoice no longer has an outstanding balance")
 
-    provider_type = provider or _resolve_payment_provider(db)
-
     # Bank transfer: reuse the direct-transfer proof flow, prefilled with the
     # invoice balance and tagged with the invoice so the proof is traceable.
     # Limits are NOT enforced here (a real invoice may be below the top-up
     # minimum, e.g. a small reconnection fee). The reviewed transfer credits the
     # account and auto-allocation settles outstanding invoices oldest-first.
-    if provider_type == _DIRECT_TRANSFER_PROVIDER:
+    if provider == _DIRECT_TRANSFER_PROVIDER:
         return create_direct_transfer_topup_intent(
             db,
             customer,
@@ -865,6 +863,8 @@ def create_invoice_payment_intent(
             enforce_limits=False,
         )
 
+    route = select_checkout_provider(db, provider)
+    provider_type = route.provider_type.value
     customer_email = _resolve_customer_email(db, customer)
     _require_gateway_email(provider_type, customer_email)
 
@@ -874,6 +874,7 @@ def create_invoice_payment_intent(
         "invoice_id": str(invoice.id),
         "invoice_number": invoice_number or "",
         "account_id": str(invoice.account_id),
+        "provider_id": route.provider_id,
     }
 
     # Saved card -> server-to-server Paystack charge.
@@ -888,6 +889,7 @@ def create_invoice_payment_intent(
             amount=amount,
             payment_method_id=selected_payment_method_id,
             checkout_metadata=checkout_metadata,
+            provider_id=route.provider_id,
             idempotency_key=idempotency_key,
         )
 
@@ -947,10 +949,8 @@ def _record_invoice_checkout_intent(
 ) -> TopupIntent:
     """Persist a pending record tracing a started invoice gateway checkout.
 
-    Reuses ``TopupIntent`` (provider_type + metadata distinguish it) so abandoned
-    hosted checkouts are queryable/expirable; it is not consumed by the verify
-    path (which works off ``Payment.external_id``), only completed for audit by
-    :func:`complete_invoice_payment_intent`.
+    Reuses ``TopupIntent`` so checkout selection is durable and verification
+    cannot be redirected to a different provider by caller input.
     """
     intent = TopupIntent(
         account_id=account_id,
@@ -1005,7 +1005,17 @@ def verify_and_record_payment(
     provider: str | None = None,
 ) -> dict:
     """Verify an online payment transaction and record the payment."""
-    provider_type = provider or _resolve_payment_provider(db)
+    intent = db.scalars(
+        select(TopupIntent).where(TopupIntent.reference == reference)
+    ).first()
+    if (
+        intent is None
+        or str((intent.metadata_ or {}).get("payment_flow")) != "invoice_payment"
+    ):
+        raise ValueError("Payment reference was not issued for this invoice checkout")
+    if not customer_can_access_account(db, customer, intent.account_id):
+        raise ValueError("Payment reference does not belong to this account")
+    provider_type = provider_for_intent(intent, provider).value
 
     tx = payment_gateway_adapter.verify(
         db,
@@ -1013,23 +1023,34 @@ def verify_and_record_payment(
         reference=reference,
     )
     invoice_id = tx.metadata.get("invoice_id")
+    expected_invoice_id = str((intent.metadata_ or {}).get("invoice_id") or "")
     amount_naira = round_money(tx.amount)
 
     if not invoice_id:
         raise ValueError("Payment metadata missing invoice_id")
+    if expected_invoice_id and str(invoice_id) != expected_invoice_id:
+        raise ValueError("Verified payment did not match the original invoice checkout")
+
+    provider_id = _coerce_uuid_or_none(
+        (intent.metadata_ or {}).get("provider_id")
+    ) or _provider_uuid(db, provider_type)
 
     # Idempotency: check if a payment with this external reference already exists
-    existing_payment = db.scalars(
-        select(Payment).where(Payment.external_id == tx.external_id)
-    ).first()
+    existing_payment = _payment_by_gateway_identity(
+        db, external_id=tx.external_id, provider_id=provider_id
+    )
     if existing_payment:
+        if existing_payment.account_id != intent.account_id:
+            raise ValueError("Payment reference is linked to a different account")
         invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
         summary = _build_topup_summary(db, existing_payment)
+        complete_invoice_payment_intent(db, reference, existing_payment)
         return {
             "payment": existing_payment,
             "invoice": invoice,
             "amount": getattr(existing_payment, "amount", amount_naira),
             "reference": reference,
+            "provider_type": provider_type,
             "already_recorded": True,
             **summary,
         }
@@ -1047,17 +1068,21 @@ def verify_and_record_payment(
     # Serialize concurrent verifies (double-click, refresh, verify racing the
     # webhook) for this account, then re-check under the lock.
     lock_account(db, str(invoice.account_id))
-    existing_payment = db.scalars(
-        select(Payment).where(Payment.external_id == tx.external_id)
-    ).first()
+    existing_payment = _payment_by_gateway_identity(
+        db, external_id=tx.external_id, provider_id=provider_id
+    )
     if existing_payment:
+        if existing_payment.account_id != intent.account_id:
+            raise ValueError("Payment reference is linked to a different account")
         invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
         summary = _build_topup_summary(db, existing_payment)
+        complete_invoice_payment_intent(db, reference, existing_payment)
         return {
             "payment": existing_payment,
             "invoice": invoice,
             "amount": getattr(existing_payment, "amount", amount_naira),
             "reference": reference,
+            "provider_type": provider_type,
             "already_recorded": True,
             **summary,
         }
@@ -1076,7 +1101,7 @@ def verify_and_record_payment(
                 amount=amount_naira,
                 currency=tx.currency,
                 status=PaymentStatus.succeeded,
-                provider_id=_provider_uuid(db, provider_type),
+                provider_id=provider_id,
                 external_id=tx.external_id,
                 memo=f"{tx.memo_prefix} payment ref: {reference}",
                 allocations=[
@@ -1089,29 +1114,35 @@ def verify_and_record_payment(
         )
     except IntegrityError:
         db.rollback()
-        payment = db.scalars(
-            select(Payment).where(Payment.external_id == tx.external_id)
-        ).first()
+        payment = _payment_by_gateway_identity(
+            db, external_id=tx.external_id, provider_id=provider_id
+        )
         if payment is None:
             raise
+        if payment.account_id != intent.account_id:
+            raise ValueError("Payment reference is linked to a different account")
         invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
         summary = _build_topup_summary(db, payment)
+        complete_invoice_payment_intent(db, reference, payment)
         return {
             "payment": payment,
             "invoice": invoice,
             "amount": getattr(payment, "amount", amount_naira),
             "reference": reference,
+            "provider_type": provider_type,
             "already_recorded": True,
             **summary,
         }
     invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
     summary = _build_topup_summary(db, payment)
+    complete_invoice_payment_intent(db, reference, payment)
 
     return {
         "payment": payment,
         "invoice": invoice,
         "amount": amount_naira,
         "reference": reference,
+        "provider_type": provider_type,
         "already_recorded": False,
         **summary,
     }
@@ -1154,7 +1185,14 @@ def get_topup_page(
 ) -> dict:
     """Build context for the customer top-up page."""
     account_id = optional_customer_account_id(db, customer)
-    provider_type = _resolve_payment_provider(db)
+    default_route = _default_online_route(db)
+    provider_type = (
+        default_route.provider_type.value
+        if default_route
+        else _DIRECT_TRANSFER_PROVIDER
+        if direct_bank_transfer_enabled(db)
+        else None
+    )
 
     # Resolve current balance
     prepaid_balance: Decimal | None = None
@@ -1183,7 +1221,7 @@ def get_topup_page(
 
     context = {
         "provider_type": provider_type,
-        "payment_options": _topup_payment_options(db, provider_type),
+        "payment_options": _topup_payment_options(db),
         "customer_email": email,
         "prepaid_balance": prepaid_balance,
         "min_amount": min_amount_value,
@@ -1207,13 +1245,16 @@ def get_topup_page(
             "currency": pending_direct.currency,
         }
 
-    gateway_context = payment_gateway_adapter.build_context(
-        db,
-        provider_type=provider_type,
-    )
-    context["provider_public_key"] = gateway_context.public_key
-    if gateway_context.provider_type == "paystack":
-        context["paystack_public_key"] = gateway_context.public_key
+    if default_route:
+        gateway_context = payment_gateway_adapter.build_context(
+            db,
+            provider_type=default_route.provider_type.value,
+        )
+        context["provider_public_key"] = gateway_context.public_key
+        if gateway_context.provider_type == "paystack":
+            context["paystack_public_key"] = gateway_context.public_key
+    else:
+        context["provider_public_key"] = None
 
     return context
 
@@ -1256,13 +1297,18 @@ def get_payment_methods_page(
             )
 
     min_amount_value, max_amount_value = _resolve_topup_limits(db)
+    default_route = _default_online_route(db)
 
     return {
         "saved_cards": saved_cards,
         "prepaid_balance": prepaid_balance,
         "min_amount": min_amount_value,
         "max_amount": max_amount_value,
-        "provider_type": _resolve_payment_provider(db),
+        "provider_type": (
+            default_route.provider_type.value
+            if default_route
+            else _DIRECT_TRANSFER_PROVIDER
+        ),
         "direct_bank_transfer_enabled": direct_bank_transfer_enabled(db),
         "bank_transfer": direct_bank_transfer_settings(db),
     }
@@ -1331,9 +1377,11 @@ def create_topup_intent(
             f"Top-up amount must not exceed {_format_naira(max_amount_value)}"
         )
 
-    provider_type = provider or _resolve_payment_provider(db)
-    if provider_type == _DIRECT_TRANSFER_PROVIDER:
+    if provider == _DIRECT_TRANSFER_PROVIDER:
         return create_direct_transfer_topup_intent(db, customer, requested_amount)
+
+    route = select_checkout_provider(db, provider)
+    provider_type = route.provider_type.value
 
     customer_email = _resolve_customer_email(db, customer)
     _require_gateway_email(provider_type, customer_email)
@@ -1377,7 +1425,10 @@ def create_topup_intent(
         if replayed is not None:
             return replayed
 
-    intent_metadata = {"payment_flow": "account_topup"}
+    intent_metadata = {
+        "payment_flow": "account_topup",
+        "provider_id": route.provider_id,
+    }
     if selected_payment_method_id:
         intent_metadata["payment_method_id"] = selected_payment_method_id
 
@@ -1641,6 +1692,10 @@ def verify_and_record_topup(
         raise ValueError("Payment reference was not issued for this add-funds flow")
     if intent.account_id != account_id:
         raise ValueError("Payment reference does not belong to this account")
+    provider_type = provider_for_intent(intent, provider).value
+    provider_id = _coerce_uuid_or_none(
+        (intent.metadata_ or {}).get("provider_id")
+    ) or _provider_uuid(db, provider_type)
 
     # Serialize concurrent verifies of the same reference (double-click,
     # web+mobile, verify racing the webhook), then re-read the intent under
@@ -1664,8 +1719,6 @@ def verify_and_record_topup(
             already_recorded=True,
         )
 
-    provider_type = intent.provider_type or provider or _resolve_payment_provider(db)
-
     tx = payment_gateway_adapter.verify(
         db,
         provider_type=provider_type,
@@ -1688,9 +1741,9 @@ def verify_and_record_topup(
     )
 
     # Idempotency check
-    existing = db.scalars(
-        select(Payment).where(Payment.external_id == external_id)
-    ).first()
+    existing = _payment_by_gateway_identity(
+        db, external_id=external_id, provider_id=provider_id
+    )
     if existing:
         if existing.account_id != intent.account_id:
             raise ValueError(
@@ -1731,7 +1784,7 @@ def verify_and_record_topup(
                 amount=amount_naira,
                 currency=tx.currency,
                 status=PaymentStatus.succeeded,
-                provider_id=_provider_uuid(db, provider_type),
+                provider_id=provider_id,
                 external_id=external_id,
                 memo=f"{tx.memo_prefix} prepaid top-up ref: {reference}",
                 allocations=[],  # No invoice allocation — goes to account credit
@@ -1741,9 +1794,9 @@ def verify_and_record_topup(
         # The (provider_id, external_id) unique index caught a concurrent
         # writer recording the same gateway transaction.
         db.rollback()
-        existing = db.scalars(
-            select(Payment).where(Payment.external_id == external_id)
-        ).first()
+        existing = _payment_by_gateway_identity(
+            db, external_id=external_id, provider_id=provider_id
+        )
         if existing is None:
             raise
         if existing.account_id != intent.account_id:
@@ -1835,7 +1888,6 @@ def verify_and_record_topup(
 
 
 __all__ = [
-    "_resolve_payment_provider",
     "complete_invoice_payment_intent",
     "create_invoice_payment_intent",
     "create_topup_intent",

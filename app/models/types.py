@@ -18,6 +18,27 @@ import json
 from sqlalchemy.types import Text, TypeDecorator
 
 
+class EncryptedText(TypeDecorator):
+    """A transparently encrypted TEXT credential with legacy read support."""
+
+    impl = Text
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):  # noqa: ANN001
+        if value is None:
+            return None
+        from app.services.credential_crypto import encrypt_credential
+
+        return encrypt_credential(str(value))
+
+    def process_result_value(self, value, dialect):  # noqa: ANN001
+        if value is None:
+            return None
+        from app.services.credential_crypto import decrypt_credential
+
+        return decrypt_credential(str(value))
+
+
 class EncryptedJSON(TypeDecorator):
     """A TEXT column holding a JSON dict, encrypted at rest.
 

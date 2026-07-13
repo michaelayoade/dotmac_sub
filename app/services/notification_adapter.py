@@ -236,9 +236,8 @@ class EmailProvider:
             from app.services.email import send_email
 
             subject = request.subject or request.title or "Notification"
-            html_body = self._render_html(request)
-
             with db_session_adapter.session() as db:
+                html_body = self._render_html(request, db=db)
                 success = send_email(
                     db=db,
                     to_email=request.recipient,
@@ -273,7 +272,7 @@ class EmailProvider:
                 error=str(exc),
             )
 
-    def _render_html(self, request: NotificationRequest) -> str:
+    def _render_html(self, request: NotificationRequest, db=None) -> str:
         """Render HTML email body."""
         if request.template_code:
             try:
@@ -298,7 +297,17 @@ class EmailProvider:
             f'<p style="margin: 0; font-size: 14px; line-height: 1.6;">'
             f"{escape(request.message or '')}</p>"
         )
-        return wrap_email_html(body, subject=title)
+        resolved_brand = None
+        subscriber_id = request.metadata.get("subscriber_id") or request.context.get(
+            "subscriber_id"
+        )
+        if db is not None and subscriber_id:
+            from app.services.brand_profiles import resolve_brand
+
+            resolved_brand = resolve_brand(
+                db, subscriber_id=str(subscriber_id)
+            ).to_dict()
+        return wrap_email_html(body, subject=title, brand=resolved_brand)
 
 
 # ---------------------------------------------------------------------------

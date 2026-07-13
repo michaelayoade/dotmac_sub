@@ -120,8 +120,7 @@ def test_uisp_client_requires_configuration():
         raise AssertionError("expected UispConfigurationError")
 
 
-def test_uisp_client_exposes_no_write_helpers():
-    # The client is read-only by design: every public helper is a GET list.
+def test_uisp_client_exposes_scoped_configuration_write_helpers():
     public = {
         name
         for name in dir(uisp.UispClient)
@@ -134,4 +133,50 @@ def test_uisp_client_exposes_no_write_helpers():
         "list_airmax_stations",
         "list_olt_onus",
         "list_data_links",
+        "get_device_configuration",
+        "put_device_configuration",
     }
+
+
+def test_uisp_client_uses_airos_configuration_routes(monkeypatch):
+    client = uisp.UispClient("https://uisp.example.test", "token")
+    calls = []
+    monkeypatch.setattr(client, "_get", lambda path: calls.append(("GET", path)) or {})
+    monkeypatch.setattr(
+        client,
+        "_put",
+        lambda path, payload: calls.append(("PUT", path, payload)) or {},
+    )
+
+    client.get_device_configuration("device-1", transport="airos")
+    client.put_device_configuration("device-1", {"wireless": {}}, transport="airos")
+
+    assert calls == [
+        ("GET", "/devices/airos/device-1/configuration"),
+        ("PUT", "/devices/airos/device-1/configuration", {"wireless": {}}),
+    ]
+
+
+def test_uisp_client_uses_onu_bulk_configuration_routes(monkeypatch):
+    client = uisp.UispClient("https://uisp.example.test", "token")
+    calls = []
+
+    def fake_post(path, payload):
+        calls.append((path, payload))
+        if path.endswith("get-configuration"):
+            return [{"deviceId": "device-1", "wireless": {}}]
+        return [{"deviceId": "device-1", "status": "success"}]
+
+    monkeypatch.setattr(client, "_post", fake_post)
+
+    observed = client.get_device_configuration("device-1", transport="onu")
+    response = client.put_device_configuration("device-1", observed, transport="onu")
+
+    assert calls == [
+        ("/devices/get-configuration", {"deviceIds": ["device-1"]}),
+        (
+            "/devices/update-configuration",
+            [{"deviceId": "device-1", "wireless": {}}],
+        ),
+    ]
+    assert response == {"results": [{"deviceId": "device-1", "status": "success"}]}

@@ -47,6 +47,7 @@ from app.schemas.billing import (
     TopupVerifyRequest,
     TopupVerifyResponse,
 )
+from app.schemas.branding import ResolvedBrandRead
 from app.schemas.catalog import (
     AddonPurchaseRequest,
     AddonPurchaseResponse,
@@ -198,6 +199,16 @@ def _customer(db: Session, principal: dict) -> dict:
         "subscriber_id": sid,
         "username": getattr(subscriber, "email", "") or "",
     }
+
+
+@router.get("/branding", response_model=ResolvedBrandRead)
+def my_branding(
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    from app.services.brand_profiles import resolve_brand
+
+    return resolve_brand(db, subscriber_id=_subscriber_id(principal))
 
 
 @router.get("/invoices", response_model=ListResponse[InvoiceRead])
@@ -764,7 +775,7 @@ def my_topup_verify(
     if payload.save_card:
         try:
             customer_cards.capture_card_after_payment(
-                db, account_id, payload.reference, None
+                db, account_id, payload.reference, result["provider_type"]
             )
             card_saved = True
             card_save_message = CARD_SAVE_SUCCESS_MESSAGE
@@ -1293,10 +1304,6 @@ def my_create_ticket(
             ) from exc
         support_service.tickets.add_attachments(db, str(ticket.id), uploaded)
         db.refresh(ticket)
-    from app.services.crm_ticket_push import enqueue_crm_ticket_push
-
-    if getattr(ticket, "id", None):
-        enqueue_crm_ticket_push(ticket.id, source="me_ticket_create")
     return ticket
 
 
@@ -1373,10 +1380,6 @@ def my_add_ticket_comment(
         actor_id=subscriber_id,
         request=request,
     )
-    from app.services.crm_ticket_push import enqueue_crm_comment_push
-
-    if getattr(comment, "id", None):
-        enqueue_crm_comment_push(comment.id, source="me_ticket_comment")
     return comment
 
 

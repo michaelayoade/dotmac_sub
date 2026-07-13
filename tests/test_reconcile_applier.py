@@ -15,9 +15,11 @@ from app.services.network.reconcile import (
     AcsAddObject,
     AcsDeleteObject,
     AcsSetDhcpServer,
+    AcsSetIpv6,
     AcsSetManagementServer,
     AcsSetNatEnabled,
     AcsSetPppoe,
+    AcsSetWanIp,
     AcsSetWifiPassword,
     AcsSetWifiSsid,
     ApplyContext,
@@ -178,6 +180,59 @@ def test_empty_plan_returns_success_with_no_actions():
     assert result.success is True
     assert result.actions_applied == ()
     assert result.halted_by is None
+
+
+def test_tr181_ipv6_action_enables_dhcpv6_prefix_delegation():
+    acs = _StubAcsClient()
+    result = apply_plan(
+        _plan(
+            AcsSetIpv6(
+                device_id="dev",
+                interface_index=2,
+                enabled=True,
+                request_prefixes=True,
+            )
+        ),
+        _ctx(acs_client=acs),
+    )
+
+    assert result.success is True
+    params = acs.calls[0][1][1]
+    assert params == {
+        "Device.IP.Interface.2.IPv6Enable": True,
+        "Device.DHCPv6.Client.2.Enable": True,
+        "Device.DHCPv6.Client.2.RequestPrefixes": True,
+        "Device.RouterAdvertisement.InterfaceSettings.2.Enable": True,
+    }
+
+
+def test_tr098_static_wan_action_writes_routed_nat_addressing():
+    acs = _StubAcsClient()
+    result = apply_plan(
+        _plan(
+            AcsSetWanIp(
+                device_id="dev",
+                data_model_root="InternetGatewayDevice",
+                wcd_index=2,
+                instance_index=1,
+                mode="static",
+                vlan=203,
+                nat_enabled=True,
+                ip_address="198.51.100.10",
+                subnet_mask="255.255.255.248",
+                gateway="198.51.100.9",
+                dns_servers="1.1.1.1",
+            )
+        ),
+        _ctx(acs_client=acs),
+    )
+
+    assert result.success is True
+    params = acs.calls[0][1][1]
+    base = "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANIPConnection.1"
+    assert params[f"{base}.AddressingType"] == "Static"
+    assert params[f"{base}.ExternalIPAddress"] == "198.51.100.10"
+    assert params[f"{base}.NATEnabled"] is True
 
 
 def test_acs_delete_object_dispatches_to_client():

@@ -933,7 +933,7 @@ net = charge - credit
 |---------|---------|---------|
 | Dunning Enabled | true | Run dunning checks |
 | Dunning Interval | 86400 sec | Check frequency |
-| Prepaid Enforcement | true | Check prepaid balances |
+| Prepaid Enforcement | false | Customer-impacting balance enforcement gate |
 | Prepaid Blocking Time | 08:00 | Time of day to block |
 | Prepaid Skip Weekends | false | Skip blocking on weekends |
 | Prepaid Grace Days | 0 | Grace before blocking |
@@ -960,6 +960,23 @@ net = charge - credit
 ### Enforcement Caution
 
 Apply aggressive collections settings only after confirming payment posting latency. If payment imports or webhook confirmation are delayed, customers can be suspended incorrectly.
+
+Before enabling prepaid enforcement, generate the side-effect-free production
+plan and review every action bucket:
+
+```bash
+docker compose exec -T -e PYTHONPATH=/app app \
+  python scripts/one_off/plan_prepaid_balance_sweep.py \
+  --out /tmp/prepaid-balance-sweep-plan.json
+```
+
+The report runs even while the control is disabled. It includes account IDs,
+available and required balances, lifecycle projection drift, safety shields,
+enforcement lock/timer drift, and infrastructure outage/ticket notice
+suppression. It never arms timers,
+queues notices, changes service state, or disconnects sessions. Enable the
+control only after reviewing the complete plan; the first low-balance pass
+warns and arms timers, while a later eligible pass performs suspension.
 
 ---
 
@@ -1128,12 +1145,122 @@ the shared observability service. Use these series in VictoriaMetrics/Grafana:
 
 - `observability_state{domain="credentials",signal="undecryptable",scope="all"}`
 - `observability_state{domain="credentials",signal="plaintext",scope="all"}`
+- `observability_state{domain="credentials",signal="one_way",scope="all"}`
 - `observability_snapshot_age_seconds{domain="credentials"}`
 - `observability_snapshot_status{domain="credentials",status="error"}`
 
 The scan never exports credential values or record identifiers. Non-zero
 plaintext or undecryptable totals also enter the standard admin-alert lifecycle;
 undecryptable values block automatic key rotation until corrected.
+The `one_way` state covers valid RADIUS crypt, PBKDF2, and opaque migrated hashes.
+These values are intentionally preserved and are not remediation candidates.
+
+Use the same inventory for one-time plaintext remediation. Dry-run first, then
+execute, then confirm a second dry-run reports zero plaintext candidates:
+
+```bash
+python -m scripts.one_off.remediate_credential_encryption --dry-run
+python -m scripts.one_off.remediate_credential_encryption --execute
+python -m scripts.one_off.remediate_credential_encryption --dry-run
+```
+
+The command returns aggregate JSON only and publishes the resulting integrity
+snapshot. It blocks before writing when the active key is missing or any stored
+ciphertext is undecryptable.
+
+If the original key cannot be recovered, resolve undecryptable values through
+the lifecycle cleanup planner before plaintext remediation. The planner:
+
+- decommissions and clears an inactive NAS only when it has no non-terminal
+  subscription and no live RADIUS session by device ID or client IP;
+- recovers a service-referenced or active NAS secret only when every configured
+  external FreeRADIUS store agrees on one authoritative value;
+- removes only the corrupt `desired_config.wifi.password` leaf for an ONT and
+  records that an operator reset is required;
+- stages one audit event per mutation in the same local database transaction;
+- emits an identity-free plan digest and refuses a different execute-time plan.
+
+Review the aggregate plan, then pass its exact digest:
+
+```bash
+python -m scripts.one_off.cleanup_unrecoverable_credentials
+python -m scripts.one_off.cleanup_unrecoverable_credentials \
+  --execute --confirm-plan-digest <reviewed-digest>
+python -m scripts.one_off.cleanup_unrecoverable_credentials
+```
+
+Do not use this workflow to make an active device look decommissioned or to
+invent a replacement secret. Resolve lifecycle blockers first. After cleanup,
+run plaintext remediation and confirm both `plaintext` and `undecryptable` are
+zero. Search the audit log for action `credential_lifecycle_cleanup` to review
+record-level evidence without exposing secrets in command output.
+
+NAS records recovered from authoritative FreeRADIUS may still have lifecycle
+or subscription-link drift. Use the NAS lifecycle reconciler rather than
+editing `status`, `is_active`, subscription NAS links, or RADIUS clients
+independently:
+
+```bash
+python -m scripts.one_off.reconcile_nas_lifecycle
+python -m scripts.one_off.reconcile_nas_lifecycle --details
+python -m scripts.one_off.reconcile_nas_lifecycle \
+  --execute --confirm-plan-digest <reviewed-digest>
+```
+
+The reconciler uses administrative intent, non-terminal subscriptions, exact
+subscription-bound live sessions, fresh native monitoring, and internal plus
+external RADIUS state. It can automatically reactivate only when live-session
+or fresh monitoring evidence supports the existing active intent. It can
+relink only when every affected subscription has one exact, active live-session
+NAS. FreeRADIUS presence alone never reactivates a device. Ambiguous records
+produce `manual_review`, block execution, publish the `nas_lifecycle`
+observability snapshot, and enter the admin-alert lifecycle. Detailed output
+contains network-device identity and aggregate service counts, never customer
+identity or credential values. Successful writes use action
+`nas_lifecycle_reconcile` in the transactional audit log.
+
+For records blocked on `manual_review`, gather recent accounting evidence before
+changing lifecycle or subscription links:
+
+```bash
+python -m scripts.one_off.report_nas_access_path_evidence
+python -m scripts.one_off.report_nas_access_path_evidence --days 90 --details
+```
+
+The report is read-only. It resolves accounting rows through their direct NAS
+identity first and their linked RADIUS client only as a fallback. Output is
+aggregated by NAS and never includes subscriber, subscription, credential, or
+session identity. Recommendations are review classifications, not mutation
+authority: historical use can support reactivation or relink review, but only
+current exact live-session evidence can authorize automatic relinking.
+The command reports `source_stale` and exits `2` when the newest accounting
+observation exceeds `radius_accounting_source_stale_seconds` (one hour by
+default). Do not use its recommendations until the accounting import is healthy
+and the report has been rerun.
+
+FreeRADIUS uses dedicated `FREERADIUS_DB_*` environment variables. They must
+identify the same database as the active FreeRADIUS connector, never the app's
+`DATABASE_URL` or generic application database settings. Before deploying this
+change to an existing environment, seed those variables from the current
+connector target, run `freeradius -XC` in the container, and verify that both
+`radpostauth` and `radacct` advance. The accounting importer fails its task when
+the source is stale, allowing task-reliability alerting to remain authoritative.
+
+Existing RADIUS databases must also accept the full 253-octet NAS-Port-Id
+payload. Vendor interface descriptions longer than the historical 32-character
+default otherwise reject the complete accounting row. Apply the idempotent
+upgrade before or with the application deployment:
+
+```bash
+docker exec -i dotmac_radius_pg_test sh -lc \
+  'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+  < config/freeradius/upgrade_003_radacct_nasportid_capacity.sql
+```
+
+Verify `radacct.nasportid` reports `253` in `information_schema.columns`, then
+confirm `radius_radacct_schema_ok` is `1`. Rejected over-length writes are
+labelled in Loki as `event="radius_accounting_write_rejected"`; that event
+must remain absent after the upgrade.
 
 ### Rotation Order
 
@@ -1191,7 +1318,7 @@ Rotate non-customer-facing secrets first, then payment, then authentication or n
 |------|-----------------|---------|
 | Billing Cycle | 86400s (daily) | Generate invoices |
 | Dunning | 86400s (daily) | Collections enforcement |
-| Prepaid Enforcement | 3600s (hourly) | Balance checks |
+| Prepaid Enforcement | 86400s (daily, opt-in) | Balance checks |
 | Usage Rating | 86400s (daily) | Usage charge generation |
 | Expiry Reminders | 86400s (daily) | Subscription renewal reminders |
 | Subscription Expiration | 86400s (daily) | Expire past-due subscriptions |

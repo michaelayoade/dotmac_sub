@@ -31,9 +31,9 @@ rotation path working:
 
 ## Backfill
 
-`scripts/one_off/encrypt_integration_hook_auth_config.py` re-encrypts legacy
-plaintext secret values (dry-run default, `--apply`). Idempotent; a key rotation
-also encrypts any remaining plaintext.
+`scripts/one_off/remediate_credential_encryption.py` scans the shared credential
+inventory and re-encrypts plaintext values (dry-run default, `--execute`). The
+operation is aggregate, idempotent, and publishes the resulting integrity state.
 
 ## Tests
 

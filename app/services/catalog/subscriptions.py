@@ -5,10 +5,12 @@ Provides services for Subscriptions and SubscriptionAddOns.
 
 import logging
 from calendar import monthrange
+from collections.abc import Collection
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.catalog import (
@@ -17,6 +19,8 @@ from app.models.catalog import (
     BillingMode,
     CatalogOffer,
     ContractTerm,
+    NasDevice,
+    NasDeviceStatus,
     OfferPrice,
     OfferRadiusProfile,
     OfferVersionPrice,
@@ -37,6 +41,7 @@ from app.services import settings_spec
 from app.services.common import (
     apply_ordering,
     apply_pagination,
+    coerce_uuid,
     round_money,
     to_decimal,
     validate_enum,
@@ -243,11 +248,13 @@ def _auto_generate_pppoe(
         db,
         str(subscription.subscriber_id),
         radius_profile_id=str(profile_id) if profile_id else None,
+        subscription_id=str(subscription.id),
     )
     active_credential = (
         db.query(AccessCredential)
         .filter(
             AccessCredential.subscriber_id == subscription.subscriber_id,
+            AccessCredential.subscription_id == subscription.id,
             AccessCredential.is_active.is_(True),
         )
         .first()
@@ -1247,6 +1254,53 @@ def _create_service_order_for_subscription(db: Session, subscription: Subscripti
 
 
 class Subscriptions(ListResponseMixin):
+    @staticmethod
+    def list_nonterminal_for_nas_devices(
+        db: Session,
+        nas_device_ids: Collection[object],
+    ) -> list[Subscription]:
+        """Return services that still depend on the supplied NAS inventory."""
+        if not nas_device_ids:
+            return []
+        from app.services.subscription_lifecycle_policy import (
+            TERMINAL_SERVICE_STATUSES,
+        )
+
+        return list(
+            db.scalars(
+                select(Subscription)
+                .where(Subscription.provisioning_nas_device_id.in_(nas_device_ids))
+                .where(Subscription.status.not_in(TERMINAL_SERVICE_STATUSES))
+                .order_by(Subscription.id)
+            ).all()
+        )
+
+    @staticmethod
+    def stage_provisioning_nas_assignment(
+        db: Session,
+        subscription_id: str,
+        nas_device_id: str,
+    ) -> Subscription:
+        """Stage an authoritative subscription-to-NAS relink."""
+        subscription = db.scalar(
+            select(Subscription)
+            .where(Subscription.id == coerce_uuid(subscription_id))
+            .with_for_update()
+        )
+        if subscription is None:
+            raise ValueError("Subscription not found")
+        nas = db.scalar(
+            select(NasDevice)
+            .where(NasDevice.id == coerce_uuid(nas_device_id))
+            .with_for_update()
+        )
+        if nas is None:
+            raise ValueError("Target NAS not found")
+        if not nas.is_active or nas.status != NasDeviceStatus.active:
+            raise ValueError("Target NAS is not active")
+        subscription.provisioning_nas_device_id = nas.id
+        return subscription
+
     @staticmethod
     def create(db: Session, payload: SubscriptionCreate):
         catalog_validators.validate_subscription_links(

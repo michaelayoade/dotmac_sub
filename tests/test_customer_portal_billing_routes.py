@@ -58,6 +58,57 @@ class TestCustomerBillingRouteRegistration:
         assert ("/portal/billing/payments/{payment_id}/receipt/pdf", "GET") in routes
 
 
+class TestCustomerBillingReadTransaction:
+    def test_billing_page_finishes_read_transaction_before_render(self) -> None:
+        from app.web.customer.routes import customer_billing
+
+        request = MagicMock()
+        db = MagicMock()
+        customer = {"subscriber_id": "sub-1", "account_id": "acct-1"}
+        response = MagicMock(name="template_response")
+        events: list[str] = []
+
+        def _finish_read_transaction(_db):
+            events.append("finish")
+
+        def _render(_template, _context):
+            events.append("render")
+            return response
+
+        with (
+            patch(
+                "app.web.customer.routes.get_current_customer_from_request",
+                return_value=customer,
+            ),
+            patch(
+                "app.web.customer.routes.customer_portal.get_billing_page",
+                return_value={
+                    "invoices": [],
+                    "status": None,
+                    "page": 1,
+                    "per_page": 10,
+                    "total": 0,
+                    "total_pages": 1,
+                    "prepaid_balance": None,
+                    "ledger_entries": [],
+                    "billing_activity": [],
+                },
+            ),
+            patch(
+                "app.web.customer.routes.finish_read_transaction",
+                side_effect=_finish_read_transaction,
+            ) as finish,
+            patch(
+                "app.web.customer.routes.templates.TemplateResponse",
+                side_effect=_render,
+            ),
+        ):
+            assert customer_billing(request=request, db=db) is response
+
+        finish.assert_called_once_with(db)
+        assert events == ["finish", "render"]
+
+
 class TestPaymentReceiptPdf:
     def _receipt_context(self) -> dict:
         return {
@@ -143,6 +194,7 @@ class TestPaymentSuccessBanner:
             "invoice": SimpleNamespace(id="inv-1", invoice_number="INV-1"),
             "amount": 5000,
             "reference": "ref-1",
+            "provider_type": "paystack",
         }
 
         template_response = MagicMock(name="template_response")
@@ -189,6 +241,7 @@ class TestPaymentSuccessBanner:
             "invoice": SimpleNamespace(id="inv-2", invoice_number="INV-2"),
             "amount": 1000,
             "reference": "ref-2",
+            "provider_type": "paystack",
         }
 
         template_response = MagicMock(name="template_response")
@@ -513,6 +566,7 @@ class TestCustomerTopupRoutes:
             "payment": SimpleNamespace(receipt_number="RCT-T1"),
             "amount": 5000,
             "reference": "ref-topup-1",
+            "provider_type": "paystack",
             "already_recorded": False,
             "allocated_to_invoices": [],
             "allocated_total": 0,
@@ -607,6 +661,7 @@ class TestSaveCardOnVerify:
             "invoice": SimpleNamespace(id="inv-1", invoice_number="INV-1"),
             "amount": 5000,
             "reference": "ref-1",
+            "provider_type": "paystack",
         }
 
     @staticmethod
@@ -615,6 +670,7 @@ class TestSaveCardOnVerify:
             "payment": SimpleNamespace(receipt_number="RCT-T1"),
             "amount": 5000,
             "reference": "ref-topup-1",
+            "provider_type": "paystack",
             "already_recorded": False,
             "allocated_to_invoices": [],
             "allocated_total": 0,

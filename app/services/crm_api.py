@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from time import monotonic
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -39,7 +40,21 @@ from app.services.invoice_collectibility import (
 
 SUCCESSFUL_PAYMENT_STATUSES = (PaymentStatus.succeeded,)
 ONLINE_FRESH_SECONDS = 24 * 60 * 60
+LOCATIONS_CACHE_TTL_SECONDS = 30
 _MISSING = object()
+_SUSPENDED_STATUSES = {
+    SubscriptionStatus.suspended,
+    SubscriptionStatus.blocked,
+    SubscriptionStatus.stopped,
+}
+_TERMINATED_STATUSES = {
+    SubscriptionStatus.disabled,
+    SubscriptionStatus.canceled,
+    SubscriptionStatus.expired,
+    SubscriptionStatus.hidden,
+    SubscriptionStatus.archived,
+}
+_locations_cache: tuple[float, list[dict[str, Any]]] | None = None
 
 
 def coerce_subscriber_id(value: str) -> uuid.UUID | None:
@@ -738,6 +753,82 @@ def _first_status_event(
     )
 
 
+def _first_status_events_by_subscriber(
+    db: Session, subscriber_ids: list[uuid.UUID], statuses: set[SubscriptionStatus]
+) -> dict[uuid.UUID, datetime]:
+    if not subscriber_ids:
+        return {}
+    return {
+        subscriber_id: created_at
+        for subscriber_id, created_at in db.execute(
+            select(
+                Subscription.subscriber_id,
+                func.min(SubscriptionLifecycleEvent.created_at),
+            )
+            .join(
+                Subscription,
+                Subscription.id == SubscriptionLifecycleEvent.subscription_id,
+            )
+            .where(Subscription.subscriber_id.in_(subscriber_ids))
+            .where(SubscriptionLifecycleEvent.to_status.in_(list(statuses)))
+            .group_by(Subscription.subscriber_id)
+        ).all()
+    }
+
+
+def subscriber_payload_metadata(
+    db: Session, subscribers: list[Subscriber]
+) -> dict[uuid.UUID, dict[str, Any]]:
+    if not subscribers:
+        return {}
+    subscriber_ids = [subscriber.id for subscriber in subscribers]
+    subscription_starts = {
+        subscriber_id: start_at
+        for subscriber_id, start_at in db.execute(
+            select(Subscription.subscriber_id, func.min(Subscription.start_at))
+            .where(Subscription.subscriber_id.in_(subscriber_ids))
+            .group_by(Subscription.subscriber_id)
+        ).all()
+    }
+    suspended_dates = _first_status_events_by_subscriber(
+        db, subscriber_ids, _SUSPENDED_STATUSES
+    )
+    terminated_dates = _first_status_events_by_subscriber(
+        db, subscriber_ids, _TERMINATED_STATUSES
+    )
+    pop_site_ids = sorted(
+        {subscriber.pop_site_id for subscriber in subscribers if subscriber.pop_site_id}
+    )
+    pop_names = (
+        {
+            pop_id: name
+            for pop_id, name in db.execute(
+                select(PopSite.id, PopSite.name).where(PopSite.id.in_(pop_site_ids))
+            ).all()
+        }
+        if pop_site_ids
+        else {}
+    )
+    metadata: dict[uuid.UUID, dict[str, Any]] = {}
+    for subscriber in subscribers:
+        pop_name = pop_names.get(subscriber.pop_site_id)
+        metadata[subscriber.id] = {
+            "activated_at": (
+                subscriber.account_start_date
+                or subscription_starts.get(subscriber.id)
+                or subscriber.created_at
+            ),
+            "suspended_at": suspended_dates.get(subscriber.id),
+            "terminated_at": terminated_dates.get(subscriber.id),
+            "location": (
+                pop_name
+                if pop_name
+                else subscriber.city or subscriber.region or address_text(subscriber)
+            ),
+        }
+    return metadata
+
+
 def subscriber_payload(
     db: Session,
     subscriber: Subscriber,
@@ -746,34 +837,24 @@ def subscriber_payload(
     billing: dict[str, Any] | object = _MISSING,
     session: RadiusAccountingSession | None = None,
     include_session_state: bool = False,
+    metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    activated_at = (
-        subscriber.account_start_date
-        or db.query(func.min(Subscription.start_at))
-        .filter(Subscription.subscriber_id == subscriber.id)
-        .scalar()
-        or subscriber.created_at
-    )
-    suspended_at = _first_status_event(
-        db,
-        subscriber.id,
-        {
-            SubscriptionStatus.suspended,
-            SubscriptionStatus.blocked,
-            SubscriptionStatus.stopped,
-        },
-    )
-    terminated_at = _first_status_event(
-        db,
-        subscriber.id,
-        {
-            SubscriptionStatus.disabled,
-            SubscriptionStatus.canceled,
-            SubscriptionStatus.expired,
-            SubscriptionStatus.hidden,
-            SubscriptionStatus.archived,
-        },
-    )
+    if metadata is None:
+        activated_at = (
+            subscriber.account_start_date
+            or db.query(func.min(Subscription.start_at))
+            .filter(Subscription.subscriber_id == subscriber.id)
+            .scalar()
+            or subscriber.created_at
+        )
+        suspended_at = _first_status_event(db, subscriber.id, _SUSPENDED_STATUSES)
+        terminated_at = _first_status_event(db, subscriber.id, _TERMINATED_STATUSES)
+        location = location_label(db, subscriber)
+    else:
+        activated_at = metadata.get("activated_at")
+        suspended_at = metadata.get("suspended_at")
+        terminated_at = metadata.get("terminated_at")
+        location = metadata.get("location")
     row: dict[str, Any] = {
         "id": str(subscriber.id),
         "subscriber_number": subscriber.subscriber_number or subscriber.account_number,
@@ -784,7 +865,7 @@ def subscriber_payload(
         "billing_mode": enum_value(subscriber.billing_mode),
         "billing_day": subscriber.billing_day,
         "address": address_text(subscriber, list(subscriber.addresses or [])),
-        "location": location_label(db, subscriber),
+        "location": location,
         "created_at": utc_iso(subscriber.created_at),
         "activated_at": utc_iso(activated_at),
         "suspended_at": utc_iso(suspended_at),
@@ -848,6 +929,13 @@ def search_subscribers(
 
 
 def locations(db: Session) -> list[dict[str, Any]]:
+    global _locations_cache
+    now = monotonic()
+    if _locations_cache is not None:
+        cached_at, cached = _locations_cache
+        if now - cached_at < LOCATIONS_CACHE_TTL_SECONDS:
+            return [dict(item) for item in cached]
+
     result: dict[str, dict[str, str]] = {}
     for pop in db.scalars(
         select(PopSite).where(PopSite.is_active.is_(True)).order_by(PopSite.name)
@@ -860,7 +948,9 @@ def locations(db: Session) -> list[dict[str, Any]]:
             continue
         key = f"address:{str(label).strip().lower()}"
         result.setdefault(key, {"id": key, "name": str(label)})
-    return sorted(result.values(), key=lambda item: item["name"].lower())
+    ordered = sorted(result.values(), key=lambda item: item["name"].lower())
+    _locations_cache = (now, [dict(item) for item in ordered])
+    return ordered
 
 
 def billing_risk_rows(
@@ -1857,6 +1947,7 @@ def create_subscription(
     external_ref: str,
     unit_price: Any = None,
     start_at: datetime | None = None,
+    service_address_id: Any = None,
 ) -> dict:
     """Create a subscription for a subscriber from a CRM sale and generate its
     first (subscription-tagged) invoice, so the plan + its charge show in the
@@ -1898,6 +1989,7 @@ def create_subscription(
             SubscriptionCreate(
                 subscriber_id=subscriber.id,
                 offer_id=offer.id,
+                service_address_id=service_address_id,
                 status=SubscriptionStatus.pending,
                 start_at=start_at or datetime.now(UTC),
                 unit_price=price_override,

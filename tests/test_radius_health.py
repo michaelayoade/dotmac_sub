@@ -6,12 +6,34 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
+from sqlalchemy import create_engine, text
+
 from app.celery_app import celery_app
 from app.models.radius_active_session import RadiusActiveSession
 from app.services import admin_alerts, radius_health
 from tests.test_customer_plan_change_prepaid import _make_offer, _make_subscription
 
 TASK_NAME = "app.tasks.radius_health.run_radius_health_check"
+
+
+def test_radacct_schema_rejects_undersized_nasportid():
+    engine = create_engine("sqlite://")
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE radacct (nasportid VARCHAR(32))"))
+        assert radius_health._radacct_schema_signals(conn) == {
+            "radacct_schema_ok": 0,
+            "radacct_nasportid_capacity": 32,
+        }
+
+
+def test_radacct_schema_accepts_full_radius_attribute():
+    engine = create_engine("sqlite://")
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE radacct (nasportid VARCHAR(253))"))
+        assert radius_health._radacct_schema_signals(conn) == {
+            "radacct_schema_ok": 1,
+            "radacct_nasportid_capacity": 253,
+        }
 
 
 def test_task_registered_routed_and_exported():
@@ -74,6 +96,17 @@ def test_enforcement_signals_counts_drift(db_session, subscriber, monkeypatch):
         name="RH Suspended",
     )
     _session_row(db_session, username="susp-1", subscription=suspended)
+    db_session.add(
+        RadiusActiveSession(
+            username="susp-1",
+            acct_session_id="sess-susp-1-second",
+            subscription_id=suspended.id,
+            subscriber_id=suspended.subscriber_id,
+            session_start=datetime.now(UTC) - timedelta(minutes=30),
+            last_update=datetime.now(UTC),
+        )
+    )
+    db_session.commit()
 
     disabled = Subscriber(
         first_name="Radius",
@@ -106,8 +139,11 @@ def test_enforcement_signals_counts_drift(db_session, subscriber, monkeypatch):
 
     signals = radius_health._enforcement_signals(db_session)
 
-    assert signals["active_sessions"] == 3
+    assert signals["active_sessions"] == 4
     assert signals["suspended_with_session"] == 2
+    assert signals["blocked_access_sessions"] == 3
+    assert signals["blocked_access_subscriptions"] == 2
+    assert signals["blocked_access_accounts"] == 2
     assert signals["paid_active_without_session"] == 1
 
 
@@ -129,15 +165,24 @@ def test_push_radius_metrics_writes_gauges(monkeypatch):
             "acct_freshness_seconds": 42.0,
             "active_sessions": 850,
             "suspended_with_session": 2,
+            "blocked_access_sessions": 3,
+            "blocked_access_subscriptions": 2,
+            "blocked_access_accounts": 1,
             "paid_active_without_session": 60,
             "radacct_read_ok": 1,
+            "radacct_schema_ok": 1,
+            "radacct_nasportid_capacity": 253,
         }
     )
 
-    assert result == {"radius_metric_lines": 7, "radius_metric_write_failed": 0}
+    assert result == {"radius_metric_lines": 12, "radius_metric_write_failed": 0}
     names = {line.split("{")[0].split(" ")[0] for line in written["lines"]}
     assert "radius_acct_freshness_seconds" in names
     assert "radius_suspended_with_active_session" in names
+    assert "radius_blocked_access_active_sessions" in names
+    assert "radius_blocked_access_active_subscriptions" in names
+    assert "radius_blocked_access_active_accounts" in names
+    assert "radius_radacct_schema_ok" in names
     assert written["kwargs"]["operation"] == "radius_health"
 
 
@@ -166,11 +211,16 @@ def _wire_heartbeat(monkeypatch, result: dict | None):
 
 _HEALTHY = {
     "radacct_read_ok": 1,
+    "radacct_schema_ok": 1,
+    "radacct_nasportid_capacity": 253,
     "open_sessions": 855,
     "stale_open_sessions": 0,
     "acct_freshness_seconds": 30.0,
     "active_sessions": 850,
     "suspended_with_session": 0,
+    "blocked_access_sessions": 0,
+    "blocked_access_subscriptions": 0,
+    "blocked_access_accounts": 0,
     "paid_active_without_session": 60,
 }
 
@@ -194,6 +244,22 @@ def test_unreadable_radacct_is_critical(db_session, monkeypatch):
     assert findings[0].severity.name == "critical"
 
 
+def test_undersized_radacct_schema_is_critical(db_session, monkeypatch):
+    _wire_heartbeat(
+        monkeypatch,
+        {
+            **_HEALTHY,
+            "radacct_schema_ok": 0,
+            "radacct_nasportid_capacity": 32,
+        },
+    )
+    findings = admin_alerts._radius_health_findings(db_session)
+    assert [f.fingerprint for f in findings] == [
+        "infrastructure:radius:radacct-schema-incompatible"
+    ]
+    assert findings[0].severity.name == "critical"
+
+
 def test_stale_accounting_is_critical(db_session, monkeypatch):
     _wire_heartbeat(monkeypatch, {**_HEALTHY, "acct_freshness_seconds": 4000.0})
     findings = admin_alerts._radius_health_findings(db_session)
@@ -210,9 +276,19 @@ def test_no_open_sessions_means_no_freshness_alert(db_session, monkeypatch):
 
 
 def test_enforcement_drift_is_warning(db_session, monkeypatch):
-    _wire_heartbeat(monkeypatch, {**_HEALTHY, "suspended_with_session": 3})
+    _wire_heartbeat(
+        monkeypatch,
+        {
+            **_HEALTHY,
+            "suspended_with_session": 1,
+            "blocked_access_sessions": 2,
+            "blocked_access_subscriptions": 1,
+            "blocked_access_accounts": 1,
+        },
+    )
     findings = admin_alerts._radius_health_findings(db_session)
     assert [f.fingerprint for f in findings] == [
         "infrastructure:radius:enforcement-drift"
     ]
     assert findings[0].severity.name == "warning"
+    assert "1 account(s), 1 subscription(s), and 2 session(s)" in findings[0].summary

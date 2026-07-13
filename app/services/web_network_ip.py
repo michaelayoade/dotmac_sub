@@ -18,6 +18,7 @@ from sqlalchemy.orm import joinedload
 from app.models.catalog import NasDevice, Subscription
 from app.models.network import (
     IPAssignment,
+    IpPool,
     IPv4Address,
     IPv6Address,
     IPVersion,
@@ -1721,6 +1722,7 @@ def get_ip_pool_new_form_data(db=None) -> dict[str, object]:
         "action_url": "/admin/network/ip-management/pools",
         "olt_devices": list_active_olts(db),
         "vlans": list_active_vlans(db),
+        "nas_devices": list_active_nas_devices(db),
     }
 
 
@@ -1742,6 +1744,17 @@ def list_active_ip_pools(db):
         order_dir="asc",
         limit=200,
         offset=0,
+    )
+
+
+def list_active_nas_devices(db):
+    if db is None:
+        return []
+    return (
+        db.query(NasDevice)
+        .filter(NasDevice.is_active.is_(True))
+        .order_by(NasDevice.name.asc())
+        .all()
     )
 
 
@@ -1853,6 +1866,7 @@ def parse_ip_pool_form(form) -> dict[str, object]:
         "gateway": form.get("gateway", "").strip() or None,
         "dns_primary": form.get("dns_primary", "").strip() or None,
         "dns_secondary": form.get("dns_secondary", "").strip() or None,
+        "nas_device_id": form.get("nas_device_id", "").strip() or None,
         "olt_device_id": form.get("olt_device_id", "").strip() or None,
         "vlan_id": form.get("vlan_id", "").strip() or None,
         "notes": form.get("notes", "").strip() or None,
@@ -1943,6 +1957,14 @@ def validate_ip_pool_values(values: dict[str, object]) -> str | None:
 
 
 def _ip_pool_scope_error(db, values: dict[str, object]) -> str | None:
+    nas_id = str(values.get("nas_device_id") or "").strip()
+    if nas_id:
+        try:
+            nas = db.get(NasDevice, coerce_uuid(nas_id))
+        except (TypeError, ValueError):
+            return "Selected BNG is invalid."
+        if nas is None or not nas.is_active:
+            return "Selected BNG was not found or is inactive."
     vlan_id = str(values.get("vlan_id") or "").strip()
     olt_id = str(values.get("olt_device_id") or "").strip()
     if not vlan_id:
@@ -1970,6 +1992,7 @@ def pool_form_snapshot(
         "gateway": values.get("gateway"),
         "dns_primary": values.get("dns_primary"),
         "dns_secondary": values.get("dns_secondary"),
+        "nas_device_id": values.get("nas_device_id"),
         "olt_device_id": values.get("olt_device_id"),
         "vlan_id": values.get("vlan_id"),
         "notes": values.get("notes"),
@@ -1999,6 +2022,7 @@ def pool_form_snapshot_from_model(pool) -> dict[str, object]:
         "gateway": pool.gateway,
         "dns_primary": pool.dns_primary,
         "dns_secondary": pool.dns_secondary,
+        "nas_device_id": str(pool.nas_device_id) if pool.nas_device_id else None,
         "olt_device_id": str(pool.olt_device_id) if pool.olt_device_id else None,
         "vlan_id": str(getattr(pool, "vlan_id", None) or "") or None,
         "notes": cleaned_notes,
@@ -2132,6 +2156,8 @@ def _nas_devices_using_pool(db, pool_id: str) -> list[NasDevice]:
     `NasDevice.tags` column (no FK), so this is the reverse lookup.
     """
     tag = f"radius_pool:{pool_id}"
+    pool = db.get(IpPool, coerce_uuid(pool_id))
+    directly_bound_id = getattr(pool, "nas_device_id", None)
     if _session_dialect_name(db) == "sqlite":
         devices = (
             db.query(NasDevice)
@@ -2139,11 +2165,20 @@ def _nas_devices_using_pool(db, pool_id: str) -> list[NasDevice]:
             .order_by(NasDevice.name.asc())
             .all()
         )
-        return [device for device in devices if tag in (device.tags or [])]
+        return [
+            device
+            for device in devices
+            if device.id == directly_bound_id or tag in (device.tags or [])
+        ]
     stmt = (
         select(NasDevice)
         .where(NasDevice.is_active.is_(True))
-        .where(NasDevice.tags.contains([tag]))
+        .where(
+            or_(
+                NasDevice.id == directly_bound_id,
+                NasDevice.tags.contains([tag]),
+            )
+        )
         .order_by(NasDevice.name.asc())
     )
     return list(db.execute(stmt).scalars().all())
