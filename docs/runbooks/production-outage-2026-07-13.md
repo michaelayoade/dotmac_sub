@@ -39,6 +39,11 @@ PostgreSQL writes WAL continuously to an encrypted pgBackRest repository at
 differential sets; dependent incremental backups and required WAL are expired
 with their parent sets.
 
+The database image preserves the exact production PostgreSQL 16/PostGIS 3.4
+base digest. pgBackRest 2.58 is compiled from checksum-pinned official source in
+a separate build stage, enabling block-level incrementals without combining the
+backup rollout with a PostgreSQL or PostGIS upgrade.
+
 VictoriaMetrics receives backup completion, duration, repository health, archive
 failure, and restore-verification metrics. Promtail ships structured operational
 logs from `/var/log/dotmac_sub/pgbackrest-operations.log`.

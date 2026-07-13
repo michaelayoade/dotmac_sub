@@ -7,7 +7,7 @@ ROOT_DIR="${ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 ENV_FILE="${ENV_FILE:-${ROOT_DIR}/.env}"
 DB_CONTAINER="${DB_CONTAINER:-dotmac_pg_local}"
 DB_DATA_DIR="${PGBACKREST_DB_DATA_DIR:-/var/lib/dotmac-pg-local}"
-POSTGRES_IMAGE="${POSTGRES_IMAGE:-dotmac/postgis-pgbackrest:16-3.4-2.51}"
+POSTGRES_IMAGE="${POSTGRES_IMAGE:-dotmac/postgis-pgbackrest:16-3.4-2.58}"
 
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "Run as root so backup directories, Docker, and systemd can be configured" >&2
