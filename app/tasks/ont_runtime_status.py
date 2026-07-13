@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 
 from sqlalchemy import func, select
 
 from app.celery_app import celery_app
 from app.services.db_session_adapter import db_session_adapter
 from app.tasks._postgres_lock import postgres_session_advisory_lock
+
+logger = logging.getLogger(__name__)
 
 
 def _olt_lock_key(olt_id: str) -> int:
@@ -68,4 +71,64 @@ def refresh_huawei_olt_status(olt_id: str) -> dict[str, int | str]:
                 "offline": stats.offline,
                 "unmatched": stats.unmatched,
                 "invalid": stats.invalid,
+            }
+
+
+@celery_app.task(name="app.tasks.ont_runtime_status.refresh_single_ont_status")
+def refresh_single_ont_status(ont_id: str, operation_id: str) -> dict[str, object]:
+    """Run a user-requested OLT/TR-069 refresh and update its durable operation."""
+    from app.services.network.ont_actions import OntActions
+    from app.services.network_operations import network_operations
+
+    with db_session_adapter.session() as db:
+        try:
+            network_operations.mark_running(db, operation_id)
+            db.commit()
+
+            result = OntActions.refresh_status(db, ont_id)
+            payload = {
+                "message": result.message,
+                "result": result.data or {},
+            }
+            if result.success:
+                network_operations.mark_succeeded(
+                    db, operation_id, output_payload=payload
+                )
+            else:
+                network_operations.mark_failed(
+                    db,
+                    operation_id,
+                    result.message,
+                    output_payload=payload,
+                )
+            db.commit()
+            return {
+                "ont_id": ont_id,
+                "operation_id": operation_id,
+                "success": result.success,
+                **payload,
+            }
+        except Exception as exc:
+            db.rollback()
+            try:
+                network_operations.mark_failed(
+                    db,
+                    operation_id,
+                    str(exc),
+                    output_payload={"message": str(exc)},
+                )
+                db.commit()
+            except Exception:
+                db.rollback()
+                logger.exception(
+                    "Failed to record ONT refresh operation failure for %s",
+                    operation_id,
+                )
+            logger.exception("Queued ONT status refresh failed for %s", ont_id)
+            return {
+                "ont_id": ont_id,
+                "operation_id": operation_id,
+                "success": False,
+                "message": str(exc),
+                "result": {},
             }
