@@ -110,11 +110,102 @@ _TERMINAL = {
 # Public alias for callers outside this module (e.g. the catalog write path)
 # that need to reason about terminal subscription states.
 TERMINAL_STATUSES = frozenset(_TERMINAL)
+ACCOUNT_OVERRIDE_STATUSES = frozenset(
+    {
+        SubscriberStatus.new,
+        SubscriberStatus.active,
+        SubscriberStatus.blocked,
+        SubscriberStatus.suspended,
+        SubscriberStatus.disabled,
+        SubscriberStatus.canceled,
+    }
+)
 
 
 def is_terminal_status(status: SubscriptionStatus | None) -> bool:
     """True if ``status`` is a terminal (sink) subscription status."""
     return status in _TERMINAL
+
+
+def set_account_lifecycle_override(
+    db: Session,
+    subscriber_id: str,
+    status: SubscriberStatus,
+    *,
+    reason: str,
+    source: str,
+) -> SubscriberStatus:
+    """Persist an explicit account-level lifecycle fact and refresh projection."""
+    if status not in ACCOUNT_OVERRIDE_STATUSES:
+        raise ValueError(f"{status.value} is derived and cannot be an override")
+    subscriber = db.get(Subscriber, subscriber_id)
+    if subscriber is None:
+        raise ValueError(f"Subscriber {subscriber_id} not found")
+    subscriber.lifecycle_override_status = status
+    subscriber.lifecycle_override_reason = reason
+    subscriber.lifecycle_override_source = source
+    subscriber.lifecycle_override_at = datetime.now(UTC)
+    return compute_account_status(db, subscriber_id)
+
+
+def clear_account_lifecycle_override(
+    db: Session,
+    subscriber_id: str,
+    *,
+    reason: str,
+    source: str,
+) -> SubscriberStatus:
+    """Clear an administrative account fact and re-derive from subscriptions."""
+    subscriber = db.get(Subscriber, subscriber_id)
+    if subscriber is None:
+        raise ValueError(f"Subscriber {subscriber_id} not found")
+    logger.info(
+        "Account lifecycle override cleared: subscriber=%s status=%s reason=%s source=%s",
+        subscriber_id,
+        subscriber.lifecycle_override_status.value
+        if subscriber.lifecycle_override_status
+        else None,
+        reason,
+        source,
+    )
+    subscriber.lifecycle_override_status = None
+    subscriber.lifecycle_override_reason = None
+    subscriber.lifecycle_override_source = None
+    subscriber.lifecycle_override_at = None
+    return compute_account_status(db, subscriber_id)
+
+
+def apply_requested_account_status(
+    db: Session,
+    subscriber_id: str,
+    status: SubscriberStatus,
+    *,
+    reason: str,
+    source: str,
+) -> SubscriberStatus:
+    """Translate an account status command into an explicit fact or derivation."""
+    if status == SubscriberStatus.delinquent:
+        raise ValueError("delinquent is derived from collections and cannot be set")
+    if status == SubscriberStatus.new:
+        return clear_account_lifecycle_override(
+            db, subscriber_id, reason=reason, source=source
+        )
+    if status == SubscriberStatus.active:
+        has_subscription = (
+            db.scalars(
+                select(Subscription.id)
+                .where(Subscription.subscriber_id == subscriber_id)
+                .limit(1)
+            ).first()
+            is not None
+        )
+        if has_subscription:
+            return clear_account_lifecycle_override(
+                db, subscriber_id, reason=reason, source=source
+            )
+    return set_account_lifecycle_override(
+        db, subscriber_id, status, reason=reason, source=source
+    )
 
 
 def assert_legal_subscription_transition(
@@ -503,6 +594,7 @@ def expire_subscription(
     db.flush()
 
     _release_service_ips(db, subscription)
+    compute_account_status(db, str(subscription.subscriber_id))
 
     if emit:
         emit_event(
@@ -518,9 +610,6 @@ def expire_subscription(
             subscription_id=subscription.id,
             account_id=subscription.subscriber_id,
         )
-
-    compute_account_status(db, str(subscription.subscriber_id))
-
     logger.info(
         "Subscription %s expired (locks_resolved=%d)", subscription_id, resolved_count
     )
@@ -533,6 +622,7 @@ def cancel_subscription(
     source: str,
     *,
     emit: bool = True,
+    generate_credit: bool = True,
 ) -> None:
     """Transition subscription to canceled (terminal state).
 
@@ -576,18 +666,21 @@ def cancel_subscription(
     # Generate credit note for unused portion of the billing period.
     # Use a savepoint so a credit note failure doesn't corrupt the
     # cancel transaction (the cancellation itself is already flushed).
-    try:
-        from app.services.billing_automation import generate_cancellation_credit
+    if generate_credit:
+        try:
+            from app.services.billing_automation import generate_cancellation_credit
 
-        db.begin_nested()  # savepoint
-        generate_cancellation_credit(db, subscription)
-    except Exception as exc:
-        db.rollback()  # rolls back to savepoint only
-        logger.warning(
-            "Cancellation credit generation failed for subscription %s: %s",
-            subscription_id,
-            exc,
-        )
+            db.begin_nested()  # savepoint
+            generate_cancellation_credit(db, subscription)
+        except Exception as exc:
+            db.rollback()  # rolls back to savepoint only
+            logger.warning(
+                "Cancellation credit generation failed for subscription %s: %s",
+                subscription_id,
+                exc,
+            )
+
+    compute_account_status(db, str(subscription.subscriber_id))
 
     if emit:
         emit_event(
@@ -605,9 +698,6 @@ def cancel_subscription(
             subscription_id=subscription.id,
             account_id=subscription.subscriber_id,
         )
-
-    compute_account_status(db, str(subscription.subscriber_id))
-
     logger.info(
         "Subscription %s canceled (reason=%s source=%s locks_resolved=%d)",
         subscription_id,
@@ -615,6 +705,209 @@ def cancel_subscription(
         source,
         resolved_count,
     )
+
+
+def disable_subscription(
+    db: Session,
+    subscription_id: str,
+    *,
+    reason: str,
+    source: str,
+    emit: bool = True,
+) -> bool:
+    """Disable a subscription through the canonical terminal transition.
+
+    Returns ``False`` when the subscription is already disabled. Other terminal
+    states remain immutable and must not be rewritten as disabled.
+    """
+    subscription = db.execute(
+        select(Subscription).where(Subscription.id == subscription_id).with_for_update()
+    ).scalar_one_or_none()
+    if subscription is None:
+        raise ValueError(f"Subscription {subscription_id} not found")
+    if subscription.status == SubscriptionStatus.disabled:
+        return False
+    if subscription.status in _TERMINAL:
+        raise ValueError(
+            f"Cannot disable subscription already in {subscription.status.value}"
+        )
+
+    resolved_count = resolve_all_locks(db, subscription, "disabled")
+    previous_status = subscription.status
+    now = datetime.now(UTC)
+    subscription.status = SubscriptionStatus.disabled
+    subscription.end_at = subscription.end_at or now
+    subscription.canceled_at = subscription.canceled_at or now
+    subscription.cancel_reason = reason
+    for sub_addon in db.scalars(
+        select(SubscriptionAddOn).where(
+            SubscriptionAddOn.subscription_id == subscription.id,
+            SubscriptionAddOn.end_at.is_(None),
+        )
+    ).all():
+        sub_addon.end_at = now
+    db.flush()
+    _release_service_ips(db, subscription)
+    compute_account_status(db, str(subscription.subscriber_id))
+
+    if emit:
+        emit_event(
+            db,
+            EventType.subscription_canceled,
+            {
+                "subscription_id": str(subscription.id),
+                "cancel_reason": reason,
+                "reason": reason,
+                "source": source,
+                "action": "disabled",
+                "from_status": previous_status.value,
+                "to_status": SubscriptionStatus.disabled.value,
+                "offer_name": subscription.offer.name if subscription.offer else None,
+            },
+            subscription_id=subscription.id,
+            account_id=subscription.subscriber_id,
+        )
+    logger.info(
+        "Subscription %s disabled (reason=%s source=%s locks_resolved=%d)",
+        subscription_id,
+        reason,
+        source,
+        resolved_count,
+    )
+    return True
+
+
+def transition_subscription_status(
+    db: Session,
+    subscription_id: str,
+    target_status: SubscriptionStatus,
+    *,
+    reason: str,
+    source: str,
+    emit: bool = True,
+) -> bool:
+    """Route an administrative status request through a legal domain command."""
+    subscription = db.get(Subscription, subscription_id)
+    if subscription is None:
+        raise ValueError(f"Subscription {subscription_id} not found")
+    if subscription.status == target_status:
+        return False
+    assert_legal_subscription_transition(subscription.status, target_status)
+
+    if target_status == SubscriptionStatus.active:
+        if subscription.status == SubscriptionStatus.pending:
+            activate_subscription(db, subscription_id, emit=emit)
+            return True
+        if subscription.status in SUSPENDED_EQUIVALENT:
+            return restore_subscription(
+                db,
+                subscription_id,
+                trigger="admin",
+                resolved_by=source,
+                notes=reason,
+                emit=emit,
+            )
+    elif target_status == SubscriptionStatus.suspended:
+        suspend_subscription(
+            db,
+            subscription_id,
+            reason=EnforcementReason.admin,
+            source=source,
+            notes=reason,
+            emit=emit,
+        )
+        return True
+    elif target_status == SubscriptionStatus.canceled:
+        cancel_subscription(db, subscription_id, reason, source, emit=emit)
+        return True
+    elif target_status == SubscriptionStatus.expired:
+        expire_subscription(db, subscription_id, emit=emit)
+        return True
+    elif target_status == SubscriptionStatus.disabled:
+        return disable_subscription(
+            db,
+            subscription_id,
+            reason=reason,
+            source=source,
+            emit=emit,
+        )
+    raise ValueError(f"Unsupported lifecycle target status {target_status.value}")
+
+
+def transition_account_status(
+    db: Session,
+    subscriber_id: str,
+    target_status: SubscriberStatus,
+    *,
+    reason: str,
+    source: str,
+    emit: bool = True,
+) -> SubscriberStatus:
+    """Apply an account-level command and align all owned subscription facts."""
+    subscriber = db.get(Subscriber, subscriber_id)
+    if subscriber is None:
+        raise ValueError(f"Subscriber {subscriber_id} not found")
+    subscriptions = list(
+        db.scalars(
+            select(Subscription).where(Subscription.subscriber_id == subscriber.id)
+        ).all()
+    )
+    if target_status in {SubscriberStatus.active, SubscriberStatus.new}:
+        clear_account_lifecycle_override(
+            db, subscriber_id, reason=reason, source=source
+        )
+        if target_status == SubscriberStatus.active:
+            for subscription in subscriptions:
+                if subscription.status in SUSPENDED_EQUIVALENT:
+                    transition_subscription_status(
+                        db,
+                        str(subscription.id),
+                        SubscriptionStatus.active,
+                        reason=reason,
+                        source=source,
+                        emit=emit,
+                    )
+    else:
+        set_account_lifecycle_override(
+            db,
+            subscriber_id,
+            target_status,
+            reason=reason,
+            source=source,
+        )
+
+    if target_status in {SubscriberStatus.blocked, SubscriberStatus.suspended}:
+        for subscription in subscriptions:
+            if subscription.status in _SUSPENDABLE:
+                suspend_subscription(
+                    db,
+                    str(subscription.id),
+                    reason=EnforcementReason.admin,
+                    source=source,
+                    notes=reason,
+                    emit=emit,
+                )
+    elif target_status == SubscriberStatus.disabled:
+        for subscription in subscriptions:
+            if subscription.status not in _TERMINAL:
+                disable_subscription(
+                    db,
+                    str(subscription.id),
+                    reason=reason,
+                    source=source,
+                    emit=emit,
+                )
+    elif target_status == SubscriberStatus.canceled:
+        for subscription in subscriptions:
+            if subscription.status not in _TERMINAL:
+                cancel_subscription(
+                    db,
+                    str(subscription.id),
+                    reason,
+                    source,
+                    emit=emit,
+                )
+    return compute_account_status(db, subscriber_id)
 
 
 # ---------------------------------------------------------------------------
@@ -683,15 +976,19 @@ def _credit_covers_open_ar(db: Session, subscriber_id: str) -> bool:
 
 
 def derive_account_status(db: Session, subscriber_id: str) -> SubscriberStatus:
-    """Return the subscriber status implied by authoritative service state.
+    """Return the subscriber status implied by authoritative lifecycle facts.
 
     This is the read-only half of ``compute_account_status``. Audits and
     enforcement planners must be able to report projection drift without
     temporarily mutating an ORM object or relying on a transaction rollback.
+    An explicit account override outranks the derived service projection.
     """
     subscriber = db.get(Subscriber, subscriber_id)
     if not subscriber:
         raise ValueError(f"Subscriber {subscriber_id} not found")
+
+    if subscriber.lifecycle_override_status is not None:
+        return subscriber.lifecycle_override_status
 
     subs = list(
         db.scalars(
@@ -762,18 +1059,21 @@ def compute_account_status(db: Session, subscriber_id: str) -> SubscriberStatus:
         )
         subscriber.status = new_status
 
-    # Sync is_active flag with derived status.
-    # Suspended subscribers remain is_active=True so they can still
-    # log into the customer portal to view invoices and make payments.
+    # Sync is_active with the account projection. A service-derived suspension
+    # keeps portal access so the customer can view invoices and pay. An explicit
+    # account suspension is an administrative access decision and disables the
+    # account until that override is cleared.
+    explicitly_suspended = (
+        subscriber.lifecycle_override_status == SubscriberStatus.suspended
+    )
     should_be_active = new_status in {
         SubscriberStatus.active,
         SubscriberStatus.new,
         SubscriberStatus.blocked,
-        SubscriberStatus.suspended,
         # Delinquent = past due but service still running; keep portal access
         # so they can log in and pay down the balance.
         SubscriberStatus.delinquent,
-    }
+    } or (new_status == SubscriberStatus.suspended and not explicitly_suspended)
     if subscriber.is_active != should_be_active:
         subscriber.is_active = should_be_active
 

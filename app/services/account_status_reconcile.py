@@ -80,6 +80,8 @@ def account_eligibility(db: Session, account_id: str) -> tuple[bool, str | None]
     account = db.get(Subscriber, coerce_uuid(account_id))
     if account is None:
         return False, "not_found"
+    if account.lifecycle_override_status is not None:
+        return False, "explicit_lifecycle_override"
     if account.status not in _SAFE_PRIOR_STATUSES:
         status = account.status.value if account.status else "unknown"
         return False, f"not_safe_prior_status (status={status})"
@@ -140,6 +142,7 @@ def find_safe_all_active_account_ids(
         select(Subscriber.id)
         .join(sub_rollup, sub_rollup.c.subscriber_id == Subscriber.id)
         .where(Subscriber.status.in_(_SAFE_PRIOR_STATUSES))
+        .where(Subscriber.lifecycle_override_status.is_(None))
         .where(sub_rollup.c.active > 0)
         .where(sub_rollup.c.total == sub_rollup.c.active)
         .order_by(Subscriber.id)

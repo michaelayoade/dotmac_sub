@@ -1,7 +1,7 @@
 """Enforce one applied import per validated source run.
 
-Revision ID: 273_financial_import_sot
-Revises: 272_radius_nas_port_id_capacity
+Revision ID: 276_financial_import_sot
+Revises: 275_mikrotik_control_plane_alignment
 """
 
 from __future__ import annotations
@@ -11,8 +11,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "273_financial_import_sot"
-down_revision = "272_radius_nas_port_id_capacity"
+revision = "276_financial_import_sot"
+down_revision = "275_mikrotik_control_plane_alignment"
 branch_labels = None
 depends_on = None
 

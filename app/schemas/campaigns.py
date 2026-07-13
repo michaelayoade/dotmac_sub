@@ -93,6 +93,7 @@ class CampaignAudienceBuildRead(BaseModel):
 
 class CampaignSendRead(BaseModel):
     campaign_id: UUID
+    queued: int
     sent: int
     failed: int
     skipped: int

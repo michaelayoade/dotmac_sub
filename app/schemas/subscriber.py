@@ -297,6 +297,10 @@ class SubscriberRead(SubscriberBase):
     email: str  # type: ignore[assignment]
 
     id: UUID
+    lifecycle_override_status: SubscriberStatus | None = None
+    lifecycle_override_reason: str | None = None
+    lifecycle_override_source: str | None = None
+    lifecycle_override_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 

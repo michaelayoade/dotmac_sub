@@ -296,7 +296,7 @@ def team_inbox_reply(
         ),
         record_failure=True,
     )
-    if result.kind != "sent":
+    if result.kind not in {"sent", "queued"}:
         return _detail_redirect(
             conversation_id,
             status="error",
@@ -309,7 +309,11 @@ def team_inbox_reply(
     return _detail_redirect(
         conversation_id,
         status="success",
-        message=f"Reply sent from {sender}.",
+        message=(
+            f"Reply queued from {sender}."
+            if result.kind == "queued"
+            else f"Reply sent from {sender}."
+        ),
     )
 
 
@@ -486,7 +490,7 @@ def team_inbox_message_retry(
         sent_by_person_id=_actor_id_from_request(request),
     )
     db.commit()
-    if result.kind != "sent":
+    if result.kind not in {"sent", "queued"}:
         return _detail_redirect(
             message.conversation_id,
             status="error",
@@ -495,7 +499,7 @@ def team_inbox_message_retry(
     return _detail_redirect(
         message.conversation_id,
         status="success",
-        message="Message retried.",
+        message="Message queued for retry.",
     )
 
 

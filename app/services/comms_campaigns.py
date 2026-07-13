@@ -17,16 +17,25 @@ from app.models.comms_campaign import (
     CampaignStatus,
     CampaignType,
 )
+from app.models.notification import NotificationChannel, NotificationStatus
 from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
 from app.models.team_inbox import (
     InboxConversation,
     InboxConversationStatus,
     InboxConversationTeam,
+    InboxMessage,
+    InboxMessageDirection,
     InboxTeamRole,
     InboxTeamSource,
 )
-from app.services import team_inbox_outbound, team_inbox_routing
+from app.services import team_inbox_routing, team_outbound
 from app.services.common import coerce_uuid
+from app.services.communication_intents import (
+    CommunicationClass,
+    CommunicationIntent,
+    submit,
+    suppression_reason,
+)
 from app.services.customer_identity_normalization import normalize_phone_identifier
 
 NON_CONTACTABLE_STATUSES = {
@@ -48,6 +57,7 @@ class CampaignAudienceBuildResult:
 @dataclass(frozen=True)
 class CampaignSendResult:
     campaign_id: UUID
+    queued: int
     sent: int
     failed: int
     skipped: int
@@ -94,6 +104,7 @@ def _segment_query(db: Session, campaign: Campaign):
     )
     query = query.filter(Subscriber.is_active.is_(True))
     query = query.filter(Subscriber.status.notin_(NON_CONTACTABLE_STATUSES))
+    query = query.filter(Subscriber.marketing_opt_in.is_(True))
     query = query.filter(
         or_(Subscriber.reseller_id.is_(None), Reseller.is_active.is_(True))
     )
@@ -124,9 +135,6 @@ def _segment_query(db: Session, campaign: Campaign):
             else [raw_billing_mode]
         )
         query = query.filter(Subscriber.billing_mode.in_([str(item) for item in modes]))
-
-    if bool(segment.get("marketing_opt_in_only")):
-        query = query.filter(Subscriber.marketing_opt_in.is_(True))
 
     limit = segment.get("limit")
     if isinstance(limit, int) and limit > 0:
@@ -362,12 +370,30 @@ def _conversation_for_recipient(
     return conversation
 
 
-def _payload_for_recipient(campaign: Campaign, recipient: CampaignRecipient):
+def _intent_metadata(
+    db: Session,
+    campaign: Campaign,
+    recipient: CampaignRecipient,
+) -> dict[str, object]:
     metadata: dict[str, object] = {
         "source_route": "native_campaign",
         "campaign_id": str(campaign.id),
         "campaign_recipient_id": str(recipient.id),
+        "body_html": campaign.body_html,
+        "body_text": campaign.body_text,
     }
+    sender = team_outbound.resolve_team_email_sender(
+        db,
+        service_team_id=campaign.service_team_id,
+        fallback_activity="notification_queue",
+    )
+    metadata["sender_key"] = (
+        campaign.sender.sender_key if campaign.sender is not None else sender.sender_key
+    )
+    metadata["activity"] = sender.activity or "notification_queue"
+    metadata["service_team_id"] = (
+        str(campaign.service_team_id) if campaign.service_team_id else None
+    )
     if (
         campaign.channel == CampaignChannel.whatsapp.value
         and campaign.whatsapp_template_name
@@ -377,13 +403,7 @@ def _payload_for_recipient(campaign: Campaign, recipient: CampaignRecipient):
             "language": campaign.whatsapp_template_language or "en",
             "variables": campaign.whatsapp_template_components or {},
         }
-    return team_inbox_outbound.InboxReplyPayload(
-        body_html=campaign.body_html or campaign.body_text or "",
-        body_text=campaign.body_text,
-        subject=campaign.subject or campaign.name,
-        to_email=recipient.email,
-        metadata=metadata,
-    )
+    return metadata
 
 
 def send_campaign_batch(
@@ -407,61 +427,127 @@ def send_campaign_batch(
 
     recipients = (
         db.query(CampaignRecipient)
-        .join(Subscriber, CampaignRecipient.subscriber_id == Subscriber.id)
-        .outerjoin(Reseller, Subscriber.reseller_id == Reseller.id)
         .filter(CampaignRecipient.campaign_id == campaign.id)
         .filter(CampaignRecipient.status == CampaignRecipientStatus.pending.value)
-        .filter(Subscriber.is_active.is_(True))
-        .filter(Subscriber.status.notin_(NON_CONTACTABLE_STATUSES))
-        .filter(or_(Subscriber.reseller_id.is_(None), Reseller.is_active.is_(True)))
         .order_by(CampaignRecipient.created_at.asc(), CampaignRecipient.id.asc())
         .limit(batch_size)
         .all()
     )
 
-    sent = failed = skipped = 0
+    queued = sent = failed = skipped = 0
     for recipient in recipients:
+        subscriber = recipient.subscriber
+        if (
+            not subscriber.is_active
+            or subscriber.status.value in NON_CONTACTABLE_STATUSES
+        ):
+            recipient.status = CampaignRecipientStatus.skipped.value
+            recipient.failed_reason = "inactive_subscriber"
+            skipped += 1
+            continue
+        if subscriber.reseller is not None and not subscriber.reseller.is_active:
+            recipient.status = CampaignRecipientStatus.skipped.value
+            recipient.failed_reason = "inactive_reseller"
+            skipped += 1
+            continue
+        if not subscriber.marketing_opt_in:
+            recipient.status = CampaignRecipientStatus.skipped.value
+            recipient.failed_reason = "marketing_opt_out"
+            skipped += 1
+            continue
+        channel = NotificationChannel(campaign.channel)
+        durable_suppression = suppression_reason(
+            db,
+            subscriber_id=subscriber.id,
+            channel=channel,
+            category="marketing",
+            recipient=recipient.address,
+        )
+        if durable_suppression:
+            recipient.status = CampaignRecipientStatus.skipped.value
+            recipient.failed_reason = f"suppressed:{durable_suppression}"
+            skipped += 1
+            continue
         conversation = _conversation_for_recipient(
             db, campaign=campaign, recipient=recipient, now=current_time
         )
-        result = team_inbox_outbound.send_inbox_reply(
+        metadata = _intent_metadata(db, campaign, recipient)
+        result = submit(
             db,
-            conversation=conversation,
-            payload=_payload_for_recipient(campaign, recipient),
-            now=current_time,
-            record_failure=True,
+            CommunicationIntent(
+                subscriber_id=subscriber.id,
+                event_type="campaign.send",
+                category="marketing",
+                communication_class=CommunicationClass.marketing,
+                subject=campaign.subject or campaign.name,
+                body=campaign.body_text or campaign.body_html,
+                channels=(channel,),
+                include_reseller=False,
+                persist_policy_suppressions=False,
+                subscriber_recipients={channel: recipient.address},
+                metadata=metadata,
+                dedupe_key=f"campaign:{campaign.id}:recipient:{recipient.id}",
+            ),
         )
         recipient.conversation_id = conversation.id
-        if result.kind == "sent" and result.message_id is not None:
-            recipient.status = CampaignRecipientStatus.sent.value
-            recipient.sent_at = current_time
-            recipient.message_id = coerce_uuid(result.message_id)
-            sent += 1
-        elif result.kind in {"missing_recipient", "empty_body"}:
+        notification = next(
+            (
+                item
+                for item in result.queued
+                if item.audience_type == "subscriber"
+                and item.status == NotificationStatus.queued
+            ),
+            None,
+        )
+        if notification is None:
             recipient.status = CampaignRecipientStatus.skipped.value
-            recipient.failed_reason = result.reason
+            recipient.failed_reason = ",".join(result.suppressed) or "policy_suppressed"
             skipped += 1
         else:
-            recipient.status = CampaignRecipientStatus.failed.value
-            recipient.failed_reason = result.reason or result.kind
-            if result.message_id is not None:
-                recipient.message_id = coerce_uuid(result.message_id)
-            failed += 1
+            message = InboxMessage(
+                conversation_id=conversation.id,
+                notification_id=notification.id,
+                channel_type=campaign.channel,
+                direction=InboxMessageDirection.outbound.value,
+                subject=campaign.subject or campaign.name,
+                body=campaign.body_html or campaign.body_text,
+                external_thread_id=conversation.external_thread_id,
+                from_address=campaign.from_email
+                or (campaign.sender.from_email if campaign.sender else None),
+                to_addresses=[recipient.address],
+                cc_addresses=[],
+                metadata_={**metadata, "delivery_status": "queued"},
+            )
+            db.add(message)
+            db.flush()
+            recipient.notification_id = notification.id
+            recipient.message_id = message.id
+            recipient.status = CampaignRecipientStatus.queued.value
+            queued += 1
 
+    db.flush()
     _refresh_counts(db, campaign)
-    pending = (
+    outstanding = (
         db.query(CampaignRecipient)
         .filter(CampaignRecipient.campaign_id == campaign.id)
-        .filter(CampaignRecipient.status == CampaignRecipientStatus.pending.value)
+        .filter(
+            CampaignRecipient.status.in_(
+                [
+                    CampaignRecipientStatus.pending.value,
+                    CampaignRecipientStatus.queued.value,
+                ]
+            )
+        )
         .count()
     )
-    completed = pending == 0
+    completed = outstanding == 0
     if completed:
         campaign.status = CampaignStatus.completed.value
         campaign.completed_at = current_time
     db.flush()
     return CampaignSendResult(
         campaign_id=campaign.id,
+        queued=queued,
         sent=sent,
         failed=failed,
         skipped=skipped,
@@ -486,6 +572,32 @@ def _refresh_counts(db: Session, campaign: Campaign) -> None:
     campaign.clicked_count = counts.get(CampaignRecipientStatus.clicked.value, 0)
 
 
+def refresh_campaign_delivery_state(db: Session, campaign_id: UUID) -> None:
+    """Refresh campaign counters and completion after an outbox delivery."""
+    db.flush()
+    campaign = db.get(Campaign, campaign_id)
+    if campaign is None:
+        return
+    _refresh_counts(db, campaign)
+    outstanding = (
+        db.query(CampaignRecipient.id)
+        .filter(CampaignRecipient.campaign_id == campaign.id)
+        .filter(
+            CampaignRecipient.status.in_(
+                [
+                    CampaignRecipientStatus.pending.value,
+                    CampaignRecipientStatus.queued.value,
+                ]
+            )
+        )
+        .first()
+    )
+    if outstanding is None:
+        campaign.status = CampaignStatus.completed.value
+        campaign.completed_at = _now()
+    db.flush()
+
+
 def process_due_campaigns(
     db: Session, *, now: datetime | None = None, limit: int = 20
 ) -> dict[str, int]:
@@ -504,12 +616,13 @@ def process_due_campaigns(
         .limit(limit)
         .all()
     )
-    built = sent = failed = 0
+    built = queued = sent = failed = 0
     for campaign in campaigns:
         try:
             build_recipient_list(db, campaign.id)
             result = send_campaign_batch(db, campaign.id, now=current_time)
             built += 1
+            queued += result.queued
             sent += result.sent
             failed += result.failed
         except Exception:
@@ -518,7 +631,13 @@ def process_due_campaigns(
             metadata["last_processing_error_at"] = current_time.isoformat()
             campaign.metadata_ = metadata
             failed += 1
-    return {"campaigns": len(campaigns), "built": built, "sent": sent, "failed": failed}
+    return {
+        "campaigns": len(campaigns),
+        "built": built,
+        "queued": queued,
+        "sent": sent,
+        "failed": failed,
+    }
 
 
 # Commit-owning entry points. The API layer must not own transaction boundaries

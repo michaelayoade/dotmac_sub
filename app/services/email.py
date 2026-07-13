@@ -18,6 +18,7 @@ from app.models.notification import (
     NotificationStatus,
 )
 from app.models.subscription_engine import SettingValueType
+from app.schemas.notification import NotificationCreate
 from app.schemas.settings import DomainSettingUpdate
 from app.services.branding_config import get_brand
 from app.services.domain_settings import notification_settings
@@ -838,6 +839,34 @@ def send_email(
     Returns:
         True if email was sent successfully, False otherwise
     """
+    if body_text is not None:
+        tracked_body = body_text
+    else:
+        from app.services.email_template import html_to_text
+
+        tracked_body = html_to_text(body_html)
+
+    if db is not None and track and notification_id is None:
+        queued = notification_records.create_customer_notification(
+            db,
+            NotificationCreate(
+                channel=NotificationChannel.email,
+                recipient=to_email,
+                subject=subject,
+                body=tracked_body,
+                event_type=activity or "direct.email",
+                category="general",
+                metadata={
+                    "body_html": body_html,
+                    "body_text": tracked_body,
+                    "sender_key": sender_key,
+                    "activity": activity or "notification_queue",
+                    "source": "email_service",
+                },
+            ),
+        )
+        return queued.status == NotificationStatus.queued
+
     config = _get_smtp_config(db, sender_key=sender_key, activity=activity)
 
     msg = MIMEMultipart("alternative")
@@ -848,13 +877,6 @@ def send_email(
     if body_text:
         msg.attach(MIMEText(body_text, "plain"))
     msg.attach(MIMEText(body_html, "html"))
-    if body_text is not None:
-        tracked_body = body_text
-    else:
-        from app.services.email_template import html_to_text
-
-        tracked_body = html_to_text(body_html)
-
     notification = None
     if db is not None and (notification_id or track):
         notification = notification_records.record_transport_attempt(

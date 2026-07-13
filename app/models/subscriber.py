@@ -265,6 +265,14 @@ class Subscriber(Base):
     status: Mapped[SubscriberStatus] = mapped_column(
         Enum(SubscriberStatus), default=SubscriberStatus.active
     )
+    lifecycle_override_status: Mapped[SubscriberStatus | None] = mapped_column(
+        Enum(SubscriberStatus)
+    )
+    lifecycle_override_reason: Mapped[str | None] = mapped_column(String(200))
+    lifecycle_override_source: Mapped[str | None] = mapped_column(String(120))
+    lifecycle_override_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     user_type: Mapped[UserType] = mapped_column(
         Enum(UserType), default=UserType.system_user
     )
