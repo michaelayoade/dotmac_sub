@@ -17,6 +17,7 @@
         </div>
         <form method="POST" action="/admin/network/onts/{{ ont.id }}/onu-mode"
               hx-post="/admin/network/onts/{{ ont.id }}/onu-mode"
+              hx-confirm="Change the ONU mode? Subscriber connectivity may be interrupted while configuration is applied and verified."
               hx-swap="none">
             {% include "components/forms/csrf_input.html" %}
 

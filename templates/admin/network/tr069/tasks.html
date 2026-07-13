@@ -25,7 +25,7 @@
         breadcrumbs=[{"label": "Network", "href": "/admin/network"}, {"label": "TR-069", "href": "/admin/network/tr069"}, {"label": "Pending Tasks"}]
     ) %}
         {% if selected_server_id and task_count %}
-        <form method="POST" action="/admin/network/tr069/tasks/clear?acs_server_id={{ selected_server_id }}" onsubmit="return confirm('Delete all pending GenieACS tasks for this ACS server? This can unblock informs, but it will also cancel legitimate queued config pushes.')">
+        <form method="POST" action="/admin/network/tr069/tasks/clear?acs_server_id={{ selected_server_id }}" data-confirm="Delete all pending GenieACS tasks for this ACS server? This can unblock informs, but it will also cancel legitimate queued config pushes." data-confirm-label="Delete tasks">
             {% include "components/forms/csrf_input.html" %}
             <button type="submit" class="inline-flex items-center gap-2 rounded-lg border border-rose-300 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-100 dark:border-rose-700 dark:bg-rose-900/20 dark:text-rose-300 dark:hover:bg-rose-900/30">
                 Clear All Tasks
@@ -139,7 +139,7 @@
                         </td>
                         <td class="px-4 py-3 text-right">
                             {% if task.id and selected_server_id %}
-                            <form method="POST" action="/admin/network/tr069/tasks/{{ task.id }}/delete?acs_server_id={{ selected_server_id }}" onsubmit="return confirm('Delete this pending GenieACS task?')">
+                            <form method="POST" action="/admin/network/tr069/tasks/{{ task.id }}/delete?acs_server_id={{ selected_server_id }}" data-confirm="Delete this pending GenieACS task?" data-confirm-label="Delete">
                                 {% include "components/forms/csrf_input.html" %}
                                 <button type="submit" class="rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-50 dark:border-rose-700 dark:bg-slate-800 dark:text-rose-300 dark:hover:bg-rose-900/20">Delete</button>
                             </form>

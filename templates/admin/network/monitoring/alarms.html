@@ -1,7 +1,7 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import
     ambient_background, page_header, stats_card, card,
-    table_head, status_badge, animation_styles
+    table_head, status_badge, animation_styles, pagination as table_pagination
 %}
 
 {% set severity_variants = {
@@ -47,6 +47,7 @@
                 <option value="acknowledged" {% if status == 'acknowledged' %}selected{% endif %}>Acknowledged</option>
                 <option value="resolved" {% if status == 'resolved' %}selected{% endif %}>Resolved</option>
             </select>
+            <input type="hidden" name="per_page" value="{{ pagination.per_page }}">
         </form>
     {% endcall %}
 
@@ -107,13 +108,13 @@
                     </div>
                     <div class="flex items-center gap-2">
                         {% if alarm.status.value == 'open' %}
-                        <form method="POST" action="/admin/network/alarms/{{ alarm.id }}/acknowledge">
+                        <form method="POST" action="/admin/network/alarms/{{ alarm.id }}/acknowledge" data-confirm="Acknowledge this alarm?" data-confirm-variant="info" data-confirm-label="Acknowledge">
                             {% include "components/forms/csrf_input.html" %}
                             <button type="submit" class="text-sm text-blue-600 hover:text-blue-700 dark:text-blue-400">Acknowledge</button>
                         </form>
                         {% endif %}
                         {% if alarm.status.value != 'resolved' %}
-                        <form method="POST" action="/admin/network/alarms/{{ alarm.id }}/resolve">
+                        <form method="POST" action="/admin/network/alarms/{{ alarm.id }}/resolve" data-confirm="Resolve this alarm? This marks the condition as cleared." data-confirm-variant="warning" data-confirm-label="Resolve">
                             {% include "components/forms/csrf_input.html" %}
                             <button type="submit" class="text-sm text-green-600 hover:text-green-700 dark:text-green-400">Resolve</button>
                         </form>
@@ -122,6 +123,17 @@
                 </div>
             </div>
             {% endfor %}
+        </div>
+        <div class="-mx-6 -mb-6 mt-6">
+            {{ table_pagination(
+                pagination.page,
+                pagination.total_pages,
+                pagination.total,
+                pagination.per_page,
+                "/admin/network/alarms",
+                extra_params="&severity=" ~ (severity or "") ~ "&status=" ~ (status or ""),
+                item_label="alarms"
+            ) }}
         </div>
         {% else %}
         <div class="text-center py-12">
@@ -134,7 +146,7 @@
                     <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
                     <span class="relative inline-flex h-2 w-2 rounded-full bg-emerald-500"></span>
                 </span>
-                <span class="text-xs font-medium text-emerald-700 dark:text-emerald-400">Monitoring {{ stats.critical + stats.warning + stats.info + stats.total_open }} rules across all devices</span>
+                <span class="text-xs font-medium text-emerald-700 dark:text-emerald-400">Monitoring {{ rules | length }} active rules across all devices</span>
             </div>
         </div>
         {% endif %}

@@ -603,13 +603,33 @@ def list_intents(
     subscription_id: UUID | None = None,
     status: UispIntentStatus | None = None,
     limit: int = 200,
+    offset: int = 0,
 ) -> list[UispDeviceIntent]:
     query = db.query(UispDeviceIntent)
     if subscription_id is not None:
         query = query.filter(UispDeviceIntent.subscription_id == subscription_id)
     if status is not None:
         query = query.filter(UispDeviceIntent.status == status)
-    return query.order_by(UispDeviceIntent.updated_at.desc()).limit(limit).all()
+    return (
+        query.order_by(UispDeviceIntent.updated_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+
+def count_intents(
+    db: Session,
+    *,
+    subscription_id: UUID | None = None,
+    status: UispIntentStatus | None = None,
+) -> int:
+    query = db.query(func.count(UispDeviceIntent.id))
+    if subscription_id is not None:
+        query = query.filter(UispDeviceIntent.subscription_id == subscription_id)
+    if status is not None:
+        query = query.filter(UispDeviceIntent.status == status)
+    return int(query.scalar() or 0)
 
 
 def intent_status_counts(db: Session) -> dict[str, int]:

@@ -341,7 +341,7 @@
                                 <div class="flex items-center justify-between">
                                     <a href="/admin/network/pop-sites/{{ pop_site.id }}/files/{{ photo.id }}/download"
                                        class="text-xs text-primary-600 hover:text-primary-700">Download</a>
-                                    <form method="post" action="/admin/network/pop-sites/{{ pop_site.id }}/files/{{ photo.id }}/delete" onsubmit="return confirm('Delete this photo?');">
+                                    <form method="post" action="/admin/network/pop-sites/{{ pop_site.id }}/files/{{ photo.id }}/delete" data-confirm="Delete this photo?" data-confirm-label="Delete">
                                         {% include "components/forms/csrf_input.html" %}
                                         <input type="hidden" name="tab" value="gallery">
                                         <button type="submit" class="text-xs text-red-600 hover:text-red-700">Delete</button>
@@ -400,7 +400,7 @@
                                     <td class="px-4 py-3">
                                         <div class="flex items-center justify-end gap-3">
                                             <a href="/admin/network/pop-sites/{{ pop_site.id }}/files/{{ doc.id }}/download" class="text-xs text-primary-600 hover:text-primary-700">Download</a>
-                                            <form method="post" action="/admin/network/pop-sites/{{ pop_site.id }}/files/{{ doc.id }}/delete" onsubmit="return confirm('Delete this document?');">
+                                            <form method="post" action="/admin/network/pop-sites/{{ pop_site.id }}/files/{{ doc.id }}/delete" data-confirm="Delete this document?" data-confirm-label="Delete">
                                                 {% include "components/forms/csrf_input.html" %}
                                                 <input type="hidden" name="tab" value="documents">
                                                 <button type="submit" class="text-xs text-red-600 hover:text-red-700">Delete</button>
@@ -464,7 +464,7 @@
                                     <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ contact.notes }}</p>
                                     {% endif %}
                                 </div>
-                                <form method="post" action="/admin/network/pop-sites/{{ pop_site.id }}/contacts/{{ contact.id }}/delete" onsubmit="return confirm('Delete this contact?');">
+                                <form method="post" action="/admin/network/pop-sites/{{ pop_site.id }}/contacts/{{ contact.id }}/delete" data-confirm="Delete this contact?" data-confirm-label="Delete">
                                     {% include "components/forms/csrf_input.html" %}
                                     <button type="submit" class="text-xs text-red-600 hover:text-red-700">Delete</button>
                                 </form>

@@ -115,7 +115,8 @@
                 <button type="submit"
                         formaction="/admin/network/topology/links/{{ link.id }}/delete"
                         formmethod="POST"
-                        onclick="return confirm('Delete this link?');"
+                        data-confirm="Delete this link?"
+                        data-confirm-label="Delete"
                         class="inline-flex items-center gap-2 rounded-xl border border-rose-300 bg-white px-5 py-2.5 text-sm font-semibold text-rose-700 hover:bg-rose-50 dark:border-rose-700 dark:bg-slate-800 dark:text-rose-300">Delete</button>
                 {% endif %}
             </div>
