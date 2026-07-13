@@ -83,7 +83,10 @@ def test_an_unknown_category_is_treated_as_transactional(db_session):
     suppression would silently start eating it.
     """
     eligibility.suppress_committed(
-        db_session, channel=EMAIL, address="c@example.com", scope=SuppressionScope.marketing
+        db_session,
+        channel=EMAIL,
+        address="c@example.com",
+        scope=SuppressionScope.marketing,
     )
 
     assert eligibility.may_send(
@@ -103,9 +106,7 @@ def test_suppression_cannot_be_dodged_by_case_or_punctuation(db_session):
     eligibility.suppress_committed(
         db_session, channel=EMAIL, address="Person@Example.COM"
     )
-    eligibility.suppress_committed(
-        db_session, channel=SMS, address="+234 801 234 5678"
-    )
+    eligibility.suppress_committed(db_session, channel=SMS, address="+234 801 234 5678")
 
     assert not eligibility.may_send(
         db_session, channel=EMAIL, address="person@example.com", category="marketing"
@@ -163,7 +164,10 @@ def test_a_bounce_escalates_a_marketing_block_but_unsubscribe_never_downgrades(
     to marketing-only because the customer later clicked an unsubscribe link --
     that would resume sending invoices to a dead mailbox."""
     eligibility.suppress_committed(
-        db_session, channel=EMAIL, address="e@example.com", scope=SuppressionScope.marketing
+        db_session,
+        channel=EMAIL,
+        address="e@example.com",
+        scope=SuppressionScope.marketing,
     )
     eligibility.suppress_committed(
         db_session,
@@ -188,7 +192,9 @@ def test_a_bounce_escalates_a_marketing_block_but_unsubscribe_never_downgrades(
 
 
 def test_unsuppress_restores_delivery(db_session):
-    eligibility.suppress_committed(db_session, channel=EMAIL, address="back@example.com")
+    eligibility.suppress_committed(
+        db_session, channel=EMAIL, address="back@example.com"
+    )
     assert not eligibility.may_send(
         db_session, channel=EMAIL, address="back@example.com", category="marketing"
     )
@@ -218,10 +224,16 @@ def test_filter_eligible_agrees_with_may_send(db_session):
     """Audience building must not be a second, drifting implementation of the
     same rule."""
     eligibility.suppress_committed(
-        db_session, channel=EMAIL, address="no@example.com", scope=SuppressionScope.marketing
+        db_session,
+        channel=EMAIL,
+        address="no@example.com",
+        scope=SuppressionScope.marketing,
     )
     eligibility.suppress_committed(
-        db_session, channel=EMAIL, address="dead@example.com", scope=SuppressionScope.all
+        db_session,
+        channel=EMAIL,
+        address="dead@example.com",
+        scope=SuppressionScope.all,
     )
     addresses = ["yes@example.com", "no@example.com", "dead@example.com"]
 
@@ -247,4 +259,6 @@ def test_filter_eligible_agrees_with_may_send(db_session):
         got = eligibility.filter_eligible(
             db_session, channel=EMAIL, addresses=addresses, category=category
         )
-        assert sorted(got) == sorted(expected), f"bulk and single disagree on {category}"
+        assert sorted(got) == sorted(expected), (
+            f"bulk and single disagree on {category}"
+        )

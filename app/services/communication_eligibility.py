@@ -155,9 +155,7 @@ def filter_eligible(
 
     marketing = is_marketing(category)
     blocked = {
-        row.address
-        for row in rows
-        if row.scope is SuppressionScope.all or marketing
+        row.address for row in rows if row.scope is SuppressionScope.all or marketing
     }
     return [original for norm, original in wanted.items() if norm not in blocked]
 
@@ -192,7 +190,10 @@ def suppress(
     ).first()
 
     if existing is not None:
-        if existing.scope is SuppressionScope.marketing and scope is SuppressionScope.all:
+        if (
+            existing.scope is SuppressionScope.marketing
+            and scope is SuppressionScope.all
+        ):
             existing.scope = scope
             existing.reason = reason
             existing.note = note or existing.note
@@ -220,7 +221,9 @@ def suppress_committed(db: Session, **kwargs) -> CommunicationSuppression:
     return row
 
 
-def unsuppress(db: Session, *, channel: NotificationChannel | str, address: str) -> bool:
+def unsuppress(
+    db: Session, *, channel: NotificationChannel | str, address: str
+) -> bool:
     """Remove a suppression (re-subscribe). True if one was removed."""
     resolved = _coerce_channel(channel)
     normalized = normalize_address(resolved, address)
@@ -255,7 +258,9 @@ def list_suppressions(
 ) -> list[CommunicationSuppression]:
     query = select(CommunicationSuppression)
     if channel is not None:
-        query = query.where(CommunicationSuppression.channel == _coerce_channel(channel))
+        query = query.where(
+            CommunicationSuppression.channel == _coerce_channel(channel)
+        )
     if scope is not None:
         query = query.where(CommunicationSuppression.scope == scope)
     return list(

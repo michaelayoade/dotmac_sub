@@ -12,8 +12,9 @@ Revises: 272_radius_nas_port_id_capacity
 """
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects.postgresql import UUID
+
+from alembic import op
 
 revision = "273_communication_suppressions"
 down_revision = "272_radius_nas_port_id_capacity"

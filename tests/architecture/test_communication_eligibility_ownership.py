@@ -74,11 +74,7 @@ KNOWN_DIRECT_SENDERS = TRANSPORT_MODULES | LEDGER_BYPASS_BACKLOG
 
 
 def _py_files() -> list[Path]:
-    return [
-        p
-        for p in (ROOT / "app").rglob("*.py")
-        if "__pycache__" not in p.parts
-    ]
+    return [p for p in (ROOT / "app").rglob("*.py") if "__pycache__" not in p.parts]
 
 
 def test_the_consent_rule_has_exactly_one_implementation() -> None:

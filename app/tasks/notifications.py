@@ -16,10 +16,10 @@ from app.models.notification import (
     NotificationDelivery,
     NotificationStatus,
 )
+from app.services import communication_eligibility
 from app.services import email as email_service
 from app.services import push as push_service
 from app.services import sms as sms_service
-from app.services import communication_eligibility
 from app.services.db_session_adapter import db_session_adapter
 from app.services.email_template import render_email_bodies
 from app.services.integrations.connectors import whatsapp as whatsapp_service
