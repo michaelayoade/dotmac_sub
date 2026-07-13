@@ -157,6 +157,60 @@ def test_bootstrap_confirmation_completes_parent_and_bulk_item(db_session):
     assert run.status == BulkProvisioningRunStatus.succeeded
 
 
+def test_inform_apply_completes_waiting_bootstrap_parent(db_session):
+    from app.models.network import OntUnit
+    from app.models.network_operation import (
+        NetworkOperationStatus,
+        NetworkOperationTargetType,
+        NetworkOperationType,
+    )
+    from app.services.network.ont_provisioning.result import StepResult
+    from app.services.network_operations import network_operations
+    from app.tasks.tr069 import _complete_waiting_bootstrap_after_inform
+
+    ont = OntUnit(serial_number="BOOTSTRAP-INFORM-CONFIRMED")
+    db_session.add(ont)
+    db_session.flush()
+    parent = network_operations.start(
+        db_session,
+        NetworkOperationType.ont_provision,
+        NetworkOperationTargetType.ont,
+        str(ont.id),
+        correlation_key=f"provision:{ont.id}",
+    )
+    network_operations.mark_running(db_session, str(parent.id))
+    child = network_operations.start(
+        db_session,
+        NetworkOperationType.tr069_bootstrap,
+        NetworkOperationTargetType.ont,
+        str(ont.id),
+        correlation_key=f"tr069_bootstrap:{ont.id}",
+        parent_id=str(parent.id),
+    )
+    network_operations.mark_running(db_session, str(child.id))
+    network_operations.mark_waiting(db_session, str(child.id), "next_inform")
+    network_operations.update_parent_status(db_session, str(parent.id))
+
+    completed = _complete_waiting_bootstrap_after_inform(
+        db_session,
+        ont_id=str(ont.id),
+        result=StepResult(
+            "apply_saved_service_config",
+            True,
+            "Saved ONT service config applied.",
+            duration_ms=123,
+        ),
+        reason="stale_inform_reconnect",
+    )
+
+    assert completed is True
+    assert child.status == NetworkOperationStatus.succeeded
+    assert parent.status == NetworkOperationStatus.succeeded
+    assert parent.output_payload["device_confirmation"]["confirmation_source"] == (
+        "stale_inform_reconnect"
+    )
+
+
 def test_admin_provision_route_queues_device_write(db_session, monkeypatch):
     from app.web.admin import network_onts_provisioning
 

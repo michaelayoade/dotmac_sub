@@ -95,6 +95,69 @@ def _sync_bootstrap_parent(
     )
 
 
+def _complete_waiting_bootstrap_after_inform(
+    db,
+    *,
+    ont_id: str,
+    result,
+    reason: str,
+) -> bool:
+    """Close a waiting bootstrap operation after saved intent applies on Inform."""
+    from app.models.network_operation import (
+        NetworkOperation,
+        NetworkOperationStatus,
+        NetworkOperationType,
+    )
+    from app.services.network_operations import network_operations
+
+    bootstrap_operation = db.scalars(
+        select(NetworkOperation)
+        .where(
+            NetworkOperation.operation_type == NetworkOperationType.tr069_bootstrap,
+            NetworkOperation.target_id == ont_id,
+            NetworkOperation.status.in_(
+                {
+                    NetworkOperationStatus.pending,
+                    NetworkOperationStatus.running,
+                    NetworkOperationStatus.waiting,
+                }
+            ),
+        )
+        .order_by(NetworkOperation.created_at.desc())
+        .limit(1)
+    ).first()
+    if bootstrap_operation is None:
+        return False
+
+    confirmation_payload = {
+        "success": True,
+        "waiting": False,
+        "message": result.message,
+        "service_config": {
+            "step_name": result.step_name,
+            "success": result.success,
+            "message": result.message,
+            "duration_ms": result.duration_ms,
+            "waiting": result.waiting,
+            "skipped": result.skipped,
+            "data": result.data or {},
+        },
+        "confirmation_source": reason,
+    }
+    network_operations.mark_succeeded(
+        db,
+        str(bootstrap_operation.id),
+        output_payload=confirmation_payload,
+    )
+    _sync_bootstrap_parent(
+        db,
+        operation_id=str(bootstrap_operation.id),
+        ont_id=ont_id,
+        payload=confirmation_payload,
+    )
+    return True
+
+
 @celery_app.task(name="app.tasks.tr069.sync_all_acs_devices")
 def sync_all_acs_devices() -> dict[str, int]:
     """Periodic sync of devices from all active ACS servers.
@@ -226,6 +289,22 @@ def wait_for_ont_bootstrap(
     db = SessionLocal()
     try:
         if operation_id:
+            existing_operation = network_operations.get(db, operation_id)
+            if existing_operation.status.value in {
+                "succeeded",
+                "warning",
+                "failed",
+                "canceled",
+            }:
+                return dict(
+                    existing_operation.output_payload
+                    or {
+                        "success": existing_operation.status.value == "succeeded",
+                        "waiting": False,
+                        "message": existing_operation.error
+                        or "Bootstrap operation already completed.",
+                    }
+                )
             network_operations.mark_running(db, operation_id)
             db.commit()
 
@@ -264,48 +343,54 @@ def wait_for_ont_bootstrap(
                     operation_id,
                     output_payload=payload,
                 )
-            elif payload["waiting"] and service_retry_count < 4:
+            elif payload["waiting"]:
                 network_operations.mark_waiting(
                     db,
                     operation_id,
                     str(payload["message"]),
                 )
-                from app.services.queue_adapter import enqueue_task
+                if service_retry_count < 4:
+                    from app.services.queue_adapter import enqueue_task
 
-                # Exponential backoff: 30s -> 60s -> 120s -> 240s with ±10% jitter
-                retry_delays = [30, 60, 120, 240]
-                base_countdown = retry_delays[
-                    min(service_retry_count, len(retry_delays) - 1)
-                ]
-                jitter = _retry_jitter_random.uniform(-0.1, 0.1) * base_countdown
-                countdown = int(base_countdown + jitter)
+                    # Exponential backoff: 30s -> 60s -> 120s -> 240s with ±10% jitter
+                    retry_delays = [30, 60, 120, 240]
+                    base_countdown = retry_delays[
+                        min(service_retry_count, len(retry_delays) - 1)
+                    ]
+                    jitter = _retry_jitter_random.uniform(-0.1, 0.1) * base_countdown
+                    countdown = int(base_countdown + jitter)
 
-                logger.info(
-                    "Scheduling TR-069 bootstrap retry %d for ONT %s in %ds",
-                    service_retry_count + 1,
-                    ont_id,
-                    countdown,
-                )
-
-                dispatch = enqueue_task(
-                    "app.tasks.tr069.wait_for_ont_bootstrap",
-                    args=[ont_id, operation_id, service_retry_count + 1],
-                    correlation_id=f"tr069_bootstrap:{ont_id}",
-                    source="ont_provision_step_retry",
-                    countdown=countdown,
-                )
-                if not dispatch.queued:
-                    payload["waiting"] = False
-                    payload["success"] = False
-                    payload["message"] = (
-                        "TR-069 verification retry could not be queued: "
-                        f"{dispatch.error or 'unknown queue error'}"
+                    logger.info(
+                        "Scheduling TR-069 bootstrap retry %d for ONT %s in %ds",
+                        service_retry_count + 1,
+                        ont_id,
+                        countdown,
                     )
-                    network_operations.mark_failed(
-                        db,
-                        operation_id,
-                        str(payload["message"]),
-                        output_payload=payload,
+
+                    dispatch = enqueue_task(
+                        "app.tasks.tr069.wait_for_ont_bootstrap",
+                        args=[ont_id, operation_id, service_retry_count + 1],
+                        correlation_id=f"tr069_bootstrap:{ont_id}",
+                        source="ont_provision_step_retry",
+                        countdown=countdown,
+                    )
+                    if not dispatch.queued:
+                        payload["waiting"] = False
+                        payload["success"] = False
+                        payload["message"] = (
+                            "TR-069 verification retry could not be queued: "
+                            f"{dispatch.error or 'unknown queue error'}"
+                        )
+                        network_operations.mark_failed(
+                            db,
+                            operation_id,
+                            str(payload["message"]),
+                            output_payload=payload,
+                        )
+                else:
+                    payload["message"] = (
+                        f"{payload['message']} Active retries exhausted; saved intent "
+                        "remains pending and will be retried on the next Inform."
                     )
             else:
                 network_operations.mark_failed(
@@ -368,6 +453,13 @@ def apply_saved_ont_service_config(
     db = db_session_adapter.create_session()
     try:
         result = apply_saved_service_config(db, ont_id)
+        if result.success:
+            _complete_waiting_bootstrap_after_inform(
+                db,
+                ont_id=ont_id,
+                result=result,
+                reason=reason,
+            )
         db.commit()
         return {
             "ont_id": ont_id,
