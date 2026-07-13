@@ -125,8 +125,6 @@ from app.models.comms_campaign import (  # noqa: F401
     CampaignSmtpConfig,
     CampaignStatus,
     CampaignStep,
-    CampaignSuppression,
-    CampaignSuppressionReason,
     CampaignType,
 )
 from app.models.communication_log import (  # noqa: F401

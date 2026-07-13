@@ -233,7 +233,14 @@ class CampaignSmtpConfigRead(BaseModel):
     updated_at: datetime
 
 
-class CampaignSuppressionCreate(BaseModel):
+class SuppressionCreate(BaseModel):
+    """A platform suppression, created from the campaign admin surface.
+
+    Scope is always ``marketing`` here: an operator suppressing someone from the
+    campaign screen is recording a marketing refusal, not authorising us to stop
+    sending their invoice. A hard bounce or an erasure request sets ``all``, and
+    that is not something this endpoint does.
+    """
     model_config = ConfigDict(str_strip_whitespace=True)
 
     channel: str = "email"
@@ -245,7 +252,7 @@ class CampaignSuppressionCreate(BaseModel):
     notes: str | None = None
 
 
-class CampaignSuppressionRead(BaseModel):
+class SuppressionRead(BaseModel):
     id: UUID
     channel: str
     address: str
