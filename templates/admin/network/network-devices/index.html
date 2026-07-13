@@ -356,7 +356,6 @@
                                     'up': ('bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400','bg-green-500'),
                                     'degraded': ('bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400','bg-amber-500'),
                                     'down': ('bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400','bg-red-500'),
-                                    'unmonitored': ('bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300','bg-slate-400'),
                                     'unknown': ('bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400','bg-slate-300')
                                 } %}
                                 {% set cls = opmap.get(opst, opmap['unknown']) %}
@@ -451,7 +450,6 @@
                                 {% set opmap = {
                                     'up': ('bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400','bg-green-500'),
                                     'down': ('bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400','bg-red-500'),
-                                    'unmonitored': ('bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300','bg-slate-400'),
                                     'unknown': ('bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400','bg-slate-300')
                                 } %}
                                 {% set cls = opmap.get(opst, opmap['unknown']) %}

@@ -171,9 +171,8 @@ def test_onu_auth_trend_returns_json_safe_series(db_session):
     json.dumps(trend["values"])
 
 
-def test_get_onu_status_summary_counts_unmonitored_onts_as_offline(db_session):
-    """The live per-OLT status source was retired: every non-UISP active ONT
-    rolls up as offline via unmonitored_total — not silently dropped."""
+def test_get_onu_status_summary_counts_never_seen_onts_as_offline(db_session):
+    """Never-seen active ONTs remain in the binary offline count."""
     olt = OLTDevice(
         name="Cold Cache OLT",
         vendor="Huawei",
@@ -194,13 +193,10 @@ def test_get_onu_status_summary_counts_unmonitored_onts_as_offline(db_session):
     assert summary["online"] == 0
 
 
-def test_get_onu_status_summary_uisp_managed_onts_not_dumped_offline(db_session):
-    """ONTs under inactive UISP-managed OLTs must not land in the offline
-    bucket via the unmonitored rollup: they are counted from their own last
-    observed olt_status (never-observed ones go to a distinct ``uisp_managed``
-    bucket), while unmonitored Huawei math is unchanged."""
+def test_get_onu_status_summary_is_binary_across_huawei_and_uisp(db_session):
+    """Huawei and UISP ONTs use the same online/offline projection."""
     seen = datetime(2026, 7, 5, 6, 0, tzinfo=UTC)
-    huawei_olt = OLTDevice(name="HW-UNMONITORED", vendor="Huawei")
+    huawei_olt = OLTDevice(name="HW-RETRY-PENDING", vendor="Huawei")
     uf_olt = OLTDevice(
         name="GPON-UF-1",
         vendor="ubiquiti",
@@ -211,7 +207,7 @@ def test_get_onu_status_summary_uisp_managed_onts_not_dumped_offline(db_session)
     db_session.flush()
     db_session.add_all(
         [
-            # Huawei ONT with no Zabbix-monitored OLT: stays offline-by-rollup.
+            # Huawei ONT with no observation is offline while polling retries.
             OntUnit(serial_number="HW-ONT-1", olt_device_id=huawei_olt.id),
             # UFiber ONTs: observed online / observed offline / never observed.
             OntUnit(
@@ -234,9 +230,8 @@ def test_get_onu_status_summary_uisp_managed_onts_not_dumped_offline(db_session)
     summary = monitoring_service.get_onu_status_summary(db_session)
 
     assert summary["online"] == 1  # observed-online UFiber ONT
-    assert summary["offline"] == 2  # observed-offline UFiber + unmonitored Huawei
-    assert summary["uisp_managed"] == 1  # never-observed UFiber ONT, NOT offline
-    assert summary["total"] == 3
+    assert summary["offline"] == 3
+    assert summary["total"] == 4
 
 
 def test_get_onu_olt_status_summary_has_no_unknown_bucket(db_session):
@@ -259,7 +254,7 @@ def test_get_onu_olt_status_summary_has_no_unknown_bucket(db_session):
 
     summary = monitoring_service.get_onu_olt_status_summary(db_session)
 
-    # Degraded rollup: every ONT reads offline; still binary (no "unknown").
+    # Never-seen rows remain offline; the summary stays binary.
     assert summary["total"] == 3
     assert summary["online"] == 0
     assert summary["offline"] == 3
@@ -267,9 +262,8 @@ def test_get_onu_olt_status_summary_has_no_unknown_bucket(db_session):
 
 
 def test_get_pon_outage_summary_flags_ports_with_assignments(db_session):
-    """The live ONT snapshot source was retired: no ONT ever reads online in
-    this summary, so every port with assignments reports as fully offline
-    (the same result the permanently-cold cache already produced)."""
+    """Only a port with explicit negative observations is an outage."""
+    observed_at = datetime.now(UTC)
     olt = OLTDevice(name="SPDC Huawei OLT", vendor="Huawei", model="MA5608T")
     db_session.add(olt)
     db_session.commit()
@@ -287,6 +281,7 @@ def test_get_pon_outage_summary_flags_ports_with_assignments(db_session):
             serial_number=f"FULL-{idx}-{uuid.uuid4().hex[:8]}",
             olt_device_id=olt.id,
             olt_status=OnuOnlineStatus.offline,
+            olt_status_seen_at=observed_at,
         )
         db_session.add(ont)
         db_session.flush()
@@ -298,11 +293,13 @@ def test_get_pon_outage_summary_flags_ports_with_assignments(db_session):
         serial_number=f"PARTIAL-OFFLINE-{uuid.uuid4().hex[:8]}",
         olt_device_id=olt.id,
         olt_status=OnuOnlineStatus.offline,
+        olt_status_seen_at=observed_at,
     )
     online_partial = OntUnit(
         serial_number=f"PARTIAL-ONLINE-{uuid.uuid4().hex[:8]}",
         olt_device_id=olt.id,
         olt_status=OnuOnlineStatus.online,
+        olt_status_seen_at=observed_at,
     )
     db_session.add_all([offline_partial, online_partial])
     db_session.flush()
@@ -325,11 +322,9 @@ def test_get_pon_outage_summary_flags_ports_with_assignments(db_session):
     summary = monitoring_service.get_pon_outage_summary(db_session)
 
     by_name = {item["pon_port_name"]: item for item in summary}
-    assert set(by_name) == {"pon-0/1/1", "pon-0/1/2"}
+    assert set(by_name) == {"pon-0/1/1"}
     assert by_name["pon-0/1/1"]["offline_count"] == 2
     assert by_name["pon-0/1/1"]["total_count"] == 2
-    assert by_name["pon-0/1/2"]["offline_count"] == 2
-    assert by_name["pon-0/1/2"]["total_count"] == 2
 
 
 def test_get_onu_status_trend_uses_current_summary(db_session, monkeypatch):

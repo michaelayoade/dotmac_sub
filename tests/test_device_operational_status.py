@@ -9,8 +9,6 @@ from app.services.device_operational_status import (
     DEGRADED,
     DOWN,
     MAINTENANCE,
-    UNKNOWN,
-    UNMONITORED,
     UP,
     annotate_operational_status,
     derive_operational_status,
@@ -44,23 +42,26 @@ def test_lifecycle_maintenance_overrides_observation():
     assert op.mismatch is False
 
 
-def test_no_live_status_is_unmonitored_not_warmed():
+def test_no_live_status_is_offline_while_retrying():
     op = derive_operational_status(_dev("online", None), warm_stale=False)
-    assert op.status == UNMONITORED
-    assert op.reason == "not_warmed"
+    assert op.status == DOWN
+    assert op.reason == "not_warmed_retry_pending"
+    assert op.retry_pending is True
     assert op.alarming is False
 
 
-def test_stale_warmer_is_unmonitored_even_when_live_up():
+def test_stale_warmer_retains_online_while_retrying():
     op = derive_operational_status(_dev("online", "up"), warm_stale=True)
-    assert op.status == UNMONITORED
-    assert op.reason == "stale"
+    assert op.status == UP
+    assert op.reason == "stale_retry_pending"
+    assert op.alarming is False
 
 
-def test_live_unknown_is_unmonitored_not_down():
+def test_live_unknown_is_offline_while_retrying():
     op = derive_operational_status(_dev("online", "unknown"), warm_stale=False)
-    assert op.status == UNMONITORED
-    assert op.reason == "monitoring_unknown"
+    assert op.status == DOWN
+    assert op.reason == "monitoring_unknown_retry_pending"
+    assert op.alarming is False
 
 
 def test_live_problem_maps_to_degraded():
@@ -87,9 +88,10 @@ def test_plain_string_attributes_supported():
     assert op.status == UP
 
 
-def test_indeterminate_live_value_is_unknown():
+def test_indeterminate_live_value_is_offline_while_retrying():
     op = derive_operational_status(_dev("online", "weird"), warm_stale=False)
-    assert op.status == UNKNOWN
+    assert op.status == DOWN
+    assert op.retry_pending is True
 
 
 # ── mismatch flags (inventory hygiene) ───────────────────────────────────────
@@ -107,10 +109,10 @@ def test_mismatch_admin_offline_observed_up():
     assert op.mismatch_reason == "admin_offline_observed_up"
 
 
-def test_mismatch_active_but_unmonitored():
+def test_mismatch_active_retry_pending():
     op = derive_operational_status(_dev("online", None), warm_stale=False)
     assert op.mismatch is True
-    assert op.mismatch_reason == "active_but_unmonitored"
+    assert op.mismatch_reason == "active_retry_pending"
 
 
 def test_no_mismatch_when_admin_agrees_with_observation():
@@ -131,4 +133,4 @@ def test_annotate_sets_operational_attribute_and_is_render_safe():
     assert devices[0].operational.status == UP
     assert devices[1].operational.status == DOWN
     # object with no status/live_status still gets a (safe) operational value
-    assert devices[2].operational.status in (UNMONITORED, UNKNOWN)
+    assert devices[2].operational.status == DOWN

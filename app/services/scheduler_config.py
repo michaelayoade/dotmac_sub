@@ -1626,6 +1626,19 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(ont_reconcile_seconds, 300),
         )
+        ont_status_seconds = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "huawei_ont_status_interval_seconds",
+            300,
+        )
+        _sync_scheduled_task(
+            session,
+            name="huawei_ont_status",
+            task_name="app.tasks.ont_runtime_status.dispatch_huawei_ont_status",
+            enabled=True,
+            interval_seconds=max(ont_status_seconds, 120),
+        )
         # RADIUS health: accounting freshness + enforcement drift from the
         # external radacct DB and the reconciled live-session view. Customer
         # experience often fails here before any router goes down.

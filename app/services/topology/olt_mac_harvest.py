@@ -39,7 +39,6 @@ from app.models.network import (
     OLTDevice,
     OntAssignment,
     OntUnit,
-    OnuOnlineStatus,
 )
 from app.services.network._common import normalize_mac_address
 from app.services.network.olt_ssh_diagnostics import _run_readonly_command
@@ -145,10 +144,12 @@ def _active_ports_for_olt(db: Session, olt: OLTDevice) -> dict[str, _PortContext
     paginated ``display mac-address all``) and, as a side effect, builds the
     per-port ONT-ID -> OntUnit lookup used to resolve each learned MAC.
     """
+    from app.services.network.ont_status import effective_ont_online_clause
+
     rows = db.scalars(
         select(OntUnit).where(
             OntUnit.olt_device_id == olt.id,
-            OntUnit.olt_status == OnuOnlineStatus.online,
+            effective_ont_online_clause(),
             OntUnit.is_active.is_(True),
         )
     ).all()

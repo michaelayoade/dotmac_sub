@@ -197,7 +197,7 @@ def _monitoring_evidence(
     now: datetime,
 ) -> tuple[bool, str]:
     if node is None or not node.is_active:
-        return False, "unmonitored"
+        return False, "status_retry_pending"
     live = str(node.live_status or "").strip().lower()
     if live == "up" and _fresh(node.live_status_at, now):
         return True, "live_status_up"

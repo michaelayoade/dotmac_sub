@@ -450,8 +450,13 @@ def _signal_summary(ont: OntUnit | None) -> dict[str, object | None]:
         }
     onu_rx = normalize_optical_signal_dbm(getattr(ont, "onu_rx_signal_dbm", None))
     olt_rx = normalize_optical_signal_dbm(getattr(ont, "olt_rx_signal_dbm", None))
+    from app.services.network.ont_status import resolve_effective_ont_status
+
+    effective = resolve_effective_ont_status(ont)
     return {
-        "status": _enum_value(getattr(ont, "olt_status", None)),
+        "status": effective.status.value,
+        "raw_olt_status": _enum_value(getattr(ont, "olt_status", None)),
+        "status_retry_pending": effective.retry_pending,
         "quality": classify_signal(onu_rx),
         "onu_rx_dbm": onu_rx,
         "olt_rx_dbm": olt_rx,

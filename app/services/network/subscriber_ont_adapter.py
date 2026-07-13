@@ -635,13 +635,15 @@ class DefaultSubscriberOntLinker:
             # Get CPE device if exists
             cpe_device_id = self._find_cpe_device_id(db, ont.serial_number)
 
+            from app.services.network.ont_status import resolve_effective_ont_status
+
             results.append(
                 SubscriberOntInfo(
                     ont_id=str(ont.id),
                     assignment_id=str(assignment.id),
                     serial_number=ont.serial_number,
                     model=ont.model,
-                    olt_status=ont.olt_status.value if ont.olt_status else None,
+                    olt_status=resolve_effective_ont_status(ont).status.value,
                     olt_name=olt_name,
                     pon_port=pon_port_str,
                     service_address=service_address_str,

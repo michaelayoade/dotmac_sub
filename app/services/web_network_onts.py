@@ -23,6 +23,7 @@ from app.models.network import (
 )
 from app.models.tr069 import Tr069AcsServer
 from app.services.network.effective_ont_config import resolve_effective_ont_config
+from app.services.network.ont_status import resolve_effective_ont_status
 from app.services.network.onu_types import onu_types
 from app.services.network.speed_profiles import speed_profiles
 from app.services.network.zones import network_zones
@@ -976,11 +977,7 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
         "speed_profiles_download": get_speed_profiles(db, "download"),
         "speed_profiles_upload": get_speed_profiles(db, "upload"),
         "signal_info": {
-            "olt_status": (
-                ont.olt_status.value
-                if getattr(getattr(ont, "olt_status", None), "value", None)
-                else str(getattr(ont, "olt_status", "") or "")
-            ),
+            "olt_status": resolve_effective_ont_status(ont).status.value,
             "olt_rx_dbm": getattr(ont, "olt_rx_signal_dbm", None),
         },
         "pon_label": (

@@ -41,6 +41,10 @@ from app.services import network as network_service
 from app.services.network._common import decode_huawei_hex_serial, encode_to_hex_serial
 from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.olt_polling_parsers import _decode_huawei_packed_fsp
+from app.services.network.ont_status import (
+    effective_ont_online_clause,
+    resolve_effective_ont_status,
+)
 from app.services.network.provisioning_events import list_ont_provisioning_events
 from app.services.web_network_core_devices_inventory import (
     _build_legacy_probe_statuses,
@@ -731,8 +735,7 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
             ont = a.ont_unit
             if not ont:
                 continue
-            status_val = getattr(ont, "olt_status", None)
-            s = status_val.value if status_val else "unknown"
+            s = resolve_effective_ont_status(ont).status.value
             if s == "online":
                 p_online += 1
             elif s == "offline":
@@ -789,11 +792,6 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
             onts_by_id[str(ont.id)] = ont
     onts_on_olt = list(onts_by_id.values())
 
-    # The live per-ONT snapshot source (Zabbix) was retired with the native
-    # monitoring cutover; ONTs render offline with empty live signal values
-    # here, exactly as the unconfigured path already did.
-    live_snapshot: dict[str, Any] = {}
-
     # Build signal data for each ONT
     signal_data: dict[str, dict[str, object]] = {}
     pon_port_display_by_ont_id: dict[str, str] = {}
@@ -849,11 +847,11 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
             if normalized_port:
                 pon_port_display_by_ont_id[ont_id] = normalized_port
 
-        zbx = live_snapshot.get(ont_id)
-        olt_rx = zbx.olt_rx_dbm if zbx else None
-        onu_rx = zbx.onu_rx_dbm if zbx else None
+        olt_rx = getattr(ont, "olt_rx_signal_dbm", None)
+        onu_rx = getattr(ont, "onu_rx_signal_dbm", None)
         quality = classify_signal(olt_rx, warn_threshold=warn, crit_threshold=crit)
-        s = zbx.status if zbx else "offline"
+        effective_status = resolve_effective_ont_status(ont)
+        s = effective_status.status.value
         reason = getattr(ont, "offline_reason", None)
         reason_val = reason.value if reason else None
         distance_meters = getattr(ont, "distance_meters", None)
@@ -871,11 +869,16 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
             "status_class": ONLINE_STATUS_CLASSES.get(
                 s, ONLINE_STATUS_CLASSES["unknown"]
             ),
-            "reason_display": OFFLINE_REASON_DISPLAY.get(reason_val, "")
-            if reason_val
-            else "",
+            "reason_display": (
+                "Status refresh pending"
+                if effective_status.retry_pending
+                else OFFLINE_REASON_DISPLAY.get(reason_val, "")
+                if reason_val
+                else ""
+            ),
+            "retry_pending": effective_status.retry_pending,
             "distance_meters": distance_meters,
-            "signal_updated_at": zbx.updated_at if zbx else None,
+            "signal_updated_at": getattr(ont, "signal_updated_at", None),
         }
         if s == "online":
             total_online += 1
@@ -896,13 +899,12 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
             ont = assignment.ont_unit
             if not ont:
                 continue
-            zbx = live_snapshot.get(str(ont.id))
-            status = zbx.status if zbx else "offline"
+            status = resolve_effective_ont_status(ont).status.value
             if status == "online":
                 p_online += 1
             else:
                 p_offline += 1
-            olt_rx_val = zbx.olt_rx_dbm if zbx else None
+            olt_rx_val = getattr(ont, "olt_rx_signal_dbm", None)
             quality = classify_signal(
                 olt_rx_val,
                 warn_threshold=warn,
@@ -1527,8 +1529,9 @@ def onts_list_page_data(
             status_val = "offline"
         if status_val not in ONLINE_STATUS_CLASSES:
             status_val = "unknown"
-        status_display_val = status_val
-        status_source = "inventory"
+        effective_status = resolve_effective_ont_status(ont)
+        status_display_val = effective_status.status.value
+        status_source = effective_status.source.value
         effective_last_seen_at = (
             getattr(ont, "last_seen_at", None)
             or getattr(ont, "olt_status_seen_at", None)
@@ -1545,6 +1548,7 @@ def onts_list_page_data(
             "operational": ont_op.status,
             "operational_label": ont_op.label,
             "operational_reason": ont_op.reason,
+            "retry_pending": effective_status.retry_pending,
             "olt_rx_dbm": olt_rx_dbm,
             "onu_rx_dbm": onu_rx_dbm,
             "signal_updated_at": getattr(ont, "signal_updated_at", None),
@@ -1570,7 +1574,7 @@ def onts_list_page_data(
                 status_val,
                 ONLINE_STATUS_CLASSES["offline"],
             ),
-            "status_source_display": "Cached",
+            "status_source_display": status_source.replace("_", " ").title(),
             "status_source_class": ACS_STATUS_CLASSES.get(
                 status_source, ACS_STATUS_CLASSES["unknown"]
             ),
@@ -1586,9 +1590,11 @@ def onts_list_page_data(
                 "connection_request_class",
                 CONNECTION_REQUEST_STATUS_CLASSES["unavailable"],
             ),
-            "reason_display": OFFLINE_REASON_DISPLAY.get(reason_val, "")
-            if reason_val and status_val == "offline"
-            else "",
+            "reason_display": (
+                "Status refresh pending"
+                if effective_status.retry_pending
+                else OFFLINE_REASON_DISPLAY.get(reason_val, "")
+            ),
         }
 
     # Summary counts use cached inventory state; native polling runs out of band.
@@ -1600,9 +1606,7 @@ def onts_list_page_data(
     stats_row = db.execute(
         select(
             func.count().label("total"),
-            func.count()
-            .filter(OntUnit.olt_status == OnuOnlineStatus.online)
-            .label("online"),
+            func.count().filter(effective_ont_online_clause()).label("online"),
             func.count()
             .filter(
                 OntUnit.olt_rx_signal_dbm.isnot(None),
@@ -1925,8 +1929,9 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
     )
     if status_val not in ONLINE_STATUS_CLASSES:
         status_val = "unknown"
-    status_display_val = status_val
-    status_source = "inventory"
+    effective_status = resolve_effective_ont_status(ont)
+    status_display_val = effective_status.status.value
+    status_source = effective_status.source.value
     normalized_acs_last_inform_at = getattr(ont, "acs_last_inform_at", None) or (
         getattr(linked_tr069, "last_inform_at", None) if linked_tr069 else None
     )
@@ -1993,12 +1998,16 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
             "connection_request_message"
         ),
         "offline_reason": reason_val,
-        "offline_reason_display": OFFLINE_REASON_DISPLAY.get(reason_val, "")
-        if reason_val and status_val == "offline"
-        else "",
+        "offline_reason_display": (
+            "Status refresh pending"
+            if effective_status.retry_pending
+            else OFFLINE_REASON_DISPLAY.get(reason_val, "")
+        ),
+        "status_reason": effective_status.reason,
+        "retry_pending": effective_status.retry_pending,
         "warn_threshold": warn,
         "crit_threshold": crit,
-        "online_status": status_val,
+        "online_status": status_display_val,
     }
 
     display_serial_number = _ont_display_serial(ont)

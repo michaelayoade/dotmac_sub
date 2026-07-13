@@ -114,12 +114,10 @@ class ProvisioningEnforcement:
         stale_cutoff = datetime.now(UTC) - timedelta(hours=stale_hours)
 
         candidates = ProvisioningEnforcement._list_candidate_onts(db, olt_id=olt_id)
+        from app.services.network.ont_status import resolve_effective_ont_status
 
         for ont in candidates:
-            # The live runtime-status source (Zabbix) was retired with the
-            # native monitoring cutover: every ONT reads offline here, matching
-            # the unconfigured behaviour (online-gated gap checks never fire).
-            runtime_online = False
+            runtime_online = resolve_effective_ont_status(ont).is_online
             resolved = resolve_effective_ont_config(db, ont)
             values = resolved.get("values", {}) if isinstance(resolved, dict) else {}
             effective_pppoe_username = values.get("pppoe_username")

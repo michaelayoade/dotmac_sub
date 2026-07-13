@@ -33,10 +33,7 @@ def test_get_optical_metrics_reads_persisted_ont_ddm_fields() -> None:
     assert metrics.fetched_at == fetched_at
 
 
-def test_get_ont_status_degrades_to_offline_not_configured() -> None:
-    """The live monitoring status source (Zabbix) was retired: get_ont_status
-    reports the same offline/not-configured result the unconfigured path
-    always produced."""
+def test_get_ont_status_uses_native_binary_projection() -> None:
     now = datetime.now(UTC)
     ont = SimpleNamespace(
         olt_status=OnuOnlineStatus.online,
@@ -49,6 +46,6 @@ def test_get_ont_status_degrades_to_offline_not_configured() -> None:
 
     result = get_ont_status(None, ont)  # type: ignore[arg-type]
 
-    assert result.status == OnuOnlineStatus.offline
-    assert result.status_source == OntStatusSource.zabbix
-    assert result.error is not None
+    assert result.status == OnuOnlineStatus.online
+    assert result.status_source == OntStatusSource.olt
+    assert result.success is True

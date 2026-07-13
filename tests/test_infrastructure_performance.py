@@ -218,9 +218,7 @@ def test_wallboard_counts_devices_by_live_status(db_session):
     board = perf.wallboard(db_session)
     ap_card = next(c for c in board["cards"] if c["tier"] == "ap")
     assert ap_card["up"] == 1
-    assert ap_card["down"] == 1
-    # No live signal -> unmonitored (we no longer trust the stale admin status).
-    assert ap_card["unmonitored"] == 1
+    assert ap_card["down"] == 2
     assert ap_card["degraded"] == 0
     assert ap_card["total"] == 3
 

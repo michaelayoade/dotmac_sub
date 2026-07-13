@@ -1,20 +1,15 @@
-"""ONT state helpers.
-
-The monitoring layer is the authority for ONT online/offline state. OLT and
-ACS values are raw diagnostics/metadata only. (The live Zabbix status source
-was retired with the native monitoring cutover; status reads degrade to
-offline/not-configured until a native per-ONT status source lands.)
-"""
+"""ONT state helpers and the shared binary runtime-status projection."""
 
 from __future__ import annotations
 
 import logging
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from math import ceil
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.network import (
@@ -28,6 +23,7 @@ from app.models.network import (
 
 DEFAULT_ACS_ONLINE_WINDOW_MINUTES = 15
 ACS_INFORM_GRACE_MINUTES = 5
+ONT_STATUS_FRESH_SECONDS = 1800
 
 logger = logging.getLogger(__name__)
 
@@ -195,6 +191,8 @@ class OntStatusResult:
     resolved_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     optical_metrics: OpticalMetrics | None = None
     error: str | None = None
+    reason: str | None = None
+    retry_pending: bool = False
 
     @property
     def is_online(self) -> bool:
@@ -203,6 +201,20 @@ class OntStatusResult:
     @property
     def success(self) -> bool:
         return self.error is None
+
+
+@dataclass(frozen=True)
+class EffectiveOntStatus:
+    """Binary operator state resolved from OLT, ACS and last-seen evidence."""
+
+    status: OnuOnlineStatus
+    source: OntStatusSource
+    reason: str
+    retry_pending: bool = False
+
+    @property
+    def is_online(self) -> bool:
+        return self.status == OnuOnlineStatus.online
 
 
 def _normalize_timestamp(value: datetime | None) -> datetime | None:
@@ -216,12 +228,85 @@ def _normalize_timestamp(value: datetime | None) -> datetime | None:
 def _normalize_olt_status(value: OnuOnlineStatus | str | None) -> OnuOnlineStatus:
     if isinstance(value, OnuOnlineStatus):
         return value
+    value = getattr(value, "value", value)
     if isinstance(value, str):
         try:
             return OnuOnlineStatus(value)
         except ValueError:
             return OnuOnlineStatus.offline
     return OnuOnlineStatus.offline
+
+
+def _is_fresh(value: datetime | None, now: datetime, seconds: int) -> bool:
+    value = _normalize_timestamp(value)
+    return value is not None and now - value <= timedelta(seconds=seconds)
+
+
+def resolve_effective_ont_status(
+    ont: OntUnit | object,
+    *,
+    now: datetime | None = None,
+) -> EffectiveOntStatus:
+    """Return exactly online/offline while distinguishing telemetry retries.
+
+    Positive evidence from either OLT or ACS wins. If evidence ages out, the
+    last confirmed binary state is retained and marked retry-pending; only a
+    fresh explicit OLT-offline observation is authoritative negative evidence.
+    """
+    current = now or datetime.now(UTC)
+    raw_status = _normalize_olt_status(getattr(ont, "olt_status", None))
+    olt_seen = _normalize_timestamp(getattr(ont, "olt_status_seen_at", None))
+    acs_seen = _normalize_timestamp(getattr(ont, "acs_last_inform_at", None))
+    last_seen = _normalize_timestamp(getattr(ont, "last_seen_at", None))
+
+    if raw_status == OnuOnlineStatus.online and _is_fresh(
+        olt_seen, current, ONT_STATUS_FRESH_SECONDS
+    ):
+        return EffectiveOntStatus(raw_status, OntStatusSource.olt, "olt_online")
+    if _is_fresh(acs_seen, current, ONT_STATUS_FRESH_SECONDS):
+        return EffectiveOntStatus(
+            OnuOnlineStatus.online, OntStatusSource.acs, "acs_inform_recent"
+        )
+    if _is_fresh(last_seen, current, ONT_STATUS_FRESH_SECONDS):
+        return EffectiveOntStatus(
+            OnuOnlineStatus.online, OntStatusSource.derived, "seen_recent"
+        )
+    if raw_status == OnuOnlineStatus.offline and olt_seen is not None:
+        reason = _normalize_offline_reason(getattr(ont, "offline_reason", None))
+        return EffectiveOntStatus(
+            OnuOnlineStatus.offline,
+            OntStatusSource.olt,
+            reason,
+            retry_pending=not _is_fresh(olt_seen, current, ONT_STATUS_FRESH_SECONDS),
+        )
+    if raw_status == OnuOnlineStatus.online:
+        return EffectiveOntStatus(
+            OnuOnlineStatus.online,
+            OntStatusSource.olt,
+            "last_confirmed_online_retry_pending",
+            retry_pending=True,
+        )
+    return EffectiveOntStatus(
+        OnuOnlineStatus.offline,
+        OntStatusSource.derived,
+        "never_seen_retry_pending",
+        retry_pending=True,
+    )
+
+
+def effective_ont_online_clause(*, now: datetime | None = None):
+    """SQL equivalent of the positive/retained-online projection."""
+    cutoff = (now or datetime.now(UTC)) - timedelta(seconds=ONT_STATUS_FRESH_SECONDS)
+    return or_(
+        OntUnit.olt_status == OnuOnlineStatus.online,
+        OntUnit.acs_last_inform_at >= cutoff,
+        OntUnit.last_seen_at >= cutoff,
+    )
+
+
+def _normalize_offline_reason(value: OnuOfflineReason | str | None) -> str:
+    normalized = getattr(value, "value", value)
+    return str(normalized or "observed_down")
 
 
 def _coerce_auth_status(
@@ -580,8 +665,8 @@ def reconcile_ont_state(
         ont_id=ont.id,
         snapshot=snapshot,
         conflict=conflict,
-        reason="monitoring_is_authority",
-        authoritative_source=OntStatusSource.zabbix,
+        reason="native_status_projection",
+        authoritative_source=resolve_effective_ont_status(ont, now=now).source,
         recommended_action=None,
     )
 
@@ -607,16 +692,15 @@ def get_ont_status(
     mode: StatusProviderMode | str = StatusProviderMode.auto,
 ) -> OntStatusResult:
     _ = db, mode
-    # The live monitoring status source (Zabbix) was retired with the native
-    # monitoring cutover; degrade to the same offline/not-configured result the
-    # unconfigured path already produced.
+    effective = resolve_effective_ont_status(ont)
     return OntStatusResult(
-        status=OnuOnlineStatus.offline,
-        status_source=OntStatusSource.zabbix,
+        status=effective.status,
+        status_source=effective.source,
         acs_last_inform_at=getattr(ont, "acs_last_inform_at", None),
         resolved_at=datetime.now(UTC),
         optical_metrics=_optical_metrics_from_ont(ont) if include_optical else None,
-        error="ONT status monitoring source is not configured",
+        reason=effective.reason,
+        retry_pending=effective.retry_pending,
     )
 
 
@@ -636,14 +720,25 @@ def refresh_ont_status(
     *,
     mode: StatusProviderMode | str = StatusProviderMode.auto,
 ) -> OntStatusResult:
-    _ = db, mode
-    # The live monitoring refresh source (Zabbix) was retired with the native
-    # monitoring cutover. The unconfigured path never wrote status fields;
-    # stored ONT state (native-poll signal columns included) is left untouched.
-    return OntStatusResult(
-        status=OnuOnlineStatus.offline,
-        status_source=OntStatusSource.zabbix,
-        acs_last_inform_at=getattr(ont, "acs_last_inform_at", None),
-        resolved_at=datetime.now(UTC),
-        error="ONT status monitoring source is not configured",
-    )
+    _ = mode
+    try:
+        from app.services.network.ont_runtime_status import refresh_single_ont_status
+
+        refresh_single_ont_status(db, ont)
+    except Exception as exc:
+        logger.warning(
+            "ONT status refresh failed for %s; retaining confirmed state: %s",
+            getattr(ont, "id", None),
+            exc,
+        )
+        effective = resolve_effective_ont_status(ont)
+        return OntStatusResult(
+            status=effective.status,
+            status_source=effective.source,
+            acs_last_inform_at=getattr(ont, "acs_last_inform_at", None),
+            resolved_at=datetime.now(UTC),
+            error=str(exc),
+            reason=effective.reason,
+            retry_pending=True,
+        )
+    return get_ont_status(db, ont)
