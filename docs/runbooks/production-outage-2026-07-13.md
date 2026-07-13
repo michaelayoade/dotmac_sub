@@ -53,11 +53,31 @@ copy. Keep the existing off-host rclone logical backup enabled until a dedicated
 pgBackRest S3 repository has been provisioned and its first off-host restore has
 passed. Do not repurpose the application upload bucket for database backups.
 
+## Streaming Replication
+
+Streaming replication and backups solve different failures. A standby provides
+fast service recovery, while pgBackRest retains recoverable history when an
+accidental delete, corruption, or bad application write is replicated.
+
+The read-only production inspection on 2026-07-13 found that the primary is not
+currently streaming: `pg_stat_replication` was empty and physical slot
+`standby_91` was inactive. Seabone's `dotmac_sub_db` is a separate writable
+primary (`pg_is_in_recovery() = false`), not that standby. Do not describe the
+current topology as highly available until the former standby has been located,
+its host key has been verified, and streaming is healthy again.
+
+The pgBackRest rollout does not delete or replace the replication slot. Take the
+initial backups from the primary. If the standby no longer has the required WAL,
+re-seed it from a verified pgBackRest backup after the backup rollout. Moving
+backup reads to the standby is a later optimization and requires an active,
+monitored standby plus a repository topology accessible from both hosts.
+
 ## Production Rollout
 
-Run from the production checkout in a maintenance window. The PostgreSQL
-container recreation causes a brief reconnect window; the first full backup and
-restore verification run online afterward.
+Run from the production checkout in a maintenance window. PostgreSQL is
+recreated first with archiving disabled so the stanza can be initialized, then
+once more with archiving enabled. These cause two brief reconnect windows; the
+first full backup and restore verification run online afterward.
 
 ```bash
 cd /root/dotmac_sub
@@ -73,7 +93,8 @@ The rollout does the following in order:
 1. Verifies free disk is at least twice the current PostgreSQL data size.
 2. Reads or creates `secret/backups/postgres#repo1_cipher_pass` in OpenBao.
 3. Builds and validates the pgBackRest-enabled image before touching PostgreSQL.
-4. Recreates only PostgreSQL, creates the stanza, and proves WAL archiving.
+4. Recreates only PostgreSQL with archiving off, creates the stanza, then
+   recreates it with archiving on and proves WAL transport.
 5. Takes the first online full backup and passes the freshness gate.
 6. Sets `BACKUP_MODE=pgbackrest`, installs timers, and optionally restores the
    backup into a network-isolated temporary PostgreSQL for verification.

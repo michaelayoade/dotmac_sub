@@ -129,7 +129,7 @@ services:
     # stays safe.
     - max_slot_wal_keep_size=50GB
     - -c
-    - archive_mode=on
+    - "archive_mode=${POSTGRES_ARCHIVE_MODE:-on}"
     - -c
     - "archive_command=pgbackrest --stanza=dotmac-sub archive-push %p"
     - -c

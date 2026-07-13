@@ -17,35 +17,56 @@ cleanup() {
     sh -c "chown -R ${HOST_UID}:${HOST_GID} /test" >/dev/null 2>&1 || true
   rm -rf "${TEST_ROOT}"
 }
+
+diagnose_failure() {
+  local status=$?
+  set +e
+  echo "pgBackRest smoke test failed; primary diagnostics follow" >&2
+  docker inspect --format='{{json .State}}' "${PRIMARY}" >&2
+  docker logs --tail 200 "${PRIMARY}" >&2
+  echo "Restored database diagnostics follow" >&2
+  docker inspect --format='{{json .State}}' "${RESTORED}" >&2
+  docker logs --tail 200 "${RESTORED}" >&2
+  return "${status}"
+}
+
+trap diagnose_failure ERR
 trap cleanup EXIT
+
+start_primary() {
+  local archive_mode="$1"
+  docker run -d --rm \
+    --name "${PRIMARY}" \
+    -e POSTGRES_USER=postgres \
+    -e POSTGRES_PASSWORD=smoke-test \
+    -e POSTGRES_DB=dotmac_backup_test \
+    -v "${TEST_ROOT}/data:/var/lib/postgresql/data" \
+    -v "${TEST_ROOT}/repo:/var/lib/pgbackrest" \
+    -v "${TEST_ROOT}/spool:/var/spool/pgbackrest" \
+    -v "${TEST_ROOT}/log:/var/log/pgbackrest" \
+    -v "${TEST_ROOT}/restore:/var/lib/postgresql/restore-verify" \
+    -v "${ROOT_DIR}/config/pgbackrest/pgbackrest.conf:/etc/pgbackrest/pgbackrest.conf:ro" \
+    -v "${TEST_ROOT}/conf.d:/etc/pgbackrest/conf.d:ro" \
+    "${IMAGE}" \
+    postgres \
+      -c wal_level=replica \
+      -c "archive_mode=${archive_mode}" \
+      -c "archive_command=pgbackrest --stanza=dotmac-sub archive-push %p" \
+      -c archive_timeout=10 \
+    >/dev/null
+}
 
 mkdir -p "${TEST_ROOT}"/{data,repo,spool,log,restore,conf.d}
 printf '[global]\nrepo1-cipher-pass=smoke-test-only-not-a-production-secret\n' > "${TEST_ROOT}/conf.d/secret.conf"
 chmod 0600 "${TEST_ROOT}/conf.d/secret.conf"
 docker run --rm -v "${TEST_ROOT}:/test" "${IMAGE}" chown -R 70:70 /test
 
-docker run -d --rm \
-  --name "${PRIMARY}" \
-  -e POSTGRES_USER=postgres \
-  -e POSTGRES_PASSWORD=smoke-test \
-  -e POSTGRES_DB=dotmac_backup_test \
-  -v "${TEST_ROOT}/data:/var/lib/postgresql/data" \
-  -v "${TEST_ROOT}/repo:/var/lib/pgbackrest" \
-  -v "${TEST_ROOT}/spool:/var/spool/pgbackrest" \
-  -v "${TEST_ROOT}/log:/var/log/pgbackrest" \
-  -v "${TEST_ROOT}/restore:/var/lib/postgresql/restore-verify" \
-  -v "${ROOT_DIR}/config/pgbackrest/pgbackrest.conf:/etc/pgbackrest/pgbackrest.conf:ro" \
-  -v "${TEST_ROOT}/conf.d:/etc/pgbackrest/conf.d:ro" \
-  "${IMAGE}" \
-  postgres \
-    -c wal_level=replica \
-    -c archive_mode=on \
-    -c "archive_command=pgbackrest --stanza=dotmac-sub archive-push %p" \
-    -c archive_timeout=10 \
-  >/dev/null
+start_primary off
 
 deadline=$((SECONDS + 120))
-until docker exec "${PRIMARY}" pg_isready -U postgres >/dev/null 2>&1; do
+until docker logs "${PRIMARY}" 2>&1 \
+    | grep -q 'PostgreSQL init process complete; ready for start up.' \
+    && docker exec "${PRIMARY}" pg_isready -U postgres >/dev/null 2>&1; do
   if ((SECONDS >= deadline)); then
     docker logs "${PRIMARY}" >&2 || true
     echo "Smoke-test primary did not become ready" >&2
@@ -55,6 +76,19 @@ until docker exec "${PRIMARY}" pg_isready -U postgres >/dev/null 2>&1; do
 done
 
 docker exec --user postgres "${PRIMARY}" pgbackrest --stanza=dotmac-sub stanza-create
+docker stop --time 30 "${PRIMARY}" >/dev/null
+start_primary on
+
+deadline=$((SECONDS + 120))
+until docker exec "${PRIMARY}" pg_isready -U postgres >/dev/null 2>&1; do
+  if ((SECONDS >= deadline)); then
+    docker logs "${PRIMARY}" >&2 || true
+    echo "Smoke-test primary did not restart with archiving enabled" >&2
+    exit 1
+  fi
+  sleep 2
+done
+
 docker exec --user postgres "${PRIMARY}" pgbackrest --stanza=dotmac-sub check
 docker exec "${PRIMARY}" psql -X -v ON_ERROR_STOP=1 -U postgres -d dotmac_backup_test -c \
   "CREATE TABLE backup_smoke (id integer PRIMARY KEY); INSERT INTO backup_smoke VALUES (1), (2);" \
@@ -74,10 +108,11 @@ docker exec --user postgres "${PRIMARY}" \
   --pg1-path=/var/lib/postgresql/restore-verify \
   --type=immediate --target-action=promote restore
 
-docker run -d --rm \
+docker run -d \
   --name "${RESTORED}" \
   --network none \
-  -v "${TEST_ROOT}/restore:/var/lib/postgresql/data" \
+  -e PGDATA=/var/lib/postgresql/restore-verify \
+  -v "${TEST_ROOT}/restore:/var/lib/postgresql/restore-verify" \
   -v "${TEST_ROOT}/repo:/var/lib/pgbackrest:ro" \
   -v "${TEST_ROOT}/spool:/var/spool/pgbackrest" \
   -v "${ROOT_DIR}/config/pgbackrest/pgbackrest.conf:/etc/pgbackrest/pgbackrest.conf:ro" \

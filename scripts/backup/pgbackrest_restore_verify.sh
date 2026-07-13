@@ -77,10 +77,11 @@ docker exec --user postgres "${DB_CONTAINER}" \
   --type=immediate --target-action=promote restore
 
 POSTGRES_IMAGE="$(docker inspect "${DB_CONTAINER}" --format '{{.Config.Image}}')"
-docker run -d --rm \
+docker run -d \
   --name "${VERIFY_CONTAINER}" \
   --network none \
-  -v "${RESTORE_DIR}:/var/lib/postgresql/data" \
+  -e PGDATA=/var/lib/postgresql/restore-verify \
+  -v "${RESTORE_DIR}:/var/lib/postgresql/restore-verify" \
   -v "${REPO_DIR}:/var/lib/pgbackrest:ro" \
   -v "${SPOOL_DIR}:/var/spool/pgbackrest" \
   -v "${ROOT_DIR}/config/pgbackrest/pgbackrest.conf:/etc/pgbackrest/pgbackrest.conf:ro" \

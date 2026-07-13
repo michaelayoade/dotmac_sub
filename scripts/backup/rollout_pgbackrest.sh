@@ -28,6 +28,19 @@ set +a
 cd "${ROOT_DIR}"
 COMPOSE=(docker compose -f docker-compose.yml)
 
+wait_for_database() {
+  local phase="$1"
+  local deadline=$((SECONDS + ${PGBACKREST_DB_START_TIMEOUT_SECONDS:-180}))
+  until docker exec "${DB_CONTAINER}" pg_isready -U postgres >/dev/null 2>&1; do
+    if ((SECONDS >= deadline)); then
+      "${COMPOSE[@]}" logs --tail 200 postgres-local >&2 || true
+      echo "PostgreSQL did not become ready during ${phase}" >&2
+      exit 1
+    fi
+    sleep 3
+  done
+}
+
 db_bytes="$(du -sb "${DB_DATA_DIR}" | cut -f1)"
 available_bytes="$(df -B1 --output=avail "${DB_DATA_DIR}" | tail -1 | tr -d ' ')"
 required_bytes=$((db_bytes * 2))
@@ -43,20 +56,20 @@ echo "==> Building backup-enabled PostgreSQL image before touching the live cont
 POSTGRES_IMAGE="${POSTGRES_IMAGE}" "${COMPOSE[@]}" build postgres-local
 docker run --rm "${POSTGRES_IMAGE}" pgbackrest version
 
-echo "==> Recreating PostgreSQL with WAL archiving enabled"
-POSTGRES_IMAGE="${POSTGRES_IMAGE}" "${COMPOSE[@]}" up -d --no-deps postgres-local
-deadline=$((SECONDS + ${PGBACKREST_DB_START_TIMEOUT_SECONDS:-180}))
-until docker exec "${DB_CONTAINER}" pg_isready -U postgres >/dev/null 2>&1; do
-  if ((SECONDS >= deadline)); then
-    "${COMPOSE[@]}" logs --tail 200 postgres-local >&2 || true
-    echo "PostgreSQL did not become ready before timeout; data volume was not modified by this script" >&2
-    exit 1
-  fi
-  sleep 3
-done
+echo "==> Recreating PostgreSQL with WAL archiving initially disabled"
+POSTGRES_ARCHIVE_MODE=off POSTGRES_IMAGE="${POSTGRES_IMAGE}" \
+  "${COMPOSE[@]}" up -d --no-deps --force-recreate postgres-local
+wait_for_database "backup image activation"
 
-echo "==> Creating stanza and proving WAL archive transport"
+echo "==> Creating stanza before WAL archiving is enabled"
 docker exec --user postgres "${DB_CONTAINER}" pgbackrest --stanza="${PGBACKREST_STANZA:-dotmac-sub}" stanza-create
+
+echo "==> Restarting PostgreSQL with WAL archiving enabled"
+POSTGRES_ARCHIVE_MODE=on POSTGRES_IMAGE="${POSTGRES_IMAGE}" \
+  "${COMPOSE[@]}" up -d --no-deps --force-recreate postgres-local
+wait_for_database "WAL archive activation"
+
+echo "==> Proving WAL archive transport"
 docker exec --user postgres "${DB_CONTAINER}" pgbackrest --stanza="${PGBACKREST_STANZA:-dotmac-sub}" check
 
 echo "==> Taking first online full backup (the app remains online)"
