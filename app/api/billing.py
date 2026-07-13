@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
-from app.db import get_db
+from app.db import finish_read_response, get_db
 from app.schemas.billing import (
     BankAccountCreate,
     BankAccountRead,
@@ -147,14 +147,17 @@ def sync_invoices(
     db: Session = Depends(get_db),
 ):
     """Lightweight, deterministic invoice feed for accounting synchronization."""
-    return billing_service.invoices.sync_list_response(
+    return finish_read_response(
         db,
-        account_id=account_id,
-        status=status,
-        is_active=is_active,
-        updated_since=updated_since,
-        limit=limit,
-        offset=offset,
+        billing_service.invoices.sync_list_response(
+            db,
+            account_id=account_id,
+            status=status,
+            is_active=is_active,
+            updated_since=updated_since,
+            limit=limit,
+            offset=offset,
+        ),
     )
 
 
@@ -165,7 +168,7 @@ def sync_invoices(
     dependencies=[Depends(require_permission("billing:invoice:read"))],
 )
 def get_invoice(invoice_id: str, db: Session = Depends(get_db)):
-    return billing_service.invoices.get(db, invoice_id)
+    return finish_read_response(db, billing_service.invoices.get(db, invoice_id))
 
 
 @router.get(
@@ -191,16 +194,19 @@ def list_invoices(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    return billing_service.invoices.list_response(
+    return finish_read_response(
         db,
-        account_id,
-        status,
-        is_active,
-        order_by,
-        order_dir,
-        limit=limit,
-        offset=offset,
-        updated_since=updated_since,
+        billing_service.invoices.list_response(
+            db,
+            account_id,
+            status,
+            is_active,
+            order_by,
+            order_dir,
+            limit=limit,
+            offset=offset,
+            updated_since=updated_since,
+        ),
     )
 
 
@@ -281,8 +287,11 @@ def list_billing_runs(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    return billing_service.billing_runs.list_response(
-        db, status, order_by, order_dir, limit, offset
+    return finish_read_response(
+        db,
+        billing_service.billing_runs.list_response(
+            db, status, order_by, order_dir, limit, offset
+        ),
     )
 
 
@@ -293,7 +302,7 @@ def list_billing_runs(
     dependencies=[Depends(require_permission("billing:batch:read"))],
 )
 def get_billing_run(run_id: str, db: Session = Depends(get_db)):
-    return billing_service.billing_runs.get(db, run_id)
+    return finish_read_response(db, billing_service.billing_runs.get(db, run_id))
 
 
 @router.delete(
@@ -327,7 +336,9 @@ def create_credit_note(payload: CreditNoteCreate, db: Session = Depends(get_db))
     dependencies=[Depends(require_permission("billing:credit_note:read"))],
 )
 def get_credit_note(credit_note_id: str, db: Session = Depends(get_db)):
-    return billing_service.credit_notes.get(db, credit_note_id)
+    return finish_read_response(
+        db, billing_service.credit_notes.get(db, credit_note_id)
+    )
 
 
 @router.get(
@@ -354,17 +365,20 @@ def list_credit_notes(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    return billing_service.credit_notes.list_response(
+    return finish_read_response(
         db,
-        account_id,
-        invoice_id,
-        status,
-        is_active,
-        order_by,
-        order_dir,
-        limit=limit,
-        offset=offset,
-        updated_since=updated_since,
+        billing_service.credit_notes.list_response(
+            db,
+            account_id,
+            invoice_id,
+            status,
+            is_active,
+            order_by,
+            order_dir,
+            limit=limit,
+            offset=offset,
+            updated_since=updated_since,
+        ),
     )
 
 
@@ -653,8 +667,11 @@ def list_payment_allocations(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    return billing_service.payment_allocations.list_response(
-        db, payment_id, invoice_id, order_by, order_dir, limit, offset
+    return finish_read_response(
+        db,
+        billing_service.payment_allocations.list_response(
+            db, payment_id, invoice_id, order_by, order_dir, limit, offset
+        ),
     )
 
 
@@ -1322,7 +1339,7 @@ def verify_payment(
     dependencies=[Depends(require_permission("billing:payment:read"))],
 )
 def get_payment(payment_id: str, db: Session = Depends(get_db)):
-    return billing_service.payments.get(db, payment_id)
+    return finish_read_response(db, billing_service.payments.get(db, payment_id))
 
 
 @router.get(
@@ -1349,17 +1366,20 @@ def list_payments(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    return billing_service.payments.list_response(
+    return finish_read_response(
         db,
-        account_id,
-        invoice_id,
-        status,
-        is_active,
-        order_by,
-        order_dir,
-        limit=limit,
-        offset=offset,
-        updated_since=updated_since,
+        billing_service.payments.list_response(
+            db,
+            account_id,
+            invoice_id,
+            status,
+            is_active,
+            order_by,
+            order_dir,
+            limit=limit,
+            offset=offset,
+            updated_since=updated_since,
+        ),
     )
 
 
@@ -1426,7 +1446,7 @@ def create_ledger_entry(payload: LedgerEntryCreate, db: Session = Depends(get_db
     dependencies=[Depends(require_permission("billing:ledger:read"))],
 )
 def get_ledger_entry(entry_id: str, db: Session = Depends(get_db)):
-    return billing_service.ledger_entries.get(db, entry_id)
+    return finish_read_response(db, billing_service.ledger_entries.get(db, entry_id))
 
 
 @router.get(
@@ -1446,16 +1466,19 @@ def list_ledger_entries(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    return billing_service.ledger_entries.list_response(
+    return finish_read_response(
         db,
-        account_id,
-        entry_type,
-        source,
-        is_active,
-        order_by,
-        order_dir,
-        limit,
-        offset,
+        billing_service.ledger_entries.list_response(
+            db,
+            account_id,
+            entry_type,
+            source,
+            is_active,
+            order_by,
+            order_dir,
+            limit,
+            offset,
+        ),
     )
 
 
@@ -1569,11 +1592,14 @@ def list_billing_accounts(
         limit=limit,
         offset=offset,
     )
-    return ListResponse[BillingAccountRead](
-        items=[BillingAccountRead.model_validate(i) for i in items],
-        count=len(items),
-        limit=limit,
-        offset=offset,
+    return finish_read_response(
+        db,
+        ListResponse[BillingAccountRead](
+            items=[BillingAccountRead.model_validate(i) for i in items],
+            count=len(items),
+            limit=limit,
+            offset=offset,
+        ),
     )
 
 
@@ -1597,7 +1623,9 @@ def create_billing_account(
     dependencies=[Depends(require_permission("billing_account:read"))],
 )
 def get_billing_account(billing_account_id: str, db: Session = Depends(get_db)):
-    return billing_service.billing_accounts.get(db, billing_account_id)
+    return finish_read_response(
+        db, billing_service.billing_accounts.get(db, billing_account_id)
+    )
 
 
 @router.patch(
@@ -1628,13 +1656,16 @@ def get_billing_account_statement(
     payments_offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    return billing_service.billing_accounts.statement(
+    return finish_read_response(
         db,
-        billing_account_id,
-        subscribers_limit=subscribers_limit,
-        subscribers_offset=subscribers_offset,
-        payments_limit=payments_limit,
-        payments_offset=payments_offset,
+        billing_service.billing_accounts.statement(
+            db,
+            billing_account_id,
+            subscribers_limit=subscribers_limit,
+            subscribers_offset=subscribers_offset,
+            payments_limit=payments_limit,
+            payments_offset=payments_offset,
+        ),
     )
 
 

@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 
+from app.db import finish_read_transaction
 from app.db import get_db as _get_db
 from app.models.auth import ApiKey, SessionStatus
 from app.models.auth import Session as AuthSession
@@ -158,6 +159,7 @@ def require_audit_auth(
             if request is not None:
                 request.state.actor_id = actor_id
                 request.state.actor_type = "user"
+            finish_read_transaction(db)
             return {"actor_type": "user", "actor_id": actor_id}
         session = (
             db.query(AuthSession)
@@ -172,6 +174,7 @@ def require_audit_auth(
             if request is not None:
                 request.state.actor_id = session_actor_id
                 request.state.actor_type = "user"
+            finish_read_transaction(db)
             return {"actor_type": "user", "actor_id": session_actor_id}
     # API keys are accepted only when they carry an explicit audit scope — the
     # same gate JWTs must pass (`_has_audit_scope`). A key with no/other scopes is
@@ -191,6 +194,7 @@ def require_audit_auth(
             if request is not None:
                 request.state.actor_id = str(api_key.id)
                 request.state.actor_type = "api_key"
+            finish_read_transaction(db)
             return {"actor_type": "api_key", "actor_id": str(api_key.id)}
     raise HTTPException(status_code=401, detail="Unauthorized")
 
@@ -234,6 +238,7 @@ def _api_key_principal(
         request.state.actor_id = actor_id
         request.state.actor_type = "api_key"
         request.state.auth = auth
+    finish_read_transaction(db)
     return auth
 
 
@@ -304,6 +309,7 @@ def require_user_auth(
     if request is not None:
         request.state.actor_id = actor_id
         request.state.actor_type = "user"
+    finish_read_transaction(db)
     return {
         "subscriber_id": str(principal_id),
         "person_id": str(principal_id),
@@ -351,6 +357,7 @@ def require_role(role_name: str):
             )
         if not link:
             raise HTTPException(status_code=403, detail="Forbidden")
+        finish_read_transaction(db)
         return auth
 
     return _require_role
@@ -480,11 +487,13 @@ def require_permission(permission_key: str):
     ):
         roles = set(auth.get("roles") or [])
         if "admin" in roles:
+            finish_read_transaction(db)
             return auth
 
         possible_keys = _expand_permission_keys(permission_key)
         scopes = set(auth.get("scopes") or [])
         if scopes & set(possible_keys):
+            finish_read_transaction(db)
             return auth
 
         permissions = (
@@ -516,6 +525,7 @@ def require_permission(permission_key: str):
                 auth.get("scopes"),
             )
             raise HTTPException(status_code=403, detail="Forbidden")
+        finish_read_transaction(db)
         return auth
 
     return _require_permission
@@ -532,6 +542,7 @@ def require_any_permission(*permission_keys: str):
         principal_type = auth.get("principal_type", "subscriber")
         roles = set(auth.get("roles") or [])
         if "admin" in roles:
+            finish_read_transaction(db)
             return auth
 
         # Expand all permission keys
@@ -540,6 +551,7 @@ def require_any_permission(*permission_keys: str):
             all_possible_keys.update(_expand_permission_keys(key))
         scopes = set(auth.get("scopes") or [])
         if scopes & all_possible_keys:
+            finish_read_transaction(db)
             return auth
 
         permissions = (
@@ -597,6 +609,7 @@ def require_any_permission(*permission_keys: str):
 
         if not has_role_permission and not has_direct_permission:
             raise HTTPException(status_code=403, detail="Forbidden")
+        finish_read_transaction(db)
         return auth
 
     return _require_any_permission

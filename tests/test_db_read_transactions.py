@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from app.db import finish_read_transaction
+from app.db import finish_read_response, finish_read_transaction
 
 
 class _FakeSession:
@@ -75,3 +75,13 @@ def test_finish_read_transaction_leaves_sessions_with_pending_writes_alone() -> 
 
     assert db.commit_count == 0
     assert db.rollback_count == 0
+
+
+def test_finish_read_response_returns_value_after_releasing_transaction() -> None:
+    db = _FakeSession()
+    value = object()
+
+    result = finish_read_response(db, value)
+
+    assert result is value
+    assert db.commit_count == 1
