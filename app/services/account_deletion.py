@@ -22,9 +22,8 @@ from sqlalchemy.orm import Session
 from app.models.audit import AuditActorType
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.schemas.audit import AuditEventCreate
-from app.schemas.subscriber import SubscriberUpdate
 from app.services import audit as audit_service
-from app.services import subscriber as subscriber_service
+from app.services.account_lifecycle import transition_account_status
 
 logger = logging.getLogger(__name__)
 
@@ -53,15 +52,13 @@ def request_deletion(
     clean_reason = (reason or "").strip() or None
 
     if not already:
-        # Soft-delete via the canonical subscriber update (fires the usual
-        # validation/events); canceled blocks login and marks the record
-        # terminated-but-preserved.
-        subscriber_service.subscribers.update(
-            db=db,
-            subscriber_id=str(subscriber_id),
-            payload=SubscriberUpdate(status=SubscriberStatus.canceled, is_active=False),
+        transition_account_status(
+            db,
+            str(subscriber_id),
+            SubscriberStatus.canceled,
+            reason=clean_reason or "Customer requested account deletion",
+            source="customer:self_service_deletion",
         )
-        db.refresh(subscriber)
 
     # Stamp who/why for operations + the eventual personal-data purge.
     subscriber.metadata_ = {

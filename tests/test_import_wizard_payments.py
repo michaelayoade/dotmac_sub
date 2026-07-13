@@ -15,6 +15,7 @@ naive "payment with no allocation" query reports ~3,100 false orphans.
 
 from __future__ import annotations
 
+import uuid
 from decimal import Decimal
 
 from app.models.billing import (
@@ -45,7 +46,15 @@ def _invoice(db_session, account_id, total: str, number: str) -> Invoice:
 
 def _import_payment(db_session, account_id, amount: str, **kw):
     """Drive the real import path: validate the CSV row, then persist it."""
-    rows = [{"account_id": str(account_id), "amount": amount, "currency": "NGN", **kw}]
+    rows = [
+        {
+            "account_id": str(account_id),
+            "amount": amount,
+            "currency": "NGN",
+            "external_id": f"test-import-{uuid.uuid4()}",
+            **kw,
+        }
+    ]
     valid, errors = _validate_rows("payments", rows)
     assert not errors, errors
     payment = _persist_row(db_session, "payments", valid[0], source_name="test-import")

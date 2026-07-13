@@ -27,12 +27,16 @@ from app.models.catalog import (
 )
 from app.models.collections import DunningCase
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
-from app.models.lifecycle import LifecycleEventType, SubscriptionLifecycleEvent
+from app.models.lifecycle import SubscriptionLifecycleEvent
 from app.models.network_monitoring import NetworkDevice, PopSite
 from app.models.service_extension import ServiceExtension, ServiceExtensionEntry
 from app.models.subscriber import Address, Subscriber, SubscriberStatus
 from app.models.system_user import SystemUser
 from app.models.usage import AccountingStatus, RadiusAccountingSession
+from app.services.account_lifecycle import (
+    cancel_subscription,
+    transition_account_status,
+)
 from app.services.invoice_collectibility import (
     open_invoice_balance,
     open_invoice_filters_for_accounts,
@@ -1249,36 +1253,15 @@ def disable_subscriber_from_crm(
     source: str | None,
     reason: str | None,
 ) -> dict[str, Any]:
-    now = datetime.now(UTC)
     previous_status = enum_value(subscriber.status)
-    subscriber.status = SubscriberStatus.disabled
-    subscriber.is_active = False
-    subscriptions = list(
-        db.scalars(
-            select(Subscription).where(Subscription.subscriber_id == subscriber.id)
-        ).all()
+    transition_account_status(
+        db,
+        str(subscriber.id),
+        SubscriberStatus.disabled,
+        reason=reason or "Disabled from CRM ingress",
+        source=actor or source or "crm",
+        emit=False,
     )
-    for subscription in subscriptions:
-        if subscription.status in {
-            SubscriptionStatus.blocked,
-            SubscriptionStatus.suspended,
-            SubscriptionStatus.stopped,
-        }:
-            old_status = subscription.status
-            subscription.status = SubscriptionStatus.disabled
-            subscription.end_at = subscription.end_at or now
-            subscription.canceled_at = subscription.canceled_at or now
-            db.add(
-                SubscriptionLifecycleEvent(
-                    subscription_id=subscription.id,
-                    event_type=LifecycleEventType.cancel,
-                    from_status=old_status,
-                    to_status=SubscriptionStatus.disabled,
-                    reason=reason,
-                    actor=actor or source or "crm",
-                    metadata_={"source": source or "crm"},
-                )
-            )
     log_status_writeback(
         db,
         subscriber_id=subscriber.id,
@@ -2021,7 +2004,14 @@ def create_subscription(
         session.commit()
     except IntegrityError:
         session.rollback()
-        subscription.status = SubscriptionStatus.canceled
+        cancel_subscription(
+            session,
+            str(subscription.id),
+            "Duplicate CRM external reference",
+            "crm_subscription_create",
+            emit=False,
+            generate_credit=False,
+        )
         invoice.is_active = False
         session.commit()
         existing = _find_crm_subscription(session, subscriber.id, external_ref)

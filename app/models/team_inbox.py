@@ -473,6 +473,11 @@ class InboxMessage(Base):
     conversation_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("inbox_conversations.id"), nullable=False
     )
+    notification_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("notifications.id", ondelete="SET NULL"),
+        index=True,
+    )
     channel_type: Mapped[str] = mapped_column(
         String(40), default=InboxChannelType.email.value, nullable=False
     )
@@ -502,6 +507,7 @@ class InboxMessage(Base):
     )
 
     conversation = relationship("InboxConversation", back_populates="messages")
+    notification = relationship("Notification")
 
 
 class InboxMediaAsset(Base):

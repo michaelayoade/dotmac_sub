@@ -101,6 +101,9 @@ from app.services.auth_dependencies import require_permission
 from app.services.common import coerce_uuid
 from app.tasks.exports import run_export_job
 from app.tasks.gis import run_batch_geocode_job
+from app.tasks.imports import (
+    process_import_run as process_import_run_task,
+)
 from app.tasks.imports import run_import_job
 from app.web.request_parsing import (
     parse_form_data,
@@ -508,6 +511,42 @@ def system_import_wizard_submit(
         )
         total_rows = len(parsed_preview.rows)
         threshold = web_system_import_wizard_service.background_threshold_rows(db)
+        from app.services.financial_imports import FINANCIAL_IMPORT_MODULES
+
+        if module in FINANCIAL_IMPORT_MODULES:
+            # Financial input always enters the durable run ledger first. Files
+            # are normalized to JSON so the exact validated rows are retained
+            # and the apply action cannot read changed upload bytes.
+            staged_text = json.dumps(parsed_preview.rows, default=str)
+            run = import_runs_service.create_import_run(
+                db,
+                module=module,
+                raw_text=staged_text,
+                data_format="json",
+                source_name=source_name,
+                column_mapping=column_mapping,
+                csv_delimiter=csv_delimiter,
+                dry_run=True,
+                created_by=(current_user.get("email") or "").strip() or None,
+            )
+            if total_rows >= threshold:
+                from app.services.queue_adapter import enqueue_task
+
+                enqueue_task(
+                    process_import_run_task,
+                    args=[str(run.id)],
+                    correlation_id=f"financial_import:{run.id}",
+                    source="admin_system_import",
+                    request_id=getattr(request.state, "request_id", None),
+                    actor_id=str(current_user.get("subscriber_id") or "").strip()
+                    or None,
+                )
+            else:
+                import_runs_service.process_import_run(db, run.id)
+            return RedirectResponse(
+                f"/admin/system/import-runs/{run.id}", status_code=303
+            )
+
         if total_rows >= threshold:
             job_id = str(uuid4())
             web_system_import_wizard_service.upsert_job(
@@ -701,7 +740,7 @@ def system_import_run_apply(
     user = get_current_user(request)
     try:
         applied = import_runs_service.apply_from_dry_run(
-            db, run_id, created_by=getattr(user, "email", None)
+            db, run_id, created_by=(user.get("email") or "").strip() or None
         )
     except ValueError:
         return RedirectResponse(f"/admin/system/import-runs/{run_id}", status_code=303)
