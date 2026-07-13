@@ -58,7 +58,14 @@ def _invoice(db, account, total: str) -> Invoice:
 
 
 def _import_payment(db, account, amount: str) -> Payment:
-    rows = [{"account_id": str(account.id), "amount": amount, "currency": "NGN"}]
+    rows = [
+        {
+            "account_id": str(account.id),
+            "amount": amount,
+            "currency": "NGN",
+            "external_id": f"test-import-{uuid.uuid4()}",
+        }
+    ]
     valid, errors = _validate_rows("payments", rows)
     assert not errors, errors
     payment = _persist_row(db, "payments", valid[0], source_name="test-import")

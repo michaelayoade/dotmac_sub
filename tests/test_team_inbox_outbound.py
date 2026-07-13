@@ -161,7 +161,7 @@ def test_send_inbox_reply_sends_whatsapp_text(db_session, monkeypatch):
     assert message.external_message_id is None
     assert message.to_addresses == ["+2348035550114"]
     assert message.metadata_["delivery_status"] == "queued"
-    assert conversation.last_message_at == datetime(2026, 7, 10, 8, 5, tzinfo=UTC)
+    assert conversation.last_message_at == datetime(2026, 7, 10, 8, 5)
 
 
 def test_send_inbox_reply_sends_whatsapp_template(db_session, monkeypatch):

@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models.notification import NotificationChannel, SuppressionScope
 from app.schemas.common import ListResponse
 from app.schemas.notification import (
     AlertNotificationLogRead,
@@ -36,7 +37,7 @@ from app.schemas.notification import (
     OnCallRotationRead,
     OnCallRotationUpdate,
 )
-from app.services import communication_intents
+from app.services import communication_eligibility, communication_intents
 from app.services import notification as notification_service
 from app.services.response import list_response
 
@@ -153,15 +154,17 @@ def list_communication_intents(
 )
 def list_communication_suppressions(
     subscriber_id: UUID | None = None,
-    is_active: bool | None = True,
+    channel: NotificationChannel | None = None,
+    scope: SuppressionScope | None = None,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    items = communication_intents.list_suppressions(
+    items = communication_eligibility.list_suppressions(
         db,
         subscriber_id=subscriber_id,
-        is_active=is_active,
+        channel=channel,
+        scope=scope,
         limit=limit,
         offset=offset,
     )
@@ -178,7 +181,7 @@ def create_communication_suppression(
     payload: CommunicationSuppressionCreate,
     db: Session = Depends(get_db),
 ):
-    return communication_intents.suppress_committed(db, **payload.model_dump())
+    return communication_eligibility.suppress_committed(db, **payload.model_dump())
 
 
 @router.delete(
@@ -190,7 +193,7 @@ def deactivate_communication_suppression(
     suppression_id: UUID,
     db: Session = Depends(get_db),
 ):
-    communication_intents.unsuppress_committed(db, suppression_id)
+    communication_eligibility.unsuppress_by_id_committed(db, suppression_id)
 
 
 @router.post(

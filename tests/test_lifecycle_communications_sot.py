@@ -12,7 +12,12 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
-from app.models.notification import NotificationChannel, NotificationStatus
+from app.models.notification import (
+    NotificationChannel,
+    NotificationStatus,
+    SuppressionReason,
+    SuppressionScope,
+)
 from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
 from app.schemas.notification import NotificationCreate
 from app.services.account_lifecycle import (
@@ -20,12 +25,11 @@ from app.services.account_lifecycle import (
     transition_account_status,
     transition_subscription_status,
 )
+from app.services.communication_eligibility import suppress, unsuppress_by_id
 from app.services.communication_intents import (
     CommunicationClass,
     CommunicationIntent,
     submit,
-    suppress,
-    unsuppress,
 )
 from app.services.notification import notifications
 
@@ -118,9 +122,10 @@ def test_durable_suppression_applies_to_intents_and_legacy_queue(db_session):
         db_session,
         subscriber_id=subscriber.id,
         channel=NotificationChannel.email,
-        category="service",
-        reason="hard_bounce",
-        source="provider:webhook",
+        address=subscriber.email,
+        scope=SuppressionScope.all,
+        reason=SuppressionReason.bounce,
+        note="provider:webhook",
     )
 
     result = submit(db_session, _intent(subscriber))
@@ -134,13 +139,13 @@ def test_durable_suppression_applies_to_intents_and_legacy_queue(db_session):
             event_type="legacy.service",
         ),
     )
-    unsuppress(db_session, row.id)
+    unsuppress_by_id(db_session, row.id)
     allowed = submit(db_session, _intent(subscriber, event_type="service.restored"))
 
     assert result.queued == ()
-    assert result.suppressed == ("subscriber:email:hard_bounce",)
+    assert result.suppressed == ("subscriber:email:bounce",)
     assert legacy.status == NotificationStatus.canceled
-    assert legacy.last_error == "Suppressed by communication ledger: hard_bounce"
+    assert legacy.last_error == "Suppressed by communication ledger: bounce"
     assert len(allowed.queued) == 1
 
 

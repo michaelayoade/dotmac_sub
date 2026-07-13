@@ -15,7 +15,9 @@ Projection order is account override, active service (including collections stat
 ### Communications
 
 - `communication_intents` records why communication is requested, its audience root, class, channels, schedule, content, sender context, and dedupe key.
-- `communication_suppressions` owns durable hard-bounce, compliance, and explicit address/account suppressions.
+- `communication_eligibility` owns the existing `communication_suppressions`
+  ledger and the single address/channel eligibility decision. Intent expansion
+  consumes that owner; it does not maintain a second suppression model.
 - `notifications` is the delivery outbox. Every customer-facing notification points to an intent and identifies its expanded audience.
 - `notification_deliveries` and `notifications.status` own provider outcomes.
 - `inbox_messages` and `campaign_recipients` are projections linked by `notification_id`; they do not invoke providers.
@@ -33,12 +35,13 @@ The processing order is:
 
 Disabled and canceled subscribers never receive customer communication. Their active reseller can still receive a transactional event concerning the subscriber. Marketing requires subscriber opt-in and is never sent to an unlinked contact without proven identity/consent.
 
-## Migration 274
+## Migration 277
 
 - Adds explicit subscriber lifecycle override fields.
 - Preserves non-`new` subscriptionless account states as migration overrides.
 - Preserves terminal account/service conflicts as overrides for reconciliation.
-- Adds durable intents and notification/inbox lineage.
+- Adds durable intents and notification/inbox lineage. The suppression table is
+  retained from migration 273 and is not recreated or owned by this migration.
 - Backfills active legacy outbox rows (`queued`, `sending`, and retryable `failed`) one-to-one into intents.
 - Backfills normalized email hard-bounce suppressions from communication logs and delivery records.
 

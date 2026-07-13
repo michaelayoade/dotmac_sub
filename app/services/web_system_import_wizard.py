@@ -17,7 +17,7 @@ from typing import Any
 from uuid import UUID
 from xml.etree import ElementTree as ET  # nosec
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.orm import Session
 
 from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentStatus
@@ -93,7 +93,7 @@ class PaymentImportRow(BaseModel):
     currency: str = "NGN"
     status: PaymentStatus = PaymentStatus.succeeded
     memo: str | None = None
-    external_id: str | None = None
+    external_id: str = Field(min_length=1, max_length=255)
     invoice_number: str | None = None
 
 

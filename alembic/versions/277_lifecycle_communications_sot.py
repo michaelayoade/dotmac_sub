@@ -213,64 +213,6 @@ def _align_delivery_lineage() -> None:
         )
 
 
-def _create_suppressions() -> None:
-    tables = set(sa.inspect(op.get_bind()).get_table_names())
-    if "communication_suppressions" not in tables:
-        op.create_table(
-            "communication_suppressions",
-            sa.Column(
-                "id",
-                postgresql.UUID(as_uuid=True),
-                primary_key=True,
-                server_default=sa.text("gen_random_uuid()"),
-            ),
-            sa.Column(
-                "subscriber_id",
-                postgresql.UUID(as_uuid=True),
-                sa.ForeignKey("subscribers.id", ondelete="CASCADE"),
-                nullable=True,
-            ),
-            sa.Column(
-                "channel",
-                postgresql.ENUM(name="notificationchannel", create_type=False),
-                nullable=True,
-            ),
-            sa.Column("category", sa.String(40), nullable=True),
-            sa.Column("normalized_address", sa.String(255), nullable=True),
-            sa.Column("reason", sa.String(120), nullable=False),
-            sa.Column("source", sa.String(120), nullable=False),
-            sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True),
-            sa.Column(
-                "is_active", sa.Boolean(), nullable=False, server_default=sa.true()
-            ),
-            sa.Column(
-                "created_at",
-                sa.DateTime(timezone=True),
-                nullable=False,
-                server_default=sa.func.now(),
-            ),
-            sa.Column(
-                "updated_at",
-                sa.DateTime(timezone=True),
-                nullable=False,
-                server_default=sa.func.now(),
-            ),
-        )
-    existing_indexes = _indexes("communication_suppressions")
-    if "ix_communication_suppressions_lookup" not in existing_indexes:
-        op.create_index(
-            "ix_communication_suppressions_lookup",
-            "communication_suppressions",
-            ["subscriber_id", "channel", "category", "is_active"],
-        )
-    if "ix_communication_suppressions_address" not in existing_indexes:
-        op.create_index(
-            "ix_communication_suppressions_address",
-            "communication_suppressions",
-            ["normalized_address", "is_active"],
-        )
-
-
 def _backfill() -> None:
     op.execute(
         sa.text(
@@ -278,7 +220,7 @@ def _backfill() -> None:
             UPDATE subscribers s
             SET lifecycle_override_status = s.status,
                 lifecycle_override_reason = 'Preserved pre-SOT account state',
-                lifecycle_override_source = 'migration:274',
+                lifecycle_override_source = 'migration:277',
                 lifecycle_override_at = now()
             WHERE s.lifecycle_override_status IS NULL
               AND s.status::text <> 'new'
@@ -294,7 +236,7 @@ def _backfill() -> None:
             UPDATE subscribers s
             SET lifecycle_override_status = s.status,
                 lifecycle_override_reason = 'Preserved terminal account/service conflict',
-                lifecycle_override_source = 'migration:274',
+                lifecycle_override_source = 'migration:277',
                 lifecycle_override_at = now()
             WHERE s.lifecycle_override_status IS NULL
               AND s.status::text IN ('disabled', 'canceled')
@@ -325,7 +267,7 @@ def _backfill() -> None:
                      ELSE 'transactional' END,
                 n.template_id, n.subject, n.body,
                 json_build_array(n.channel::text), false, 'expanded',
-                '[]'::json, json_build_object('source', 'migration:274'), n.send_at,
+                '[]'::json, json_build_object('source', 'migration:277'), n.send_at,
                 n.created_at, n.created_at, n.updated_at
             FROM notifications n
             WHERE n.subscriber_id IS NOT NULL
@@ -353,30 +295,34 @@ def _backfill() -> None:
         sa.text(
             """
             INSERT INTO communication_suppressions (
-                id, subscriber_id, channel, category, normalized_address,
-                reason, source, expires_at, is_active, created_at, updated_at
+                id, subscriber_id, channel, address, raw_address,
+                scope, reason, note, created_at, created_by
             )
             SELECT gen_random_uuid(), bounced.subscriber_id,
-                   CAST('email' AS notificationchannel), NULL,
-                   bounced.normalized_address, 'historical_hard_bounce',
-                   'migration:274', NULL, true, now(), now()
+                   'email', bounced.normalized_address, bounced.normalized_address,
+                   'all', 'bounce', 'Historical hard bounce', now(), 'migration:277'
             FROM (
-                SELECT DISTINCT subscriber_id, lower(trim(recipient)) normalized_address
-                FROM communication_logs
-                WHERE channel::text = 'email' AND status::text = 'bounced'
-                  AND recipient IS NOT NULL AND trim(recipient) <> ''
-                UNION
-                SELECT DISTINCT n.subscriber_id, lower(trim(n.recipient))
-                FROM notification_deliveries d
-                JOIN notifications n ON n.id = d.notification_id
-                WHERE n.channel::text = 'email' AND d.status::text = 'bounced'
-                  AND n.recipient IS NOT NULL AND trim(n.recipient) <> ''
+                SELECT DISTINCT ON (normalized_address)
+                       subscriber_id, normalized_address
+                FROM (
+                    SELECT subscriber_id,
+                           lower(trim(recipient)) normalized_address
+                    FROM communication_logs
+                    WHERE channel::text = 'email' AND status::text = 'bounced'
+                      AND recipient IS NOT NULL AND trim(recipient) <> ''
+                    UNION ALL
+                    SELECT n.subscriber_id, lower(trim(n.recipient))
+                    FROM notification_deliveries d
+                    JOIN notifications n ON n.id = d.notification_id
+                    WHERE n.channel::text = 'email' AND d.status::text = 'bounced'
+                      AND n.recipient IS NOT NULL AND trim(n.recipient) <> ''
+                ) candidates
+                ORDER BY normalized_address, subscriber_id NULLS LAST
             ) bounced
             WHERE NOT EXISTS (
                 SELECT 1 FROM communication_suppressions cs
                 WHERE cs.channel::text = 'email'
-                  AND cs.normalized_address = bounced.normalized_address
-                  AND cs.is_active
+                  AND cs.address = bounced.normalized_address
             )
             """
         )
@@ -387,11 +333,15 @@ def upgrade() -> None:
     _add_lifecycle_override_columns()
     _create_communication_intents()
     _align_delivery_lineage()
-    _create_suppressions()
     _backfill()
 
 
 def downgrade() -> None:
+    op.execute(
+        sa.text(
+            "DELETE FROM communication_suppressions WHERE created_by = 'migration:277'"
+        )
+    )
     if "notification_id" in _columns("inbox_messages"):
         if "ix_inbox_messages_notification_id" in _indexes("inbox_messages"):
             op.drop_index(
@@ -427,8 +377,6 @@ def downgrade() -> None:
             op.drop_column("notifications", column)
 
     tables = set(sa.inspect(op.get_bind()).get_table_names())
-    if "communication_suppressions" in tables:
-        op.drop_table("communication_suppressions")
     if "communication_intents" in tables:
         op.drop_table("communication_intents")
 

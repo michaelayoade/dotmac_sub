@@ -100,6 +100,17 @@ def _build_inline_xlsx(headers: list[str], rows: list[list[str]]) -> bytes:
     return output.getvalue()
 
 
+def test_payment_import_requires_external_id_during_validation(subscriber):
+    valid, errors = import_wizard_service._validate_rows(
+        "payments",
+        [{"account_id": str(subscriber.id), "amount": "1000.00"}],
+    )
+
+    assert valid == []
+    assert len(errors) == 1
+    assert "external_id" in errors[0]["detail"]
+
+
 def test_execute_import_dry_run_does_not_persist(db_session):
     payload = "first_name,last_name,email\nAda,Lovelace,ada@example.com\n"
 

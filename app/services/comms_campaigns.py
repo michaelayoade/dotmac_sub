@@ -30,11 +30,11 @@ from app.models.team_inbox import (
 )
 from app.services import team_inbox_routing, team_outbound
 from app.services.common import coerce_uuid
+from app.services.communication_eligibility import suppression_reason
 from app.services.communication_intents import (
     CommunicationClass,
     CommunicationIntent,
     submit,
-    suppression_reason,
 )
 from app.services.customer_identity_normalization import normalize_phone_identifier
 
@@ -458,10 +458,9 @@ def send_campaign_batch(
         channel = NotificationChannel(campaign.channel)
         durable_suppression = suppression_reason(
             db,
-            subscriber_id=subscriber.id,
             channel=channel,
             category="marketing",
-            recipient=recipient.address,
+            address=recipient.address,
         )
         if durable_suppression:
             recipient.status = CampaignRecipientStatus.skipped.value

@@ -7,22 +7,17 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.notification import (
     CommunicationIntentRecord,
-    CommunicationSuppression,
     Notification,
     NotificationChannel,
     NotificationStatus,
 )
 from app.models.subscriber import Reseller, ResellerUser, Subscriber
 from app.schemas.notification import NotificationCreate
-from app.services.customer_identity_normalization import (
-    normalize_email_identifier,
-    normalize_phone_identifier,
-)
+from app.services.communication_eligibility import suppression_reason
 from app.services.customer_notification_policy import (
     resolve_subscriber_id_for_recipient,
 )
@@ -54,6 +49,7 @@ class CommunicationIntent:
     dedupe_key: str | None = None
     send_at: datetime | None = None
     requested_status: NotificationStatus = NotificationStatus.queued
+    requested_last_error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -62,141 +58,6 @@ class CommunicationIntentResult:
     deliveries: tuple[Notification, ...]
     queued: tuple[Notification, ...]
     suppressed: tuple[str, ...]
-
-
-def _normalized_address(channel: NotificationChannel, value: str | None) -> str | None:
-    if channel == NotificationChannel.email:
-        return normalize_email_identifier(value)
-    if channel in {NotificationChannel.sms, NotificationChannel.whatsapp}:
-        return normalize_phone_identifier(value)
-    return (value or "").strip().lower() or None
-
-
-def suppression_reason(
-    db: Session,
-    *,
-    subscriber_id: UUID | None,
-    channel: NotificationChannel,
-    category: str | None,
-    recipient: str | None,
-    now: datetime | None = None,
-) -> str | None:
-    timestamp = now or datetime.now(UTC)
-    normalized = _normalized_address(channel, recipient)
-    query = db.query(CommunicationSuppression).filter(
-        CommunicationSuppression.is_active.is_(True),
-        or_(
-            CommunicationSuppression.expires_at.is_(None),
-            CommunicationSuppression.expires_at > timestamp,
-        ),
-    )
-    if subscriber_id is not None and normalized:
-        query = query.filter(
-            or_(
-                CommunicationSuppression.subscriber_id == subscriber_id,
-                CommunicationSuppression.normalized_address == normalized,
-            )
-        )
-    elif subscriber_id is not None:
-        query = query.filter(CommunicationSuppression.subscriber_id == subscriber_id)
-    elif normalized:
-        query = query.filter(CommunicationSuppression.normalized_address == normalized)
-    else:
-        return None
-    query = query.filter(
-        or_(
-            CommunicationSuppression.channel.is_(None),
-            CommunicationSuppression.channel == channel,
-        ),
-        or_(
-            CommunicationSuppression.category.is_(None),
-            CommunicationSuppression.category == category,
-        ),
-    )
-    row = query.order_by(CommunicationSuppression.created_at.desc()).first()
-    return row.reason if row is not None else None
-
-
-def suppress(
-    db: Session,
-    *,
-    reason: str,
-    source: str,
-    subscriber_id: UUID | None = None,
-    channel: NotificationChannel | None = None,
-    category: str | None = None,
-    address: str | None = None,
-    expires_at: datetime | None = None,
-) -> CommunicationSuppression:
-    if subscriber_id is None and not address:
-        raise ValueError("subscriber_id or address is required")
-    normalized = _normalized_address(channel, address) if channel else None
-    existing = (
-        db.query(CommunicationSuppression)
-        .filter(CommunicationSuppression.subscriber_id == subscriber_id)
-        .filter(CommunicationSuppression.channel == channel)
-        .filter(CommunicationSuppression.category == category)
-        .filter(CommunicationSuppression.normalized_address == normalized)
-        .filter(CommunicationSuppression.is_active.is_(True))
-        .one_or_none()
-    )
-    if existing is not None:
-        existing.reason = reason
-        existing.source = source
-        existing.expires_at = expires_at
-        db.flush()
-        return existing
-    row = CommunicationSuppression(
-        subscriber_id=subscriber_id,
-        channel=channel,
-        category=category,
-        normalized_address=normalized,
-        reason=reason,
-        source=source,
-        expires_at=expires_at,
-    )
-    db.add(row)
-    db.flush()
-    return row
-
-
-def unsuppress(db: Session, suppression_id: UUID) -> None:
-    row = db.get(CommunicationSuppression, suppression_id)
-    if row is None:
-        raise ValueError("Communication suppression not found")
-    row.is_active = False
-    db.flush()
-
-
-def suppress_committed(
-    db: Session,
-    *,
-    reason: str,
-    source: str,
-    subscriber_id: UUID | None = None,
-    channel: NotificationChannel | None = None,
-    category: str | None = None,
-    address: str | None = None,
-    expires_at: datetime | None = None,
-) -> CommunicationSuppression:
-    row = suppress(
-        db,
-        reason=reason,
-        source=source,
-        subscriber_id=subscriber_id,
-        channel=channel,
-        category=category,
-        address=address,
-        expires_at=expires_at,
-    )
-    db.commit()
-    db.refresh(row)
-    return row
-
-
-def unsuppress_committed(db: Session, suppression_id: UUID) -> None:
-    unsuppress(db, suppression_id)
-    db.commit()
 
 
 def list_intents(
@@ -214,27 +75,6 @@ def list_intents(
         query = query.filter(CommunicationIntentRecord.status == status)
     return list(
         query.order_by(CommunicationIntentRecord.created_at.desc())
-        .offset(offset)
-        .limit(limit)
-        .all()
-    )
-
-
-def list_suppressions(
-    db: Session,
-    *,
-    subscriber_id: UUID | None = None,
-    is_active: bool | None = True,
-    limit: int = 50,
-    offset: int = 0,
-) -> list[CommunicationSuppression]:
-    query = db.query(CommunicationSuppression)
-    if subscriber_id is not None:
-        query = query.filter(CommunicationSuppression.subscriber_id == subscriber_id)
-    if is_active is not None:
-        query = query.filter(CommunicationSuppression.is_active == is_active)
-    return list(
-        query.order_by(CommunicationSuppression.created_at.desc())
         .offset(offset)
         .limit(limit)
         .all()
@@ -361,10 +201,9 @@ def submit(db: Session, intent: CommunicationIntent) -> CommunicationIntentResul
         else:
             reason = suppression_reason(
                 db,
-                subscriber_id=subscriber.id if subscriber else None,
                 channel=channel,
                 category=intent.category,
-                recipient=delivery_recipient,
+                address=delivery_recipient,
             )
             if reason:
                 suppressed.append(f"subscriber:{channel.value}:{reason}")
@@ -385,6 +224,7 @@ def submit(db: Session, intent: CommunicationIntent) -> CommunicationIntentResul
                     body=intent.body,
                     status=intent.requested_status,
                     send_at=intent.send_at,
+                    last_error=intent.requested_last_error,
                     metadata_=dict(intent.metadata),
                 )
                 notification = (
@@ -408,10 +248,9 @@ def submit(db: Session, intent: CommunicationIntent) -> CommunicationIntentResul
         for reseller_recipient in _reseller_addresses(db, reseller, channel):
             reseller_reason = suppression_reason(
                 db,
-                subscriber_id=None,
                 channel=channel,
                 category=intent.category,
-                recipient=reseller_recipient,
+                address=reseller_recipient,
             )
             if reseller_reason:
                 suppressed.append(f"reseller:{channel.value}:{reseller_reason}")

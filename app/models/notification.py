@@ -100,55 +100,6 @@ class CommunicationIntentRecord(Base):
     notifications = relationship("Notification", back_populates="communication_intent")
 
 
-class CommunicationSuppression(Base):
-    """Durable opt-out/bounce/compliance suppression for customer communication."""
-
-    __tablename__ = "communication_suppressions"
-    __table_args__ = (
-        Index(
-            "ix_communication_suppressions_lookup",
-            "subscriber_id",
-            "channel",
-            "category",
-            "is_active",
-        ),
-        Index(
-            "ix_communication_suppressions_address",
-            "normalized_address",
-            "is_active",
-        ),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("subscribers.id", ondelete="CASCADE"),
-        nullable=True,
-    )
-    channel: Mapped[NotificationChannel | None] = mapped_column(
-        Enum(NotificationChannel), nullable=True
-    )
-    category: Mapped[str | None] = mapped_column(String(40))
-    normalized_address: Mapped[str | None] = mapped_column(String(255))
-    reason: Mapped[str] = mapped_column(String(120), nullable=False)
-    source: Mapped[str] = mapped_column(String(120), nullable=False)
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
-        onupdate=lambda: datetime.now(UTC),
-        nullable=False,
-    )
-
-    subscriber = relationship("Subscriber")
-
-
 class DeliveryStatus(enum.Enum):
     accepted = "accepted"
     delivered = "delivered"

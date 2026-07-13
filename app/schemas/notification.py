@@ -11,6 +11,8 @@ from app.models.notification import (
     DeliveryStatus,
     NotificationChannel,
     NotificationStatus,
+    SuppressionReason,
+    SuppressionScope,
 )
 
 
@@ -138,12 +140,12 @@ class CommunicationIntentRead(BaseModel):
 
 class CommunicationSuppressionCreate(BaseModel):
     subscriber_id: UUID | None = None
-    channel: NotificationChannel | None = None
-    category: str | None = Field(default=None, max_length=40)
-    address: str | None = Field(default=None, max_length=255)
-    reason: str = Field(min_length=1, max_length=120)
-    source: str = Field(min_length=1, max_length=120)
-    expires_at: datetime | None = None
+    channel: NotificationChannel
+    address: str = Field(min_length=1, max_length=320)
+    scope: SuppressionScope = SuppressionScope.marketing
+    reason: SuppressionReason = SuppressionReason.unsubscribe
+    note: str | None = None
+    created_by: str | None = Field(default=None, max_length=120)
 
 
 class CommunicationSuppressionRead(BaseModel):
@@ -151,15 +153,14 @@ class CommunicationSuppressionRead(BaseModel):
 
     id: UUID
     subscriber_id: UUID | None
-    channel: NotificationChannel | None
-    category: str | None
-    normalized_address: str | None
-    reason: str
-    source: str
-    expires_at: datetime | None
-    is_active: bool
+    channel: NotificationChannel
+    address: str
+    raw_address: str | None
+    scope: SuppressionScope
+    reason: SuppressionReason
+    note: str | None
     created_at: datetime
-    updated_at: datetime
+    created_by: str | None
 
 
 class NotificationBulkCreateRequest(BaseModel):

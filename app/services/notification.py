@@ -361,14 +361,13 @@ class Notifications(ListResponseMixin):
             data["last_error"] = "Suppressed by customer notification preferences"
             return
 
-        from app.services.communication_intents import suppression_reason
+        from app.services.communication_eligibility import suppression_reason
 
         durable_suppression = suppression_reason(
             db,
-            subscriber_id=subscriber_id,
             channel=channel,
             category=category,
-            recipient=recipient,
+            address=recipient,
         )
         if durable_suppression:
             data["status"] = NotificationStatus.canceled
@@ -487,10 +486,12 @@ class Notifications(ListResponseMixin):
                 body=payload.body,
                 template_id=payload.template_id,
                 channels=(payload.channel,),
+                include_reseller=False,
                 subscriber_recipients={payload.channel: payload.recipient},
                 metadata=dict(payload.metadata_ or {}),
                 send_at=payload.send_at,
                 requested_status=payload.status,
+                requested_last_error=payload.last_error,
             ),
         )
         notification = next(
@@ -528,11 +529,13 @@ class Notifications(ListResponseMixin):
                 body=payload.body,
                 template_id=payload.template_id,
                 channels=(payload.channel,),
+                include_reseller=False,
                 subscriber_recipients={payload.channel: payload.recipient},
                 persist_policy_suppressions=False,
                 metadata=dict(payload.metadata_ or {}),
                 send_at=payload.send_at,
                 requested_status=payload.status,
+                requested_last_error=payload.last_error,
             ),
         )
         return next(

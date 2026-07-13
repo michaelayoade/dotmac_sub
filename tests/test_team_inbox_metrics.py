@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from app.api import analytics as analytics_api
+from app.models.notification import Notification
 from app.models.service_team import ServiceTeam, ServiceTeamMember, ServiceTeamType
 from app.models.team_inbox import (
     InboxAgentPresence,
@@ -18,7 +19,7 @@ from app.models.team_inbox import (
     InboxTeamRole,
     InboxTeamSource,
 )
-from app.services import team_inbox_metrics, team_inbox_outbound
+from app.services import team_inbox_metrics
 from app.web.admin import reports as admin_reports
 
 
@@ -493,18 +494,12 @@ def test_inbox_escalation_report_action_auto_assigns_candidate(db_session):
     )
 
 
-def test_inbox_escalation_report_reply_sends_team_message(db_session, monkeypatch):
+def test_inbox_escalation_report_reply_queues_team_message(db_session):
     team = _team(db_session)
     conversation = _conversation(
         db_session,
         team,
         first_at=datetime(2026, 1, 1, 8, 0, tzinfo=UTC),
-    )
-    sent: dict[str, object] = {}
-    monkeypatch.setattr(
-        team_inbox_outbound.email_service,
-        "send_email",
-        lambda *args, **kwargs: sent.update(kwargs) or True,
     )
     db_session.commit()
 
@@ -517,9 +512,11 @@ def test_inbox_escalation_report_reply_sends_team_message(db_session, monkeypatc
     )
 
     message = db_session.query(InboxMessage).one()
+    notification = db_session.query(Notification).one()
     assert response.status_code == 303
     assert "status=success" in response.headers["location"]
-    assert sent["to_email"] == "customer@example.com"
-    assert sent["activity"] == "support_ticket"
+    assert notification.recipient == "customer@example.com"
+    assert notification.metadata_["activity"] == "support_ticket"
     assert message.direction == InboxMessageDirection.outbound.value
+    assert message.notification_id == notification.id
     assert message.metadata_["source_route"] == "admin_inbox_escalation_reply"
