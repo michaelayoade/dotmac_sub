@@ -23,7 +23,6 @@ _LAZY_MODULES = {
     "queue_adapter",
     "queue_strategy_adapter",
     "rate_limiter_adapter",
-    "service_intent_adapter",
     "service_intent_ui_adapter",
     "web_network_olts",
 }
