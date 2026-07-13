@@ -33,33 +33,48 @@ that obscure business behavior.
 
 ## Financial and Access
 
-1. Ledger and billing account services own money movement and balances.
-2. Customer financial position owns read-side financial summaries.
-3. `financial.access_resolution` owns financial suspension/restoration
+1. `financial.ledger` owns the append-only record lifecycle and reversal
+   invariant. Domain owners decide why money moves.
+2. `financial.payments`, `financial.invoices`, and `financial.credit_notes` own
+   their document lifecycles and the ledger postings those transitions require.
+3. `financial.vas_wallet` owns its separate append-only wallet, spendable
+   balance, and atomic bridge into `financial.payments` for bill settlement.
+4. Customer financial position owns read-side financial summaries.
+5. `financial.access_resolution` owns financial suspension/restoration
    eligibility. For prepaid service, both directions compare the customer
    financial position with the single `financial.prepaid_threshold`; the
    existence or size of one payment is never itself permission to restore.
-4. `financial.prepaid_enforcement` owns the prepaid candidate cohort and the
+6. `financial.prepaid_enforcement` owns the prepaid candidate cohort and the
    warn/suspend/restore plan consumed by both dry-run and execution. It consumes
    the funding decision from `financial.access_resolution`; it does not create
    another balance or threshold rule.
-5. Dunning owns postpaid enforcement; prepaid enforcement owns prepaid access.
+7. Dunning owns postpaid enforcement; prepaid enforcement owns prepaid access.
    Both converge on the account lifecycle writer, which re-checks billing
    profile validity, payment-arrangement/proof/extension shields, and billing
    enforcement health immediately before a financial suspension.
-6. Scheduled billing, collections, and payment-reconciliation services own DB
+8. Scheduled billing, collections, and payment-reconciliation services own DB
    sessions, transaction outcomes, and operational logging for Celery runners.
-6. `financial.payment_webhooks` owns signature-verified provider-payload
+9. `financial.payment_webhooks` owns signature-verified provider-payload
    projection and inbound dead-letter lifecycle. Replay rebuilds the same
    settlement command as live delivery; `financial.payment_provider_events`
    owns idempotent event processing, delegates the monetary write to the
    payment owner, and must resume an incomplete event rather than treating
    receipt identity as proof that money was posted.
+10. `financial.vas_operations` owns admin VAS mutation transactions and manual
+   purchase resolution. `financial.vas_refunds` exclusively owns
+   refund-to-source eligibility, the durable request lifecycle, and wallet
+   reservation/reversal projection. It commits the request and wallet debit
+   before contacting the gateway; provider responses are observations that an
+   idempotent reconciler can replay. Gateway adapters only submit or observe a
+   refund against the original funding transaction and never decide eligibility
+   or lifecycle state.
 
 Rule: no module should infer access from draft invoices, ad hoc balances, or
 legacy import fields when a billing/access resolver exists. Celery tasks only
 apply scheduling, routing, idempotency, and feature-gate concerns before calling
-the owning financial service.
+the owning financial service. Admin VAS routes do not mutate catalog or
+transaction rows, control wallet transactions, or decide whether funds may
+leave through a gateway.
 
 ## Customer Context
 
@@ -67,9 +82,20 @@ the owning financial service.
 network summary composition.
 2. Customer network context owns the raw customer-to-network footprint.
 3. Network access path owns the customer service path.
+4. `customer.service_status` owns customer-visible service health and action
+   hints, including whether payment can restore every active service hold and
+   the authoritative amount required by financial policy.
+5. `customer.usage_summary` owns customer usage windows, headline totals, and
+   total provenance. An authoritative zero is a valid value, not a missing-data
+   sentinel.
 
 Rule: admin, portal, support, and reporting views should consume context
-services instead of rebuilding customer joins.
+services instead of rebuilding customer joins. Customer clients must not infer
+that `blocked` or `suspended` means payment-restorable, or calculate restoration
+amounts from locally loaded invoice rows; they consume `/me/service-status`.
+Customer clients consume `/me/usage-summary` totals and provenance; they do not
+replace a server total with a loaded-session page, chart-series sum, or a
+different time window.
 
 ## Secrets and Credentials
 
@@ -92,14 +118,26 @@ in forms, or rotate key material directly.
    suppression.
 3. Notification service owns notification rows and delivery lifecycle.
 4. Staff notification service owns internal/admin notification creation.
-5. Team inbox services own conversation notes, assignment, replies,
-   contact-linking, widget writes, inbound-channel ingestion, and collaboration.
-6. Campaign services own marketing audience, sequence, and content decisions.
+5. `communications.customer_read_state` owns customer notification read/unread
+   state and unread counts across the web portal and mobile app. Subscriber
+   metadata is its bounded persistence mechanism; `/me/notifications` projects
+   that state, and `/me/notifications/read` is the self-scoped mutation
+   boundary. Device storage is only a one-way legacy migration input. The
+   identity-cleared GET response cache may render last-known state offline but
+   never accepts read decisions.
+6. `communications.team_inbox` owns conversation notes, assignment, replies,
+   contact-linking, widget writes, inbound-channel ingestion, collaboration,
+   and admin mutation transactions. `app.services.team_inbox_commands` is the
+   committed admin command boundary; `app.web.admin.inbox` only translates HTTP
+   inputs and outcomes.
+7. Campaign services own marketing audience, sequence, and content decisions.
    They request a canonical sender key; email delivery alone resolves that key
    to SMTP identity and credentials.
 
 Rule: domain services request a notification outcome; they should not construct
-notification rows or choose email/SMS/WhatsApp directly.
+notification rows, choose email/SMS/WhatsApp directly, or maintain recipient
+read state outside the owning service. Admin inbox routes must not load or
+mutate inbox ORM rows, control commits, or select alternate mutation helpers.
 
 ## Events and Webhooks
 
@@ -129,11 +167,13 @@ Dependency order:
    alert rules, and alert state mutations.
 3. `network.access_path`: resolves `subscriber/subscription -> access path`.
 4. `network.radius_sessions`: resolves online-now state from active sessions.
-5. `network.device_state`: resolves device state from admin/live/poll signals.
+5. `network.device_state`: derives NOC operational state, retry state, and alarm
+   classification from administrative intent and monitoring observations.
 6. `network.outage_impact`: resolves affected customers from topology.
 7. `network.device_groups`: owns device-group mutations, membership, and bulk
    action queueing.
-8. `network.events`: turns resolved state/impact into event decisions.
+8. `network.outage_lifecycle`: owns incident transitions, escalation planning,
+   and outage event emission.
 
 Rule: pollers write observations; resolver services decide state; event services
 decide consequences. Customer-facing outage, SLA, expiry suppression, support
@@ -143,13 +183,12 @@ context, and escalation should consume these network SOT layers.
 
 Dependency order:
 
-1. `sessions.radius_live_view`: owns `radius_active_sessions` mutations from
-   accounting start/interim/stop events.
-2. `sessions.radius_reconciliation`: reconciles external `radacct` open
-   sessions into the live view and prunes dead rows.
-3. `sessions.radius_resolution`: answers online-now and primary-session
+1. `sessions.radius_reconciliation`: is the canonical writer of the
+   `radius_active_sessions` projection; it reconciles external `radacct` open
+   sessions and prunes dead rows.
+2. `sessions.radius_resolution`: answers online-now and primary-session
    questions for customers/subscribers.
-4. `sessions.enforcement`: owns CoA, disconnect, and session refresh outcomes
+3. `sessions.enforcement`: owns CoA, disconnect, and session refresh outcomes
    after billing/access/FUP state changes.
 
 Rule: accounting imports write session facts; resolvers answer online state;
@@ -198,10 +237,22 @@ Dependency order:
 2. `operations.provisioning_workflow`: executes service-order workflows and
    provisioning steps from the resolved context.
 3. `operations.work_orders`: exposes work-order read models and customer links.
+4. `operations.field_completion`: owns field-job completion eligibility, evidence
+   requirements, and completion transitions.
+5. `operations.project_lifecycle`: owns native project field/status mutations,
+   project SLA synchronization, and lifecycle event/notification requests.
 
 Rule: provisioning callers should resolve customer/network context once through
 the operations context service before running workflow steps. Step executors may
 consume context, but should not rediscover subscriber/ONT/CPE links themselves.
+`Projects.update` is the canonical writer for native project mutations;
+Kanban, Gantt, normal edit, API, and web adapters delegate to it rather than
+maintaining parallel SLA/event/notification paths. Customer and reseller read
+authority remains controlled by `projects.native_read` until the documented CRM
+mirror cutover is complete. Field job detail projects `completion_requirements`
+from the same transition service that validates completion. Field clients consume
+that contract and may offer advisory quality checks, but must not invent a separate
+completion gate from local checklist state or cached settings.
 
 ## Control Planes
 
@@ -256,13 +307,12 @@ Service intent:
 
 1. `service_intent.catalog_policy`: owns catalog policy lookup.
 2. `service_intent.catalog_validation`: owns catalog consistency checks.
-3. `service_intent.catalog_to_network`: translates commercial subscriptions
-   into network-safe provisioning payloads.
-4. `service_intent.ont`: projects provisioning intent to ONT operations.
+3. `service_intent.subscription_nas_assignment`: owns commercial-service NAS
+   assignment.
+4. `service_intent.ont`: projects configured intent for ONT operations.
 
-Rule: catalog defines the commercial service. Network/provisioning code consumes
-service-intent payloads and should not infer plan meaning directly from catalog
-models.
+Rule: catalog policy and subscription owners define commercial intent. Network
+owners project configured intent without a parallel catalog-to-network adapter.
 
 Integrations:
 

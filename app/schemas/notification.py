@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from app.models.network_monitoring import AlertSeverity, AlertStatus
 from app.models.notification import (
@@ -64,7 +64,9 @@ class NotificationBase(BaseModel):
     body: str | None = None
     metadata_: dict[str, Any] = Field(
         default_factory=dict,
-        validation_alias="metadata",
+        # ORM models also inherit SQLAlchemy's ``metadata`` schema object, so
+        # prefer the mapped attribute before accepting the public JSON key.
+        validation_alias=AliasChoices("metadata_", "metadata"),
         serialization_alias="metadata",
     )
     status: NotificationStatus = NotificationStatus.queued
@@ -95,7 +97,7 @@ class NotificationUpdate(BaseModel):
     body: str | None = None
     metadata_: dict[str, Any] | None = Field(
         default=None,
-        validation_alias="metadata",
+        validation_alias=AliasChoices("metadata_", "metadata"),
         serialization_alias="metadata",
     )
     status: NotificationStatus | None = None
@@ -112,6 +114,23 @@ class NotificationRead(NotificationBase):
     id: UUID
     created_at: datetime
     updated_at: datetime
+
+
+class CustomerInboxNotificationRead(NotificationRead):
+    """A notification plus the signed-in customer's server-owned read state."""
+
+    is_read: bool = False
+
+
+class CustomerNotificationReadRequest(BaseModel):
+    """Mark selected notifications, or the customer's entire visible inbox."""
+
+    notification_ids: list[UUID] = Field(default_factory=list, max_length=500)
+    all_visible: bool = False
+
+
+class CustomerNotificationReadResponse(BaseModel):
+    marked: int = Field(ge=0)
 
 
 class CommunicationIntentRead(BaseModel):

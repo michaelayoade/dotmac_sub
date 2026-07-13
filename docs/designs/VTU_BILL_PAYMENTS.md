@@ -232,6 +232,29 @@ rendered); only the second is e-money. Three scenarios:
    machinery; wallet-paid bills credit back to the wallet (or scenario 2).
    Refund ledger entries reduce wallet liability symmetrically.
 
+### Refund-to-source reconciliation state machine
+
+`app.services.vas_refunds` is the single writer for refund-to-source state:
+
+```
+prepared → submitting → accepted → succeeded
+                    ↘ needs_attention
+                    ↘ failed → wallet reversal
+```
+
+- One `vas_refund_requests` row exists per top-up. The request and its wallet
+  debit are committed atomically before any gateway call, so the provider can
+  never succeed while the wallet debit exists only in an uncommitted process.
+- `submitting` means the call may have reached the provider. Retries first find
+  the refund by provider id or the durable request key; they never issue a
+  second refund from an ambiguous response.
+- Provider `pending`/processing states map to `accepted`. Terminal failure
+  creates one idempotent `rts-reversal-{request_id}` wallet credit; terminal
+  success retains the debit.
+- `app.tasks.vas.reconcile_refund_requests` observes non-terminal requests every
+  five minutes. Repeated missing/failed observations move the request to
+  `needs_attention` while preserving the reserved funds and audit trail.
+
 ## Risk knobs — recommended starting values (2026-06-12, tune after 30 days)
 
 Structural advantage: wallet users are KYC-anchored ISP subscribers (name,

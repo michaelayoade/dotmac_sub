@@ -232,7 +232,7 @@ Format: `[POLISH|CONTROL] (severity) file:line — problem → recommendation [r
 - [POLISH] (Med) `service_requests_queue.py` + `index.html` — no bulk select / no assignee-claim; multiple admins can work same request; no partial-success path → row-claim + (if bulk) per-row reporting [defer]
 - [POLISH] (Low) `service_requests/index.html:125-131` — empty state always "No service requests found" even when filtered → vary copy + "clear filter" when status set [recommend]
 - [POLISH] (Low) `service_requests/index.html:65` — `onchange="this.form.submit()"` auto-submit, no fallback button (keyboard/SR/no-JS) → add Apply button [defer]
-- [CONTROL] (Low) `service_intent_adapter.py:299,320` / `service_intent_ui_adapter.py:118` — hardcoded `connection_type="pppoe"`, service_type "internet", planned name "Internet" → promote to offer/profile config if non-PPPoE deployments appear [defer]
+- [CONTROL] (Low) `service_intent_ui_adapter.py:118` — hardcoded `connection_type="pppoe"`, service_type "internet", planned name "Internet" → promote to offer/profile config if non-PPPoE deployments appear [defer]
 
 ## Remediation status
 

@@ -12,10 +12,12 @@ from fastapi.testclient import TestClient
 from app.api.field import router
 from app.db import get_db
 from app.models.dispatch import TechnicianProfile
+from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.field_job_event import FieldJobEvent
 from app.models.field_worklog import FieldWorkLog
 from app.models.stored_file import StoredFile
 from app.models.subscriber import Subscriber, UserType
+from app.models.subscription_engine import SettingValueType
 from app.models.system_user import SystemUser
 from app.models.work_order_mirror import WorkOrderMirror
 from app.services.auth_dependencies import require_user_auth
@@ -218,6 +220,12 @@ def test_completion_requires_photo_and_signature_fallback(db_session, fake_uploa
     )
     db_session.commit()
 
+    requirements = field_transitions.completion_requirements(db_session)
+    assert requirements.evidence_required is True
+    assert requirements.minimum_photo_count == 1
+    assert requirements.customer_signoff_required is True
+    assert requirements.signature_unavailable_reason_allowed is True
+
     with pytest.raises(HTTPException) as exc:
         field_transitions.apply(
             db_session,
@@ -250,6 +258,44 @@ def test_completion_requires_photo_and_signature_fallback(db_session, fake_uploa
         == "complete"
     )
     assert completed["event"]["new_status"] == "completed"
+
+
+def test_disabled_completion_evidence_policy_allows_completion_without_evidence(
+    db_session,
+):
+    user = _user(db_session, "NoEvidence")
+    _profile(db_session, user)
+    subscriber = _subscriber(db_session)
+    _work_order(
+        db_session,
+        subscriber,
+        crm_work_order_id="wo-transition-no-evidence",
+        status="in_progress",
+    )
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.field,
+            key="completion_requires_evidence",
+            value_type=SettingValueType.boolean,
+            value_text="false",
+        )
+    )
+    db_session.commit()
+
+    requirements = field_transitions.completion_requirements(db_session)
+    completed = field_transitions.apply(
+        db_session,
+        _auth(user),
+        "wo-transition-no-evidence",
+        event="complete",
+        client_event_id=uuid4(),
+    )
+
+    assert requirements.evidence_required is False
+    assert requirements.minimum_photo_count == 0
+    assert requirements.customer_signoff_required is False
+    assert requirements.signature_unavailable_reason_allowed is False
+    assert completed["job"].status == "completed"
 
 
 def test_transition_rejects_hidden_jobs_and_invalid_unable_reason(db_session):

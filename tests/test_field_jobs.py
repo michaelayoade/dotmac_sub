@@ -281,6 +281,9 @@ def test_field_job_detail_returns_customer_and_location(db_session):
     assert detail.ticket_ref == "ticket-1"
     assert detail.project_id == "project-1"
     assert detail.access_notes == "Call on arrival"
+    assert detail.completion_requirements.evidence_required is True
+    assert detail.completion_requirements.minimum_photo_count == 1
+    assert detail.completion_requirements.customer_signoff_required is True
 
 
 def test_field_job_update_location_is_sub_authoritative(db_session):

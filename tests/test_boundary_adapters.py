@@ -172,7 +172,6 @@ def test_global_adapter_registry_contains_core_singletons() -> None:
         queue_adapter,
         queue_strategy_adapter,
         rate_limiter_adapter,
-        service_intent_adapter,
         service_intent_ui_adapter,
     )
     from app.services.adapters import adapter_registry
@@ -192,7 +191,6 @@ def test_global_adapter_registry_contains_core_singletons() -> None:
         "queue.celery": queue_adapter.queue_adapter,
         "queue.strategy": queue_strategy_adapter.queue_strategy,
         "rate_limiter.redis": rate_limiter_adapter.rate_limiter_adapter,
-        "service_intent": service_intent_adapter.service_intent_adapter,
         "service_intent.ui": service_intent_ui_adapter.service_intent_ui_adapter,
     }
 

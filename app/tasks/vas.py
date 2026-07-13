@@ -108,3 +108,27 @@ def run_vas_review_requery():
             status=status,
             duration_seconds=time.monotonic() - start,
         )
+
+
+@celery_app.task(name="app.tasks.vas.reconcile_refund_requests")
+def reconcile_refund_requests():
+    """Observe provider refund state and repair durable wallet projections."""
+    start = time.monotonic()
+    status = "success"
+    session = SessionLocal()
+    try:
+        from app.services import vas_refunds
+
+        stats = vas_refunds.reconcile_refund_requests(session)
+        logger.info("vas_refund_reconcile %s", stats)
+        return stats
+    except Exception:
+        status = "failure"
+        raise
+    finally:
+        session.close()
+        record_task_run(
+            "vas_refund_reconcile",
+            status=status,
+            duration_seconds=time.monotonic() - start,
+        )

@@ -105,6 +105,34 @@
         </div>
     </div>
 
+    <!-- Refund reconciliation -->
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <h2 class="font-semibold text-slate-900 dark:text-white">Refund reconciliation <span class="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700 dark:bg-slate-700 dark:text-slate-200">{{ refund_requests | length }}</span></h2>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Durable refund-to-source requests. Submitting and attention states keep the wallet funds reserved while the provider outcome is reconciled.</p>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
+                <thead><tr class="text-left text-xs text-slate-500 dark:text-slate-400"><th class="px-6 py-3">Created</th><th>Provider</th><th>Funding reference</th><th>Amount</th><th>Status</th><th>Provider status</th><th class="pr-6">Last error</th></tr></thead>
+                <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                    {% for refund in refund_requests %}
+                    <tr>
+                        <td class="whitespace-nowrap px-6 py-3 text-xs text-slate-500">{{ refund.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                        <td class="font-medium text-slate-900 dark:text-white">{{ refund.provider }}</td>
+                        <td class="max-w-xs truncate font-mono text-xs text-slate-500" title="{{ refund.funding_reference }}">{{ refund.funding_reference }}</td>
+                        <td class="whitespace-nowrap text-slate-900 dark:text-white">{{ currency_symbol }}{{ '%,.2f'|format(refund.amount) }}</td>
+                        <td><span class="rounded-full px-2 py-0.5 text-xs font-semibold {% if refund.status.value == 'succeeded' %}bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300{% elif refund.status.value == 'failed' %}bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-300{% elif refund.status.value == 'needs_attention' %}bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300{% else %}bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300{% endif %}">{{ refund.status.value | replace('_', ' ') }}</span></td>
+                        <td class="text-xs text-slate-500">{{ refund.provider_status or '—' }}</td>
+                        <td class="max-w-sm truncate pr-6 text-xs text-slate-500" title="{{ refund.last_error or '' }}">{{ refund.last_error or '—' }}</td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="7" class="px-6 py-6 text-sm text-slate-500 dark:text-slate-400">No refund-to-source requests yet.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
     <div class="grid gap-6 lg:grid-cols-2">
         <!-- Rate cards -->
         <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">

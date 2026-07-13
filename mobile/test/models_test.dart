@@ -325,14 +325,6 @@ void main() {
         expect(withStatus(status).isCurrent, isFalse, reason: status);
       }
     });
-
-    test('needsPayment only for blocked and suspended', () {
-      expect(withStatus('blocked').needsPayment, isTrue);
-      expect(withStatus('suspended').needsPayment, isTrue);
-      for (final status in ['active', 'pending', 'stopped', 'disabled']) {
-        expect(withStatus(status).needsPayment, isFalse, reason: status);
-      }
-    });
   });
 
   group('PlanChangeQuote', () {
@@ -477,10 +469,12 @@ void main() {
         'id': 'n1',
         'channel': 'email',
         'status': 'queued',
+        'is_read': true,
         'subject': 'Service suspended — action required',
         'event_type': 'service_suspended',
       });
       expect(n.title, 'Service suspended — action required');
+      expect(n.isRead, isTrue);
     });
 
     test('falls back to a humanised event_type when no subject', () {
@@ -491,6 +485,7 @@ void main() {
         'event_type': 'payment_received',
       });
       expect(n.title, 'payment received');
+      expect(n.isRead, isFalse);
     });
   });
 
@@ -585,6 +580,14 @@ void main() {
         'min_balance': '100.00',
         'low_balance': true,
         'grace_until': '2026-07-01T00:00:00Z',
+        'primary_action': {
+          'kind': 'top_up',
+          'label': 'Top up',
+          'message': 'Balance low — top up NGN 50.00 to keep your service.',
+          'amount': '50.00',
+          'currency': 'NGN',
+          'restores_service': false,
+        },
         'services': [
           {
             'subscription_id': 's1',
@@ -592,6 +595,14 @@ void main() {
             'billing_mode': 'prepaid',
             'usable': true,
             'reason': 'low_balance',
+            'action': {
+              'kind': 'top_up',
+              'label': 'Top up',
+              'message': 'Balance low — top up NGN 50.00 to keep your service.',
+              'amount': '50.00',
+              'currency': 'NGN',
+              'restores_service': false,
+            },
           }
         ],
       });
@@ -601,6 +612,9 @@ void main() {
       expect(s.graceUntil, isNotNull);
       expect(s.needsRenewal, isTrue);
       expect(s.services.single.actionable, isTrue);
+      expect(s.primaryAction?.kind, 'top_up');
+      expect(s.primaryAction?.amount, 50.0);
+      expect(s.primaryAction?.restoresService, isFalse);
     });
 
     test('healthy account does not flag a renewal', () {
@@ -619,6 +633,42 @@ void main() {
       });
       expect(s.needsRenewal, isFalse);
       expect(s.services.single.actionable, isFalse);
+    });
+
+    test('manual suspension directs support and never implies payment restore',
+        () {
+      final s = ServiceStatus.fromJson({
+        'billing_mode': 'postpaid',
+        'primary_action': {
+          'kind': 'contact_support',
+          'label': 'Contact support',
+          'message': 'This hold cannot be cleared by payment.',
+          'currency': 'NGN',
+          'restores_service': false,
+        },
+        'services': [
+          {
+            'subscription_id': 's1',
+            'status': 'suspended',
+            'billing_mode': 'postpaid',
+            'usable': false,
+            'reason': 'administrative_hold',
+            'action': {
+              'kind': 'contact_support',
+              'label': 'Contact support',
+              'message': 'This hold cannot be cleared by payment.',
+              'currency': 'NGN',
+              'restores_service': false,
+            },
+          }
+        ],
+      });
+
+      expect(s.unavailableServices, hasLength(1));
+      expect(s.needsRenewal, isFalse);
+      expect(s.primaryAction?.kind, 'contact_support');
+      expect(s.services.single.action?.isFinancial, isFalse);
+      expect(s.services.single.action?.restoresService, isFalse);
     });
   });
 }

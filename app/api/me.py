@@ -67,7 +67,9 @@ from app.schemas.gis import (
     MyLocationRequestRead,
 )
 from app.schemas.notification import (
-    NotificationRead,
+    CustomerInboxNotificationRead,
+    CustomerNotificationReadRequest,
+    CustomerNotificationReadResponse,
     PushTokenRead,
     PushTokenRegister,
 )
@@ -140,6 +142,7 @@ from app.services import customer_portal_flow_addons as customer_addons
 from app.services import customer_portal_flow_changes as customer_changes
 from app.services import customer_portal_flow_payment_methods as customer_cards
 from app.services import customer_portal_flow_payments as customer_payments
+from app.services import customer_portal_notifications as customer_notifications_service
 from app.services import geocoding as geocoding_service
 from app.services import notification as notification_service
 from app.services import portal_session as portal_session_service
@@ -391,6 +394,10 @@ def my_service_status(
     overdue invoices. `next_charge_at` is the next charge/invoice date, never an
     expiry — clients should read this endpoint (and `status`) rather than infer
     expiry from `next_billing_at`.
+
+    `primary_action` and per-service `action` are the customer-action contract:
+    clients must not treat a blocked/suspended status as proof that payment will
+    restore service or derive a restoration amount from their invoice cache.
     """
     from app.services.service_status import build_service_status
 
@@ -1048,7 +1055,9 @@ def my_refer_a_friend(
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
 
-@router.get("/notifications", response_model=ListResponse[NotificationRead])
+@router.get(
+    "/notifications", response_model=ListResponse[CustomerInboxNotificationRead]
+)
 def my_notifications(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
@@ -1057,9 +1066,35 @@ def my_notifications(
 ):
     """The subscriber's own notifications (in-app inbox), newest first."""
     subscriber_id = _subscriber_id(principal)
-    return notification_service.notifications.list_response_for_subscriber(
+    response = notification_service.notifications.list_response_for_subscriber(
         db, subscriber_id, limit, offset
     )
+    customer_notifications_service.apply_notification_read_state(
+        db,
+        subscriber_id=subscriber_id,
+        notifications=response["items"],
+    )
+    return response
+
+
+@router.post(
+    "/notifications/read",
+    response_model=CustomerNotificationReadResponse,
+)
+def my_notifications_mark_read(
+    payload: CustomerNotificationReadRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+):
+    """Mark selected or all visible notifications for the calling subscriber."""
+    subscriber_id = _subscriber_id(principal)
+    marked = customer_notifications_service.mark_api_notifications_read(
+        db,
+        subscriber_id=subscriber_id,
+        notification_ids=payload.notification_ids,
+        all_visible=payload.all_visible,
+    )
+    return CustomerNotificationReadResponse(marked=marked)
 
 
 @router.post("/push-tokens", response_model=PushTokenRead, status_code=201)
@@ -1115,11 +1150,12 @@ async def my_usage_summary(
 ):
     """Time-windowed data-usage total + bucketed series for the caller.
 
-    period: hour | today | yesterday | week | cycle | all. The total is billing-grade for
-    cycle (rated quota) and all (session octets), and throughput-integrated for
-    sub-day windows — see total_source / is_authoritative on the response. The
-    window has a defined start/end (unlike the legacy "last 50 sessions" sum)
-    and counts the live session's current octets.
+    period: hour | today | yesterday | week | cycle | all. The total is
+    billing-grade for cycle (session octets) and all (daily history plus session
+    octets), and throughput-integrated for sub-day windows — see total_source /
+    is_authoritative on the response. Zero is a valid authoritative value, not
+    a missing-data sentinel. The window has a defined start/end (unlike the
+    legacy "last 50 sessions" sum) and counts the live session's current octets.
     """
     subscriber_id = _subscriber_id(principal)
     summary = await usage_summary_service.get_usage_summary(db, subscriber_id, period)

@@ -182,6 +182,7 @@ from app.tasks.usage import (
 )
 from app.tasks.vacation_holds import resume_expired_holds
 from app.tasks.vas import (
+    reconcile_refund_requests,
     run_vas_requery,
     run_vas_review_requery,
     run_wallet_auto_deduct,
@@ -209,6 +210,7 @@ __all__ = [
     "sync_gis_sources",
     "run_batch_geocode_job",
     "run_vas_requery",
+    "reconcile_refund_requests",
     "run_vas_review_requery",
     "run_wallet_auto_deduct",
     "sync_vas_catalog",
