@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-from html import escape
 from urllib.parse import quote_plus
 from uuid import UUID
 
@@ -15,15 +13,13 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models.team_inbox import (
     InboxChannelType,
-    InboxConversation,
     InboxConversationStatus,
-    InboxMessage,
 )
 from app.services import (
+    team_inbox_commands,
     team_inbox_contact_links,
     team_inbox_metrics,
     team_inbox_operations,
-    team_inbox_outbound,
     team_inbox_read,
 )
 from app.services.auth_dependencies import require_permission
@@ -227,92 +223,36 @@ def team_inbox_reply(
     template_id: str | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
-    from app.services import web_admin as web_admin_service
-
-    clean_body = body_text.strip()
-    template = None
-    clean_template_id = (
-        template_id.strip()
-        if isinstance(template_id, str) and template_id.strip()
-        else None
-    )
-    if clean_template_id:
-        try:
-            template = team_inbox_operations.get_template(db, clean_template_id)
-        except team_inbox_operations.InboxOperationError as exc:
-            return _detail_redirect(conversation_id, status="error", message=str(exc))
-        if not clean_body:
-            clean_body = template.body_text.strip()
-    if not clean_body:
-        return _detail_redirect(
-            conversation_id,
-            status="error",
-            message="Reply body is required.",
+    try:
+        outcome = team_inbox_commands.reply(
+            db,
+            conversation_id=conversation_id,
+            body_text=body_text,
+            macro_id=macro_id,
+            template_id=template_id,
+            actor_person_id=_actor_id_from_request(request),
         )
-    conversation = db.get(InboxConversation, conversation_id)
-    if conversation is None or not conversation.is_active:
+    except team_inbox_commands.ConversationNotFoundError:
         return RedirectResponse(
             url="/admin/inbox?status=error&message=Conversation%20not%20found",
             status_code=303,
         )
-
-    body_html = (
-        "<p>" + "<br>".join(escape(line) for line in clean_body.splitlines()) + "</p>"
-    )
-    reply_metadata: dict[str, object] = {
-        "source_route": "admin_inbox_detail_reply",
-        "template_id": str(template.id) if template is not None else None,
-    }
-    if (
-        template is not None
-        and conversation.channel_type == InboxChannelType.whatsapp.value
-    ):
-        template_metadata = dict(template.metadata_ or {})
-        provider_template_name = str(
-            template_metadata.get("provider_template_name")
-            or template_metadata.get("whatsapp_template_name")
-            or ""
-        ).strip()
-        if provider_template_name:
-            variables = template_metadata.get("provider_template_variables")
-            reply_metadata["whatsapp_template"] = {
-                "name": provider_template_name,
-                "language": str(
-                    template_metadata.get("provider_template_language") or ""
-                ).strip()
-                or None,
-                "variables": variables if isinstance(variables, dict) else {},
-                "inbox_template_id": str(template.id),
-            }
-    result = team_inbox_outbound.send_inbox_reply(
-        db,
-        conversation=conversation,
-        payload=team_inbox_outbound.InboxReplyPayload(
-            body_html=body_html,
-            body_text=clean_body,
-            subject=template.subject if template is not None else None,
-            sent_by_person_id=web_admin_service.get_actor_id(request),
-            metadata=reply_metadata,
-        ),
-        record_failure=True,
-    )
-    if result.kind not in {"sent", "queued"}:
+    except (
+        team_inbox_commands.InboxCommandError,
+        team_inbox_operations.InboxOperationError,
+    ) as exc:
         return _detail_redirect(
             conversation_id,
             status="error",
-            message=result.reason or "Reply could not be sent.",
+            message=str(exc),
         )
-
-    team_inbox_operations.record_macro_use(db, macro_id)
-    db.commit()
-    sender = result.from_address or result.sender_key or "team sender"
     return _detail_redirect(
         conversation_id,
         status="success",
         message=(
-            f"Reply queued from {sender}."
-            if result.kind == "queued"
-            else f"Reply sent from {sender}."
+            f"Reply queued from {outcome.sender}."
+            if outcome.kind == "queued"
+            else f"Reply sent from {outcome.sender}."
         ),
     )
 
@@ -328,10 +268,12 @@ def team_inbox_label_create(
     db: Session = Depends(get_db),
 ):
     try:
-        team_inbox_operations.create_or_reactivate_label(db, name=name, color=color)
-    except team_inbox_operations.InboxOperationError as exc:
+        team_inbox_commands.create_label(db, name=name, color=color)
+    except (
+        team_inbox_commands.InboxCommandError,
+        team_inbox_operations.InboxOperationError,
+    ) as exc:
         return _detail_redirect(conversation_id, status="error", message=str(exc))
-    db.commit()
     return _detail_redirect(
         conversation_id,
         status="success",
@@ -349,22 +291,23 @@ def team_inbox_label_apply(
     label_id: str = Form(...),
     db: Session = Depends(get_db),
 ):
-    conversation = db.get(InboxConversation, conversation_id)
-    if conversation is None or not conversation.is_active:
+    try:
+        team_inbox_commands.apply_label(
+            db,
+            conversation_id=conversation_id,
+            label_id=label_id,
+            actor_person_id=_actor_id_from_request(request),
+        )
+    except team_inbox_commands.ConversationNotFoundError:
         return RedirectResponse(
             url="/admin/inbox?status=error&message=Conversation%20not%20found",
             status_code=303,
         )
-    try:
-        team_inbox_operations.apply_label(
-            db,
-            conversation=conversation,
-            label_id=label_id,
-            applied_by_person_id=_actor_id_from_request(request),
-        )
-    except team_inbox_operations.InboxOperationError as exc:
+    except (
+        team_inbox_commands.InboxCommandError,
+        team_inbox_operations.InboxOperationError,
+    ) as exc:
         return _detail_redirect(conversation_id, status="error", message=str(exc))
-    db.commit()
     return _detail_redirect(
         conversation_id,
         status="success",
@@ -381,14 +324,22 @@ def team_inbox_label_remove(
     label_id: str = Form(...),
     db: Session = Depends(get_db),
 ):
-    conversation = db.get(InboxConversation, conversation_id)
-    if conversation is None or not conversation.is_active:
+    try:
+        team_inbox_commands.remove_label(
+            db,
+            conversation_id=conversation_id,
+            label_id=label_id,
+        )
+    except team_inbox_commands.ConversationNotFoundError:
         return RedirectResponse(
             url="/admin/inbox?status=error&message=Conversation%20not%20found",
             status_code=303,
         )
-    team_inbox_operations.remove_label(db, conversation=conversation, label_id=label_id)
-    db.commit()
+    except (
+        team_inbox_commands.InboxCommandError,
+        team_inbox_operations.InboxOperationError,
+    ) as exc:
+        return _detail_redirect(conversation_id, status="error", message=str(exc))
     return _detail_redirect(
         conversation_id,
         status="success",
@@ -410,17 +361,19 @@ def team_inbox_macro_create(
     db: Session = Depends(get_db),
 ):
     try:
-        team_inbox_operations.create_macro(
+        team_inbox_commands.create_macro(
             db,
             name=name,
             body_text=body_text,
             description=description,
             visibility=visibility,
-            created_by_person_id=_actor_id_from_request(request),
+            actor_person_id=_actor_id_from_request(request),
         )
-    except team_inbox_operations.InboxOperationError as exc:
+    except (
+        team_inbox_commands.InboxCommandError,
+        team_inbox_operations.InboxOperationError,
+    ) as exc:
         return _detail_redirect(conversation_id, status="error", message=str(exc))
-    db.commit()
     return _detail_redirect(
         conversation_id,
         status="success",
@@ -442,26 +395,21 @@ def team_inbox_template_create(
     provider_template_language: str | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
-    metadata = {
-        key: value
-        for key, value in {
-            "provider_template_name": str(provider_template_name or "").strip(),
-            "provider_template_language": str(provider_template_language or "").strip(),
-        }.items()
-        if value
-    }
     try:
-        team_inbox_operations.create_template(
+        team_inbox_commands.create_template(
             db,
             name=name,
             channel_type=channel_type,
             subject=subject,
             body_text=body_text,
-            metadata=metadata or None,
+            provider_template_name=provider_template_name,
+            provider_template_language=provider_template_language,
         )
-    except team_inbox_operations.InboxOperationError as exc:
+    except (
+        team_inbox_commands.InboxCommandError,
+        team_inbox_operations.InboxOperationError,
+    ) as exc:
         return _detail_redirect(conversation_id, status="error", message=str(exc))
-    db.commit()
     return _detail_redirect(
         conversation_id,
         status="success",
@@ -478,26 +426,25 @@ def team_inbox_message_retry(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    message = db.get(InboxMessage, message_id)
-    if message is None:
+    try:
+        conversation_id = team_inbox_commands.retry_message(
+            db,
+            message_id=message_id,
+            actor_person_id=_actor_id_from_request(request),
+        )
+    except team_inbox_commands.MessageNotFoundError:
         return RedirectResponse(
             url="/admin/inbox?status=error&message=Message%20not%20found",
             status_code=303,
         )
-    result = team_inbox_outbound.retry_outbound_message(
-        db,
-        message=message,
-        sent_by_person_id=_actor_id_from_request(request),
-    )
-    db.commit()
-    if result.kind not in {"sent", "queued"}:
+    except team_inbox_commands.InboxCommandRejected as exc:
         return _detail_redirect(
-            message.conversation_id,
+            exc.conversation_id or "",
             status="error",
-            message=result.reason or "Retry failed.",
+            message=str(exc),
         )
     return _detail_redirect(
-        message.conversation_id,
+        conversation_id,
         status="success",
         message="Message queued for retry.",
     )
@@ -510,10 +457,7 @@ def team_inbox_message_retry(
 def team_inbox_retry_failed_batch(
     db: Session = Depends(get_db),
 ):
-    result = team_inbox_operations.retry_failed_outbound_batch(db, limit=50)
-    db.commit()
-    retried = result.get("retried")
-    retry_count = len(retried) if isinstance(retried, list) else 0
+    retry_count = team_inbox_commands.retry_failed_batch(db, limit=50)
     return RedirectResponse(
         url=(
             "/admin/inbox/reports/outbox-failures"
@@ -535,21 +479,20 @@ def team_inbox_workflow_action(
     snooze_minutes: int | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
-    conversation = db.get(InboxConversation, conversation_id)
-    if conversation is None or not conversation.is_active:
+    try:
+        team_inbox_commands.update_workflow(
+            db,
+            conversation_id=conversation_id,
+            priority=priority,
+            is_muted=is_muted,
+            snooze_minutes=snooze_minutes,
+            actor_person_id=_actor_id_from_request(request),
+        )
+    except team_inbox_commands.ConversationNotFoundError:
         return RedirectResponse(
             url="/admin/inbox?status=error&message=Conversation%20not%20found",
             status_code=303,
         )
-    team_inbox_operations.update_conversation_workflow(
-        db,
-        conversation=conversation,
-        priority=priority,
-        is_muted=is_muted,
-        snooze_minutes=snooze_minutes,
-        actor_person_id=_actor_id_from_request(request),
-    )
-    db.commit()
     return _detail_redirect(
         conversation_id,
         status="success",
@@ -577,7 +520,7 @@ def team_inbox_saved_filter_create(
     db: Session = Depends(get_db),
 ):
     try:
-        team_inbox_operations.save_filter(
+        team_inbox_commands.save_filter(
             db,
             name=name,
             filter_payload={
@@ -591,15 +534,17 @@ def team_inbox_saved_filter_create(
                 "muted": muted,
                 "snoozed": snoozed,
             },
-            owner_person_id=_actor_id_from_request(request),
+            actor_person_id=_actor_id_from_request(request),
             is_shared=is_shared,
         )
-    except team_inbox_operations.InboxOperationError as exc:
+    except (
+        team_inbox_commands.InboxCommandError,
+        team_inbox_operations.InboxOperationError,
+    ) as exc:
         return RedirectResponse(
             url=f"/admin/inbox?status=error&message={quote_plus(str(exc))}",
             status_code=303,
         )
-    db.commit()
     return RedirectResponse(
         url="/admin/inbox?status=success&message=Saved%20filter%20created",
         status_code=303,
@@ -639,58 +584,28 @@ def team_inbox_bulk_action(
     auto_assign: bool = Form(default=True),
     db: Session = Depends(get_db),
 ):
-    if not conversation_ids:
-        return RedirectResponse(
-            url="/admin/inbox?status=error&message=Select%20at%20least%20one%20conversation",
-            status_code=303,
-        )
     try:
-        if action == "status":
-            result = team_inbox_operations.bulk_update_status(
-                db,
-                conversation_ids=conversation_ids,
-                status_value=status_value or "",
-                actor_person_id=_actor_id_from_request(request),
-            )
-            updated = result.get("updated")
-            updated_count = len(updated) if isinstance(updated, list) else 0
-            message = f"Updated {updated_count} conversation statuses."
-        elif action == "label":
-            result = team_inbox_operations.bulk_apply_label(
-                db,
-                conversation_ids=conversation_ids,
-                label_id=label_id or "",
-                actor_person_id=_actor_id_from_request(request),
-            )
-            updated = result.get("updated")
-            updated_count = len(updated) if isinstance(updated, list) else 0
-            message = f"Applied label to {updated_count} conversations."
-        elif action == "escalate":
-            result = team_inbox_operations.bulk_escalate(
-                db,
-                conversation_ids=conversation_ids,
-                service_team_id=service_team_id or "",
-                assigned_person_id=assigned_person_id or None,
-                auto_assign=auto_assign,
-                actor_person_id=_actor_id_from_request(request),
-                reason="Bulk inbox escalation",
-            )
-            updated = result.get("updated")
-            updated_count = len(updated) if isinstance(updated, list) else 0
-            message = f"Escalated {updated_count} conversations."
-        else:
-            return RedirectResponse(
-                url="/admin/inbox?status=error&message=Unsupported%20bulk%20action",
-                status_code=303,
-            )
-    except team_inbox_operations.InboxOperationError as exc:
+        outcome = team_inbox_commands.bulk_action(
+            db,
+            conversation_ids=conversation_ids,
+            action=action,
+            status_value=status_value,
+            label_id=label_id,
+            service_team_id=service_team_id,
+            assigned_person_id=assigned_person_id,
+            auto_assign=auto_assign,
+            actor_person_id=_actor_id_from_request(request),
+        )
+    except (
+        team_inbox_commands.InboxCommandError,
+        team_inbox_operations.InboxOperationError,
+    ) as exc:
         return RedirectResponse(
             url=f"/admin/inbox?status=error&message={quote_plus(str(exc))}",
             status_code=303,
         )
-    db.commit()
     return RedirectResponse(
-        url=f"/admin/inbox?status=success&message={quote_plus(message)}",
+        url=f"/admin/inbox?status=success&message={quote_plus(outcome.message)}",
         status_code=303,
     )
 
@@ -710,43 +625,35 @@ def team_inbox_contact_link(
     note: str | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
-    from app.services import web_admin as web_admin_service
-
-    conversation = db.get(InboxConversation, conversation_id)
-    if conversation is None or not conversation.is_active:
+    try:
+        outcome = team_inbox_commands.link_contact(
+            db,
+            conversation_id=conversation_id,
+            target_type=target_type,
+            subscriber_id=subscriber_id,
+            reseller_id=reseller_id,
+            subscriber_id_manual=subscriber_id_manual,
+            reseller_id_manual=reseller_id_manual,
+            actor_person_id=_actor_id_from_request(request),
+            note=note,
+        )
+    except team_inbox_commands.ConversationNotFoundError:
         return RedirectResponse(
             url="/admin/inbox?status=error&message=Conversation%20not%20found",
             status_code=303,
         )
-    selected_subscriber = (subscriber_id_manual or subscriber_id or "").strip() or None
-    selected_reseller = (reseller_id_manual or reseller_id or "").strip() or None
-    if target_type == "subscriber":
-        selected_reseller = None
-    elif target_type == "reseller":
-        selected_subscriber = None
-    else:
-        return _detail_redirect(
-            conversation_id,
-            status="error",
-            message="Choose whether this contact belongs to a subscriber or reseller.",
-        )
-    try:
-        result = team_inbox_contact_links.link_conversation_contact(
-            db,
-            conversation=conversation,
-            subscriber_id=selected_subscriber,
-            reseller_id=selected_reseller,
-            linked_by_person_id=web_admin_service.get_actor_id(request),
-            note=note,
-        )
-    except team_inbox_contact_links.ContactLinkError as exc:
+    except (
+        team_inbox_commands.InboxCommandError,
+        team_inbox_contact_links.ContactLinkError,
+    ) as exc:
         return _detail_redirect(conversation_id, status="error", message=str(exc))
-    db.commit()
-    target = "subscriber" if result.subscriber_id else "reseller"
     return _detail_redirect(
         conversation_id,
         status="success",
-        message=f"Linked {conversation.channel_type.replace('_', ' ')} contact to {target}.",
+        message=(
+            f"Linked {outcome.channel_type.replace('_', ' ')} contact to "
+            f"{outcome.target}."
+        ),
     )
 
 
@@ -760,28 +667,23 @@ def team_inbox_internal_note(
     body_text: str = Form(...),
     db: Session = Depends(get_db),
 ):
-    from app.services import web_admin as web_admin_service
-
-    clean_body = body_text.strip()
-    if not clean_body:
-        return _detail_redirect(
-            conversation_id,
-            status="error",
-            message="Internal note is required.",
+    try:
+        team_inbox_commands.create_internal_note(
+            db,
+            conversation_id=conversation_id,
+            body=body_text,
+            actor_person_id=_actor_id_from_request(request),
         )
-    conversation = db.get(InboxConversation, conversation_id)
-    if conversation is None or not conversation.is_active:
+    except team_inbox_commands.ConversationNotFoundError:
         return RedirectResponse(
             url="/admin/inbox?status=error&message=Conversation%20not%20found",
             status_code=303,
         )
-    team_inbox_operations.create_internal_note(
-        db,
-        conversation=conversation,
-        body=clean_body,
-        actor_person_id=web_admin_service.get_actor_id(request),
-    )
-    db.commit()
+    except (
+        team_inbox_commands.InboxCommandError,
+        team_inbox_operations.InboxOperationError,
+    ) as exc:
+        return _detail_redirect(conversation_id, status="error", message=str(exc))
     return _detail_redirect(
         conversation_id,
         status="success",
@@ -800,23 +702,24 @@ def team_inbox_comment_create(
     message_id: str | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
-    conversation = db.get(InboxConversation, conversation_id)
-    if conversation is None or not conversation.is_active:
+    try:
+        team_inbox_commands.create_comment(
+            db,
+            conversation_id=conversation_id,
+            body=body_text,
+            message_id=message_id,
+            actor_person_id=_actor_id_from_request(request),
+        )
+    except team_inbox_commands.ConversationNotFoundError:
         return RedirectResponse(
             url="/admin/inbox?status=error&message=Conversation%20not%20found",
             status_code=303,
         )
-    try:
-        team_inbox_operations.create_comment(
-            db,
-            conversation=conversation,
-            body=body_text,
-            message_id=message_id,
-            author_person_id=_actor_id_from_request(request),
-        )
-    except team_inbox_operations.InboxOperationError as exc:
+    except (
+        team_inbox_commands.InboxCommandError,
+        team_inbox_operations.InboxOperationError,
+    ) as exc:
         return _detail_redirect(conversation_id, status="error", message=str(exc))
-    db.commit()
     return _detail_redirect(
         conversation_id,
         status="success",
@@ -834,19 +737,21 @@ def team_inbox_comment_resolve(
     db: Session = Depends(get_db),
 ):
     try:
-        comment = team_inbox_operations.resolve_comment(
+        conversation_id = team_inbox_commands.resolve_comment(
             db,
             comment_id=comment_id,
-            resolved_by_person_id=_actor_id_from_request(request),
+            actor_person_id=_actor_id_from_request(request),
         )
-    except team_inbox_operations.InboxOperationError as exc:
+    except (
+        team_inbox_commands.InboxCommandError,
+        team_inbox_operations.InboxOperationError,
+    ) as exc:
         return RedirectResponse(
             url=f"/admin/inbox?status=error&message={quote_plus(str(exc))}",
             status_code=303,
         )
-    db.commit()
     return _detail_redirect(
-        comment.conversation_id,
+        conversation_id,
         status="success",
         message="Comment resolved.",
     )
@@ -862,48 +767,32 @@ def team_inbox_status_action(
     status_value: str = Form(...),
     db: Session = Depends(get_db),
 ):
-    from app.services import web_admin as web_admin_service
-
-    allowed_statuses = {item.value for item in InboxConversationStatus}
-    clean_status = status_value.strip().lower()
-    if clean_status not in allowed_statuses:
-        return _detail_redirect(
-            conversation_id,
-            status="error",
-            message="Unsupported conversation status.",
+    try:
+        outcome = team_inbox_commands.update_status(
+            db,
+            conversation_id=conversation_id,
+            status_value=status_value,
+            actor_person_id=_actor_id_from_request(request),
         )
-    conversation = db.get(InboxConversation, conversation_id)
-    if conversation is None or not conversation.is_active:
+    except team_inbox_commands.ConversationNotFoundError:
         return RedirectResponse(
             url="/admin/inbox?status=error&message=Conversation%20not%20found",
             status_code=303,
         )
-    previous_status = conversation.status
-    if previous_status == clean_status:
+    except team_inbox_commands.InboxCommandError as exc:
+        return _detail_redirect(
+            conversation_id,
+            status="error",
+            message=str(exc),
+        )
+    if outcome.already_set:
         return _detail_redirect(
             conversation_id,
             status="success",
-            message=f"Conversation is already {clean_status}.",
+            message=f"Conversation is already {outcome.status}.",
         )
-    metadata = dict(conversation.metadata_ or {})
-    history = metadata.get("status_history")
-    if not isinstance(history, list):
-        history = []
-    history.append(
-        {
-            "from": previous_status,
-            "to": clean_status,
-            "at": datetime.now(UTC).isoformat(),
-            "actor_id": web_admin_service.get_actor_id(request),
-            "source": "admin_inbox_status_action",
-        }
-    )
-    metadata["status_history"] = history[-50:]
-    conversation.status = clean_status
-    conversation.metadata_ = metadata
-    db.commit()
     return _detail_redirect(
         conversation_id,
         status="success",
-        message=f"Conversation marked {clean_status.replace('_', ' ')}.",
+        message=f"Conversation marked {outcome.status.replace('_', ' ')}.",
     )

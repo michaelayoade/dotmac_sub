@@ -291,10 +291,44 @@ class JobChatThread {
   );
 }
 
+class JobCompletionRequirements {
+  const JobCompletionRequirements({
+    required this.evidenceRequired,
+    required this.minimumPhotoCount,
+    required this.customerSignoffRequired,
+    required this.signatureUnavailableReasonAllowed,
+  });
+
+  /// Conservative fallback for an older server or cached detail that predates
+  /// the contract. The server still revalidates every queued transition.
+  static const safeFallback = JobCompletionRequirements(
+    evidenceRequired: true,
+    minimumPhotoCount: 1,
+    customerSignoffRequired: true,
+    signatureUnavailableReasonAllowed: true,
+  );
+
+  final bool evidenceRequired;
+  final int minimumPhotoCount;
+  final bool customerSignoffRequired;
+  final bool signatureUnavailableReasonAllowed;
+
+  factory JobCompletionRequirements.fromJson(Map<String, dynamic> json) =>
+      JobCompletionRequirements(
+        evidenceRequired: json['evidence_required'] as bool? ?? true,
+        minimumPhotoCount: json['minimum_photo_count'] as int? ?? 1,
+        customerSignoffRequired:
+            json['customer_signoff_required'] as bool? ?? true,
+        signatureUnavailableReasonAllowed:
+            json['signature_unavailable_reason_allowed'] as bool? ?? true,
+      );
+}
+
 class JobDetail {
   const JobDetail({
     required this.job,
     required this.location,
+    this.completionRequirements = JobCompletionRequirements.safeFallback,
     this.customer,
     this.ticketRef,
     this.projectId,
@@ -312,6 +346,7 @@ class JobDetail {
 
   final JobSummary job;
   final JobLocation location;
+  final JobCompletionRequirements completionRequirements;
   final JobCustomer? customer;
   final String? ticketRef;
   final String? projectId;
@@ -326,11 +361,22 @@ class JobDetail {
   final List<Map<String, dynamic>> worklogs;
   final List<Map<String, dynamic>> history;
 
+  int get completionPhotoCount =>
+      attachments.where((item) => item['kind'] == 'photo').length;
+
+  bool get hasCompletionSignature =>
+      attachments.any((item) => item['kind'] == 'signature');
+
   factory JobDetail.fromJson(Map<String, dynamic> json) => JobDetail(
     job: JobSummary.fromJson((json['job'] as Map).cast<String, dynamic>()),
     location: JobLocation.fromJson(
       (json['location'] as Map).cast<String, dynamic>(),
     ),
+    completionRequirements: json['completion_requirements'] is Map
+        ? JobCompletionRequirements.fromJson(
+            (json['completion_requirements'] as Map).cast<String, dynamic>(),
+          )
+        : JobCompletionRequirements.safeFallback,
     customer: json['customer'] != null
         ? JobCustomer.fromJson(
             (json['customer'] as Map).cast<String, dynamic>(),

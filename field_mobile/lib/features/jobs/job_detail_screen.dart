@@ -436,9 +436,16 @@ class _JobDetailViewState extends ConsumerState<_JobDetailView> {
 
   Future<void> _runWorkAction(String jobId, String action) async {
     if (action == 'complete') {
-      await Navigator.of(
-        context,
-      ).push(MaterialPageRoute(builder: (_) => CompletionWizard(jobId: jobId)));
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => CompletionWizard(
+            jobId: jobId,
+            requirements: widget.detail.completionRequirements,
+            existingPhotoCount: widget.detail.completionPhotoCount,
+            hasExistingSignature: widget.detail.hasCompletionSignature,
+          ),
+        ),
+      );
     } else if (action == 'en_route') {
       final destination = await _pickDestination(jobId);
       if (destination == null) return;

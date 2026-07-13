@@ -394,16 +394,103 @@ class TestProjectLifecycle:
         )
         assert any(n.subject.startswith("Project completed:") for n in emails)
 
-    def test_update_status_kanban_move(self, db_session, subscriber):
+    def test_update_status_kanban_move_uses_canonical_lifecycle(
+        self, db_session, subscriber, emitted_events, monkeypatch
+    ):
         project = _create_fiber_project(db_session, subscriber)
-        result = projects.update_status(db_session, str(project.id), "active")
+        pushed_project_ids: list[str] = []
+        monkeypatch.setattr(
+            "app.services.projects._push_installation_complete",
+            lambda _db, updated: pushed_project_ids.append(str(updated.id)),
+        )
+        emitted_events.clear()
+
+        result = projects.update_status(db_session, str(project.id), "completed")
+
         assert result == {"status": "ok"}
         db_session.refresh(project)
-        assert project.status == "active"
+        assert project.status == "completed"
+        assert project.completed_at is not None
+
+        clock = (
+            db_session.query(SlaClock)
+            .filter(
+                SlaClock.entity_type == WorkflowEntityType.project.value,
+                SlaClock.entity_id == project.id,
+            )
+            .order_by(SlaClock.created_at.desc())
+            .first()
+        )
+        assert clock is not None
+        assert clock.status == SlaClockStatus.completed.value
+        assert [event["name"] for event in emitted_events] == ["project.completed"]
+        assert pushed_project_ids == [str(project.id)]
+
+        emails = (
+            db_session.query(Notification)
+            .filter(Notification.channel == NotificationChannel.email)
+            .filter(Notification.recipient == subscriber.email)
+            .all()
+        )
+        assert any(n.subject.startswith("Project completed:") for n in emails)
 
         with pytest.raises(HTTPException) as exc:
             projects.update_status(db_session, str(project.id), "not-a-status")
         assert exc.value.status_code == 400
+
+    def test_update_gantt_date_uses_canonical_update(
+        self, db_session, subscriber, emitted_events
+    ):
+        project = _create_fiber_project(db_session, subscriber)
+        emitted_events.clear()
+
+        result = projects.update_gantt_date(
+            db_session,
+            str(project.id),
+            "due_date",
+            "2026-08-31",
+        )
+
+        assert result == {
+            "status": "ok",
+            "field": "due_date",
+            "value": "2026-08-31",
+        }
+        db_session.refresh(project)
+        assert _utc(project.due_at) == datetime(2026, 8, 31, 23, 59, 59, tzinfo=UTC)
+
+        clock = (
+            db_session.query(SlaClock)
+            .filter(
+                SlaClock.entity_type == WorkflowEntityType.project.value,
+                SlaClock.entity_id == project.id,
+            )
+            .order_by(SlaClock.created_at.desc())
+            .first()
+        )
+        assert clock is not None
+        assert _utc(clock.due_at) == _utc(project.due_at)
+        assert emitted_events == [
+            {
+                "name": "project.updated",
+                "project_id": str(project.id),
+                "project_name": project.name,
+                "status": project.status,
+                "changed_fields": ["due_at"],
+            }
+        ]
+
+    def test_update_status_noop_does_not_emit_duplicate_event(
+        self, db_session, subscriber, emitted_events
+    ):
+        project = _create_fiber_project(db_session, subscriber)
+        projects.update_status(db_session, str(project.id), "active")
+        emitted_events.clear()
+
+        result = projects.update_status(db_session, str(project.id), "active")
+
+        assert result == {"status": "ok"}
+        assert emitted_events == []
 
     def test_soft_delete(self, db_session, subscriber):
         project = _create_fiber_project(db_session, subscriber)

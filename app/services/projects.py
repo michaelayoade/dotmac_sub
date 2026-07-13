@@ -1731,10 +1731,8 @@ class Projects(ListResponseMixin):
 
     @staticmethod
     def update_gantt_date(db: Session, project_id: str, field: str, value: str) -> dict:
-        """Update a date field on a project from gantt chart drag."""
-        project = db.get(Project, coerce_uuid(project_id))
-        if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
+        """Update a project date through the canonical project writer."""
+        Projects.get(db, project_id)
         field_map = {
             "due_date": "due_at",
             "start_date": "start_at",
@@ -1749,30 +1747,30 @@ class Projects(ListResponseMixin):
             target_day = date.fromisoformat(value)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Invalid date") from exc
-        setattr(
-            project,
-            field_map[field],
-            datetime.combine(target_day, time(23, 59, 59), tzinfo=UTC),
+        Projects.update(
+            db,
+            project_id,
+            ProjectUpdate.model_validate(
+                {
+                    field_map[field]: datetime.combine(
+                        target_day,
+                        time(23, 59, 59),
+                        tzinfo=UTC,
+                    )
+                }
+            ),
         )
-        db.commit()
         return {"status": "ok", "field": field, "value": target_day.isoformat()}
 
     @staticmethod
     def update_status(db: Session, project_id: str, new_status: str) -> dict:
-        """Move a project to a new status (kanban card move)."""
-        project = db.get(Project, coerce_uuid(project_id))
-        if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
+        """Move a Kanban card through the canonical project lifecycle writer."""
+        Projects.get(db, project_id)
         try:
-            project.status = ProjectStatus(new_status).value
+            payload = ProjectUpdate(status=ProjectStatus(new_status))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Invalid status") from exc
-        if (
-            project.status == ProjectStatus.completed.value
-            and project.completed_at is None
-        ):
-            project.completed_at = datetime.now(UTC)
-        db.commit()
+        Projects.update(db, project_id, payload)
         return {"status": "ok"}
 
     @staticmethod
@@ -1829,6 +1827,9 @@ class Projects(ListResponseMixin):
                 and "assistant_manager_person_id" not in data
             ):
                 data["assistant_manager_person_id"] = coerce_uuid(auto_spc)
+        changed_fields = [
+            key for key, value in data.items() if getattr(project, key) != value
+        ]
         for key, value in data.items():
             setattr(project, key, value)
         if (
@@ -1879,7 +1880,7 @@ class Projects(ListResponseMixin):
                     "to_status": new_status,
                 },
             )
-        elif previous_status != new_status or len(data) > 1:
+        elif changed_fields:
             # Emit generic update if status changed or other fields updated
             _emit_project_event(
                 db,
@@ -1889,7 +1890,7 @@ class Projects(ListResponseMixin):
                     "project_id": str(project.id),
                     "project_name": project.name,
                     "status": new_status,
-                    "changed_fields": list(data.keys()),
+                    "changed_fields": changed_fields,
                 },
             )
 
