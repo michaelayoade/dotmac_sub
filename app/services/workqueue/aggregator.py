@@ -171,6 +171,14 @@ def list_workqueue(
     providers: tuple[WorkqueueProvider, ...] | None = None,
 ) -> list[WorkqueueItem]:
     """Flat, ranked queue (the paginated list endpoint's read model)."""
+    scoring = config or load_scoring_config()
+    # A caller may page beyond the normal per-provider window. Fetch enough
+    # candidates from every source to make that page real; otherwise offsets at
+    # or beyond provider_limit silently return an empty page.
+    page_scoring = replace(
+        scoring,
+        provider_limit=max(scoring.provider_limit, offset + limit),
+    )
     view = build_workqueue(
         db,
         principal,
@@ -178,13 +186,12 @@ def list_workqueue(
         service_team_id=service_team_id,
         include_snoozed=include_snoozed,
         hero_band_size=0,
-        config=config,
+        config=page_scoring,
         now=now,
         providers=providers,
     )
-    scoring = config or load_scoring_config()
     ranked = sorted(
         (item for section in view.sections for item in section.items),
-        key=lambda item: _rank_key(item, scoring),
+        key=lambda item: _rank_key(item, page_scoring),
     )
     return ranked[offset : offset + limit]

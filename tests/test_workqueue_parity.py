@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from app.models.dispatch import TechnicianProfile, WorkOrderAssignmentQueue
 from app.models.service_team import (
     ServiceTeam,
     ServiceTeamMember,
@@ -238,9 +239,10 @@ def test_each_provider_only_emits_its_own_kind(db_session, subscriber):
     person = uuid4()
     team = _team(db_session)
     _member(db_session, team, person)
+    db_session.add(TechnicianProfile(person_id=person, crm_person_id="crm-me"))
     _ticket(db_session, team=team)
     _conversation(db_session, team=team)
-    _work_order(db_session, subscriber)
+    _work_order(db_session, subscriber, assigned_to_crm_person_id="crm-me")
 
     scope = _scope(db_session, _principal(person))
     for provider in all_providers():
@@ -437,6 +439,7 @@ def test_hero_band_is_ranked_by_score_and_capped(db_session, subscriber):
     person = uuid4()
     team = _team(db_session)
     _member(db_session, team, person)
+    db_session.add(TechnicianProfile(person_id=person, crm_person_id="crm-me"))
 
     breaching = _ticket(
         db_session,
@@ -455,7 +458,12 @@ def test_hero_band_is_ranked_by_score_and_capped(db_session, subscriber):
     )
     conversation = _conversation(db_session, team=team)
     _message(db_session, conversation, created_at=NOW - timedelta(minutes=8))
-    _work_order(db_session, subscriber, scheduled_start=NOW + timedelta(days=2))
+    _work_order(
+        db_session,
+        subscriber,
+        scheduled_start=NOW + timedelta(days=2),
+        assigned_to_crm_person_id="crm-me",
+    )
 
     view = build_workqueue(
         db_session,
@@ -497,6 +505,31 @@ def test_list_workqueue_paginates_the_ranked_queue(db_session):
     assert len(first) == 2
     assert len(second) == 1
     assert {item.item_id for item in first}.isdisjoint({i.item_id for i in second})
+
+
+def test_list_workqueue_fetches_enough_candidates_for_later_pages(db_session):
+    person = uuid4()
+    team = _team(db_session)
+    _member(db_session, team, person)
+    for index in range(5):
+        _ticket(
+            db_session,
+            title=f"T{index}",
+            team=team,
+            assigned_to=person,
+            status=TicketStatus.pending.value,
+            due_at=NOW - timedelta(minutes=index),
+        )
+
+    page = list_workqueue(
+        db_session,
+        _principal(person),
+        limit=2,
+        offset=3,
+        config=WorkqueueScoringConfig(provider_limit=2),
+        now=NOW,
+    )
+    assert len(page) == 2
 
 
 # --- scope: items a user must not see ----------------------------------------
@@ -646,28 +679,114 @@ def test_a_teammates_item_is_visible_but_not_actionable_at_self_audience():
 # --- work-order mirror -------------------------------------------------------
 
 
-def test_self_audience_only_surfaces_unclaimed_work_orders(db_session, subscriber):
+def test_self_audience_only_surfaces_attributable_work_orders(db_session, subscriber):
     person = uuid4()
+    teammate = uuid4()
     team = _team(db_session)
     _member(db_session, team, person)
-    unclaimed = _work_order(db_session, subscriber)
-    _work_order(db_session, subscriber, assigned_to_crm_person_id="crm-person-1")
+    _member(db_session, team, teammate)
+    db_session.add_all(
+        [
+            TechnicianProfile(person_id=person, crm_person_id="crm-me"),
+            TechnicianProfile(person_id=teammate, crm_person_id="crm-teammate"),
+        ]
+    )
+    mine = _work_order(db_session, subscriber, assigned_to_crm_person_id="crm-me")
+    _work_order(db_session, subscriber, assigned_to_crm_person_id="crm-teammate")
+    _work_order(db_session, subscriber)
+    _work_order(db_session, subscriber, assigned_to_crm_person_id="crm-unmapped")
 
     scope = _scope(db_session, _principal(person))
     items = _fetch(work_order_provider, db_session, scope)
-    assert [item.item_id for item in items] == [unclaimed.id]
+    assert [item.item_id for item in items] == [mine.id]
+    assert items[0].assigned_person_id == person
     # The mirror is CRM's record — sub only offers open/snooze on it.
     assert set(items[0].actions) == {ActionKind.open, ActionKind.snooze}
 
 
-def test_a_team_filter_excludes_work_orders(db_session, subscriber):
+def test_a_team_lead_sees_attributable_team_work_orders(db_session, subscriber):
+    lead = uuid4()
+    teammate = uuid4()
+    team = _team(db_session)
+    _member(db_session, team, lead, role=ServiceTeamMemberRole.lead.value)
+    _member(db_session, team, teammate)
+    db_session.add(TechnicianProfile(person_id=teammate, crm_person_id="crm-teammate"))
+    work_order = _work_order(
+        db_session, subscriber, assigned_to_crm_person_id="crm-teammate"
+    )
+
+    scope = _scope(db_session, _principal(lead), service_team_id=team.id)
+    assert [
+        item.item_id for item in _fetch(work_order_provider, db_session, scope)
+    ] == [work_order.id]
+
+
+def test_native_dispatch_assignment_is_the_work_order_scope_fallback(
+    db_session, subscriber
+):
     person = uuid4()
     team = _team(db_session)
     _member(db_session, team, person)
-    _work_order(db_session, subscriber)
+    profile = TechnicianProfile(person_id=person)
+    work_order = _work_order(db_session, subscriber)
+    db_session.add(profile)
+    db_session.flush()
+    db_session.add(
+        WorkOrderAssignmentQueue(
+            work_order_mirror_id=work_order.id,
+            crm_work_order_id=work_order.crm_work_order_id,
+            assigned_technician_id=profile.id,
+        )
+    )
+    db_session.flush()
 
-    scope = _scope(db_session, _principal(person), service_team_id=team.id)
-    assert _fetch(work_order_provider, db_session, scope) == []
+    scope = _scope(db_session, _principal(person))
+    [item] = _fetch(work_order_provider, db_session, scope)
+    assert item.item_id == work_order.id
+    assert item.assigned_person_id == person
+
+
+def test_org_audience_surfaces_unassigned_and_unmapped_work_orders(
+    db_session, subscriber
+):
+    unassigned = _work_order(db_session, subscriber)
+    unmapped = _work_order(
+        db_session, subscriber, assigned_to_crm_person_id="crm-unmapped"
+    )
+
+    scope = _scope(
+        db_session,
+        _principal(uuid4(), roles=("admin",)),
+        requested_audience="org",
+    )
+    assert {
+        item.item_id for item in _fetch(work_order_provider, db_session, scope)
+    } == {
+        unassigned.id,
+        unmapped.id,
+    }
+
+
+def test_org_team_filter_does_not_widen_to_unmapped_work_orders(db_session, subscriber):
+    teammate = uuid4()
+    team = _team(db_session)
+    _member(db_session, team, teammate)
+    db_session.add(TechnicianProfile(person_id=teammate, crm_person_id="crm-teammate"))
+    attributable = _work_order(
+        db_session, subscriber, assigned_to_crm_person_id="crm-teammate"
+    )
+    _work_order(db_session, subscriber)
+    _work_order(db_session, subscriber, assigned_to_crm_person_id="crm-unmapped")
+
+    scope = _scope(
+        db_session,
+        _principal(uuid4(), roles=("admin",)),
+        requested_audience="org",
+        service_team_id=team.id,
+    )
+    assert [
+        item.item_id for item in _fetch(work_order_provider, db_session, scope)
+    ] == [attributable.id]
 
 
 # --- snooze ------------------------------------------------------------------

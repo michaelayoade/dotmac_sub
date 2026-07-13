@@ -149,11 +149,21 @@ def get_workqueue_scope(
     # own teams — that is the queue they are expected to pull from.
     accessible_team_ids = member_team_ids | frozenset(managed_team_ids)
 
+    query_team_ids = (
+        frozenset({service_team_id})
+        if service_team_id is not None
+        else accessible_team_ids
+    )
+
     if is_org_wide:
-        accessible_person_ids: frozenset[UUID] = frozenset()
+        accessible_person_ids = (
+            frozenset(_team_member_person_ids(db, query_team_ids))
+            if service_team_id is not None
+            else frozenset()
+        )
     elif audience is WorkqueueAudience.team:
         accessible_person_ids = frozenset(
-            _team_member_person_ids(db, accessible_team_ids) | {principal.person_id}
+            _team_member_person_ids(db, query_team_ids) | {principal.person_id}
         )
     else:
         accessible_person_ids = frozenset({principal.person_id})
