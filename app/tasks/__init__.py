@@ -22,7 +22,11 @@ from app.tasks.billing import (
     check_billing_switch_task,
     run_invoice_cycle,
 )
-from app.tasks.campaigns import process_due_campaigns, send_campaign_batch
+from app.tasks.campaigns import (
+    process_due_campaign_steps,
+    process_due_campaigns,
+    send_campaign_batch,
+)
 from app.tasks.catalog import apply_due_subscription_changes, expire_subscriptions
 from app.tasks.collections import prepaid_balance_sweep, run_dunning
 from app.tasks.crm_native_sync import pull_crm_phase3_native_delta
@@ -205,6 +209,7 @@ __all__ = [
     "run_import_job",
     "run_integration_job",
     "process_due_campaigns",
+    "process_due_campaign_steps",
     "send_campaign_batch",
     "expire_stale_insights",
     "generate_invoice_pdf_export",

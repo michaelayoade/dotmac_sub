@@ -154,6 +154,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "Builds recipients and sends due campaigns through native inbox channels; "
         "recipient rows gate repeat sends.",
     ),
+    "app.tasks.campaigns.process_due_campaign_steps": _c(
+        "campaigns",
+        SWEEP,
+        PER_ITEM,
+        STATUS,
+        "Materializes and sends the next due step of a nurture sequence; a step "
+        "that already has recipient rows is never materialized twice.",
+    ),
     "app.tasks.campaigns.send_campaign_batch": _c(
         "campaigns",
         ITEMS,

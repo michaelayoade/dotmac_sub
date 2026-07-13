@@ -11,7 +11,19 @@ from app.schemas.campaigns import (
     CampaignCreate,
     CampaignRead,
     CampaignRecipientRead,
+    CampaignSenderCreate,
+    CampaignSenderRead,
+    CampaignSenderUpdate,
     CampaignSendRead,
+    CampaignSmtpConfigCreate,
+    CampaignSmtpConfigRead,
+    CampaignSmtpConfigUpdate,
+    CampaignStepCreate,
+    CampaignStepRead,
+    CampaignStepUpdate,
+    CampaignSuppressionCreate,
+    CampaignSuppressionRead,
+    CampaignUnsubscribeRead,
     CampaignUpdate,
 )
 from app.schemas.common import ListResponse
@@ -20,6 +32,9 @@ from app.services.auth_dependencies import require_user_auth
 from app.services.response import list_response
 
 router = APIRouter(prefix="/campaigns", tags=["campaigns"])
+# Unsubscribe must work from an email client with no session. Mounted without
+# auth in app.main (dependency mode "none").
+public_router = APIRouter(prefix="/campaigns/public", tags=["campaigns"])
 
 
 def _actor_id(auth: dict) -> str | None:
@@ -38,6 +53,9 @@ def _campaign_read(campaign) -> CampaignRead:
         status=campaign.status,
         subject=campaign.subject,
         scheduled_at=campaign.scheduled_at,
+        send_window_start_hour=campaign.send_window_start_hour,
+        send_window_end_hour=campaign.send_window_end_hour,
+        send_window_timezone=campaign.send_window_timezone,
         sending_started_at=campaign.sending_started_at,
         completed_at=campaign.completed_at,
         total_recipients=campaign.total_recipients,
@@ -46,10 +64,76 @@ def _campaign_read(campaign) -> CampaignRead:
         failed_count=campaign.failed_count,
         opened_count=campaign.opened_count,
         clicked_count=campaign.clicked_count,
+        campaign_sender_id=campaign.campaign_sender_id,
+        campaign_smtp_config_id=campaign.campaign_smtp_config_id,
         service_team_id=campaign.service_team_id,
         metadata=campaign.metadata_,
         created_at=campaign.created_at,
         updated_at=campaign.updated_at,
+    )
+
+
+def _step_read(step) -> CampaignStepRead:
+    return CampaignStepRead(
+        id=step.id,
+        campaign_id=step.campaign_id,
+        step_index=step.step_index,
+        name=step.name,
+        subject=step.subject,
+        body_html=step.body_html,
+        body_text=step.body_text,
+        delay_days=step.delay_days,
+        delay_hours=step.delay_hours,
+        is_active=step.is_active,
+        created_at=step.created_at,
+        updated_at=step.updated_at,
+    )
+
+
+def _sender_read(sender) -> CampaignSenderRead:
+    return CampaignSenderRead(
+        id=sender.id,
+        name=sender.name,
+        sender_key=sender.sender_key,
+        from_name=sender.from_name,
+        from_email=sender.from_email,
+        reply_to=sender.reply_to,
+        campaign_smtp_config_id=sender.campaign_smtp_config_id,
+        is_active=sender.is_active,
+        metadata=sender.metadata_,
+        created_at=sender.created_at,
+        updated_at=sender.updated_at,
+    )
+
+
+def _smtp_read(config) -> CampaignSmtpConfigRead:
+    return CampaignSmtpConfigRead(
+        id=config.id,
+        name=config.name,
+        host=config.host,
+        port=config.port,
+        username=config.username,
+        has_password=bool(config.password),
+        use_tls=config.use_tls,
+        use_ssl=config.use_ssl,
+        is_active=config.is_active,
+        metadata=config.metadata_,
+        created_at=config.created_at,
+        updated_at=config.updated_at,
+    )
+
+
+def _suppression_read(suppression) -> CampaignSuppressionRead:
+    return CampaignSuppressionRead(
+        id=suppression.id,
+        channel=suppression.channel,
+        address=suppression.address,
+        reason=suppression.reason,
+        source=suppression.source,
+        subscriber_id=suppression.subscriber_id,
+        campaign_id=suppression.campaign_id,
+        notes=suppression.notes,
+        created_at=suppression.created_at,
     )
 
 
@@ -153,6 +237,10 @@ def list_campaign_recipients(
             conversation_id=row.conversation_id,
             message_id=row.message_id,
             sent_at=row.sent_at,
+            delivered_at=row.delivered_at,
+            suppressed_at=row.suppressed_at,
+            attempt_count=row.attempt_count,
+            last_attempt_at=row.last_attempt_at,
             failed_reason=row.failed_reason,
             metadata=row.metadata_,
             created_at=row.created_at,
@@ -160,3 +248,225 @@ def list_campaign_recipients(
         for row in rows
     ]
     return list_response(items, limit, offset)
+
+
+@router.post(
+    "/recipients/{recipient_id}/delivered", response_model=CampaignRecipientRead
+)
+def mark_recipient_delivered(
+    recipient_id: UUID,
+    db: Session = Depends(get_db),
+):
+    row = comms_campaigns.mark_recipient_delivered_committed(db, recipient_id)
+    return CampaignRecipientRead(
+        id=row.id,
+        campaign_id=row.campaign_id,
+        subscriber_id=row.subscriber_id,
+        step_id=row.step_id,
+        address=row.address,
+        email=row.email,
+        status=row.status,
+        conversation_id=row.conversation_id,
+        message_id=row.message_id,
+        sent_at=row.sent_at,
+        delivered_at=row.delivered_at,
+        suppressed_at=row.suppressed_at,
+        attempt_count=row.attempt_count,
+        last_attempt_at=row.last_attempt_at,
+        failed_reason=row.failed_reason,
+        metadata=row.metadata_,
+        created_at=row.created_at,
+    )
+
+
+# --- Steps ------------------------------------------------------------------
+
+
+@router.get("/{campaign_id}/steps", response_model=list[CampaignStepRead])
+def list_campaign_steps(
+    campaign_id: UUID,
+    db: Session = Depends(get_db),
+):
+    return [
+        _step_read(step)
+        for step in comms_campaigns.list_campaign_steps(db, campaign_id)
+    ]
+
+
+@router.post(
+    "/{campaign_id}/steps",
+    response_model=CampaignStepRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_campaign_step(
+    campaign_id: UUID,
+    payload: CampaignStepCreate,
+    db: Session = Depends(get_db),
+):
+    step = comms_campaigns.create_campaign_step_committed(db, campaign_id, payload)
+    return _step_read(step)
+
+
+@router.patch("/{campaign_id}/steps/{step_id}", response_model=CampaignStepRead)
+def update_campaign_step(
+    campaign_id: UUID,
+    step_id: UUID,
+    payload: CampaignStepUpdate,
+    db: Session = Depends(get_db),
+):
+    step = comms_campaigns.update_campaign_step_committed(
+        db, campaign_id, step_id, payload
+    )
+    return _step_read(step)
+
+
+@router.delete("/{campaign_id}/steps/{step_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_campaign_step(
+    campaign_id: UUID,
+    step_id: UUID,
+    db: Session = Depends(get_db),
+):
+    comms_campaigns.delete_campaign_step_committed(db, campaign_id, step_id)
+
+
+# --- Sender profiles --------------------------------------------------------
+
+
+@router.get("/senders", response_model=ListResponse[CampaignSenderRead])
+def list_campaign_senders(
+    is_active: bool | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    items = [
+        _sender_read(sender)
+        for sender in comms_campaigns.list_senders(
+            db, is_active=is_active, limit=limit, offset=offset
+        )
+    ]
+    return list_response(items, limit, offset)
+
+
+@router.post(
+    "/senders", response_model=CampaignSenderRead, status_code=status.HTTP_201_CREATED
+)
+def create_campaign_sender(
+    payload: CampaignSenderCreate,
+    db: Session = Depends(get_db),
+):
+    return _sender_read(comms_campaigns.create_sender_committed(db, payload))
+
+
+@router.patch("/senders/{sender_id}", response_model=CampaignSenderRead)
+def update_campaign_sender(
+    sender_id: UUID,
+    payload: CampaignSenderUpdate,
+    db: Session = Depends(get_db),
+):
+    return _sender_read(comms_campaigns.update_sender_committed(db, sender_id, payload))
+
+
+# --- SMTP configuration -----------------------------------------------------
+
+
+@router.get("/smtp-configs", response_model=ListResponse[CampaignSmtpConfigRead])
+def list_campaign_smtp_configs(
+    is_active: bool | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    items = [
+        _smtp_read(config)
+        for config in comms_campaigns.list_smtp_configs(
+            db, is_active=is_active, limit=limit, offset=offset
+        )
+    ]
+    return list_response(items, limit, offset)
+
+
+@router.post(
+    "/smtp-configs",
+    response_model=CampaignSmtpConfigRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_campaign_smtp_config(
+    payload: CampaignSmtpConfigCreate,
+    db: Session = Depends(get_db),
+):
+    return _smtp_read(comms_campaigns.create_smtp_config_committed(db, payload))
+
+
+@router.patch("/smtp-configs/{smtp_config_id}", response_model=CampaignSmtpConfigRead)
+def update_campaign_smtp_config(
+    smtp_config_id: UUID,
+    payload: CampaignSmtpConfigUpdate,
+    db: Session = Depends(get_db),
+):
+    return _smtp_read(
+        comms_campaigns.update_smtp_config_committed(db, smtp_config_id, payload)
+    )
+
+
+# --- Suppression ------------------------------------------------------------
+
+
+@router.get("/suppressions", response_model=ListResponse[CampaignSuppressionRead])
+def list_campaign_suppressions(
+    channel: str | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    items = [
+        _suppression_read(row)
+        for row in comms_campaigns.list_suppressions(
+            db, channel=channel, limit=limit, offset=offset
+        )
+    ]
+    return list_response(items, limit, offset)
+
+
+@router.post(
+    "/suppressions",
+    response_model=CampaignSuppressionRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_campaign_suppression(
+    payload: CampaignSuppressionCreate,
+    db: Session = Depends(get_db),
+):
+    suppression = comms_campaigns.suppress_address_committed(
+        db,
+        channel=payload.channel,
+        address=payload.address,
+        reason=payload.reason,
+        source=payload.source or "admin",
+        subscriber_id=payload.subscriber_id,
+        campaign_id=payload.campaign_id,
+        notes=payload.notes,
+    )
+    return _suppression_read(suppression)
+
+
+@router.delete("/suppressions", status_code=status.HTTP_204_NO_CONTENT)
+def delete_campaign_suppression(
+    channel: str = Query(...),
+    address: str = Query(...),
+    db: Session = Depends(get_db),
+):
+    comms_campaigns.remove_suppression_committed(db, channel=channel, address=address)
+
+
+@public_router.post("/unsubscribe/{token}", response_model=CampaignUnsubscribeRead)
+def unsubscribe(
+    token: str,
+    db: Session = Depends(get_db),
+):
+    suppression = comms_campaigns.unsubscribe_by_token_committed(db, token)
+    return CampaignUnsubscribeRead(
+        unsubscribed=True,
+        channel=suppression.channel,
+        address=suppression.address,
+    )
