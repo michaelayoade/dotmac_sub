@@ -13,8 +13,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "273_campaign_parity"
-down_revision = "272_radius_nas_port_id_capacity"
+revision = "274_campaign_parity"
+down_revision = "273_communication_suppressions"
 branch_labels = None
 depends_on = None
 
@@ -174,35 +174,6 @@ def upgrade() -> None:
         postgresql_where=sa.text("unsubscribe_token IS NOT NULL"),
     )
 
-    # --- Suppression list --------------------------------------------------
-    if not _has_table("campaign_suppressions"):
-        op.create_table(
-            "campaign_suppressions",
-            sa.Column("id", uuid_type, primary_key=True),
-            sa.Column("channel", sa.String(length=40), nullable=False),
-            sa.Column("address", sa.String(length=255), nullable=False),
-            sa.Column("subscriber_id", uuid_type, sa.ForeignKey("subscribers.id")),
-            sa.Column("campaign_id", uuid_type, sa.ForeignKey("campaigns.id")),
-            sa.Column(
-                "reason",
-                sa.String(length=40),
-                nullable=False,
-                server_default="unsubscribed",
-            ),
-            sa.Column("source", sa.String(length=80)),
-            sa.Column("notes", sa.Text()),
-            sa.Column("metadata", json_type),
-            sa.Column("created_at", sa.DateTime(timezone=True)),
-            sa.Column("updated_at", sa.DateTime(timezone=True)),
-            sa.UniqueConstraint(
-                "channel", "address", name="uq_campaign_suppressions_address"
-            ),
-        )
-    _create_index_once(
-        "campaign_suppressions",
-        "ix_campaign_suppressions_subscriber",
-        ["subscriber_id"],
-    )
 
 
 def downgrade() -> None:
@@ -210,8 +181,6 @@ def downgrade() -> None:
     if bind.dialect.name == "sqlite":
         return
 
-    if _has_table("campaign_suppressions"):
-        op.drop_table("campaign_suppressions")
 
     for index_name in (
         "uq_campaign_recipients_unsubscribe_token",

@@ -21,13 +21,14 @@ from app.schemas.campaigns import (
     CampaignStepCreate,
     CampaignStepRead,
     CampaignStepUpdate,
-    CampaignSuppressionCreate,
-    CampaignSuppressionRead,
+    SuppressionCreate,
+    SuppressionRead,
     CampaignUnsubscribeRead,
     CampaignUpdate,
 )
 from app.schemas.common import ListResponse
-from app.services import comms_campaigns
+from app.models.notification import SuppressionReason, SuppressionScope
+from app.services import comms_campaigns, communication_eligibility
 from app.services.auth_dependencies import require_user_auth
 from app.services.response import list_response
 
@@ -123,8 +124,8 @@ def _smtp_read(config) -> CampaignSmtpConfigRead:
     )
 
 
-def _suppression_read(suppression) -> CampaignSuppressionRead:
-    return CampaignSuppressionRead(
+def _suppression_read(suppression) -> SuppressionRead:
+    return SuppressionRead(
         id=suppression.id,
         channel=suppression.channel,
         address=suppression.address,
@@ -412,7 +413,7 @@ def update_campaign_smtp_config(
 # --- Suppression ------------------------------------------------------------
 
 
-@router.get("/suppressions", response_model=ListResponse[CampaignSuppressionRead])
+@router.get("/suppressions", response_model=ListResponse[SuppressionRead])
 def list_campaign_suppressions(
     channel: str | None = None,
     limit: int = Query(default=50, ge=1, le=200),
@@ -421,7 +422,7 @@ def list_campaign_suppressions(
 ):
     items = [
         _suppression_read(row)
-        for row in comms_campaigns.list_suppressions(
+        for row in communication_eligibility.list_suppressions(
             db, channel=channel, limit=limit, offset=offset
         )
     ]
@@ -430,22 +431,26 @@ def list_campaign_suppressions(
 
 @router.post(
     "/suppressions",
-    response_model=CampaignSuppressionRead,
+    response_model=SuppressionRead,
     status_code=status.HTTP_201_CREATED,
 )
 def create_campaign_suppression(
-    payload: CampaignSuppressionCreate,
+    payload: SuppressionCreate,
     db: Session = Depends(get_db),
 ):
-    suppression = comms_campaigns.suppress_address_committed(
+    # Scope is pinned to `marketing`. An operator suppressing someone from the
+    # campaign screen is recording a marketing refusal -- it is not authority to
+    # stop sending that customer their invoice. `all` is for hard bounces and
+    # erasure requests, and this is not the endpoint that sets it.
+    suppression = communication_eligibility.suppress_committed(
         db,
         channel=payload.channel,
         address=payload.address,
-        reason=payload.reason,
-        source=payload.source or "admin",
+        scope=SuppressionScope.marketing,
+        reason=SuppressionReason.unsubscribe,
         subscriber_id=payload.subscriber_id,
-        campaign_id=payload.campaign_id,
-        notes=payload.notes,
+        note=payload.notes,
+        created_by=payload.source or "admin",
     )
     return _suppression_read(suppression)
 
@@ -456,7 +461,7 @@ def delete_campaign_suppression(
     address: str = Query(...),
     db: Session = Depends(get_db),
 ):
-    comms_campaigns.remove_suppression_committed(db, channel=channel, address=address)
+    communication_eligibility.unsuppress_committed(db, channel=channel, address=address)
 
 
 @public_router.post("/unsubscribe/{token}", response_model=CampaignUnsubscribeRead)

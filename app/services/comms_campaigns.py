@@ -35,7 +35,16 @@ from app.models.team_inbox import (
     InboxTeamRole,
     InboxTeamSource,
 )
-from app.services import team_inbox_outbound, team_inbox_routing
+from app.models.notification import (
+    CommunicationSuppression,
+    SuppressionReason,
+    SuppressionScope,
+)
+from app.services import (
+    communication_eligibility,
+    team_inbox_outbound,
+    team_inbox_routing,
+)
 from app.services.common import coerce_uuid
 from app.services.customer_identity_normalization import normalize_phone_identifier
 
@@ -115,6 +124,12 @@ def _validate_campaign_values(campaign: Campaign) -> None:
         )
 
 
+#: Everything a campaign sends is marketing. This is what makes an unsubscribe
+#: actually stop it -- a marketing-scoped suppression blocks this category and
+#: leaves invoices alone.
+MARKETING_CATEGORY = "marketing"
+
+
 def _segment_query(db: Session, campaign: Campaign):
     segment = (
         campaign.segment_filter if isinstance(campaign.segment_filter, dict) else {}
@@ -155,8 +170,11 @@ def _segment_query(db: Session, campaign: Campaign):
         )
         query = query.filter(Subscriber.billing_mode.in_([str(item) for item in modes]))
 
-    if bool(segment.get("marketing_opt_in_only")):
-        query = query.filter(Subscriber.marketing_opt_in.is_(True))
+    # Marketing consent is NOT a segment option. It used to be
+    # `if segment.get("marketing_opt_in_only")` -- untick the box and the
+    # campaign went to people who never opted in. Consent is not a filter you
+    # choose to apply; it is the precondition for a campaign existing.
+    query = query.filter(Subscriber.marketing_opt_in.is_(True))
 
     limit = segment.get("limit")
     if isinstance(limit, int) and limit > 0:
@@ -187,175 +205,32 @@ def _recipient_address(
 # ---------------------------------------------------------------------------
 
 
-def normalize_suppression_address(channel: str, address: str | None) -> str | None:
-    """Canonical form of an address for suppression lookups."""
-    if channel == CampaignChannel.email.value:
-        return team_inbox_routing.normalize_email_address(address)
-    if channel == CampaignChannel.whatsapp.value:
-        return normalize_phone_identifier(address)
-    normalized = (address or "").strip()
-    return normalized or None
 
 
-def suppressed_addresses(
-    db: Session, *, channel: str, addresses: Iterable[str | None]
-) -> set[str]:
-    """Return the subset of `addresses` (normalized) that are suppressed."""
-    normalized = {
-        candidate
-        for candidate in (
-            normalize_suppression_address(channel, address) for address in addresses
-        )
-        if candidate
-    }
-    if not normalized:
-        return set()
-    rows = (
-        db.query(CampaignSuppression.address)
-        .filter(CampaignSuppression.channel == channel)
-        .filter(CampaignSuppression.address.in_(sorted(normalized)))
-        .all()
-    )
-    return {row[0] for row in rows}
 
 
-def is_suppressed(db: Session, *, channel: str, address: str | None) -> bool:
-    normalized = normalize_suppression_address(channel, address)
-    if not normalized:
-        return False
-    return (
-        db.query(CampaignSuppression.id)
-        .filter(CampaignSuppression.channel == channel)
-        .filter(CampaignSuppression.address == normalized)
-        .first()
-        is not None
-    )
 
 
-def list_suppressions(
-    db: Session,
-    *,
-    channel: str | None = None,
-    limit: int = 50,
-    offset: int = 0,
-) -> list[CampaignSuppression]:
-    query = db.query(CampaignSuppression)
-    if channel:
-        query = query.filter(CampaignSuppression.channel == channel)
-    return (
-        query.order_by(CampaignSuppression.created_at.desc())
-        .limit(limit)
-        .offset(offset)
-        .all()
-    )
 
 
-def suppress_address(
-    db: Session,
-    *,
-    channel: str,
-    address: str,
-    reason: str = CampaignSuppressionReason.unsubscribed.value,
-    source: str | None = None,
-    subscriber_id: str | UUID | None = None,
-    campaign_id: str | UUID | None = None,
-    notes: str | None = None,
-) -> CampaignSuppression:
-    if channel not in {item.value for item in CampaignChannel}:
-        raise HTTPException(status_code=400, detail="Invalid suppression channel")
-    if reason not in {item.value for item in CampaignSuppressionReason}:
-        raise HTTPException(status_code=400, detail="Invalid suppression reason")
-    normalized = normalize_suppression_address(channel, address)
-    if not normalized:
-        raise HTTPException(status_code=400, detail="Invalid suppression address")
-
-    existing = (
-        db.query(CampaignSuppression)
-        .filter(CampaignSuppression.channel == channel)
-        .filter(CampaignSuppression.address == normalized)
-        .one_or_none()
-    )
-    if existing is not None:
-        # Idempotent: keep the earliest suppression, refresh its provenance.
-        existing.reason = reason
-        if source:
-            existing.source = source
-        if notes:
-            existing.notes = notes
-        db.flush()
-        _suppress_pending_recipients(db, channel=channel, address=normalized)
-        return existing
-
-    suppression = CampaignSuppression(
-        channel=channel,
-        address=normalized,
-        subscriber_id=coerce_uuid(subscriber_id),
-        campaign_id=coerce_uuid(campaign_id),
-        reason=reason,
-        source=source,
-        notes=notes,
-    )
-    db.add(suppression)
-    db.flush()
-    _suppress_pending_recipients(db, channel=channel, address=normalized)
-    return suppression
 
 
-def _suppress_pending_recipients(db: Session, *, channel: str, address: str) -> int:
-    """Retire every not-yet-sent recipient row that points at a suppressed address.
-
-    The send path re-checks suppression anyway, so this is defence in depth —
-    but it also keeps campaign counters and the recipient list truthful.
-    """
-    now = _now()
-    pending = (
-        db.query(CampaignRecipient)
-        .join(Campaign, CampaignRecipient.campaign_id == Campaign.id)
-        .filter(Campaign.channel == channel)
-        .filter(CampaignRecipient.address == address)
-        .filter(
-            CampaignRecipient.status.in_(
-                [
-                    CampaignRecipientStatus.pending.value,
-                    CampaignRecipientStatus.queued.value,
-                ]
-            )
-        )
-        .all()
-    )
-    for recipient in pending:
-        recipient.status = CampaignRecipientStatus.suppressed.value
-        recipient.suppressed_at = now
-        recipient.failed_reason = "Address is on the campaign suppression list"
-    if pending:
-        db.flush()
-    return len(pending)
 
 
-def remove_suppression(db: Session, *, channel: str, address: str) -> bool:
-    normalized = normalize_suppression_address(channel, address)
-    if not normalized:
-        return False
-    suppression = (
-        db.query(CampaignSuppression)
-        .filter(CampaignSuppression.channel == channel)
-        .filter(CampaignSuppression.address == normalized)
-        .one_or_none()
-    )
-    if suppression is None:
-        return False
-    db.delete(suppression)
-    db.flush()
-    return True
 
 
 def unsubscribe_by_token(
     db: Session, token: str, *, source: str = "unsubscribe_link"
-) -> CampaignSuppression:
+) -> CommunicationSuppression:
     """Honor a one-click unsubscribe link.
 
     The token is minted per recipient row, so it identifies both the address to
-    suppress and the campaign that prompted the unsubscribe.
+    suppress and the campaign that prompted it.
+
+    This writes to the PLATFORM ledger, not a campaign-local table. That is the
+    whole point: an unsubscribe must silence the customer everywhere, not just
+    in the campaign module that happened to carry the link. It is scoped to
+    ``marketing`` -- the customer refused promotions, not their invoice.
     """
     clean_token = (token or "").strip()
     if not clean_token:
@@ -370,15 +245,38 @@ def unsubscribe_by_token(
     campaign = db.get(Campaign, recipient.campaign_id)
     if campaign is None:
         raise HTTPException(status_code=404, detail="Unknown unsubscribe token")
-    return suppress_address(
+
+    suppression = communication_eligibility.suppress(
         db,
         channel=campaign.channel,
         address=recipient.address,
-        reason=CampaignSuppressionReason.unsubscribed.value,
-        source=source,
+        scope=SuppressionScope.marketing,
+        reason=SuppressionReason.unsubscribe,
         subscriber_id=recipient.subscriber_id,
-        campaign_id=campaign.id,
+        note=f"campaign={campaign.id} source={source}",
+        created_by=source,
     )
+    # Stop the ones already queued for this campaign. The delivery gate would
+    # catch them anyway -- this just keeps the campaign's own counts honest.
+    (
+        db.query(CampaignRecipient)
+        .filter(CampaignRecipient.address == recipient.address)
+        .filter(
+            CampaignRecipient.status.in_(
+                [
+                    CampaignRecipientStatus.pending.value,
+                    CampaignRecipientStatus.queued.value,
+                ]
+            )
+        )
+        .update(
+            {CampaignRecipient.status: CampaignRecipientStatus.suppressed.value},
+            synchronize_session=False,
+        )
+    )
+    return suppression
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -1289,11 +1187,19 @@ def materialize_step_recipients(
         .filter(CampaignRecipient.step_id == step.id)
         .all()
     }
-    blocked = suppressed_addresses(
-        db,
-        channel=campaign.channel,
-        addresses=[seed.address for seed in seeds],
+    # Consent is asked of the platform ledger, not a campaign-local table.
+    # `filter_eligible` is the SAME rule the delivery gate applies -- a
+    # per-recipient loop here would be a second implementation that drifts from
+    # it, and the drift would show up as mail to someone who unsubscribed.
+    eligible = set(
+        communication_eligibility.filter_eligible(
+            db,
+            channel=campaign.channel,
+            addresses=[seed.address for seed in seeds],
+            category=MARKETING_CATEGORY,
+        )
     )
+    blocked = {seed.address for seed in seeds if seed.address not in eligible}
 
     created = suppressed = 0
     for seed in seeds:
@@ -1506,41 +1412,13 @@ def update_smtp_config_committed(
     return config
 
 
-def suppress_address_committed(
-    db: Session,
-    *,
-    channel: str,
-    address: str,
-    reason: str = CampaignSuppressionReason.unsubscribed.value,
-    source: str | None = None,
-    subscriber_id: str | UUID | None = None,
-    campaign_id: str | UUID | None = None,
-    notes: str | None = None,
-) -> CampaignSuppression:
-    suppression = suppress_address(
-        db,
-        channel=channel,
-        address=address,
-        reason=reason,
-        source=source,
-        subscriber_id=subscriber_id,
-        campaign_id=campaign_id,
-        notes=notes,
-    )
-    db.commit()
-    db.refresh(suppression)
-    return suppression
 
 
-def remove_suppression_committed(db: Session, *, channel: str, address: str) -> bool:
-    removed = remove_suppression(db, channel=channel, address=address)
-    db.commit()
-    return removed
 
 
 def unsubscribe_by_token_committed(
     db: Session, token: str, *, source: str = "unsubscribe_link"
-) -> CampaignSuppression:
+) -> CommunicationSuppression:
     suppression = unsubscribe_by_token(db, token, source=source)
     db.commit()
     db.refresh(suppression)

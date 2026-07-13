@@ -56,11 +56,6 @@ class CampaignRecipientStatus(enum.StrEnum):
     suppressed = "suppressed"
 
 
-class CampaignSuppressionReason(enum.StrEnum):
-    unsubscribed = "unsubscribed"
-    bounced = "bounced"
-    complaint = "complaint"
-    manual = "manual"
 
 
 class CampaignSmtpConfig(Base):
@@ -350,48 +345,3 @@ class CampaignRecipient(Base):
     message = relationship("InboxMessage")
 
 
-class CampaignSuppression(Base):
-    """Do-not-contact list, keyed by (channel, normalized address).
-
-    Suppression is deliberately **global per channel**, not per campaign: an
-    unsubscribe from one blast must hold for every later blast. `campaign_id`
-    records where the suppression originated, for audit only — it never scopes
-    enforcement.
-    """
-
-    __tablename__ = "campaign_suppressions"
-    __table_args__ = (
-        UniqueConstraint("channel", "address", name="uq_campaign_suppressions_address"),
-        Index("ix_campaign_suppressions_subscriber", "subscriber_id"),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    channel: Mapped[str] = mapped_column(String(40), nullable=False)
-    address: Mapped[str] = mapped_column(String(255), nullable=False)
-    subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscribers.id")
-    )
-    campaign_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("campaigns.id")
-    )
-    reason: Mapped[str] = mapped_column(
-        String(40), default=CampaignSuppressionReason.unsubscribed.value, nullable=False
-    )
-    source: Mapped[str | None] = mapped_column(String(80))
-    notes: Mapped[str | None] = mapped_column(Text)
-    metadata_: Mapped[dict | None] = mapped_column(
-        "metadata", MutableDict.as_mutable(JSON())
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
-        onupdate=lambda: datetime.now(UTC),
-    )
-
-    subscriber = relationship("Subscriber")
-    campaign = relationship("Campaign")
