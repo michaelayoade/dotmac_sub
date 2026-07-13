@@ -184,13 +184,33 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="financial.payment_provider_events",
+                module="app.services.billing.providers",
+                owns=(
+                    "payment-provider event ingestion",
+                    "provider-event idempotency",
+                    "incomplete provider settlement resumption",
+                ),
+                depends_on=("financial.ledger",),
+            ),
+            SOTService(
+                name="financial.payment_webhooks",
+                module="app.services.api_billing_webhooks",
+                owns=(
+                    "verified payment webhook projection",
+                    "inbound payment dead-letter lifecycle",
+                    "payment dead-letter replay",
+                ),
+                depends_on=("financial.payment_provider_events",),
+            ),
+            SOTService(
                 name="financial.payment_reconciliation",
                 module="app.services.payment_reconciliation",
                 owns=(
                     "stranded top-up reconciliation",
                     "scheduled top-up reconciliation execution",
                 ),
-                depends_on=("financial.ledger",),
+                depends_on=("financial.ledger", "financial.payment_provider_events"),
             ),
         ),
         entrypoints=(

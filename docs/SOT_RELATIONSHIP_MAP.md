@@ -49,6 +49,12 @@ that obscure business behavior.
    enforcement health immediately before a financial suspension.
 6. Scheduled billing, collections, and payment-reconciliation services own DB
    sessions, transaction outcomes, and operational logging for Celery runners.
+6. `financial.payment_webhooks` owns signature-verified provider-payload
+   projection and inbound dead-letter lifecycle. Replay rebuilds the same
+   settlement command as live delivery; `financial.payment_provider_events`
+   owns idempotent event processing, delegates the monetary write to the
+   payment owner, and must resume an incomplete event rather than treating
+   receipt identity as proof that money was posted.
 
 Rule: no module should infer access from draft invoices, ad hoc balances, or
 legacy import fields when a billing/access resolver exists. Celery tasks only
