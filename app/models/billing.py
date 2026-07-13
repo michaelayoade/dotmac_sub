@@ -95,7 +95,10 @@ class PaymentWebhookDeadLetterStatus(enum.Enum):
     # Ingest deterministically rejected the payload (HTTP 4xx, e.g. bad data).
     # Replaying as-is will not help; needs human attention.
     rejected = "rejected"
-    # A previously-failed event was successfully reprocessed.
+    # Legacy/manual replay result. Retained rows are treated as unresolved
+    # because old replay code set this without proving money was posted. New
+    # successful replays return this status as an API snapshot, then delete the
+    # dead-letter row; PaymentProviderEvent is the durable success record.
     replayed = "replayed"
 
 

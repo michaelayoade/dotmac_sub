@@ -56,6 +56,13 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "financial.access_resolution",
         "financial.prepaid_enforcement",
     )
+    assert sot_relationships.dependencies_for("financial.payment_webhooks") == (
+        "financial.payment_provider_events",
+    )
+    assert sot_relationships.dependencies_for("financial.payment_reconciliation") == (
+        "financial.ledger",
+        "financial.payment_provider_events",
+    )
     assert sot_relationships.dependencies_for(
         "communications.notification_service"
     ) == ("communications.channel_policy", "communications.event_policy")

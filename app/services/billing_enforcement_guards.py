@@ -258,6 +258,11 @@ def payment_channel_health(db: Session) -> EnforcementHealth:
                     PaymentWebhookDeadLetterStatus.received,
                     PaymentWebhookDeadLetterStatus.failed,
                     PaymentWebhookDeadLetterStatus.rejected,
+                    # Legacy replay marked rows resolved without proving that
+                    # a Payment was posted. New successful replays delete the
+                    # insurance row; retained ``replayed`` rows remain unsafe
+                    # until they are reprocessed through the fixed owner.
+                    PaymentWebhookDeadLetterStatus.replayed,
                 ]
             )
         )
