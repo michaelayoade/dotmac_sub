@@ -334,3 +334,86 @@ class AlertNotificationPolicyStep(Base):
     policy = relationship("AlertNotificationPolicy", back_populates="steps")
     template = relationship("NotificationTemplate")
     rotation = relationship("OnCallRotation", back_populates="policy_steps")
+
+
+class SuppressionScope(enum.Enum):
+    """What a suppression blocks.
+
+    The distinction is the whole point. An unsubscribe is a refusal of
+    *marketing*; it is not permission to stop sending someone their invoice,
+    their outage notice, or their credentials. Conflating the two is how a
+    consent ledger turns into a billing incident.
+
+    ``marketing`` — blocks marketing only. This is what "unsubscribe" means.
+    ``all``       — blocks everything, transactional included. Reserved for
+                    addresses we must not send to at all: hard bounces, spam
+                    complaints, and legal erasure requests. Never set by a
+                    customer clicking unsubscribe.
+    """
+
+    marketing = "marketing"
+    all = "all"
+
+
+class SuppressionReason(enum.Enum):
+    unsubscribe = "unsubscribe"
+    bounce = "bounce"
+    complaint = "complaint"
+    manual = "manual"
+    erasure = "erasure"
+
+
+class CommunicationSuppression(Base):
+    """Platform-wide 'do not contact' ledger — the single source of truth for
+    whether we may send to an address on a channel.
+
+    Campaigns, transactional notifications, imports and every other sender ask
+    the same question of the same table (``communication_eligibility.may_send``).
+    Before this, marketing eligibility was decided inside the campaign segment
+    filter, which meant a customer could unsubscribe and still be reachable by
+    any other path -- and that the answer differed depending on who was asking.
+    """
+
+    __tablename__ = "communication_suppressions"
+    __table_args__ = (
+        UniqueConstraint(
+            "channel", "address", name="uq_communication_suppressions_channel_address"
+        ),
+        Index("ix_communication_suppressions_address", "address"),
+        Index("ix_communication_suppressions_subscriber_id", "subscriber_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    channel: Mapped[NotificationChannel] = mapped_column(
+        Enum(NotificationChannel, native_enum=False), nullable=False, index=True
+    )
+    #: Normalised recipient (lower-cased email, digits-only phone). The raw form
+    #: is kept in ``raw_address`` so a suppression is auditable back to what the
+    #: customer actually clicked.
+    address: Mapped[str] = mapped_column(String(320), nullable=False)
+    raw_address: Mapped[str | None] = mapped_column(String(320))
+    #: Best-effort link. An address is not always resolvable to a subscriber
+    #: (imports, forwarded mail), and the ledger is keyed on the ADDRESS -- the
+    #: thing the transport actually sends to -- not on the person.
+    subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), index=True
+    )
+    scope: Mapped[SuppressionScope] = mapped_column(
+        Enum(SuppressionScope, native_enum=False),
+        nullable=False,
+        default=SuppressionScope.marketing,
+    )
+    reason: Mapped[SuppressionReason] = mapped_column(
+        Enum(SuppressionReason, native_enum=False),
+        nullable=False,
+        default=SuppressionReason.unsubscribe,
+    )
+    #: Free-text provenance: the bounce code, the campaign that carried the
+    #: unsubscribe link, the operator who set it by hand.
+    note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    created_by: Mapped[str | None] = mapped_column(String(120))
