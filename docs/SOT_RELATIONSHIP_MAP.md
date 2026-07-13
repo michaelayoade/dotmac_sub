@@ -33,23 +33,28 @@ that obscure business behavior.
 
 ## Financial and Access
 
-1. Ledger and billing account services own money movement and balances.
-2. Customer financial position owns read-side financial summaries.
-3. `financial.access_resolution` owns financial suspension/restoration
+1. `financial.ledger` owns the append-only record lifecycle and reversal
+   invariant. Domain owners decide why money moves.
+2. `financial.payments`, `financial.invoices`, and `financial.credit_notes` own
+   their document lifecycles and the ledger postings those transitions require.
+3. `financial.vas_wallet` owns its separate append-only wallet, spendable
+   balance, and atomic bridge into `financial.payments` for bill settlement.
+4. Customer financial position owns read-side financial summaries.
+5. `financial.access_resolution` owns financial suspension/restoration
    eligibility. For prepaid service, both directions compare the customer
    financial position with the single `financial.prepaid_threshold`; the
    existence or size of one payment is never itself permission to restore.
-4. `financial.prepaid_enforcement` owns the prepaid candidate cohort and the
+6. `financial.prepaid_enforcement` owns the prepaid candidate cohort and the
    warn/suspend/restore plan consumed by both dry-run and execution. It consumes
    the funding decision from `financial.access_resolution`; it does not create
    another balance or threshold rule.
-5. Dunning owns postpaid enforcement; prepaid enforcement owns prepaid access.
+7. Dunning owns postpaid enforcement; prepaid enforcement owns prepaid access.
    Both converge on the account lifecycle writer, which re-checks billing
    profile validity, payment-arrangement/proof/extension shields, and billing
    enforcement health immediately before a financial suspension.
-6. Scheduled billing, collections, and payment-reconciliation services own DB
+8. Scheduled billing, collections, and payment-reconciliation services own DB
    sessions, transaction outcomes, and operational logging for Celery runners.
-6. `financial.payment_webhooks` owns signature-verified provider-payload
+9. `financial.payment_webhooks` owns signature-verified provider-payload
    projection and inbound dead-letter lifecycle. Replay rebuilds the same
    settlement command as live delivery; `financial.payment_provider_events`
    owns idempotent event processing, delegates the monetary write to the
@@ -129,11 +134,13 @@ Dependency order:
    alert rules, and alert state mutations.
 3. `network.access_path`: resolves `subscriber/subscription -> access path`.
 4. `network.radius_sessions`: resolves online-now state from active sessions.
-5. `network.device_state`: resolves device state from admin/live/poll signals.
+5. `network.device_state`: derives NOC operational state, retry state, and alarm
+   classification from administrative intent and monitoring observations.
 6. `network.outage_impact`: resolves affected customers from topology.
 7. `network.device_groups`: owns device-group mutations, membership, and bulk
    action queueing.
-8. `network.events`: turns resolved state/impact into event decisions.
+8. `network.outage_lifecycle`: owns incident transitions, escalation planning,
+   and outage event emission.
 
 Rule: pollers write observations; resolver services decide state; event services
 decide consequences. Customer-facing outage, SLA, expiry suppression, support
@@ -143,13 +150,12 @@ context, and escalation should consume these network SOT layers.
 
 Dependency order:
 
-1. `sessions.radius_live_view`: owns `radius_active_sessions` mutations from
-   accounting start/interim/stop events.
-2. `sessions.radius_reconciliation`: reconciles external `radacct` open
-   sessions into the live view and prunes dead rows.
-3. `sessions.radius_resolution`: answers online-now and primary-session
+1. `sessions.radius_reconciliation`: is the canonical writer of the
+   `radius_active_sessions` projection; it reconciles external `radacct` open
+   sessions and prunes dead rows.
+2. `sessions.radius_resolution`: answers online-now and primary-session
    questions for customers/subscribers.
-4. `sessions.enforcement`: owns CoA, disconnect, and session refresh outcomes
+3. `sessions.enforcement`: owns CoA, disconnect, and session refresh outcomes
    after billing/access/FUP state changes.
 
 Rule: accounting imports write session facts; resolvers answer online state;
@@ -256,13 +262,12 @@ Service intent:
 
 1. `service_intent.catalog_policy`: owns catalog policy lookup.
 2. `service_intent.catalog_validation`: owns catalog consistency checks.
-3. `service_intent.catalog_to_network`: translates commercial subscriptions
-   into network-safe provisioning payloads.
-4. `service_intent.ont`: projects provisioning intent to ONT operations.
+3. `service_intent.subscription_nas_assignment`: owns commercial-service NAS
+   assignment.
+4. `service_intent.ont`: projects configured intent for ONT operations.
 
-Rule: catalog defines the commercial service. Network/provisioning code consumes
-service-intent payloads and should not infer plan meaning directly from catalog
-models.
+Rule: catalog policy and subscription owners define commercial intent. Network
+owners project configured intent without a parallel catalog-to-network adapter.
 
 Integrations:
 

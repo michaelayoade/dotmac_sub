@@ -30,7 +30,10 @@ def test_domain_sot_relationships_cover_expected_domains():
 def test_domain_sot_relationships_encode_cross_domain_dependencies():
     assert sot_relationships.dependencies_for("network.outage_impact") == (
         "network.access_path",
-        "network.device_state",
+    )
+    assert sot_relationships.dependencies_for("network.outage_lifecycle") == (
+        "network.outage_impact",
+        "events.dispatcher",
     )
     assert sot_relationships.dependencies_for("network.device_groups") == (
         "network.identity",
@@ -58,6 +61,12 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     )
     assert sot_relationships.dependencies_for("financial.payment_webhooks") == (
         "financial.payment_provider_events",
+    )
+    assert sot_relationships.dependencies_for("financial.vas_wallet") == (
+        "financial.payments",
+    )
+    assert sot_relationships.dependencies_for("financial.payment_provider_events") == (
+        "financial.payments",
     )
     assert sot_relationships.dependencies_for("financial.payment_reconciliation") == (
         "financial.ledger",
@@ -100,13 +109,11 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     )
     assert sot_relationships.dependencies_for("runtime.infrastructure_polling") == (
         "runtime.db_sessions",
-        "network.device_state",
     )
     assert sot_relationships.dependencies_for("network.nas_lifecycle") == (
         "network.identity",
         "network.access_path",
         "network.radius_sessions",
-        "network.device_state",
         "network.nas_inventory",
         "service_intent.subscription_nas_assignment",
         "access.radius_state",
@@ -130,8 +137,9 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "access.control_resolution",
         "access.event_policy",
     )
-    assert sot_relationships.dependencies_for("service_intent.catalog_to_network") == (
-        "service_intent.catalog_policy",
+    assert sot_relationships.dependencies_for("sessions.radius_resolution") == (
+        "sessions.radius_reconciliation",
+        "network.identity",
     )
 
 
