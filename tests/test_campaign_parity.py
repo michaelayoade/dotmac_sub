@@ -15,8 +15,12 @@ from app.models.comms_campaign import (
     CampaignRecipient,
     CampaignRecipientStatus,
     CampaignStatus,
-    CampaignSuppression,
-    CampaignSuppressionReason,
+)
+from app.models.notification import (
+    CommunicationSuppression,
+    NotificationChannel,
+    SuppressionReason,
+    SuppressionScope,
 )
 from app.models.service_team import ServiceTeam, ServiceTeamType
 from app.models.subscriber import Subscriber, SubscriberStatus
@@ -27,6 +31,7 @@ from app.schemas.campaigns import (
     CampaignStepCreate,
 )
 from app.services import comms_campaigns
+from app.services import communication_eligibility as eligibility
 
 
 def _subscriber(db_session, *, email: str, first_name: str = "Ada") -> Subscriber:
@@ -37,6 +42,7 @@ def _subscriber(db_session, *, email: str, first_name: str = "Ada") -> Subscribe
         phone="08035550114",
         status=SubscriberStatus.active,
         is_active=True,
+        marketing_opt_in=True,
     )
     db_session.add(subscriber)
     db_session.flush()
@@ -104,11 +110,11 @@ def _campaign(db_session, **overrides):
 def test_suppressed_address_is_excluded_from_the_audience(db_session, captured_email):
     _subscriber(db_session, email="keep@example.com")
     _subscriber(db_session, email="gone@example.com")
-    comms_campaigns.suppress_address(
+    eligibility.suppress(
         db_session,
-        channel="email",
+        channel=NotificationChannel.email,
         address="GONE@example.com",
-        reason=CampaignSuppressionReason.unsubscribed.value,
+        reason=SuppressionReason.unsubscribe,
     )
     campaign = _campaign(db_session)
 
@@ -132,11 +138,11 @@ def test_address_suppressed_after_the_build_is_never_sent_to(
     assert audience.created == 2
 
     # The unsubscribe lands between the audience build and the send.
-    comms_campaigns.suppress_address(
+    eligibility.suppress(
         db_session,
-        channel="email",
+        channel=NotificationChannel.email,
         address="late@example.com",
-        reason=CampaignSuppressionReason.unsubscribed.value,
+        reason=SuppressionReason.unsubscribe,
     )
     result = comms_campaigns.send_campaign_batch(db_session, campaign.id)
 
@@ -167,10 +173,12 @@ def test_send_batch_rechecks_suppression_it_did_not_retire(db_session, captured_
     comms_campaigns.build_recipient_list(db_session, campaign.id)
 
     db_session.add(
-        CampaignSuppression(
-            channel="email",
+        CommunicationSuppression(
+            channel=NotificationChannel.email,
             address="raw@example.com",
-            reason=CampaignSuppressionReason.bounced.value,
+            raw_address="raw@example.com",
+            scope=SuppressionScope.all,
+            reason=SuppressionReason.bounce,
         )
     )
     db_session.flush()
@@ -205,8 +213,12 @@ def test_unsubscribe_token_suppresses_the_address_globally(db_session, captured_
         db_session, recipient.unsubscribe_token
     )
     assert suppression.address == "churn@example.com"
-    assert suppression.reason == CampaignSuppressionReason.unsubscribed.value
-    assert suppression.campaign_id == first.id
+    assert suppression.reason is SuppressionReason.unsubscribe
+    # Refusing a promo is NOT permission to stop their invoice.
+    assert suppression.scope is SuppressionScope.marketing
+    # The campaign that prompted it is provenance, not a column on a
+    # platform-wide table.
+    assert f"campaign={first.id}" in suppression.note
 
     # A *later, unrelated* campaign must not reach the unsubscribed address.
     captured_email.clear()
@@ -245,29 +257,50 @@ def test_unknown_unsubscribe_token_is_a_404(db_session):
     assert excinfo.value.status_code == 404
 
 
-def test_suppression_is_idempotent_and_removable(db_session):
-    comms_campaigns.suppress_address(
-        db_session, channel="email", address="dupe@example.com"
-    )
-    comms_campaigns.suppress_address(
+def test_a_complaint_escalates_an_unsubscribe_and_is_never_downgraded(db_session):
+    """One row per (channel, address) -- and severity only ever climbs.
+
+    A spam complaint means the address is unusable, not merely uninterested. If
+    a later unsubscribe click could pull the scope back down to `marketing`, we
+    would resume sending invoices to an address that reported us.
+    """
+    eligibility.suppress(
         db_session,
-        channel="email",
+        channel=NotificationChannel.email,
         address="dupe@example.com",
-        reason=CampaignSuppressionReason.complaint.value,
+        reason=SuppressionReason.unsubscribe,
+    )
+    eligibility.suppress(
+        db_session,
+        channel=NotificationChannel.email,
+        address="DUPE@example.com",  # same address, dodging via case
+        scope=SuppressionScope.all,
+        reason=SuppressionReason.complaint,
     )
 
-    rows = db_session.query(CampaignSuppression).all()
+    rows = db_session.query(CommunicationSuppression).all()
     assert len(rows) == 1
-    assert rows[0].reason == CampaignSuppressionReason.complaint.value
-    assert comms_campaigns.is_suppressed(
-        db_session, channel="email", address="dupe@example.com"
-    )
+    assert rows[0].scope is SuppressionScope.all
 
-    assert comms_campaigns.remove_suppression(
-        db_session, channel="email", address="dupe@example.com"
+    # A late unsubscribe must not de-escalate the complaint.
+    eligibility.suppress(
+        db_session,
+        channel=NotificationChannel.email,
+        address="dupe@example.com",
+        scope=SuppressionScope.marketing,
+        reason=SuppressionReason.unsubscribe,
     )
-    assert not comms_campaigns.is_suppressed(
-        db_session, channel="email", address="dupe@example.com"
+    db_session.refresh(rows[0])
+    assert rows[0].scope is SuppressionScope.all
+
+    assert eligibility.unsuppress(
+        db_session, channel=NotificationChannel.email, address="dupe@example.com"
+    )
+    assert eligibility.may_send(
+        db_session,
+        channel=NotificationChannel.email,
+        address="dupe@example.com",
+        category="marketing",
     )
 
 

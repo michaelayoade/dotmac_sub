@@ -11,6 +11,7 @@ from typing import Any
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session, load_only
 
+from app.models.comms_campaign import CampaignSmtpConfig
 from app.models.billing import BankAccount, PaymentMethod
 from app.models.catalog import AccessCredential, NasDevice
 from app.models.domain_settings import DomainSetting
@@ -125,6 +126,7 @@ _MODEL_BY_NAME: dict[str, type[Any]] = {
     "SystemUser": SystemUser,
     "Router": Router,
     "JumpHost": JumpHost,
+    "CampaignSmtpConfig": CampaignSmtpConfig,
 }
 
 _MODEL_FIELDS: tuple[tuple[type[Any], tuple[str, ...]], ...] = tuple(

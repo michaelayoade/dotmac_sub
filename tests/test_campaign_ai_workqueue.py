@@ -31,6 +31,7 @@ def _subscriber(
         phone=phone,
         status=status,
         is_active=is_active,
+        marketing_opt_in=True,
         reseller=reseller,
     )
     db_session.add(subscriber)
