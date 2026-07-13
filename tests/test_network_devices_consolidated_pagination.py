@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from pathlib import Path
 
 from app.models.network_monitoring import (
     DeviceMetric,
@@ -9,6 +10,39 @@ from app.models.network_monitoring import (
     NetworkDevice,
 )
 from app.services import web_network_core_devices_views as core_devices_views
+from app.web.admin import network_core_devices as core_devices_web
+
+
+def test_paginate_rows_clamps_stale_pages_and_handles_empty_lists():
+    rows, pagination = core_devices_web._paginate_rows(list(range(7)), 99, 3)
+
+    assert rows == [6]
+    assert pagination == {
+        "page": 3,
+        "per_page": 3,
+        "total": 7,
+        "total_pages": 3,
+        "has_prev": True,
+        "has_next": False,
+    }
+
+    rows, pagination = core_devices_web._paginate_rows([], 4, 25)
+
+    assert rows == []
+    assert pagination["page"] == 1
+    assert pagination["total_pages"] == 1
+
+
+def test_consolidated_template_uses_server_tabs_and_independent_pagination():
+    template = Path("templates/admin/network/network-devices/index.html").read_text()
+
+    assert "activeTab" not in template
+    assert "{% if tab == 'core' %}" in template
+    assert "{% if tab == 'olts' %}" in template
+    assert "{% if tab == 'onts' %}" in template
+    assert "include_query_params(olt_page=" in template
+    assert "include_query_params(ont_page=" in template
+    assert "include_query_params(cpe_page=" in template
 
 
 def test_consolidated_page_data_does_not_cap_core_devices_before_pagination(
