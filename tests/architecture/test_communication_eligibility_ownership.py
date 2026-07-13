@@ -31,14 +31,46 @@ TRANSPORT_CALLS = {
     "send_text_message",
 }
 
-#: Pre-existing direct-transport callers. This list must only ever SHRINK --
-#: each one is a path that can bypass the consent ledger. It is not an
-#: allowlist of "fine"; it is a to-do list.
-KNOWN_DIRECT_SENDERS = {
-    "app/services/email.py",  # the transport itself
+#: The transports themselves. These ARE the send.
+TRANSPORT_MODULES = {
+    "app/services/email.py",
     "app/services/sms.py",
     "app/services/push.py",
 }
+
+#: Every path that currently calls a transport directly, skipping the delivery
+#: point and therefore the consent ledger.
+#:
+#: This is NOT an allowlist of "these are fine". It is the migration backlog for
+#: SOT finding 9 -- "many billing, project, import, export, mirror and inbox
+#: paths call email/SMS/push transports directly [and] can bypass suppression,
+#: category preferences, quiet hours, dedupe and auditing".
+#:
+#: Each of these can mail a customer who has unsubscribed. THIS SET MUST ONLY
+#: EVER SHRINK. Converting one to submit a Notification through the queue -- and
+#: deleting its line here -- is the unit of progress. Adding a line is a
+#: regression, and CI will not tell you off for it, so reviewers must.
+LEDGER_BYPASS_BACKLOG = {
+    "app/api/crm_webhooks.py",
+    "app/services/billing_payment_receipts.py",
+    "app/services/crm_ticket_pull.py",
+    "app/services/notification_adapter.py",
+    "app/services/operational_escalation_delivery.py",
+    "app/services/projects.py",
+    "app/services/projects_mirror.py",
+    "app/services/quotes_mirror.py",
+    "app/services/referrals.py",
+    "app/services/referrals_mirror.py",
+    "app/services/team_inbox_outbound.py",
+    "app/services/web_billing_invoices.py",
+    "app/services/web_catalog_subscriptions.py",
+    "app/services/web_notifications.py",
+    "app/services/web_system_export_tool.py",
+    "app/services/work_orders_mirror.py",
+    "app/tasks/imports.py",
+}
+
+KNOWN_DIRECT_SENDERS = TRANSPORT_MODULES | LEDGER_BYPASS_BACKLOG
 
 
 def _py_files() -> list[Path]:
@@ -123,4 +155,44 @@ def test_the_delivery_point_actually_consults_the_ledger() -> None:
         f"{DELIVERY_POINT} must gate every send on may_send() -- it is the only "
         "place all four transports are called, so it is the only place the "
         "check is guaranteed to run."
+    )
+
+
+def test_the_bypass_backlog_only_shrinks() -> None:
+    """Every module in the backlog must still exist and still bypass.
+
+    If one no longer calls a transport, it has been migrated -- delete its line.
+    Leaving a stale entry lets a genuinely new bypass hide behind an old name.
+    """
+    stale: list[str] = []
+
+    for rel in sorted(LEDGER_BYPASS_BACKLOG):
+        path = ROOT / rel
+        if not path.exists():
+            stale.append(f"{rel} (module deleted)")
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError:  # pragma: no cover
+            continue
+        calls_transport = any(
+            isinstance(node, ast.Call)
+            and (
+                node.func.attr
+                if isinstance(node.func, ast.Attribute)
+                else node.func.id
+                if isinstance(node.func, ast.Name)
+                else None
+            )
+            in TRANSPORT_CALLS
+            for node in ast.walk(tree)
+        )
+        if not calls_transport:
+            stale.append(f"{rel} (migrated -- remove it from the backlog)")
+
+    assert not stale, (
+        "These are listed as bypassing the consent ledger but no longer do:\n  "
+        + "\n  ".join(stale)
+        + "\n\nDelete them from LEDGER_BYPASS_BACKLOG. A stale entry is a place "
+        "a new bypass can hide."
     )

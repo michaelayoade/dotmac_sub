@@ -379,6 +379,7 @@ class CommunicationSuppression(Base):
         UniqueConstraint(
             "channel", "address", name="uq_communication_suppressions_channel_address"
         ),
+        Index("ix_communication_suppressions_channel", "channel"),
         Index("ix_communication_suppressions_address", "address"),
         Index("ix_communication_suppressions_subscriber_id", "subscriber_id"),
     )
@@ -387,7 +388,7 @@ class CommunicationSuppression(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     channel: Mapped[NotificationChannel] = mapped_column(
-        Enum(NotificationChannel, native_enum=False), nullable=False, index=True
+        Enum(NotificationChannel, native_enum=False), nullable=False
     )
     #: Normalised recipient (lower-cased email, digits-only phone). The raw form
     #: is kept in ``raw_address`` so a suppression is auditable back to what the
@@ -398,7 +399,7 @@ class CommunicationSuppression(Base):
     #: (imports, forwarded mail), and the ledger is keyed on the ADDRESS -- the
     #: thing the transport actually sends to -- not on the person.
     subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscribers.id"), index=True
+        UUID(as_uuid=True), ForeignKey("subscribers.id")
     )
     scope: Mapped[SuppressionScope] = mapped_column(
         Enum(SuppressionScope, native_enum=False),
