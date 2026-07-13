@@ -1838,15 +1838,44 @@ class Payments(ListResponseMixin):
 
     @staticmethod
     def delete(db: Session, payment_id: str):
+        """Soft-delete a payment and remove every effect it had.
+
+        A payment's effect is spread across the payment row, its allocations, and
+        the ledger credits those allocations justify. Deactivating only the payment
+        row left the ledger credit ACTIVE and unallocated — so the money kept
+        counting toward the customer's spendable credit even though the payment
+        that created it was gone.
+
+        Allocation and ledger credit drop together, the same way
+        ``PaymentAllocations.delete`` and ``Payments.reallocate`` do it. Never one
+        without the other.
+        """
         payment = get_by_id(db, Payment, payment_id)
         if not payment:
             raise HTTPException(status_code=404, detail="Payment not found")
-        payment.is_active = False
+
+        invoices = [
+            invoice
+            for allocation in payment.allocations
+            if allocation.is_active
+            and (invoice := get_by_id(db, Invoice, allocation.invoice_id))
+        ]
+
+        # Drop every ledger entry this payment posted — the invoice-scoped credits
+        # AND the unallocated surplus credit, which nothing else would ever undo.
+        db.query(LedgerEntry).filter(
+            LedgerEntry.payment_id == payment.id,
+            LedgerEntry.is_active.is_(True),
+        ).update({"is_active": False}, synchronize_session=False)
+
         for allocation in payment.allocations:
-            invoice = get_by_id(db, Invoice, allocation.invoice_id)
-            if invoice:
-                db.flush()
-                _finalize_invoice_payment_effects(db, invoice)
+            allocation.is_active = False
+
+        payment.is_active = False
+        db.flush()
+
+        for invoice in invoices:
+            _finalize_invoice_payment_effects(db, invoice)
         db.commit()
 
     @staticmethod
