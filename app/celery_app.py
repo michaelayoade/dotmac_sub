@@ -93,7 +93,8 @@ celery_app.conf.task_routes = {
     "app.tasks.topology_outage.reconcile_detected_outages": {"queue": "ingestion"},
     "app.tasks.topology_uisp.run_uisp_topology_sync": {"queue": "ingestion"},
     "app.tasks.uisp_ip_backfill.run_uisp_mgmt_ip_backfill": {"queue": "ingestion"},
-    "app.tasks.uisp_control.apply_uisp_intent": {"queue": "ingestion"},
+    # Operator-triggered writes must not wait behind long inventory and
+    # topology jobs. Unrouted apply tasks use the default worker queue.
     "app.tasks.uisp_control.reconcile_uisp_config_readback": {"queue": "ingestion"},
     "app.tasks.topology_ufiber_link.run_ufiber_onu_link": {"queue": "ingestion"},
     "app.tasks.topology_metrics.export_topology_metrics": {"queue": "ingestion"},
