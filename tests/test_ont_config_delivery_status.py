@@ -634,3 +634,38 @@ def test_queued_saved_service_apply_remains_pending(db_session, monkeypatch) -> 
     assert result.data and result.data["pending_deliveries"]
     assert ont.provisioning_status == OntProvisioningStatus.pending_service_config
     assert (ont.desired_config or {})["delivery"]["pending_apply"] is True
+
+
+def test_acs_401_after_queued_write_remains_pending(db_session, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from app.models.network import OntProvisioningStatus, OntUnit
+    from app.services.network.ont_desired_config import set_desired_config_values
+    from app.services.network.ont_provision_steps import apply_saved_service_config
+
+    ont = OntUnit(serial_number="QUEUED-ACS-401", is_active=True)
+    set_desired_config_values(ont, {"wifi.ssid": "WAIT-FOR-INFORM"})
+    db_session.add(ont)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "app.services.network.ont_provision_steps.genieacs_service",
+        SimpleNamespace(
+            set_wifi_config=lambda *a, **kw: SimpleNamespace(
+                success=False,
+                waiting=False,
+                data=None,
+                message=(
+                    "setParameterValues queued but Connection Request failed: "
+                    "HTTP 401 Unauthorized"
+                ),
+            )
+        ),
+    )
+
+    result = apply_saved_service_config(db_session, str(ont.id))
+
+    assert result.success is False
+    assert result.waiting is True
+    assert result.data and result.data["pending_deliveries"]
+    assert ont.provisioning_status == OntProvisioningStatus.pending_service_config

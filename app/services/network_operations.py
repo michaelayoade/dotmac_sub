@@ -537,6 +537,42 @@ class NetworkOperations(ListResponseMixin):
         # always derived from children and must be re-derivable as children
         # complete, even if the parent was previously marked terminal.
         parent.status = derived
+        if derived == NetworkOperationStatus.failed:
+            failed_children = [
+                child
+                for child in children
+                if child.status == NetworkOperationStatus.failed
+            ]
+            failed_child = max(
+                failed_children,
+                key=lambda child: child.completed_at or child.created_at,
+            )
+            child_payload = failed_child.output_payload or {}
+            parent.error = str(
+                failed_child.error
+                or child_payload.get("message")
+                or f"Child operation {failed_child.id} failed without an error message."
+            )
+        elif derived == NetworkOperationStatus.warning:
+            warning_child = next(
+                child
+                for child in children
+                if child.status == NetworkOperationStatus.warning
+            )
+            parent.error = warning_child.error
+        else:
+            parent.error = None
+        if derived == NetworkOperationStatus.waiting:
+            waiting_child = next(
+                child
+                for child in children
+                if child.status == NetworkOperationStatus.waiting
+            )
+            parent.waiting_reason = (
+                parent.waiting_reason or waiting_child.waiting_reason
+            )
+        else:
+            parent.waiting_reason = None
         if derived in (
             NetworkOperationStatus.succeeded,
             NetworkOperationStatus.warning,

@@ -262,3 +262,36 @@ def test_filter_eligible_agrees_with_may_send(db_session):
         assert sorted(got) == sorted(expected), (
             f"bulk and single disagree on {category}"
         )
+
+
+def test_an_escalation_survives_without_a_commit(db_session):
+    """The bug this exists to stop.
+
+    `suppress()` escalates by mutating the existing row. If it does not flush,
+    the change lives only in the Session -- and with autoflush off it is thrown
+    away, leaving the row at `marketing`. The address hard-bounced, but we would
+    go on sending it invoices.
+
+    The committed variant could never catch this: commit flushes.
+    """
+    eligibility.suppress(
+        db_session,
+        channel=EMAIL,
+        address="bounced@example.com",
+        scope=SuppressionScope.marketing,
+        reason=SuppressionReason.unsubscribe,
+    )
+    eligibility.suppress(
+        db_session,
+        channel=EMAIL,
+        address="bounced@example.com",
+        scope=SuppressionScope.all,
+        reason=SuppressionReason.bounce,
+    )
+
+    row = db_session.query(CommunicationSuppression).one()
+    db_session.refresh(row)  # re-read from the DB, discarding un-flushed state
+    assert row.scope is SuppressionScope.all, "the escalation never reached the DB"
+    assert not eligibility.may_send(
+        db_session, channel=EMAIL, address="bounced@example.com", category="billing"
+    )

@@ -197,6 +197,11 @@ def suppress(
             existing.scope = scope
             existing.reason = reason
             existing.note = note or existing.note
+            # Persist the escalation. Without this the mutation lives only in
+            # the Session; with autoflush off it is silently discarded, the row
+            # stays `marketing`, and we resume sending invoices to an address
+            # that hard-bounced.
+            db.flush()
         return existing
 
     row = CommunicationSuppression(
