@@ -153,29 +153,49 @@ def export_config_via_ssh(
             "ROUTER_CONFIG_SSH_PASSWORD"
         )
 
-    base_kwargs = dict(
-        hostname=router.management_ip,
-        port=port,
-        username=username,
-        timeout=timeout,
-        banner_timeout=timeout,
-        auth_timeout=timeout,
-        look_for_keys=False,
-        allow_agent=False,
-    )
     client = paramiko.SSHClient()
     _install_host_key_policy(client)
     try:
         try:
-            client.connect(  # type: ignore[call-arg]
-                **base_kwargs,
-                **({"pkey": pkey} if pkey is not None else {"password": password}),
-            )
+            if pkey is not None:
+                client.connect(  # type: ignore[call-arg]
+                    hostname=router.management_ip,
+                    port=port,
+                    username=username,
+                    timeout=timeout,
+                    banner_timeout=timeout,
+                    auth_timeout=timeout,
+                    look_for_keys=False,
+                    allow_agent=False,
+                    pkey=pkey,
+                )
+            else:
+                client.connect(  # type: ignore[call-arg]
+                    hostname=router.management_ip,
+                    port=port,
+                    username=username,
+                    timeout=timeout,
+                    banner_timeout=timeout,
+                    auth_timeout=timeout,
+                    look_for_keys=False,
+                    allow_agent=False,
+                    password=password,
+                )
         except AuthenticationException:
             # Key rejected — fall back to the password if one is configured.
             if pkey is None or not password:
                 raise
-            client.connect(**base_kwargs, password=password)  # type: ignore[call-arg]
+            client.connect(  # type: ignore[call-arg]
+                hostname=router.management_ip,
+                port=port,
+                username=username,
+                timeout=timeout,
+                banner_timeout=timeout,
+                auth_timeout=timeout,
+                look_for_keys=False,
+                allow_agent=False,
+                password=password,
+            )
         # Fixed, non-interpolated command (no user input) — not a shell.
         _stdin, stdout, stderr = client.exec_command(command, timeout=timeout)  # nosec B601
         out = stdout.read().decode("utf-8", "replace")

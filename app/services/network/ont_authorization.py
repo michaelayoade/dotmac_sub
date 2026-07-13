@@ -800,7 +800,7 @@ def authorize_ont(
             success=provision_result.success,
             subphases=provision_data.get("phase_timings", []),
         )
-        step_details = {
+        step_details: dict[str, object] = {
             key: provision_data[key]
             for key in ("phase_timings", "command_timings", "domain_outcomes")
             if key in provision_data
