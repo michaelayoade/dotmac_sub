@@ -243,12 +243,6 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("network.identity",),
             ),
             SOTService(
-                name="network.device_state",
-                module="app.services.network.device_state",
-                owns=("live infrastructure state", "pollability interpretation"),
-                depends_on=("network.identity",),
-            ),
-            SOTService(
                 name="network.nas_inventory",
                 module="app.services.nas.devices",
                 owns=("NAS administrative lifecycle state", "NAS inventory reads"),
@@ -266,7 +260,6 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "network.identity",
                     "network.access_path",
                     "network.radius_sessions",
-                    "network.device_state",
                     "network.nas_inventory",
                     "service_intent.subscription_nas_assignment",
                     "access.radius_state",
@@ -291,7 +284,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="network.outage_impact",
                 module="app.services.network.outage_impact",
                 owns=("affected-customer impact", "outage scope impact"),
-                depends_on=("network.access_path", "network.device_state"),
+                depends_on=("network.access_path",),
             ),
             SOTService(
                 name="network.device_groups",
@@ -302,17 +295,6 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "device group bulk action queueing",
                 ),
                 depends_on=("network.identity",),
-            ),
-            SOTService(
-                name="network.events",
-                module="app.services.network.events",
-                owns=("network event decisions",),
-                depends_on=(
-                    "network.device_state",
-                    "network.outage_impact",
-                    "network.radius_sessions",
-                    "network.device_groups",
-                ),
             ),
         ),
         entrypoints=(
@@ -330,22 +312,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         domain="subscriber_sessions",
         services=(
             SOTService(
-                name="sessions.radius_live_view",
-                module="app.services.radius_active_sessions",
-                owns=(
-                    "RADIUS active-session mirror",
-                    "accounting start/interim/stop session rows",
-                ),
-                depends_on=("network.identity",),
-            ),
-            SOTService(
                 name="sessions.radius_reconciliation",
                 module="app.services.radius_session_reconcile",
                 owns=(
                     "external radacct open-session discovery",
                     "live-session mirror pruning",
                 ),
-                depends_on=("sessions.radius_live_view",),
             ),
             SOTService(
                 name="sessions.radius_accounting_health",
@@ -360,7 +332,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="sessions.radius_resolution",
                 module="app.services.network.radius_sessions",
                 owns=("customer online-now resolution", "primary NAS session"),
-                depends_on=("sessions.radius_live_view", "network.identity"),
+                depends_on=("network.identity",),
             ),
             SOTService(
                 name="sessions.enforcement",
@@ -657,7 +629,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "pollable device predicate",
                     "poll heartbeat result counters",
                 ),
-                depends_on=("runtime.db_sessions", "network.device_state"),
+                depends_on=("runtime.db_sessions",),
             ),
             SOTService(
                 name="runtime.infrastructure_health",
@@ -921,15 +893,6 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         domain="service_intent_control_plane",
         services=(
             SOTService(
-                name="service_intent.catalog_to_network",
-                module="app.services.service_intent_adapter",
-                owns=(
-                    "catalog/subscription to network intent",
-                    "network-safe subscription provisioning payloads",
-                ),
-                depends_on=("service_intent.catalog_policy",),
-            ),
-            SOTService(
                 name="service_intent.catalog_policy",
                 module="app.services.catalog.policies",
                 owns=("catalog policy lookup", "offer policy interpretation"),
@@ -953,7 +916,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="service_intent.ont",
                 module="app.services.network.ont_service_intent",
                 owns=("ONT service intent projection",),
-                depends_on=("service_intent.catalog_to_network", "network.access_path"),
+                depends_on=("network.access_path",),
             ),
         ),
         entrypoints=(
