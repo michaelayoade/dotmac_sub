@@ -79,7 +79,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "customer usage headline totals",
                     "customer usage total provenance",
                 ),
-                depends_on=("sessions.radius_live_view",),
+                depends_on=("sessions.radius_reconciliation",),
                 notes=(
                     "Authoritative zero is a valid total. Customer clients do "
                     "not replace server totals with loaded-session pages or "
@@ -199,6 +199,23 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "financial.ledger",
                     "financial.billing_profile",
                     "financial.prepaid_threshold",
+                ),
+            ),
+            SOTService(
+                name="financial.prepaid_plan_change",
+                module="app.services.prepaid_plan_changes",
+                owns=(
+                    "prepaid plan-change proration decision",
+                    "prepaid plan-change wallet affordability",
+                    "idempotent plan-change debit and credit staging",
+                ),
+                depends_on=(
+                    "financial.ledger",
+                    "customer.financial_position",
+                ),
+                notes=(
+                    "Immediate changes lock the account, recompute at write time, "
+                    "and commit the financial adjustment with the subscription."
                 ),
             ),
             SOTService(
@@ -1102,6 +1119,20 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.catalog.validation",
                 owns=("catalog mutation validation", "offer/profile consistency"),
                 depends_on=("service_intent.catalog_policy",),
+            ),
+            SOTService(
+                name="service_intent.catalog_billing_governance",
+                module="app.services.catalog_billing_governance",
+                owns=(
+                    "billing-critical catalog mutation policy",
+                    "live pricing and cadence immutability",
+                    "billing catalog audit and operator alerting",
+                ),
+                depends_on=(
+                    "service_intent.catalog_validation",
+                    "auth.permission_gate",
+                    "observability.recording",
+                ),
             ),
             SOTService(
                 name="service_intent.subscription_nas_assignment",

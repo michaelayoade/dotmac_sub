@@ -13,6 +13,7 @@ from app.models.billing import (
     CollectionAccountType,
     CreditNoteStatus,
     InvoiceStatus,
+    LedgerCategory,
     LedgerEntryType,
     LedgerSource,
     PaymentChannelType,
@@ -714,6 +715,7 @@ class LedgerEntryBase(BaseModel):
     payment_id: UUID | None = None
     entry_type: LedgerEntryType
     source: LedgerSource | None = None
+    category: LedgerCategory | None = None
     # Bound is create-only (see InvoiceBase); base stays unbounded for *Read.
     amount: Decimal = Decimal("0.00")
     currency: str = Field(default="NGN", min_length=3, max_length=3)

@@ -118,51 +118,15 @@ def _build_plan_change_quote(
     *,
     current_balance: Decimal | None = None,
 ) -> dict[str, object]:
-    from app.services.catalog.subscriptions import (
-        _apply_plan_change_policy,
-        _calculate_proration,
-        _offer_recurring_price_amount,
-    )
-    from app.services.common import round_money
+    from app.services.prepaid_plan_changes import resolve_prepaid_plan_change
 
-    proration = _calculate_proration(db, subscription, str(target_offer.id))
-    proration = _apply_plan_change_policy(
+    decision = resolve_prepaid_plan_change(
         db,
-        proration,
-        old_price=_offer_recurring_price_amount(db, subscription.offer_id),
-        new_price=_offer_recurring_price_amount(db, str(target_offer.id)),
+        subscription,
+        str(target_offer.id),
+        current_balance=current_balance,
     )
-    balance = round_money(
-        current_balance
-        if current_balance is not None
-        else _customer_credit_balance(db, str(subscription.subscriber_id))
-    )
-    required_amount = round_money(
-        max(Decimal("0.00"), Decimal(str(proration.get("net_amount", "0.00"))))
-    )
-    shortfall = round_money(max(Decimal("0.00"), required_amount - balance))
-    return {
-        "current_remaining_value": round_money(
-            Decimal(str(proration.get("credit_amount", "0.00")))
-        ),
-        "required_amount": required_amount,
-        "current_balance": balance,
-        "shortfall": shortfall,
-        "charge_amount": round_money(
-            Decimal(str(proration.get("charge_amount", "0.00")))
-        ),
-        "net_amount": round_money(Decimal(str(proration.get("net_amount", "0.00")))),
-        "days_remaining": int(proration.get("days_remaining", 0) or 0),
-        "days_in_cycle": int(proration.get("days_in_cycle", 0) or 0),
-        "remaining_cycle_seconds": int(
-            proration.get("remaining_cycle_seconds", 0) or 0
-        ),
-        "total_cycle_seconds": int(proration.get("total_cycle_seconds", 0) or 0),
-        "can_apply_immediately": shortfall <= Decimal("0.00"),
-        "is_upgrade": required_amount > Decimal("0.00"),
-        "is_downgrade": Decimal(str(proration.get("net_amount", "0.00")))
-        < Decimal("0.00"),
-    }
+    return decision.as_quote_dict()
 
 
 def _serialize_plan_change_quote(quote: dict[str, object]) -> dict[str, object]:
@@ -172,7 +136,11 @@ def _serialize_plan_change_quote(quote: dict[str, object]) -> dict[str, object]:
         ),
         "required_amount": _to_float(quote.get("required_amount", Decimal("0.00"))),
         "current_balance": _to_float(quote.get("current_balance", Decimal("0.00"))),
+        "currency": str(quote.get("currency") or "NGN"),
         "shortfall": _to_float(quote.get("shortfall", Decimal("0.00"))),
+        "collection_blocking_balance": _to_float(
+            quote.get("collection_blocking_balance", Decimal("0.00"))
+        ),
         "charge_amount": _to_float(quote.get("charge_amount", Decimal("0.00"))),
         "net_amount": _to_float(quote.get("net_amount", Decimal("0.00"))),
         "days_remaining": _to_int(quote.get("days_remaining", 0) or 0),
@@ -184,6 +152,7 @@ def _serialize_plan_change_quote(quote: dict[str, object]) -> dict[str, object]:
         "can_apply_immediately": bool(quote.get("can_apply_immediately", False)),
         "is_upgrade": bool(quote.get("is_upgrade", False)),
         "is_downgrade": bool(quote.get("is_downgrade", False)),
+        "reason": quote.get("reason"),
     }
 
 
@@ -635,10 +604,7 @@ def apply_instant_plan_change(
     from fastapi import HTTPException
 
     from app.services import subscription_changes as change_service
-    from app.services.catalog.subscriptions import (
-        _create_prepaid_plan_change_debit,
-        _validate_plan_change,
-    )
+    from app.services.catalog.subscriptions import _validate_plan_change
 
     subscription = catalog_service.subscriptions.get(
         db=db, subscription_id=subscription_id
@@ -649,12 +615,6 @@ def apply_instant_plan_change(
     account_id = optional_customer_account_id(db, customer)
     if not account_id or str(subscription.subscriber_id) != str(account_id):
         raise ValueError("Subscription does not belong to this account")
-
-    # Serialize the wallet read-modify-write against concurrent add-on/autopay/
-    # plan-change debits so the balance can't be overspent by a race.
-    from app.services.billing._common import lock_account
-
-    lock_account(db, str(subscription.subscriber_id))
 
     new_offer = db.get(CatalogOffer, coerce_uuid(offer_id))
     if not new_offer:
@@ -756,18 +716,10 @@ def apply_instant_plan_change(
     )
 
     try:
-        if is_prepaid and required_amount > Decimal("0.00"):
-            _create_prepaid_plan_change_debit(
-                db,
-                subscription,
-                required_amount,
-                old_offer_name=old_name,
-                new_offer_name=new_name,
-            )
         change_service.subscription_change_requests.apply(
             db=db,
             request_id=str(change_request.id),
-            skip_proration_artifacts=is_prepaid and required_amount > Decimal("0.00"),
+            plan_change_operation_key=str(change_request.id),
         )
     except Exception:
         db.rollback()

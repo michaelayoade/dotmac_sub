@@ -62,11 +62,17 @@ from app.schemas.catalog import (
 )
 from app.schemas.common import ListResponse
 from app.services import catalog as catalog_service
-from app.services.auth_dependencies import require_method_permission
+from app.services.auth_dependencies import require_method_permission, require_permission
 
 router = APIRouter(
     dependencies=[Depends(require_method_permission("catalog:read", "catalog:write"))]
 )
+
+_require_billing_catalog_write = require_permission("catalog:billing_write")
+
+
+def _actor(auth: dict) -> tuple[str | None, str | None]:
+    return auth.get("principal_id"), auth.get("principal_type")
 
 
 @router.post(
@@ -361,8 +367,15 @@ def delete_add_on(add_on_id: str, db: Session = Depends(get_db)):
     status_code=status.HTTP_201_CREATED,
     tags=["offer-prices"],
 )
-def create_offer_price(payload: OfferPriceCreate, db: Session = Depends(get_db)):
-    return catalog_service.offer_prices.create(db, payload)
+def create_offer_price(
+    payload: OfferPriceCreate,
+    db: Session = Depends(get_db),
+    auth: dict = Depends(_require_billing_catalog_write),
+):
+    actor_id, actor_type = _actor(auth)
+    return catalog_service.offer_prices.create(
+        db, payload, actor_id=actor_id, actor_type=actor_type
+    )
 
 
 @router.get(
@@ -399,9 +412,15 @@ def list_offer_prices(
     tags=["offer-prices"],
 )
 def update_offer_price(
-    price_id: str, payload: OfferPriceUpdate, db: Session = Depends(get_db)
+    price_id: str,
+    payload: OfferPriceUpdate,
+    db: Session = Depends(get_db),
+    auth: dict = Depends(_require_billing_catalog_write),
 ):
-    return catalog_service.offer_prices.update(db, price_id, payload)
+    actor_id, actor_type = _actor(auth)
+    return catalog_service.offer_prices.update(
+        db, price_id, payload, actor_id=actor_id, actor_type=actor_type
+    )
 
 
 @router.delete(
@@ -409,8 +428,15 @@ def update_offer_price(
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["offer-prices"],
 )
-def delete_offer_price(price_id: str, db: Session = Depends(get_db)):
-    catalog_service.offer_prices.delete(db, price_id)
+def delete_offer_price(
+    price_id: str,
+    db: Session = Depends(get_db),
+    auth: dict = Depends(_require_billing_catalog_write),
+):
+    actor_id, actor_type = _actor(auth)
+    catalog_service.offer_prices.delete(
+        db, price_id, actor_id=actor_id, actor_type=actor_type
+    )
 
 
 @router.post(
@@ -419,8 +445,15 @@ def delete_offer_price(price_id: str, db: Session = Depends(get_db)):
     status_code=status.HTTP_201_CREATED,
     tags=["add-on-prices"],
 )
-def create_add_on_price(payload: AddOnPriceCreate, db: Session = Depends(get_db)):
-    return catalog_service.add_on_prices.create(db, payload)
+def create_add_on_price(
+    payload: AddOnPriceCreate,
+    db: Session = Depends(get_db),
+    auth: dict = Depends(_require_billing_catalog_write),
+):
+    actor_id, actor_type = _actor(auth)
+    return catalog_service.add_on_prices.create(
+        db, payload, actor_id=actor_id, actor_type=actor_type
+    )
 
 
 @router.get(
@@ -457,9 +490,15 @@ def list_add_on_prices(
     tags=["add-on-prices"],
 )
 def update_add_on_price(
-    price_id: str, payload: AddOnPriceUpdate, db: Session = Depends(get_db)
+    price_id: str,
+    payload: AddOnPriceUpdate,
+    db: Session = Depends(get_db),
+    auth: dict = Depends(_require_billing_catalog_write),
 ):
-    return catalog_service.add_on_prices.update(db, price_id, payload)
+    actor_id, actor_type = _actor(auth)
+    return catalog_service.add_on_prices.update(
+        db, price_id, payload, actor_id=actor_id, actor_type=actor_type
+    )
 
 
 @router.delete(
@@ -467,8 +506,15 @@ def update_add_on_price(
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["add-on-prices"],
 )
-def delete_add_on_price(price_id: str, db: Session = Depends(get_db)):
-    catalog_service.add_on_prices.delete(db, price_id)
+def delete_add_on_price(
+    price_id: str,
+    db: Session = Depends(get_db),
+    auth: dict = Depends(_require_billing_catalog_write),
+):
+    actor_id, actor_type = _actor(auth)
+    catalog_service.add_on_prices.delete(
+        db, price_id, actor_id=actor_id, actor_type=actor_type
+    )
 
 
 @router.post(
@@ -477,8 +523,15 @@ def delete_add_on_price(price_id: str, db: Session = Depends(get_db)):
     status_code=status.HTTP_201_CREATED,
     tags=["offers"],
 )
-def create_offer(payload: CatalogOfferCreate, db: Session = Depends(get_db)):
-    return catalog_service.offers.create(db, payload)
+def create_offer(
+    payload: CatalogOfferCreate,
+    db: Session = Depends(get_db),
+    auth: dict = Depends(_require_billing_catalog_write),
+):
+    actor_id, actor_type = _actor(auth)
+    return catalog_service.offers.create(
+        db, payload, actor_id=actor_id, actor_type=actor_type
+    )
 
 
 @router.get(
@@ -525,9 +578,15 @@ def list_offers(
     tags=["offers"],
 )
 def update_offer(
-    offer_id: str, payload: CatalogOfferUpdate, db: Session = Depends(get_db)
+    offer_id: str,
+    payload: CatalogOfferUpdate,
+    db: Session = Depends(get_db),
+    auth: dict = Depends(_require_billing_catalog_write),
 ):
-    return catalog_service.offers.update(db, offer_id, payload)
+    actor_id, actor_type = _actor(auth)
+    return catalog_service.offers.update(
+        db, offer_id, payload, actor_id=actor_id, actor_type=actor_type
+    )
 
 
 @router.delete(
@@ -535,8 +594,15 @@ def update_offer(
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["offers"],
 )
-def delete_offer(offer_id: str, db: Session = Depends(get_db)):
-    catalog_service.offers.delete(db, offer_id)
+def delete_offer(
+    offer_id: str,
+    db: Session = Depends(get_db),
+    auth: dict = Depends(_require_billing_catalog_write),
+):
+    actor_id, actor_type = _actor(auth)
+    catalog_service.offers.delete(
+        db, offer_id, actor_id=actor_id, actor_type=actor_type
+    )
     db.commit()
 
 
@@ -674,8 +740,15 @@ def delete_subscription_add_on(
     status_code=status.HTTP_201_CREATED,
     tags=["offer-versions"],
 )
-def create_offer_version(payload: OfferVersionCreate, db: Session = Depends(get_db)):
-    return catalog_service.offer_versions.create(db, payload)
+def create_offer_version(
+    payload: OfferVersionCreate,
+    db: Session = Depends(get_db),
+    auth: dict = Depends(_require_billing_catalog_write),
+):
+    actor_id, actor_type = _actor(auth)
+    return catalog_service.offer_versions.create(
+        db, payload, actor_id=actor_id, actor_type=actor_type
+    )
 
 
 @router.get(
@@ -712,9 +785,15 @@ def list_offer_versions(
     tags=["offer-versions"],
 )
 def update_offer_version(
-    version_id: str, payload: OfferVersionUpdate, db: Session = Depends(get_db)
+    version_id: str,
+    payload: OfferVersionUpdate,
+    db: Session = Depends(get_db),
+    auth: dict = Depends(_require_billing_catalog_write),
 ):
-    return catalog_service.offer_versions.update(db, version_id, payload)
+    actor_id, actor_type = _actor(auth)
+    return catalog_service.offer_versions.update(
+        db, version_id, payload, actor_id=actor_id, actor_type=actor_type
+    )
 
 
 @router.delete(
@@ -722,8 +801,15 @@ def update_offer_version(
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["offer-versions"],
 )
-def delete_offer_version(version_id: str, db: Session = Depends(get_db)):
-    catalog_service.offer_versions.delete(db, version_id)
+def delete_offer_version(
+    version_id: str,
+    db: Session = Depends(get_db),
+    auth: dict = Depends(_require_billing_catalog_write),
+):
+    actor_id, actor_type = _actor(auth)
+    catalog_service.offer_versions.delete(
+        db, version_id, actor_id=actor_id, actor_type=actor_type
+    )
 
 
 @router.post(
@@ -733,9 +819,14 @@ def delete_offer_version(version_id: str, db: Session = Depends(get_db)):
     tags=["offer-version-prices"],
 )
 def create_offer_version_price(
-    payload: OfferVersionPriceCreate, db: Session = Depends(get_db)
+    payload: OfferVersionPriceCreate,
+    db: Session = Depends(get_db),
+    auth: dict = Depends(_require_billing_catalog_write),
 ):
-    return catalog_service.offer_version_prices.create(db, payload)
+    actor_id, actor_type = _actor(auth)
+    return catalog_service.offer_version_prices.create(
+        db, payload, actor_id=actor_id, actor_type=actor_type
+    )
 
 
 @router.get(
@@ -772,9 +863,15 @@ def list_offer_version_prices(
     tags=["offer-version-prices"],
 )
 def update_offer_version_price(
-    price_id: str, payload: OfferVersionPriceUpdate, db: Session = Depends(get_db)
+    price_id: str,
+    payload: OfferVersionPriceUpdate,
+    db: Session = Depends(get_db),
+    auth: dict = Depends(_require_billing_catalog_write),
 ):
-    return catalog_service.offer_version_prices.update(db, price_id, payload)
+    actor_id, actor_type = _actor(auth)
+    return catalog_service.offer_version_prices.update(
+        db, price_id, payload, actor_id=actor_id, actor_type=actor_type
+    )
 
 
 @router.delete(
@@ -782,8 +879,15 @@ def update_offer_version_price(
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["offer-version-prices"],
 )
-def delete_offer_version_price(price_id: str, db: Session = Depends(get_db)):
-    catalog_service.offer_version_prices.delete(db, price_id)
+def delete_offer_version_price(
+    price_id: str,
+    db: Session = Depends(get_db),
+    auth: dict = Depends(_require_billing_catalog_write),
+):
+    actor_id, actor_type = _actor(auth)
+    catalog_service.offer_version_prices.delete(
+        db, price_id, actor_id=actor_id, actor_type=actor_type
+    )
 
 
 @router.post(
