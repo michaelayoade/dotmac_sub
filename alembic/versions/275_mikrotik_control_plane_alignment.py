@@ -1,7 +1,7 @@
 """Align MikroTik writes with durable operations and readback states.
 
-Revision ID: 274_mikrotik_control_plane_alignment
-Revises: 273_communication_suppressions
+Revision ID: 275_mikrotik_control_plane_alignment
+Revises: 274_access_credential_pre_throttle_profile
 """
 
 from __future__ import annotations
@@ -11,8 +11,8 @@ from sqlalchemy.dialects.postgresql import UUID
 
 from alembic import op
 
-revision = "274_mikrotik_control_plane_alignment"
-down_revision = "273_communication_suppressions"
+revision = "275_mikrotik_control_plane_alignment"
+down_revision = "274_access_credential_pre_throttle_profile"
 branch_labels = None
 depends_on = None
 
