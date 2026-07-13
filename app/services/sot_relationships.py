@@ -120,8 +120,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="financial.ledger",
                 module="app.services.billing.ledger",
                 owns=(
-                    "posted money movement",
-                    "ledger-derived balances",
+                    "append-only ledger record lifecycle",
+                    "ledger reversal invariants",
                     "financial transaction history",
                 ),
             ),
@@ -133,6 +133,42 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "account-level balance materialization",
                 ),
                 depends_on=("financial.ledger",),
+            ),
+            SOTService(
+                name="financial.payments",
+                module="app.services.billing.payments",
+                owns=(
+                    "payment document lifecycle",
+                    "payment allocation and account credit",
+                    "payment-originated ledger postings",
+                ),
+                depends_on=("financial.ledger", "financial.billing_accounts"),
+            ),
+            SOTService(
+                name="financial.invoices",
+                module="app.services.billing.invoices",
+                owns=(
+                    "invoice document lifecycle",
+                    "invoice status transitions",
+                    "invoice-originated ledger postings",
+                ),
+                depends_on=("financial.ledger", "financial.billing_accounts"),
+            ),
+            SOTService(
+                name="financial.credit_notes",
+                module="app.services.billing.credit_notes",
+                owns=("credit-note lifecycle", "credit-note ledger postings"),
+                depends_on=("financial.ledger", "financial.invoices"),
+            ),
+            SOTService(
+                name="financial.vas_wallet",
+                module="app.services.vas_wallet",
+                owns=(
+                    "VAS wallet entry lifecycle",
+                    "VAS spendable balance",
+                    "atomic wallet-to-billing payment bridge",
+                ),
+                depends_on=("financial.payments",),
             ),
             SOTService(
                 name="financial.billing_profile",
@@ -224,7 +260,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "provider-event idempotency",
                     "incomplete provider settlement resumption",
                 ),
-                depends_on=("financial.ledger",),
+                depends_on=("financial.payments",),
             ),
             SOTService(
                 name="financial.payment_webhooks",
@@ -325,9 +361,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             ),
             SOTService(
                 name="network.device_state",
-                module="app.services.network.device_state",
-                owns=("live infrastructure state", "pollability interpretation"),
-                depends_on=("network.identity",),
+                module="app.services.device_operational_status",
+                owns=(
+                    "NOC-facing device operational status",
+                    "device retry-pending and alarm classification",
+                ),
+                depends_on=("runtime.infrastructure_polling",),
             ),
             SOTService(
                 name="network.nas_inventory",
@@ -347,7 +386,6 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "network.identity",
                     "network.access_path",
                     "network.radius_sessions",
-                    "network.device_state",
                     "network.nas_inventory",
                     "service_intent.subscription_nas_assignment",
                     "access.radius_state",
@@ -372,7 +410,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="network.outage_impact",
                 module="app.services.network.outage_impact",
                 owns=("affected-customer impact", "outage scope impact"),
-                depends_on=("network.access_path", "network.device_state"),
+                depends_on=("network.access_path",),
             ),
             SOTService(
                 name="network.device_groups",
@@ -385,14 +423,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("network.identity",),
             ),
             SOTService(
-                name="network.events",
-                module="app.services.network.events",
-                owns=("network event decisions",),
+                name="network.outage_lifecycle",
+                module="app.services.topology.outage",
+                owns=(
+                    "outage incident lifecycle",
+                    "outage event emission and escalation planning",
+                ),
                 depends_on=(
-                    "network.device_state",
                     "network.outage_impact",
-                    "network.radius_sessions",
-                    "network.device_groups",
+                    "events.dispatcher",
                 ),
             ),
         ),
@@ -411,22 +450,14 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         domain="subscriber_sessions",
         services=(
             SOTService(
-                name="sessions.radius_live_view",
-                module="app.services.radius_active_sessions",
-                owns=(
-                    "RADIUS active-session mirror",
-                    "accounting start/interim/stop session rows",
-                ),
-                depends_on=("network.identity",),
-            ),
-            SOTService(
                 name="sessions.radius_reconciliation",
                 module="app.services.radius_session_reconcile",
                 owns=(
                     "external radacct open-session discovery",
+                    "RADIUS active-session mirror writes",
                     "live-session mirror pruning",
                 ),
-                depends_on=("sessions.radius_live_view",),
+                depends_on=("network.identity",),
             ),
             SOTService(
                 name="sessions.radius_accounting_health",
@@ -441,7 +472,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="sessions.radius_resolution",
                 module="app.services.network.radius_sessions",
                 owns=("customer online-now resolution", "primary NAS session"),
-                depends_on=("sessions.radius_live_view", "network.identity"),
+                depends_on=("sessions.radius_reconciliation", "network.identity"),
             ),
             SOTService(
                 name="sessions.enforcement",
@@ -758,7 +789,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "pollable device predicate",
                     "poll heartbeat result counters",
                 ),
-                depends_on=("runtime.db_sessions", "network.device_state"),
+                depends_on=("runtime.db_sessions",),
             ),
             SOTService(
                 name="runtime.infrastructure_health",
@@ -1062,15 +1093,6 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         domain="service_intent_control_plane",
         services=(
             SOTService(
-                name="service_intent.catalog_to_network",
-                module="app.services.service_intent_adapter",
-                owns=(
-                    "catalog/subscription to network intent",
-                    "network-safe subscription provisioning payloads",
-                ),
-                depends_on=("service_intent.catalog_policy",),
-            ),
-            SOTService(
                 name="service_intent.catalog_policy",
                 module="app.services.catalog.policies",
                 owns=("catalog policy lookup", "offer policy interpretation"),
@@ -1094,7 +1116,6 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="service_intent.ont",
                 module="app.services.network.ont_service_intent",
                 owns=("ONT service intent projection",),
-                depends_on=("service_intent.catalog_to_network", "network.access_path"),
             ),
         ),
         entrypoints=(
@@ -1104,9 +1125,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             "app.web.admin.provisioning",
         ),
         rule=(
-            "Catalog defines the commercial service; service-intent adapters "
-            "translate it into network/provisioning payloads. Network code should "
-            "not infer plan meaning directly from catalog models."
+            "Catalog policy and subscription services define commercial intent; "
+            "network owners project configured intent without a parallel adapter."
         ),
     ),
     DomainSOT(
