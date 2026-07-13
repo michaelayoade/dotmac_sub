@@ -1,17 +1,10 @@
-"""Discover-reconcile the live ``radius_active_sessions`` view from radacct.
+"""Own the live ``radius_active_sessions`` projection from external radacct.
 
-The event-driven populator (``RadiusActiveSessionManager.on_acct_start/stop``,
-wired to FreeRADIUS accounting hooks) is not firing in prod, so
-``radius_active_sessions`` starved to a single row while the authoritative feed
-— the external FreeRADIUS ``radacct`` table — carries ~893 genuinely-open
-sessions, every one tagged with username, calling-station (router MAC),
-framed IP and NAS IP.
-
-This module reads the OPEN radacct sessions directly and upserts them into the
-app-side ``radius_active_sessions`` table, then prunes rows whose session is no
-longer open. Because it rediscovers the full open set on every run, it
-self-heals regardless of whether the accounting hook ever fires — the same
-discover-reconcile posture the ghost reaper already uses against radacct.
+The external FreeRADIUS ``radacct`` table is the authoritative observation feed.
+This reconciler is the canonical writer of the app-side active-session mirror:
+it reads the complete bounded set of open observations, upserts that set, and
+prunes rows that are no longer open. The full-set reconciliation self-heals
+missed observations without a parallel event-driven writer.
 
 Read-only against the external RADIUS DB (SELECT only). Closing radacct rows is
 solely the ghost reaper's job; this module never writes radacct.
