@@ -11,9 +11,9 @@ from typing import Any
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session, load_only
 
-from app.models.comms_campaign import CampaignSmtpConfig
 from app.models.billing import BankAccount, PaymentMethod
 from app.models.catalog import AccessCredential, NasDevice
+from app.models.comms_campaign import CampaignSmtpConfig
 from app.models.domain_settings import DomainSetting
 from app.models.integration_hook import (
     SECRET_AUTH_CONFIG_KEYS as _INTEGRATION_HOOK_SECRET_KEYS,
