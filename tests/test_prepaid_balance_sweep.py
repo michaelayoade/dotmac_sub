@@ -542,6 +542,97 @@ def test_blocking_time_window_defers_deactivation(
     assert subscription.status == SubscriptionStatus.active
 
 
+def test_active_payment_arrangement_shields_prepaid_suspension(
+    db_session, subscriber_account, subscription
+):
+    from datetime import date
+
+    from app.models.payment_arrangement import ArrangementStatus, PaymentArrangement
+
+    _enable_control(db_session)
+    _make_prepaid(db_session, subscriber_account, subscription, credit=Decimal("0"))
+    subscriber_account.prepaid_low_balance_at = _MONDAY_NOON - timedelta(days=2)
+    db_session.add(
+        PaymentArrangement(
+            subscriber_id=subscriber_account.id,
+            status=ArrangementStatus.active,
+            is_active=True,
+            total_amount=Decimal("5000.00"),
+            installment_amount=Decimal("2500.00"),
+            installments_total=2,
+            start_date=date(2026, 7, 1),
+        )
+    )
+    db_session.commit()
+
+    result = run_prepaid_balance_sweep(db_session, now=_MONDAY_NOON)
+
+    db_session.refresh(subscriber_account)
+    db_session.refresh(subscription)
+    assert result["suspended"] == 0
+    assert subscriber_account.prepaid_deactivation_at is None
+    assert subscription.status == SubscriptionStatus.active
+    assert _prepaid_locks(db_session, subscription) == []
+
+
+def test_submitted_payment_proof_shields_prepaid_suspension(
+    db_session, subscriber_account, subscription
+):
+    from app.models.payment_proof import PaymentProof, PaymentProofStatus
+
+    _enable_control(db_session)
+    _make_prepaid(db_session, subscriber_account, subscription, credit=Decimal("0"))
+    subscriber_account.prepaid_low_balance_at = _MONDAY_NOON - timedelta(days=2)
+    db_session.add(
+        PaymentProof(
+            account_id=subscriber_account.id,
+            amount=Decimal("5000.00"),
+            currency="NGN",
+            file_path="tests/fixtures/payment-proof.pdf",
+            status=PaymentProofStatus.submitted,
+        )
+    )
+    db_session.commit()
+
+    result = run_prepaid_balance_sweep(db_session, now=_MONDAY_NOON)
+
+    db_session.refresh(subscriber_account)
+    db_session.refresh(subscription)
+    assert result["suspended"] == 0
+    assert subscriber_account.prepaid_deactivation_at is None
+    assert subscription.status == SubscriptionStatus.active
+    assert _prepaid_locks(db_session, subscription) == []
+
+
+def test_billing_health_gate_blocks_prepaid_suspension(
+    db_session, subscriber_account, subscription, monkeypatch
+):
+    from app.services import billing_enforcement_guards as guards
+
+    _enable_control(db_session)
+    _make_prepaid(db_session, subscriber_account, subscription, credit=Decimal("0"))
+    subscriber_account.prepaid_low_balance_at = _MONDAY_NOON - timedelta(days=2)
+    db_session.commit()
+    monkeypatch.setattr(
+        guards,
+        "billing_enforcement_health",
+        lambda _db: guards.EnforcementHealth(
+            ok=False,
+            reasons=["payment_webhook_dead_letters"],
+            details={"dead_letters": 1},
+        ),
+    )
+
+    result = run_prepaid_balance_sweep(db_session, now=_MONDAY_NOON)
+
+    db_session.refresh(subscriber_account)
+    db_session.refresh(subscription)
+    assert result["suspended"] == 0
+    assert subscriber_account.prepaid_deactivation_at is None
+    assert subscription.status == SubscriptionStatus.active
+    assert _prepaid_locks(db_session, subscription) == []
+
+
 # ---------------------------------------------------------------------------
 # Non-prepaid accounts are ignored
 # ---------------------------------------------------------------------------

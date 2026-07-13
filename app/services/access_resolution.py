@@ -10,6 +10,9 @@ modules.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
+from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from app.models.catalog import AccessState
 from app.services.customer_service_state import (
@@ -19,6 +22,11 @@ from app.services.customer_service_state import (
     prepaid_enforcement_eligible_filters,
     resolve_customer_billing_access_state,
 )
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+
+    from app.models.subscriber import Subscriber
 
 
 @dataclass(frozen=True)
@@ -78,6 +86,52 @@ class CustomerAccessDecision:
     @property
     def billing_block_reason(self) -> str | None:
         return self.state.billing_block_reason
+
+
+@dataclass(frozen=True)
+class PrepaidFundingDecision:
+    """The one funding decision used to suspend and restore prepaid access."""
+
+    account_id: str
+    available_balance: Decimal
+    required_balance: Decimal
+
+    @property
+    def funded(self) -> bool:
+        return self.available_balance >= self.required_balance
+
+
+def resolve_prepaid_available_balance(db: Session, account_id: object) -> Decimal:
+    """Resolve the customer financial position used by prepaid access policy.
+
+    Multi-currency accounts fail closed by using their least-funded currency.
+    This preserves the existing enforcement semantics while moving the decision
+    behind the declared ``financial.access_resolution`` boundary.
+    """
+    from app.services.customer_financial_position import prepaid_available_balance
+
+    return prepaid_available_balance(db, account_id)
+
+
+def resolve_prepaid_funding(
+    db: Session,
+    account: Subscriber,
+    *,
+    now: datetime | None = None,
+) -> PrepaidFundingDecision:
+    """Compare the access balance with the canonical prepaid threshold.
+
+    Callers must consume ``funded`` rather than comparing against a locally
+    chosen zero/minimum/invoice value. Suspension and restoration therefore
+    use the same quantity and cannot oscillate between incompatible gates.
+    """
+    from app.services.prepaid_threshold import resolve_prepaid_threshold
+
+    return PrepaidFundingDecision(
+        account_id=str(account.id),
+        available_balance=resolve_prepaid_available_balance(db, account.id),
+        required_balance=resolve_prepaid_threshold(db, account, now=now),
+    )
 
 
 def resolve_customer_access(

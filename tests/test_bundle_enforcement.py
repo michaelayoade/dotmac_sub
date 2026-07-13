@@ -61,12 +61,29 @@ def test_suspend_account_skips_dedicated_bundle(
 def test_suspend_account_suspends_non_dedicated_bundle(
     db_session, subscriber, subscription, catalog_offer
 ):
+    from datetime import UTC, datetime, timedelta
+    from decimal import Decimal
+
+    from app.models.billing import Invoice, InvoiceStatus
     from app.services.collections._core import _suspend_account
 
     subscription.status = SubscriptionStatus.active
+    subscriber.billing_mode = subscription.billing_mode
     db_session.flush()
     b = bundles.create_bundle(db_session, str(subscriber.id), str(subscription.id))
     bundles.add_member(db_session, str(b.id), str(subscription.id))
+    db_session.add(
+        Invoice(
+            account_id=subscriber.id,
+            invoice_number="INV-BUNDLE-ENFORCEMENT",
+            status=InvoiceStatus.overdue,
+            total=Decimal("100.00"),
+            balance_due=Decimal("100.00"),
+            due_at=datetime.now(UTC) - timedelta(days=1),
+            metadata_={},
+        )
+    )
+    db_session.commit()
 
     result = _suspend_account(db_session, str(subscriber.id))
     db_session.refresh(subscription)

@@ -650,6 +650,32 @@ class TestComputeAccountStatus:
             == SubscriberStatus.delinquent
         )
 
+    def test_prepaid_status_uses_threshold_not_nonnegative_net(self, db_session):
+        """A positive net below the access threshold is still underfunded."""
+        from decimal import Decimal
+
+        from app.models.collections import DunningCase, DunningCaseStatus
+
+        subscriber = _make_subscriber(
+            db_session,
+            billing_mode=BillingMode.prepaid,
+            min_balance=Decimal("5000.00"),
+        )
+        offer = _make_offer(db_session)
+        _make_subscription(db_session, subscriber, offer)
+        # Net financial position is +1000: the old >= 0 criterion passed, but
+        # the canonical prepaid threshold is 5000.
+        self._add_open_ar_and_credit(db_session, subscriber, ar=5000, credit=6000)
+        db_session.add(
+            DunningCase(account_id=subscriber.id, status=DunningCaseStatus.open)
+        )
+        db_session.flush()
+
+        assert (
+            compute_account_status(db_session, str(subscriber.id))
+            == SubscriberStatus.delinquent
+        )
+
     def test_suspended_takes_precedence_over_dunning(self, db_session):
         """A suspended subscription outranks delinquent even with open dunning."""
         from app.models.collections import DunningCase, DunningCaseStatus
@@ -928,3 +954,10 @@ class TestAllowedRestorers:
         """Admin trigger can resolve every enforcement reason."""
         for reason, triggers in ALLOWED_RESTORERS.items():
             assert "admin" in triggers, f"Admin cannot restore {reason}"
+
+    def test_payment_cannot_clear_prepaid_lock(self):
+        """Prepaid restoration requires the funding-gated top-up owner."""
+        triggers = ALLOWED_RESTORERS[EnforcementReason.prepaid]
+
+        assert "payment" not in triggers
+        assert "top_up" in triggers
