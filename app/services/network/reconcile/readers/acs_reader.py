@@ -37,6 +37,9 @@ _PROJECTION_PATHS: tuple[str, ...] = (
     # TR-098 (InternetGatewayDevice) — the HG8546M / EG8145V5 fleet.
     "InternetGatewayDevice.DeviceInfo.SoftwareVersion",
     "InternetGatewayDevice.ManagementServer.PeriodicInformInterval",
+    "InternetGatewayDevice.ManagementServer.URL",
+    "InternetGatewayDevice.ManagementServer.Username",
+    "InternetGatewayDevice.ManagementServer.Password",
     "InternetGatewayDevice.ManagementServer.ConnectionRequestUsername",
     "InternetGatewayDevice.ManagementServer.ConnectionRequestPassword",
     "InternetGatewayDevice.WANDevice.1.WANConnectionDevice",
@@ -45,6 +48,9 @@ _PROJECTION_PATHS: tuple[str, ...] = (
     # TR-181 (Device) — for any future ONTs on that data model.
     "Device.DeviceInfo.SoftwareVersion",
     "Device.ManagementServer.PeriodicInformInterval",
+    "Device.ManagementServer.URL",
+    "Device.ManagementServer.Username",
+    "Device.ManagementServer.Password",
     "Device.ManagementServer.ConnectionRequestUsername",
     "Device.ManagementServer.ConnectionRequestPassword",
     "Device.IP.Interface",
@@ -288,6 +294,18 @@ def _parse_device(device: dict[str, Any]) -> AcsObservedFields:
             ),
             "Enable",
         ),
+        acs_observed_url=_first_not_none(
+            _value(igd_ms, "URL"),
+            _value(dev_ms, "URL"),
+        ),
+        acs_observed_username=_first_not_none(
+            _value(igd_ms, "Username"),
+            _value(dev_ms, "Username"),
+        ),
+        acs_observed_password_set=_first_not_none(
+            _value_present(igd_ms, "Password"),
+            _value_present(dev_ms, "Password"),
+        ),
     )
 
 
@@ -323,6 +341,9 @@ def _absent_fields() -> AcsObservedFields:
         acs_observed_dhcpv6_enabled=None,
         acs_observed_dhcpv6_request_prefixes=None,
         acs_observed_ra_enabled=None,
+        acs_observed_url=None,
+        acs_observed_username=None,
+        acs_observed_password_set=None,
     )
 
 

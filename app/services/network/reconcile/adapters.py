@@ -39,6 +39,7 @@ from sqlalchemy.orm import Session
 
 from app.models.network import OntUnit
 from app.models.ont_observation import OntObservation
+from app.services.network.acs_resolution import resolve_acs_for_ont
 from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.serial_utils import parse_ont_id_on_olt
 
@@ -81,6 +82,8 @@ def desired_from_ont_unit(db: Session, ont: OntUnit) -> OntDesiredState:
     # the ONU operating mode (``routing``/``bridging``). Either being "bridge"
     # or "bridging" means the reconciler treats the WAN as bridged.
     wan_mode = _normalise_wan_mode(values.get("wan_mode"), values.get("onu_mode"))
+    acs_resolution = resolve_acs_for_ont(db, ont)
+    acs_server = acs_resolution.server
 
     return OntDesiredState(
         ont_unit_id=str(ont.id),
@@ -107,11 +110,12 @@ def desired_from_ont_unit(db: Session, ont: OntUnit) -> OntDesiredState:
         # iphost_priority.resolve_management_iphost_priority and is plan-time.
         mgmt_iphost_priority=2,
         tr069_profile_id=int(values.get("tr069_olt_profile_id") or 0),
-        acs_server_id=str(ont.tr069_acs_server_id) if ont.tr069_acs_server_id else None,
+        acs_server_id=acs_resolution.server_id,
         cr_username=values.get("cr_username"),
         cr_password_ref=values.get("cr_password"),
-        # DEFAULT: interval not carried; fleet standard is 300s.
-        periodic_inform_interval_sec=300,
+        periodic_inform_interval_sec=int(
+            getattr(acs_server, "periodic_inform_interval", None) or 300
+        ),
         wan_mode=wan_mode,
         wan_vlan=_int_or_none(values.get("wan_vlan")),
         wan_gem_index=_int_or_none(values.get("wan_gem_index")),
@@ -155,6 +159,9 @@ def desired_from_ont_unit(db: Session, ont: OntUnit) -> OntDesiredState:
         wan_static_subnet=values.get("wan_static_subnet"),
         wan_static_gateway=values.get("wan_static_gateway"),
         wan_static_dns=values.get("wan_static_dns"),
+        acs_url=getattr(acs_server, "cwmp_url", None),
+        acs_username=getattr(acs_server, "cwmp_username", None),
+        acs_password_ref=getattr(acs_server, "cwmp_password", None),
     )
 
 
@@ -284,6 +291,11 @@ def observed_from_ont_observation(
                 obs.acs_observed_dhcpv6_request_prefixes
             ),
             acs_observed_ra_enabled=obs.acs_observed_ra_enabled,
+            # ManagementServer endpoint fields are read live on every pass;
+            # the current observation schema does not persist credentials.
+            acs_observed_url=None,
+            acs_observed_username=None,
+            acs_observed_password_set=None,
         ),
     )
 

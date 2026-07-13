@@ -566,12 +566,26 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
 
         case AcsSetManagementServer():
             cr_password = _resolve_or_fail(ctx, action, action.cr_password_ref)
-            params = {
-                "InternetGatewayDevice.ManagementServer.ConnectionRequestUsername": action.cr_username,
-                "InternetGatewayDevice.ManagementServer.ConnectionRequestPassword": cr_password,
-                "InternetGatewayDevice.ManagementServer.PeriodicInformInterval": action.inform_interval_sec,
+            root = f"{action.data_model_root}.ManagementServer"
+            connection_params = {
+                f"{root}.ConnectionRequestUsername": action.cr_username,
+                f"{root}.ConnectionRequestPassword": cr_password,
+                f"{root}.PeriodicInformEnable": True,
+                f"{root}.PeriodicInformInterval": action.inform_interval_sec,
             }
-            _acs_set(action, ctx, params)
+            _acs_set(action, ctx, connection_params)
+            if action.acs_url:
+                acs_password = _resolve_or_fail(
+                    ctx, action, action.acs_password_ref or ""
+                )
+                endpoint_params = {
+                    f"{root}.URL": action.acs_url,
+                    f"{root}.Username": action.acs_username or "",
+                    f"{root}.Password": acs_password,
+                }
+                # Move the endpoint last: changing URL first can sever the
+                # current ACS session before CR credentials are established.
+                _acs_set(action, ctx, endpoint_params)
             return _ok(
                 action,
                 "acs_management_server",

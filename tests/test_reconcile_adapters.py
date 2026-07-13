@@ -17,6 +17,7 @@ from app.models.network import (
     OntUnit,
 )
 from app.models.ont_observation import OntObservation
+from app.models.tr069 import Tr069AcsServer
 from app.services.network.reconcile import (
     AcsObservedFields,
     OltObservedFields,
@@ -71,6 +72,24 @@ def test_desired_carries_identity_from_ont_unit(db_session, ont, olt):
     assert desired.olt_id == str(olt.id)
     assert desired.fsp == "0/1/3"
     assert desired.olt_ont_id == 11
+
+
+def test_desired_inherits_acs_assignment_and_interval_from_olt(db_session, ont, olt):
+    server = Tr069AcsServer(
+        name="Inherited ACS",
+        base_url="http://genieacs:7557",
+        is_active=True,
+        periodic_inform_interval=420,
+    )
+    db_session.add(server)
+    db_session.flush()
+    olt.tr069_acs_server_id = server.id
+    db_session.commit()
+
+    desired = desired_from_ont_unit(db_session, ont)
+
+    assert desired.acs_server_id == str(server.id)
+    assert desired.periodic_inform_interval_sec == 420
 
 
 def test_desired_builds_fsp_from_board_and_port(db_session, ont):

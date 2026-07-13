@@ -710,6 +710,65 @@ def test_present_cr_credentials_skip_management_server_push():
     assert AcsSetManagementServer not in _types(plan)
 
 
+def test_acs_endpoint_drift_plans_verified_management_server_update():
+    desired = _desired(
+        acs_url="https://new-acs.example.net/cwmp",
+        acs_username="cwmp-user",
+        acs_password_ref="encrypted-cwmp-password",
+    )
+    observed = dataclasses.replace(
+        _synced_observed(desired),
+        acs=dataclasses.replace(
+            _synced_observed(desired).acs,
+            acs_observed_url="https://old-acs.example.net/cwmp",
+            acs_observed_username="old-user",
+            acs_observed_password_set=True,
+        ),
+    )
+
+    plan = compute_plan(desired, observed, "sweep")
+
+    action = next(a for a in plan.actions if isinstance(a, AcsSetManagementServer))
+    assert action.acs_url == "https://new-acs.example.net/cwmp"
+    assert action.acs_username == "cwmp-user"
+    assert action.acs_password_ref == "encrypted-cwmp-password"
+    assert any(d.field == "acs_management_server" for d in plan.drifts)
+
+
+def test_explicit_acs_password_rotation_forces_one_write_only_push():
+    desired = _desired(
+        acs_url="https://acs.example.net/cwmp",
+        acs_username="cwmp-user",
+        acs_password_ref="rotated-password",
+    )
+    observed = dataclasses.replace(
+        _synced_observed(desired),
+        acs=dataclasses.replace(
+            _synced_observed(desired).acs,
+            acs_observed_url=desired.acs_url,
+            acs_observed_username=desired.acs_username,
+            acs_observed_password_set=True,
+        ),
+    )
+
+    apply_phase = compute_plan(
+        desired,
+        observed,
+        "sweep",
+        proposed_fields=frozenset({"acs_password_ref"}),
+    )
+    verify_phase = compute_plan(
+        desired,
+        observed,
+        "sweep",
+        proposed_fields=frozenset({"acs_password_ref"}),
+        force_proposed_writes=False,
+    )
+
+    assert AcsSetManagementServer in _types(apply_phase)
+    assert AcsSetManagementServer not in _types(verify_phase)
+
+
 # ── Plan determinism ────────────────────────────────────────────────────────
 
 
