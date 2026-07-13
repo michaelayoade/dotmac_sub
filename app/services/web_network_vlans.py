@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload
@@ -48,7 +49,7 @@ VLAN_PURPOSE_CHOICES: list[dict[str, str]] = [
 ]
 
 
-def _vlan_usage_counts(db, vlan_ids: list[object]) -> dict[str, dict[str, int]]:
+def _vlan_usage_counts(db, vlan_ids: Sequence[object]) -> dict[str, dict[str, int]]:
     """Count VLAN usage across ONT desired config, WAN services, and IP pools.
 
     Note: ONT VLAN usage is derived from OntUnit.desired_config and WAN service
