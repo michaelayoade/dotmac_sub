@@ -2,9 +2,53 @@ from __future__ import annotations
 
 from fastapi import WebSocket
 
+from app.services.auth_dependencies import claims_for_principal
 from app.services.auth_flow import decode_access_token
 from app.services.db_session_adapter import db_session_adapter
 from app.services.team_inbox_widget import decode_widget_token
+
+
+def _websocket_token(websocket: WebSocket) -> str | None:
+    return websocket.query_params.get("token") or websocket.cookies.get("session_token")
+
+
+async def authenticate_staff_websocket(websocket: WebSocket) -> dict | None:
+    """Authenticate a staff WebSocket and return an ``auth``-shaped dict.
+
+    Shaped like ``require_user_auth``'s return value (principal_id / roles /
+    scopes) so services that already take an auth dict — e.g. the workqueue's
+    ``principal_from_auth`` — work unchanged over a socket.
+    """
+    token = _websocket_token(websocket)
+    if not token:
+        await websocket.close(code=4001, reason="Authentication required")
+        return None
+
+    db = db_session_adapter.create_session()
+    try:
+        payload = decode_access_token(db, token)
+        principal_id = payload.get("principal_id") or payload.get("sub")
+        if not principal_id:
+            await websocket.close(code=4001, reason="Invalid token")
+            return None
+
+        principal_type = payload.get("principal_type") or "subscriber"
+        roles, scopes = claims_for_principal(
+            db, str(principal_id), str(principal_type), payload
+        )
+        return {
+            "principal_id": str(principal_id),
+            "person_id": str(principal_id),
+            "principal_type": str(principal_type),
+            "session_id": payload.get("session_id"),
+            "roles": roles,
+            "scopes": scopes,
+        }
+    except Exception:
+        await websocket.close(code=4001, reason="Invalid token")
+        return None
+    finally:
+        db.close()
 
 
 async def authenticate_websocket(websocket: WebSocket) -> dict | None:

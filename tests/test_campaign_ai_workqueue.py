@@ -6,7 +6,12 @@ from datetime import UTC, datetime, timedelta
 from app.models.ai_insight import AIInsightStatus
 from app.models.comms_campaign import CampaignRecipient, CampaignRecipientStatus
 from app.models.notification import Notification
-from app.models.service_team import ServiceTeam, ServiceTeamType
+from app.models.service_team import (
+    ServiceTeam,
+    ServiceTeamMember,
+    ServiceTeamMemberRole,
+    ServiceTeamType,
+)
 from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
 from app.models.support import Ticket
 from app.models.team_inbox import InboxConversation, InboxMessage
@@ -218,9 +223,30 @@ def test_workqueue_aggregates_native_items_and_respects_snooze(db_session):
     db_session.add_all([conversation, ticket])
     db_session.flush()
 
+    # list_workqueue() now scopes reads to what the principal may actually see;
+    # the old signature took a bare user_id and applied no authorization at all.
+    # This user is an ordinary member of the team, which is what the original
+    # test implied: they see their own assigned ticket plus the team's
+    # unassigned conversation.
+    db_session.add(
+        ServiceTeamMember(
+            team_id=team.id,
+            person_id=user_id,
+            role=ServiceTeamMemberRole.member.value,
+        )
+    )
+    db_session.flush()
+    principal = workqueue.WorkqueuePrincipal(
+        person_id=user_id,
+        roles=frozenset(),
+        scopes=frozenset(),
+        can_view=True,
+        can_act=True,
+    )
+
     items = workqueue.list_workqueue(
         db_session,
-        user_id=user_id,
+        principal,
         service_team_id=team.id,
     )
     workqueue.snooze_item(
@@ -232,7 +258,7 @@ def test_workqueue_aggregates_native_items_and_respects_snooze(db_session):
     )
     unsnoozed = workqueue.list_workqueue(
         db_session,
-        user_id=user_id,
+        principal,
         service_team_id=team.id,
     )
 
