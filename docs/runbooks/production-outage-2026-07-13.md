@@ -99,6 +99,11 @@ The rollout does the following in order:
 6. Sets `BACKUP_MODE=pgbackrest`, installs timers, and optionally restores the
    backup into a network-isolated temporary PostgreSQL for verification.
 
+After the stanza is created, the rollout persists the validated
+`POSTGRES_IMAGE` before enabling archiving. A later deploy therefore cannot
+revert to an image without pgBackRest. `BACKUP_MODE` is changed only after the
+first full backup and WAL health gate pass; an interrupted rollout can be rerun.
+
 Never replace the OpenBao repository cipher passphrase while retained backups
 exist. Losing or changing it makes those backups unreadable.
 

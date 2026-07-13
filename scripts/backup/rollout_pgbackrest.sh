@@ -41,6 +41,16 @@ wait_for_database() {
   done
 }
 
+set_env_value() {
+  local key="$1"
+  local value="$2"
+  if grep -q "^${key}=" "${ENV_FILE}"; then
+    sed -i "s|^${key}=.*|${key}=${value}|" "${ENV_FILE}"
+  else
+    printf '%s=%s\n' "${key}" "${value}" >> "${ENV_FILE}"
+  fi
+}
+
 db_bytes="$(du -sb "${DB_DATA_DIR}" | cut -f1)"
 available_bytes="$(df -B1 --output=avail "${DB_DATA_DIR}" | tail -1 | tr -d ' ')"
 required_bytes=$((db_bytes * 2))
@@ -63,6 +73,7 @@ wait_for_database "backup image activation"
 
 echo "==> Creating stanza before WAL archiving is enabled"
 docker exec --user postgres "${DB_CONTAINER}" pgbackrest --stanza="${PGBACKREST_STANZA:-dotmac-sub}" stanza-create
+set_env_value POSTGRES_IMAGE "${POSTGRES_IMAGE}"
 
 echo "==> Restarting PostgreSQL with WAL archiving enabled"
 POSTGRES_ARCHIVE_MODE=on POSTGRES_IMAGE="${POSTGRES_IMAGE}" \
@@ -76,16 +87,6 @@ echo "==> Taking first online full backup (the app remains online)"
 bash "${ROOT_DIR}/scripts/backup/pgbackrest_backup.sh" full
 bash "${ROOT_DIR}/scripts/backup/pgbackrest_health.sh" --gate
 
-set_env_value() {
-  local key="$1"
-  local value="$2"
-  if grep -q "^${key}=" "${ENV_FILE}"; then
-    sed -i "s|^${key}=.*|${key}=${value}|" "${ENV_FILE}"
-  else
-    printf '%s=%s\n' "${key}" "${value}" >> "${ENV_FILE}"
-  fi
-}
-set_env_value POSTGRES_IMAGE "${POSTGRES_IMAGE}"
 set_env_value BACKUP_MODE pgbackrest
 
 echo "==> Installing backup and health timers"
