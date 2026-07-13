@@ -659,22 +659,20 @@ def _throttle_account(db: Session, account_id: str) -> tuple[bool, int]:
         return True, 0
 
     throttled_count = 0
-    original_profiles = {}  # Track original profiles for logging
     for cred in credentials:
-        # Track original profile for audit/logging purposes
+        # PERSIST the profile we are about to replace. The throttle is a temporary
+        # override, so the value it overrides has to survive it — previously this
+        # was only written to a log line, which meant a customer who paid could
+        # never get their speed back.
+        #
+        # Only capture on the FIRST throttle: re-throttling an already-throttled
+        # credential must not overwrite the real profile with the throttle profile.
         if cred.radius_profile_id and str(cred.radius_profile_id) != str(
             throttle_profile_id
         ):
-            original_profiles[str(cred.id)] = str(cred.radius_profile_id)
+            cred.pre_throttle_radius_profile_id = cred.radius_profile_id
         cred.radius_profile_id = throttle_profile.id
         throttled_count += 1
-
-    # Log original profiles for debugging (can be used for manual recovery if needed)
-    if original_profiles:
-        logger.info(
-            f"Throttled credentials for account {account_id}, "
-            f"original profiles: {original_profiles}"
-        )
 
     # Emit throttle event
     emit_event(
@@ -725,7 +723,18 @@ def _restore_throttle(db: Session, account_id: str) -> int:
 
     restored_count = 0
     for cred in credentials:
-        # Get default profile from subscription's offer
+        if cred.pre_throttle_radius_profile_id is not None:
+            # Give back exactly what we took. This is the only path that can
+            # honour an admin credential-level override, which the offer-profile
+            # guess below silently discards.
+            cred.radius_profile_id = cred.pre_throttle_radius_profile_id
+            cred.pre_throttle_radius_profile_id = None
+            restored_count += 1
+            continue
+
+        # LEGACY cohort only: credentials throttled before the pre-throttle
+        # profile was persisted have nothing to give back, so fall back to the
+        # offer's profile. This is a guess, and it is why the column exists.
         subscription = (
             db.query(Subscription)
             .filter(Subscription.subscriber_id == coerce_uuid(account_id))
@@ -737,7 +746,6 @@ def _restore_throttle(db: Session, account_id: str) -> int:
             .first()
         )
         if subscription and subscription.offer:
-            # Get the offer's RADIUS profile
             from app.models.catalog import OfferRadiusProfile
 
             offer_profile = (
@@ -745,10 +753,7 @@ def _restore_throttle(db: Session, account_id: str) -> int:
                 .filter(OfferRadiusProfile.offer_id == subscription.offer_id)
                 .first()
             )
-            if offer_profile:
-                cred.radius_profile_id = offer_profile.profile_id
-            else:
-                cred.radius_profile_id = None
+            cred.radius_profile_id = offer_profile.profile_id if offer_profile else None
         else:
             cred.radius_profile_id = None
         restored_count += 1
@@ -756,6 +761,19 @@ def _restore_throttle(db: Session, account_id: str) -> int:
     if restored_count:
         logger.info(
             f"Restored {restored_count} throttled credentials for account {account_id}"
+        )
+        # The throttle emits ``subscriber_throttled``, which enqueues a RADIUS
+        # refresh. The un-throttle emitted nothing, so the customer's speed came
+        # back only on the next scheduled sweep — the throttle landed in seconds
+        # and the release took up to 15 minutes. Emit the mirror event.
+        emit_event(
+            db,
+            EventType.subscriber_unthrottled,
+            {
+                "account_id": str(account_id),
+                "credentials_restored": restored_count,
+            },
+            account_id=coerce_uuid(account_id),
         )
 
     return restored_count
@@ -2082,6 +2100,12 @@ def restore_account_services(
             invoice_id=invoice_id,
             commit=False,
         )
+        # Lift the collections throttle. resolve_cases_for_account marks the case
+        # resolved but never un-throttled, and DunningWorkflow.run only revisits
+        # OPEN cases — so a customer who paid in full was left rate-limited
+        # forever, with radius_population re-applying the throttle on every sweep.
+        # The debt is gone, so the bandwidth penalty for it must be gone too.
+        _restore_throttle(db, account_id)
     else:
         logger.info(
             "Overdue restore skipped for account %s: overdue balance remains",

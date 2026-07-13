@@ -1432,13 +1432,18 @@ def update_customer_account_status(
                 # could not reactivate (resolved_count == 0) — the split-brain
                 # this fixes. active/pending → suspended; an already-down
                 # blocked/stopped keeps its status but gains the missing lock.
+                # emit=True (the default): the subscription_suspended event is what
+                # actually ENFORCES the suspension — it blocks the credential in
+                # RADIUS and disconnects the live session. With emit=False this
+                # path created the lock and flipped the status while the customer
+                # kept browsing until the next populate() sweep. The lock is not
+                # the enforcement; the event is.
                 suspend_subscription(
                     db,
                     str(subscription.id),
                     reason=EnforcementReason.admin,
                     source=source,
                     notes="Deactivated from reseller portal.",
-                    emit=False,
                 )
                 changed += 1
             else:
@@ -1455,7 +1460,6 @@ def update_customer_account_status(
             if subscription.status not in restorable_statuses:
                 skipped += 1
                 continue
-            before = subscription.status
             restored = restore_subscription(
                 db,
                 str(subscription.id),
@@ -1464,12 +1468,14 @@ def update_customer_account_status(
                 reason=EnforcementReason.admin,
                 notes="Restored from reseller portal.",
             )
+            # No local fallback. restore_subscription now restores a lock-less
+            # suspended subscription itself, so a raw ``status = active`` here —
+            # which emitted no event, left the IP unprovisioned and RADIUS
+            # unsynced — is no longer needed. If the owner declines, it declined
+            # for a reason (an unauthorized trigger, or an active login on the
+            # login name), and the caller must not override it.
             if restored:
                 changed += 1
-                continue
-            if not get_active_locks(db, subscription_id=str(subscription.id)):
-                subscription.status = SubscriptionStatus.active
-                changed += 1 if before != subscription.status else 0
             else:
                 skipped += 1
         db.flush()
