@@ -281,7 +281,14 @@ _MISMATCH_OWNERS = {
 }
 
 
-def mismatch_worklist(db, *, reason: str | None = None) -> dict:
+def mismatch_worklist(
+    db,
+    *,
+    reason: str | None = None,
+    search: str | None = None,
+    page: int = 1,
+    per_page: int = 25,
+) -> dict:
     """Devices whose admin intent conflicts with observed reality, grouped by
     reason and routed to an owning team. The operational hygiene queue.
 
@@ -293,12 +300,26 @@ def mismatch_worklist(db, *, reason: str | None = None) -> dict:
     )
     annotate_operational_status(devices)
 
+    search_filter = (search or "").strip()
+    search_match = search_filter.lower()
     groups: dict[str, dict] = {}
     for d in devices:
         op = getattr(d, "operational", None)
         if not op or not op.mismatch or not op.mismatch_reason:
             continue
         if reason and op.mismatch_reason != reason:
+            continue
+        if search_match and search_match not in " ".join(
+            str(value or "").lower()
+            for value in (
+                d.name,
+                getattr(d, "mgmt_ip", None),
+                op.admin_status,
+                op.status,
+                op.label,
+                op.mismatch_reason,
+            )
+        ):
             continue
         label, owner = _MISMATCH_OWNERS.get(
             op.mismatch_reason, (op.mismatch_reason, "Unassigned")
@@ -322,11 +343,38 @@ def mismatch_worklist(db, *, reason: str | None = None) -> dict:
     for g in ordered:
         g["count"] = len(g["rows"])
         g["rows"].sort(key=lambda r: (r["name"] or "").lower())
+
+    total = sum(g["count"] for g in ordered)
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = min(page, total_pages)
+    start = (page - 1) * per_page
+    end = start + per_page
+    flattened = [(group, row) for group in ordered for row in group["rows"]]
+    page_groups: list[dict] = []
+    page_group_by_reason: dict[str, dict] = {}
+    for source_group, row in flattened[start:end]:
+        page_group = page_group_by_reason.get(source_group["reason"])
+        if page_group is None:
+            page_group = {
+                key: value for key, value in source_group.items() if key != "rows"
+            }
+            page_group["rows"] = []
+            page_group_by_reason[source_group["reason"]] = page_group
+            page_groups.append(page_group)
+        page_group["rows"].append(row)
+
     return {
-        "groups": ordered,
-        "total": sum(g["count"] for g in ordered),
+        "groups": page_groups,
+        "total": total,
         "reason_filter": reason,
+        "search": search_filter,
         "reasons": list(_MISMATCH_OWNERS),
+        "pagination": {
+            "page": page,
+            "per_page": per_page,
+            "total": total,
+            "total_pages": total_pages,
+        },
     }
 
 

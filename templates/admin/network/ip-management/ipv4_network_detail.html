@@ -137,7 +137,8 @@
                                     Reassign
                                 </a>
                                 <form method="post" action="/admin/network/ip-management/ipv4-release" class="inline"
-                                      onsubmit="return confirm('Release {{ row.ip_address }} from {{ row.subscriber_name or 'its subscriber' }}? This frees the address and clears the customer\'s IP. The previous owner is recorded in the audit log.');">
+                                      data-confirm="Release {{ row.ip_address }} from {{ row.subscriber_name or 'its subscriber' }}? This frees the address and clears the customer's IP. The previous owner is recorded in the audit log."
+                                      data-confirm-variant="warning" data-confirm-label="Release">
                                     {% include "components/forms/csrf_input.html" %}
                                     <input type="hidden" name="pool_id" value="{{ pool.id }}">
                                     {% if is_block and block %}<input type="hidden" name="block_id" value="{{ block.id }}">{% endif %}

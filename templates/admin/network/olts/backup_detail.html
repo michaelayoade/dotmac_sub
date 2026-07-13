@@ -67,7 +67,7 @@
                 <h2 class="text-sm font-semibold text-amber-900 dark:text-amber-100">Restore this snapshot</h2>
                 <p class="mt-1 text-sm text-amber-800 dark:text-amber-200">This applies the saved configuration to {{ olt.name }} and saves it as startup config. Take a fresh backup first if the current device state is not already captured.</p>
             </div>
-            <form method="POST" action="/admin/network/olts/{{ olt.id }}/backups/{{ backup.id }}/restore" class="flex w-full flex-col gap-2 sm:w-80">
+            <form method="POST" action="/admin/network/olts/{{ olt.id }}/backups/{{ backup.id }}/restore" class="flex w-full flex-col gap-2 sm:w-80" data-confirm="Restore this snapshot to {{ olt.name }} and save it as startup configuration?" data-confirm-variant="warning" data-confirm-label="Restore snapshot">
                 {% include "components/forms/csrf_input.html" %}
                 <label for="confirm_olt_name" class="text-xs font-medium uppercase tracking-wide text-amber-900 dark:text-amber-100">Type {{ olt.name }} to confirm</label>
                 <input id="confirm_olt_name" name="confirm_olt_name" type="text" autocomplete="off" class="rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-amber-800 dark:bg-slate-950 dark:text-white">

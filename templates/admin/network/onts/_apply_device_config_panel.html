@@ -16,21 +16,21 @@
     </summary>
     <div class="flex flex-wrap items-center gap-2 border-t border-slate-100 px-3 py-2.5 dark:border-slate-700">
         {# Access toggles #}
-        <form hx-post="/admin/network/onts/{{ ont_id }}/wan-remote-access" hx-swap="none" hx-indicator="find button" class="contents">
+        <form hx-post="/admin/network/onts/{{ ont_id }}/wan-remote-access" hx-swap="none" hx-indicator="find button" hx-confirm="{{ 'Disable' if ont.wan_remote_access else 'Enable' }} WAN remote access on this ONT?" class="contents">
             {% include "components/forms/csrf_input.html" %}
             <input type="hidden" name="enabled" value="{{ 'false' if ont.wan_remote_access else 'true' }}">
             <button class="inline-flex items-center rounded px-2 py-1 text-xs disabled:opacity-50 {{ 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' if ont.wan_remote_access else 'bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400' }}">
                 {{ spinner() }}WAN{% if ont.wan_remote_access %} ✓{% endif %}
             </button>
         </form>
-        <form hx-post="/admin/network/onts/{{ ont_id }}/mgmt-remote-access" hx-swap="none" hx-indicator="find button" class="contents">
+        <form hx-post="/admin/network/onts/{{ ont_id }}/mgmt-remote-access" hx-swap="none" hx-indicator="find button" hx-confirm="{{ 'Disable' if ont.mgmt_remote_access else 'Enable' }} management remote access on this ONT?" class="contents">
             {% include "components/forms/csrf_input.html" %}
             <input type="hidden" name="enabled" value="{{ 'false' if ont.mgmt_remote_access else 'true' }}">
             <button class="inline-flex items-center rounded px-2 py-1 text-xs disabled:opacity-50 {{ 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' if ont.mgmt_remote_access else 'bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400' }}">
                 {{ spinner() }}Mgmt{% if ont.mgmt_remote_access %} ✓{% endif %}
             </button>
         </form>
-        <form hx-post="/admin/network/onts/{{ ont_id }}/http-management" hx-swap="none" hx-indicator="find button" class="contents">
+        <form hx-post="/admin/network/onts/{{ ont_id }}/http-management" hx-swap="none" hx-indicator="find button" hx-confirm="Enable HTTP management on this ONT?" class="contents">
             {% include "components/forms/csrf_input.html" %}
             <input type="hidden" name="enabled" value="true">
             <input type="hidden" name="port" value="80">
@@ -40,7 +40,7 @@
         <span class="mx-1 text-slate-300 dark:text-slate-600">|</span>
 
         {# Web credentials inline #}
-        <form hx-post="/admin/network/onts/{{ ont_id }}/web-credentials" hx-swap="none" hx-indicator="find button" class="contents">
+        <form hx-post="/admin/network/onts/{{ ont_id }}/web-credentials" hx-swap="none" hx-indicator="find button" hx-confirm="Replace the ONT web management credentials?" class="contents">
             {% include "components/forms/csrf_input.html" %}
             <input name="username" placeholder="web user" maxlength="32" class="w-20 rounded border border-slate-300 px-1.5 py-1 text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">
             <input name="password" type="password" placeholder="web pass" maxlength="64" class="w-20 rounded border border-slate-300 px-1.5 py-1 text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">
@@ -48,7 +48,7 @@
         </form>
 
         {# TR-069 CR credentials inline #}
-        <form hx-post="/admin/network/onts/{{ ont_id }}/connection-request-credentials" hx-swap="none" hx-indicator="find button" class="contents">
+        <form hx-post="/admin/network/onts/{{ ont_id }}/connection-request-credentials" hx-swap="none" hx-indicator="find button" hx-confirm="Replace the ONT connection-request credentials?" class="contents">
             {% include "components/forms/csrf_input.html" %}
             <input name="username" placeholder="CR user" maxlength="64" class="w-20 rounded border border-slate-300 px-1.5 py-1 text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">
             <input name="password" type="password" placeholder="CR pass" maxlength="64" class="w-20 rounded border border-slate-300 px-1.5 py-1 text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">

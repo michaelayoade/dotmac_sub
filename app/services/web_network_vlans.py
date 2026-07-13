@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
+from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.sql.elements import ColumnElement
 
-from app.models.network import PortVlan, VlanPurpose
+from app.models.network import OLTDevice, PortVlan, Vlan, VlanPurpose
 from app.schemas.network import VlanCreate, VlanUpdate
 from app.services import catalog as catalog_service
 from app.services import network as network_service
+from app.services.common import coerce_uuid
 
 logger = logging.getLogger(__name__)
 
@@ -74,52 +77,79 @@ def _vlan_usage_counts(db, vlan_ids: list[object]) -> dict[str, dict[str, int]]:
     return usage
 
 
-def build_vlans_list_data(db, *, olt_device_id: str | None = None) -> dict[str, object]:
-    vlans = network_service.vlans.list(
-        db=db,
-        region_id=None,
-        is_active=True,
-        order_by="tag",
-        order_dir="asc",
-        limit=100,
-        offset=0,
-        olt_device_id=olt_device_id,
-    )
-    olt_devices = network_service.olt_devices.list(
-        db=db,
-        is_active=True,
-        order_by="name",
-        order_dir="asc",
-        limit=500,
-        offset=0,
-    )
-    selected_olt = None
-    if olt_device_id:
-        try:
-            selected_olt = network_service.olt_devices.get(db, olt_device_id)
-        except Exception:
-            selected_olt = None
+def build_vlans_list_data(
+    db: Session,
+    *,
+    olt_device_id: str | None = None,
+    search: str | None = None,
+    page: int = 1,
+    per_page: int = 25,
+) -> dict[str, object]:
+    try:
+        selected_olt_id = coerce_uuid(olt_device_id) if olt_device_id else None
+    except (TypeError, ValueError):
+        selected_olt_id = None
+    search_filter = (search or "").strip()
+    base_filters: list[ColumnElement[bool]] = [Vlan.is_active.is_(True)]
+    if selected_olt_id:
+        base_filters.append(Vlan.olt_device_id == selected_olt_id)
+
+    list_filters: list[ColumnElement[bool]] = list(base_filters)
+    if search_filter:
+        pattern = f"%{search_filter}%"
+        search_conditions: list[ColumnElement[bool]] = [
+            Vlan.name.ilike(pattern),
+            Vlan.description.ilike(pattern),
+        ]
+        if search_filter.isdigit():
+            search_conditions.append(Vlan.tag == int(search_filter))
+        list_filters.append(or_(*search_conditions))
+
+    total = db.scalar(select(func.count(Vlan.id)).where(*list_filters)) or 0
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = min(page, total_pages)
+    vlans = db.scalars(
+        select(Vlan)
+        .options(joinedload(Vlan.olt_device))
+        .where(*list_filters)
+        .order_by(Vlan.tag, Vlan.name)
+        .offset((page - 1) * per_page)
+        .limit(per_page)
+    ).all()
+    olt_devices = db.scalars(
+        select(OLTDevice).where(OLTDevice.is_active.is_(True)).order_by(OLTDevice.name)
+    ).all()
+    selected_olt = db.get(OLTDevice, selected_olt_id) if selected_olt_id else None
     vlan_ids = [vlan.id for vlan in vlans]
     usage_counts = _vlan_usage_counts(db, vlan_ids)
-    total_ont_refs = sum(item["onts"] for item in usage_counts.values())
-    purpose_counts: dict[str, int] = {}
-    for vlan in vlans:
-        purpose = vlan.purpose.value if vlan.purpose else "other"
-        purpose_counts[purpose] = purpose_counts.get(purpose, 0) + 1
+    stats_row = db.execute(
+        select(
+            func.count(Vlan.id),
+            func.count(Vlan.id).filter(Vlan.purpose == VlanPurpose.management),
+            func.count(Vlan.id).filter(Vlan.purpose == VlanPurpose.internet),
+        ).where(*base_filters)
+    ).one()
 
     return {
         "vlans": vlans,
         "olt_devices": olt_devices,
         "selected_olt": selected_olt,
-        "selected_olt_id": olt_device_id or "",
+        "selected_olt_id": str(selected_olt_id) if selected_olt_id else "",
+        "search": search_filter,
         "usage_counts": usage_counts,
         "stats": {
-            "total": len(vlans),
-            "ont_refs": total_ont_refs,
-            "management": purpose_counts.get("management", 0),
-            "internet": purpose_counts.get("internet", 0),
+            "total": stats_row[0],
+            "ont_refs": 0,
+            "management": stats_row[1],
+            "internet": stats_row[2],
         },
         "purpose_display": PURPOSE_DISPLAY,
+        "pagination": {
+            "page": page,
+            "per_page": per_page,
+            "total": total,
+            "total_pages": total_pages,
+        },
     }
 
 

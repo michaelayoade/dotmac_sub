@@ -324,7 +324,7 @@
                         </td>
                         <td class="px-4 py-3 text-sm tabular-nums text-slate-700 dark:text-slate-300">{{ mapping.source_registration_count }}</td>
                         <td class="px-4 py-3 text-right">
-                            <form method="POST" action="/admin/network/olts/{{ olt.id }}/profiles/imported/mappings/{{ mapping.id }}/delete" class="inline">
+                            <form method="POST" action="/admin/network/olts/{{ olt.id }}/profiles/imported/mappings/{{ mapping.id }}/delete" class="inline" data-confirm="Delete this imported profile mapping?" data-confirm-label="Delete">
                                 {% include "components/forms/csrf_input.html" %}
                                 <button type="submit" class="text-xs font-medium text-rose-600 hover:text-rose-800 dark:text-rose-400">Delete</button>
                             </form>

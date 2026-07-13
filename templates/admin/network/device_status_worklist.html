@@ -1,4 +1,5 @@
 {% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import pagination as table_pagination %}
 
 {% block title %}Device Status Worklist - Admin{% endblock %}
 
@@ -20,14 +21,29 @@
     </p>
   </div>
 
-  <div class="flex flex-wrap items-center gap-2 text-sm">
-    <span class="text-slate-500 dark:text-slate-400">{{ worklist.total }} mismatch{{ 'es' if worklist.total != 1 }}</span>
-    <span class="text-slate-300">·</span>
-    <a href="?" class="rounded-full px-3 py-1 {{ 'bg-indigo-600 text-white' if not worklist.reason_filter else 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300' }}">All</a>
-    {% for r in worklist.reasons %}
-    <a href="?reason={{ r }}" class="rounded-full px-3 py-1 {{ 'bg-indigo-600 text-white' if worklist.reason_filter == r else 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300' }}">{{ r|replace('_',' ') }}</a>
-    {% endfor %}
-  </div>
+  <form method="GET" action="/admin/network/device-status-worklist" class="flex flex-col gap-3 border-y border-slate-200/70 py-4 sm:flex-row sm:items-end dark:border-slate-700/70">
+    <div class="min-w-0 flex-1">
+      <label for="worklist-search" class="mb-1 block text-xs font-medium text-slate-700 dark:text-slate-300">Search</label>
+      <input id="worklist-search" type="search" name="search" value="{{ worklist.search }}" placeholder="Device, management IP, or status"
+      class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+    </div>
+    <div class="w-full sm:w-72">
+      <label for="reason-filter" class="mb-1 block text-xs font-medium text-slate-700 dark:text-slate-300">Mismatch reason</label>
+      <select id="reason-filter" name="reason" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+        <option value="">All reasons</option>
+        {% for r in worklist.reasons %}
+        <option value="{{ r }}" {% if worklist.reason_filter == r %}selected{% endif %}>{{ r | replace('_', ' ') | title }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <input type="hidden" name="per_page" value="{{ worklist.pagination.per_page }}">
+    <button type="submit" class="inline-flex h-[38px] items-center justify-center rounded-lg bg-primary-600 px-4 text-sm font-semibold text-white hover:bg-primary-700">Filter</button>
+    {% if worklist.search or worklist.reason_filter %}
+    <a href="/admin/network/device-status-worklist" class="inline-flex h-[38px] items-center justify-center rounded-lg border border-slate-300 px-4 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-800">Clear</a>
+    {% endif %}
+  </form>
+
+  <p class="text-sm text-slate-500 dark:text-slate-400">{{ worklist.total }} mismatch{{ 'es' if worklist.total != 1 }}</p>
 
   {% for group in worklist.groups %}
   <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
@@ -68,5 +84,15 @@
     No status mismatches{% if worklist.reason_filter %} for this reason{% endif %}. Inventory and monitoring agree.
   </div>
   {% endfor %}
+
+  {{ table_pagination(
+      worklist.pagination.page,
+      worklist.pagination.total_pages,
+      worklist.pagination.total,
+      worklist.pagination.per_page,
+      "/admin/network/device-status-worklist",
+      extra_params="&reason=" ~ (worklist.reason_filter or "") ~ "&search=" ~ (worklist.search | urlencode),
+      item_label="mismatches"
+  ) }}
 </div>
 {% endblock %}
