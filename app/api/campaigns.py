@@ -127,7 +127,7 @@ def _smtp_read(config) -> CampaignSmtpConfigRead:
 def _suppression_read(suppression) -> SuppressionRead:
     return SuppressionRead(
         id=suppression.id,
-        channel=suppression.channel,
+        channel=suppression.channel.value,
         address=suppression.address,
         reason=suppression.reason,
         source=suppression.source,

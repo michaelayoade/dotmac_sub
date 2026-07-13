@@ -130,6 +130,30 @@ def _validate_campaign_values(campaign: Campaign) -> None:
 MARKETING_CATEGORY = "marketing"
 
 
+def _blocked_addresses(
+    db: Session, *, channel, addresses: list[str]
+) -> set[str]:
+    """Addresses the platform ledger says we may not send MARKETING to.
+
+    One helper, used by every campaign path that needs the answer. Three inline
+    copies of `filter_eligible` would be three chances to drift -- which is the
+    bug this whole slice exists to remove.
+    """
+    clean = [a for a in addresses if a]
+    if not clean:
+        return set()
+    eligible = set(
+        communication_eligibility.filter_eligible(
+            db,
+            channel=channel,
+            addresses=clean,
+            category=MARKETING_CATEGORY,
+        )
+    )
+    return {a for a in clean if a not in eligible}
+
+
+
 def _segment_query(db: Session, campaign: Campaign):
     segment = (
         campaign.segment_filter if isinstance(campaign.segment_filter, dict) else {}
@@ -685,7 +709,7 @@ def build_recipient_list(
     subscribers = query.all()
     # Suppression is checked in bulk here so a large audience build stays one
     # extra query rather than one per candidate.
-    blocked = suppressed_addresses(
+    blocked = _blocked_addresses(
         db,
         channel=campaign.channel,
         addresses=[_recipient_address(campaign, item)[0] for item in subscribers],
@@ -962,7 +986,7 @@ def send_campaign_batch(
     # Re-check suppression at send time, not just at audience-build time: an
     # unsubscribe can land in between, and a suppressed address must never be
     # handed to the transport.
-    blocked = suppressed_addresses(
+    blocked = _blocked_addresses(
         db,
         channel=campaign.channel,
         addresses=[recipient.address for recipient in recipients],
@@ -1188,18 +1212,11 @@ def materialize_step_recipients(
         .all()
     }
     # Consent is asked of the platform ledger, not a campaign-local table.
-    # `filter_eligible` is the SAME rule the delivery gate applies -- a
-    # per-recipient loop here would be a second implementation that drifts from
-    # it, and the drift would show up as mail to someone who unsubscribed.
-    eligible = set(
-        communication_eligibility.filter_eligible(
-            db,
-            channel=campaign.channel,
-            addresses=[seed.address for seed in seeds],
-            category=MARKETING_CATEGORY,
-        )
+    blocked = _blocked_addresses(
+        db,
+        channel=campaign.channel,
+        addresses=[seed.address for seed in seeds],
     )
-    blocked = {seed.address for seed in seeds if seed.address not in eligible}
 
     created = suppressed = 0
     for seed in seeds:
