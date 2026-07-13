@@ -119,6 +119,20 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("financial.billing_profile",),
             ),
             SOTService(
+                name="financial.prepaid_enforcement",
+                module="app.services.prepaid_enforcement_planner",
+                owns=(
+                    "prepaid enforcement candidate cohort",
+                    "prepaid warn/suspend/restore planning",
+                    "prepaid enforcement readiness reporting",
+                ),
+                depends_on=(
+                    "financial.ledger",
+                    "financial.billing_profile",
+                    "financial.prepaid_threshold",
+                ),
+            ),
+            SOTService(
                 name="financial.access_resolution",
                 module="app.services.access_resolution",
                 owns=(
@@ -166,6 +180,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=(
                     "financial.dunning",
                     "financial.access_resolution",
+                    "financial.prepaid_enforcement",
                 ),
             ),
             SOTService(

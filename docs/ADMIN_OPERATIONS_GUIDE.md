@@ -933,7 +933,7 @@ net = charge - credit
 |---------|---------|---------|
 | Dunning Enabled | true | Run dunning checks |
 | Dunning Interval | 86400 sec | Check frequency |
-| Prepaid Enforcement | true | Check prepaid balances |
+| Prepaid Enforcement | false | Customer-impacting balance enforcement gate |
 | Prepaid Blocking Time | 08:00 | Time of day to block |
 | Prepaid Skip Weekends | false | Skip blocking on weekends |
 | Prepaid Grace Days | 0 | Grace before blocking |
@@ -960,6 +960,23 @@ net = charge - credit
 ### Enforcement Caution
 
 Apply aggressive collections settings only after confirming payment posting latency. If payment imports or webhook confirmation are delayed, customers can be suspended incorrectly.
+
+Before enabling prepaid enforcement, generate the side-effect-free production
+plan and review every action bucket:
+
+```bash
+docker compose exec -T -e PYTHONPATH=/app app \
+  python scripts/one_off/plan_prepaid_balance_sweep.py \
+  --out /tmp/prepaid-balance-sweep-plan.json
+```
+
+The report runs even while the control is disabled. It includes account IDs,
+available and required balances, lifecycle projection drift, safety shields,
+enforcement lock/timer drift, and infrastructure outage/ticket notice
+suppression. It never arms timers,
+queues notices, changes service state, or disconnects sessions. Enable the
+control only after reviewing the complete plan; the first low-balance pass
+warns and arms timers, while a later eligible pass performs suspension.
 
 ---
 
@@ -1301,7 +1318,7 @@ Rotate non-customer-facing secrets first, then payment, then authentication or n
 |------|-----------------|---------|
 | Billing Cycle | 86400s (daily) | Generate invoices |
 | Dunning | 86400s (daily) | Collections enforcement |
-| Prepaid Enforcement | 3600s (hourly) | Balance checks |
+| Prepaid Enforcement | 86400s (daily, opt-in) | Balance checks |
 | Usage Rating | 86400s (daily) | Usage charge generation |
 | Expiry Reminders | 86400s (daily) | Subscription renewal reminders |
 | Subscription Expiration | 86400s (daily) | Expire past-due subscriptions |

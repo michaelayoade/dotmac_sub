@@ -54,6 +54,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     assert sot_relationships.dependencies_for("financial.collections_scheduled") == (
         "financial.dunning",
         "financial.access_resolution",
+        "financial.prepaid_enforcement",
     )
     assert sot_relationships.dependencies_for(
         "communications.notification_service"

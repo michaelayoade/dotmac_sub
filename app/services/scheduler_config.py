@@ -748,9 +748,9 @@ def build_beat_schedule() -> dict:
         )
         # Daily status-backstop reconcilers (SP-8): the event path normally
         # clears these, but the sweeps are the catch-up for lost events.
-        # account_status: auto-repair subscribers stuck `blocked` while all subs
-        # are active (walled-gardened despite active service) — the all-active
-        # filter is a robust guard, pure service-state, so apply mode is safe.
+        # account_status: auto-repair subscribers stuck `new`/`blocked` while
+        # all subs are active. The all-active filter is a robust guard, pure
+        # service-state, so apply mode is safe.
         account_status_reconcile_enabled = _effective_bool(
             session,
             SettingDomain.billing,

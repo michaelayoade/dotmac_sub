@@ -114,11 +114,15 @@ Fix:
 The sweep being default-off is a reasonable safety posture during cleanup, but
 the rest of the system must not depend on a disabled backstop.
 
-Fix:
+Implemented readiness layer:
 
-- add a dry-run command/report for `prepaid_balance_sweep`;
-- show exact accounts that would be warned, suspended, restored, or skipped;
-- make production enablement a launch decision after reviewing the report;
+- `plan_prepaid_balance_sweep.py` reports the exact warn, suspend, restore,
+  deferred, shielded, health-blocked, invalid, and no-op cohorts;
+- each row includes the canonical balance/threshold, parent-status projection
+  drift, active service/lock counts, and outage/ticket notice suppression;
+- the report and executor consume `prepaid_enforcement_planner`; planning has no
+  timer, notification, service-state, or network side effects;
+- production enablement remains a launch decision after reviewing the report;
 - add billing health alert when billing is live, prepaid accounts are negative,
   and the sweep is disabled.
 
@@ -188,10 +192,8 @@ Implement these before further balance cleanup:
    - allow override only with explicit permission and reason;
    - write audit record.
 
-3. Prepaid sweep dry-run/report
-   - list accounts by action bucket;
-   - include balance, threshold, current status, active subscription count,
-     open infrastructure ticket/outage suppression status, and proposed action.
+3. Prepaid sweep dry-run/report - implemented by
+   `scripts/one_off/plan_prepaid_balance_sweep.py`.
 
 4. Billing health additions
    - negative prepaid wallet count/total;
