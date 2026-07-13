@@ -268,7 +268,7 @@ def test_dispatcher_contains_handler_database_failures(db_session):
 
     class ArrangementHandler:
         def handle(self, db, event):
-            db.execute(text("SELECT CAST('not-a-uuid' AS uuid)"))
+            db.execute(text("SELECT * FROM event_handler_table_that_does_not_exist"))
 
     class NotificationHandler:
         def handle(self, db, event):
