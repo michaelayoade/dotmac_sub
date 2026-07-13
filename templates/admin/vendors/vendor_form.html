@@ -1,0 +1,96 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import submit_button %}
+{% block title %}{{ form_title }} - Admin{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-3xl space-y-4">
+    <div>
+        <nav class="mb-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+            <a href="/admin/vendors" class="hover:text-cyan-600">Vendors</a>
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <span class="text-slate-900 dark:text-white">{{ form_title }}</span>
+        </nav>
+        <h1 class="font-display text-xl font-bold tracking-tight text-slate-900 dark:text-white">{{ form_title }}</h1>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Creating a vendor also provisions their portal identity, so they can be invited to sign in.</p>
+    </div>
+
+    {% if error %}
+    <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-200">
+        {{ error }}
+    </div>
+    {% endif %}
+
+    <form method="post" action="{{ action_url }}" class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        {% include "components/forms/csrf_input.html" %}
+        <div class="space-y-6 p-6">
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
+                    <label for="vendor-name" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Vendor Name</label>
+                    <input id="vendor-name" type="text" name="name" value="{{ vendor_form.name }}" required
+                           class="block w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                           placeholder="e.g. Kano Fibre Works Ltd">
+                </div>
+                <div>
+                    <label for="vendor-code" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Code <span class="text-slate-400">(unique)</span></label>
+                    <input id="vendor-code" type="text" name="code" value="{{ vendor_form.code }}"
+                           class="block w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                           placeholder="e.g. KFW">
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <div>
+                    <label for="vendor-contact-name" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Contact Name</label>
+                    <input id="vendor-contact-name" type="text" name="contact_name" value="{{ vendor_form.contact_name }}"
+                           class="block w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label for="vendor-contact-email" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Contact Email</label>
+                    <input id="vendor-contact-email" type="email" name="contact_email" value="{{ vendor_form.contact_email }}"
+                           class="block w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label for="vendor-contact-phone" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Contact Phone</label>
+                    <input id="vendor-contact-phone" type="tel" inputmode="tel" name="contact_phone" value="{{ vendor_form.contact_phone }}"
+                           class="block w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
+                    <label for="vendor-license" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">License Number</label>
+                    <input id="vendor-license" type="text" name="license_number" value="{{ vendor_form.license_number }}"
+                           class="block w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label for="vendor-status" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Status</label>
+                    <select id="vendor-status" name="is_active"
+                            class="block w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="true" {% if vendor_form.is_active %}selected{% endif %}>Active</option>
+                        <option value="false" {% if not vendor_form.is_active %}selected{% endif %}>Inactive</option>
+                    </select>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Deactivating also revokes the vendor's portal login.</p>
+                </div>
+            </div>
+
+            <div>
+                <label for="vendor-service-area" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Service Area</label>
+                <textarea id="vendor-service-area" name="service_area" rows="2"
+                          class="block w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                          placeholder="e.g. Abuja municipal, Gwagwalada">{{ vendor_form.service_area }}</textarea>
+            </div>
+
+            <div>
+                <label for="vendor-notes" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Notes</label>
+                <textarea id="vendor-notes" name="notes" rows="3"
+                          class="block w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                          placeholder="Internal notes">{{ vendor_form.notes }}</textarea>
+            </div>
+        </div>
+        <div class="flex items-center justify-end gap-3 border-t border-slate-200 bg-slate-50 px-6 py-4 dark:border-slate-700 dark:bg-slate-800/50">
+            <a href="/admin/vendors" class="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Cancel</a>
+            {{ submit_button(submit_label, loading_label="Saving...") }}
+        </div>
+    </form>
+</div>
+{% endblock %}

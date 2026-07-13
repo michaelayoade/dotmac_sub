@@ -25,17 +25,10 @@ from app.tasks.billing import (
 from app.tasks.campaigns import process_due_campaigns, send_campaign_batch
 from app.tasks.catalog import apply_due_subscription_changes, expire_subscriptions
 from app.tasks.collections import prepaid_balance_sweep, run_dunning
-from app.tasks.crm_billing_push import push_crm_billing_snapshots
 from app.tasks.crm_native_sync import pull_crm_phase3_native_delta
-from app.tasks.crm_sync import push_subscriber_change as push_crm_subscriber_change
-from app.tasks.crm_sync import redrive_crm_dead_letters
 from app.tasks.crm_ticket_pull import (
     pull_crm_tickets,
     sync_crm_ticket,
-)
-from app.tasks.crm_ticket_push import (
-    push_comment_to_crm,
-    push_ticket_to_crm,
 )
 from app.tasks.cross_app_drift import run_cross_app_drift_detection
 from app.tasks.customer_impact_metrics import export_customer_impact_metrics
@@ -101,6 +94,7 @@ from app.tasks.ont_provisioning import (
     provision_ont,
     queue_bulk_provisioning,
 )
+from app.tasks.ont_reconcile import run_ont_reconcile_sweep
 from app.tasks.ont_signal_observations import record_ont_observations
 from app.tasks.operational_escalations import dispatch_operational_escalation_deliveries
 from app.tasks.payment_reconciliation import reconcile_topups
@@ -167,6 +161,7 @@ from app.tasks.tr069 import (
 from app.tasks.tr069 import (
     sync_all_acs_devices as tr069_sync_all_acs_devices,
 )
+from app.tasks.uisp_control import apply_uisp_intent, reconcile_uisp_config_readback
 from app.tasks.uisp_ip_backfill import run_uisp_mgmt_ip_backfill
 from app.tasks.unmatched_radio import run_unmatched_radio_review
 from app.tasks.usage import (
@@ -228,13 +223,8 @@ __all__ = [
     "audit_cutover_balance_invariant_task",
     "audit_funded_inactive_exposure_task",
     "check_billing_switch_task",
-    "push_crm_subscriber_change",
-    "redrive_crm_dead_letters",
     "pull_crm_tickets",
     "sync_crm_ticket",
-    "push_ticket_to_crm",
-    "push_comment_to_crm",
-    "push_crm_billing_snapshots",
     "pull_crm_phase3_native_delta",
     "auto_confirm_resolved_tickets",
     "retry_failed_inbox_outbound_messages",
@@ -296,6 +286,8 @@ __all__ = [
     "reconcile_detected_outages",
     "run_uisp_topology_sync",
     "run_uisp_mgmt_ip_backfill",
+    "apply_uisp_intent",
+    "reconcile_uisp_config_readback",
     "run_ufiber_onu_link",
     "run_unmatched_radio_review",
     "export_topology_metrics",
@@ -311,6 +303,7 @@ __all__ = [
     "update_subscriber_counts",
     "check_nas_health",
     "execute_ont_bulk_action",
+    "run_ont_reconcile_sweep",
     "authorize_ont_task",
     "evaluate_alert_rules",
     "evaluate_infrastructure_alerts",

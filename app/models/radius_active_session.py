@@ -59,7 +59,7 @@ class RadiusActiveSession(Base):
     framed_ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
     framed_ipv6_prefix: Mapped[str | None] = mapped_column(String(128), nullable=True)
     calling_station_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    nas_port_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    nas_port_id: Mapped[str | None] = mapped_column(String(253), nullable=True)
 
     # Session counters
     session_start: Mapped[datetime] = mapped_column(

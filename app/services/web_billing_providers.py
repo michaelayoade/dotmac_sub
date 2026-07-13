@@ -15,109 +15,36 @@ from app.models.billing import (
     PaymentProviderEventStatus,
     PaymentProviderType,
 )
-from app.models.domain_settings import SettingDomain
 from app.models.subscription_engine import SettingValueType
 from app.schemas.billing import PaymentProviderCreate, PaymentProviderUpdate
 from app.schemas.settings import DomainSettingUpdate
 from app.services import billing as billing_service
 from app.services import domain_settings as domain_settings_service
-from app.services import settings_spec
+from app.services.payment_routing import (
+    SUPPORTED_PROVIDER_TYPES,
+    get_routing_policy,
+    parse_supported_provider_type,
+    provider_credentials,
+    provider_health,
+    supported_provider_type_values,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_PROVIDER_TYPES: tuple[PaymentProviderType, ...] = (
-    PaymentProviderType.paystack,
-    PaymentProviderType.flutterwave,
-)
-
-_BOOL_TRUE_VALUES = {"1", "true", "yes", "on"}
-
-
-def supported_provider_type_values() -> list[str]:
-    return [item.value for item in SUPPORTED_PROVIDER_TYPES]
-
-
-def parse_supported_provider_type(raw_value: str) -> PaymentProviderType:
-    normalized = (raw_value or "").strip().lower()
-    for provider_type in SUPPORTED_PROVIDER_TYPES:
-        if provider_type.value == normalized:
-            return provider_type
-    allowed = ", ".join(supported_provider_type_values())
-    raise ValueError(
-        f"Unsupported payment provider type '{raw_value}'. Allowed: {allowed}"
-    )
-
-
-def _resolve_setting_value(db: Session, key: str) -> Any:
-    return settings_spec.resolve_value(db, SettingDomain.billing, key)
-
-
-def _resolve_bool_setting(db: Session, key: str, default: bool) -> bool:
-    raw = _resolve_setting_value(db, key)
-    if raw is None:
-        return default
-    if isinstance(raw, bool):
-        return raw
-    return str(raw).strip().lower() in _BOOL_TRUE_VALUES
-
-
-def _resolve_str_setting(db: Session, key: str, default: str) -> str:
-    raw = _resolve_setting_value(db, key)
-    if raw is None:
-        return default
-    value = str(raw).strip()
-    return value or default
-
-
-def _credentials_for_provider(
-    db: Session, provider_type: PaymentProviderType
-) -> dict[str, str]:
-    if provider_type == PaymentProviderType.paystack:
-        return {
-            "secret_key": _resolve_str_setting(db, "paystack_secret_key", ""),
-            "public_key": _resolve_str_setting(db, "paystack_public_key", ""),
-        }
-    return {
-        "secret_key": _resolve_str_setting(db, "flutterwave_secret_key", ""),
-        "public_key": _resolve_str_setting(db, "flutterwave_public_key", ""),
-        "secret_hash": _resolve_str_setting(db, "flutterwave_secret_hash", ""),
-    }
-
 
 def _provider_health_rows(db: Session) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for provider_type in SUPPORTED_PROVIDER_TYPES:
-        provider = billing_service.payment_providers.get_by_type(db, provider_type)
-        credentials = _credentials_for_provider(db, provider_type)
-        has_required_credentials = bool(credentials.get("secret_key")) and bool(
-            credentials.get("public_key")
-        )
-        if provider_type == PaymentProviderType.flutterwave:
-            has_required_credentials = has_required_credentials and bool(
-                credentials.get("secret_hash")
-            )
-        if not provider:
-            health = "not_configured"
-            health_label = "Not Configured"
-        elif not provider.is_active:
-            health = "inactive"
-            health_label = "Inactive"
-        elif not has_required_credentials:
-            health = "misconfigured"
-            health_label = "Missing Credentials"
-        else:
-            health = "healthy"
-            health_label = "Healthy"
-
+    rows = provider_health(db)
+    for row in rows:
+        provider_id = row.pop("provider_id", None)
         failed_events = 0
         last_event_at = None
-        if provider:
+        if provider_id:
             failed_events = (
                 db.query(func.count(PaymentProviderEvent.id))
-                .filter(PaymentProviderEvent.provider_id == provider.id)
+                .filter(PaymentProviderEvent.provider_id == provider_id)
                 .filter(
                     PaymentProviderEvent.status == PaymentProviderEventStatus.failed
                 )
@@ -126,47 +53,20 @@ def _provider_health_rows(db: Session) -> list[dict[str, Any]]:
             )
             last_event_at = (
                 db.query(func.max(PaymentProviderEvent.received_at))
-                .filter(PaymentProviderEvent.provider_id == provider.id)
+                .filter(PaymentProviderEvent.provider_id == provider_id)
                 .scalar()
             )
-        rows.append(
-            {
-                "provider_type": provider_type.value,
-                "provider_name": provider.name
-                if provider
-                else provider_type.value.title(),
-                "configured": bool(provider),
-                "active": bool(provider and provider.is_active),
-                "has_required_credentials": has_required_credentials,
-                "health": health,
-                "health_label": health_label,
-                "failed_events": int(failed_events),
-                "last_event_at": last_event_at,
-            }
-        )
+        row["failed_events"] = int(failed_events)
+        row["last_event_at"] = last_event_at
     return rows
 
 
 def get_failover_state(db: Session) -> dict[str, Any]:
-    primary = _resolve_str_setting(db, "payment_gateway_primary_provider", "paystack")
-    secondary = _resolve_str_setting(
-        db, "payment_gateway_secondary_provider", "flutterwave"
-    )
-    failover_enabled = _resolve_bool_setting(
-        db, "payment_gateway_failover_enabled", True
-    )
-    primary_type = parse_supported_provider_type(primary)
-    secondary_type = parse_supported_provider_type(secondary)
-    if primary_type == secondary_type:
-        secondary_type = (
-            PaymentProviderType.flutterwave
-            if primary_type == PaymentProviderType.paystack
-            else PaymentProviderType.paystack
-        )
+    policy = get_routing_policy(db)
     return {
-        "enabled": failover_enabled,
-        "primary": primary_type.value,
-        "secondary": secondary_type.value,
+        "enabled": policy.failover_enabled,
+        "primary": policy.primary.value,
+        "secondary": policy.secondary.value,
         "options": supported_provider_type_values(),
     }
 
@@ -214,7 +114,7 @@ def run_provider_test(
     db: Session, *, provider_type_value: str, mode: str = "test"
 ) -> dict[str, Any]:
     provider_type = parse_supported_provider_type(provider_type_value)
-    credentials = _credentials_for_provider(db, provider_type)
+    credentials = provider_credentials(db, provider_type)
     provider = billing_service.payment_providers.get_by_type(db, provider_type)
     errors: list[str] = []
     warnings: list[str] = []

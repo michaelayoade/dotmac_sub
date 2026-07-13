@@ -64,9 +64,11 @@ from .actions import (
     AcsAddObject,
     AcsDeleteObject,
     AcsSetDhcpServer,
+    AcsSetIpv6,
     AcsSetManagementServer,
     AcsSetNatEnabled,
     AcsSetPppoe,
+    AcsSetWanIp,
     AcsSetWifiPassword,
     AcsSetWifiSsid,
     Action,
@@ -498,6 +500,59 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
             }
             _acs_set(action, ctx, params)
             return _ok(action, "acs_nat_enabled", None, action.enabled, started)
+
+        case AcsSetIpv6():
+            params = {
+                f"Device.IP.Interface.{action.interface_index}.IPv6Enable": action.enabled,
+                f"Device.DHCPv6.Client.{action.interface_index}.Enable": action.enabled,
+                f"Device.DHCPv6.Client.{action.interface_index}.RequestPrefixes": (
+                    action.enabled and action.request_prefixes
+                ),
+                f"Device.RouterAdvertisement.InterfaceSettings.{action.interface_index}.Enable": action.enabled,
+            }
+            _acs_set(action, ctx, params)
+            return _ok(action, "acs_ipv6_enabled", None, action.enabled, started)
+
+        case AcsSetWanIp():
+            if action.data_model_root == "Device":
+                if action.mode != "dhcp":
+                    raise ApplyError(
+                        action,
+                        ReconcileFailureReason.ACS_WRITE_FAULTED,
+                        "TR-181 static WAN requires model-specific gateway and DNS paths",
+                    )
+                params = {
+                    f"Device.IP.Interface.{action.instance_index}.Enable": True,
+                    f"Device.DHCPv4.Client.{action.instance_index}.Enable": True,
+                }
+            else:
+                base = (
+                    "InternetGatewayDevice.WANDevice.1."
+                    f"WANConnectionDevice.{action.wcd_index}."
+                    f"WANIPConnection.{action.instance_index}"
+                )
+                params = {
+                    f"{base}.Enable": True,
+                    f"{base}.NATEnabled": action.nat_enabled,
+                    f"{base}.ConnectionType": "IP_Routed",
+                    f"{base}.AddressingType": (
+                        "DHCP" if action.mode == "dhcp" else "Static"
+                    ),
+                    f"{base}.X_HW_VLAN": action.vlan,
+                    f"{base}.X_HW_SERVICELIST": "INTERNET",
+                }
+                if action.mode == "static":
+                    params.update(
+                        {
+                            f"{base}.ExternalIPAddress": action.ip_address,
+                            f"{base}.SubnetMask": action.subnet_mask,
+                            f"{base}.DefaultGateway": action.gateway,
+                        }
+                    )
+                    if action.dns_servers:
+                        params[f"{base}.DNSServers"] = action.dns_servers
+            _acs_set(action, ctx, params)
+            return _ok(action, "acs_wan_ip_mode", None, action.mode, started)
 
         case AcsSetDhcpServer():
             params = {

@@ -261,7 +261,16 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
             if notification.channel == NotificationChannel.email:
                 # Queue bodies are usually plain text — wrap them in the
                 # branded template and keep the text as the text/plain part.
-                body_html, body_text = render_email_bodies(body, subject=subject)
+                resolved_brand = None
+                if notification.subscriber_id:
+                    from app.services.brand_profiles import resolve_brand
+
+                    resolved_brand = resolve_brand(
+                        db, subscriber_id=notification.subscriber_id
+                    ).to_dict()
+                body_html, body_text = render_email_bodies(
+                    body, subject=subject, brand=resolved_brand
+                )
                 success = email_service.send_email(
                     db=db,
                     to_email=notification.recipient,

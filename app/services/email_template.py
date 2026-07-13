@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Mapping
 from html import escape
 from html.parser import HTMLParser
 from urllib.parse import urljoin
@@ -93,6 +94,7 @@ def render_email_bodies(
     base_url: str = "",
     company_name: str | None = None,
     support_email: str | None = None,
+    brand: Mapping[str, object] | None = None,
 ) -> tuple[str, str | None]:
     """Return ``(body_html, body_text)`` for an outgoing email.
 
@@ -111,6 +113,7 @@ def render_email_bodies(
             base_url=base_url,
             company_name=company_name,
             support_email=support_email,
+            brand=brand,
         )
         return html, html_to_text(body)
 
@@ -126,6 +129,7 @@ def render_email_bodies(
         base_url=base_url,
         company_name=company_name,
         support_email=support_email,
+        brand=brand,
     )
     return html, body
 
@@ -141,6 +145,7 @@ def wrap_email_html(
     base_url: str = "",
     company_name: str | None = None,
     support_email: str | None = None,
+    brand: Mapping[str, object] | None = None,
 ) -> str:
     """Wrap email body HTML in a branded template with header and footer.
 
@@ -156,17 +161,24 @@ def wrap_email_html(
     """
     from html import escape
 
-    brand = get_brand()
-    base = base_url or brand["app_url"]
-    primary = DOTMAC_RED
-    secondary = DOTMAC_GREEN
-    logo_url = _asset_url(base, "/static/branding/favicon/icon-192.png")
+    resolved_brand = dict(brand) if brand is not None else get_brand()
+    base = base_url or str(resolved_brand["app_url"])
+    primary = str(resolved_brand.get("primary_color") or DOTMAC_RED)
+    secondary = str(resolved_brand.get("secondary_color") or DOTMAC_GREEN)
+    configured_logo = str(resolved_brand.get("logo_url") or "").strip()
+    logo_url = (
+        _asset_url(base, configured_logo)
+        if configured_logo
+        else _asset_url(base, "/static/branding/favicon/icon-192.png")
+    )
     safe_subject = escape(subject)
     safe_company = escape(
-        company_name if company_name is not None else brand["legal_name"]
+        company_name if company_name is not None else str(resolved_brand["legal_name"])
     )
     safe_support = escape(
-        support_email if support_email is not None else brand["support_email"]
+        support_email
+        if support_email is not None
+        else str(resolved_brand["support_email"])
     )
 
     return f"""<!DOCTYPE html>

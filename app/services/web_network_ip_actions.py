@@ -187,6 +187,7 @@ def ip_pool_form_context(
         "action_url": action_url,
         "olt_devices": ip_service.list_active_olts(db),
         "vlans": ip_service.list_active_vlans(db),
+        "nas_devices": ip_service.list_active_nas_devices(db),
     }
     if error:
         context["error"] = error

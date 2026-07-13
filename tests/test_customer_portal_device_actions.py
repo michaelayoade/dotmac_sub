@@ -46,12 +46,55 @@ def _active_subscription_with_ont(db_session):
         OntAssignment(
             ont_unit_id=ont.id,
             subscriber_id=subscriber.id,
+            subscription_id=subscription.id,
             active=True,
             wifi_ssid="ExistingSSID",
         )
     )
     db_session.commit()
     return subscriber, subscription, ont
+
+
+def test_uisp_ont_does_not_expose_huawei_customer_actions(db_session):
+    from app.models.network import OLTDevice
+    from app.models.uisp_control import (
+        UispDeviceIntent,
+        UispIntentStatus,
+        UispIntentTargetType,
+    )
+
+    subscriber, subscription, ont = _active_subscription_with_ont(db_session)
+    olt = OLTDevice(
+        name="UF-OLT-PORTAL",
+        vendor="ubiquiti",
+        uisp_device_id="uisp-olt-portal",
+    )
+    db_session.add(olt)
+    db_session.flush()
+    ont.olt_device_id = olt.id
+    ont.uisp_device_id = "uisp-onu-portal"
+    db_session.add(
+        UispDeviceIntent(
+            target_type=UispIntentTargetType.ont,
+            target_id=ont.id,
+            subscription_id=subscription.id,
+            uisp_device_id=ont.uisp_device_id,
+            desired_state={"wifi": {"ssid": "Portal"}},
+            status=UispIntentStatus.manual_required,
+        )
+    )
+    db_session.commit()
+
+    detail = get_service_detail(
+        db_session,
+        {"account_id": str(subscriber.id)},
+        str(subscription.id),
+    )
+
+    assert detail is not None
+    assert detail["can_reboot_ont"] is False
+    assert detail["can_update_wifi"] is False
+    assert detail["uisp_control_status"] == "manual_required"
 
 
 def test_service_detail_exposes_customer_reboot_when_ont_is_linked(db_session):
@@ -94,21 +137,20 @@ def test_customer_reboot_delegates_to_tracked_ont_action(db_session, monkeypatch
     assert calls == [(str(ont.id), "customer:customer-user-1", None)]
 
 
-def test_customer_wifi_update_delegates_to_existing_wifi_action(
+def test_customer_wifi_update_delegates_to_reconciled_wifi_action(
     db_session, monkeypatch
 ):
+    from app.services.network.ont_features import OntFeatureService
+
     subscriber, subscription, ont = _active_subscription_with_ont(db_session)
     calls = []
 
-    def fake_set_wifi_config(
-        db, ont_id, *, ssid=None, password=None, request=None, **_
-    ):
-        calls.append((ont_id, ssid, password, request))
+    def fake_set_wifi_config(db, ont_id, *, ssid=None, password=None, **_):
+        calls.append((ont_id, ssid, password))
         return SimpleNamespace(success=True, message="WiFi updated")
 
     monkeypatch.setattr(
-        "app.services.customer_portal_flow_services.ont_config_setters.set_wifi_config",
-        fake_set_wifi_config,
+        OntFeatureService, "set_wifi_config", staticmethod(fake_set_wifi_config)
     )
 
     ok, message = update_customer_subscription_wifi(
@@ -122,7 +164,7 @@ def test_customer_wifi_update_delegates_to_existing_wifi_action(
 
     assert ok is True
     assert message == "WiFi updated"
-    assert calls == [(str(ont.id), "NewSSID", "Secret123", None)]
+    assert calls == [(str(ont.id), "NewSSID", "Secret123")]
 
 
 def test_customer_wifi_update_rejects_password_mismatch(db_session):

@@ -286,11 +286,77 @@ def decommission_ont(
             OntAssignment.active.is_(True),
         )
     ).all()
+    released_subscriber_ids = {
+        assignment.subscriber_id
+        for assignment in assignments
+        if assignment.subscriber_id is not None
+    }
+    released_subscription_ids = {
+        assignment.subscription_id
+        for assignment in assignments
+        if assignment.subscription_id is not None
+    }
     for assignment in assignments:
         assignment.active = False
         assignment.released_at = datetime.now(UTC)
         assignment.release_reason = f"decommissioned:{reason}"
         stats["assignments_closed"] += 1
+
+    # Release PD only when this was the subscriber's final active ONT. A
+    # subscriber may legitimately have multiple services/ONTs and must keep
+    # the stable delegated prefix while any one of them remains active.
+    try:
+        from app.services.ipv6_pd import (
+            release_subscriber_prefixes,
+            release_subscription_prefixes,
+        )
+
+        pd_released = sum(
+            release_subscription_prefixes(db, subscription_id)
+            for subscription_id in released_subscription_ids
+        )
+        # Legacy assignments without an explicit subscription can only be
+        # released safely when no other active ONT exists for the subscriber.
+        for subscriber_id in released_subscriber_ids:
+            has_bound_assignment = any(
+                assignment.subscriber_id == subscriber_id
+                and assignment.subscription_id is not None
+                for assignment in assignments
+            )
+            if has_bound_assignment:
+                continue
+            other_active = db.scalars(
+                select(OntAssignment.id).where(
+                    OntAssignment.subscriber_id == subscriber_id,
+                    OntAssignment.active.is_(True),
+                    OntAssignment.ont_unit_id != ont.id,
+                )
+            ).first()
+            if other_active is None:
+                pd_released += release_subscriber_prefixes(db, subscriber_id)
+        stats["ipv6_prefixes_released"] = pd_released
+    except Exception as exc:
+        errors.append(f"IPv6 PD release error: {exc}")
+        logger.warning("Failed to release IPv6 PD for ONT %s: %s", serial_number, exc)
+
+    # Management addresses are IPAM resources, not ONT inventory attributes.
+    # Release them after assignments are closed so the allocator no longer
+    # protects the address as belonging to an active assignment.
+    try:
+        from app.services.network.ont_management_ipam import (
+            release_ont_management_ip,
+        )
+
+        stats["management_ips_released"] = len(
+            release_ont_management_ip(db, ont=ont, mode="inactive")
+        )
+    except Exception as exc:
+        errors.append(f"Management IP release error: {exc}")
+        logger.warning(
+            "Failed to release management IP for ONT %s: %s",
+            serial_number,
+            exc,
+        )
 
     # Step 3: Release service port allocations
     try:

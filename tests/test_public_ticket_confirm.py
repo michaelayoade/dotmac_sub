@@ -54,10 +54,12 @@ def test_ticket_access_token_urls_point_to_public_page(
         actor_id=str(subscriber.id),
     )
     token_row = support_service.ticket_access_tokens.mint(db_session, ticket)
+    raw_token = token_row.raw_token
+    assert raw_token
 
     urls = support_service.ticket_access_tokens.action_urls(token_row)
 
-    expected = f"https://selfcare.example.test/ticket-confirm/{token_row.token}"
+    expected = f"https://selfcare.example.test/ticket-confirm/{raw_token}"
     assert urls == {"confirm_url": expected, "dispute_url": expected}
 
 
@@ -69,11 +71,13 @@ def test_ticket_confirm_page_marks_token_accessed(db_session, subscriber, monkey
         actor_id=str(subscriber.id),
     )
     token_row = support_service.ticket_access_tokens.mint(db_session, ticket)
+    raw_token = token_row.raw_token
+    assert raw_token
     db_session.commit()
 
     response = ticket_confirm_routes.confirmation_page(
         SimpleNamespace(),
-        token_row.token,
+        raw_token,
         db_session,
     )
 
@@ -99,10 +103,12 @@ def test_ticket_confirm_page_confirm_action_closes_ticket(
         str(ticket.id),
         actor_id=str(subscriber.id),
     )
+    raw_token = token_row.raw_token
+    assert raw_token
 
     response = ticket_confirm_routes.confirm_resolution_page(
         SimpleNamespace(),
-        token_row.token,
+        raw_token,
         db_session,
     )
 

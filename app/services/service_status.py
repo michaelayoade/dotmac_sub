@@ -122,19 +122,16 @@ def _unfunded_prepaid_renewal_requirement(
 def _prepaid_threshold(
     db: Session, account: Subscriber, *, now: datetime | None = None
 ) -> Decimal:
-    """The min-balance threshold used by the prepaid enforcement gate."""
-    effective_now = now or datetime.now(UTC)
-    if account.min_balance is not None:
-        configured = Decimal(str(account.min_balance))
-    else:
-        default = settings_spec.resolve_value(
-            db, SettingDomain.collections, "prepaid_default_min_balance"
-        )
-        configured = Decimal(str(default)) if default is not None else Decimal("0.00")
-    renewal_requirement = _unfunded_prepaid_renewal_requirement(
-        db, account, effective_now
-    )
-    return max(configured, renewal_requirement)
+    """The min-balance threshold used by the prepaid enforcement gate.
+
+    Thin adapter. ``app.services.prepaid_threshold`` owns the rule; this
+    delegates so the enforcement sweep and every batch consumer resolve the
+    threshold through one implementation. Re-deriving it here would let an audit
+    disagree with the enforcement it exists to check.
+    """
+    from app.services.prepaid_threshold import resolve_prepaid_threshold
+
+    return resolve_prepaid_threshold(db, account, now=now)
 
 
 def _grace_days(db: Session, account: Subscriber) -> int:

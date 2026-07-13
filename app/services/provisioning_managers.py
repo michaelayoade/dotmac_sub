@@ -94,6 +94,16 @@ class ServiceOrders(CRUDManager[ServiceOrder]):
         db.commit()
         db.refresh(order)
 
+        try:
+            from app.services.uisp_control_plane import stage_from_service_order
+
+            stage_from_service_order(db, order)
+        except Exception:
+            db.rollback()
+            logger.exception(
+                "uisp_service_order_staging_failed service_order_id=%s", order.id
+            )
+
         # Emit service_order.created event
         emit_event(
             db,
@@ -311,6 +321,19 @@ class ServiceOrders(CRUDManager[ServiceOrder]):
                 )
         for key, value in data.items():
             setattr(order, key, value)
+        if (
+            order.status == ServiceOrderStatus.active
+            and order.subscription_id is not None
+        ):
+            from app.models.catalog import Subscription, SubscriptionStatus
+            from app.services.account_lifecycle import activate_subscription
+
+            subscription = db.get(Subscription, order.subscription_id)
+            if (
+                subscription is not None
+                and subscription.status == SubscriptionStatus.pending
+            ):
+                activate_subscription(db, str(subscription.id))
         db.commit()
         db.refresh(order)
 

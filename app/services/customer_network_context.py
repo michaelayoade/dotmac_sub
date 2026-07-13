@@ -104,19 +104,26 @@ def list_active_ont_assignments(db: Session, subscriber_id) -> list[OntAssignmen
 
 
 def resolve_active_customer_ont_assignment(
-    db: Session, subscriber_id
+    db: Session, subscriber_id, *, subscription_id=None
 ) -> OntAssignment | None:
     """Active customer ONT assignment suitable for portal device actions."""
     if subscriber_id is None:
         return None
-    return db.scalars(
+    query = (
         select(OntAssignment)
         .join(OntUnit, OntUnit.id == OntAssignment.ont_unit_id)
         .where(OntAssignment.subscriber_id == coerce_uuid(subscriber_id))
         .where(OntAssignment.active.is_(True))
         .where(OntUnit.is_active.is_(True))
-        .order_by(OntAssignment.assigned_at.desc().nullslast(), OntAssignment.id)
-        .limit(1)
+    )
+    if subscription_id is not None:
+        query = query.where(
+            OntAssignment.subscription_id == coerce_uuid(subscription_id)
+        )
+    return db.scalars(
+        query.order_by(
+            OntAssignment.assigned_at.desc().nullslast(), OntAssignment.id
+        ).limit(1)
     ).first()
 
 

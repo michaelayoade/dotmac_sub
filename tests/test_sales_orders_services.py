@@ -10,7 +10,9 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
+from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.project import Project
+from app.models.provisioning import ServiceOrder, ServiceOrderStatus
 from app.models.sales import (
     SalesOrderPaymentStatus,
     SalesOrderStatus,
@@ -293,6 +295,186 @@ def test_paid_order_pushes_subscription_then_payment(db_session, billing_calls):
     names = [name for name, _ in billing_calls]
     assert "create_subscription" not in names
     assert names == ["record_external_payment"]
+
+
+def test_closed_sales_line_stages_one_bound_provisioning_order(
+    db_session, catalog_offer
+):
+    subscriber = _make_subscriber(db_session)
+    order = sales_order_service.sales_orders.create(
+        db_session, SalesOrderCreate(subscriber_id=subscriber.id)
+    )
+    line = sales_order_service.sales_order_lines.create(
+        db_session,
+        SalesOrderLineCreate(
+            sales_order_id=order.id,
+            description="Fiber service",
+            metadata_={"sub_offer_id": str(catalog_offer.id)},
+        ),
+    )
+    subscription = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=catalog_offer.id,
+        status=SubscriptionStatus.pending,
+    )
+    order.status = SalesOrderStatus.paid.value
+    db_session.add(subscription)
+    db_session.commit()
+
+    sales_order_service._ensure_provisioning_order_for_sales_line(
+        db_session,
+        sales_order=order,
+        line=line,
+        subscription=subscription,
+    )
+    sales_order_service._ensure_provisioning_order_for_sales_line(
+        db_session,
+        sales_order=order,
+        line=line,
+        subscription=subscription,
+    )
+
+    service_orders = (
+        db_session.query(ServiceOrder)
+        .filter(ServiceOrder.sales_order_line_id == line.id)
+        .all()
+    )
+    assert len(service_orders) == 1
+    assert service_orders[0].subscription_id == subscription.id
+    assert service_orders[0].status == ServiceOrderStatus.submitted
+    assert service_orders[0].execution_context["catalog_offer_id"] == str(
+        catalog_offer.id
+    )
+    assert (
+        service_orders[0].execution_context["device_intent"]["desired_config"][
+            "wan.mode"
+        ]
+        == "pppoe"
+    )
+    staged_context = service_orders[0].execution_context
+    staged_desired = staged_context["device_intent"]["desired_config"]
+    assert "wan.static_ip" not in staged_desired
+    assert staged_context["bng_intent"]["subscription_id"] == str(subscription.id)
+    assert staged_context["bng_intent"]["ipv4"] == {
+        "source": "ipam",
+        "assignment_scope": "subscription",
+        "nat_policy": "pool_defined",
+    }
+    assert staged_context["bng_intent"]["additional_routes"] == {
+        "source": "subscription_add_ons",
+        "radius_attribute": "Framed-Route",
+        "nat_policy": "no_nat",
+    }
+
+    from app.models.catalog import AccessCredential
+    from app.models.network import OntSyncStatus, OntUnit
+    from app.schemas.network import OntAssignmentCreate
+    from app.services import network as network_service
+    from app.services.network.ont_desired_config import desired_config
+
+    credential = (
+        db_session.query(AccessCredential)
+        .filter(AccessCredential.subscription_id == subscription.id)
+        .one()
+    )
+    ont = OntUnit(serial_number="ORDER-STAGED-ONT", is_active=True)
+    db_session.add(ont)
+    db_session.commit()
+    network_service.ont_assignments.create(
+        db_session,
+        OntAssignmentCreate(
+            ont_unit_id=ont.id,
+            subscriber_id=subscriber.id,
+            subscription_id=subscription.id,
+            active=True,
+        ),
+    )
+
+    db_session.refresh(ont)
+    assert desired_config(ont)["wan"]["mode"] == "pppoe"
+    assert desired_config(ont)["wan"]["pppoe_username"] == credential.username
+    assert "static_ip" not in desired_config(ont)["wan"]
+    assert ont.sync_status == OntSyncStatus.out_of_sync
+
+
+def test_sales_ip_addon_allocates_subscription_scoped_route(
+    db_session, subscriber, catalog_offer
+):
+    from app.models.catalog import (
+        AddOn,
+        AddOnPrice,
+        AddOnType,
+        OfferAddOn,
+        PriceType,
+        SubscriptionAddOn,
+    )
+    from app.models.network import IpPool, IPVersion, SubscriberAdditionalRoute
+
+    order = sales_order_service.sales_orders.create(
+        db_session, SalesOrderCreate(subscriber_id=subscriber.id)
+    )
+    subscription = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=catalog_offer.id,
+        status=SubscriptionStatus.pending,
+    )
+    add_on = AddOn(
+        name="Public /29",
+        addon_type=AddOnType.extra_ip,
+        ip_is_public=True,
+        ip_prefix_length=29,
+        is_active=True,
+    )
+    pool = IpPool(
+        name="Sales add-on public pool",
+        ip_version=IPVersion.ipv4,
+        cidr="203.0.113.0/24",
+        is_active=True,
+    )
+    db_session.add_all([subscription, add_on, pool])
+    db_session.flush()
+    db_session.add_all(
+        [
+            OfferAddOn(offer_id=catalog_offer.id, add_on_id=add_on.id),
+            AddOnPrice(
+                add_on_id=add_on.id,
+                price_type=PriceType.recurring,
+                amount=Decimal("5000.00"),
+                is_active=True,
+            ),
+        ]
+    )
+    line = sales_order_service.sales_order_lines.create(
+        db_session,
+        SalesOrderLineCreate(
+            sales_order_id=order.id,
+            description="Public /29",
+            quantity=Decimal("1"),
+            metadata_={
+                "add_on_id": str(add_on.id),
+                "subscription_id": str(subscription.id),
+            },
+        ),
+    )
+
+    sales_order_service._sync_sales_order_add_ons(
+        db_session,
+        lines=[line],
+        subscriptions=[subscription],
+    )
+
+    link = (
+        db_session.query(SubscriptionAddOn)
+        .filter(SubscriptionAddOn.subscription_id == subscription.id)
+        .one()
+    )
+    route = (
+        db_session.query(SubscriberAdditionalRoute)
+        .filter(SubscriberAdditionalRoute.subscription_id == subscription.id)
+        .one()
+    )
+    assert link.add_on_id == add_on.id
+    assert route.cidr == "203.0.113.8/29"
 
 
 def test_lines_without_offer_tags_push_no_subscription(db_session, billing_calls):

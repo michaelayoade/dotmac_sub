@@ -7,11 +7,11 @@ sql {
 	driver = "rlm_sql_postgresql"
 
 	# Connection parameters from environment variables
-	server = "$ENV{RADIUS_DB_HOST}"
-	port = 5432
-	login = "$ENV{RADIUS_DB_USER}"
-	password = "$ENV{RADIUS_DB_PASS}"
-	radius_db = "$ENV{RADIUS_DB_NAME}"
+	server = "$ENV{FREERADIUS_DB_HOST}"
+	port = $ENV{FREERADIUS_DB_PORT}
+	login = "$ENV{FREERADIUS_DB_USER}"
+	password = "$ENV{FREERADIUS_DB_PASS}"
+	radius_db = "$ENV{FREERADIUS_DB_NAME}"
 
 	# SQL username from RADIUS User-Name attribute
 	sql_user_name = "%{User-Name}"

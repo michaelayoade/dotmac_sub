@@ -73,9 +73,7 @@ def billing_overview(
             "allocation_error": error,
             "payment_options": [
                 opt
-                for opt in customer_payments._topup_payment_options(
-                    db, customer_payments._resolve_payment_provider(db)
-                )
+                for opt in customer_payments._topup_payment_options(db)
                 if opt["provider_type"] != "direct_bank_transfer"
             ],
             "bank_transfer_accounts": (

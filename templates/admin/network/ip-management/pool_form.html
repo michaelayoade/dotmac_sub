@@ -110,6 +110,18 @@
                     </div>
 
                     <div>
+                        <label for="nas_device_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">BNG / NAS Scope</label>
+                        <select name="nas_device_id" id="nas_device_id"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Unassigned</option>
+                            {% for nas in nas_devices or [] %}
+                            <option value="{{ nas.id }}" {% if pool and pool.nas_device_id == nas.id|string %}selected{% endif %}>{{ nas.name }}{% if nas.nas_ip %} ({{ nas.nas_ip }}){% endif %}</option>
+                            {% endfor %}
+                        </select>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Subscriber provisioning only allocates this pool to subscriptions served by the selected BNG.</p>
+                    </div>
+
+                    <div>
                         <label for="olt_device_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">OLT Scope</label>
                         <select name="olt_device_id" id="olt_device_id" x-model="selectedOlt" @change="selectedVlan = ''"
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">

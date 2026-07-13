@@ -21,7 +21,6 @@ from app.services.brand_theme import (
     DEFAULT_SECONDARY_HEX,
     generate_scale,
 )
-from app.services.branding_config import get_brand
 from app.services.file_storage import file_uploads
 from app.services.object_storage import ObjectNotFoundError
 from app.services.public_branding import is_configured_favicon_url
@@ -58,20 +57,15 @@ def theme_css(db: Session = Depends(get_db)):
     back to the default green/cyan scales.
     """
     try:
-        raw = settings_spec.resolve_value(
-            db, SettingDomain.comms, "brand_primary_color"
-        )
-        hex_color = str(raw).strip() if raw else DEFAULT_HEX
+        from app.services.brand_profiles import resolve_brand
+
+        brand = resolve_brand(db)
+        hex_color = brand.primary_color
         scale = generate_scale(hex_color or DEFAULT_HEX)
     except Exception:
         scale = generate_scale(DEFAULT_HEX)
     try:
-        raw_secondary = settings_spec.resolve_value(
-            db, SettingDomain.comms, "brand_secondary_color"
-        )
-        secondary_hex = (
-            str(raw_secondary).strip() if raw_secondary else DEFAULT_SECONDARY_HEX
-        )
+        secondary_hex = brand.secondary_color
         secondary_scale = generate_scale(secondary_hex or DEFAULT_SECONDARY_HEX)
     except Exception:
         secondary_scale = generate_scale(DEFAULT_SECONDARY_HEX)
@@ -103,17 +97,19 @@ def login_hero(portal: str, db: Session = Depends(get_db)):
 
 
 @router.get("/manifest.webmanifest", include_in_schema=False)
-def web_manifest():
-    """Brand-driven PWA manifest (name/short_name/theme_color from brand.json)."""
-    brand = get_brand()
+def web_manifest(db: Session = Depends(get_db)):
+    """Brand-driven PWA manifest from the canonical platform profile."""
+    from app.services.brand_profiles import resolve_brand
+
+    resolved = resolve_brand(db)
     manifest = {
-        "name": f"{brand['name']} Selfcare",
-        "short_name": brand["name"],
+        "name": f"{resolved.name} Selfcare",
+        "short_name": resolved.name,
         "description": "Manage your internet subscription, billing, and support",
         "start_url": "/portal/",
         "display": "standalone",
         "background_color": "#ffffff",
-        "theme_color": brand["primary_color"],
+        "theme_color": resolved.primary_color,
         "icons": [
             {
                 "src": "/static/branding/favicon/icon-192.png",

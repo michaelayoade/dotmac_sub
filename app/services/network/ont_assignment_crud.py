@@ -129,6 +129,27 @@ def _validate_assignment_customer_links(
     )
 
 
+def _resolve_assignment_subscription(
+    db: Session,
+    *,
+    subscription_id: object | None,
+    subscriber_id: object | None,
+    subscriber_validator: SubscriberValidator | None,
+) -> tuple[object | None, object | None]:
+    if subscription_id is None:
+        return None, subscriber_id
+    if subscriber_validator is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Subscription validation is unavailable",
+        )
+    return subscriber_validator.resolve_assignment_subscription(
+        db,
+        subscription_id=subscription_id,
+        subscriber_id=subscriber_id,
+    )
+
+
 def _has_other_active_assignment(
     db: Session,
     *,
@@ -162,6 +183,15 @@ class OntAssignments(CRUDManager[OntAssignment]):
         self._subscriber_validator = subscriber_validator
 
     def create(self, db: Session, payload: OntAssignmentCreate) -> OntAssignment:  # type: ignore[override]
+        data = payload.model_dump()
+        subscription_id, subscriber_id = _resolve_assignment_subscription(
+            db,
+            subscription_id=data.get("subscription_id"),
+            subscriber_id=data.get("subscriber_id"),
+            subscriber_validator=self._subscriber_validator,
+        )
+        data["subscription_id"] = subscription_id
+        data["subscriber_id"] = subscriber_id
         ont, _pon_port = _validate_assignment_target(
             db,
             ont_unit_id=payload.ont_unit_id,
@@ -170,11 +200,11 @@ class OntAssignments(CRUDManager[OntAssignment]):
         )
         _validate_assignment_customer_links(
             db,
-            subscriber_id=payload.subscriber_id,
+            subscriber_id=subscriber_id,
             service_address_id=payload.service_address_id,
             subscriber_validator=self._subscriber_validator,
         )
-        assignment = OntAssignment(**payload.model_dump())
+        assignment = OntAssignment(**data)
         from app.services.network.cpe import ensure_cpe_for_ont
 
         for attempt in range(3):
@@ -182,6 +212,17 @@ class OntAssignments(CRUDManager[OntAssignment]):
                 with db.begin_nested():
                     db.add(assignment)
                     db.flush()
+                    if assignment.subscription_id is not None:
+                        if self._subscriber_validator is None:
+                            raise HTTPException(
+                                status_code=503,
+                                detail="Subscription device-intent bridge is unavailable",
+                            )
+                        self._subscriber_validator.apply_subscription_device_intent(
+                            db,
+                            subscription_id=assignment.subscription_id,
+                            ont=ont,
+                        )
                     if assignment.active:
                         ont.is_active = True
                         ensure_cpe_for_ont(db, ont, assignment, commit=False)
@@ -216,7 +257,6 @@ class OntAssignments(CRUDManager[OntAssignment]):
         offset: int = 0,
         ont_unit_id: str | None = None,
     ) -> list[OntAssignment]:
-        del subscription_id  # No subscription_id column; ONTs are subscriber-scoped.
         stmt = select(OntAssignment)
         stmt = apply_optional_equals(
             stmt,
@@ -224,6 +264,7 @@ class OntAssignments(CRUDManager[OntAssignment]):
                 OntAssignment.ont_unit_id: ont_unit_id,
                 OntAssignment.pon_port_id: pon_port_id,
                 OntAssignment.subscriber_id: subscriber_id,
+                OntAssignment.subscription_id: subscription_id,
             },
         )
         stmt = apply_active_state(stmt, OntAssignment.active, active)
@@ -254,6 +295,21 @@ class OntAssignments(CRUDManager[OntAssignment]):
             if "subscriber_id" in fields_set
             else assignment.subscriber_id
         )
+        target_subscription_id = (
+            data.get("subscription_id")
+            if "subscription_id" in fields_set
+            else assignment.subscription_id
+        )
+        target_subscription_id, target_subscriber_id = _resolve_assignment_subscription(
+            db,
+            subscription_id=target_subscription_id,
+            subscriber_id=target_subscriber_id,
+            subscriber_validator=self._subscriber_validator,
+        )
+        if "subscription_id" in fields_set:
+            data["subscription_id"] = target_subscription_id
+        if target_subscription_id is not None:
+            data["subscriber_id"] = target_subscriber_id
         target_service_address_id = (
             data.get("service_address_id")
             if "service_address_id" in fields_set
@@ -286,6 +342,18 @@ class OntAssignments(CRUDManager[OntAssignment]):
                     for key, value in data.items():
                         setattr(assignment, key, value)
                     db.flush()
+
+                    if assignment.subscription_id is not None:
+                        if self._subscriber_validator is None:
+                            raise HTTPException(
+                                status_code=503,
+                                detail="Subscription device-intent bridge is unavailable",
+                            )
+                        self._subscriber_validator.apply_subscription_device_intent(
+                            db,
+                            subscription_id=assignment.subscription_id,
+                            ont=ont,
+                        )
 
                     if assignment.active:
                         ont.is_active = True

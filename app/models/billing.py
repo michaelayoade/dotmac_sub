@@ -780,6 +780,12 @@ class PaymentAllocation(Base):
         # The unique constraint's index is payment_id-leading; this backs
         # invoice_id-leading lookups (allocations for an invoice).
         Index("ix_payment_allocations_invoice_id", "invoice_id"),
+        Index(
+            "ix_payment_allocations_invoice_active_payment",
+            "invoice_id",
+            "is_active",
+            "payment_id",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -807,6 +813,21 @@ class PaymentAllocation(Base):
 
 class LedgerEntry(Base):
     __tablename__ = "ledger_entries"
+    __table_args__ = (
+        # One reversal per entry, enforced by the database rather than by caller
+        # discipline. NULLs are distinct in a unique index on both Postgres and
+        # SQLite, so ordinary (non-reversal) entries are unconstrained while every
+        # non-null reversal_of_entry_id is unique.
+        #
+        # Deliberately NOT scoped to is_active: a reversal that was later
+        # deactivated must still block a second reversal of the same entry, or
+        # deactivating the reversal would silently re-open the double-post.
+        Index(
+            "uq_ledger_entries_reversal_of",
+            "reversal_of_entry_id",
+            unique=True,
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -832,6 +853,23 @@ class LedgerEntry(Base):
     currency: Mapped[str] = mapped_column(String(3), default="NGN")
     memo: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # The entry this one reverses. The ledger is append-only: an entry's effect is
+    # undone by posting its opposite, and this is the structural link between the
+    # two. ``uq_ledger_entries_reversal_of`` makes a second reversal of the same
+    # entry impossible at the database level, so the invariant does not depend on
+    # every future caller remembering to take the row lock first.
+    #
+    # NULL for ordinary entries and for pre-existing reversals, which were only
+    # ever linked by memo text. Those are deliberately NOT backfilled here — the
+    # pairing is inferred, and inferring it wrong would corrupt money. The service
+    # keeps the legacy memo lookup so an un-backfilled reversal still blocks a
+    # re-reversal.
+    reversal_of_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ledger_entries.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
 
     # The real-world date the entry represents (invoice issue / payment / txn
     # date). NULL for native entries and any row the cutover backfill could not

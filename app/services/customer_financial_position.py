@@ -87,10 +87,21 @@ def get_customer_financial_position(
 
 
 def prepaid_available_balance(db: Session, account_id) -> Decimal:
-    """Available service wallet balance, matching collections enforcement."""
-    from app.services.collections import get_available_balance
+    """Available service wallet balance consumed by access resolution.
 
-    return get_available_balance(db, str(account_id))
+    Multi-currency accounts fail closed on their least-funded currency.  This
+    is a read-only projection over financial events; it never posts money.
+    """
+    from app.services.customer_financial_ledger import list_customer_financial_events
+
+    balances_by_currency: dict[str, Decimal] = {}
+    for event in list_customer_financial_events(db, str(account_id), currency=None):
+        currency = event.currency or "NGN"
+        balances_by_currency[currency] = (
+            balances_by_currency.get(currency, Decimal("0.00")) + event.signed_amount
+        )
+    balances = list(balances_by_currency.values())
+    return min(balances) if balances else Decimal("0.00")
 
 
 def _oldest_due_invoice(invoices: list[Invoice], now: datetime) -> Invoice | None:

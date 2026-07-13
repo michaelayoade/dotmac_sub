@@ -6,11 +6,16 @@ from datetime import UTC, datetime
 
 import pytest
 from cryptography.fernet import Fernet
+from sqlalchemy import event
 
-from app.models.catalog import NasDevice
+from app.models.catalog import AccessCredential, NasDevice
+from app.models.subscriber import Subscriber
 from app.services import credential_key_rotation as key_rotation
 from app.services import credential_rotation_schedule as rotation_schedule
-from app.services.credential_crypto import encrypt_credential_with_key
+from app.services.credential_crypto import (
+    decrypt_credential_with_key,
+    encrypt_credential_with_key,
+)
 from app.services.credential_key_rotation import CredentialIntegrityResult
 from app.services.observability import StateObservation
 
@@ -24,6 +29,7 @@ def _integrity_result(
         "NasDevice.shared_secret": {
             "encrypted": 1,
             "plaintext": plaintext,
+            "one_way": 0,
             "undecryptable": undecryptable,
             "reference": 0,
             "empty": 0,
@@ -34,6 +40,7 @@ def _integrity_result(
         totals={
             "encrypted": 1,
             "plaintext": plaintext,
+            "one_way": 0,
             "undecryptable": undecryptable,
             "reference": 0,
             "empty": 0,
@@ -87,6 +94,186 @@ def test_integrity_scan_reads_ont_credentials_through_network_owner(
     assert result.counts[scope]["plaintext"] == 1
 
 
+def test_integrity_scan_selects_only_owned_credential_columns(db_session, monkeypatch):
+    key = Fernet.generate_key()
+    monkeypatch.setattr(key_rotation, "get_encryption_key", lambda: key)
+    monkeypatch.setattr(key_rotation, "get_previous_encryption_key", lambda: None)
+    statements: list[str] = []
+
+    def capture(_conn, _cursor, statement, _parameters, _context, _executemany):
+        statements.append(statement)
+
+    bind = db_session.get_bind()
+    event.listen(bind, "before_cursor_execute", capture)
+    try:
+        key_rotation.scan_credential_encryption_integrity(db_session)
+    finally:
+        event.remove(bind, "before_cursor_execute", capture)
+
+    access_query = next(
+        statement for statement in statements if "FROM access_credentials" in statement
+    )
+    assert "secret_hash" in access_query
+    assert "subscription_id" not in access_query
+
+
+def test_rotation_loads_only_owned_access_credential_columns(db_session, subscriber):
+    key = Fernet.generate_key()
+    credential = AccessCredential(
+        subscriber_id=subscriber.id,
+        username="schema-tolerant-rotation",
+        secret_hash="plain:secret",
+    )
+    db_session.add(credential)
+    db_session.commit()
+    statements: list[str] = []
+
+    def capture(_conn, _cursor, statement, _parameters, _context, _executemany):
+        statements.append(statement)
+
+    bind = db_session.get_bind()
+    event.listen(bind, "before_cursor_execute", capture)
+    try:
+        key_rotation._rotate_model_fields(
+            db_session,
+            AccessCredential,
+            ("secret_hash",),
+            old_key=key.decode("ascii"),
+            new_key=key.decode("ascii"),
+        )
+    finally:
+        event.remove(bind, "before_cursor_execute", capture)
+
+    access_query = next(
+        statement for statement in statements if "FROM access_credentials" in statement
+    )
+    assert "secret_hash" in access_query
+    assert "subscription_id" not in access_query
+
+
+def test_credential_remediation_dry_run_does_not_mutate(db_session, monkeypatch):
+    key = Fernet.generate_key()
+    row = NasDevice(name="remediation-dry-run", shared_secret="legacy-secret")
+    db_session.add(row)
+    db_session.commit()
+    monkeypatch.setattr(key_rotation, "get_encryption_key", lambda: key)
+    monkeypatch.setattr(key_rotation, "get_previous_encryption_key", lambda: None)
+    published: list[str] = []
+    monkeypatch.setattr(
+        key_rotation,
+        "publish_credential_integrity_snapshot",
+        lambda _integrity, *, operation, operation_status, **_kwargs: (
+            published.append(f"{operation}:{operation_status}") or True
+        ),
+    )
+
+    result = key_rotation.remediate_credential_encryption(db_session)
+
+    db_session.refresh(row)
+    assert result.status == "dry_run"
+    assert result.plaintext_before >= 1
+    assert result.updated_values == 0
+    assert row.shared_secret == "legacy-secret"
+    assert published == ["remediation:dry_run"]
+
+
+def test_credential_remediation_converges_and_is_idempotent(db_session, monkeypatch):
+    key = Fernet.generate_key()
+    row = NasDevice(name="remediation-execute", shared_secret="legacy-secret")
+    db_session.add(row)
+    db_session.commit()
+    monkeypatch.setattr(key_rotation, "get_encryption_key", lambda: key)
+    monkeypatch.setattr(key_rotation, "get_previous_encryption_key", lambda: None)
+    monkeypatch.setattr(
+        key_rotation,
+        "publish_credential_integrity_snapshot",
+        lambda *_args, **_kwargs: True,
+    )
+
+    first = key_rotation.remediate_credential_encryption(db_session, execute=True)
+    db_session.refresh(row)
+
+    assert first.status == "completed"
+    assert first.updated_values == 1
+    assert first.plaintext_after == 0
+    assert decrypt_credential_with_key(row.shared_secret, key) == "legacy-secret"
+
+    second = key_rotation.remediate_credential_encryption(db_session, execute=True)
+
+    assert second.status == "completed"
+    assert second.updated_values == 0
+
+
+def test_credential_remediation_blocks_before_writes_on_corruption(
+    db_session, monkeypatch
+):
+    key = Fernet.generate_key()
+    row = NasDevice(
+        name="remediation-corrupt",
+        shared_secret="legacy-secret",
+        api_password="enc:not-valid",
+    )
+    db_session.add(row)
+    db_session.commit()
+    monkeypatch.setattr(key_rotation, "get_encryption_key", lambda: key)
+    monkeypatch.setattr(key_rotation, "get_previous_encryption_key", lambda: None)
+    monkeypatch.setattr(
+        key_rotation,
+        "publish_credential_integrity_snapshot",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        key_rotation,
+        "rotate_credential_encryption_material",
+        lambda *_args, **_kwargs: pytest.fail("blocked remediation must not write"),
+    )
+
+    result = key_rotation.remediate_credential_encryption(db_session, execute=True)
+
+    db_session.refresh(row)
+    assert result.status == "blocked"
+    assert result.reason == "undecryptable_credentials"
+    assert result.undecryptable >= 1
+    assert row.shared_secret == "legacy-secret"
+
+
+def test_credential_remediation_preserves_one_way_access_hash(db_session, monkeypatch):
+    key = Fernet.generate_key()
+    subscriber = Subscriber(
+        first_name="Opaque",
+        last_name="Credential",
+        email="opaque-credential@example.com",
+        user_type="customer",
+    )
+    db_session.add(subscriber)
+    db_session.flush()
+    credential = AccessCredential(
+        subscriber_id=subscriber.id,
+        username="opaque-credential",
+        secret_hash="YWJjZGVmZ2hpamtsbW5vcA==",
+    )
+    db_session.add(credential)
+    db_session.commit()
+    monkeypatch.setattr(key_rotation, "get_encryption_key", lambda: key)
+    monkeypatch.setattr(key_rotation, "get_previous_encryption_key", lambda: None)
+    monkeypatch.setattr(
+        key_rotation,
+        "publish_credential_integrity_snapshot",
+        lambda *_args, **_kwargs: True,
+    )
+
+    before = key_rotation.scan_credential_encryption_integrity(db_session)
+    result = key_rotation.remediate_credential_encryption(db_session, execute=True)
+    db_session.refresh(credential)
+
+    scope = "AccessCredential.secret_hash"
+    assert before.counts[scope]["one_way"] == 1
+    assert before.counts[scope]["plaintext"] == 0
+    assert result.status == "completed"
+    assert result.updated_values == 0
+    assert credential.secret_hash == "YWJjZGVmZ2hpamtsbW5vcA=="
+
+
 def test_shared_observability_snapshot_round_trip(monkeypatch):
     from app.services import app_cache, observability
 
@@ -123,6 +310,45 @@ def test_shared_observability_snapshot_round_trip(monkeypatch):
         }
     ]
     assert int(stored["ttl"]) == 7 * 86_400
+
+
+def test_credential_snapshot_preserves_rotation_metric_contract(monkeypatch):
+    from app.services import observability
+
+    captured: dict[str, object] = {}
+
+    def fake_publish(domain, observations, *, status, now):
+        captured.update(
+            {
+                "domain": domain,
+                "observations": list(observations),
+                "status": status,
+                "now": now,
+            }
+        )
+        return True
+
+    monkeypatch.setattr(observability, "publish_state_snapshot", fake_publish)
+    integrity = _integrity_result(plaintext=2)
+
+    assert key_rotation.publish_credential_integrity_snapshot(
+        integrity,
+        operation="rotation",
+        operation_status="not_due",
+        extra_observations=(("managed_key_source", "openbao_env_ref", 1.0),),
+    )
+
+    assert captured["domain"] == "credentials"
+    assert captured["status"] == "degraded"
+    observations = captured["observations"]
+    assert isinstance(observations, list)
+    labels = {
+        (item.signal, item.scope): item.value
+        for item in observations
+        if isinstance(item, StateObservation)
+    }
+    assert labels[("rotation_status", "not_due")] == 1.0
+    assert labels[("managed_key_source", "openbao_env_ref")] == 1.0
 
 
 def test_shared_observability_rejects_unbounded_scope():
@@ -241,3 +467,63 @@ def test_security_task_records_lock_contention_as_skip(monkeypatch):
 
     assert result["status"] == "already_running"
     assert skips == [(security._TASK_NAME, "already_running")]
+
+
+def test_remediation_cli_emits_aggregate_json(monkeypatch, capsys):
+    from scripts.one_off import remediate_credential_encryption as cli
+
+    class _DummySession:
+        def rollback(self):
+            return None
+
+        def close(self):
+            return None
+
+    result = key_rotation.CredentialRemediationResult(
+        status="dry_run",
+        execute=False,
+        values_scanned=12,
+        plaintext_before=3,
+        plaintext_after=3,
+        undecryptable=0,
+    )
+    monkeypatch.setattr(cli, "load_dotenv", lambda: None)
+    monkeypatch.setattr(cli, "SessionLocal", lambda: _DummySession())
+    monkeypatch.setattr(
+        cli,
+        "remediate_credential_encryption",
+        lambda _db, *, execute: result,
+    )
+
+    assert cli.main(["--dry-run"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == result.as_dict()
+    assert "id" not in payload
+
+
+def test_remediation_cli_redacts_service_exception_details(monkeypatch, capsys):
+    from scripts.one_off import remediate_credential_encryption as cli
+
+    class _DummySession:
+        def rollback(self):
+            return None
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(cli, "load_dotenv", lambda: None)
+    monkeypatch.setattr(cli, "SessionLocal", lambda: _DummySession())
+    monkeypatch.setattr(
+        cli,
+        "remediate_credential_encryption",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ValueError("Failed to rotate NasDevice.shared_secret id=customer-123")
+        ),
+    )
+
+    assert cli.main(["--execute"]) == 1
+
+    payload = json.loads(capsys.readouterr().err)
+    assert payload["error"] == "Credential remediation failed."
+    assert "customer-123" not in json.dumps(payload)

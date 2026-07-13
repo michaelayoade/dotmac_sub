@@ -56,6 +56,7 @@ from app.models.billing import (  # noqa: F401
     TaxRate,
     TopupIntent,
 )
+from app.models.branding import BrandProfile  # noqa: F401
 from app.models.catalog import (  # noqa: F401
     AccessCredential,
     AccessType,
@@ -719,6 +720,13 @@ from app.models.tr069 import (  # noqa: F401
     Tr069JobStatus,
     Tr069Parameter,
     Tr069Session,
+)
+from app.models.uisp_control import (  # noqa: F401
+    UispConfigSnapshot,
+    UispDeviceIntent,
+    UispIntentStatus,
+    UispIntentTargetType,
+    UispSnapshotSource,
 )
 from app.models.usage import (  # noqa: F401
     AccountingStatus,

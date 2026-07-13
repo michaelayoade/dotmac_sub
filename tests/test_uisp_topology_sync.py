@@ -388,7 +388,9 @@ def test_failed_upsert_does_not_mark_device_vanished(db_session, subscriber):
     assert existing.last_uisp_status == "active"
 
 
-def test_vanished_radio_is_soft_pruned(db_session, subscriber, catalog_offer):
+def test_empty_inventory_does_not_mass_prune_radios(
+    db_session, subscriber, catalog_offer
+):
     _ap_node(db_session)
     _active_subscription(db_session, subscriber, catalog_offer, STATION_MAC)
     client = FakeUispClient(devices=_wireless_payload())
@@ -399,8 +401,46 @@ def test_vanished_radio_is_soft_pruned(db_session, subscriber, catalog_offer):
     cpe = (
         db_session.query(CPEDevice).filter(CPEDevice.uisp_device_id == STATION_ID).one()
     )
-    assert cpe.last_uisp_status == "vanished"
-    assert result["pruned"] == 1
+    assert cpe.last_uisp_status == "active"
+    assert result["pruned"] == 0
+    assert result["prune_guarded"] == 1
+
+
+def test_partial_inventory_requires_two_missing_passes_before_prune(
+    db_session, subscriber, catalog_offer
+):
+    _ap_node(db_session)
+    _active_subscription(db_session, subscriber, catalog_offer, STATION_MAC)
+    sync(db_session, FakeUispClient(devices=_wireless_payload()))
+
+    other = Subscriber(
+        first_name="Still",
+        last_name="Visible",
+        email=f"visible-{uuid.uuid4().hex[:8]}@example.test",
+    )
+    db_session.add(other)
+    db_session.flush()
+    visible_mac = "24:A4:3C:AA:BB:99"
+    _active_subscription(db_session, other, catalog_offer, visible_mac)
+    visible_station = _device(
+        "99999999-1111-2222-3333-444444444444",
+        "Still Visible",
+        mac=visible_mac,
+        ap_device_id=AP_ID,
+    )
+    partial = [_wireless_payload()[0], visible_station]
+
+    first = sync(db_session, FakeUispClient(devices=partial))
+    missing = (
+        db_session.query(CPEDevice).filter(CPEDevice.uisp_device_id == STATION_ID).one()
+    )
+    assert missing.last_uisp_status == "missing"
+    assert first["pruned"] == 0
+
+    second = sync(db_session, FakeUispClient(devices=partial))
+    db_session.refresh(missing)
+    assert missing.last_uisp_status == "vanished"
+    assert second["pruned"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -938,6 +978,63 @@ def test_second_run_pon_ports_are_idempotent(db_session):
     assert db_session.query(PonPort).count() == 1
 
 
+def test_onu_move_between_uisp_olts_updates_parent_and_port(db_session):
+    second_olt_id = "e2e2e2e2-1111-2222-3333-777777777777"
+    first_devices = _ufiber_payload()
+    sync(
+        db_session,
+        FakeUispClient(
+            devices=first_devices,
+            onus_by_olt={OLT_ID: [_olt_onu_listing_entry(ONU_ID, 3)]},
+        ),
+    )
+
+    second_olt = _device(
+        second_olt_id,
+        "GPON-GARKI-2",
+        role="gpon",
+        device_type="olt",
+        ip="172.16.60.3/24",
+        mac="24:A4:3C:11:22:44",
+        model="UF-OLT",
+        site_id="site-bts-1",
+    )
+    moved_onu = _device(
+        ONU_ID,
+        "ONU-CUST-42",
+        role="station",
+        device_type="onu",
+        mac="24:A4:3C:44:55:66",
+        parent_id=second_olt_id,
+        model="UF-LOCO",
+    )
+    result = sync(
+        db_session,
+        FakeUispClient(
+            devices=[first_devices[0], second_olt, moved_onu],
+            onus_by_olt={
+                OLT_ID: [],
+                second_olt_id: [
+                    _olt_onu_listing_entry(ONU_ID, 5, parent_id=second_olt_id)
+                ],
+            },
+        ),
+    )
+
+    destination = (
+        db_session.query(OLTDevice)
+        .filter(OLTDevice.uisp_device_id == second_olt_id)
+        .one()
+    )
+    ont = db_session.query(OntUnit).filter(OntUnit.uisp_device_id == ONU_ID).one()
+    port = db_session.get(PonPort, ont.pon_port_id)
+    assert ont.olt_device_id == destination.id
+    assert port is not None
+    assert port.olt_id == destination.id
+    assert port.port_number == 5
+    assert result["onu_olts_moved"] == 1
+
+
 def test_onu_port_change_moves_pon_port_id(db_session):
     # UISP is observed truth for the UFiber plant: a re-spliced ONU that shows
     # up on a different OLT port is moved, not left on the stale port.
@@ -1292,7 +1389,7 @@ def test_data_link_to_unmatched_endpoint_is_skipped(db_session):
     assert result["links_skipped"] == 1
 
 
-def test_vanished_data_link_is_soft_pruned(db_session):
+def test_empty_data_link_response_does_not_mass_prune(db_session):
     from app.models.network_monitoring import NetworkTopologyLink
 
     _stamped_node(db_session, "AP-A", "uisp-a", "172.16.40.10")
@@ -1309,8 +1406,9 @@ def test_vanished_data_link_is_soft_pruned(db_session):
         .filter(NetworkTopologyLink.source == "uisp_data_link")
         .one()
     )
-    assert link.is_active is False
-    assert result["links_pruned"] == 1
+    assert link.is_active is True
+    assert result["links_pruned"] == 0
+    assert result["link_prune_guarded"] == 1
 
 
 # ---------------------------------------------------------------------------

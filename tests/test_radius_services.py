@@ -145,6 +145,23 @@ def test_external_password_row_uses_cleartext_password_for_plain_prefixed_secret
     assert row[2] == "secret123"
 
 
+def test_external_password_row_strips_cleartext_marker():
+    credential = AccessCredential(
+        subscriber_id="00000000-0000-0000-0000-000000000001",
+        username="10005031",
+        secret_hash="cleartext:secret123",
+        is_active=True,
+    )
+
+    row = radius_service._external_password_row(
+        credential,
+        default_attribute="Cleartext-Password",
+        default_op=":=",
+    )
+
+    assert row == ("Cleartext-Password", ":=", "secret123")
+
+
 def test_external_password_row_keeps_crypt_password_for_legacy_sha512_crypt():
     credential = AccessCredential(
         subscriber_id="00000000-0000-0000-0000-000000000001",
@@ -816,6 +833,130 @@ def _read_radreply(db_path):
         )
     finally:
         conn.close()
+
+
+def test_external_nas_lifecycle_helpers_do_not_read_or_return_secrets(
+    db_session, tmp_path, monkeypatch
+):
+    db_path = tmp_path / "radius-nas-lifecycle.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "CREATE TABLE nas (nasname TEXT, shortname TEXT, type TEXT, "
+            "secret TEXT, description TEXT)"
+        )
+        conn.executemany(
+            "INSERT INTO nas (nasname, secret) VALUES (?, ?)",
+            [("10.0.0.1", "secret-one"), ("10.0.0.2", "secret-two")],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    config = _fake_external_config(db_path)
+    monkeypatch.setattr(
+        radius_service, "_active_external_sync_configs", lambda _db: [config]
+    )
+
+    found = radius_service.external_radius_nas_client_ips(
+        db_session, {"10.0.0.1", "10.0.0.3"}
+    )
+    inventory = radius_service.external_radius_nas_secret_inventory(
+        db_session, {"10.0.0.1", "10.0.0.3"}
+    )
+    removed = radius_service.remove_external_radius_nas_clients(
+        db_session, {"10.0.0.1"}
+    )
+
+    assert found == {"10.0.0.1"}
+    assert inventory.present_client_ips == {"10.0.0.1"}
+    assert inventory.recoverable_secrets == {"10.0.0.1": "secret-one"}
+    assert inventory.conflicting_client_ips == set()
+    assert removed == 1
+    conn = sqlite3.connect(db_path)
+    try:
+        remaining = list(conn.execute("SELECT nasname FROM nas ORDER BY nasname"))
+    finally:
+        conn.close()
+    assert remaining == [("10.0.0.2",)]
+
+
+def test_authoritative_external_radius_db_url_requires_one_target(
+    db_session, monkeypatch
+):
+    monkeypatch.setattr(
+        radius_service,
+        "_active_external_sync_configs",
+        lambda _db: [
+            {"db_url": "postgresql+psycopg://radius-one/radius"},
+            {"db_url": "postgresql+psycopg://radius-one/radius"},
+        ],
+    )
+    assert radius_service.authoritative_external_radius_db_url(db_session) == (
+        "postgresql+psycopg://radius-one/radius"
+    )
+
+    monkeypatch.setattr(
+        radius_service,
+        "_active_external_sync_configs",
+        lambda _db: [
+            {"db_url": "postgresql+psycopg://radius-one/radius"},
+            {"db_url": "postgresql+psycopg://radius-two/radius"},
+        ],
+    )
+    with pytest.raises(RuntimeError, match="Multiple external RADIUS databases"):
+        radius_service.authoritative_external_radius_db_url(db_session)
+
+
+def test_radius_nas_lifecycle_projects_active_and_inactive_state(
+    db_session, radius_server, tmp_path, monkeypatch
+):
+    db_path = tmp_path / "radius-nas-reconcile.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "CREATE TABLE nas (nasname TEXT, shortname TEXT, type TEXT, "
+            "secret TEXT, description TEXT)"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    config = _fake_external_config(db_path)
+    monkeypatch.setattr(
+        radius_service, "_active_external_sync_configs", lambda _db: [config]
+    )
+    device = NasDevice(
+        name="lifecycle-router",
+        vendor=NasVendor.mikrotik,
+        nas_ip="10.40.0.1",
+        shared_secret="plain:radius-secret",
+        is_active=True,
+    )
+    db_session.add(device)
+    db_session.flush()
+
+    active = radius_service.apply_radius_nas_lifecycle(db_session, device, active=True)
+    db_session.flush()
+    # The linked client remains authoritative lifecycle evidence while a NAS IP
+    # correction is pending projection to the external store.
+    device.nas_ip = "10.40.0.2"
+    db_session.flush()
+    active_state = radius_service.radius_nas_lifecycle_state(db_session, device)
+
+    assert active.internal_clients_changed == 1
+    assert active.external_clients_changed == 1
+    assert active_state.internal_active_clients == 1
+    assert active_state.external_present is True
+
+    inactive = radius_service.apply_radius_nas_lifecycle(
+        db_session, device, active=False
+    )
+    db_session.flush()
+    inactive_state = radius_service.radius_nas_lifecycle_state(db_session, device)
+
+    assert inactive.internal_clients_changed == 1
+    assert inactive.external_clients_changed == 1
+    assert inactive_state.internal_active_clients == 0
+    assert inactive_state.external_present is False
 
 
 class TestBlockUnblockExternalRadiusCredentials:

@@ -6,6 +6,7 @@ import pytest
 
 from app.services.network.reconcile.secrets import (
     SecretResolutionError,
+    credential_secret_resolver,
     default_secret_resolver_from_env,
     openbao_secret_resolver,
 )
@@ -86,37 +87,13 @@ def test_openbao_resolver_handles_env_uri(monkeypatch):
 # ── default_secret_resolver_from_env ───────────────────────────────────────
 
 
-def test_default_resolver_returns_openbao_when_available(monkeypatch):
+def test_default_resolver_always_handles_encryption_at_rest():
+    assert default_secret_resolver_from_env() is credential_secret_resolver
+
+
+def test_credential_resolver_decrypts_local_wrappers(monkeypatch):
     monkeypatch.setattr(
-        "app.services.network.reconcile.secrets.is_openbao_available",
-        lambda: True,
+        "app.services.network.reconcile.secrets.decrypt_credential",
+        lambda value: "decrypted" if value == "enc:ciphertext" else value,
     )
-    resolver = default_secret_resolver_from_env()
-    assert resolver is openbao_secret_resolver
-
-
-def test_default_resolver_returns_passthrough_when_unavailable(monkeypatch):
-    from app.services.network.reconcile.applier import passthrough_secret
-
-    monkeypatch.setattr(
-        "app.services.network.reconcile.secrets.is_openbao_available",
-        lambda: False,
-    )
-    resolver = default_secret_resolver_from_env()
-    assert resolver is passthrough_secret
-
-
-def test_default_resolver_re_evaluates_each_call(monkeypatch):
-    """The factory is intentionally NOT memoised — a long-running sweeper
-    that starts before OpenBao comes up needs to pick it up on the next
-    cycle without a process restart."""
-    states = iter([False, True, False])
-    monkeypatch.setattr(
-        "app.services.network.reconcile.secrets.is_openbao_available",
-        lambda: next(states),
-    )
-    from app.services.network.reconcile.applier import passthrough_secret
-
-    assert default_secret_resolver_from_env() is passthrough_secret
-    assert default_secret_resolver_from_env() is openbao_secret_resolver
-    assert default_secret_resolver_from_env() is passthrough_secret
+    assert credential_secret_resolver("enc:ciphertext") == "decrypted"

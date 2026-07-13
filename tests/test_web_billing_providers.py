@@ -12,9 +12,6 @@ from app.models.billing import (
     PaymentProviderType,
     PaymentStatus,
 )
-from app.models.subscription_engine import SettingValueType
-from app.schemas.settings import DomainSettingUpdate
-from app.services import domain_settings as domain_settings_service
 from app.services.web_billing_providers import (
     build_gateway_reconciliation,
     get_failover_state,
@@ -35,7 +32,7 @@ def test_parse_supported_provider_type_rejects_non_supported():
         parse_supported_provider_type("stripe")
 
 
-def test_run_provider_test_paystack_success(db_session):
+def test_run_provider_test_paystack_success(db_session, monkeypatch):
     provider = PaymentProvider(
         name="Paystack Primary",
         provider_type=PaymentProviderType.paystack,
@@ -43,25 +40,17 @@ def test_run_provider_test_paystack_success(db_session):
     )
     db_session.add(provider)
     db_session.commit()
-
-    domain_settings_service.billing_settings.upsert_by_key(
-        db_session,
-        "paystack_secret_key",
-        DomainSettingUpdate(
-            value_type=SettingValueType.string, value_text="sk_test_abc123"
-        ),
-    )
-    domain_settings_service.billing_settings.upsert_by_key(
-        db_session,
-        "paystack_public_key",
-        DomainSettingUpdate(
-            value_type=SettingValueType.string, value_text="pk_test_abc123"
-        ),
+    monkeypatch.setattr(
+        "app.services.payment_routing._setting",
+        lambda _db, key: {
+            "paystack_secret_key": "sk_test_abc123",
+            "paystack_public_key": "pk_test_abc123",
+        }.get(key),
     )
 
     result = run_provider_test(db_session, provider_type_value="paystack", mode="test")
 
-    assert result["ok"] is True
+    assert result["ok"] is True, result
     assert result["errors"] == []
 
 

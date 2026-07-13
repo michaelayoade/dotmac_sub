@@ -93,6 +93,9 @@ celery_app.conf.task_routes = {
     "app.tasks.topology_outage.reconcile_detected_outages": {"queue": "ingestion"},
     "app.tasks.topology_uisp.run_uisp_topology_sync": {"queue": "ingestion"},
     "app.tasks.uisp_ip_backfill.run_uisp_mgmt_ip_backfill": {"queue": "ingestion"},
+    # Operator-triggered writes must not wait behind long inventory and
+    # topology jobs. Unrouted apply tasks use the default worker queue.
+    "app.tasks.uisp_control.reconcile_uisp_config_readback": {"queue": "ingestion"},
     "app.tasks.topology_ufiber_link.run_ufiber_onu_link": {"queue": "ingestion"},
     "app.tasks.topology_metrics.export_topology_metrics": {"queue": "ingestion"},
     "app.tasks.olt_mac_harvest.run_olt_mac_harvest": {"queue": "ingestion"},
@@ -111,10 +114,6 @@ celery_app.conf.task_routes = {
     # would push it far past its 5-minute schedule.
     "app.tasks.crm_ticket_pull.pull_crm_tickets": {"queue": "crm"},
     "app.tasks.crm_ticket_pull.sync_crm_ticket": {"queue": "crm"},
-    "app.tasks.crm_ticket_push.push_ticket_to_crm": {"queue": "crm"},
-    "app.tasks.crm_ticket_push.push_comment_to_crm": {"queue": "crm"},
-    "app.tasks.crm_billing_push.push_crm_billing_snapshots": {"queue": "crm"},
-    "app.tasks.crm_sync.push_subscriber_change": {"queue": "crm"},
     # ERP outbox delivery paces against an external API (erp.dotmac.io) like the
     # CRM push tasks; share the externally-paced integration queue so a slow ERP
     # never blocks the default queue.

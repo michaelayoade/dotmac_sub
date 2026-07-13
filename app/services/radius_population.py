@@ -287,53 +287,78 @@ def populate(dry_run: bool = True) -> dict[str, int]:
         # sweep loop below.
         from app.models.network import SubscriberAdditionalRoute
 
-        routes_by_subscriber: dict = {}
+        subscriber_service_counts: dict = {}
+        for row in rows:
+            subscriber_service_counts[row.subscriber_id] = (
+                subscriber_service_counts.get(row.subscriber_id, 0) + 1
+            )
+
+        routes_by_subscription: dict = {}
+        legacy_routes_by_subscriber: dict = {}
         for r in db.scalars(
             select(SubscriberAdditionalRoute).where(
                 SubscriberAdditionalRoute.is_active.is_(True)
             )
         ).all():
-            routes_by_subscriber.setdefault(r.subscriber_id, []).append(
-                (r.cidr, r.metric)
+            target = (
+                routes_by_subscription.setdefault(r.subscription_id, [])
+                if getattr(r, "subscription_id", None)
+                else legacy_routes_by_subscriber.setdefault(r.subscriber_id, [])
             )
+            target.append((r.cidr, r.metric))
         logger.info(
-            "%d subscribers with additional routed IP blocks",
-            len(routes_by_subscriber),
+            "%d subscriptions with additional routed IP blocks",
+            len(routes_by_subscription),
         )
 
         # Fallback IPv4 from the active IPAssignment so a stale/cleared
         # subscriptions.ipv4_address doesn't silently drop Framed-IP-Address (which
         # de-IPs the customer -> BNG teardown -> reconnect flap). One query, keyed
-        # by subscriber_id.
+        # by subscription_id. Legacy unbound assignments are used only for a
+        # subscriber with one projected subscription.
         from app.models.network import IPAssignment, IPv4Address, IPVersion
 
-        ipv4_by_subscriber: dict = {}
-        for sid, addr in db.execute(
-            select(IPAssignment.subscriber_id, IPv4Address.address)
+        ipv4_by_subscription: dict = {}
+        legacy_ipv4_by_subscriber: dict = {}
+        for sid, subscription_id, addr in db.execute(
+            select(
+                IPAssignment.subscriber_id,
+                IPAssignment.subscription_id,
+                IPv4Address.address,
+            )
             .join(IPv4Address, IPAssignment.ipv4_address_id == IPv4Address.id)
             .where(IPAssignment.is_active.is_(True))
             .where(IPAssignment.ip_version == IPVersion.ipv4)
         ).all():
             if sid and addr:
-                ipv4_by_subscriber.setdefault(sid, str(addr))
+                if subscription_id:
+                    ipv4_by_subscription.setdefault(subscription_id, str(addr))
+                else:
+                    legacy_ipv4_by_subscriber.setdefault(sid, str(addr))
 
-        # IPv6 PD: the subscriber's assigned delegated prefix, emitted as
+        # IPv6 PD: the subscription's assigned delegated prefix, emitted as
         # Delegated-IPv6-Prefix. Flag-gated (inert until IPv6 PD is turned on).
-        pd_by_subscriber: dict = {}
+        pd_by_subscription: dict = {}
+        legacy_pd_by_subscriber: dict = {}
         from app.services.ipv6_pd import pd_enabled
 
         if pd_enabled():
             from app.models.network import Ipv6DelegatedPrefix, Ipv6PrefixState
 
-            for sid, prefix, plen in db.execute(
+            for sid, subscription_id, prefix, plen in db.execute(
                 select(
                     Ipv6DelegatedPrefix.subscriber_id,
+                    Ipv6DelegatedPrefix.subscription_id,
                     Ipv6DelegatedPrefix.prefix,
                     Ipv6DelegatedPrefix.prefix_length,
                 ).where(Ipv6DelegatedPrefix.state == Ipv6PrefixState.assigned)
             ).all():
                 if sid and prefix:
-                    pd_by_subscriber.setdefault(sid, f"{prefix}/{plen}")
+                    value = f"{prefix}/{plen}"
+                    if subscription_id:
+                        pd_by_subscription.setdefault(subscription_id, value)
+                    else:
+                        legacy_pd_by_subscriber.setdefault(sid, value)
 
         # Compute the full work list in memory while the dotmac session is
         # alive, then release it BEFORE the radius writes — holding the read
@@ -375,7 +400,24 @@ def populate(dry_run: bool = True) -> dict[str, int]:
             sub_blocked = projection.blocked
             eff_ipv4 = sub.ipv4_address
             if not eff_ipv4 or eff_ipv4 == "0.0.0.0":  # nosec B104  # noqa: S104
-                eff_ipv4 = ipv4_by_subscriber.get(sub.subscriber_id)
+                eff_ipv4 = ipv4_by_subscription.get(sub.id)
+                if (
+                    eff_ipv4 is None
+                    and subscriber_service_counts.get(sub.subscriber_id) == 1
+                ):
+                    eff_ipv4 = legacy_ipv4_by_subscriber.get(sub.subscriber_id)
+            delegated_ipv6 = pd_by_subscription.get(sub.id)
+            if (
+                delegated_ipv6 is None
+                and subscriber_service_counts.get(sub.subscriber_id) == 1
+            ):
+                delegated_ipv6 = legacy_pd_by_subscriber.get(sub.subscriber_id)
+            additional_routes = routes_by_subscription.get(sub.id)
+            if (
+                additional_routes is None
+                and subscriber_service_counts.get(sub.subscriber_id) == 1
+            ):
+                additional_routes = legacy_routes_by_subscriber.get(sub.subscriber_id)
             # Credential-level profile (throttle/FUP) takes precedence over the
             # subscription profile, so an applied throttle actually shapes the
             # radreply instead of being reverted to full offer speed each sweep.
@@ -388,9 +430,9 @@ def populate(dry_run: bool = True) -> dict[str, int]:
                 effective_profile,
                 sub_blocked,
                 captive_redirect_enabled=captive,
-                additional_routes=routes_by_subscriber.get(sub.subscriber_id),
+                additional_routes=additional_routes,
                 framed_ipv4=eff_ipv4,
-                delegated_ipv6=pd_by_subscriber.get(sub.subscriber_id),
+                delegated_ipv6=delegated_ipv6,
                 suspended_list_name=suspended_list_name,
             )
             blocked_flag = projection.blocked

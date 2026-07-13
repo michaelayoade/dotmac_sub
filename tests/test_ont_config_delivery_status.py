@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 
 def _make_subscriber(db_session, email: str):
     from app.models.subscriber import Subscriber, SubscriberStatus
@@ -184,7 +186,7 @@ def test_update_ont_config_pushes_lan_dhcp_range_only(db_session, monkeypatch) -
 
 def test_update_ont_config_pushes_static_wan_fields(db_session, monkeypatch) -> None:
     from app.models.network import OntUnit
-    from app.services.network.ont_action_common import ActionResult
+    from app.services.network.ont_desired_config import desired_config
     from app.services.web_network_ont_actions.db_config import update_ont_config
 
     ont = OntUnit(serial_number="STATIC-WAN-FIELDS", is_active=True)
@@ -193,13 +195,18 @@ def test_update_ont_config_pushes_static_wan_fields(db_session, monkeypatch) -> 
 
     calls = []
 
-    def fake_set_wan_config(*args, **kwargs):
+    def fake_reconcile(*args, **kwargs):
         calls.append(kwargs)
-        return ActionResult(success=True, message="wan ok")
+        return SimpleNamespace(
+            success=True,
+            sync_status="synced",
+            actions_applied=(),
+            failure=None,
+        )
 
     monkeypatch.setattr(
-        "app.services.web_network_ont_actions.db_config.set_wan_config",
-        fake_set_wan_config,
+        "app.services.network.reconcile.reconcile_ont",
+        fake_reconcile,
     )
 
     result = update_ont_config(
@@ -218,14 +225,20 @@ def test_update_ont_config_pushes_static_wan_fields(db_session, monkeypatch) -> 
     )
 
     assert result.success is True
-    assert calls[0]["wan_mode"] == "static"
-    assert calls[0]["ip_address"] == "100.64.1.2"
-    assert calls[0]["subnet_mask"] == "255.255.255.252"
-    assert calls[0]["gateway"] == "100.64.1.1"
-    assert calls[0]["dns_servers"] == "1.1.1.1"
+    assert calls[0]["mode"] == "sync"
+    db_session.refresh(ont)
+    wan = desired_config(ont)["wan"]
+    assert wan["mode"] == "static_ip"
+    assert wan["static_ip"] == "100.64.1.2"
+    assert wan["static_subnet"] == "255.255.255.252"
+    assert wan["static_gateway"] == "100.64.1.1"
+    assert wan["static_dns"] == "1.1.1.1"
 
 
-def test_update_ont_config_claims_static_wan_ipam_address(db_session) -> None:
+def test_update_ont_config_claims_static_wan_ipam_address(
+    db_session, catalog_offer
+) -> None:
+    from app.models.catalog import Subscription, SubscriptionStatus
     from app.models.network import (
         IPAssignment,
         IpBlock,
@@ -247,11 +260,19 @@ def test_update_ont_config_claims_static_wan_ipam_address(db_session) -> None:
     )
     db_session.add_all([ont, pool])
     db_session.flush()
+    subscription = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=catalog_offer.id,
+        status=SubscriptionStatus.active,
+    )
+    db_session.add(subscription)
+    db_session.flush()
     db_session.add_all(
         [
             OntAssignment(
                 ont_unit_id=ont.id,
                 subscriber_id=subscriber.id,
+                subscription_id=subscription.id,
                 active=True,
             ),
             IpBlock(pool_id=pool.id, cidr="100.64.10.0/29", is_active=True),
@@ -278,6 +299,7 @@ def test_update_ont_config_claims_static_wan_ipam_address(db_session) -> None:
         .one()
     )
     assert assignment.ipv4_address.address == "100.64.10.2"
+    assert assignment.subscription_id == subscription.id
 
 
 def test_update_ont_config_rejects_static_wan_ip_assigned_elsewhere(
@@ -345,23 +367,26 @@ def test_update_ont_config_does_not_convert_omci_failure_to_pending(
     db_session, monkeypatch
 ) -> None:
     from app.models.network import OntUnit
-    from app.services.network.ont_action_common import ActionResult
     from app.services.web_network_ont_actions.db_config import update_ont_config
 
     ont = OntUnit(serial_number="OMCI-WAN-FAIL", is_active=True)
     db_session.add(ont)
     db_session.commit()
 
-    def fake_set_wan_config(*args, **kwargs):
-        return ActionResult(
+    def fake_reconcile(*args, **kwargs):
+        return SimpleNamespace(
             success=False,
-            message="WAN PPPoE OMCI apply failed: OLT rejected",
-            data={"delivery_transport": "olt_omci", "delivery_pending": False},
+            sync_status="out_of_sync",
+            actions_applied=(),
+            failure=SimpleNamespace(
+                reason="olt_write_rejected",
+                message="WAN PPPoE OMCI apply failed: OLT rejected",
+            ),
         )
 
     monkeypatch.setattr(
-        "app.services.web_network_ont_actions.db_config.set_wan_config",
-        fake_set_wan_config,
+        "app.services.network.reconcile.reconcile_ont",
+        fake_reconcile,
     )
 
     result = update_ont_config(

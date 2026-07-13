@@ -1,6 +1,7 @@
 import enum
 import uuid
 from datetime import UTC, datetime
+from typing import ClassVar
 
 from sqlalchemy import (
     JSON,
@@ -291,13 +292,12 @@ class TicketLink(Base):
 
 class TicketAccessToken(Base):
     """Magic-link token letting a customer confirm (or dispute) a ticket's
-    resolution without logging in; the unguessable ``token`` is the
-    capability. One active token per ticket resolution cycle (the service
-    mints a fresh one on each resolve)."""
+    resolution without logging in. Only a SHA-256 digest of the capability is
+    persisted; the raw token exists in memory only while its link is created."""
 
     __tablename__ = "ticket_access_tokens"
     __table_args__ = (
-        Index("ix_ticket_access_tokens_token", "token", unique=True),
+        Index("ix_ticket_access_tokens_token_hash", "token_hash", unique=True),
         Index("ix_ticket_access_tokens_ticket_id", "ticket_id"),
     )
 
@@ -307,7 +307,8 @@ class TicketAccessToken(Base):
     ticket_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("support_tickets.id"), nullable=False
     )
-    token: Mapped[str] = mapped_column(String(64), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    raw_token: ClassVar[str | None] = None
     purpose: Mapped[str] = mapped_column(
         String(40), default="resolution_confirm", nullable=False
     )

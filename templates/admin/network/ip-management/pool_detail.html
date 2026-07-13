@@ -73,6 +73,16 @@
                             <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ pool.dns_secondary or '-' }}</dd>
                         </div>
                         <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">BNG / NAS Scope</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">
+                                {% if pool.nas_device %}
+                                <a href="/admin/network/nas/devices/{{ pool.nas_device.id }}" class="text-primary-600 hover:text-primary-700 dark:text-primary-400">{{ pool.nas_device.name }}</a>
+                                {% else %}
+                                Unassigned
+                                {% endif %}
+                            </dd>
+                        </div>
+                        <div>
                             <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">OLT Scope</dt>
                             <dd class="mt-1 text-sm text-slate-900 dark:text-white">
                                 {% if pool.olt_device %}

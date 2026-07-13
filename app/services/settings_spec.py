@@ -723,6 +723,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.usage,
+        key="radius_accounting_source_stale_seconds",
+        env_var="RADIUS_ACCOUNTING_SOURCE_STALE_SECONDS",
+        value_type=SettingValueType.integer,
+        default=3600,
+        min_value=300,
+    ),
+    SettingSpec(
+        domain=SettingDomain.usage,
         key="radius_session_reap_enabled",
         env_var="RADIUS_SESSION_REAP_ENABLED",
         value_type=SettingValueType.boolean,
@@ -1438,14 +1446,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.scheduler,
-        key="crm_billing_push_enabled",
-        env_var="CRM_BILLING_PUSH_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=False,
-        label="CRM Billing Push Enabled",
-    ),
-    SettingSpec(
-        domain=SettingDomain.scheduler,
         key="crm_cache_list_seconds",
         env_var="CRM_CACHE_LIST_SECONDS",
         value_type=SettingValueType.integer,
@@ -1712,14 +1712,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.string,
         default="card",
         allowed={"card", "bank_account", "cash", "check", "transfer", "other"},
-    ),
-    SettingSpec(
-        domain=SettingDomain.billing,
-        key="default_payment_provider_type",
-        env_var="BILLING_DEFAULT_PAYMENT_PROVIDER_TYPE",
-        value_type=SettingValueType.string,
-        default="paystack",
-        allowed={"paystack", "flutterwave"},
     ),
     SettingSpec(
         domain=SettingDomain.billing,
