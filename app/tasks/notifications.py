@@ -20,6 +20,7 @@ from app.services import communication_eligibility
 from app.services import email as email_service
 from app.services import push as push_service
 from app.services import sms as sms_service
+from app.services.communication_intents import record_delivery_outcome
 from app.services.db_session_adapter import db_session_adapter
 from app.services.email_template import render_email_bodies
 from app.services.integrations.connectors import whatsapp as whatsapp_service
@@ -131,7 +132,7 @@ def _expire_stale_notifications(db, now) -> int:
     if max_age_hours <= 0:
         return 0
     cutoff = now - timedelta(hours=max_age_hours)
-    expired = (
+    expired_notifications = (
         db.query(Notification)
         .filter(Notification.is_active.is_(True))
         .filter(
@@ -147,20 +148,20 @@ def _expire_stale_notifications(db, now) -> int:
         # Deliberately future-scheduled sends are expired only once their
         # send_at is itself past the cutoff.
         .filter((Notification.send_at.is_(None)) | (Notification.send_at < cutoff))
-        .update(
-            {
-                "status": NotificationStatus.canceled,
-                "last_error": "expired_in_queue",
-            },
-            synchronize_session=False,
-        )
+        .all()
     )
-    if expired:
+    for notification in expired_notifications:
+        notification.status = NotificationStatus.canceled
+        notification.last_error = "expired_in_queue"
+        record_delivery_outcome(db, notification)
+    if expired_notifications:
         db.commit()
         logger.info(
-            "Expired %d stale notifications older than %dh", expired, max_age_hours
+            "Expired %d stale notifications older than %dh",
+            len(expired_notifications),
+            max_age_hours,
         )
-    return int(expired or 0)
+    return len(expired_notifications)
 
 
 def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int]:
@@ -232,6 +233,7 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                 notification.status = NotificationStatus.failed
                 notification.last_error = "stuck_sending_not_resent (at-most-once)"
                 stuck_dropped += 1
+                record_delivery_outcome(db, notification)
                 db.commit()
                 continue
             if notification.retry_count > max_retries:
@@ -243,6 +245,7 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                     notification.id,
                     notification.retry_count,
                 )
+                record_delivery_outcome(db, notification)
                 db.commit()
                 continue
             reclaimed += 1
@@ -275,15 +278,18 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                 notification.channel.value,
                 notification.category,
             )
+            record_delivery_outcome(db, notification)
             db.commit()
             continue
 
         # Update status before sending
         notification.status = NotificationStatus.sending
+        record_delivery_outcome(db, notification)
         db.commit()
 
         subject = notification.subject or "Notification"
         body = notification.body or ""
+        delivery_metadata = dict(notification.metadata_ or {})
         try:
             if notification.channel == NotificationChannel.email:
                 # Queue bodies are usually plain text — wrap them in the
@@ -295,17 +301,28 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                     resolved_brand = resolve_brand(
                         db, subscriber_id=notification.subscriber_id
                     ).to_dict()
-                body_html, body_text = render_email_bodies(
-                    body, subject=subject, brand=resolved_brand
-                )
+                configured_html = delivery_metadata.get("body_html")
+                configured_text = delivery_metadata.get("body_text")
+                if isinstance(configured_html, str) and configured_html.strip():
+                    body_html = configured_html
+                    body_text = (
+                        configured_text if isinstance(configured_text, str) else body
+                    )
+                else:
+                    body_html, body_text = render_email_bodies(
+                        body, subject=subject, brand=resolved_brand
+                    )
                 success = email_service.send_email(
                     db=db,
                     to_email=notification.recipient,
                     subject=subject,
                     body_html=body_html,
                     body_text=body_text,
+                    sender_key=str(delivery_metadata.get("sender_key") or "") or None,
                     track=False,
-                    activity="notification_queue",
+                    activity=str(
+                        delivery_metadata.get("activity") or "notification_queue"
+                    ),
                     notification_id=str(notification.id),
                 )
             elif notification.channel == NotificationChannel.sms:
@@ -318,11 +335,18 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                 )
             elif notification.channel == NotificationChannel.whatsapp:
                 whatsapp_payload = None
+                configured_template = delivery_metadata.get("whatsapp_template")
+                if isinstance(configured_template, dict) and configured_template.get(
+                    "name"
+                ):
+                    whatsapp_payload = configured_template
                 if body:
                     try:
                         parsed_body = json.loads(body)
-                        if isinstance(parsed_body, dict) and parsed_body.get(
-                            "__whatsapp_template__"
+                        if (
+                            isinstance(parsed_body, dict)
+                            and parsed_body.get("__whatsapp_template__")
+                            and whatsapp_payload is None
                         ):
                             whatsapp_payload = parsed_body
                     except json.JSONDecodeError:
@@ -405,6 +429,7 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
             notification.retry_count = (notification.retry_count or 0) + 1
             if notification.retry_count >= max_retries:
                 notification.status = NotificationStatus.failed
+                notification.send_at = None
                 failed += 1
                 logger.warning(
                     "Notification %s permanently failed after %d retries: %s",
@@ -427,6 +452,7 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                 )
             if not notification.last_error:
                 notification.last_error = "send_failed"
+        record_delivery_outcome(db, notification)
         db.commit()
 
     return {

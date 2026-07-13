@@ -27,12 +27,16 @@ from app.models.catalog import (
 )
 from app.models.collections import DunningCase
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
-from app.models.lifecycle import LifecycleEventType, SubscriptionLifecycleEvent
+from app.models.lifecycle import SubscriptionLifecycleEvent
 from app.models.network_monitoring import NetworkDevice, PopSite
 from app.models.service_extension import ServiceExtension, ServiceExtensionEntry
 from app.models.subscriber import Address, Subscriber, SubscriberStatus
 from app.models.system_user import SystemUser
 from app.models.usage import AccountingStatus, RadiusAccountingSession
+from app.services.account_lifecycle import (
+    cancel_subscription,
+    transition_account_status,
+)
 from app.services.invoice_collectibility import (
     open_invoice_balance,
     open_invoice_filters_for_accounts,
@@ -928,13 +932,18 @@ def search_subscribers(
     return rows, int(total)
 
 
-def locations(db: Session) -> list[dict[str, Any]]:
+def locations(
+    db: Session, *, page: int, per_page: int
+) -> tuple[list[dict[str, Any]], int]:
     global _locations_cache
     now = monotonic()
     if _locations_cache is not None:
         cached_at, cached = _locations_cache
         if now - cached_at < LOCATIONS_CACHE_TTL_SECONDS:
-            return [dict(item) for item in cached]
+            start = (page - 1) * per_page
+            return [dict(item) for item in cached[start : start + per_page]], len(
+                cached
+            )
 
     result: dict[str, dict[str, str]] = {}
     for pop in db.scalars(
@@ -950,7 +959,8 @@ def locations(db: Session) -> list[dict[str, Any]]:
         result.setdefault(key, {"id": key, "name": str(label)})
     ordered = sorted(result.values(), key=lambda item: item["name"].lower())
     _locations_cache = (now, [dict(item) for item in ordered])
-    return ordered
+    start = (page - 1) * per_page
+    return ordered[start : start + per_page], len(ordered)
 
 
 def billing_risk_rows(
@@ -1007,52 +1017,63 @@ def billing_risk_rows(
     return rows, total
 
 
-def online_subscribers(db: Session) -> list[dict[str, Any]]:
+def online_subscribers(
+    db: Session, *, page: int, per_page: int
+) -> tuple[list[dict[str, Any]], int]:
     cutoff = cutoff_ago(ONLINE_FRESH_SECONDS)
-    rows = list(
-        db.query(Subscriber, RadiusAccountingSession)
+    last_seen = func.coalesce(
+        RadiusAccountingSession.last_update_at,
+        RadiusAccountingSession.session_start,
+        RadiusAccountingSession.created_at,
+    )
+    ranked = (
+        select(
+            Subscriber.id.label("subscriber_id"),
+            Subscriber.subscriber_number,
+            Subscriber.account_number,
+            Subscriber.status,
+            last_seen.label("last_seen"),
+            func.row_number()
+            .over(partition_by=Subscriber.id, order_by=last_seen.desc())
+            .label("session_rank"),
+        )
         .join(Subscription, Subscription.subscriber_id == Subscriber.id)
         .join(
             RadiusAccountingSession,
             RadiusAccountingSession.subscription_id == Subscription.id,
         )
-        .filter(Subscription.status == SubscriptionStatus.active)
-        .filter(RadiusAccountingSession.status_type != AccountingStatus.stop)
-        .filter(RadiusAccountingSession.session_end.is_(None))
-        .filter(
-            func.coalesce(
-                RadiusAccountingSession.last_update_at,
-                RadiusAccountingSession.session_start,
-                RadiusAccountingSession.created_at,
-            )
-            >= cutoff
+        .where(
+            Subscription.status == SubscriptionStatus.active,
+            RadiusAccountingSession.status_type != AccountingStatus.stop,
+            RadiusAccountingSession.session_end.is_(None),
+            last_seen >= cutoff,
         )
-        .order_by(
-            Subscriber.id,
-            func.coalesce(
-                RadiusAccountingSession.last_update_at,
-                RadiusAccountingSession.session_start,
-                RadiusAccountingSession.created_at,
-            ).desc(),
-        )
-        .all()
+        .subquery()
     )
-    seen: set[uuid.UUID] = set()
-    result: list[dict[str, Any]] = []
-    for subscriber, session in rows:
-        if subscriber.id in seen:
-            continue
-        seen.add(subscriber.id)
-        result.append(
+    latest = select(ranked).where(ranked.c.session_rank == 1).subquery()
+    rows = db.execute(
+        select(latest, func.count().over().label("total"))
+        .order_by(latest.c.subscriber_id)
+        .offset((page - 1) * per_page)
+        .limit(per_page)
+    ).all()
+    total = (
+        int(rows[0].total)
+        if rows
+        else int(db.scalar(select(func.count()).select_from(latest)) or 0)
+    )
+    return (
+        [
             {
-                "id": str(subscriber.id),
-                "subscriber_number": subscriber.subscriber_number
-                or subscriber.account_number,
-                "status": enum_value(subscriber.status),
-                "last_seen": utc_iso(session_last_seen(session)),
+                "id": str(row.subscriber_id),
+                "subscriber_number": row.subscriber_number or row.account_number,
+                "status": enum_value(row.status),
+                "last_seen": utc_iso(row.last_seen),
             }
-        )
-    return result
+            for row in rows
+        ],
+        total,
+    )
 
 
 def transaction_rows(
@@ -1249,36 +1270,15 @@ def disable_subscriber_from_crm(
     source: str | None,
     reason: str | None,
 ) -> dict[str, Any]:
-    now = datetime.now(UTC)
     previous_status = enum_value(subscriber.status)
-    subscriber.status = SubscriberStatus.disabled
-    subscriber.is_active = False
-    subscriptions = list(
-        db.scalars(
-            select(Subscription).where(Subscription.subscriber_id == subscriber.id)
-        ).all()
+    transition_account_status(
+        db,
+        str(subscriber.id),
+        SubscriberStatus.disabled,
+        reason=reason or "Disabled from CRM ingress",
+        source=actor or source or "crm",
+        emit=False,
     )
-    for subscription in subscriptions:
-        if subscription.status in {
-            SubscriptionStatus.blocked,
-            SubscriptionStatus.suspended,
-            SubscriptionStatus.stopped,
-        }:
-            old_status = subscription.status
-            subscription.status = SubscriptionStatus.disabled
-            subscription.end_at = subscription.end_at or now
-            subscription.canceled_at = subscription.canceled_at or now
-            db.add(
-                SubscriptionLifecycleEvent(
-                    subscription_id=subscription.id,
-                    event_type=LifecycleEventType.cancel,
-                    from_status=old_status,
-                    to_status=SubscriptionStatus.disabled,
-                    reason=reason,
-                    actor=actor or source or "crm",
-                    metadata_={"source": source or "crm"},
-                )
-            )
     log_status_writeback(
         db,
         subscriber_id=subscriber.id,
@@ -2021,7 +2021,14 @@ def create_subscription(
         session.commit()
     except IntegrityError:
         session.rollback()
-        subscription.status = SubscriptionStatus.canceled
+        cancel_subscription(
+            session,
+            str(subscription.id),
+            "Duplicate CRM external reference",
+            "crm_subscription_create",
+            emit=False,
+            generate_credit=False,
+        )
         invoice.is_active = False
         session.commit()
         existing = _find_crm_subscription(session, subscriber.id, external_ref)

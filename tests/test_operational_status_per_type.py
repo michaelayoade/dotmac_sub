@@ -9,7 +9,6 @@ from types import SimpleNamespace
 from app.services.device_operational_status import (
     DEGRADED,
     DOWN,
-    UNMONITORED,
     UP,
     derive_olt_operational_status,
     derive_ont_operational_status,
@@ -49,18 +48,18 @@ def test_olt_ping_failed_is_down():
     assert op.status == DOWN
 
 
-def test_olt_never_pinged_is_unmonitored():
+def test_olt_never_pinged_is_offline_while_retrying():
     op = derive_olt_operational_status(_olt(None, None, ping_at=None), now=NOW)
-    assert op.status == UNMONITORED
-    assert op.reason == "not_warmed"
+    assert op.status == DOWN
+    assert op.reason == "not_warmed_retry_pending"
 
 
-def test_olt_stale_ping_is_unmonitored():
+def test_olt_stale_ping_retains_last_state_while_retrying():
     op = derive_olt_operational_status(
         _olt(True, "success", ping_at=NOW - timedelta(hours=3)), now=NOW
     )
-    assert op.status == UNMONITORED
-    assert op.reason == "stale"
+    assert op.status == UP
+    assert op.reason == "stale_retry_pending"
 
 
 def test_olt_stale_direct_falls_back_to_linked_zabbix():
@@ -83,22 +82,24 @@ def test_olt_fresh_direct_beats_linked_zabbix():
     assert op.status == DOWN
 
 
-def test_olt_stale_with_stale_warmer_stays_unmonitored():
+def test_olt_stale_with_stale_warmer_retains_last_state():
     op = derive_olt_operational_status(
         _olt(True, "success", ping_at=NOW - timedelta(days=60)),
         linked_live_status="up",
         warm_stale=True,
         now=NOW,
     )
-    assert op.status == UNMONITORED
+    assert op.status == UP
+    assert op.retry_pending is True
 
 
 # ── ONT (multi-source reconciliation) ────────────────────────────────────────
 
 
-def _ont(olt_status=None, acs=None, seen=None, offline_reason=None):
+def _ont(olt_status=None, acs=None, seen=None, offline_reason=None, olt_seen=True):
     return SimpleNamespace(
         olt_status=_enum(olt_status) if olt_status else None,
+        olt_status_seen_at=NOW if olt_status and olt_seen else None,
         acs_last_inform_at=acs,
         last_seen_at=seen,
         offline_reason=_enum(offline_reason) if offline_reason else None,
@@ -129,10 +130,10 @@ def test_ont_offline_with_history_is_down():
     assert op.reason == "no_signal"
 
 
-def test_ont_never_seen_is_unmonitored_not_down():
-    op = derive_ont_operational_status(_ont("offline"), now=NOW)
-    assert op.status == UNMONITORED
-    assert op.reason == "never_seen"
+def test_ont_never_seen_is_offline_while_retrying():
+    op = derive_ont_operational_status(_ont("offline", olt_seen=False), now=NOW)
+    assert op.status == DOWN
+    assert op.reason == "never_seen_retry_pending"
 
 
 def test_ont_stale_acs_does_not_count_as_up():

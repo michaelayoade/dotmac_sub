@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
@@ -15,12 +16,14 @@ from app.schemas.subscriber import (
     AddressUpdate,
     ResellerCreate,
     ResellerRead,
+    ResellerSyncRead,
     ResellerUpdate,
     SubscriberCreate,
     SubscriberCustomFieldCreate,
     SubscriberCustomFieldRead,
     SubscriberCustomFieldUpdate,
     SubscriberRead,
+    SubscriberSyncRead,
     SubscriberUpdate,
 )
 from app.services import subscriber as subscriber_service
@@ -30,6 +33,7 @@ from app.services.nin_verifications import (
     begin_subscriber_nin_verification_committed,
     latest_nin_verification,
 )
+from app.services.sync_feeds import SYNC_FEED_MAX_PAGE_SIZE
 
 router = APIRouter()
 
@@ -69,6 +73,33 @@ def _nin_verification_payload(
 )
 def create_reseller(payload: ResellerCreate, db: Session = Depends(get_db)):
     return subscriber_service.resellers.create(db, payload)
+
+
+@router.get(
+    "/resellers/sync",
+    response_model=ListResponse[ResellerSyncRead],
+    tags=["resellers"],
+    dependencies=[Depends(require_permission("customer:read"))],
+)
+def sync_resellers(
+    is_active: bool | None = None,
+    updated_since: datetime | None = None,
+    limit: int = Query(
+        default=SYNC_FEED_MAX_PAGE_SIZE, ge=1, le=SYNC_FEED_MAX_PAGE_SIZE
+    ),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    return finish_read_response(
+        db,
+        subscriber_service.resellers.sync_list_response(
+            db,
+            is_active=is_active,
+            updated_since=updated_since,
+            limit=limit,
+            offset=offset,
+        ),
+    )
 
 
 @router.get(
@@ -134,6 +165,36 @@ def delete_reseller(reseller_id: str, db: Session = Depends(get_db)):
 )
 def create_subscriber(payload: SubscriberCreate, db: Session = Depends(get_db)):
     return subscriber_service.subscribers.create(db, payload)
+
+
+@router.get(
+    "/subscribers/sync",
+    response_model=ListResponse[SubscriberSyncRead],
+    tags=["subscribers"],
+    dependencies=[Depends(require_permission("customer:read"))],
+)
+def sync_subscribers(
+    subscriber_type: str | None = None,
+    updated_since: datetime | None = Query(
+        default=None,
+        description="Inclusive updated_at watermark for integration synchronization.",
+    ),
+    limit: int = Query(
+        default=SYNC_FEED_MAX_PAGE_SIZE, ge=1, le=SYNC_FEED_MAX_PAGE_SIZE
+    ),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    return finish_read_response(
+        db,
+        subscriber_service.subscribers.sync_list_response(
+            db,
+            subscriber_type=subscriber_type,
+            updated_since=updated_since,
+            limit=limit,
+            offset=offset,
+        ),
+    )
 
 
 @router.get(

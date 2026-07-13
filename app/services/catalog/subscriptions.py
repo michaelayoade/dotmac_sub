@@ -1414,9 +1414,37 @@ class Subscriptions(ListResponseMixin):
         db.add(subscription)
         activating = subscription.status == SubscriptionStatus.active
         try:
+            from app.models.subscriber import Subscriber, SubscriberStatus
+            from app.services.account_lifecycle import (
+                clear_account_lifecycle_override,
+                compute_account_status,
+            )
+
+            subscriber = db.get(Subscriber, str(payload.subscriber_id))
+            if subscriber and subscriber.lifecycle_override_status is not None:
+                if subscriber.lifecycle_override_status not in {
+                    SubscriberStatus.active,
+                    SubscriberStatus.new,
+                }:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "Account lifecycle restriction must be cleared before "
+                            "creating a subscription"
+                        ),
+                    )
+                clear_account_lifecycle_override(
+                    db,
+                    str(subscriber.id),
+                    reason="Subscription created",
+                    source="catalog:subscription_create",
+                )
             if activating:
                 db.flush()
                 _auto_generate_pppoe(db, subscription)
+            else:
+                db.flush()
+            compute_account_status(db, str(payload.subscriber_id))
             db.commit()
         except Exception:
             db.rollback()

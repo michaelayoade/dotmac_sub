@@ -294,10 +294,13 @@ def test_subscriber_list_batches_payload_metadata(db_session, crm_auth):
     assert len(statements) <= 10
 
 
-def test_subscriber_list_rejects_pressure_page_size(crm_auth):
+def test_crm_pagination_uses_shared_limit_and_accepts_legacy_alias(crm_auth):
+    assert crm_routes._pagination(_request({"per_page": "500"}))[:2] == (1, 500)
+    assert crm_routes._pagination(_request({"limit": "10"}))[:2] == (1, 10)
+
     response = _call_route(
         crm_routes.list_subscribers,
-        _request({"page": "1", "per_page": "500"}),
+        _request({"page": "1", "per_page": "501"}),
         object(),
     )
 
@@ -331,34 +334,30 @@ def test_locations_uses_short_cache(db_session, crm_auth):
     assert len(statements) == 2
 
 
-@pytest.mark.parametrize(
-    "route,service_name",
-    [
-        (crm_routes.locations, "locations"),
-        (crm_routes.online_subscribers, "online_subscribers"),
-    ],
-)
-def test_materialized_crm_endpoints_paginate_and_terminate(
-    db_session, monkeypatch, route, service_name
-):
+def test_locations_service_owns_pagination(db_session, monkeypatch):
     rows = [
         {"id": "first", "name": "First"},
         {"id": "second", "name": "Second"},
     ]
-    monkeypatch.setattr(crm_api, service_name, lambda db: rows)
+
+    def page_rows(db, *, page, per_page):
+        start = (page - 1) * per_page
+        return rows[start : start + per_page], len(rows)
+
+    monkeypatch.setattr(crm_api, "locations", page_rows)
 
     first = _call_route(
-        route,
+        crm_routes.locations,
         _request({"page": "1", "per_page": "1"}),
         db_session,
     )
     second = _call_route(
-        route,
+        crm_routes.locations,
         _request({"page": "2", "per_page": "1"}),
         db_session,
     )
     final = _call_route(
-        route,
+        crm_routes.locations,
         _request({"page": "3", "per_page": "1"}),
         db_session,
     )
@@ -374,6 +373,80 @@ def test_materialized_crm_endpoints_paginate_and_terminate(
     }
     assert final.json()["data"] == []
     assert final.json()["meta"] == {"page": 3, "per_page": 1, "total": 2}
+
+
+def test_online_subscribers_paginates_scalar_query_and_uses_latest_session(
+    db_session, crm_auth
+):
+    now = datetime.now(UTC)
+    offer = _offer(db_session)
+    subscribers = [_subscriber(db_session) for _ in range(3)]
+    subscriptions = [
+        _subscription(db_session, subscriber, offer) for subscriber in subscribers
+    ]
+    for index, subscription in enumerate(subscriptions):
+        db_session.add(
+            RadiusAccountingSession(
+                subscription_id=subscription.id,
+                session_id=f"SID-{index}",
+                status_type=AccountingStatus.interim,
+                session_start=now - timedelta(hours=2),
+                last_update_at=now - timedelta(minutes=10 - index),
+            )
+        )
+    latest_seen = now - timedelta(minutes=1)
+    db_session.add(
+        RadiusAccountingSession(
+            subscription_id=subscriptions[0].id,
+            session_id="SID-latest",
+            status_type=AccountingStatus.interim,
+            session_start=now - timedelta(hours=1),
+            last_update_at=latest_seen,
+        )
+    )
+    db_session.commit()
+    latest_subscriber_id = str(subscribers[0].id)
+
+    statements: list[str] = []
+    engine = db_session.get_bind()
+
+    def capture_statement(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", capture_statement)
+    try:
+        first = _call_route(
+            crm_routes.online_subscribers,
+            _request({"page": "1", "per_page": "2"}),
+            db_session,
+        )
+        second = _call_route(
+            crm_routes.online_subscribers,
+            _request({"page": "2", "per_page": "2"}),
+            db_session,
+        )
+        final = _call_route(
+            crm_routes.online_subscribers,
+            _request({"page": "3", "per_page": "2"}),
+            db_session,
+        )
+    finally:
+        event.remove(engine, "before_cursor_execute", capture_statement)
+
+    assert first.json()["meta"] == {"page": 1, "per_page": 2, "total": 3}
+    assert second.json()["meta"] == {"page": 2, "per_page": 2, "total": 3}
+    assert final.json() == {
+        "data": [],
+        "meta": {"page": 3, "per_page": 2, "total": 3},
+    }
+    rows = [*first.json()["data"], *second.json()["data"]]
+    assert len(rows) == 3
+    assert len({row["id"] for row in rows}) == 3
+    latest_row = next(row for row in rows if row["id"] == latest_subscriber_id)
+    assert latest_row["last_seen"] == crm_api.utc_iso(latest_seen)
+    assert len(statements) == 4
+    assert sum(" LIMIT " in statement.upper() for statement in statements) == 3
+    assert all("FROM invoices" not in statement for statement in statements)
 
 
 def test_invalid_query_parameters_return_400_field_errors(crm_auth):

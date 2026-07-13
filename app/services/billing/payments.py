@@ -7,7 +7,7 @@ from typing import cast
 
 from fastapi import HTTPException
 from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.models.billing import (
     BankAccount,
@@ -87,6 +87,7 @@ from app.services.service_entitlements import (
     ensure_prepaid_entitlements_for_paid_invoice,
     revoke_prepaid_entitlements_for_unpaid_invoice,
 )
+from app.services.sync_feeds import apply_sync_page, sync_page_response
 
 logger = logging.getLogger(__name__)
 
@@ -1630,6 +1631,45 @@ class Payments(ListResponseMixin):
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
+    def list_for_sync(
+        db: Session,
+        *,
+        account_id: str | None,
+        status: str | None,
+        is_active: bool | None,
+        updated_since: datetime | None,
+        limit: int,
+        offset: int,
+    ):
+        query = db.query(Payment).options(
+            selectinload(
+                Payment.allocations.and_(PaymentAllocation.is_active.is_(True))
+            )
+        )
+        if account_id:
+            query = query.filter(Payment.account_id == account_id)
+        if status:
+            query = query.filter(
+                Payment.status == validate_enum(status, PaymentStatus, "status")
+            )
+        if is_active is None:
+            query = query.filter(Payment.is_active.is_(True))
+        else:
+            query = query.filter(Payment.is_active == is_active)
+        return apply_sync_page(
+            query,
+            Payment,
+            updated_since=updated_since,
+            limit=limit,
+            offset=offset,
+        ).all()
+
+    @classmethod
+    def sync_list_response(cls, db: Session, **kwargs):
+        items = cls.list_for_sync(db, **kwargs)
+        return sync_page_response(items, limit=kwargs["limit"], offset=kwargs["offset"])
+
+    @staticmethod
     def update(db: Session, payment_id: str, payload: PaymentUpdate):
         payment = get_by_id(db, Payment, payment_id)
         if not payment:
@@ -2199,6 +2239,31 @@ class PaymentChannels(ListResponseMixin):
             {"created_at": PaymentChannel.created_at, "name": PaymentChannel.name},
         )
         return apply_pagination(query, limit, offset).all()
+
+    @staticmethod
+    def list_for_sync(
+        db: Session,
+        *,
+        is_active: bool | None,
+        updated_since: datetime | None,
+        limit: int,
+        offset: int,
+    ):
+        query = db.query(PaymentChannel)
+        if is_active is not None:
+            query = query.filter(PaymentChannel.is_active == is_active)
+        return apply_sync_page(
+            query,
+            PaymentChannel,
+            updated_since=updated_since,
+            limit=limit,
+            offset=offset,
+        ).all()
+
+    @classmethod
+    def sync_list_response(cls, db: Session, **kwargs):
+        items = cls.list_for_sync(db, **kwargs)
+        return sync_page_response(items, limit=kwargs["limit"], offset=kwargs["offset"])
 
     @staticmethod
     def update(db: Session, channel_id: str, payload: PaymentChannelUpdate):

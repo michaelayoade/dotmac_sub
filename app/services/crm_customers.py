@@ -313,8 +313,6 @@ def _update_existing_customer(
             _track_change(changes, key, getattr(subscriber, key), value)
             setattr(subscriber, key, value)
     status_value = _status(payload.get("status"))
-    _track_change(changes, "status", _enum_value(subscriber.status), status_value.value)
-    subscriber.status = status_value
     category_value = _category(
         payload.get("subscriber_category") or metadata.get("subscriber_category")
     )
@@ -327,6 +325,7 @@ def _update_existing_customer(
     subscriber.category = category_value
     merged = dict(subscriber.metadata_ or {})
     merged.update(metadata)
+    merged["crm_reported_status"] = status_value.value
     subscriber.metadata_ = merged
     db.commit()
     db.refresh(subscriber)

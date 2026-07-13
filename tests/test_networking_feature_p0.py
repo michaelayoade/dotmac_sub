@@ -31,6 +31,7 @@ from app.models.network import (
     OntAuthorizationStatus,
     OntUnit,
     OnuOnlineStatus,
+    PollStatus,
     PonPort,
 )
 from app.models.network_monitoring import (
@@ -1606,9 +1607,7 @@ def test_network_map_context_includes_network_device_markers(db_session):
     assert context["stats"]["network_devices_online"] == 1
 
 
-def test_network_map_context_renders_onts_offline(db_session):
-    """The live ONT status source was retired with the native monitoring
-    cutover: map ONTs render offline with empty signal values."""
+def test_network_map_context_uses_effective_ont_status(db_session):
     ont = OntUnit(
         serial_number="ONT-MAP-1",
         name="Map ONT",
@@ -1629,9 +1628,9 @@ def test_network_map_context_renders_onts_offline(db_session):
     ]
 
     assert len(ont_features) == 1
-    assert ont_features[0]["properties"]["status"] == "offline"
-    assert context["stats"]["onts_online"] == 0
-    assert context["stats"]["onts_offline"] == 1
+    assert ont_features[0]["properties"]["status"] == "online"
+    assert context["stats"]["onts_online"] == 1
+    assert context["stats"]["onts_offline"] == 0
 
 
 def test_speedtest_form_parse_and_validate():
@@ -2245,7 +2244,7 @@ def test_consolidated_page_data_includes_ont_signal_data(db_session):
     signal_data = payload["signal_data"][str(ont.id)]
     assert signal_data["operational"] == "up"
     assert signal_data["operational_label"] == "Up"
-    assert signal_data["operational_reason"] == "olt_online"
+    assert signal_data["operational_reason"] == "last_confirmed_online_retry_pending"
 
 
 def test_consolidated_page_data_moves_network_devices_ending_in_olt_to_olt_bucket(
@@ -2384,9 +2383,9 @@ def test_devices_list_page_data_filters_core_network_devices(db_session):
     assert payload["type"] == "core"
 
 
-def test_network_devices_legacy_probe_statuses_degrade_to_not_monitored():
+def test_network_devices_legacy_probe_statuses_are_refresh_pending():
     """The Zabbix probe source was retired: every core-device row degrades to
-    a fixed "not monitored" placeholder (native reachability lives on the
+    a fixed refresh-pending placeholder (native reachability lives on the
     poll columns / operational status)."""
     statuses = core_devices_inventory_service._build_legacy_probe_statuses(
         [
@@ -2398,9 +2397,9 @@ def test_network_devices_legacy_probe_statuses_degrade_to_not_monitored():
 
     assert set(statuses) == {"device-a", "device-b"}
     for status in statuses.values():
-        assert status["ping_label"] == "Not monitored"
+        assert status["ping_label"] == "Refresh pending"
         assert status["ping_state"] == "unknown"
-        assert status["snmp_label"] == "Not monitored"
+        assert status["snmp_label"] == "Refresh pending"
         assert status["snmp_state"] == "unknown"
         assert status["ping_reason"] == "Legacy probe source is not configured"
 
@@ -2540,6 +2539,144 @@ def test_olts_list_page_data_includes_network_devices_ending_in_olt(
         ).first()
         is not None
     )
+
+
+def test_olts_list_page_data_uses_binary_operational_status(db_session):
+    now = datetime.now(UTC)
+    online = OLTDevice(
+        name="OLT Online",
+        mgmt_ip="192.0.2.221",
+        last_ping_at=now,
+        last_ping_ok=True,
+        last_poll_status=PollStatus.success,
+    )
+    offline = OLTDevice(
+        name="OLT Offline",
+        mgmt_ip="192.0.2.222",
+        last_ping_at=now,
+        last_ping_ok=False,
+    )
+    pending = OLTDevice(name="OLT Pending", mgmt_ip="192.0.2.223")
+    db_session.add_all([online, offline, pending])
+    db_session.commit()
+
+    payload = web_network_core_devices_service.olts_list_page_data(db_session)
+    rows = {item["name"]: item for item in payload["olts"]}
+
+    assert rows["OLT Online"]["runtime_operational_status"] == "online"
+    assert rows["OLT Online"]["runtime_retry_pending"] is False
+    assert rows["OLT Offline"]["runtime_operational_status"] == "offline"
+    assert rows["OLT Offline"]["runtime_health_state"] == "attention"
+    assert rows["OLT Pending"]["runtime_operational_status"] == "offline"
+    assert rows["OLT Pending"]["runtime_health_state"] == "retry_pending"
+    assert rows["OLT Pending"]["runtime_retry_pending"] is True
+    assert payload["stats"]["online"] == 1
+    assert payload["stats"]["offline"] == 2
+    assert payload["stats"]["attention"] == 1
+
+    offline_payload = web_network_core_devices_service.olts_list_page_data(
+        db_session, status="offline"
+    )
+    assert {item["name"] for item in offline_payload["olts"]} == {
+        "OLT Offline",
+        "OLT Pending",
+    }
+
+    online_payload = web_network_core_devices_service.olts_list_page_data(
+        db_session, status="online"
+    )
+    assert [item["name"] for item in online_payload["olts"]] == ["OLT Online"]
+
+
+def test_olts_list_page_data_paginates_and_clamps_out_of_range_page(db_session):
+    db_session.add_all(
+        [
+            OLTDevice(
+                name=f"OLT Page {index:02d}",
+                mgmt_ip=f"198.51.100.{index + 1}",
+                is_active=True,
+            )
+            for index in range(11)
+        ]
+    )
+    db_session.commit()
+
+    payload = web_network_core_devices_service.olts_list_page_data(
+        db_session,
+        page=999,
+        per_page=10,
+    )
+
+    assert payload["pagination"] == {
+        "page": 2,
+        "per_page": 10,
+        "total": 11,
+        "total_pages": 2,
+        "has_prev": True,
+        "has_next": False,
+    }
+    assert len(payload["olts"]) == 1
+
+
+def test_onts_list_defaults_to_all_authorization_states_and_clamps_page(db_session):
+    onts = [
+        OntUnit(
+            serial_number=f"ONT-PAGE-{index:02d}",
+            is_active=True,
+            authorization_status=(
+                OntAuthorizationStatus.authorized
+                if index == 0
+                else OntAuthorizationStatus.pending
+            ),
+        )
+        for index in range(11)
+    ]
+    db_session.add_all(onts)
+    db_session.commit()
+
+    payload = core_devices_views.onts_list_page_data(
+        db_session,
+        page=999,
+        per_page=10,
+    )
+
+    assert payload["filters"]["authorization"] == "all"
+    assert payload["pagination"]["page"] == 2
+    assert payload["pagination"]["total"] == 11
+    assert len(payload["onts"]) == 1
+
+
+def test_onts_diagnostics_view_runs_one_inventory_query(db_session, monkeypatch):
+    db_session.add(
+        OntUnit(
+            serial_number="ONT-DIAGNOSTICS-ONE-QUERY",
+            is_active=True,
+            authorization_status=OntAuthorizationStatus.authorized,
+        )
+    )
+    db_session.commit()
+
+    original = network_service.ont_units.list_advanced
+    calls = 0
+
+    def counted_list_advanced(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(
+        network_service.ont_units, "list_advanced", counted_list_advanced
+    )
+
+    payload = core_devices_views.onts_list_page_data(
+        db_session,
+        view="diagnostics",
+        per_page=50,
+    )
+
+    assert calls == 1
+    assert payload["onts"] == ()
+    assert len(payload["diagnostics_onts"]) == 1
 
 
 def test_olt_detail_page_data_pon_rows_link_to_specific_pon(db_session):

@@ -19,7 +19,7 @@ from app.metrics import (
 )
 from app.models.audit import AuditActorType
 from app.models.domain_settings import DomainSetting, SettingDomain
-from app.models.network import OLTDevice, OntUnit, OnuOnlineStatus
+from app.models.network import OLTDevice, OntUnit
 from app.models.network_monitoring import (
     DeviceInterface,
     InterfaceStatus,
@@ -216,11 +216,13 @@ def _build_cached_ont_status_summary(db: Session) -> dict[str, int]:
     """
     thresholds = _build_health_thresholds(db)
     low_signal_threshold = thresholds.get("ont_signal_warning_dbm") or -25
+    from app.services.network.ont_status import effective_ont_online_clause
+
     counts = (
         db.query(
             func.count(OntUnit.id).label("total"),
             func.count(OntUnit.id)
-            .filter(OntUnit.olt_status == OnuOnlineStatus.online)
+            .filter(effective_ont_online_clause())
             .label("online"),
             func.count(OntUnit.id)
             .filter(OntUnit.olt_rx_signal_dbm.is_not(None))

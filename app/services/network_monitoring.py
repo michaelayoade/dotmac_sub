@@ -11,7 +11,7 @@ from fastapi import HTTPException
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.network import FdhCabinet, OLTDevice, OntUnit, OnuOnlineStatus, PonPort
+from app.models.network import FdhCabinet, OLTDevice, OntUnit, PonPort
 from app.models.network_monitoring import (
     Alert,
     AlertEvent,
@@ -134,9 +134,9 @@ def _pon_availability_items(db: Session, window_seconds: int) -> list[UptimeRepo
     ``derived=True`` so the UI labels them estimates, not contractual SLA.
     Ports with no ONTs are reported with ``uptime_percent=None`` (no signal).
     """
-    online_count = func.count(
-        case((OntUnit.olt_status == OnuOnlineStatus.online, OntUnit.id))
-    )
+    from app.services.network.ont_status import effective_ont_online_clause
+
+    online_count = func.count(case((effective_ont_online_clause(), OntUnit.id)))
     rows = (
         db.query(
             PonPort.id,
@@ -1444,70 +1444,47 @@ class AlertEvents(ListResponseMixin):
 def get_onu_status_summary(db: Session, *, refresh: bool = False) -> dict[str, int]:
     """Aggregate binary ONT monitoring status.
 
-    Degraded: the live per-OLT ONT status source (Zabbix) was retired with the
-    native monitoring cutover, so no ONT is live-monitored here and every
-    non-UISP active ONT rolls up as offline — the same result the request path
-    already produced on a permanently cold cache. UISP-managed plant still
-    counts from its last observed state.
-
     Returns:
         Dictionary with total, online, offline, low_signal counts.
     """
     del refresh
     from sqlalchemy import func as sa_func
 
-    from app.models.network import OLTDevice, OntUnit, OnuOnlineStatus
+    from app.models.network import OntUnit
+    from app.services.network.ont_status import effective_ont_online_clause
 
     inventory_total = (
         db.query(sa_func.count(OntUnit.id)).filter(OntUnit.is_active.is_(True)).scalar()
         or 0
     )
-    online = 0
-    offline = 0
-    low_signal = 0
-
-    # UISP-managed plant (UFiber): the topology sync imports these OLTs as
-    # INACTIVE placeholder rows (no config pack). They are not
-    # unmonitored Huawei gear and must not be dumped into the offline bucket:
-    # count them from their own last OBSERVED state instead — online/offline
-    # only when a status was actually seen (olt_status_seen_at set), otherwise
-    # a distinct ``uisp_managed`` bucket that is excluded from offline.
-    uisp_ont_rows = (
-        db.query(OntUnit.olt_status, OntUnit.olt_status_seen_at)
-        .join(OLTDevice, OntUnit.olt_device_id == OLTDevice.id)
+    online = (
+        db.query(sa_func.count(OntUnit.id))
+        .filter(OntUnit.is_active.is_(True), effective_ont_online_clause())
+        .scalar()
+        or 0
+    )
+    offline = max(inventory_total - online, 0)
+    low_signal = (
+        db.query(sa_func.count(OntUnit.id))
         .filter(
             OntUnit.is_active.is_(True),
-            OLTDevice.uisp_device_id.isnot(None),
-            OLTDevice.is_active.is_(False),
+            OntUnit.olt_rx_signal_dbm.isnot(None),
+            OntUnit.olt_rx_signal_dbm < -27,
         )
-        .all()
+        .scalar()
+        or 0
     )
-    uisp_managed = 0
-    for uisp_status, uisp_seen_at in uisp_ont_rows:
-        if uisp_status == OnuOnlineStatus.online:
-            online += 1
-        elif uisp_status == OnuOnlineStatus.offline and uisp_seen_at is not None:
-            offline += 1
-        else:
-            uisp_managed += 1
-
-    # No live per-OLT monitoring source remains, so every non-UISP active ONT
-    # is unmonitored and rolls up as offline (UISP-managed ONTs were already
-    # bucketed above — keep them out of the unmonitored -> offline rollup).
-    unmonitored_total = max(inventory_total - len(uisp_ont_rows), 0)
-    offline += unmonitored_total
 
     return {
-        "total": online + offline,
+        "total": inventory_total,
         "online": online,
         "offline": offline,
         "low_signal": low_signal,
-        "uisp_managed": uisp_managed,
     }
 
 
 def get_onu_olt_status_summary(db: Session) -> dict[str, int]:
-    """Aggregate raw ONT link status (same degraded rollup as the summary)."""
+    """Aggregate effective binary ONT link status."""
     return get_onu_status_summary(db)
 
 
@@ -1537,6 +1514,7 @@ def get_pon_outage_summary(db: Session) -> list[dict]:
     ont_ids = [assignment.ont_unit_id for assignment in assignments]
     onts = db.query(OntUnit).filter(OntUnit.id.in_(ont_ids)).all() if ont_ids else []
     ont_by_id = {ont.id: ont for ont in onts}
+    from app.services.network.ont_status import resolve_effective_ont_status
 
     port_offline: dict[str, list[dict]] = {}
     total_per_port: dict[str, int] = {}
@@ -1547,9 +1525,11 @@ def get_pon_outage_summary(db: Session) -> list[dict]:
             continue
         total_per_port[port_key] = total_per_port.get(port_key, 0) + 1
         ont = ont_by_id.get(assignment.ont_unit_id)
-        # The live ONT snapshot source (Zabbix) was retired with the native
-        # monitoring cutover; no ONT ever reads online here, matching the
-        # permanently-cold-cache behaviour the request path already had.
+        if ont is None:
+            continue
+        effective = resolve_effective_ont_status(ont)
+        if effective.is_online or effective.retry_pending:
+            continue
         reason = getattr(ont, "offline_reason", None)
         last_seen = getattr(ont, "last_seen_at", None)
         port_offline.setdefault(port_key, []).append(

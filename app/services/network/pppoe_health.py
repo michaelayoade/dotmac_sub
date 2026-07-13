@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import and_, func, select
 
-from app.models.network import OntAssignment, OntUnit, OnuOnlineStatus
+from app.models.network import OntAssignment, OntUnit
 from app.models.tr069 import Tr069CpeDevice
 from app.services.common import coerce_uuid
 from app.services.network._credentials import (
@@ -318,9 +318,10 @@ class PppoeHealthClassifier:
 
         When category is ``"issues"``, returns all ONTs with any issue.
         """
+        from app.services.network.ont_status import effective_ont_online_clause
+
         stmt = _health_base_query().where(
-            OntUnit.olt_status == OnuOnlineStatus.online,
-            OntUnit.is_active.is_(True),
+            effective_ont_online_clause(), OntUnit.is_active.is_(True)
         )
 
         if olt_id:

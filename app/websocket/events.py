@@ -19,6 +19,8 @@ class EventType(str, Enum):
     HEARTBEAT = "heartbeat"
     # Network operations
     OPERATION_STATUS = "operation_status"
+    # Workqueue
+    WORKQUEUE_CHANGED = "workqueue_changed"
 
 
 class WebSocketEvent(BaseModel):

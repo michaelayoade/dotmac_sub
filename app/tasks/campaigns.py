@@ -24,6 +24,21 @@ def process_due_campaigns(*, limit: int = 20) -> dict[str, int]:
         return result
 
 
+@celery_app.task(name="app.tasks.campaigns.process_due_campaign_steps")
+def process_due_campaign_steps(*, limit: int = 20) -> dict[str, int]:
+    """Advance nurture sequences whose next step has come due."""
+    from app.services import comms_campaigns
+
+    with db_session_adapter.session() as session:
+        result = comms_campaigns.process_due_campaign_steps(session, limit=limit)
+        session.commit()
+        logger.info(
+            "campaign step processing complete",
+            extra={"event": "campaign_step_processing_complete", **result},
+        )
+        return result
+
+
 @celery_app.task(name="app.tasks.campaigns.send_campaign_batch")
 def send_campaign_batch(
     *,
@@ -41,9 +56,11 @@ def send_campaign_batch(
         session.commit()
         payload = {
             "campaign_id": str(result.campaign_id),
+            "queued": result.queued,
             "sent": result.sent,
             "failed": result.failed,
             "skipped": result.skipped,
+            "suppressed": result.suppressed,
             "completed": result.completed,
         }
         logger.info(

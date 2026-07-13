@@ -1359,6 +1359,37 @@ def build_beat_schedule() -> dict:
             enabled=notification_queue_enabled,
             interval_seconds=notification_queue_interval_seconds,
         )
+        campaign_processing_enabled = _effective_bool(
+            session,
+            SettingDomain.comms,
+            "campaign_processing_enabled",
+            "CAMPAIGN_PROCESSING_ENABLED",
+            False,
+        )
+        campaign_processing_interval_seconds = max(
+            _effective_int(
+                session,
+                SettingDomain.comms,
+                "campaign_processing_interval_seconds",
+                "CAMPAIGN_PROCESSING_INTERVAL_SECONDS",
+                60,
+            ),
+            30,
+        )
+        _sync_scheduled_task(
+            session,
+            name="campaign_due_runner",
+            task_name="app.tasks.campaigns.process_due_campaigns",
+            enabled=campaign_processing_enabled,
+            interval_seconds=campaign_processing_interval_seconds,
+        )
+        _sync_scheduled_task(
+            session,
+            name="campaign_sequence_runner",
+            task_name="app.tasks.campaigns.process_due_campaign_steps",
+            enabled=campaign_processing_enabled,
+            interval_seconds=campaign_processing_interval_seconds,
+        )
         operational_escalation_delivery_enabled = _effective_bool(
             session,
             SettingDomain.notification,
@@ -1625,6 +1656,19 @@ def build_beat_schedule() -> dict:
             task_name="app.tasks.ont_reconcile.run_ont_reconcile_sweep",
             enabled=True,
             interval_seconds=max(ont_reconcile_seconds, 300),
+        )
+        ont_status_seconds = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "huawei_ont_status_interval_seconds",
+            300,
+        )
+        _sync_scheduled_task(
+            session,
+            name="huawei_ont_status",
+            task_name="app.tasks.ont_runtime_status.dispatch_huawei_ont_status",
+            enabled=True,
+            interval_seconds=max(ont_status_seconds, 120),
         )
         # RADIUS health: accounting freshness + enforcement drift from the
         # external radacct DB and the reconciled live-session view. Customer

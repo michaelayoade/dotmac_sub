@@ -49,6 +49,7 @@ from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.nin_matching import normalize_nin
 from app.services.response import ListResponseMixin
+from app.services.sync_feeds import apply_sync_page, sync_page_response
 
 logger = logging.getLogger(__name__)
 _UNSPECIFIED_IPV4 = ParsedIPv4Address(0)
@@ -311,6 +312,31 @@ class Resellers(ListResponseMixin):
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
+    def list_for_sync(
+        db: Session,
+        *,
+        is_active: bool | None,
+        updated_since: datetime | None,
+        limit: int,
+        offset: int,
+    ) -> builtins.list[Reseller]:
+        query = db.query(Reseller)
+        if is_active is not None:
+            query = query.filter(Reseller.is_active == is_active)
+        return apply_sync_page(
+            query,
+            Reseller,
+            updated_since=updated_since,
+            limit=limit,
+            offset=offset,
+        ).all()
+
+    @classmethod
+    def sync_list_response(cls, db: Session, **kwargs):
+        items = cls.list_for_sync(db, **kwargs)
+        return sync_page_response(items, limit=kwargs["limit"], offset=kwargs["offset"])
+
+    @staticmethod
     def count(db: Session, is_active: bool | None) -> int:
         query = db.query(func.count(Reseller.id))
         if is_active is None:
@@ -413,6 +439,8 @@ class Subscribers(ListResponseMixin):
             data = _normalize_subscriber_identity_fields(
                 payload.model_dump(exclude_unset=True, exclude={"person_id"})
             )
+            requested_status = data.pop("status", None)
+            requested_is_active = data.pop("is_active", None)
             category = data.pop("category", None)
             data.pop("organization_id", None)
             for key, value in data.items():
@@ -442,12 +470,31 @@ class Subscribers(ListResponseMixin):
                 if derived_account:
                     subscriber.account_number = derived_account
             _apply_billing_defaults(db, subscriber)
+            if requested_status is not None or requested_is_active is not None:
+                from app.services.account_lifecycle import (
+                    apply_requested_account_status,
+                )
+
+                apply_requested_account_status(
+                    db,
+                    str(subscriber.id),
+                    requested_status
+                    or (
+                        SubscriberStatus.active
+                        if requested_is_active
+                        else SubscriberStatus.suspended
+                    ),
+                    reason="Initial subscriber account state",
+                    source="subscriber_service:create_existing",
+                )
             rebuild_identity_index_for_subscriber(db, subscriber.id)
             db.commit()
             db.refresh(subscriber)
             return subscriber
 
         data = _normalize_subscriber_identity_fields(payload.model_dump())
+        requested_status = data.pop("status", SubscriberStatus.active)
+        data.pop("is_active", None)
         category = data.pop("category", None)
         data.pop("organization_id", None)
         if data.get("user_type") is None:
@@ -482,6 +529,15 @@ class Subscribers(ListResponseMixin):
         _apply_billing_defaults(db, subscriber)
         db.add(subscriber)
         db.flush()
+        from app.services.account_lifecycle import apply_requested_account_status
+
+        apply_requested_account_status(
+            db,
+            str(subscriber.id),
+            requested_status,
+            reason="Initial subscriber account state",
+            source="subscriber_service:create",
+        )
         rebuild_identity_index_for_subscriber(db, subscriber.id)
         db.commit()
         db.refresh(subscriber)
@@ -725,6 +781,40 @@ class Subscribers(ListResponseMixin):
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
+    def list_for_sync(
+        db: Session,
+        *,
+        subscriber_type: str | None,
+        updated_since: datetime | None,
+        limit: int,
+        offset: int,
+    ) -> builtins.list[Subscriber]:
+        query = db.query(Subscriber).filter(
+            Subscriber.user_type != UserType.system_user,
+            not_(splynx_deleted_import_clause()),
+        )
+        if subscriber_type:
+            normalized = subscriber_type.strip().lower()
+            if normalized == "person":
+                query = query.filter(not_(_is_business_clause()))
+            elif normalized == "business":
+                query = query.filter(_is_business_clause())
+            else:
+                raise HTTPException(status_code=400, detail="Invalid subscriber_type")
+        return apply_sync_page(
+            query,
+            Subscriber,
+            updated_since=updated_since,
+            limit=limit,
+            offset=offset,
+        ).all()
+
+    @classmethod
+    def sync_list_response(cls, db: Session, **kwargs):
+        items = cls.list_for_sync(db, **kwargs)
+        return sync_page_response(items, limit=kwargs["limit"], offset=kwargs["offset"])
+
+    @staticmethod
     def list_active_by_ids(
         db: Session, subscriber_ids: builtins.list[UUID]
     ) -> builtins.list[Subscriber]:
@@ -770,6 +860,9 @@ class Subscribers(ListResponseMixin):
         data = _normalize_subscriber_identity_fields(
             payload.model_dump(exclude_unset=True)
         )
+        updated_fields = list(data.keys())
+        requested_status = data.pop("status", None)
+        requested_is_active = data.pop("is_active", None)
         category = data.pop("category", None)
         data.pop("organization_id", None)
         for key, value in data.items():
@@ -777,6 +870,23 @@ class Subscribers(ListResponseMixin):
         if category is not None:
             subscriber.category = (
                 category if isinstance(category, SubscriberCategory) else str(category)
+            )
+        if requested_status is not None or requested_is_active is not None:
+            from app.services.account_lifecycle import apply_requested_account_status
+
+            target_status = requested_status
+            if target_status is None:
+                target_status = (
+                    SubscriberStatus.active
+                    if requested_is_active
+                    else SubscriberStatus.suspended
+                )
+            apply_requested_account_status(
+                db,
+                str(subscriber.id),
+                target_status,
+                reason="Subscriber account updated",
+                source="subscriber_service:update",
             )
         _update_restricted_status_metadata(
             subscriber,
@@ -794,7 +904,7 @@ class Subscribers(ListResponseMixin):
             {
                 "subscriber_id": str(subscriber.id),
                 "subscriber_number": subscriber.subscriber_number,
-                "updated_fields": list(data.keys()),
+                "updated_fields": updated_fields,
             },
             subscriber_id=subscriber.id,
         )

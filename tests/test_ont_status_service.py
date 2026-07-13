@@ -129,7 +129,7 @@ def test_resolve_ont_status_for_model_treats_olt_acs_as_managed() -> None:
     assert snapshot.last_seen_at is None
 
 
-def test_reconcile_ont_state_keeps_monitoring_as_authority() -> None:
+def test_reconcile_ont_state_prefers_positive_acs_evidence() -> None:
     now = datetime.now(UTC)
     ont = OntUnit(
         serial_number="ONT-RECON-ACS",
@@ -141,7 +141,7 @@ def test_reconcile_ont_state_keeps_monitoring_as_authority() -> None:
     result = reconcile_ont_state(ont, now=now)
 
     assert result.conflict is False
-    assert result.authoritative_source == OntStatusSource.zabbix
+    assert result.authoritative_source == OntStatusSource.acs
     assert result.recommended_action is None
 
 
@@ -156,9 +156,8 @@ def test_resolve_effective_last_seen_at_prefers_newer_acs_inform() -> None:
     assert resolve_effective_last_seen_at(ont) == now - timedelta(minutes=1)
 
 
-def test_list_advanced_runtime_status_filter_degrades_to_offline(db_session) -> None:
-    """The live runtime-status source was retired: every ONT reads offline, so
-    the "online" filter matches nothing and the "offline" filter matches all."""
+def test_list_advanced_runtime_status_filter_uses_native_inventory(db_session) -> None:
+    """A retained native OLT-online observation remains in the online bucket."""
     ont = OntUnit(
         serial_number="ONT-RUNTIME-STATUS",
         is_active=True,
@@ -173,8 +172,8 @@ def test_list_advanced_runtime_status_filter_degrades_to_offline(db_session) -> 
         limit=50,
         offset=0,
     )
-    assert total == 0
-    assert rows == []
+    assert total == 1
+    assert [item.serial_number for item in rows] == ["ONT-RUNTIME-STATUS"]
 
     rows, total = network_service.ont_units.list_advanced(
         db_session,
@@ -182,5 +181,5 @@ def test_list_advanced_runtime_status_filter_degrades_to_offline(db_session) -> 
         limit=50,
         offset=0,
     )
-    assert total == 1
-    assert [item.serial_number for item in rows] == ["ONT-RUNTIME-STATUS"]
+    assert total == 0
+    assert rows == []

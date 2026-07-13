@@ -770,12 +770,12 @@ class TestAutoLinkOnts:
             search=ont.serial_number,
         )
 
-        # The live snapshot source was retired: the list renders from the
-        # persisted inventory columns (native poller writes them).
+        # The live snapshot source was retired: the list resolves persisted
+        # native OLT/ACS evidence and marks absent evidence as derived offline.
         signal_data = page_data["signal_data"][str(ont.id)]
         assert signal_data["acs_last_inform_at"] == stale_last_seen.replace(tzinfo=None)
         assert signal_data["last_seen_at"] == stale_last_seen.replace(tzinfo=None)
-        assert signal_data["status_source"] == "inventory"
+        assert signal_data["status_source"] == "derived"
         assert signal_data["status_display"] == "Offline"
 
     def test_ont_index_template_renders_zabbix_last_seen_column(self) -> None:

@@ -369,10 +369,10 @@ def test_push_interface_counters_writes_prometheus_lines(db_session, monkeypatch
     iface = DeviceInterface(
         device_id=device.id, name="sfp-sfpplus1", snmp_index=5, monitored=True
     )
-    unmonitored = DeviceInterface(
+    excluded = DeviceInterface(
         device_id=device.id, name="ether2", snmp_index=6, monitored=False
     )
-    db_session.add_all([iface, unmonitored])
+    db_session.add_all([iface, excluded])
     db_session.commit()
 
     monkeypatch.setattr(

@@ -71,6 +71,7 @@ from app.services.web_network_ont_actions.db_config import (
 
 # Device actions
 from app.services.web_network_ont_actions.device_actions import (
+    QueuedRefreshResult,
     RunningConfigResult,
     execute_config_snapshot_refresh,
     execute_connection_request,
@@ -80,6 +81,8 @@ from app.services.web_network_ont_actions.device_actions import (
     execute_reboot,
     execute_refresh,
     fetch_olt_running_config,
+    queue_refresh,
+    refresh_operation_status,
 )
 
 # Diagnostics
@@ -148,6 +151,7 @@ __all__ = [
     "running_config_context",
     # Device actions
     "RunningConfigResult",
+    "QueuedRefreshResult",
     "execute_config_snapshot_refresh",
     "execute_connection_request",
     "execute_factory_reset",
@@ -156,6 +160,8 @@ __all__ = [
     "execute_reboot",
     "execute_refresh",
     "fetch_olt_running_config",
+    "queue_refresh",
+    "refresh_operation_status",
     # Configuration setters
     "bind_tr069_profile",
     "bind_internet_wan",

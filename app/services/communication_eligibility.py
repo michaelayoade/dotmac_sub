@@ -107,12 +107,31 @@ def may_send(
     A ``marketing``-scoped suppression stops marketing and nothing else.
     An ``all``-scoped suppression stops everything.
     """
+    return (
+        suppression_reason(
+            db,
+            channel=channel,
+            address=address,
+            category=category,
+        )
+        is None
+    )
+
+
+def suppression_reason(
+    db: Session,
+    *,
+    channel: NotificationChannel | str,
+    address: str | None,
+    category: str | None,
+) -> str | None:
+    """Return the canonical suppression reason, or ``None`` when sendable."""
     normalized = normalize_address(channel, address)
     if not normalized:
         # No address is a delivery bug, not a consent decision -- let the sender
         # fail loudly on its own terms rather than silently classing it as
         # "suppressed".
-        return True
+        return None
 
     row = db.scalars(
         select(CommunicationSuppression).where(
@@ -121,12 +140,10 @@ def may_send(
         )
     ).first()
     if row is None:
-        return True
-
-    if row.scope is SuppressionScope.all:
-        return False
-    # marketing-scoped: blocks marketing, never transactional.
-    return not is_marketing(category)
+        return None
+    if row.scope is SuppressionScope.all or is_marketing(category):
+        return row.reason.value
+    return None
 
 
 def filter_eligible(
@@ -197,6 +214,11 @@ def suppress(
             existing.scope = scope
             existing.reason = reason
             existing.note = note or existing.note
+            # Persist the escalation. Without this the mutation lives only in
+            # the Session; with autoflush off it is silently discarded, the row
+            # stays `marketing`, and we resume sending invoices to an address
+            # that hard-bounced.
+            db.flush()
         return existing
 
     row = CommunicationSuppression(
@@ -248,11 +270,60 @@ def unsuppress_committed(
     return removed
 
 
+def unsuppress_marketing(
+    db: Session, *, channel: NotificationChannel | str, address: str
+) -> bool:
+    """Remove only a marketing-scoped suppression.
+
+    Campaign administration is not authority to clear a hard bounce,
+    complaint, or erasure row whose ``all`` scope also protects transactional
+    delivery. Those rows are managed by the canonical notifications surface.
+    """
+    resolved = _coerce_channel(channel)
+    normalized = normalize_address(resolved, address)
+    row = db.scalars(
+        select(CommunicationSuppression).where(
+            CommunicationSuppression.channel == resolved,
+            CommunicationSuppression.address == normalized,
+        )
+    ).first()
+    if row is None or row.scope is not SuppressionScope.marketing:
+        return False
+    db.delete(row)
+    db.flush()
+    return True
+
+
+def unsuppress_marketing_committed(
+    db: Session, *, channel: NotificationChannel | str, address: str
+) -> bool:
+    removed = unsuppress_marketing(db, channel=channel, address=address)
+    db.commit()
+    return removed
+
+
+def unsuppress_by_id(db: Session, suppression_id: UUID | str) -> bool:
+    """Remove a suppression by its durable identifier."""
+    row = db.get(CommunicationSuppression, UUID(str(suppression_id)))
+    if row is None:
+        return False
+    db.delete(row)
+    db.flush()
+    return True
+
+
+def unsuppress_by_id_committed(db: Session, suppression_id: UUID | str) -> bool:
+    removed = unsuppress_by_id(db, suppression_id)
+    db.commit()
+    return removed
+
+
 def list_suppressions(
     db: Session,
     *,
     channel: NotificationChannel | str | None = None,
     scope: SuppressionScope | None = None,
+    subscriber_id: UUID | str | None = None,
     limit: int = 100,
     offset: int = 0,
 ) -> list[CommunicationSuppression]:
@@ -263,6 +334,10 @@ def list_suppressions(
         )
     if scope is not None:
         query = query.where(CommunicationSuppression.scope == scope)
+    if subscriber_id is not None:
+        query = query.where(
+            CommunicationSuppression.subscriber_id == UUID(str(subscriber_id))
+        )
     return list(
         db.scalars(
             query.order_by(CommunicationSuppression.created_at.desc())

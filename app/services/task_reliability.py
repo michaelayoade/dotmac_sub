@@ -154,6 +154,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "Builds recipients and sends due campaigns through native inbox channels; "
         "recipient rows gate repeat sends.",
     ),
+    "app.tasks.campaigns.process_due_campaign_steps": _c(
+        "campaigns",
+        SWEEP,
+        PER_ITEM,
+        STATUS,
+        "Materializes and sends the next due step of a nurture sequence; a step "
+        "that already has recipient rows is never materialized twice.",
+    ),
     "app.tasks.campaigns.send_campaign_batch": _c(
         "campaigns",
         ITEMS,
@@ -322,6 +330,15 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     ),
     "app.tasks.ont_reconcile.run_ont_reconcile_sweep": _c(
         "network", SWEEP, IDEMP, HEALTH
+    ),
+    "app.tasks.ont_runtime_status.dispatch_huawei_ont_status": _c(
+        "network", SWEEP, IDEMP, HEALTH
+    ),
+    "app.tasks.ont_runtime_status.refresh_huawei_olt_status": _c(
+        "network", AUTORETRY, IDEMP, STATUS
+    ),
+    "app.tasks.ont_runtime_status.refresh_single_ont_status": _c(
+        "network", STATE, STATEFUL, STATUS
     ),
     "app.tasks.ont_signal_observations.record_ont_observations": _c(
         "network", SWEEP, IDEMP, HEALTH

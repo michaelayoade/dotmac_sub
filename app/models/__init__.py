@@ -419,6 +419,8 @@ from app.models.notification import (  # noqa: F401
     AlertNotificationLog,
     AlertNotificationPolicy,
     AlertNotificationPolicyStep,
+    CommunicationIntentRecord,
+    CommunicationSuppression,
     DeliveryStatus,
     Notification,
     NotificationChannel,

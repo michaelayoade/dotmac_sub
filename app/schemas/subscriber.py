@@ -103,6 +103,20 @@ class ResellerRead(ResellerBase):
     updated_at: datetime
 
 
+class ResellerSyncRead(BaseModel):
+    """Minimal reseller contract for cross-application synchronization."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+    code: str | None = None
+    contact_email: str | None = None
+    contact_phone: str | None = None
+    is_active: bool
+    updated_at: datetime
+
+
 class SubscriberBase(BaseModel):
     """Unified subscriber model - combines identity, account, and billing."""
 
@@ -297,12 +311,46 @@ class SubscriberRead(SubscriberBase):
     email: str  # type: ignore[assignment]
 
     id: UUID
+    lifecycle_override_status: SubscriberStatus | None = None
+    lifecycle_override_reason: str | None = None
+    lifecycle_override_source: str | None = None
+    lifecycle_override_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
     addresses: list[AddressRead] = Field(default_factory=list)
     channels: list[SubscriberChannelRead] = Field(default_factory=list)
     custom_fields: list[SubscriberCustomFieldRead] = Field(default_factory=list)
+
+
+class SubscriberSyncRead(BaseModel):
+    """Bounded subscriber projection consumed by accounting integrations."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    first_name: str
+    last_name: str
+    display_name: str | None = None
+    company_name: str | None = None
+    legal_name: str | None = None
+    email: str
+    phone: str | None = None
+    status: SubscriberStatus
+    category: SubscriberCategory
+    is_active: bool
+    reseller_id: UUID | None = None
+    tax_id: str | None = None
+    subscriber_number: str | None = None
+    account_number: str | None = None
+    address_line1: str | None = None
+    address_line2: str | None = None
+    city: str | None = None
+    region: str | None = None
+    postal_code: str | None = None
+    country_code: str | None = None
+    created_at: datetime
+    updated_at: datetime
 
 
 class SubscriberChannelBase(BaseModel):

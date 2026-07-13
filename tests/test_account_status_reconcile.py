@@ -73,6 +73,21 @@ def test_finder_excludes_already_active_subscriber(db_session, catalog_offer):
     assert str(s.id) not in ids
 
 
+def test_finder_excludes_explicit_account_override(db_session, catalog_offer):
+    s = _subscriber(db_session, "admin-blocked@e.com")
+    s.lifecycle_override_status = SubscriberStatus.blocked
+    _sub(db_session, s, catalog_offer, SubscriptionStatus.active)
+    db_session.commit()
+
+    ids = find_blocked_all_active_account_ids(db_session)
+
+    assert str(s.id) not in ids
+    assert account_eligibility(db_session, str(s.id)) == (
+        False,
+        "explicit_lifecycle_override",
+    )
+
+
 def test_reconcile_account_flips_to_active(db_session, catalog_offer):
     s = _subscriber(db_session, "flip@e.com")
     _sub(db_session, s, catalog_offer, SubscriptionStatus.active)
