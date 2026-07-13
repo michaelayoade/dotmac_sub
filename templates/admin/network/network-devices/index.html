@@ -146,14 +146,14 @@
             <div class="w-full">
                 <table class="w-full table-fixed">
                     <colgroup>
-                        <col class="w-[19%]">
-                        <col class="w-[9%]">
-                        <col class="w-[10%]">
-                        <col class="w-[10%]">
-                        <col class="w-[13%]">
-                        <col class="w-[12%]">
-                        <col class="w-[10%]">
+                        <col class="w-[26%]">
                         <col class="w-[8%]">
+                        <col class="w-[9%]">
+                        <col class="w-[9%]">
+                        <col class="w-[12%]">
+                        <col class="w-[11%]">
+                        <col class="w-[9%]">
+                        <col class="w-[7%]">
                         <col class="w-[4%]">
                         <col class="w-[5%]">
                     </colgroup>
@@ -175,15 +175,15 @@
                         {% for device in core_devices %}
                         <tr class="group transition-all hover:bg-slate-50 dark:hover:bg-slate-700/50">
                             <td class="px-3 py-4">
-                                <div class="flex min-w-0 items-center gap-2">
+                                <div class="flex min-w-0 max-w-full items-center gap-2">
                                     <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-100 dark:bg-slate-700">
                                         <svg class="h-4 w-4 text-slate-600 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/></svg>
                                     </div>
-                                    <div class="min-w-0">
+                                    <div class="min-w-0 flex-1 overflow-hidden">
                                         {% set device_pop_name = device.pop_site.name if device.pop_site is defined and device.pop_site else 'Unassigned' %}
                                         <a href="{{ device.detail_url if device.detail_url is defined and device.detail_url else '/admin/network/core-devices/' ~ device.id }}"
                                            title="{{ device.name }} · POP: {{ device_pop_name }}"
-                                           class="block truncate text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">{{ device.name }}</a>
+                                           class="block max-w-full truncate text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">{{ device.name }}</a>
                                         {% if device.hostname %}
                                         <p class="truncate text-xs text-slate-500 dark:text-slate-400">{{ device.hostname }}</p>
                                         {% endif %}
