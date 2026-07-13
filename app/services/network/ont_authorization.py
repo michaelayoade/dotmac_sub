@@ -56,6 +56,7 @@ class AuthorizationStepResult:
     success: bool
     message: str
     duration_ms: int = 0
+    details: dict[str, object] | None = None
 
 
 @dataclass
@@ -72,6 +73,7 @@ class AuthorizationWorkflowResult:
     partial_success: bool = False
     baseline_applied: bool | None = None
     duration_ms: int = 0
+    phase_timings: list[dict[str, object]] = field(default_factory=list)
 
     @property
     def ont_id(self) -> str | None:
@@ -89,6 +91,7 @@ class AuthorizationWorkflowResult:
             "partial_success": self.partial_success,
             "baseline_applied": self.baseline_applied,
             "duration_ms": self.duration_ms,
+            "phase_timings": self.phase_timings,
             "steps": [
                 {
                     "step": step.step,
@@ -96,6 +99,7 @@ class AuthorizationWorkflowResult:
                     "success": step.success,
                     "message": step.message,
                     "duration_ms": step.duration_ms,
+                    **({"details": step.details} if step.details is not None else {}),
                 }
                 for step in self.steps
             ],
@@ -748,8 +752,19 @@ def authorize_ont(
     from app.services.network.ont_provision_steps import apply_authorization_baseline
 
     started_at = monotonic()
+    phase_timings: list[dict[str, object]] = []
+
+    def record_phase(name: str, phase_started: float, **details: object) -> None:
+        phase_timings.append(
+            {
+                "phase": name,
+                "duration_ms": max(0, int((monotonic() - phase_started) * 1000)),
+                **details,
+            }
+        )
 
     # Step 1: Core OLT authorization (register serial, create record, link PON)
+    phase_started = monotonic()
     result = authorize_autofind_ont(
         db,
         olt_id,
@@ -758,18 +773,38 @@ def authorize_ont(
         force_reauthorize=force_reauthorize,
         preset_id=preset_id,
     )
+    record_phase("core_authorization", phase_started, success=result.success)
+    result.phase_timings = phase_timings
 
     if not result.success:
+        phase_started = monotonic()
         _audit_authorization(
             db, request, olt_id, fsp, serial_number, force_reauthorize, result
         )
+        record_phase("audit", phase_started)
+        result.duration_ms = max(0, int((monotonic() - started_at) * 1000))
         return result
 
+    phase_started = monotonic()
     db.commit()
+    record_phase("post_authorization_commit", phase_started)
 
     # Step 2: Apply OLT baseline (internet service port + ACS reachability)
     if provision and result.ont_unit_id:
+        phase_started = monotonic()
         provision_result = apply_authorization_baseline(db, result.ont_unit_id)
+        provision_data = provision_result.data or {}
+        record_phase(
+            "authorization_baseline",
+            phase_started,
+            success=provision_result.success,
+            subphases=provision_data.get("phase_timings", []),
+        )
+        step_details = {
+            key: provision_data[key]
+            for key in ("phase_timings", "command_timings", "domain_outcomes")
+            if key in provision_data
+        }
         if provision_result.success:
             result.baseline_applied = True
             result.steps.append(
@@ -779,9 +814,12 @@ def authorize_ont(
                     success=True,
                     message=provision_result.message,
                     duration_ms=provision_result.duration_ms,
+                    details=step_details,
                 )
             )
+            phase_started = monotonic()
             db.commit()
+            record_phase("post_baseline_commit", phase_started)
         else:
             # Provisioning failed but authorization succeeded - partial success
             result.baseline_applied = False
@@ -792,6 +830,7 @@ def authorize_ont(
                     success=False,
                     message=provision_result.message,
                     duration_ms=provision_result.duration_ms,
+                    details=step_details,
                 )
             )
             result.status = "warning"
@@ -801,9 +840,12 @@ def authorize_ont(
                 f"{provision_result.message}"
             )
 
+    phase_started = monotonic()
     _audit_authorization(
         db, request, olt_id, fsp, serial_number, force_reauthorize, result
     )
+    record_phase("audit", phase_started)
+    result.phase_timings = phase_timings
     result.duration_ms = max(0, int((monotonic() - started_at) * 1000))
     return result
 

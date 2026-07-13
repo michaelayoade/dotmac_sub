@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from collections import Counter
 
 from sqlalchemy.orm import Session
@@ -17,6 +18,8 @@ logger = logging.getLogger(__name__)
 _CONFLICTED_SERVICE_PORT_RE = re.compile(
     r"Conflicted service virtual port index:\s*(\d+)", re.IGNORECASE
 )
+_SERVICE_PORT_VERIFY_ATTEMPTS = 3
+_SERVICE_PORT_VERIFY_DELAY_SEC = 1.0
 
 
 def _parse_service_port_detail(output: str) -> ServicePortEntry | None:
@@ -121,6 +124,64 @@ def get_service_port_by_index(
         return False, f"Error: {exc}", None
     finally:
         transport.close()
+
+
+def _verify_conflicted_service_port(
+    olt: OLTDevice,
+    conflicted_index: int,
+    *,
+    fsp: str,
+    ont_id: int,
+    gem_index: int,
+    vlan_id: int,
+    user_vlan: int | str | None,
+    tag_transform: str,
+) -> tuple[bool, str, ServicePortEntry | None]:
+    """Verify an idempotent create conflict despite Huawei readback lag."""
+    last_message = f"Service-port {conflicted_index} was not found"
+    for attempt in range(_SERVICE_PORT_VERIFY_ATTEMPTS):
+        read_ok, read_msg, existing_port = get_service_port_by_index(
+            olt, conflicted_index
+        )
+        last_message = read_msg
+        if existing_port is not None:
+            if _service_port_matches_intent(
+                existing_port,
+                fsp=fsp,
+                ont_id=ont_id,
+                gem_index=gem_index,
+                vlan_id=vlan_id,
+                user_vlan=user_vlan,
+                tag_transform=tag_transform,
+            ):
+                return True, read_msg, existing_port
+            return (
+                True,
+                "Existing service-port maps to a different intent",
+                existing_port,
+            )
+
+        # A conflicted global index can lag while the per-PON table is current.
+        list_ok, list_msg, ports = get_service_ports_for_ont(olt, fsp, ont_id)
+        if list_ok:
+            for port in ports:
+                if _service_port_matches_intent(
+                    port,
+                    fsp=fsp,
+                    ont_id=ont_id,
+                    gem_index=gem_index,
+                    vlan_id=vlan_id,
+                    user_vlan=user_vlan,
+                    tag_transform=tag_transform,
+                ):
+                    return True, list_msg, port
+        elif not read_ok:
+            last_message = f"{read_msg}; fallback readback failed: {list_msg}"
+
+        if attempt + 1 < _SERVICE_PORT_VERIFY_ATTEMPTS:
+            time.sleep(_SERVICE_PORT_VERIFY_DELAY_SEC)
+
+    return False, last_message, None
 
 
 def clone_service_ports(
@@ -287,9 +348,15 @@ def create_single_service_port(
                 and conflict_match
             ):
                 conflicted_index = int(conflict_match.group(1))
-                read_ok, read_msg, existing_port = get_service_port_by_index(
+                read_ok, read_msg, existing_port = _verify_conflicted_service_port(
                     olt,
                     conflicted_index,
+                    fsp=fsp,
+                    ont_id=ont_id,
+                    gem_index=gem_index,
+                    vlan_id=vlan_id,
+                    user_vlan=user_vlan,
+                    tag_transform=tag_transform,
                 )
                 if not read_ok or existing_port is None:
                     return (
@@ -321,7 +388,7 @@ def create_single_service_port(
                 logger.info(
                     "Service-port already exists on OLT %s: index=%d VLAN=%d GEM=%d ONT=%d %s",
                     olt.name,
-                    conflicted_index,
+                    existing_port.index,
                     vlan_id,
                     gem_index,
                     ont_id,
@@ -332,9 +399,9 @@ def create_single_service_port(
                     True,
                     (
                         "Service-port already exists "
-                        f"(index {conflicted_index}, VLAN {vlan_id}, GEM {gem_index})"
+                        f"(index {existing_port.index}, VLAN {vlan_id}, GEM {gem_index})"
                     ),
-                    conflicted_index,
+                    existing_port.index,
                 )
             logger.warning(
                 "Service-port creation failed on OLT %s: %s",

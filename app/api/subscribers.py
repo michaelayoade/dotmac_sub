@@ -3,7 +3,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
-from app.db import get_db
+from app.db import finish_read_response, get_db
 from app.models.subscriber import (
     Subscriber,
     SubscriberNINVerification,
@@ -78,7 +78,7 @@ def create_reseller(payload: ResellerCreate, db: Session = Depends(get_db)):
     dependencies=[Depends(require_permission("customer:read"))],
 )
 def get_reseller(reseller_id: str, db: Session = Depends(get_db)):
-    return subscriber_service.resellers.get(db, reseller_id)
+    return finish_read_response(db, subscriber_service.resellers.get(db, reseller_id))
 
 
 @router.get(
@@ -95,8 +95,11 @@ def list_resellers(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    return subscriber_service.resellers.list_response(
-        db, is_active, order_by, order_dir, limit, offset
+    return finish_read_response(
+        db,
+        subscriber_service.resellers.list_response(
+            db, is_active, order_by, order_dir, limit, offset
+        ),
     )
 
 
@@ -140,7 +143,9 @@ def create_subscriber(payload: SubscriberCreate, db: Session = Depends(get_db)):
     dependencies=[Depends(require_permission("customer:read"))],
 )
 def get_subscriber(subscriber_id: str, db: Session = Depends(get_db)):
-    return subscriber_service.subscribers.get(db, subscriber_id)
+    return finish_read_response(
+        db, subscriber_service.subscribers.get(db, subscriber_id)
+    )
 
 
 @router.get(
@@ -158,15 +163,18 @@ def list_subscribers(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    return subscriber_service.subscribers.list_response(
+    return finish_read_response(
         db,
-        person_id,
-        None,
-        subscriber_type,
-        order_by,
-        order_dir,
-        limit,
-        offset,
+        subscriber_service.subscribers.list_response(
+            db,
+            person_id,
+            None,
+            subscriber_type,
+            order_by,
+            order_dir,
+            limit,
+            offset,
+        ),
     )
 
 
@@ -244,7 +252,9 @@ def get_subscriber_nin_verification(
     if subscriber is None:
         raise HTTPException(status_code=404, detail="Subscriber not found")
 
-    return _nin_verification_payload(latest_nin_verification(db, subscriber_uuid))
+    return finish_read_response(
+        db, _nin_verification_payload(latest_nin_verification(db, subscriber_uuid))
+    )
 
 
 @router.post(
@@ -265,7 +275,7 @@ def create_address(payload: AddressCreate, db: Session = Depends(get_db)):
     dependencies=[Depends(require_permission("customer:read"))],
 )
 def get_address(address_id: str, db: Session = Depends(get_db)):
-    return subscriber_service.addresses.get(db, address_id)
+    return finish_read_response(db, subscriber_service.addresses.get(db, address_id))
 
 
 @router.get(
@@ -282,8 +292,11 @@ def list_addresses(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    return subscriber_service.addresses.list_response(
-        db, subscriber_id, order_by, order_dir, limit, offset
+    return finish_read_response(
+        db,
+        subscriber_service.addresses.list_response(
+            db, subscriber_id, order_by, order_dir, limit, offset
+        ),
     )
 
 
@@ -329,7 +342,9 @@ def create_subscriber_custom_field(
     dependencies=[Depends(require_permission("customer:read"))],
 )
 def get_subscriber_custom_field(custom_field_id: str, db: Session = Depends(get_db)):
-    return subscriber_service.subscriber_custom_fields.get(db, custom_field_id)
+    return finish_read_response(
+        db, subscriber_service.subscriber_custom_fields.get(db, custom_field_id)
+    )
 
 
 @router.get(
@@ -347,8 +362,11 @@ def list_subscriber_custom_fields(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    return subscriber_service.subscriber_custom_fields.list_response(
-        db, subscriber_id, is_active, order_by, order_dir, limit, offset
+    return finish_read_response(
+        db,
+        subscriber_service.subscriber_custom_fields.list_response(
+            db, subscriber_id, is_active, order_by, order_dir, limit, offset
+        ),
     )
 
 

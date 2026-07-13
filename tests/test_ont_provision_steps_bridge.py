@@ -95,6 +95,14 @@ def test_provision_bridge_configures_native_vlan(monkeypatch) -> None:
     ]
     assert all(isinstance(timing["duration_ms"], int) for timing in timings)
     assert all("message" not in timing for timing in timings)
+    assert [phase["phase"] for phase in result.data["phase_timings"]] == [
+        "prepare",
+        "internet_l2",
+        "stale_wan_cleanup",
+        "management_and_omci_apply",
+        "service_port_readback",
+        "tr069_binding_readback",
+    ]
 
 
 def test_provision_bridge_native_vlan_failure_rolls_back_created_port(
