@@ -472,6 +472,6 @@ def unsubscribe(
     suppression = comms_campaigns.unsubscribe_by_token_committed(db, token)
     return CampaignUnsubscribeRead(
         unsubscribed=True,
-        channel=suppression.channel,
+        channel=suppression.channel.value,
         address=suppression.address,
     )

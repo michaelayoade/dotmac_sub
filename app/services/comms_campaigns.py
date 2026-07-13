@@ -139,7 +139,9 @@ def _validate_campaign_values(campaign: Campaign) -> None:
 MARKETING_CATEGORY = "marketing"
 
 
-def _blocked_addresses(db: Session, *, channel, addresses: list[str]) -> set[str]:
+def _blocked_addresses(
+    db: Session, *, channel, addresses: list[str | None]
+) -> set[str]:
     """Addresses the platform ledger says we may not send MARKETING to.
 
     One helper, used by every campaign path that needs the answer. Three inline
