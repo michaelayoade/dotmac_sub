@@ -240,8 +240,9 @@ class _DatabasePressureCollector(Collector):
     """Exports SQLAlchemy pool and PostgreSQL session pressure.
 
     This catches the failure mode behind the selfcare 504 incident: long-lived
-    app transactions and pool saturation under API sync/admin traffic. The
-    collector is fail-soft so /metrics remains available even if the DB is sick.
+    app transactions and pool saturation under API sync/admin traffic. Pool
+    counters are process-local; PostgreSQL activity comes from the scheduled
+    infrastructure snapshot so a scrape never waits for a database connection.
     """
 
     def describe(self):  # noqa: ANN201 - prometheus collector protocol
@@ -256,6 +257,18 @@ class _DatabasePressureCollector(Collector):
         yield _gauge_description(
             "sqlalchemy_pool_overflow",
             "Current SQLAlchemy pool overflow connection count",
+        )
+        yield _gauge_description(
+            "postgres_activity_snapshot_available",
+            "1 when a worker-produced PostgreSQL activity snapshot is available",
+        )
+        yield _gauge_description(
+            "postgres_activity_snapshot_age_seconds",
+            "Seconds since the latest PostgreSQL activity snapshot",
+        )
+        yield _gauge_description(
+            "postgres_activity_probe_success",
+            "1 when the latest scheduled PostgreSQL activity probe succeeded",
         )
         yield _gauge_description(
             "postgres_activity_connections",
@@ -306,13 +319,54 @@ class _DatabasePressureCollector(Collector):
             pass
 
         try:
-            from app.services.db_session_adapter import db_session_adapter
-            from app.services.infrastructure_health import _postgres_activity_snapshot
+            from datetime import UTC, datetime
 
-            with db_session_adapter.read_session() as db:
-                activity = _postgres_activity_snapshot(db)
+            from app.services.observability import load_state_snapshot
+
+            snapshot = load_state_snapshot("database_pressure")
         except Exception:
+            snapshot = None
+
+        available = GaugeMetricFamily(
+            "postgres_activity_snapshot_available",
+            "1 when a worker-produced PostgreSQL activity snapshot is available",
+        )
+        available.add_metric([], 1.0 if snapshot else 0.0)
+        yield available
+        if not snapshot:
             return
+
+        observed_at = snapshot.get("observed_at")
+        if observed_at:
+            try:
+                recorded = datetime.fromisoformat(str(observed_at))
+                if recorded.tzinfo is None:
+                    recorded = recorded.replace(tzinfo=UTC)
+                age = GaugeMetricFamily(
+                    "postgres_activity_snapshot_age_seconds",
+                    "Seconds since the latest PostgreSQL activity snapshot",
+                )
+                age.add_metric(
+                    [], max(0.0, (datetime.now(UTC) - recorded).total_seconds())
+                )
+                yield age
+            except ValueError:
+                pass
+
+        activity = {
+            str(item.get("signal")): float(item.get("value"))
+            for item in snapshot.get("observations") or []
+            if isinstance(item, dict)
+            and item.get("scope") == "postgres"
+            and item.get("signal") is not None
+            and isinstance(item.get("value"), (int, float))
+        }
+        probe = GaugeMetricFamily(
+            "postgres_activity_probe_success",
+            "1 when the latest scheduled PostgreSQL activity probe succeeded",
+        )
+        probe.add_metric([], activity.get("probe_success", 0.0))
+        yield probe
 
         connections = GaugeMetricFamily(
             "postgres_activity_connections",

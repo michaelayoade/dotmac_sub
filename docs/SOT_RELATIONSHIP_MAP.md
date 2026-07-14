@@ -162,11 +162,16 @@ Rule: handlers orchestrate. Persistence and retry bookkeeping live in services.
 3. Metrics collectors expose read-only gauges/counters for runtime pressure.
 4. Scheduled single-flight producers own expensive business-health snapshots;
    metrics collectors only read those bounded snapshots.
+5. The cross-Dotmac scrape contract is defined in
+   `docs/METRICS_SCRAPE_SAFETY.md`: `/metrics` reads process-local instruments,
+   bounded snapshots, and static metadata only. It never opens a database
+   session or invokes a business resolver.
 
 Rule: Celery tasks report lifecycle through shared observability helpers; they
 should not write heartbeat/run rows directly unless they are the helper.
 Scrape-time collectors must never perform unbounded business-table scans or
-per-customer financial reconstruction.
+per-customer financial reconstruction. Database and infrastructure queries are
+also produced out of band so pool exhaustion cannot make the scrape path block.
 
 ## Network Domain
 
