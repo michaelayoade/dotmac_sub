@@ -26,6 +26,7 @@ from app.services.network.olt_config_audit import (
     latest_valid_backup,
 )
 from app.services.network.olt_operations import olt_backup_base_dir
+from app.services.network.ont_config_snapshots import snapshot_integrity_valid
 from app.services.network.serial_utils import parse_ont_id_on_olt
 
 
@@ -261,6 +262,26 @@ def _ont_sources(
         else:
             backup_status = "drift"
             backup_message = "ONT registration missing from latest backup"
+    snapshot_integrity = (
+        snapshot_integrity_valid(latest_snapshot) if latest_snapshot else None
+    )
+    snapshot_status = (
+        "drift"
+        if snapshot_integrity is False
+        else "ok"
+        if latest_snapshot
+        else "missing"
+    )
+    snapshot_message = "No saved ONT config snapshot"
+    if latest_snapshot is not None:
+        integrity_label = (
+            "integrity verified"
+            if snapshot_integrity is True
+            else "integrity failed"
+            if snapshot_integrity is False
+            else "legacy, no checksum"
+        )
+        snapshot_message = f"Snapshot {latest_snapshot.created_at} ({integrity_label})"
     return [
         EvidenceSource(
             label="Effective intent",
@@ -280,13 +301,9 @@ def _ont_sources(
             message=f"{len(imported_ports)} imported service-port row(s)",
         ),
         EvidenceSource(
-            label="TR-069 config snapshot",
-            status="ok" if latest_snapshot else "missing",
-            message=(
-                f"Snapshot {latest_snapshot.created_at}"
-                if latest_snapshot
-                else "No saved ONT config snapshot"
-            ),
+            label="ONT config snapshot",
+            status=snapshot_status,
+            message=snapshot_message,
             observed_at=latest_snapshot.created_at if latest_snapshot else None,
         ),
     ]
@@ -299,6 +316,10 @@ def _ont_drift_checks(
     backup_coverage: OntConfigCoverage | None,
     latest_snapshot: OntConfigSnapshot | None,
 ) -> list[DriftCheck]:
+    snapshot_integrity = (
+        snapshot_integrity_valid(latest_snapshot) if latest_snapshot else None
+    )
+    trusted_snapshot = latest_snapshot if snapshot_integrity is not False else None
     checks = [
         _compare_membership(
             label="WAN VLAN",
@@ -331,19 +352,30 @@ def _ont_drift_checks(
             _compare_snapshot_value(
                 label="WiFi SSID",
                 expected=effective_values.get("wifi_ssid"),
-                snapshot=latest_snapshot,
+                snapshot=trusted_snapshot,
                 section="wifi",
                 keys=("SSID", "WiFi SSID", "SSID 1", "2.4GHz SSID"),
             ),
             _compare_snapshot_value(
                 label="WAN mode",
                 expected=effective_values.get("wan_mode"),
-                snapshot=latest_snapshot,
+                snapshot=trusted_snapshot,
                 section="wan",
                 keys=("Connection Type", "WAN Mode", "Mode"),
             ),
         ]
     )
+    if snapshot_integrity is False:
+        checks.append(
+            DriftCheck(
+                label="Snapshot integrity",
+                status="drift",
+                expected="valid checksum",
+                observed="checksum mismatch",
+                source="ONT config snapshot",
+                message="Snapshot payload changed after capture",
+            )
+        )
     return checks
 
 
@@ -415,7 +447,7 @@ def _compare_snapshot_value(
         label=label,
         expected=expected,
         observed=observed,
-        source="TR-069 config snapshot",
+        source="ONT config snapshot",
     )
 
 
