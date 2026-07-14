@@ -34,5 +34,8 @@
     </button>
 </form>
 {% else %}
-<p class="text-xs text-slate-500 dark:text-slate-400 pt-2 border-t border-slate-200 dark:border-slate-700">No firmware images available{% if ont_vendor %} for {{ ont_vendor }}{% endif %}.</p>
+<p class="pt-2 text-xs text-slate-500 dark:text-slate-400 border-t border-slate-200 dark:border-slate-700">
+    No firmware images available{% if ont_vendor %} for {{ ont_vendor }}{% endif %}.
+    <a href="/admin/network/firmware-images/create?kind=ont" class="font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400">Add image</a>
+</p>
 {% endif %}

@@ -55,6 +55,9 @@ from app.web.admin.network_device_groups import router as network_device_groups_
 from app.web.admin.network_dns_threats import router as network_dns_threats_router
 from app.web.admin.network_fiber_plant import router as network_fiber_plant_router
 from app.web.admin.network_fiber_splice import router as network_fiber_splice_router
+from app.web.admin.network_firmware_catalog import (
+    router as network_firmware_catalog_router,
+)
 from app.web.admin.network_ip_management import router as network_ip_management_router
 from app.web.admin.network_monitoring import router as network_monitoring_router
 from app.web.admin.network_olts_inventory import router as network_olts_inventory_router
@@ -355,6 +358,10 @@ router.include_router(
 )
 router.include_router(
     network_authorization_presets_router,
+    dependencies=[Depends(module_manager_service.require_module_enabled("network"))],
+)
+router.include_router(
+    network_firmware_catalog_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("network"))],
 )
 router.include_router(

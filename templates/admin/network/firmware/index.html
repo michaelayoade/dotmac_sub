@@ -1,0 +1,135 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, empty_state %}
+
+{% block title %}Firmware Images - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("emerald", "blue") }}
+
+<div class="relative space-y-6">
+    {% call page_header(
+        title="Firmware Images",
+        subtitle="Verified software artifacts for managed OLTs and ONTs",
+        icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5.5 5.5 0 0116.9 6.5 4.5 4.5 0 1118 16m-6-5v9m0 0l-3-3m3 3l3-3"/></svg>',
+        color="emerald",
+        color2="blue",
+        breadcrumbs=[{"label": "Network", "href": "/admin/network"}, {"label": "Firmware Images"}]
+    ) %}
+        {% if can_manage_firmware %}
+        <a href="/admin/network/firmware-images/create" class="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v12m6-6H6"/></svg>
+            Add image
+        </a>
+        {% endif %}
+    {% endcall %}
+
+    {% if feedback %}
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-200">{{ feedback }}</div>
+    {% endif %}
+    {% if error %}
+    <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-200">{{ error }}</div>
+    {% endif %}
+
+    <form method="GET" action="/admin/network/firmware-images" class="grid gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800 md:grid-cols-6">
+        <div class="md:col-span-2">
+            <label for="search" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Search</label>
+            <input id="search" name="search" value="{{ filters.search }}" placeholder="Vendor, model, version, filename" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+        </div>
+        <div>
+            <label for="kind" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Device type</label>
+            <select id="kind" name="kind" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+                <option value="all" {% if filters.kind == 'all' %}selected{% endif %}>All</option>
+                <option value="olt" {% if filters.kind == 'olt' %}selected{% endif %}>OLT</option>
+                <option value="ont" {% if filters.kind == 'ont' %}selected{% endif %}>ONT</option>
+            </select>
+        </div>
+        <div>
+            <label for="vendor" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Vendor</label>
+            <select id="vendor" name="vendor" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+                <option value="">All</option>
+                {% for value in vendors %}<option value="{{ value }}" {% if filters.vendor == value %}selected{% endif %}>{{ value }}</option>{% endfor %}
+            </select>
+        </div>
+        <div>
+            <label for="status" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">State</label>
+            <select id="status" name="status" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+                <option value="all" {% if filters.status == 'all' %}selected{% endif %}>All</option>
+                <option value="active" {% if filters.status == 'active' %}selected{% endif %}>Active</option>
+                <option value="inactive" {% if filters.status == 'inactive' %}selected{% endif %}>Inactive</option>
+            </select>
+        </div>
+        <div class="flex items-end gap-2">
+            <input type="hidden" name="per_page" value="{{ filters.per_page }}">
+            <button type="submit" class="w-full rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-700 dark:bg-slate-200 dark:text-slate-900 dark:hover:bg-white">Apply</button>
+            <a href="/admin/network/firmware-images" title="Clear filters" class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-50 dark:border-slate-600 dark:hover:bg-slate-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </a>
+        </div>
+    </form>
+
+    <div class="overflow-x-auto rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <table class="min-w-full">
+            <thead class="border-b border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-900/40">
+                <tr>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Type</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Vendor / model</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Version</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Artifact</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Usage</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">State</th>
+                    <th class="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">Actions</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+                {% for row in rows %}
+                {% set image = row.image %}
+                <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/30">
+                    <td class="px-4 py-3"><span class="rounded bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700 dark:bg-slate-700 dark:text-slate-200">{{ row.kind | upper }}</span></td>
+                    <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-200"><span class="font-semibold text-slate-900 dark:text-white">{{ image.vendor }}</span>{% if image.model %}<br><span class="text-xs text-slate-500">{{ image.model }}</span>{% endif %}</td>
+                    <td class="px-4 py-3 font-mono text-sm text-slate-800 dark:text-slate-200">{{ image.version }}</td>
+                    <td class="max-w-xs px-4 py-3">
+                        <p class="truncate text-sm text-slate-700 dark:text-slate-200" title="{{ image.file_url }}">{{ image.filename or image.file_url }}</p>
+                        <p class="mt-1 truncate font-mono text-[11px] text-slate-500" title="{{ image.checksum }}">{{ image.checksum }}</p>
+                    </td>
+                    <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-300">
+                        {{ row.usage.reference_count }} rollout{{ '' if row.usage.reference_count == 1 else 's' }}
+                        {% if row.usage.active %}<span class="mt-1 block text-xs font-medium text-amber-600 dark:text-amber-400">{{ row.usage.active_reference_count }} active</span>{% endif %}
+                    </td>
+                    <td class="px-4 py-3">
+                        {% if image.is_active %}<span class="rounded-full bg-emerald-100 px-2 py-1 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">Active</span>{% else %}<span class="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">Inactive</span>{% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-right">
+                        {% if can_manage_firmware %}
+                        <div class="inline-flex items-center gap-1">
+                            <a href="/admin/network/firmware-images/{{ row.kind }}/{{ image.id }}/edit" title="Edit image" class="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-700 dark:hover:bg-blue-900/20 dark:hover:text-blue-300">
+                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                            </a>
+                        </div>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                {{ empty_state(title="No firmware images", message="Add a verified OLT or ONT software artifact.", action_label=("Add image" if can_manage_firmware else ""), action_href=("/admin/network/firmware-images/create" if can_manage_firmware else ""), color="emerald", color2="blue", colspan=7) }}
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {% if pagination.pages > 1 %}
+    {% set base_qs = [] %}
+    {% if filters.search %}{% set _ = base_qs.append('search=' ~ (filters.search | urlencode)) %}{% endif %}
+    {% if filters.kind %}{% set _ = base_qs.append('kind=' ~ (filters.kind | urlencode)) %}{% endif %}
+    {% if filters.vendor %}{% set _ = base_qs.append('vendor=' ~ (filters.vendor | urlencode)) %}{% endif %}
+    {% if filters.status %}{% set _ = base_qs.append('status=' ~ (filters.status | urlencode)) %}{% endif %}
+    {% set _ = base_qs.append('per_page=' ~ pagination.per_page) %}
+    {% set base_qs_str = base_qs | join('&') %}
+    <div class="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm dark:border-slate-700 dark:bg-slate-800">
+        <p class="text-slate-500">Page {{ pagination.page }} of {{ pagination.pages }} · {{ pagination.total }} images</p>
+        <div class="flex gap-2">
+            {% if pagination.has_prev %}<a href="/admin/network/firmware-images?{{ base_qs_str }}&page={{ pagination.page - 1 }}" class="rounded-lg border border-slate-300 px-3 py-1.5 font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">Previous</a>{% endif %}
+            {% if pagination.has_next %}<a href="/admin/network/firmware-images?{{ base_qs_str }}&page={{ pagination.page + 1 }}" class="rounded-lg border border-slate-300 px-3 py-1.5 font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">Next</a>{% endif %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
