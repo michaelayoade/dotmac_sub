@@ -1,6 +1,7 @@
 """Tests for Celery tasks."""
 
 import logging
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -192,9 +193,8 @@ class TestBillingTask:
         assert "critical_notifications_failed" in caplog.text
         mock_session.close.assert_called_once()
 
-    def test_check_billing_switch_task_survives_snapshot_failure(self, caplog):
-        """A monitoring snapshot error must NOT crash the hourly billing guard
-        nor mask the config/enforcement/notification alerts."""
+    def test_check_billing_switch_task_does_not_compute_cohort_snapshot(self, caplog):
+        """The hourly config guard must not run the financial cohort scan."""
         mock_session = MagicMock()
         enforcement = MagicMock(ok=True, reasons=[], details={})
         notification = MagicMock(
@@ -223,7 +223,7 @@ class TestBillingTask:
                         patch(
                             "app.services.billing_health.billing_health_snapshot",
                             side_effect=ValueError("snapshot boom"),
-                        ),
+                        ) as snapshot,
                     ):
                         from app.tasks.billing import check_billing_switch_task
 
@@ -232,14 +232,111 @@ class TestBillingTask:
                         ):
                             result = check_billing_switch_task()
 
-        # Task completed despite the snapshot failure.
         assert result["ok"] is True
-        # Monitoring block was skipped (no billing_health key), but the existing
-        # notification alert still fired.
         assert "billing_health" not in result
         assert "billing_notification_delivery_unhealthy" in caplog.text
-        assert "billing_health_snapshot_failed" in caplog.text
+        snapshot.assert_not_called()
         mock_session.close.assert_called_once()
+
+    def test_refresh_billing_health_snapshot_is_single_flight(self):
+        mock_db = MagicMock()
+        expected = {
+            "published": True,
+            "paid_with_balance_count": 0,
+            "anomalies": [],
+        }
+
+        @contextmanager
+        def acquired_lock(*_args, **_kwargs):
+            yield mock_db, True
+
+        with (
+            patch(
+                "app.services.billing.scheduled.db_session_adapter.advisory_lock",
+                acquired_lock,
+            ),
+            patch(
+                "app.services.billing.scheduled._append_billing_health_snapshot",
+                side_effect=lambda _db, result: result.update(
+                    {"billing_health": expected}
+                ),
+            ) as append_snapshot,
+            patch("app.services.observability.record_task_run") as record_run,
+        ):
+            from app.tasks.billing import refresh_billing_health_snapshot_task
+
+            result = refresh_billing_health_snapshot_task()
+
+        assert result == expected
+        append_snapshot.assert_called_once_with(mock_db, {"billing_health": expected})
+        mock_db.rollback.assert_called_once()
+        record_run.assert_called_once()
+
+    def test_refresh_billing_health_snapshot_task_uses_billing_queue(self):
+        from app.celery_app import celery_app
+
+        assert celery_app.conf.task_routes[
+            "app.tasks.billing.refresh_billing_health_snapshot"
+        ] == {"queue": "billing"}
+
+    def test_refresh_billing_health_snapshot_skips_when_already_running(self):
+        mock_db = MagicMock()
+
+        @contextmanager
+        def held_lock(*_args, **_kwargs):
+            yield mock_db, False
+
+        with (
+            patch(
+                "app.services.billing.scheduled.db_session_adapter.advisory_lock",
+                held_lock,
+            ),
+            patch(
+                "app.services.billing.scheduled._append_billing_health_snapshot"
+            ) as append_snapshot,
+            patch(
+                "app.services.observability.record_task_skip", return_value=2
+            ) as record_skip,
+        ):
+            from app.tasks.billing import refresh_billing_health_snapshot_task
+
+            result = refresh_billing_health_snapshot_task()
+
+        assert result == {"skipped": "already_running", "skip_streak": 2}
+        append_snapshot.assert_not_called()
+        record_skip.assert_called_once()
+
+    def test_refresh_billing_health_snapshot_records_soft_timeout(self):
+        from billiard.exceptions import SoftTimeLimitExceeded
+
+        mock_db = MagicMock()
+
+        @contextmanager
+        def acquired_lock(*_args, **_kwargs):
+            yield mock_db, True
+
+        with (
+            patch(
+                "app.services.billing.scheduled.db_session_adapter.advisory_lock",
+                acquired_lock,
+            ),
+            patch(
+                "app.services.billing.scheduled._append_billing_health_snapshot",
+                side_effect=SoftTimeLimitExceeded,
+            ),
+            patch("app.services.observability.record_task_run") as record_run,
+        ):
+            from app.tasks.billing import refresh_billing_health_snapshot_task
+
+            result = refresh_billing_health_snapshot_task()
+
+        assert result == {"error": "billing_health_snapshot_timed_out"}
+        mock_db.rollback.assert_called_once()
+        record_run.assert_called_once_with(
+            "app.tasks.billing.refresh_billing_health_snapshot",
+            status="error",
+            counters=result,
+        )
 
 
 # =============================================================================

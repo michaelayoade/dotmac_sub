@@ -16,7 +16,7 @@ from types import SimpleNamespace
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, exists, func, or_
+from sqlalchemy import and_, case, exists, func, literal, or_
 from sqlalchemy.orm import Session, load_only
 
 from app.models.billing import (
@@ -457,6 +457,238 @@ def list_customer_financial_events(
         ),
         key=lambda event: (event.occurred_at, event.id),
     )
+
+
+def customer_financial_balances_by_currency(
+    db: Session,
+    account_ids: list[str | UUID] | tuple[str | UUID, ...] | set[str | UUID],
+) -> dict[UUID, dict[str, Decimal]]:
+    """Aggregate canonical balances for a cohort without materializing events."""
+    account_uuids = sorted(
+        {coerce_uuid(account_id) for account_id in account_ids}, key=str
+    )
+    if not account_uuids:
+        return {}
+
+    balances: dict[UUID, dict[str, Decimal]] = {
+        account_id: {} for account_id in account_uuids
+    }
+    legacy_account_ids = set(
+        row[0]
+        for row in db.query(SplynxBillingTransaction.subscriber_id)
+        .filter(SplynxBillingTransaction.subscriber_id.in_(account_uuids))
+        .filter(SplynxBillingTransaction.deleted.is_(False))
+        .distinct()
+        .all()
+    )
+
+    def add(rows) -> None:  # noqa: ANN001
+        for account_id, currency, amount in rows:
+            code = str(currency or "NGN")
+            account_balances = balances[account_id]
+            account_balances[code] = account_balances.get(
+                code, Decimal("0.00")
+            ) + round_money(Decimal(str(amount or 0)))
+
+    if legacy_account_ids:
+        legacy_signed = case(
+            (
+                SplynxBillingTransaction.entry_type == LedgerEntryType.credit.value,
+                SplynxBillingTransaction.amount,
+            ),
+            else_=-SplynxBillingTransaction.amount,
+        )
+        add(
+            db.query(
+                SplynxBillingTransaction.subscriber_id,
+                literal("NGN").label("currency"),
+                func.sum(legacy_signed).label("balance"),
+            )
+            .filter(SplynxBillingTransaction.subscriber_id.in_(legacy_account_ids))
+            .filter(SplynxBillingTransaction.deleted.is_(False))
+            .filter(SplynxBillingTransaction.transaction_date.isnot(None))
+            .group_by(SplynxBillingTransaction.subscriber_id)
+            .all()
+        )
+
+    payment_currency = func.coalesce(Payment.currency, "NGN")
+    payment_net = func.coalesce(Payment.amount, 0) - func.coalesce(
+        Payment.refunded_amount, 0
+    )
+    payment_query = (
+        db.query(
+            Payment.account_id,
+            payment_currency.label("currency"),
+            func.sum(payment_net).label("balance"),
+        )
+        .filter(Payment.account_id.in_(account_uuids))
+        .filter(Payment.is_active.is_(True))
+        .filter(
+            Payment.status.in_(
+                [
+                    PaymentStatus.succeeded,
+                    PaymentStatus.partially_refunded,
+                    PaymentStatus.refunded,
+                ]
+            )
+        )
+        .filter(payment_net > 0)
+    )
+    if legacy_account_ids:
+        payment_query = payment_query.filter(
+            or_(
+                Payment.account_id.notin_(legacy_account_ids),
+                Payment.created_at >= PAYMENT_ACTIVITY_AT,
+            )
+        )
+    add(payment_query.group_by(Payment.account_id, payment_currency).all())
+
+    allocation_currency = func.coalesce(Payment.currency, Invoice.currency, "NGN")
+    allocation_query = (
+        db.query(
+            Invoice.account_id,
+            allocation_currency.label("currency"),
+            func.sum(PaymentAllocation.amount).label("balance"),
+        )
+        .join(Invoice, Invoice.id == PaymentAllocation.invoice_id)
+        .join(Payment, Payment.id == PaymentAllocation.payment_id)
+        .filter(Invoice.account_id.in_(account_uuids))
+        .filter(PaymentAllocation.is_active.is_(True))
+        .filter(Payment.is_active.is_(True))
+        .filter(
+            Payment.status.in_(
+                [
+                    PaymentStatus.succeeded,
+                    PaymentStatus.partially_refunded,
+                    PaymentStatus.refunded,
+                ]
+            )
+        )
+        .filter(
+            or_(Payment.account_id.is_(None), Payment.account_id != Invoice.account_id)
+        )
+    )
+    if legacy_account_ids:
+        allocation_query = allocation_query.filter(
+            or_(
+                Invoice.account_id.notin_(legacy_account_ids),
+                Payment.created_at >= PAYMENT_ACTIVITY_AT,
+            )
+        )
+    add(allocation_query.group_by(Invoice.account_id, allocation_currency).all())
+
+    invoice_currency = func.coalesce(Invoice.currency, "NGN")
+    invoice_query = (
+        db.query(
+            Invoice.account_id,
+            invoice_currency.label("currency"),
+            (-func.sum(Invoice.total)).label("balance"),
+        )
+        .filter(Invoice.account_id.in_(account_uuids))
+        .filter(Invoice.is_active.is_(True))
+        .filter(
+            Invoice.status.in_(
+                [
+                    InvoiceStatus.issued,
+                    InvoiceStatus.partially_paid,
+                    InvoiceStatus.overdue,
+                    InvoiceStatus.paid,
+                ]
+            )
+        )
+        .filter(Invoice.is_proforma.is_(False))
+        .filter(collectible_ar_invoice_filter())
+    )
+    if legacy_account_ids:
+        invoice_query = invoice_query.filter(
+            or_(
+                Invoice.account_id.notin_(legacy_account_ids),
+                Invoice.created_at >= SERVICE_ACTIVITY_AT,
+            )
+        )
+    add(invoice_query.group_by(Invoice.account_id, invoice_currency).all())
+
+    note_currency = func.coalesce(CreditNote.currency, "NGN")
+    note_query = (
+        db.query(
+            CreditNote.account_id,
+            note_currency.label("currency"),
+            func.sum(CreditNote.total).label("balance"),
+        )
+        .filter(CreditNote.account_id.in_(account_uuids))
+        .filter(CreditNote.is_active.is_(True))
+        .filter(
+            CreditNote.status.in_(
+                [
+                    CreditNoteStatus.issued,
+                    CreditNoteStatus.partially_applied,
+                    CreditNoteStatus.applied,
+                ]
+            )
+        )
+    )
+    if legacy_account_ids:
+        note_query = note_query.filter(
+            or_(
+                CreditNote.account_id.notin_(legacy_account_ids),
+                CreditNote.created_at >= SERVICE_ACTIVITY_AT,
+            )
+        )
+    add(note_query.group_by(CreditNote.account_id, note_currency).all())
+
+    ledger_currency = func.coalesce(LedgerEntry.currency, "NGN")
+    ledger_signed = case(
+        (LedgerEntry.entry_type == LedgerEntryType.credit, LedgerEntry.amount),
+        else_=-LedgerEntry.amount,
+    )
+    ledger_query = (
+        db.query(
+            LedgerEntry.account_id,
+            ledger_currency.label("currency"),
+            func.sum(ledger_signed).label("balance"),
+        )
+        .filter(LedgerEntry.account_id.in_(account_uuids))
+        .filter(LedgerEntry.invoice_id.is_(None))
+        .filter(LedgerEntry.is_active.is_(True))
+        .filter(
+            or_(
+                LedgerEntry.source.in_([LedgerSource.adjustment, LedgerSource.other]),
+                and_(
+                    LedgerEntry.source == LedgerSource.refund,
+                    LedgerEntry.payment_id.is_(None),
+                ),
+                and_(
+                    LedgerEntry.source == LedgerSource.invoice,
+                    LedgerEntry.entry_type == LedgerEntryType.debit,
+                ),
+                and_(
+                    LedgerEntry.source == LedgerSource.payment,
+                    LedgerEntry.payment_id.is_(None),
+                ),
+                and_(
+                    LedgerEntry.source == LedgerSource.credit_note,
+                    LedgerEntry.payment_id.is_(None),
+                ),
+            )
+        )
+    )
+    memo = func.coalesce(LedgerEntry.memo, "")
+    ledger_query = ledger_query.filter(memo.notin_(INTERNAL_MEMO_EXACT))
+    for prefix in INTERNAL_MEMO_PREFIXES:
+        ledger_query = ledger_query.filter(~memo.startswith(prefix))
+    if legacy_account_ids:
+        ledger_event_date = func.coalesce(
+            LedgerEntry.effective_date, LedgerEntry.created_at
+        )
+        ledger_query = ledger_query.filter(
+            or_(
+                LedgerEntry.account_id.notin_(legacy_account_ids),
+                ledger_event_date > LEGACY_LEDGER_CUTOVER,
+            )
+        )
+    add(ledger_query.group_by(LedgerEntry.account_id, ledger_currency).all())
+
+    return balances
 
 
 def calculate_customer_balance(
