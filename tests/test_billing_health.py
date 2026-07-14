@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+from sqlalchemy import event
+
 from app.models.billing import (
     BillingRun,
     BillingRunStatus,
@@ -320,6 +322,76 @@ def test_negative_prepaid_balance_exposure_respects_enabled_sweep(db_session):
     assert total == Decimal("25.00")
     assert sweep_enabled is True
     assert disabled_count == 0
+
+
+def test_negative_prepaid_balance_exposure_has_bounded_query_count(db_session):
+    offer = _offer(db_session)
+    for index in range(20):
+        account = _subscriber(
+            db_session,
+            email=f"bounded-prepaid-{index}@example.com",
+        )
+        _subscription(db_session, account, offer, billing_mode=BillingMode.prepaid)
+        db_session.add(
+            LedgerEntry(
+                account_id=account.id,
+                entry_type=LedgerEntryType.debit,
+                source=LedgerSource.adjustment,
+                amount=Decimal("10.00"),
+                currency="NGN",
+                memo="prepaid drawdown",
+            )
+        )
+    db_session.commit()
+
+    statements: list[str] = []
+
+    def capture(_conn, _cursor, statement, _params, _context, _executemany):
+        if statement.lstrip().upper().startswith("SELECT"):
+            statements.append(statement)
+
+    event.listen(db_session.bind, "before_cursor_execute", capture)
+    try:
+        count, total, _, _ = billing_health.negative_prepaid_balance_exposure(
+            db_session
+        )
+    finally:
+        event.remove(db_session.bind, "before_cursor_execute", capture)
+
+    assert count == 20
+    assert total == Decimal("200.00")
+    # Includes control-plane/settings resolution; the financial cohort itself
+    # is loaded in a fixed set of bulk queries rather than 6+ queries/account.
+    assert len(statements) <= 25
+
+
+def test_billing_health_snapshot_publishes_bounded_observations(monkeypatch):
+    from app.services import observability
+
+    captured = {}
+
+    def publish(domain, observations, **kwargs):
+        captured.update(
+            domain=domain,
+            observations=list(observations),
+            status=kwargs["status"],
+        )
+        return True
+
+    monkeypatch.setattr(observability, "publish_state_snapshot", publish)
+
+    snapshot = _snap(
+        negative_prepaid_balance_count=2,
+        negative_prepaid_balance_total=Decimal("125.00"),
+    )
+    assert billing_health.publish_billing_health_snapshot(snapshot) is True
+    assert captured["domain"] == "billing_health"
+    assert captured["status"] == "degraded"
+    labels = {
+        (item.signal, item.scope): item.value for item in captured["observations"]
+    }
+    assert labels[("negative_prepaid_balance_accounts", "all")] == 2.0
+    assert labels[("negative_prepaid_balance_total", "all")] == 125.0
 
 
 def test_billing_profile_integrity_counts_mismatch_and_mixed_modes(db_session):
