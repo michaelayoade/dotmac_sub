@@ -84,6 +84,7 @@ from app.tasks.network_operations import cleanup_old_operations
 from app.tasks.notifications import deliver_notification_queue
 from app.tasks.oauth import check_token_health, refresh_expiring_tokens
 from app.tasks.olt_config_backup import backup_all_olts
+from app.tasks.olt_firmware import rollback_firmware_task, upgrade_firmware_task
 from app.tasks.olt_health_retry import (
     retry_failed_olt_connections,
     retry_single_olt,
@@ -275,6 +276,8 @@ __all__ = [
     "aggregate_bandwidth_to_metrics",
     "trim_bandwidth_stream",
     "backup_all_olts",
+    "upgrade_firmware_task",
+    "rollback_firmware_task",
     "run_olt_mac_harvest",
     "dispatch_operational_escalation_deliveries",
     "retry_failed_olt_connections",

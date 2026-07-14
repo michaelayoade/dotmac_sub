@@ -317,6 +317,22 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "integrations", STATE, GUARDED, STATUS
     ),
     "app.tasks.olt_config_backup.backup_all_olts": _c("network", SWEEP, IDEMP, STATUS),
+    "app.tasks.olt_firmware.rollback": _c(
+        "network",
+        MANUAL,
+        NON_IDEMP,
+        LOG,
+        "Device firmware rollback is an operator-triggered command and is not "
+        "safe for automatic redelivery.",
+    ),
+    "app.tasks.olt_firmware.upgrade_with_verification": _c(
+        "network",
+        STATE,
+        STATEFUL,
+        STATUS,
+        "The network operation owns lifecycle and failure visibility; its active-state "
+        "checks and task idempotency key guard duplicate delivery.",
+    ),
     "app.tasks.olt_health_retry.retry_failed_olt_connections": _c(
         "network", SWEEP, IDEMP, HEALTH
     ),
