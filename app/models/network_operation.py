@@ -54,6 +54,8 @@ class NetworkOperationType(enum.Enum):
     ont_send_conn_request = "ont_send_conn_request"
     ont_enable_ipv6 = "ont_enable_ipv6"
     ont_firmware_upgrade = "ont_firmware_upgrade"
+    ont_return_to_inventory = "ont_return_to_inventory"
+    ont_decommission = "ont_decommission"
     cpe_set_conn_request_creds = "cpe_set_conn_request_creds"
     cpe_send_conn_request = "cpe_send_conn_request"
     cpe_reboot = "cpe_reboot"
