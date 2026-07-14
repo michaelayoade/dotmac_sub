@@ -444,6 +444,28 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("runtime.infrastructure_polling",),
             ),
             SOTService(
+                name="network.operation_ledger",
+                module="app.services.network_operations",
+                owns=(
+                    "tracked device operation lifecycle and status vocabulary",
+                    "operation terminal-transition guard",
+                    "correlation-key duplicate suppression",
+                    "stale-active operation reclamation",
+                    "parent/child operation status rollup",
+                    "device operation re-execution eligibility",
+                ),
+                depends_on=("network.identity",),
+                notes=(
+                    "Owns whether a tracked device operation may run, resume, or "
+                    "be re-executed. Celery tasks are transport adapters that "
+                    "report progress through this ledger; they do not decide "
+                    "retry eligibility. app.services.task_reliability declares "
+                    "each task's contract and is a projection of this owner, not "
+                    "a parallel authority — a task whose contract claims operator "
+                    "redrive requires a redrive path here first."
+                ),
+            ),
+            SOTService(
                 name="network.control_plane_intent",
                 module="app.services.control_plane_intent",
                 owns=(
