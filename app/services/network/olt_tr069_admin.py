@@ -472,39 +472,17 @@ def handle_rebind_tr069_profiles(
             failed += 1
             continue
 
-        fsp = f"{board}/{port}"
-        from app.services.network.olt_protocol_adapters import get_protocol_adapter
-
-        bind_result = get_protocol_adapter(olt).bind_tr069_profile(
-            fsp,
-            onu_index,
-            profile_id=target_profile_id,
+        from app.services.network.ont_profile_reconcile import (
+            reconcile_tr069_profile_binding,
         )
-        ok = bind_result.success
-        msg = bind_result.message
+
+        ok, msg = reconcile_tr069_profile_binding(
+            db,
+            str(ont.id),
+            target_profile_id,
+        )
         if ok:
             rebound += 1
-            try:
-                from app.services.network.ont_provision_steps import (
-                    wait_tr069_bootstrap,
-                )
-
-                wait_result = wait_tr069_bootstrap(db, str(ont.id))
-                logger.info(
-                    "Queued TR-069 bootstrap wait after OLT rebind: olt_id=%s ont_id=%s serial=%s message=%s",
-                    olt_id,
-                    ont.id,
-                    ont.serial_number,
-                    wait_result.message,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Failed to queue TR-069 bootstrap wait after OLT rebind: olt_id=%s ont_id=%s serial=%s error=%s",
-                    olt_id,
-                    ont.id,
-                    ont.serial_number,
-                    exc,
-                )
         else:
             failed += 1
             errors_list.append(f"ONT {ont.serial_number}: {msg}")

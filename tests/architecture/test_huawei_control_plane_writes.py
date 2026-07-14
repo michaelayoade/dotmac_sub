@@ -46,7 +46,6 @@ CANONICAL_OLT_WRITERS = {
 OLT_WRITE_BACKLOG = {
     "app/api/network_olt_ops.py",
     "app/services/network/olt_api_operations.py",
-    "app/services/network/olt_tr069_admin.py",
     "app/services/network/ont_authorization.py",
     "app/services/network/ont_inventory.py",
     "app/services/network/ont_provision_steps.py",

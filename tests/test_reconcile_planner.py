@@ -437,10 +437,26 @@ def test_fresh_authorize_emits_authorize_servicep_ipconfig_tr069_acs():
 
     # NAT defensive is emitted when nat_enabled observed != desired. Fresh
     # device has nat=None observed; the diff helper treats None as "no signal"
-    # so NAT push is skipped on a fresh device — it'll be enforced on the
-    # next sweep after the device informs.
-    # That's a real design choice; assert it explicitly.
+    # so NAT push is skipped until the device informs.
     assert AcsSetNatEnabled not in action_types
+
+
+def test_sweep_repairs_observed_tr069_profile_drift():
+    desired = _desired(tr069_profile_id=5)
+    observed = _synced_observed(desired)
+    observed = dataclasses.replace(
+        observed,
+        olt=dataclasses.replace(observed.olt, olt_tr069_profile_id=2),
+    )
+
+    plan = compute_plan(desired, observed, "sweep")
+
+    profile_actions = [
+        action for action in plan.actions if isinstance(action, OltTr069ServerConfig)
+    ]
+    assert len(profile_actions) == 1
+    assert profile_actions[0].profile_id == 5
+    assert any(drift.field == "olt_tr069_profile_id" for drift in plan.drifts)
 
 
 def test_fresh_authorize_requires_both_surfaces():

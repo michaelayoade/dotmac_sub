@@ -79,6 +79,7 @@ class OntObservation(Base):
     olt_mgmt_vlan: Mapped[int | None] = mapped_column(Integer)
     olt_line_profile_id: Mapped[int | None] = mapped_column(Integer)
     olt_service_profile_id: Mapped[int | None] = mapped_column(Integer)
+    olt_tr069_profile_id: Mapped[int | None] = mapped_column(Integer)
     # List of {index, vlan, gem, state} dicts — JSON because the count is
     # bounded but variable, and we don't query into the structure.
     olt_service_ports: Mapped[list[dict] | None] = mapped_column(JSON)

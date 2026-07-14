@@ -62,6 +62,9 @@ def validate_desired(
     if not sp_check.ok:
         return sp_check
 
+    if target.tr069_profile_id <= 0:
+        return Validation(False, "tr069_profile_id must be a positive integer")
+
     wifi_check = _check_wifi(target, current)
     if not wifi_check.ok:
         return wifi_check

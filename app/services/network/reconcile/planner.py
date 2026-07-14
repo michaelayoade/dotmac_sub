@@ -142,6 +142,7 @@ _REMOTE_ACCESS_ONLY_FIELDS = frozenset(
     }
 )
 _ACS_ENDPOINT_FIELDS = frozenset({"acs_url", "acs_username", "acs_password_ref"})
+_TR069_PROFILE_ONLY_FIELDS = frozenset({"tr069_profile_id"})
 
 
 def _is_wifi_only_change(mode: ReconcileMode, proposed_fields: frozenset[str]) -> bool:
@@ -159,6 +160,16 @@ def _is_remote_access_only_change(
         mode == "sync"
         and bool(proposed_fields)
         and proposed_fields <= _REMOTE_ACCESS_ONLY_FIELDS
+    )
+
+
+def _is_tr069_profile_only_change(
+    mode: ReconcileMode, proposed_fields: frozenset[str]
+) -> bool:
+    return (
+        mode == "sync"
+        and bool(proposed_fields)
+        and proposed_fields <= _TR069_PROFILE_ONLY_FIELDS
     )
 
 
@@ -186,23 +197,28 @@ def compute_plan(
     proposed_fields = proposed_fields or frozenset()
     wifi_only_change = _is_wifi_only_change(mode, proposed_fields)
     remote_only_change = _is_remote_access_only_change(mode, proposed_fields)
+    tr069_profile_only_change = _is_tr069_profile_only_change(mode, proposed_fields)
 
-    if wifi_only_change or remote_only_change:
+    if tr069_profile_only_change:
+        _plan_tr069_profile_only(desired, observed, actions, drifts)
+        omci_wan_planned = False
+    elif wifi_only_change or remote_only_change:
         omci_wan_planned = False
     else:
         _plan_olt_side(desired, observed, mode, actions, drifts)
         omci_wan_planned = _plan_olt_omci_wan(desired, observed, mode, actions, drifts)
         _append_reset_if_needed(desired, actions)
-    _plan_acs_side(
-        desired,
-        observed,
-        mode,
-        actions,
-        drifts,
-        omci_wan_planned,
-        proposed_fields,
-        force_proposed_writes,
-    )
+    if not tr069_profile_only_change:
+        _plan_acs_side(
+            desired,
+            observed,
+            mode,
+            actions,
+            drifts,
+            omci_wan_planned,
+            proposed_fields,
+            force_proposed_writes,
+        )
 
     required_surfaces = frozenset(a.surface for a in actions)
     return Plan(
@@ -213,6 +229,33 @@ def compute_plan(
 
 
 # ── OLT-side planning ───────────────────────────────────────────────────────
+
+
+def _plan_tr069_profile_only(
+    desired: OntDesiredState,
+    observed: OntObservedState,
+    actions: list[Action],
+    drifts: list[Drift],
+) -> None:
+    """Plan only the requested OLT TR-069 profile binding."""
+    if observed.olt.olt_tr069_profile_id == desired.tr069_profile_id:
+        return
+    actions.append(
+        OltTr069ServerConfig(
+            fsp=desired.fsp,
+            ont_id=desired.olt_ont_id,
+            profile_id=desired.tr069_profile_id,
+        )
+    )
+    drifts.append(
+        Drift(
+            field="olt_tr069_profile_id",
+            surface="olt",
+            desired=desired.tr069_profile_id,
+            observed=observed.olt.olt_tr069_profile_id,
+            repairable=True,
+        )
+    )
 
 
 def _plan_olt_side(
@@ -305,6 +348,24 @@ def _plan_olt_side(
                 )
             )
 
+        if _observed_differs(olt_obs.olt_tr069_profile_id, desired.tr069_profile_id):
+            actions.append(
+                OltTr069ServerConfig(
+                    fsp=desired.fsp,
+                    ont_id=desired.olt_ont_id,
+                    profile_id=desired.tr069_profile_id,
+                )
+            )
+            drifts.append(
+                Drift(
+                    field="olt_tr069_profile_id",
+                    surface="olt",
+                    desired=desired.tr069_profile_id,
+                    observed=olt_obs.olt_tr069_profile_id,
+                    repairable=True,
+                )
+            )
+
     # 2. Service-port repair — strict, system-managed. Stale ports removed,
     # missing ports created.
     _plan_service_ports(desired, observed, actions, drifts)
@@ -346,9 +407,8 @@ def _plan_olt_side(
                 )
             )
 
-    # 4. TR-069 binding. We re-emit on every fresh authorize because the
-    # observed-side doesn't yet parse the TR-069 profile (parser TODO in
-    # the OLT reader).
+    # 4. Fresh authorization always needs the TR-069 binding. Existing ONTs
+    # are handled by the observed-profile diff above.
     if not olt_obs.olt_present:
         actions.append(
             OltTr069ServerConfig(

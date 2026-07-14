@@ -835,9 +835,10 @@ def configure_management_ip(
 
 
 def bind_tr069_profile(db: Session, ont_id: str) -> tuple[bool, str]:
-    """Bind TR-069 server profile to ONT via OLT."""
-    from app.services.network.olt_protocol_adapters import get_protocol_adapter
-    from app.services.network.ont_provision_steps import wait_tr069_bootstrap
+    """Bind and verify the configured TR-069 profile through the reconciler."""
+    from app.services.network.ont_profile_reconcile import (
+        reconcile_tr069_profile_binding,
+    )
     from app.services.web_network_service_ports import _resolve_ont_olt_context
 
     ont, olt, fsp, olt_ont_id = _resolve_ont_olt_context(db, ont_id)
@@ -848,35 +849,12 @@ def bind_tr069_profile(db: Session, ont_id: str) -> tuple[bool, str]:
     dependency_failure = _validate_olt_write_dependencies(db, olt, cached_only=True)
     if dependency_failure is not None:
         return False, dependency_failure.message
-    config_pack = resolve_olt_config_pack(db, olt.id)
-    profile_id = config_pack.tr069_olt_profile_id if config_pack else None
+    effective = resolve_effective_ont_config(db, ont)
+    values = effective.get("values", {}) if isinstance(effective, dict) else {}
+    profile_id = _int_or_none(values.get("tr069_olt_profile_id"))
     if profile_id is None:
-        return False, "OLT config pack TR-069 profile is not configured."
-    bind_result = get_protocol_adapter(olt).bind_tr069_profile(
-        fsp,
-        olt_ont_id,
-        profile_id=profile_id,
-    )
-    ok = bind_result.success
-    message = bind_result.message
-    if ok:
-        try:
-            _persist_ont_plan_step(
-                db,
-                ont_id,
-                "bind_tr069",
-                {"tr069_olt_profile_id": profile_id},
-            )
-            wait_result = wait_tr069_bootstrap(db, ont_id)
-            message = f"{message}; {wait_result.message}"
-        except Exception as exc:
-            logger.warning(
-                "Failed to queue TR-069 bootstrap wait after manual bind for ONT %s: %s",
-                ont_id,
-                exc,
-            )
-            message = f"{message}; failed to queue ACS inform wait: {exc}"
-    return ok, message
+        return False, "No effective OLT TR-069 profile is configured."
+    return reconcile_tr069_profile_binding(db, ont_id, profile_id)
 
 
 # ---------------------------------------------------------------------------
