@@ -5,7 +5,8 @@ from __future__ import annotations
 import logging
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.sql.elements import ColumnElement
 from starlette.datastructures import FormData
 
 from app.models.network import FdhCabinet, NetworkZone, OntUnit, Splitter
@@ -19,61 +20,96 @@ def _form_str(form: FormData, key: str, default: str = "") -> str:
     return value.strip() if isinstance(value, str) else default
 
 
-def list_page_data(db: Session, status: str | None = None) -> dict[str, object]:
+def list_page_data(
+    db: Session,
+    status: str | None = None,
+    *,
+    search: str | None = None,
+    page: int = 1,
+    per_page: int = 25,
+) -> dict[str, object]:
     """Return zone list with summary stats."""
     status_filter = (status or "all").strip().lower()
-    is_active: bool | None = None
+    search_filter = (search or "").strip()
+    filters: list[ColumnElement[bool]] = []
     if status_filter == "active":
-        is_active = True
+        filters.append(NetworkZone.is_active.is_(True))
     elif status_filter == "inactive":
-        is_active = False
+        filters.append(NetworkZone.is_active.is_(False))
+    if search_filter:
+        pattern = f"%{search_filter}%"
+        filters.append(
+            NetworkZone.name.ilike(pattern) | NetworkZone.description.ilike(pattern)
+        )
 
-    zones = network_service.network_zones.list(db, is_active=is_active)
+    count_stmt = select(func.count(NetworkZone.id))
+    if filters:
+        count_stmt = count_stmt.where(*filters)
+    filtered_total = db.scalar(count_stmt) or 0
+    total_pages = max(1, (filtered_total + per_page - 1) // per_page)
+    page = min(page, total_pages)
 
-    # Compute per-zone stats
-    zone_stats: dict[str, dict[str, int]] = {}
-    for zone in zones:
-        ont_count = (
-            db.scalar(
-                select(func.count())
-                .select_from(OntUnit)
-                .where(OntUnit.zone_id == zone.id)
-            )
-            or 0
-        )
-        splitter_count = (
-            db.scalar(
-                select(func.count())
-                .select_from(Splitter)
-                .where(Splitter.zone_id == zone.id)
-            )
-            or 0
-        )
-        fdh_count = (
-            db.scalar(
-                select(func.count())
-                .select_from(FdhCabinet)
-                .where(FdhCabinet.zone_id == zone.id)
-            )
-            or 0
-        )
-        zone_stats[str(zone.id)] = {
-            "ont_count": ont_count,
-            "splitter_count": splitter_count,
-            "fdh_count": fdh_count,
+    ont_count = (
+        select(func.count(OntUnit.id))
+        .where(OntUnit.zone_id == NetworkZone.id)
+        .correlate(NetworkZone)
+        .scalar_subquery()
+    )
+    splitter_count = (
+        select(func.count(Splitter.id))
+        .where(Splitter.zone_id == NetworkZone.id)
+        .correlate(NetworkZone)
+        .scalar_subquery()
+    )
+    fdh_count = (
+        select(func.count(FdhCabinet.id))
+        .where(FdhCabinet.zone_id == NetworkZone.id)
+        .correlate(NetworkZone)
+        .scalar_subquery()
+    )
+    stmt = (
+        select(NetworkZone, ont_count, splitter_count, fdh_count)
+        .options(joinedload(NetworkZone.parent))
+        .order_by(NetworkZone.name)
+        .offset((page - 1) * per_page)
+        .limit(per_page)
+    )
+    if filters:
+        stmt = stmt.where(*filters)
+    rows = db.execute(stmt).all()
+    zones = [row[0] for row in rows]
+    zone_stats = {
+        str(row[0].id): {
+            "ont_count": row[1],
+            "splitter_count": row[2],
+            "fdh_count": row[3],
         }
+        for row in rows
+    }
 
-    total = len(zones)
-    active = sum(1 for z in zones if z.is_active)
+    stats_row = db.execute(
+        select(
+            func.count(NetworkZone.id),
+            func.count(NetworkZone.id).filter(NetworkZone.is_active.is_(True)),
+            func.count(NetworkZone.id).filter(NetworkZone.is_active.is_(False)),
+        )
+    ).one()
 
     return {
         "zones": zones,
         "zone_stats": zone_stats,
         "status_filter": status_filter,
+        "search": search_filter,
         "stats": {
-            "total": total,
-            "active": active,
-            "inactive": total - active,
+            "total": stats_row[0],
+            "active": stats_row[1],
+            "inactive": stats_row[2],
+        },
+        "pagination": {
+            "page": page,
+            "per_page": per_page,
+            "total": filtered_total,
+            "total_pages": total_pages,
         },
     }
 

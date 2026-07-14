@@ -68,8 +68,8 @@
                     </svg>
                 </div>
                 <!-- Info Icon -->
-                <div x-show="variant === 'info'" class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-blue-100 dark:bg-blue-900/30">
-                    <svg class="h-8 w-8 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <div x-show="variant === 'info'" class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary-100 dark:bg-primary-900/30">
+                    <svg class="h-8 w-8 text-primary-600 dark:text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
                     </svg>
                 </div>
@@ -94,7 +94,7 @@
                         :disabled="submitting"
                         :class="{ 'opacity-50 cursor-wait': submitting }"
                         class="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-red-500 to-rose-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-red-500/25 transition-all hover:shadow-xl hover:shadow-red-500/30 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 disabled:hover:shadow-lg">
-                    <span x-show="!submitting">Delete</span>
+                    <span x-show="!submitting" x-text="confirmLabel"></span>
                     <span x-show="submitting" class="flex items-center gap-2">
                         <svg class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
                             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -111,7 +111,7 @@
                         :disabled="submitting"
                         :class="{ 'opacity-50 cursor-wait': submitting }"
                         class="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-amber-500/25 transition-all hover:shadow-xl hover:shadow-amber-500/30 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 disabled:hover:shadow-lg">
-                    <span x-show="!submitting">Confirm</span>
+                    <span x-show="!submitting" x-text="confirmLabel"></span>
                     <span x-show="submitting" class="flex items-center gap-2">
                         <svg class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
                             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -127,8 +127,8 @@
                         @click="confirm()"
                         :disabled="submitting"
                         :class="{ 'opacity-50 cursor-wait': submitting }"
-                        class="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-500 to-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-500/25 transition-all hover:shadow-xl hover:shadow-blue-500/30 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:hover:shadow-lg">
-                    <span x-show="!submitting">Confirm</span>
+                        class="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:hover:shadow-sm">
+                    <span x-show="!submitting" x-text="confirmLabel"></span>
                     <span x-show="submitting" class="flex items-center gap-2">
                         <svg class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
                             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -153,6 +153,8 @@ function confirmModal() {
         variant: 'danger',
         submitting: false,
         csrfToken: '',
+        confirmLabel: 'Confirm',
+        onConfirm: null,
 
         open(detail) {
             this.title = detail.title || 'Confirm Action';
@@ -160,6 +162,8 @@ function confirmModal() {
             this.actionUrl = detail.actionUrl || '';
             this.method = detail.method || 'POST';
             this.variant = detail.variant || 'danger';
+            this.confirmLabel = detail.confirmLabel || (this.variant === 'danger' ? 'Delete' : 'Continue');
+            this.onConfirm = typeof detail.onConfirm === 'function' ? detail.onConfirm : null;
             this.submitting = false;
             this.csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
             this.isOpen = true;
@@ -168,10 +172,26 @@ function confirmModal() {
         close() {
             if (this.submitting) return;
             this.isOpen = false;
+            this.onConfirm = null;
         },
 
         async confirm() {
-            if (!this.actionUrl || this.submitting) return;
+            if (this.submitting) return;
+
+            if (this.onConfirm) {
+                const callback = this.onConfirm;
+                this.submitting = true;
+                this.isOpen = false;
+                this.onConfirm = null;
+                try {
+                    await callback();
+                } finally {
+                    this.submitting = false;
+                }
+                return;
+            }
+
+            if (!this.actionUrl) return;
 
             this.submitting = true;
 

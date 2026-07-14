@@ -1,4 +1,5 @@
 {% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import pagination as table_pagination %}
 {% block title %}UISP Control - Admin{% endblock %}
 {% block content %}
 <div class="space-y-6">
@@ -16,6 +17,7 @@
                 <option value="{{ value }}" {% if status_filter == value %}selected{% endif %}>{{ value | replace('_', ' ') | title }}</option>
                 {% endfor %}
             </select>
+            <input type="hidden" name="per_page" value="{{ pagination.per_page }}">
         </form>
     </header>
 
@@ -55,6 +57,15 @@
                 </tbody>
             </table>
         </div>
+        {{ table_pagination(
+            pagination.page,
+            pagination.total_pages,
+            pagination.total,
+            pagination.per_page,
+            "/admin/network/uisp-control",
+            extra_params="&status=" ~ (status_filter or ""),
+            item_label="intents"
+        ) }}
     </section>
 </div>
 {% endblock %}

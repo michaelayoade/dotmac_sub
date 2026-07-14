@@ -12,6 +12,7 @@ from html import escape
 from typing import Any
 
 import httpx
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.services.audit_helpers import build_audit_activities_for_types
@@ -267,7 +268,12 @@ def format_bytes(value: int) -> str:
 
 
 def alarms_page_data(
-    db: Session, *, severity: str | None, status: str | None
+    db: Session,
+    *,
+    severity: str | None,
+    status: str | None,
+    page: int = 1,
+    per_page: int = 25,
 ) -> dict[str, object]:
     """Return payload for monitoring alarms page."""
     from app.models.network_monitoring import (
@@ -294,30 +300,28 @@ def alarms_page_data(
             )
         except ValueError:
             pass
-    alarms = alarms_query.limit(100).all()
+    total = alarms_query.order_by(None).count()
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = min(page, total_pages)
+    alarms = alarms_query.offset((page - 1) * per_page).limit(per_page).all()
     rules = (
         db.query(AlertRule)
         .filter(AlertRule.is_active.is_(True))
         .order_by(AlertRule.name)
         .all()
     )
+    severity_rows = (
+        db.query(Alert.severity, func.count(Alert.id))
+        .filter(Alert.status == AlertStatus.open)
+        .group_by(Alert.severity)
+        .all()
+    )
+    open_counts = {row[0].value: int(row[1]) for row in severity_rows}
     stats = {
-        "critical": sum(
-            1
-            for a in alarms
-            if a.severity == AlertSeverity.critical and a.status == AlertStatus.open
-        ),
-        "warning": sum(
-            1
-            for a in alarms
-            if a.severity == AlertSeverity.warning and a.status == AlertStatus.open
-        ),
-        "info": sum(
-            1
-            for a in alarms
-            if a.severity == AlertSeverity.info and a.status == AlertStatus.open
-        ),
-        "total_open": sum(1 for a in alarms if a.status == AlertStatus.open),
+        "critical": open_counts.get(AlertSeverity.critical.value, 0),
+        "warning": open_counts.get(AlertSeverity.warning.value, 0),
+        "info": open_counts.get(AlertSeverity.info.value, 0),
+        "total_open": sum(open_counts.values()),
     }
     return {
         "alarms": alarms,
@@ -325,6 +329,12 @@ def alarms_page_data(
         "stats": stats,
         "severity": severity,
         "status": status,
+        "pagination": {
+            "page": page,
+            "per_page": per_page,
+            "total": total,
+            "total_pages": total_pages,
+        },
     }
 
 

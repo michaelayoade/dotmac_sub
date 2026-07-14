@@ -1,8 +1,9 @@
-/// Pure gating model for the completion wizard — mirrors the server's
-/// completion gate (>=1 photo, signature or documented fallback) so techs
-/// get instant feedback instead of a server 422.
+import '../jobs/job_models.dart';
+
+/// Pure projection of the server-owned completion contract plus local inputs.
 class CompletionState {
   const CompletionState({
+    this.requirements = JobCompletionRequirements.safeFallback,
     this.checklistDone = false,
     this.photoCount = 0,
     this.hasSignature = false,
@@ -12,6 +13,7 @@ class CompletionState {
     this.summary,
   });
 
+  final JobCompletionRequirements requirements;
   final bool checklistDone;
   final int photoCount;
   final bool hasSignature;
@@ -20,20 +22,28 @@ class CompletionState {
   final String? equipmentSerial;
   final String? summary;
 
-  bool get hasPhoto => photoCount > 0;
+  bool get hasRequiredPhotos => photoCount >= requirements.minimumPhotoCount;
 
   bool get hasSignOff =>
+      !requirements.customerSignoffRequired ||
       hasSignature ||
-      (signatureUnavailableReason != null &&
+      (requirements.signatureUnavailableReasonAllowed &&
+          signatureUnavailableReason != null &&
           signatureUnavailableReason!.trim().isNotEmpty);
 
-  bool get canComplete => checklistDone && hasPhoto && hasSignOff;
+  /// The server does not gate on the app's advisory quality checklist.
+  bool get canComplete => hasRequiredPhotos && hasSignOff;
 
-  /// What still blocks completion — shown under the disabled button.
+  /// Server-owned blockers shown under the disabled button.
   List<String> get blockers => [
-    if (!checklistDone) 'Finish the checklist',
-    if (!hasPhoto) 'Add at least one photo',
-    if (!hasSignOff) 'Capture a signature (or note why unavailable)',
+    if (!hasRequiredPhotos)
+      requirements.minimumPhotoCount == 1
+          ? 'Add at least one photo'
+          : 'Add at least ${requirements.minimumPhotoCount} photos',
+    if (!hasSignOff)
+      requirements.signatureUnavailableReasonAllowed
+          ? 'Capture a signature (or note why unavailable)'
+          : 'Capture a customer signature',
   ];
 
   Map<String, dynamic> get transitionPayload => {
@@ -55,6 +65,7 @@ class CompletionState {
     String? equipmentSerial,
     String? summary,
   }) => CompletionState(
+    requirements: requirements,
     checklistDone: checklistDone ?? this.checklistDone,
     photoCount: photoCount ?? this.photoCount,
     hasSignature: hasSignature ?? this.hasSignature,

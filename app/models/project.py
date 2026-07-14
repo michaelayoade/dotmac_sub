@@ -152,7 +152,7 @@ class Project(Base):
             "ix_projects_metadata_quote_id",
             text("CAST((metadata ->> 'quote_id') AS VARCHAR)"),
             postgresql_where=text("is_active"),
-        ),
+        ).ddl_if(dialect="postgresql"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

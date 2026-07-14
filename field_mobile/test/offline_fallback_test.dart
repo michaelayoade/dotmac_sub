@@ -159,6 +159,8 @@ void main() {
     final detail = await repo().fetchDetail('wo-1');
     expect(detail.job.id, 'wo-1');
     expect(detail.location.addressText, '12 Road');
+    expect(detail.completionRequirements.evidenceRequired, isTrue);
+    expect(detail.completionRequirements.minimumPhotoCount, 1);
   });
 
   test('rethrows when offline and nothing cached', () async {

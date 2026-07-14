@@ -43,7 +43,6 @@ from app.services.common import (
     apply_pagination,
     coerce_uuid,
     round_money,
-    to_decimal,
     validate_enum,
 )
 from app.services.crud import CRUDManager
@@ -862,6 +861,8 @@ def _calculate_proration(
     db: Session,
     subscription: Subscription,
     new_offer_id: str,
+    *,
+    effective_at: datetime | None = None,
 ) -> dict:
     """Calculate proration amounts for a mid-cycle plan change.
 
@@ -874,7 +875,7 @@ def _calculate_proration(
     - days_remaining: days left in current billing cycle
     - days_in_cycle: total days in billing cycle
     """
-    now = datetime.now(UTC)
+    now = _ensure_utc(effective_at) or datetime.now(UTC)
     next_billing = subscription.next_billing_at
     if not next_billing:
         return {
@@ -958,193 +959,6 @@ def _calculate_proration(
         "old_price": round_money(old_price),
         "new_price": round_money(new_price),
     }
-
-
-def _generate_proration_invoice(
-    db: Session,
-    subscription: Subscription,
-    proration: dict,
-    old_offer_name: str,
-    new_offer_name: str,
-) -> None:
-    """Generate a proration invoice or credit note for a plan change.
-
-    For **prepaid** subscribers (already paid for the cycle):
-    - Upgrade: invoice for the price difference (remaining days)
-    - Downgrade: credit note for the overpayment (remaining days)
-
-    For **postpaid** subscribers (pay at end of cycle):
-    - The next invoice will naturally reflect the new rate
-    - Only generate an adjustment if changing mid-cycle with partial billing
-    """
-    from decimal import Decimal
-
-    # Postpaid: next invoice naturally reflects new rate — skip mid-cycle proration
-    billing_mode = getattr(subscription, "billing_mode", None)
-    if billing_mode and hasattr(billing_mode, "value"):
-        billing_mode = billing_mode.value
-    if billing_mode == "postpaid":
-        logger.info(
-            "Skipping proration for postpaid subscription %s — next invoice will reflect new rate",
-            subscription.id,
-        )
-        return
-
-    from app.models.billing import (
-        CreditNote,
-        CreditNoteStatus,
-    )
-    from app.services import numbering
-
-    net = proration["net_amount"]
-    if abs(net) < Decimal("1.00"):
-        # Skip tiny amounts
-        return
-
-    subscriber_id = str(subscription.subscriber_id)
-    days = proration["days_remaining"]
-
-    if net > 0:
-        # Prepaid is deposit-is-truth (this function only runs for prepaid —
-        # postpaid returned above): a mid-cycle upgrade draws the price
-        # difference down from the wallet as a ledger debit, NEVER an issued
-        # invoice/AR. This mirrors the customer-portal instant-change path
-        # (_create_prepaid_plan_change_debit + skip_proration_artifacts) so an
-        # admin/API-driven change behaves identically instead of minting a
-        # phantom receivable. Affordability is not gated here — an admin change
-        # may push the wallet negative; balance enforcement then applies.
-        _create_prepaid_plan_change_debit(
-            db,
-            subscription,
-            net,
-            old_offer_name=old_offer_name,
-            new_offer_name=new_offer_name,
-        )
-        logger.info(
-            "Recorded prepaid plan-change drawdown ₦%s (upgrade %s → %s, %s days)",
-            net,
-            old_offer_name,
-            new_offer_name,
-            days,
-        )
-    else:
-        # Customer gets credit — generate credit note
-        credit_amount = abs(net)
-        credit_number = numbering.generate_number(
-            db,
-            SettingDomain.billing,
-            "credit_note_number",
-            "credit_note_number_enabled",
-            "credit_note_number_prefix",
-            "credit_note_number_padding",
-            "credit_note_number_start",
-        )
-        credit = CreditNote(
-            account_id=subscriber_id,
-            credit_number=credit_number,
-            currency="NGN",
-            subtotal=credit_amount,
-            tax_total=Decimal("0"),
-            total=credit_amount,
-            status=CreditNoteStatus.issued,
-            memo=f"Plan change credit: {old_offer_name} → {new_offer_name} ({days} days remaining)",
-        )
-        db.add(credit)
-        logger.info(
-            "Generated proration credit %s for ₦%s (downgrade %s → %s)",
-            credit_number,
-            credit_amount,
-            old_offer_name,
-            new_offer_name,
-        )
-
-
-def _create_prepaid_plan_change_debit(
-    db: Session,
-    subscription: Subscription,
-    amount: Decimal,
-    *,
-    currency: str = "NGN",
-    old_offer_name: str,
-    new_offer_name: str,
-):
-    """Record a debit against account credit for a prepaid mid-cycle upgrade."""
-    from app.models.billing import (
-        LedgerCategory,
-        LedgerEntry,
-        LedgerEntryType,
-        LedgerSource,
-    )
-
-    debit_amount = round_money(to_decimal(amount))
-    if debit_amount <= Decimal("0.00"):
-        return None
-
-    entry = LedgerEntry(
-        account_id=subscription.subscriber_id,
-        entry_type=LedgerEntryType.debit,
-        source=LedgerSource.adjustment,
-        category=LedgerCategory.internet_service,
-        amount=debit_amount,
-        currency=currency,
-        memo=(f"Prepaid plan change charge: {old_offer_name} -> {new_offer_name}"),
-    )
-    db.add(entry)
-    return entry
-
-
-def _ensure_prepaid_plan_change_affordable(
-    db: Session,
-    subscription: Subscription,
-    proration: dict,
-) -> None:
-    """Block immediate prepaid plan-change drawdowns that would overspend wallet.
-
-    Customer self-service already performs this affordability check before it
-    writes the prepaid plan-change debit. Admin/API updates route through this
-    catalog service, so the same invariant belongs here too: a prepaid upgrade
-    may only draw down available wallet value that actually exists. Scheduled
-    next-cycle changes and pre-debited customer changes pass
-    ``skip_proration_artifacts=True`` and therefore do not call this helper.
-    """
-    billing_mode = getattr(subscription, "billing_mode", None)
-    billing_mode_value = (
-        billing_mode.value
-        if billing_mode and hasattr(billing_mode, "value")
-        else str(billing_mode or "")
-    )
-    if billing_mode_value != BillingMode.prepaid.value:
-        return
-
-    required_amount = round_money(
-        max(Decimal("0.00"), Decimal(str(proration.get("net_amount", "0.00"))))
-    )
-    if required_amount <= Decimal("0.00"):
-        return
-
-    from app.services.billing._common import lock_account
-    from app.services.collections import get_available_balance
-
-    account_id = str(subscription.subscriber_id)
-    lock_account(db, account_id)
-    current_balance = round_money(get_available_balance(db, account_id))
-    shortfall = round_money(required_amount - current_balance)
-    if shortfall <= Decimal("0.00"):
-        return
-
-    raise HTTPException(
-        status_code=400,
-        detail={
-            "code": "insufficient_prepaid_balance",
-            "message": (
-                "Insufficient prepaid balance for this plan change. "
-                "Top up the customer wallet or schedule the change for the next cycle."
-            ),
-            "required_amount": str(required_amount),
-            "current_balance": str(current_balance),
-            "shortfall": str(shortfall),
-        },
-    )
 
 
 def _emit_offer_change_event(
@@ -1571,15 +1385,32 @@ class Subscriptions(ListResponseMixin):
         payload: SubscriptionUpdate,
         *,
         skip_proration_artifacts: bool = False,
+        plan_change_operation_key: str | None = None,
     ):
         subscription = db.get(Subscription, subscription_id)
         if not subscription:
             raise HTTPException(status_code=404, detail="Subscription not found")
-        # Track status before update for event emission
+        data = payload.model_dump(exclude_unset=True)
+        requested_offer_id = data.get("offer_id")
+        if (
+            requested_offer_id is not None
+            and str(requested_offer_id) != str(subscription.offer_id)
+            and subscription.status == SubscriptionStatus.active
+            and subscription.billing_mode == BillingMode.prepaid
+            and not skip_proration_artifacts
+        ):
+            # Acquire the account lock before capturing old state. A concurrent
+            # wallet debit or plan change may have committed while this request
+            # was waiting, so refresh before deriving the quote and mutation.
+            from app.services.billing._common import lock_account
+
+            lock_account(db, str(subscription.subscriber_id))
+            db.refresh(subscription)
+
+        # Track state after any lock wait for event emission and idempotency.
         previous_status = subscription.status
         previous_offer_id = subscription.offer_id
         previous_profile_id = subscription.radius_profile_id
-        data = payload.model_dump(exclude_unset=True)
         subscriber_id = str(data.get("subscriber_id", subscription.subscriber_id))
         offer_id = str(data.get("offer_id", subscription.offer_id))
         offer_version_id = data.get("offer_version_id", subscription.offer_version_id)
@@ -1614,28 +1445,40 @@ class Subscriptions(ListResponseMixin):
             and str(data["offer_id"]) != str(subscription.offer_id)
             and subscription.status == SubscriptionStatus.active
         )
-        proration_result = None
         if offer_changing:
             _validate_plan_change(db, subscription, str(data["offer_id"]))
-            proration_result = _calculate_proration(
-                db, subscription, str(data["offer_id"])
-            )
-            # Use the EFFECTIVE prices (negotiated/discounted/version-aware) the
-            # subscription actually pays — already computed by _calculate_proration —
-            # to pick the upgrade vs downgrade fee. Raw catalog prices can give the
-            # wrong direction: a negotiated ₦50 → new ₦80 is an upgrade, but raw
-            # catalog ₦100 → ₦80 reads as a downgrade.
-            proration_result = _apply_plan_change_policy(
-                db,
-                proration_result,
-                old_price=proration_result.get("old_price", Decimal("0")),
-                new_price=proration_result.get("new_price", Decimal("0")),
-            )
-            if not skip_proration_artifacts and proration_result.get("generate_now"):
-                _ensure_prepaid_plan_change_affordable(
-                    db,
-                    subscription,
-                    proration_result,
+            is_prepaid = subscription.billing_mode == BillingMode.prepaid
+            if is_prepaid and not skip_proration_artifacts:
+                from app.services.prepaid_plan_changes import (
+                    PrepaidPlanChangeRejected,
+                    prepare_immediate_prepaid_plan_change,
+                )
+
+                target_offer = db.get(CatalogOffer, str(data["offer_id"]))
+                if target_offer is None:
+                    raise HTTPException(status_code=404, detail="Offer not found")
+                old_offer = db.get(CatalogOffer, previous_offer_id)
+                try:
+                    prepared = prepare_immediate_prepaid_plan_change(
+                        db,
+                        subscription,
+                        target_offer,
+                        old_offer_name=(
+                            old_offer.name if old_offer else "Previous Plan"
+                        ),
+                        operation_key=plan_change_operation_key,
+                    )
+                except PrepaidPlanChangeRejected as exc:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=exc.decision.rejection_detail(),
+                    ) from exc
+                logger.info(
+                    "Prepared prepaid plan change subscription=%s debit=%s credit=%s replayed=%s",
+                    subscription.id,
+                    prepared.ledger_entry is not None,
+                    prepared.credit_note is not None,
+                    prepared.replayed,
                 )
 
         # When the offer changes, refresh the snapshotted recurring price to the
@@ -1813,24 +1656,6 @@ class Subscriptions(ListResponseMixin):
             and subscription.status == SubscriptionStatus.active
         ):
             _emit_offer_change_event(db, subscription, str(previous_offer_id))
-
-            # Generate proration invoice/credit for the plan change
-            if (
-                not skip_proration_artifacts
-                and proration_result
-                and proration_result.get("net_amount")
-                and proration_result.get("generate_now")
-            ):
-                old_offer = db.get(CatalogOffer, previous_offer_id)
-                new_offer = db.get(CatalogOffer, subscription.offer_id)
-                _generate_proration_invoice(
-                    db,
-                    subscription,
-                    proration_result,
-                    old_offer.name if old_offer else "Previous Plan",
-                    new_offer.name if new_offer else "New Plan",
-                )
-                db.commit()
 
         return subscription
 

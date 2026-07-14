@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -39,6 +39,8 @@ def _context(request: Request, db: Session) -> dict:
 def uisp_control_list(
     request: Request,
     status: str | None = None,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(25, ge=10, le=100),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     selected_status = None
@@ -47,7 +49,15 @@ def uisp_control_list(
             selected_status = UispIntentStatus(status)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Invalid UISP status") from exc
-    intents = uisp_control_plane.list_intents(db, status=selected_status, limit=500)
+    total = uisp_control_plane.count_intents(db, status=selected_status)
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = min(page, total_pages)
+    intents = uisp_control_plane.list_intents(
+        db,
+        status=selected_status,
+        limit=per_page,
+        offset=(page - 1) * per_page,
+    )
     counts = uisp_control_plane.intent_status_counts(db)
     context = _context(request, db)
     context.update(
@@ -56,6 +66,12 @@ def uisp_control_list(
             "counts": counts,
             "capabilities": capabilities(),
             "status_filter": status,
+            "pagination": {
+                "page": page,
+                "per_page": per_page,
+                "total": total,
+                "total_pages": total_pages,
+            },
         }
     )
     return templates.TemplateResponse("admin/network/uisp-control/index.html", context)

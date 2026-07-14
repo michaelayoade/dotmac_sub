@@ -259,7 +259,11 @@ def get_public_key(db: Session | None = None) -> str:
 
 
 def refund_transaction(
-    db: Session, reference: str, amount: Decimal | None = None
+    db: Session,
+    reference: str,
+    amount: Decimal | None = None,
+    *,
+    request_key: str | None = None,
 ) -> dict[str, Any]:
     """Refund a settled transaction back to its source card.
 
@@ -268,9 +272,13 @@ def refund_transaction(
     bank account. Partial refunds pass an amount; omit for full refund.
     """
     secret_key = _get_secret_key(db)
+    if not secret_key:
+        raise ValueError("Paystack secret key is not configured")
     payload: dict[str, Any] = {"transaction": reference}
     if amount is not None:
         payload["amount"] = amount_to_kobo(amount)
+    if request_key:
+        payload["merchant_note"] = request_key
     response = httpx.post(
         f"{PAYSTACK_API_BASE}/refund",
         json=payload,
@@ -282,3 +290,38 @@ def refund_transaction(
     if not body.get("status"):
         raise ValueError(body.get("message") or "Refund failed")
     return body.get("data") or {}
+
+
+def fetch_refund(db: Session, refund_id: str) -> dict[str, Any]:
+    """Fetch one refund by Paystack refund id."""
+    secret_key = _get_secret_key(db)
+    if not secret_key:
+        raise ValueError("Paystack secret key is not configured")
+    response = httpx.get(
+        f"{PAYSTACK_API_BASE}/refund/{refund_id}",
+        headers={"Authorization": f"Bearer {secret_key}"},
+        timeout=_get_timeout_seconds(db),
+    )
+    response.raise_for_status()
+    body = response.json()
+    if not body.get("status"):
+        raise ValueError(body.get("message") or "Refund lookup failed")
+    return body.get("data") or {}
+
+
+def list_refunds(db: Session, *, transaction_id: str) -> list[dict[str, Any]]:
+    """List refunds for one Paystack funding transaction."""
+    secret_key = _get_secret_key(db)
+    if not secret_key:
+        raise ValueError("Paystack secret key is not configured")
+    response = httpx.get(
+        f"{PAYSTACK_API_BASE}/refund",
+        params={"transaction": transaction_id, "perPage": 100},
+        headers={"Authorization": f"Bearer {secret_key}"},
+        timeout=_get_timeout_seconds(db),
+    )
+    response.raise_for_status()
+    body = response.json()
+    if not body.get("status"):
+        raise ValueError(body.get("message") or "Refund lookup failed")
+    return [dict(item) for item in body.get("data") or []]

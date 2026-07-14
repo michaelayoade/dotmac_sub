@@ -233,6 +233,15 @@ class FieldMovementRead(BaseModel):
     updated_at: datetime
 
 
+class FieldCompletionRequirements(BaseModel):
+    """Server-owned completion policy projected to the field client."""
+
+    evidence_required: bool
+    minimum_photo_count: int = Field(ge=0)
+    customer_signoff_required: bool
+    signature_unavailable_reason_allowed: bool
+
+
 class FieldTransitionRequest(BaseModel):
     event: Literal[
         "accept",
@@ -489,6 +498,7 @@ class FieldJobHistoryItem(BaseModel):
 
 class FieldJobDetail(BaseModel):
     job: FieldJobSummary
+    completion_requirements: FieldCompletionRequirements
     customer: FieldCustomer | None = None
     location: FieldJobLocation
     ticket_ref: str | None = None

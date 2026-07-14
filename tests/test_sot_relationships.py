@@ -72,9 +72,32 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "financial.ledger",
         "financial.payment_provider_events",
     )
+    assert sot_relationships.dependencies_for("financial.vas_operations") == (
+        "control.domain_settings",
+        "financial.vas_refunds",
+    )
+    assert sot_relationships.dependencies_for("financial.vas_refunds") == (
+        "control.domain_settings",
+    )
+    assert sot_relationships.dependencies_for("customer.service_status") == (
+        "financial.access_resolution",
+        "customer.financial_position",
+    )
+    assert sot_relationships.dependencies_for("customer.usage_summary") == (
+        "sessions.radius_reconciliation",
+    )
+    assert sot_relationships.dependencies_for("financial.prepaid_plan_change") == (
+        "financial.ledger",
+        "customer.financial_position",
+    )
     assert sot_relationships.dependencies_for(
         "communications.notification_service"
     ) == ("communications.channel_policy", "communications.event_policy")
+    assert sot_relationships.dependencies_for("communications.customer_read_state") == (
+        "customer.identity_scope",
+        "communications.customer_policy",
+        "communications.notification_service",
+    )
     assert sot_relationships.dependencies_for("secrets.rotation") == (
         "secrets.reference_store",
         "secrets.credential_integrity",
@@ -110,6 +133,14 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     assert sot_relationships.dependencies_for("runtime.infrastructure_polling") == (
         "runtime.db_sessions",
     )
+    assert sot_relationships.dependencies_for("operations.project_lifecycle") == (
+        "events.dispatcher",
+        "communications.staff_notifications",
+    )
+    assert sot_relationships.dependencies_for("operations.field_completion") == (
+        "operations.work_orders",
+        "control.domain_settings",
+    )
     assert sot_relationships.dependencies_for("network.nas_lifecycle") == (
         "network.identity",
         "network.access_path",
@@ -141,6 +172,13 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "sessions.radius_reconciliation",
         "network.identity",
     )
+    assert sot_relationships.dependencies_for(
+        "service_intent.catalog_billing_governance"
+    ) == (
+        "service_intent.catalog_validation",
+        "auth.permission_gate",
+        "observability.recording",
+    )
 
 
 def test_domain_sot_relationships_resolve_owning_service_by_concern():
@@ -156,6 +194,68 @@ def test_domain_sot_relationships_resolve_owning_service_by_concern():
 
     assert control_service is not None
     assert control_service.name == "control.feature_registry"
+
+    project_service = sot_relationships.owning_service_for(
+        "native project field and status mutations"
+    )
+
+    assert project_service is not None
+    assert project_service.name == "operations.project_lifecycle"
+    assert project_service.module == "app.services.projects"
+
+    completion_service = sot_relationships.owning_service_for(
+        "field completion evidence requirements"
+    )
+
+    assert completion_service is not None
+    assert completion_service.name == "operations.field_completion"
+    assert completion_service.module == "app.services.field.transitions"
+
+    action_service = sot_relationships.owning_service_for(
+        "payment-restores-service claims"
+    )
+
+    assert action_service is not None
+    assert action_service.name == "customer.service_status"
+    assert action_service.module == "app.services.service_status"
+
+    usage_service = sot_relationships.owning_service_for(
+        "customer usage headline totals"
+    )
+
+    assert usage_service is not None
+    assert usage_service.name == "customer.usage_summary"
+    assert usage_service.module == "app.services.usage_summary"
+
+    read_state_service = sot_relationships.owning_service_for(
+        "customer notification read/unread state"
+    )
+
+    assert read_state_service is not None
+    assert read_state_service.name == "communications.customer_read_state"
+    assert read_state_service.module == "app.services.customer_portal_notifications"
+
+    team_inbox_service = sot_relationships.owning_service_for(
+        "admin inbox mutation transactions"
+    )
+
+    assert team_inbox_service is not None
+    assert team_inbox_service.name == "communications.team_inbox"
+    assert team_inbox_service.module == "app.services.team_inbox_commands"
+
+    vas_service = sot_relationships.owning_service_for(
+        "VAS refund-to-source eligibility"
+    )
+
+    assert vas_service is not None
+    assert vas_service.name == "financial.vas_refunds"
+    assert vas_service.module == "app.services.vas_refunds"
+
+    refund_reconciliation = sot_relationships.owning_service_for(
+        "VAS refund provider reconciliation"
+    )
+
+    assert refund_reconciliation is vas_service
 
 
 def test_domain_sot_relationship_modules_are_importable():

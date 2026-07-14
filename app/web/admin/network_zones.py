@@ -1,6 +1,6 @@
 """Admin network zones web routes."""
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -37,10 +37,21 @@ def _base_context(
     dependencies=[Depends(require_permission("network:zone:read"))],
 )
 def zones_list(
-    request: Request, status: str | None = None, db: Session = Depends(get_db)
+    request: Request,
+    status: str | None = None,
+    search: str | None = None,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(25, ge=10, le=100),
+    db: Session = Depends(get_db),
 ) -> HTMLResponse:
     """List all network zones."""
-    page_data = web_network_zones_service.list_page_data(db, status)
+    page_data = web_network_zones_service.list_page_data(
+        db,
+        status,
+        search=search,
+        page=page,
+        per_page=per_page,
+    )
     context = _base_context(request, db, active_page="zones")
     context.update(page_data)
     return templates.TemplateResponse("admin/network/zones/index.html", context)

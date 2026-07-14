@@ -218,6 +218,8 @@ def refund_transaction(
     db: Session,
     transaction_id: str,
     amount: Decimal | None = None,
+    *,
+    request_key: str | None = None,
 ) -> dict[str, Any]:
     """Refund a Flutterwave transaction back to its source."""
     secret_key = _get_secret_key(db)
@@ -228,6 +230,8 @@ def refund_transaction(
     payload: dict[str, Any] = {}
     if amount is not None:
         payload["amount"] = float(Decimal(str(amount)))
+    if request_key:
+        payload["comments"] = request_key
     resp = httpx.post(
         f"{FLUTTERWAVE_API_BASE}/transactions/{transaction_id}/refund",
         json=payload,
@@ -239,3 +243,42 @@ def refund_transaction(
     if data.get("status") != "success":
         raise ValueError(data.get("message", "Flutterwave refund failed"))
     return data.get("data") or {}
+
+
+def fetch_refund(db: Session, refund_id: str) -> dict[str, Any]:
+    """Fetch one Flutterwave refund by refund id."""
+    secret_key = _get_secret_key(db)
+    if not secret_key:
+        raise ValueError(
+            "Flutterwave secret key is not configured. Kindly use another payment option"
+        )
+    response = httpx.get(
+        f"{FLUTTERWAVE_API_BASE}/refunds/{refund_id}",
+        headers={"Authorization": f"Bearer {secret_key}"},
+        timeout=_get_timeout_seconds(db),
+    )
+    response.raise_for_status()
+    body = response.json()
+    if body.get("status") != "success":
+        raise ValueError(body.get("message", "Flutterwave refund lookup failed"))
+    return body.get("data") or {}
+
+
+def list_refunds(db: Session, *, transaction_id: str) -> list[dict[str, Any]]:
+    """List refunds for one Flutterwave funding transaction."""
+    secret_key = _get_secret_key(db)
+    if not secret_key:
+        raise ValueError(
+            "Flutterwave secret key is not configured. Kindly use another payment option"
+        )
+    response = httpx.get(
+        f"{FLUTTERWAVE_API_BASE}/refunds",
+        params={"id": transaction_id},
+        headers={"Authorization": f"Bearer {secret_key}"},
+        timeout=_get_timeout_seconds(db),
+    )
+    response.raise_for_status()
+    body = response.json()
+    if body.get("status") != "success":
+        raise ValueError(body.get("message", "Flutterwave refund lookup failed"))
+    return [dict(item) for item in body.get("data") or []]

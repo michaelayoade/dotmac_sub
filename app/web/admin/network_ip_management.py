@@ -1,6 +1,6 @@
 """Admin network IP management and VLAN web routes."""
 
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -897,10 +897,19 @@ def ip_pools_list(
 def vlans_list(
     request: Request,
     olt_id: str | None = None,
+    search: str | None = None,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(25, ge=10, le=100),
     db: Session = Depends(get_db),
 ):
     """List all VLANs."""
-    state = web_network_vlans_service.build_vlans_list_data(db, olt_device_id=olt_id)
+    state = web_network_vlans_service.build_vlans_list_data(
+        db,
+        olt_device_id=olt_id,
+        search=search,
+        page=page,
+        per_page=per_page,
+    )
 
     context = _base_context(request, db, active_page="vlans")
     context.update(state)

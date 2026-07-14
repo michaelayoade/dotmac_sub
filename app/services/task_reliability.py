@@ -554,6 +554,13 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     ),
     "app.tasks.vas.run_vas_requery": _c("vas", STATE, GUARDED, STATUS),
     "app.tasks.vas.run_vas_review_requery": _c("vas", STATE, GUARDED, STATUS),
+    "app.tasks.vas.reconcile_refund_requests": _c(
+        "vas",
+        STATE,
+        GUARDED,
+        STATUS,
+        "Observation-only after submit; never blindly repeats a gateway refund.",
+    ),
     "app.tasks.vas.run_wallet_auto_deduct": _c(
         "vas", STATE, GUARDED, STATUS, "Money-moving; provider state must gate retry."
     ),

@@ -123,7 +123,7 @@
                         </button>
                     </div>
                 </form>
-                <form method="POST" action="/admin/network/tr069/acs/{{ selected_server_id }}/enforcement-preset/remove" class="mt-2">
+                <form method="POST" action="/admin/network/tr069/acs/{{ selected_server_id }}/enforcement-preset/remove" class="mt-2" data-confirm="Remove the enforcement preset from this ACS server?" data-confirm-label="Remove preset">
                     {% include "components/forms/csrf_input.html" %}
                     <button type="submit"
                             class="w-full rounded-xl border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 transition-all hover:bg-rose-100 hover:border-rose-400 dark:border-rose-700 dark:bg-rose-900/20 dark:text-rose-300 dark:hover:bg-rose-900/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-500 focus-visible:ring-offset-2">
@@ -155,14 +155,14 @@
 
     <!-- Bulk Actions Toolbar -->
     <div id="bulk-actions-bar" class="hidden rounded-2xl border border-sky-200/60 bg-sky-50 p-4 shadow-sm dark:border-sky-800/40 dark:bg-sky-900/20">
-        <form id="bulk-action-form" method="POST" action="/admin/network/tr069/bulk-action" onsubmit="return confirmTr069BulkAction(this)" class="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-3 sm:gap-4">
+        <form id="bulk-action-form" method="POST" action="/admin/network/tr069/bulk-action" data-confirm="Queue the selected action for these CPE devices?" data-confirm-variant="warning" class="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-3 sm:gap-4">
             {% include "components/forms/csrf_input.html" %}
             <input type="hidden" name="acs_server_id" value="{{ selected_server_id }}">
             <input type="hidden" id="bulk-device-ids" name="device_ids" value="">
             <div class="flex items-center gap-2">
                 <span class="text-sm font-medium text-sky-700 dark:text-sky-300"><span id="selected-count">0</span> device(s) selected</span>
             </div>
-            <select name="bulk_action" required class="rounded-xl border border-sky-300 bg-white px-3 py-2.5 text-sm transition-colors focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 dark:border-sky-600 dark:bg-slate-700 dark:text-white min-h-[44px]">
+            <select name="bulk_action" required onchange="updateTr069BulkConfirmation()" class="rounded-xl border border-sky-300 bg-white px-3 py-2.5 text-sm transition-colors focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 dark:border-sky-600 dark:bg-slate-700 dark:text-white min-h-[44px]">
                 <option value="">Select action...</option>
                 <option value="refresh">Refresh All</option>
                 <option value="reboot">Reboot All</option>
@@ -310,7 +310,7 @@
                                     {% endif %}
                                     {% if device.is_registered_in_acs %}
                                         {% for key, action in job_actions.items() %}
-                                        <form method="POST" action="/admin/network/tr069/devices/{{ device.id }}/action">
+                                        <form method="POST" action="/admin/network/tr069/devices/{{ device.id }}/action" data-confirm="Queue {{ action.label }} for {{ device.display_name or device.serial_number }}?" data-confirm-variant="{{ 'danger' if key == 'factory_reset' else 'warning' }}" data-confirm-label="{{ action.label }}">
                                             {% include "components/forms/csrf_input.html" %}
                                             <input type="hidden" name="action" value="{{ key }}">
                                             <input type="hidden" name="acs_server_id" value="{{ selected_server_id }}">
@@ -469,7 +469,7 @@
                                 <div class="flex flex-wrap gap-2">
                                     {% if device.is_registered_in_acs %}
                                         {% for key, action in job_actions.items() %}
-                                        <form method="POST" action="/admin/network/tr069/devices/{{ device.id }}/action">
+                                        <form method="POST" action="/admin/network/tr069/devices/{{ device.id }}/action" data-confirm="Queue {{ action.label }} for {{ device.display_name or device.serial_number }}?" data-confirm-variant="{{ 'danger' if key == 'factory_reset' else 'warning' }}" data-confirm-label="{{ action.label }}">
                                             {% include "components/forms/csrf_input.html" %}
                                             <input type="hidden" name="action" value="{{ key }}">
                                             <input type="hidden" name="acs_server_id" value="{{ selected_server_id }}">
@@ -775,6 +775,7 @@ function updateBulkUI() {
         countEl.textContent = "0";
         deviceIdsInput.value = "";
     }
+    updateTr069BulkConfirmation();
 }
 
 function clearBulkSelection() {
@@ -784,17 +785,24 @@ function clearBulkSelection() {
     updateBulkUI();
 }
 
-function confirmTr069BulkAction(form) {
+function updateTr069BulkConfirmation() {
+    const form = document.getElementById("bulk-action-form");
+    if (!form) return;
     const action = form.querySelector('select[name="bulk_action"]')?.value || "";
     const count = selectedDevices.size;
-    if (!action || count === 0) return true;
     if (action === "reboot") {
-        return confirm(`Reboot ${count} selected CPE device(s)? Subscriber service may be interrupted.`);
+        form.dataset.confirm = `Reboot ${count} selected CPE device(s)? Subscriber service may be interrupted.`;
+        form.dataset.confirmVariant = "warning";
+        form.dataset.confirmLabel = "Reboot devices";
+    } else if (action === "factory_reset") {
+        form.dataset.confirm = `Factory reset ${count} selected CPE device(s)? This erases customer device configuration.`;
+        form.dataset.confirmVariant = "danger";
+        form.dataset.confirmLabel = "Factory reset";
+    } else {
+        form.dataset.confirm = `Queue ${action || "the selected action"} for ${count} selected CPE device(s)?`;
+        form.dataset.confirmVariant = "info";
+        form.dataset.confirmLabel = "Queue action";
     }
-    if (action === "factory_reset") {
-        return confirm(`Factory reset ${count} selected CPE device(s)? This erases customer device configuration.`);
-    }
-    return true;
 }
 
 // Individual checkbox change
