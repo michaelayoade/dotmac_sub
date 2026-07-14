@@ -41,6 +41,11 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     assert sot_relationships.dependencies_for("network.device_groups") == (
         "network.identity",
     )
+    assert sot_relationships.dependencies_for("network.routeros_sot") == (
+        "network.identity",
+        "runtime.db_sessions",
+        "observability.recording",
+    )
     assert sot_relationships.dependencies_for("network.monitoring_inventory") == (
         "network.identity",
     )

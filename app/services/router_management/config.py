@@ -37,10 +37,9 @@ from app.schemas.router_management import (
     RouterConfigTemplateUpdate,
 )
 from app.services.network_operations import network_operations
-from app.services.router_management.connection import check_dangerous_commands
-from app.services.router_management.write_adapter import (
-    RouterWriteUnsupported,
-    parse_routeros_rest_commands,
+from app.services.router_management.sot_policy import (
+    RouterSotPolicyError,
+    parse_routeros_sot_intents,
 )
 
 logger = logging.getLogger(__name__)
@@ -146,7 +145,7 @@ class RouterConfigService:
     @staticmethod
     def create_push(
         db: Session,
-        commands: list[str],
+        desired_state: list[object],
         router_ids: list[uuid.UUID],
         initiated_by: uuid.UUID,
         template_id: uuid.UUID | None = None,
@@ -161,10 +160,9 @@ class RouterConfigService:
             raise ValueError(
                 "Blocked-command override is disabled; use a reviewed typed operation."
             )
-        check_dangerous_commands(commands)
         try:
-            parse_routeros_rest_commands(commands)
-        except RouterWriteUnsupported as exc:
+            intents = parse_routeros_sot_intents(desired_state)
+        except RouterSotPolicyError as exc:
             raise ValueError(str(exc)) from exc
 
         unique_router_ids = list(dict.fromkeys(router_ids))
@@ -185,7 +183,7 @@ class RouterConfigService:
 
         push = RouterConfigPush(
             template_id=template_id,
-            commands=commands,
+            commands=[intent.to_dict() for intent in intents],
             variable_values=variable_values,
             dry_run=dry_run,
             failure_policy=failure_policy,
@@ -205,7 +203,8 @@ class RouterConfigService:
             input_payload={
                 "push_id": str(push.id),
                 "router_ids": [str(router_id) for router_id in unique_router_ids],
-                "command_count": len(commands),
+                "intent_count": len(intents),
+                "resources": sorted({intent.resource.value for intent in intents}),
                 "dry_run": dry_run,
                 "failure_policy": failure_policy,
             },
@@ -222,7 +221,7 @@ class RouterConfigService:
                 correlation_key=f"router-config-push:{push.id}:{rid}",
                 input_payload={
                     "push_id": str(push.id),
-                    "command_count": len(commands),
+                    "intent_count": len(intents),
                     "dry_run": dry_run,
                 },
                 parent_id=str(parent_operation.id),
@@ -239,10 +238,10 @@ class RouterConfigService:
         db.commit()
         db.refresh(push)
         logger.info(
-            "Config push created: %s (%d routers, %d commands)",
+            "Config push created: %s (%d routers, %d desired resources)",
             push.id,
             len(router_ids),
-            len(commands),
+            len(intents),
         )
         return push
 

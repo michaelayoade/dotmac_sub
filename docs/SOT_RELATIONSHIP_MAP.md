@@ -373,6 +373,14 @@ Dependency order:
    last-mile, impact, and active-incident inputs into the customer-safe
    `connected/trouble/outage` verdict plus headline/message/advice. It does not
    own device operational state or raw online-session observations.
+10. `network.control_plane_intent`: owns the shared desired-state delivery
+   lifecycle, control-plane target/revision identity, and vendor status
+   projections. Vendor adapters project through this one
+   desired-to-readback lifecycle.
+11. `network.routeros_sot`: owns typed MikroTik desired state, the managed
+   resource/field registry, Dotmac ownership markers, verified reconciliation,
+   and periodic drift evidence. Router routes and tasks only orchestrate it,
+   and it projects through `network.control_plane_intent`.
 
 Rule: pollers write observations; resolver services decide state; event services
 decide consequences. Customer-facing outage, SLA, expiry suppression, support
