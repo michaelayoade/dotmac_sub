@@ -302,6 +302,52 @@ def test_preview_rejects_stale_review_head(db_session, subscriber, catalog_offer
         )
 
 
+def test_review_head_changes_with_account_and_billing_inputs(
+    db_session, subscriber, catalog_offer
+):
+    subscription = _subscription(db_session, subscriber, catalog_offer)
+    before = resolve_subscription_lifecycle(db_session, str(subscription.id))
+
+    subscriber.is_active = False
+    subscription.next_billing_at = datetime(2026, 9, 1, tzinfo=UTC)
+    db_session.flush()
+    after = resolve_subscription_lifecycle(db_session, str(subscription.id))
+
+    assert after.head != before.head
+    with pytest.raises(SubscriptionLifecycleHeadConflict, match="refresh"):
+        preview_subscription_command(
+            db_session,
+            SubscriptionLifecycleCommand(
+                subscription_id=str(subscription.id),
+                kind=SubscriptionCommandKind.suspend,
+                source="admin:test",
+                expected_head=before.head,
+            ),
+        )
+
+
+def test_review_head_changes_when_pending_plan_change_is_created(
+    db_session, subscriber, catalog_offer
+):
+    target = _target_offer(db_session, catalog_offer)
+    subscription = _subscription(db_session, subscriber, catalog_offer)
+    before = resolve_subscription_lifecycle(db_session, str(subscription.id))
+    db_session.add(
+        SubscriptionChangeRequest(
+            subscription_id=subscription.id,
+            current_offer_id=catalog_offer.id,
+            requested_offer_id=target.id,
+            status=SubscriptionChangeStatus.approved,
+            effective_date=date(2026, 8, 1),
+        )
+    )
+    db_session.flush()
+
+    after = resolve_subscription_lifecycle(db_session, str(subscription.id))
+
+    assert after.head != before.head
+
+
 def test_plan_change_preview_uses_canonical_proration_and_access_impact(
     db_session, subscriber, catalog_offer
 ):

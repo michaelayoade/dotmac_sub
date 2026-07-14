@@ -301,7 +301,12 @@ def resolve_subscription_lifecycle(
         account_id=str(subscription.subscriber_id),
         account_status=_enum_value(getattr(subscriber, "status", None)),
         account_enabled=bool(subscriber and subscriber.is_active),
-        head=_subscription_head(subscription),
+        head=_subscription_head(
+            db,
+            subscription,
+            subscriber=subscriber,
+            pending_change=pending_change,
+        ),
         state=_resolve_state(subscription, subscriber=subscriber),
         start_at=_aware_utc(subscription.start_at),
         end_at=_aware_utc(subscription.end_at),
@@ -690,17 +695,66 @@ def _recurring_price(db: Session, offer_id: object) -> tuple[str, Decimal]:
     return str(row.currency or "NGN"), round_money(Decimal(str(row.amount)))
 
 
-def _subscription_head(subscription: Subscription) -> str:
-    updated_at = _aware_utc(subscription.updated_at)
+def _subscription_head(
+    db: Session,
+    subscription: Subscription,
+    *,
+    subscriber: object | None,
+    pending_change: SubscriptionChangeRequest | None,
+) -> str:
+    currency, recurring_amount = _recurring_price(db, subscription.offer_id)
+    offer = subscription.offer
     source = "|".join(
         (
             str(subscription.id),
             subscription.status.value,
             str(subscription.offer_id),
-            updated_at.isoformat() if updated_at else "missing-updated-at",
+            _enum_value(subscription.billing_mode) or "missing-billing-mode",
+            _head_datetime(subscription.start_at),
+            _head_datetime(subscription.end_at),
+            _head_datetime(subscription.next_billing_at),
+            _head_datetime(subscription.canceled_at),
+            _head_datetime(subscription.updated_at),
+            _enum_value(getattr(subscriber, "status", None))
+            or "missing-account-status",
+            str(bool(subscriber and getattr(subscriber, "is_active", False))),
+            _head_datetime(getattr(subscriber, "updated_at", None)),
+            _enum_value(getattr(offer, "status", None)) or "missing-offer-status",
+            str(bool(offer and offer.is_active)),
+            _enum_value(getattr(offer, "billing_mode", None))
+            or "missing-offer-billing-mode",
+            _head_datetime(getattr(offer, "updated_at", None)),
+            currency,
+            str(recurring_amount),
+            str(pending_change.id) if pending_change else "no-pending-change",
+            (
+                _enum_value(pending_change.status) or "missing-change-status"
+                if pending_change
+                else "no-pending-change-status"
+            ),
+            (
+                str(pending_change.requested_offer_id)
+                if pending_change
+                else "no-pending-target"
+            ),
+            (
+                pending_change.effective_date.isoformat()
+                if pending_change
+                else "no-pending-effective-date"
+            ),
+            _head_datetime(
+                getattr(pending_change, "updated_at", None) if pending_change else None
+            ),
         )
     )
     return hashlib.sha256(source.encode("utf-8")).hexdigest()
+
+
+def _head_datetime(value: object | None) -> str:
+    if not isinstance(value, datetime):
+        return "missing"
+    normalized = _aware_utc(value)
+    return normalized.isoformat() if normalized else "missing"
 
 
 def _aware_utc(value: datetime | None) -> datetime | None:
