@@ -204,28 +204,13 @@ def _write_subscription_ips_from_accounting(
         subscription.ipv6_address = ipv6
 
 
-def _normalize_radius_db_url(value: str | None) -> str | None:
-    if not value:
-        return None
-    db_url = value.strip()
-    if not db_url:
-        return None
-    if db_url.startswith("postgresql://"):
-        db_url = "postgresql+psycopg://" + db_url[len("postgresql://") :]
-    return db_url
-
-
 def _radius_accounting_db_url() -> str | None:
-    dsn = _normalize_radius_db_url(os.getenv("RADIUS_DB_DSN"))
-    if dsn:
-        return dsn
-    host = (os.getenv("RADIUS_DB_HOST") or "radius-db").strip()
-    database = (os.getenv("RADIUS_DB_NAME") or "radius").strip()
-    username = (os.getenv("RADIUS_DB_USER") or "radius").strip()
-    password = (os.getenv("RADIUS_DB_PASS") or "").strip()
-    if not all([host, database, username, password]):
-        return None
-    return f"postgresql+psycopg://{username}:{password}@{host}:5432/{database}"
+    # The accounting importer must read the SAME database the RADIUS writers
+    # write — resolve through the one DSN owner instead of a private
+    # precedence chain that drifts from it.
+    from app.services.radius_dsn import resolve_radius_dsn
+
+    return resolve_radius_dsn()
 
 
 def _get_radius_accounting_cursor(db: Session) -> int:

@@ -252,9 +252,9 @@ def _nas_secret_from_radius_db(nas_ip: str) -> str | None:
     FreeRADIUS actually authenticates this NAS with. Fallback for
     nas_devices rows whose Fernet-encrypted secret no longer decrypts
     (key-rotation drift, see 2026-06-11)."""
-    import os
+    from app.services.radius_dsn import radius_dsn_libpq
 
-    dsn = os.environ.get("RADIUS_DB_DSN", "")
+    dsn = radius_dsn_libpq()
     if not dsn or not nas_ip:
         return None
     try:
@@ -813,9 +813,9 @@ def _open_radacct_sessions_for_username(username: str) -> list[dict]:
     subscribers, so live sessions were silently missed on suspend/disable
     (incident 2026-06-11).
     """
-    import os
+    from app.services.radius_dsn import radius_dsn_libpq
 
-    dsn = os.environ.get("RADIUS_DB_DSN", "")
+    dsn = radius_dsn_libpq()
     if not dsn or not username:
         return []
     try:

@@ -177,10 +177,11 @@ def run_enforcement_reconciler() -> dict[str, int]:
 
     from app.db import SessionLocal
     from app.services.enforcement import _nas_device_by_ip, _send_coa_disconnect
+    from app.services.radius_dsn import radius_dsn_libpq
     from app.services.radius_reject import get_reject_networks
 
     max_kicks = int(os.environ.get("ENFORCEMENT_RECONCILER_MAX_KICKS", "25"))
-    dsn = os.environ.get("RADIUS_DB_DSN", "")
+    dsn = radius_dsn_libpq() or ""
     stats = {
         "stale_unserviceable_sessions": 0,
         "reject_pool_sessions": 0,
@@ -192,7 +193,7 @@ def run_enforcement_reconciler() -> dict[str, int]:
         "ghosts_closed": 0,
     }
     if not dsn:
-        logger.error("enforcement reconciler: RADIUS_DB_DSN not set")
+        logger.error("enforcement reconciler: radius DSN not configured")
         return stats
 
     # --- collect violations from radacct -------------------------------
@@ -240,6 +241,57 @@ def run_enforcement_reconciler() -> dict[str, int]:
                 if (row[1], row[2]) not in to_kick:
                     stats["reject_pool_sessions"] += 1
                     to_kick[(row[1], row[2])] = row
+
+        # Sync-gap guard: a missing radcheck row is an observation of
+        # projection drift, not an access decision. The external sync skips
+        # credentials it cannot rebuild a password for, so an entitled
+        # customer (active subscription, non-blocked active subscriber) can
+        # hold a live session with no radcheck row — kicking them drops a
+        # session they cannot re-establish. Spare those sessions, surface
+        # the gap, and enqueue the single-writer refresh to repair the
+        # projection. Reject-pool violations are still kicked: there the
+        # radcheck row exists and a re-auth restores real service.
+        gap_candidates = {row[0] for row in unserviceable}
+        if gap_candidates:
+            from sqlalchemy import select
+
+            from app.models.catalog import Subscription, SubscriptionStatus
+            from app.models.subscriber import Subscriber
+            from app.services.subscriber_access_policy import (
+                RADIUS_BLOCKING_SUBSCRIBER_STATUSES,
+            )
+
+            entitled = {
+                login
+                for (login,) in db.execute(
+                    select(Subscription.login)
+                    .join(Subscriber, Subscription.subscriber_id == Subscriber.id)
+                    .where(
+                        Subscription.login.in_(gap_candidates),
+                        Subscription.status == SubscriptionStatus.active,
+                        Subscriber.is_active.is_(True),
+                        Subscriber.status.notin_(RADIUS_BLOCKING_SUBSCRIBER_STATUSES),
+                    )
+                ).all()
+            }
+            if entitled:
+                unserviceable_keys = {(row[1], row[2]) for row in unserviceable}
+                to_kick = {
+                    key: row
+                    for key, row in to_kick.items()
+                    if not (key in unserviceable_keys and row[0] in entitled)
+                }
+                stats["sync_gap_logins"] = len(entitled)
+                logger.error(
+                    "enforcement reconciler: %d entitled logins have live "
+                    "sessions but no radcheck row (sync gap) — sparing them "
+                    "and enqueueing refresh (sample: %s)",
+                    len(entitled),
+                    sorted(entitled)[:5],
+                )
+                from app.tasks.radius_population import refresh_radius_from_subs
+
+                refresh_radius_from_subs.delay()
 
         ghost_rows: list[tuple[int, str]] = []
         for (
