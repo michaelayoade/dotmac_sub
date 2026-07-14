@@ -1166,7 +1166,13 @@ def seed_collections_settings(db: Session) -> None:
         db,
         key="prepaid_deactivation_days",
         value_type=SettingValueType.integer,
-        value_text=os.getenv("PREPAID_DEACTIVATION_DAYS", "0"),
+        value_text=os.getenv("PREPAID_DEACTIVATION_DAYS", "3"),
+    )
+    collections_settings.ensure_by_key(
+        db,
+        key="prepaid_enforcement_activation_at",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("PREPAID_ENFORCEMENT_ACTIVATION_AT", ""),
     )
     collections_settings.ensure_by_key(
         db,

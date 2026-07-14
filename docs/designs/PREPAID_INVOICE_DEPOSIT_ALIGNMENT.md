@@ -98,11 +98,24 @@ phantom-ledger cleanups). Separate one-off script, run after Item 1 lands.
    funded.
 2. Keep `collections.prepaid_balance_enforcement` as the customer-impacting
    suspension gate; cleanup scripts must not be used as the suspension signal.
+   Enabling it is a two-part launch operation: set
+   `collections.prepaid_enforcement_activation_at` to the reviewed ISO-8601
+   launch time and then enable the control. Adverse actions fail closed when the
+   activation time is missing/invalid/not reached, while funded restoration
+   remains available. The deactivation warning window is never zero (three days
+   by default), and old `prepaid_low_balance_at` rows cannot become due before
+   `activation_at + prepaid_deactivation_days`.
 3. Run the phantom-AR cleanup in dry-run first, review the plan, then apply.
    Runtime guards exclude prepaid subscription invoices and imported/provenance
    line-less prepaid invoices from AR/dunning/balance enforcement; ambiguous
    line-less invoices remain visible and require cleanup review.
-4. **Post-change smoke test (top-up → draft settlement).** The #751 follow-ups
+4. For migrated-account readiness, reconstruct the financial position from the
+   approved Splynx cutover baseline plus native post-cutover payments, credits,
+   debits, service extensions, and credit notes. Feed that named, timestamped
+   snapshot to `plan_prepaid_balance_sweep.py --funding-snapshot`; the planner
+   will use no local-money fallback and will still apply the production
+   enforcement owner rules. Review the full planned cohort before launch.
+5. **Post-change smoke test (top-up → draft settlement).** The #751 follow-ups
    (`settle_prepaid_draft_invoices_from_credit`, wired into portal top-up verify /
    webhook settlement / pending top-up reconciliation) are part of the go-live
    baseline, not optional. Immediately after the flip, exercise the path

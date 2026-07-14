@@ -70,7 +70,13 @@ that obscure business behavior.
 6. `financial.prepaid_enforcement` owns the prepaid candidate cohort and the
    warn/suspend/restore plan consumed by both dry-run and execution. It consumes
    the funding decision from `financial.access_resolution`; it does not create
-   another balance or threshold rule.
+   another balance or threshold rule. Audit reconstruction may supply a named,
+   timestamped funding snapshot (for example, Splynx cutover position plus
+   native post-cutover events), but the enforcement owner still applies billing
+   profile validity, grace, activation floor, shields, health, and lifecycle
+   policy, including selection of the candidate cohort. Supplied snapshots are
+   complete-or-error for that cohort and never fall back to a different local
+   balance for missing accounts.
 7. `financial.prepaid_plan_change` owns the immediate prepaid plan-change quote,
    affordability decision, and idempotent financial adjustment. It locks the
    account and recomputes at write time; portal, admin, API, and change-request

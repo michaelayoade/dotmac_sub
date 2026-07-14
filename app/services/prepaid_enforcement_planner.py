@@ -8,7 +8,8 @@ or sends network commands.
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from dataclasses import asdict, dataclass
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import Enum
@@ -62,6 +63,8 @@ class PrepaidEnforcementAction(str, Enum):
 @dataclass(frozen=True)
 class PrepaidEnforcementPolicy:
     deactivation_days: int
+    activation_at: datetime | None
+    activation_error: str | None
     warning_subject: str
     warning_body: str
     deactivation_subject: str
@@ -74,6 +77,9 @@ class PrepaidEnforcementPolicy:
         """Return operational policy without customer-message templates."""
         return {
             "deactivation_days": self.deactivation_days,
+            "activation_at": self.activation_at,
+            "activation_ready": self.activation_error is None,
+            "activation_error": self.activation_error,
             "blocking_time": self.blocking_time,
             "skip_weekends": self.skip_weekends,
             "skip_holidays": list(self.skip_holidays),
@@ -110,6 +116,8 @@ class PrepaidEnforcementPlan:
     generated_at: datetime
     control_enabled: bool
     policy: PrepaidEnforcementPolicy
+    funding_source: str
+    funding_snapshot_at: datetime
     items: tuple[PrepaidEnforcementPlanItem, ...]
 
     @property
@@ -122,6 +130,8 @@ class PrepaidEnforcementPlan:
             "generated_at": self.generated_at,
             "control_enabled": self.control_enabled,
             "policy": self.policy.report_values(),
+            "funding_source": self.funding_source,
+            "funding_snapshot_at": self.funding_snapshot_at,
             "accounts": len(self.items),
             "action_counts": self.action_counts,
             "account_status_drift": sum(
@@ -133,6 +143,36 @@ class PrepaidEnforcementPlan:
         }
         if include_items:
             result["items"] = [item.to_dict() for item in self.items]
+        return result
+
+
+@dataclass(frozen=True)
+class PrepaidFundingSnapshot:
+    """Independent funding facts supplied to the enforcement owner.
+
+    The caller owns reconstruction of the financial position (for example from
+    the Splynx cutover baseline plus native post-cutover events). The prepaid
+    enforcement owner still owns every policy, shield, health, and lifecycle
+    decision. A named source and capture time make it impossible for a report
+    to silently present supplied money as a live local-ledger calculation.
+    """
+
+    captured_at: datetime
+    source: str
+    decisions: tuple[PrepaidFundingDecision, ...]
+
+    def by_account(self) -> dict[str, PrepaidFundingDecision]:
+        source = self.source.strip()
+        if not source:
+            raise ValueError("funding snapshot source must not be empty")
+        if not self.decisions:
+            raise ValueError("funding snapshot decisions must not be empty")
+        result: dict[str, PrepaidFundingDecision] = {}
+        for decision in self.decisions:
+            account_id = str(coerce_uuid(decision.account_id))
+            if account_id in result:
+                raise ValueError(f"duplicate funding decision for account {account_id}")
+            result[account_id] = decision
         return result
 
 
@@ -149,9 +189,27 @@ def resolve_prepaid_enforcement_policy(db: Session) -> PrepaidEnforcementPolicy:
         db, SettingDomain.collections, "prepaid_deactivation_days"
     )
     try:
-        deactivation_days = max(0, int(str(days_raw))) if days_raw is not None else 0
+        deactivation_days = max(1, int(str(days_raw))) if days_raw is not None else 3
     except (TypeError, ValueError):
-        deactivation_days = 0
+        deactivation_days = 3
+
+    activation_raw = settings_spec.resolve_value(
+        db, SettingDomain.collections, "prepaid_enforcement_activation_at"
+    )
+    activation_at: datetime | None = None
+    activation_error: str | None = None
+    if not isinstance(activation_raw, str) or not activation_raw.strip():
+        activation_error = "prepaid_enforcement_activation_at_not_configured"
+    else:
+        try:
+            parsed_activation_at = datetime.fromisoformat(
+                activation_raw.strip().replace("Z", "+00:00")
+            )
+            if parsed_activation_at.tzinfo is None:
+                raise ValueError("activation timestamp requires a timezone")
+            activation_at = parsed_activation_at
+        except ValueError:
+            activation_error = "prepaid_enforcement_activation_at_invalid"
 
     holidays_raw = settings_spec.resolve_value(
         db, SettingDomain.collections, "prepaid_skip_holidays"
@@ -166,6 +224,8 @@ def resolve_prepaid_enforcement_policy(db: Session) -> PrepaidEnforcementPolicy:
     )
     return PrepaidEnforcementPolicy(
         deactivation_days=deactivation_days,
+        activation_at=activation_at,
+        activation_error=activation_error,
         warning_subject=_string("prepaid_warning_subject"),
         warning_body=_string("prepaid_warning_body"),
         deactivation_subject=_string("prepaid_deactivation_subject"),
@@ -354,10 +414,19 @@ def plan_prepaid_account(
     threshold = funding.required_balance
     derived_status = derive_account_status(db, str(account.id))
     current_status = account.status or SubscriberStatus.new
-    due_at = (
+    low_at = (
         _as_utc(account.prepaid_low_balance_at)
-        + timedelta(days=policy.deactivation_days)
         if account.prepaid_low_balance_at is not None
+        else None
+    )
+    grace_started_at = low_at
+    if policy.activation_at is not None and (
+        grace_started_at is None or grace_started_at < policy.activation_at
+    ):
+        grace_started_at = policy.activation_at
+    due_at = (
+        grace_started_at + timedelta(days=policy.deactivation_days)
+        if low_at is not None and grace_started_at is not None
         else None
     )
 
@@ -459,9 +528,22 @@ def plan_prepaid_enforcement(
     now: datetime | None = None,
     account_ids: list[Any] | None = None,
     limit: int | None = None,
+    funding_snapshot: PrepaidFundingSnapshot | None = None,
+    activation_at: datetime | None = None,
 ) -> PrepaidEnforcementPlan:
     """Build a deterministic, side-effect-free production readiness report."""
-    generated_at = now or datetime.now(UTC)
+    generated_at = (
+        _as_utc(now)
+        if now is not None
+        else (
+            _as_utc(funding_snapshot.captured_at)
+            if funding_snapshot is not None
+            else datetime.now(UTC)
+        )
+    )
+    supplied_funding: Mapping[str, PrepaidFundingDecision] | None = None
+    if funding_snapshot is not None:
+        supplied_funding = funding_snapshot.by_account()
     raw_ids = (
         list(account_ids)
         if account_ids is not None
@@ -475,6 +557,15 @@ def plan_prepaid_enforcement(
             select(Subscriber).where(Subscriber.id.in_(ids)).order_by(Subscriber.id)
         ).all()
     )
+    resolved_account_ids = {account.id for account in accounts}
+    unresolved = [
+        str(account_id) for account_id in ids if account_id not in resolved_account_ids
+    ]
+    if unresolved:
+        raise ValueError(
+            "selected account(s) are missing from the database: "
+            + ", ".join(unresolved)
+        )
     resolved_ids = [account.id for account in accounts]
     subscriptions = list(
         db.scalars(
@@ -486,10 +577,36 @@ def plan_prepaid_enforcement(
         subscriptions_by_account[subscription.subscriber_id].append(subscription)
 
     policy = resolve_prepaid_enforcement_policy(db)
-    funding_by_account = {
-        account.id: resolve_prepaid_funding(db, account, now=generated_at)
-        for account in accounts
-    }
+    if activation_at is not None:
+        policy = replace(
+            policy,
+            activation_at=_as_utc(activation_at),
+            activation_error=None,
+        )
+    if supplied_funding is None:
+        funding_by_account = {
+            account.id: resolve_prepaid_funding(db, account, now=generated_at)
+            for account in accounts
+        }
+        funding_source = "canonical_live_resolver"
+        funding_snapshot_at = generated_at
+    else:
+        assert funding_snapshot is not None
+        missing = [
+            str(account.id)
+            for account in accounts
+            if str(account.id) not in supplied_funding
+        ]
+        if missing:
+            raise ValueError(
+                "funding snapshot is missing selected account(s): "
+                + ", ".join(sorted(missing))
+            )
+        funding_by_account = {
+            account.id: supplied_funding[str(account.id)] for account in accounts
+        }
+        funding_source = funding_snapshot.source.strip()
+        funding_snapshot_at = _as_utc(funding_snapshot.captured_at)
     lock_counts = _prepaid_lock_counts(db, resolved_ids)
     dedicated_accounts = _dedicated_bundle_account_ids(db, resolved_ids)
     shield_reasons = _bulk_dunning_shield_reasons(db, set(resolved_ids))
@@ -517,5 +634,7 @@ def plan_prepaid_enforcement(
         generated_at=generated_at,
         control_enabled=prepaid_balance_enforcement_enabled(db),
         policy=policy,
+        funding_source=funding_source,
+        funding_snapshot_at=funding_snapshot_at,
         items=items,
     )
