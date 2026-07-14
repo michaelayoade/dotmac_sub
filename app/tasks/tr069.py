@@ -24,6 +24,7 @@ from app.models.tr069 import (
     Tr069Session,
 )
 from app.services.db_session_adapter import db_session_adapter
+from app.services.genieacs_config import GENIEACS_CONFIG_ENTRIES
 from app.services.genieacs_service import genieacs_service
 from app.services.task_idempotency import idempotent_task
 
@@ -1486,14 +1487,7 @@ def setup_genieacs(
             # Deploy config
             if config:
                 results["config"] = {}
-                config_entries = {
-                    "cwmp.auth": 'EXT("auth", "authenticateCpe", username, password, DeviceID.ID, DeviceID.SerialNumber)',
-                    "cwmp.connectionRequestAuth": (
-                        'AUTH(EXT("auth", "connectionRequestUsername", DeviceID.SerialNumber), '
-                        'EXT("auth", "connectionRequestPassword", DeviceID.SerialNumber))'
-                    ),
-                }
-                for key, value in config_entries.items():
+                for key, value in GENIEACS_CONFIG_ENTRIES.items():
                     try:
                         response = client.put(
                             f"/config/{key}", json={"_id": key, "value": value}

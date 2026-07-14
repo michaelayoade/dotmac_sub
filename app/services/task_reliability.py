@@ -131,6 +131,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     ),
     "app.tasks.billing.check_billing_switch": _c("billing", SWEEP, IDEMP, HEALTH),
     "app.tasks.billing.mark_invoices_overdue": _c("billing", SWEEP, IDEMP, HEALTH),
+    "app.tasks.billing.refresh_billing_health_snapshot": _c(
+        "billing",
+        SWEEP,
+        IDEMP,
+        HEALTH,
+        "Read-only single-flight snapshot producer; the next beat run repairs "
+        "a missing or stale snapshot.",
+    ),
     "app.tasks.billing.run_billing_notifications": _c(
         "billing", STATE, GUARDED, STATUS
     ),

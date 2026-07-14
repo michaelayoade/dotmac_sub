@@ -44,6 +44,16 @@ def check_billing_switch_task() -> dict:
     return scheduled_billing.check_billing_switch_health()
 
 
+@celery_app.task(
+    name="app.tasks.billing.refresh_billing_health_snapshot",
+    soft_time_limit=240,
+    time_limit=300,
+)
+def refresh_billing_health_snapshot_task() -> dict:
+    """Single-flight producer for the scrape-safe billing-health snapshot."""
+    return scheduled_billing.refresh_billing_health_snapshot()
+
+
 @celery_app.task(name="app.tasks.billing.audit_cutover_balance_invariant")
 def audit_cutover_balance_invariant_task() -> dict:
     """Read-only guard for cutover-seeded account balance drift."""
