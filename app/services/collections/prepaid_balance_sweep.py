@@ -200,6 +200,8 @@ def _reconcile_low(
     low_at = account.prepaid_low_balance_at
     if low_at.tzinfo is None:
         low_at = low_at.replace(tzinfo=UTC)
+    if cfg.activation_at is not None and low_at < cfg.activation_at:
+        low_at = cfg.activation_at
     due_at = low_at + timedelta(days=cfg.deactivation_days)
     if now < due_at:
         return result
@@ -290,6 +292,20 @@ def _process_account(
         PrepaidEnforcementAction.warn,
         PrepaidEnforcementAction.suspend,
     }:
+        if cfg.activation_error is not None:
+            logger.warning(
+                "prepaid_balance_sweep adverse action blocked for account %s: %s",
+                account.id,
+                cfg.activation_error,
+            )
+            return "activation_blocked"
+        if cfg.activation_at is not None and now < cfg.activation_at:
+            logger.info(
+                "prepaid_balance_sweep adverse action blocked for account %s: "
+                "activation time not reached",
+                account.id,
+            )
+            return "activation_blocked"
         return _reconcile_low(
             db,
             account,
@@ -327,6 +343,7 @@ def run_prepaid_balance_sweep(
         "deferred": 0,
         "shielded": 0,
         "health_blocked": 0,
+        "activation_blocked": 0,
         "state_drift": 0,
         "ok": 0,
         "errors": 0,

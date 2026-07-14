@@ -120,6 +120,13 @@ Implemented readiness layer:
   drift, active service/lock counts, and outage/ticket notice suppression;
 - the report and executor consume `prepaid_enforcement_planner`; planning has no
   timer, notification, service-state, or network side effects;
+- the planner accepts a named, timestamped, complete reconstructed-funding
+  snapshot for migrated accounts and never fills missing rows from the local
+  ledger, while the enforcement owner still selects the cohort and applies all
+  non-money policy;
+- launch requires an explicit activation timestamp and a non-zero warning
+  window (three days by default); stale timers are floored at activation so
+  enabling the control cannot immediately suspend an old cohort;
 - production enablement remains a launch decision after reviewing the report;
 - add billing health alert when billing is live, prepaid accounts are negative,
   and the sweep is disabled.

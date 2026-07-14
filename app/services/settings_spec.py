@@ -1003,8 +1003,18 @@ SETTINGS_SPECS: list[SettingSpec] = [
         key="prepaid_deactivation_days",
         env_var="PREPAID_DEACTIVATION_DAYS",
         value_type=SettingValueType.integer,
-        default=0,
-        min_value=0,
+        # Customer-impacting enforcement must always include a real warning
+        # window. Existing zero rows resolve to this safe default.
+        default=3,
+        min_value=1,
+    ),
+    SettingSpec(
+        domain=SettingDomain.collections,
+        key="prepaid_enforcement_activation_at",
+        env_var="PREPAID_ENFORCEMENT_ACTIVATION_AT",
+        value_type=SettingValueType.string,
+        default="",
+        label="Prepaid enforcement activation time (ISO 8601)",
     ),
     SettingSpec(
         domain=SettingDomain.collections,
