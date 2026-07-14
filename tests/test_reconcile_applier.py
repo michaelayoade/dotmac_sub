@@ -609,6 +609,43 @@ def test_acs_set_management_server_pushes_cr_creds_and_inform_interval():
     assert params[ms_root + "PeriodicInformInterval"] == 300
 
 
+def test_acs_management_server_moves_endpoint_after_connection_credentials():
+    acs = _StubAcsClient()
+    secrets = {
+        "encrypted-cr": "CR-PW",
+        "encrypted-cwmp": "CWMP-PW",
+    }
+    ctx = _ctx(acs_client=acs, resolve_secret=secrets.__getitem__)
+    plan = _plan(
+        AcsSetManagementServer(
+            device_id="dev",
+            cr_username="admin",
+            cr_password_ref="encrypted-cr",
+            inform_interval_sec=300,
+            data_model_root="Device",
+            acs_url="https://new-acs.example.net/cwmp",
+            acs_username="cwmp-user",
+            acs_password_ref="encrypted-cwmp",
+        )
+    )
+
+    result = apply_plan(plan, ctx)
+
+    assert result.success is True
+    assert len(acs.calls) == 2
+    connection_params = acs.calls[0][1][1]
+    endpoint_params = acs.calls[1][1][1]
+    assert (
+        connection_params["Device.ManagementServer.ConnectionRequestPassword"]
+        == "CR-PW"
+    )
+    assert endpoint_params == {
+        "Device.ManagementServer.URL": "https://new-acs.example.net/cwmp",
+        "Device.ManagementServer.Username": "cwmp-user",
+        "Device.ManagementServer.Password": "CWMP-PW",
+    }
+
+
 # ── Secret resolver fail-paths ──────────────────────────────────────────────
 
 

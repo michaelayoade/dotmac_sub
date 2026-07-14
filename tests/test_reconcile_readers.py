@@ -731,6 +731,9 @@ def _device_doc(*, serial: str = "HWTC8535819A", overrides=None) -> dict:
         "InternetGatewayDevice": {
             "DeviceInfo": {"SoftwareVersion": _leaf("V5R019C10S100")},
             "ManagementServer": {
+                "URL": _leaf("https://acs.example.net/cwmp"),
+                "Username": _leaf("cwmp-user"),
+                "Password": _leaf("configured"),
                 "PeriodicInformInterval": _leaf("300"),
                 "ConnectionRequestUsername": _leaf("admin"),
                 "ConnectionRequestPassword": _leaf("admin"),
@@ -818,6 +821,9 @@ def test_acs_reader_parses_a_full_device_document():
     assert obs.acs_observed_cr_username == "admin"
     assert obs.acs_observed_cr_username_set is True
     assert obs.acs_observed_cr_password_set is True
+    assert obs.acs_observed_url == "https://acs.example.net/cwmp"
+    assert obs.acs_observed_username == "cwmp-user"
+    assert obs.acs_observed_password_set is True
     assert obs.acs_observed_wan_wcd_index == 1
     assert obs.acs_observed_wan_instance_index == 1
     assert obs.acs_observed_wan_ppp_locations == ((1, 1),)

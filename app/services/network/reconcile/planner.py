@@ -105,6 +105,7 @@ class Plan:
 # confined to these, the plan is scoped to the matching ACS writes so unrelated
 # OLT drift doesn't block the action.
 _WIFI_ONLY_FIELDS = frozenset({"wifi_ssid", "wifi_password_ref"})
+_ACS_ENDPOINT_FIELDS = frozenset({"acs_url", "acs_username", "acs_password_ref"})
 
 
 def _is_wifi_only_change(mode: ReconcileMode, proposed_fields: frozenset[str]) -> bool:
@@ -614,13 +615,33 @@ def _plan_acs_side(
     # ManagementServer (CR creds + inform interval) — last in the ACS
     # sequence. Critical for the next reconcile's NBI calls to deliver
     # synchronously.
-    if _management_server_differs(desired, observed):
+    force_endpoint_write = bool(proposed_fields & _ACS_ENDPOINT_FIELDS) and (
+        force_proposed_writes
+    )
+    if force_endpoint_write or _management_server_differs(desired, observed):
         actions.append(
             AcsSetManagementServer(
                 device_id=device_id,
                 cr_username=desired.cr_username or "admin",
                 cr_password_ref=desired.cr_password_ref or "",
                 inform_interval_sec=desired.periodic_inform_interval_sec,
+                data_model_root=(
+                    observed.acs.acs_data_model_root
+                    or desired.tr069_data_model_root
+                    or "InternetGatewayDevice"
+                ),
+                acs_url=desired.acs_url,
+                acs_username=desired.acs_username,
+                acs_password_ref=desired.acs_password_ref,
+            )
+        )
+        drifts.append(
+            Drift(
+                field="acs_management_server",
+                surface="acs",
+                desired="configured",
+                observed="diverged",
+                repairable=True,
             )
         )
 
@@ -864,6 +885,12 @@ def _management_server_differs(
     desired: OntDesiredState, observed: OntObservedState
 ) -> bool:
     acs = observed.acs
+    if desired.acs_url and acs.acs_observed_url != desired.acs_url:
+        return True
+    if desired.acs_url and acs.acs_observed_username != (desired.acs_username or ""):
+        return True
+    if desired.acs_password_ref and not acs.acs_observed_password_set:
+        return True
     if (
         acs.acs_observed_periodic_inform_interval_sec
         != desired.periodic_inform_interval_sec

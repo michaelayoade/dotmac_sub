@@ -15,6 +15,121 @@ logger = logging.getLogger(__name__)
 _ADVISORY_LOCK_KEY = 0x6F_6E_74  # "ont"
 
 
+def _reconcile_payload(result: Any) -> dict[str, Any]:
+    failure = result.failure
+    return {
+        "success": result.success,
+        "sync_status": result.sync_status,
+        "duration_ms": result.duration_ms,
+        "failure": (
+            {"reason": failure.reason, "message": failure.message}
+            if failure is not None
+            else None
+        ),
+        # Values can contain subscriber credentials. Operation history records
+        # only which fields changed, not their old/new values.
+        "actions": [
+            {
+                "field": action.field,
+                "surface": action.surface,
+                "duration_ms": action.duration_ms,
+            }
+            for action in result.actions_applied
+        ],
+        "drift_before": [drift.field for drift in result.drift_before],
+        "drift_after": [drift.field for drift in result.drift_after],
+    }
+
+
+@celery_app.task(
+    name="app.tasks.ont_reconcile.reconcile_huawei_ont",
+    soft_time_limit=150,
+    time_limit=180,
+)
+def reconcile_huawei_ont(ont_id: str, operation_id: str) -> dict[str, Any]:
+    """Run one tracked desired/observed reconcile and persist its outcome."""
+    from app.services.network.reconcile.core import reconcile_ont
+    from app.services.network_operations import network_operations
+
+    with db_session_adapter.session() as db:
+        try:
+            from app.models.network import OntUnit
+            from app.services import tr069 as tr069_service
+            from app.services.network.acs_resolution import resolve_acs_for_ont
+
+            operation = network_operations.mark_running(db, operation_id)
+            parent_id = str(operation.parent_id) if operation.parent_id else None
+            db.commit()
+            ont = db.get(OntUnit, ont_id)
+            desired_acs = (
+                resolve_acs_for_ont(db, ont).server if ont is not None else None
+            )
+            proposed_change = (
+                {
+                    "acs_url": desired_acs.cwmp_url,
+                    "acs_username": desired_acs.cwmp_username,
+                    "acs_password_ref": desired_acs.cwmp_password,
+                }
+                if desired_acs is not None
+                else None
+            )
+            result = reconcile_ont(
+                db,
+                ont_id,
+                proposed_change=proposed_change,
+                mode="sweep",
+                timeout_sec=120,
+            )
+            payload = _reconcile_payload(result)
+            if result.success:
+                if ont is not None and desired_acs is not None:
+                    tr069_service.sync_ont_acs_server(db, ont, desired_acs.id)
+                network_operations.mark_succeeded(
+                    db, operation_id, output_payload=payload
+                )
+            else:
+                message = (
+                    result.failure.message
+                    if result.failure is not None
+                    else "ONT reconciliation did not converge"
+                )
+                network_operations.mark_failed(
+                    db, operation_id, message, output_payload=payload
+                )
+            if parent_id:
+                network_operations.update_parent_status(db, parent_id)
+            db.commit()
+            return {"ont_id": ont_id, "operation_id": operation_id, **payload}
+        except Exception as exc:
+            db.rollback()
+            try:
+                operation = network_operations.get(db, operation_id)
+                network_operations.mark_failed(
+                    db,
+                    operation_id,
+                    str(exc),
+                    output_payload={"success": False, "message": str(exc)},
+                )
+                if operation.parent_id:
+                    network_operations.update_parent_status(
+                        db, str(operation.parent_id)
+                    )
+                db.commit()
+            except Exception:
+                db.rollback()
+                logger.exception(
+                    "Failed to record Huawei ONT reconcile failure for %s",
+                    operation_id,
+                )
+            logger.exception("Queued Huawei ONT reconcile failed for %s", ont_id)
+            return {
+                "ont_id": ont_id,
+                "operation_id": operation_id,
+                "success": False,
+                "message": str(exc),
+            }
+
+
 def _close_expired_remote_access() -> dict[str, int]:
     from sqlalchemy import func, select
 

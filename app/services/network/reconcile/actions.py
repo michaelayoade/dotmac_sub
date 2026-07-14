@@ -421,7 +421,7 @@ class AcsSetDhcpServer:
 
 @dataclass(frozen=True)
 class AcsSetManagementServer:
-    """``setParameterValues`` for ``ManagementServer.{ConnectionRequestUsername, ConnectionRequestPassword, PeriodicInformInterval}``.
+    """Set the ACS endpoint, CWMP credentials, CR credentials, and interval.
 
     Set CR credentials so future NBI ``?connection_request`` POSTs deliver
     synchronously (return 200) instead of queueing (return 202). Inform
@@ -436,6 +436,10 @@ class AcsSetManagementServer:
     cr_username: str
     cr_password_ref: str  # OpenBao path
     inform_interval_sec: int
+    data_model_root: str = "InternetGatewayDevice"
+    acs_url: str | None = None
+    acs_username: str | None = None
+    acs_password_ref: str | None = None
 
 
 # ── Type alias for everything the applier might see ─────────────────────────

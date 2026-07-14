@@ -134,6 +134,9 @@ class OntDesiredState:
     wan_static_subnet: str | None = None
     wan_static_gateway: str | None = None
     wan_static_dns: str | None = None
+    acs_url: str | None = None
+    acs_username: str | None = None
+    acs_password_ref: str | None = None
 
 
 # ── Observed state ──────────────────────────────────────────────────────────
@@ -207,6 +210,9 @@ class AcsObservedFields:
     acs_observed_dhcpv6_enabled: bool | None = None
     acs_observed_dhcpv6_request_prefixes: bool | None = None
     acs_observed_ra_enabled: bool | None = None
+    acs_observed_url: str | None = None
+    acs_observed_username: str | None = None
+    acs_observed_password_set: bool | None = None
 
 
 @dataclass(frozen=True)
