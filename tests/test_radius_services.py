@@ -1123,7 +1123,7 @@ class TestExternalSyncUsersStatusAware:
         ):
             result = radius_service._external_sync_users(db_session, config, [cred])
 
-        assert result == {"external_users_synced": 1}
+        assert result["external_users_synced"] == 1
         rows = _read_radcheck(radius_db)
         # Password row rewritten (still Cleartext-Password since secret_hash starts with "plain:")
         assert any(r[1] == "Cleartext-Password" for r in rows)
@@ -1144,7 +1144,7 @@ class TestExternalSyncUsersStatusAware:
 
         result = radius_service._external_sync_users(db_session, config, [cred])
 
-        assert result == {"external_users_synced": 1}
+        assert result["external_users_synced"] == 1
         rows = _read_radcheck(radius_db)
         # Stale password row is gone, only the Reject row remains.
         assert rows == [("100088888", "Auth-Type", ":=", "Reject")]
@@ -1165,7 +1165,7 @@ class TestExternalSyncUsersStatusAware:
 
         result = radius_service._external_sync_users(db_session, config, [cred])
 
-        assert result == {"external_users_synced": 1}
+        assert result["external_users_synced"] == 1
         # Canceled: leave the user with no rows -> auth not-found.
         assert _read_radcheck(radius_db) == []
         assert _read_radreply(radius_db) == []
@@ -1185,6 +1185,54 @@ class TestExternalSyncUsersStatusAware:
         radius_service._external_sync_users(db_session, config, [cred])
 
         assert _read_radcheck(radius_db) == []
+        assert _read_radreply(radius_db) == []
+
+    def test_undecryptable_password_preserves_existing_rows(
+        self, db_session, tmp_path, subscriber, catalog_offer
+    ):
+        # A credential the sync can't build a password for (retired key,
+        # PBKDF2, opaque hash) must NOT wipe the customer's existing rows —
+        # delete-then-skip strips auth and the enforcement reconciler then
+        # kicks the live session. Skip and leave the projection untouched.
+        cred, radius_db = self._seed(
+            db_session, tmp_path, subscriber, catalog_offer, SubscriptionStatus.active
+        )
+        cred.secret_hash = "enc:not-a-valid-fernet-token"
+        db_session.commit()
+        config = _fake_external_config(radius_db)
+
+        result = radius_service._external_sync_users(db_session, config, [cred])
+
+        assert result["external_users_skipped_unbuildable"] == 1
+        assert result["external_users_synced"] == 0
+        # Pre-existing rows are preserved verbatim, not deleted.
+        assert _read_radcheck(radius_db) == [
+            ("100088888", "Cleartext-Password", ":=", "old-password")
+        ]
+        assert _read_radreply(radius_db) == [
+            ("100088888", "Framed-IP-Address", ":=", "192.0.2.1")
+        ]
+
+    def test_blocked_subscriber_with_active_subscription_writes_reject(
+        self, db_session, tmp_path, subscriber, catalog_offer
+    ):
+        # Customer-level block dominates a stale-active subscription row —
+        # same decision the populate() sweep makes via plan_radius_projection.
+        # Without this gate the 5-minute sync re-grants a working password to
+        # a blocked subscriber forever.
+        from app.models.subscriber import SubscriberStatus
+
+        subscriber.status = SubscriberStatus.blocked
+        db_session.flush()
+        cred, radius_db = self._seed(
+            db_session, tmp_path, subscriber, catalog_offer, SubscriptionStatus.active
+        )
+        config = _fake_external_config(radius_db)
+
+        result = radius_service._external_sync_users(db_session, config, [cred])
+
+        assert result["external_users_synced"] == 1
+        assert _read_radcheck(radius_db) == [("100088888", "Auth-Type", ":=", "Reject")]
         assert _read_radreply(radius_db) == []
 
     def test_suspended_optin_subscriber_gets_walled_garden_not_reject(
@@ -1216,7 +1264,7 @@ class TestExternalSyncUsersStatusAware:
         ):
             result = radius_service._external_sync_users(db_session, config, [cred])
 
-        assert result == {"external_users_synced": 1}
+        assert result["external_users_synced"] == 1
         rows = _read_radcheck(radius_db)
         assert any(r[1] == "Cleartext-Password" for r in rows)
         assert not any(r[1] == "Auth-Type" and r[3] == "Reject" for r in rows)

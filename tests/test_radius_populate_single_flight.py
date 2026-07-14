@@ -1,9 +1,13 @@
 """RADIUS populate single-flight wrapper (review task #16).
 
-On Postgres the task takes a pg advisory lock so two overlapping refreshes
-can't interleave their radcheck rewrites. On SQLite (tests) the lock is
-skipped and populate runs normally — verified here so the wrapper plumbing
-doesn't regress.
+On Postgres the tasks take a pg advisory lock so two overlapping refreshes
+can't interleave their radcheck rewrites. The lock MUST go through
+``postgres_session_advisory_lock`` (pinned connection): session-level
+advisory locks belong to one Postgres backend, and a pooled Session that
+commits after acquiring can unlock on a *different* backend — the unlock
+silently returns false and the lock strands, skipping every later run as
+"previous run still in progress" (the db_session_adapter bug that bit the
+infrastructure poller in prod).
 """
 
 from __future__ import annotations
@@ -11,39 +15,40 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 
-def test_refresh_calls_populate_without_lock_on_non_pg():
-    """On a non-Postgres bind the advisory lock is skipped and populate runs.
+def _held_lock(acquired: bool) -> MagicMock:
+    lock = MagicMock()
+    lock.return_value.__enter__.return_value = acquired
+    return lock
 
-    SessionLocal is patched to a fake non-pg session so the task doesn't try to
-    reach the real Postgres (and so the lock path is exercised as a skip)."""
-    fake_session = MagicMock()
-    fake_session.bind.dialect.name = "sqlite"
 
+def test_refresh_runs_populate_under_pinned_lock():
+    mock_lock = _held_lock(True)
     with (
-        patch("app.db.SessionLocal", return_value=fake_session),
+        patch("app.tasks.radius_population.postgres_session_advisory_lock", mock_lock),
         patch(
             "app.services.radius_population.populate",
             return_value={"radcheck_upserts": 3},
         ) as mock_pop,
     ):
-        from app.tasks.radius_population import refresh_radius_from_subs
+        from app.tasks.radius_population import (
+            _POPULATE_LOCK_KEY,
+            refresh_radius_from_subs,
+        )
 
         result = refresh_radius_from_subs()
 
+    mock_lock.assert_called_once_with(_POPULATE_LOCK_KEY)
     mock_pop.assert_called_once_with(dry_run=False)
     assert result == {"radcheck_upserts": 3}
-    fake_session.close.assert_called_once()
 
 
 def test_refresh_skips_when_lock_not_acquired():
-    """On Postgres, a second concurrent run that can't take the lock skips."""
-    fake_session = MagicMock()
-    fake_session.bind.dialect.name = "postgresql"
-    # pg_try_advisory_lock(...) -> False (someone else holds it)
-    fake_session.execute.return_value.scalar.return_value = False
-
+    """A second concurrent run that can't take the lock skips populate."""
     with (
-        patch("app.db.SessionLocal", return_value=fake_session),
+        patch(
+            "app.tasks.radius_population.postgres_session_advisory_lock",
+            _held_lock(False),
+        ),
         patch("app.services.radius_population.populate") as mock_pop,
     ):
         from app.tasks.radius_population import refresh_radius_from_subs
@@ -52,4 +57,53 @@ def test_refresh_skips_when_lock_not_acquired():
 
     mock_pop.assert_not_called()
     assert result == {"skipped_locked": 1}
-    fake_session.close.assert_called_once()
+
+
+def test_device_login_sync_uses_pinned_lock():
+    mock_lock = _held_lock(True)
+    with (
+        patch("app.tasks.radius_population.postgres_session_advisory_lock", mock_lock),
+        patch(
+            "app.services.radius_population.populate_device_login",
+            return_value={"admin_upserts": 1},
+        ) as mock_pop,
+        patch("app.services.radius_population.record_device_login_sync_status"),
+        patch("app.db.SessionLocal", return_value=MagicMock()),
+    ):
+        from app.tasks.radius_population import (
+            _DEVICE_LOGIN_LOCK_KEY,
+            sync_device_login,
+        )
+
+        result = sync_device_login()
+
+    mock_lock.assert_called_once_with(_DEVICE_LOGIN_LOCK_KEY)
+    mock_pop.assert_called_once()
+    assert result == {"admin_upserts": 1}
+
+
+def test_device_login_sync_skips_when_lock_not_acquired():
+    with (
+        patch(
+            "app.tasks.radius_population.postgres_session_advisory_lock",
+            _held_lock(False),
+        ),
+        patch("app.services.radius_population.populate_device_login") as mock_pop,
+    ):
+        from app.tasks.radius_population import sync_device_login
+
+        result = sync_device_login()
+
+    mock_pop.assert_not_called()
+    assert result == {"skipped_locked": 1}
+
+
+def test_lock_helper_is_the_pinned_connection_implementation():
+    """Guard: the task module's lock helper must be the shared pinned-connection
+    one, not a local reimplementation on a pooled session."""
+    from app.tasks import _postgres_lock, radius_population
+
+    assert (
+        radius_population.postgres_session_advisory_lock
+        is _postgres_lock.postgres_session_advisory_lock
+    )

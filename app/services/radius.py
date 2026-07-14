@@ -1140,6 +1140,10 @@ def _external_sync_users(
 ) -> dict[str, int]:
     from app.services.connection_type_provisioning import build_radius_reply_attributes
 
+    # Function-local: radius_projection_planner reaches back into this module
+    # via radius_access_state, so a top-level import would be circular.
+    from app.services.radius_projection_planner import plan_radius_projection
+
     radcheck = config["radcheck_table"]
     radreply = config["radreply_table"]
     radusergroup = config["radusergroup_table"]
@@ -1171,6 +1175,7 @@ def _external_sync_users(
         Column("priority", Integer),
     )
     created = 0
+    skipped_unbuildable = 0
     profile_cache: dict[str, RadiusProfile | None] = {}
     with engine.begin() as conn:
         for credential in credentials:
@@ -1181,96 +1186,40 @@ def _external_sync_users(
                 continue
             username = credential.username
 
-            # Status-aware sync. Suspended subs get a single
-            # `Auth-Type := Reject` row so a re-sync can't accidentally
-            # re-enable them. Active subs get the full rebuild.
-            if subscription.status != SubscriptionStatus.active:
-                conn.execute(
-                    delete(radcheck_table).where(radcheck_table.c.username == username)
+            # One resolver for "what should this user's RADIUS state be":
+            # plan_radius_projection, shared with the populate() sweep, so the
+            # two writers cannot disagree. It folds in the subscriber-level
+            # block, which subscription.status alone misses (a blocked
+            # customer with a stale-active subscription row must not get a
+            # working password re-granted every sync).
+            plan = plan_radius_projection(
+                subscription,
+                captive_redirect_enabled=_subscriber_captive_opted_in(
+                    db, subscription.subscriber_id
+                ),
+            )
+
+            password_row = None
+            if plan.write_password:
+                # Build the password BEFORE deleting anything. A credential
+                # this sync cannot rebuild (retired encryption key, PBKDF2 or
+                # opaque hash) must leave the existing projection untouched:
+                # delete-then-skip strips the user's auth rows and the
+                # enforcement reconciler then kicks the live session.
+                password_row = _external_password_row(
+                    credential,
+                    default_attribute=password_attr,
+                    default_op=password_op,
                 )
-                conn.execute(
-                    delete(radreply_table).where(radreply_table.c.username == username)
-                )
-                if use_group:
-                    conn.execute(
-                        delete(radusergroup_table).where(
-                            radusergroup_table.c.username == username
-                        )
+                if password_row is None:
+                    logger.error(
+                        "External RADIUS sync: cannot rebuild password for %s "
+                        "(undecryptable or one-way secret) — leaving existing "
+                        "rows untouched",
+                        username,
                     )
-                captive = (
-                    subscription.status == SubscriptionStatus.suspended
-                    and _subscriber_captive_opted_in(db, subscription.subscriber_id)
-                )
-                if captive:
-                    # Opted-in suspended customer: walled-garden, not hard-reject —
-                    # a usable password plus a captive radreply (Address-List, no
-                    # routes), mirroring the authoritative sweep's captive treatment
-                    # so the two writers agree instead of flapping the customer
-                    # between the pay-page and fully-offline.
-                    password_row = _external_password_row(
-                        credential,
-                        default_attribute=password_attr,
-                        default_op=password_op,
-                    )
-                    if password_row:
-                        conn.execute(
-                            insert(radcheck_table).values(
-                                username=username,
-                                attribute=password_row[0],
-                                op=password_row[1],
-                                value=password_row[2],
-                            )
-                        )
-                    cap_profile_id = (
-                        credential.radius_profile_id or subscription.radius_profile_id
-                    )
-                    cap_profile = (
-                        db.get(RadiusProfile, cap_profile_id)
-                        if cap_profile_id
-                        else None
-                    )
-                    cap_attrs = [
-                        a
-                        for a in build_radius_reply_attributes(
-                            db, subscription, profile=cap_profile
-                        )
-                        if a["attribute"] != "Framed-Route"
-                    ]
-                    cap_attrs.append(
-                        {
-                            "attribute": "Mikrotik-Address-List",
-                            "op": ":=",
-                            "value": "suspended",
-                        }
-                    )
-                    seen_cap: set[str] = set()
-                    for attr_dict in cap_attrs:
-                        key = attr_dict["attribute"].lower()
-                        if key in seen_cap and attr_dict["op"] != "+=":
-                            continue
-                        seen_cap.add(key)
-                        conn.execute(
-                            insert(radreply_table).values(
-                                username=username,
-                                attribute=attr_dict["attribute"],
-                                op=attr_dict.get("op") or default_reply_op,
-                                value=attr_dict["value"],
-                            )
-                        )
-                    created += 1
+                    skipped_unbuildable += 1
                     continue
-                if subscription.status == SubscriptionStatus.suspended:
-                    conn.execute(
-                        insert(radcheck_table).values(
-                            username=username,
-                            attribute="Auth-Type",
-                            op=":=",
-                            value="Reject",
-                        )
-                    )
-                # canceled/expired: leave the user with no rows -> not-found
-                created += 1
-                continue
 
             conn.execute(
                 delete(radcheck_table).where(radcheck_table.c.username == username)
@@ -1284,12 +1233,30 @@ def _external_sync_users(
                         radusergroup_table.c.username == username
                     )
                 )
-            password_row = _external_password_row(
-                credential,
-                default_attribute=password_attr,
-                default_op=password_op,
-            )
-            if password_row:
+
+            if plan.mode == "reject":
+                # A single `Auth-Type := Reject` row so a re-sync can't
+                # accidentally re-enable the user.
+                conn.execute(
+                    insert(radcheck_table).values(
+                        username=username,
+                        attribute="Auth-Type",
+                        op=":=",
+                        value="Reject",
+                    )
+                )
+                created += 1
+                continue
+
+            if plan.mode == "captive":
+                # Opted-in suspended customer: walled-garden, not hard-reject —
+                # a usable password plus a captive radreply (Address-List, no
+                # routes), mirroring the authoritative sweep's captive treatment
+                # so the two writers agree instead of flapping the customer
+                # between the pay-page and fully-offline.
+                # captive requires a usable password: plan.write_password is set
+                # for this mode, so password_row was built above (or we skipped).
+                assert password_row is not None
                 conn.execute(
                     insert(radcheck_table).values(
                         username=username,
@@ -1298,6 +1265,59 @@ def _external_sync_users(
                         value=password_row[2],
                     )
                 )
+                cap_profile_id = (
+                    credential.radius_profile_id or subscription.radius_profile_id
+                )
+                cap_profile = (
+                    db.get(RadiusProfile, cap_profile_id) if cap_profile_id else None
+                )
+                cap_attrs = [
+                    a
+                    for a in build_radius_reply_attributes(
+                        db, subscription, profile=cap_profile
+                    )
+                    if a["attribute"] != "Framed-Route"
+                ]
+                cap_attrs.append(
+                    {
+                        "attribute": "Mikrotik-Address-List",
+                        "op": ":=",
+                        "value": "suspended",
+                    }
+                )
+                seen_cap: set[str] = set()
+                for attr_dict in cap_attrs:
+                    key = attr_dict["attribute"].lower()
+                    if key in seen_cap and attr_dict["op"] != "+=":
+                        continue
+                    seen_cap.add(key)
+                    conn.execute(
+                        insert(radreply_table).values(
+                            username=username,
+                            attribute=attr_dict["attribute"],
+                            op=attr_dict.get("op") or default_reply_op,
+                            value=attr_dict["value"],
+                        )
+                    )
+                created += 1
+                continue
+
+            if plan.mode != "active":
+                # terminated / not provisioned: leave the user with no
+                # rows -> auth not-found.
+                created += 1
+                continue
+
+            # active requires a usable password (plan.write_password set above).
+            assert password_row is not None
+            conn.execute(
+                insert(radcheck_table).values(
+                    username=username,
+                    attribute=password_row[0],
+                    op=password_row[1],
+                    value=password_row[2],
+                )
+            )
 
             # Resolve profile from credential or subscription
             profile_id = credential.radius_profile_id or subscription.radius_profile_id
@@ -1338,7 +1358,10 @@ def _external_sync_users(
                     )
                 )
             created += 1
-    return {"external_users_synced": created}
+    return {
+        "external_users_synced": created,
+        "external_users_skipped_unbuildable": skipped_unbuildable,
+    }
 
 
 def _external_sync_nas(

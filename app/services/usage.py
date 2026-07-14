@@ -205,10 +205,13 @@ def _write_subscription_ips_from_accounting(
         subscription.ipv6_address = ipv6
 
 
-def _radius_accounting_db_url(db: Session) -> str | None:
-    from app.services.radius import authoritative_external_radius_db_url
+def _radius_accounting_db_url() -> str | None:
+    # The accounting importer must read the SAME database the RADIUS writers
+    # write — resolve through the one DSN owner (radius_dsn, the authority the
+    # writers use) instead of a private precedence chain that drifts from it.
+    from app.services.radius_dsn import resolve_radius_dsn
 
-    return authoritative_external_radius_db_url(db)
+    return resolve_radius_dsn()
 
 
 def _get_radius_accounting_cursor(db: Session) -> int:
@@ -699,7 +702,7 @@ def import_radius_accounting(
     *,
     limit: int | None = None,
 ) -> dict[str, int | bool | str | None]:
-    db_url = _radius_accounting_db_url(db)
+    db_url = _radius_accounting_db_url()
     if not db_url:
         return {
             "ok": False,
