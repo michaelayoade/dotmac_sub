@@ -263,8 +263,9 @@ consume context, but should not rediscover subscriber/ONT/CPE links themselves.
 `Projects.update` is the canonical writer for native project mutations;
 Kanban, Gantt, normal edit, API, and web adapters delegate to it rather than
 maintaining parallel SLA/event/notification paths. Customer and reseller read
-authority remains controlled by `projects.native_read` until the documented CRM
-mirror cutover is complete. Field job detail projects `completion_requirements`
+authority is owned by `projects.native_read`. Where CRM project data is shown, it
+is served from a local mirror populated over the CRM API and treated as a cache,
+never as the authority. Field job detail projects `completion_requirements`
 from the same transition service that validates completion. Field clients consume
 that contract and may offer advisory quality checks, but must not invent a separate
 completion gate from local checklist state or cached settings.
