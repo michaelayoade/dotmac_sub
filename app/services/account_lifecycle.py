@@ -212,7 +212,7 @@ def assert_legal_subscription_transition(
     from_status: SubscriptionStatus | None,
     to_status: SubscriptionStatus | None,
 ) -> None:
-    """Guard the subscription state machine against illegal transitions.
+    """Compatibility wrapper for the shared lifecycle transition guard.
 
     Terminal statuses (canceled/expired/disabled/hidden/archived) are sinks:
     once a subscription enters one, the only legal "transition" is to stay put.
@@ -227,14 +227,9 @@ def assert_legal_subscription_transition(
         ValueError: if ``from_status`` is terminal and differs from
             ``to_status``.
     """
-    if to_status is None or from_status == to_status:
-        return
-    if from_status in _TERMINAL:
-        raise ValueError(
-            f"Illegal subscription transition "
-            f"{from_status.value} → {to_status.value}: "
-            f"{from_status.value} is terminal and cannot be reactivated"
-        )
+    from app.services.subscription_lifecycle import assert_subscription_transition
+
+    assert_subscription_transition(from_status, to_status)
 
 
 # ---------------------------------------------------------------------------
