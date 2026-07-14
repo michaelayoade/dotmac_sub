@@ -218,9 +218,23 @@ def decommission_ont(
             message=f"Invalid reason '{reason}'. Valid reasons: {', '.join(DECOMMISSION_REASONS.keys())}",
             ont_id=ont_id,
         )
+    if not deauthorize_on_olt or not remove_from_acs:
+        return DecommissionResult(
+            success=False,
+            message=(
+                "Permanent decommission requires verified OLT and ACS cleanup. "
+                "Use return-to-inventory for reusable hardware."
+            ),
+            ont_id=ont_id,
+        )
     from app.models.tr069 import Tr069CpeDevice
     from app.services.events.dispatcher import emit_event
     from app.services.events.types import EventType
+    from app.services.network.ont_inventory import (
+        cleanup_acs_state_for_return,
+        cleanup_olt_state_for_return,
+        reset_ont_service_state,
+    )
 
     stats: dict[str, int] = {
         "assignments_closed": 0,
@@ -254,29 +268,114 @@ def decommission_ont(
         },
     )
 
-    # Step 1: Deauthorize on OLT (if requested and still registered)
+    # External state must converge before local SOT is changed. Both cleanup
+    # helpers are idempotent and include device readback/reconciliation.
+    external_completed: list[str] = []
     if deauthorize_on_olt and olt and ont.external_id:
         try:
-            from app.services.network.olt_protocol_adapters import get_protocol_adapter
-
-            fsp = f"{ont.board}/{ont.port}" if ont.board and ont.port else None
-            if fsp:
-                adapter = get_protocol_adapter(olt)
-                result = adapter.deauthorize_ont(fsp, int(ont.external_id))
-                if result.success:
-                    logger.info(
-                        "Deauthorized ONT %s on OLT %s during decommission",
-                        serial_number,
-                        olt_name,
+            ok, completed, cleanup_errors = cleanup_olt_state_for_return(db, ont_id)
+            external_completed.extend(completed)
+            if not ok:
+                details = "; ".join([*completed, *cleanup_errors])
+                if completed:
+                    db.rollback()
+                    _record_decommission_compensation(
+                        db,
+                        ont=ont,
+                        description=(
+                            "OLT cleanup partially completed before verified "
+                            "decommission cleanup stopped."
+                        ),
+                        error_message=details,
                     )
-                else:
-                    errors.append(f"OLT deauthorize failed: {result.message}")
+                return DecommissionResult(
+                    success=False,
+                    message=(
+                        "Decommission stopped before local state changed because "
+                        f"OLT cleanup was not verified: {details}"
+                    ),
+                    ont_id=ont_id,
+                    serial_number=serial_number,
+                    olt_name=olt_name,
+                    cleanup_stats=stats,
+                    errors=cleanup_errors,
+                )
         except Exception as exc:
-            errors.append(f"OLT deauthorize error: {exc}")
-            logger.warning(
-                "Failed to deauthorize ONT %s during decommission: %s",
-                serial_number,
-                exc,
+            logger.exception("Failed verified OLT cleanup for ONT %s", serial_number)
+            db.rollback()
+            _record_decommission_compensation(
+                db,
+                ont=ont,
+                description=(
+                    "OLT cleanup raised before its final verified result; device "
+                    "state requires operator review."
+                ),
+                error_message=str(exc),
+            )
+            return DecommissionResult(
+                success=False,
+                message=(
+                    "Decommission stopped before local state changed because "
+                    f"OLT cleanup failed: {exc}"
+                ),
+                ont_id=ont_id,
+                serial_number=serial_number,
+                olt_name=olt_name,
+                cleanup_stats=stats,
+                errors=[f"OLT cleanup error: {exc}"],
+            )
+
+    if remove_from_acs:
+        try:
+            ok, completed, cleanup_errors = cleanup_acs_state_for_return(db, ont)
+            external_completed.extend(completed)
+            if not ok:
+                details = "; ".join([*external_completed, *cleanup_errors])
+                db.rollback()
+                _record_decommission_compensation(
+                    db,
+                    ont=ont,
+                    description=(
+                        "OLT cleanup may have completed, but ACS cleanup failed "
+                        "before local decommission state was committed."
+                    ),
+                    error_message=details,
+                )
+                return DecommissionResult(
+                    success=False,
+                    message=(
+                        "Decommission stopped before local state changed because "
+                        f"ACS cleanup was not verified: {details}"
+                    ),
+                    ont_id=ont_id,
+                    serial_number=serial_number,
+                    olt_name=olt_name,
+                    cleanup_stats=stats,
+                    errors=cleanup_errors,
+                )
+        except Exception as exc:
+            logger.exception("Failed verified ACS cleanup for ONT %s", serial_number)
+            if external_completed:
+                db.rollback()
+                _record_decommission_compensation(
+                    db,
+                    ont=ont,
+                    description=(
+                        "Device cleanup partially completed before ACS cleanup raised."
+                    ),
+                    error_message=str(exc),
+                )
+            return DecommissionResult(
+                success=False,
+                message=(
+                    "Decommission stopped before local state changed because "
+                    f"ACS cleanup failed: {exc}"
+                ),
+                ont_id=ont_id,
+                serial_number=serial_number,
+                olt_name=olt_name,
+                cleanup_stats=stats,
+                errors=[f"ACS cleanup error: {exc}"],
             )
 
     # Step 2: Close all assignments
@@ -358,7 +457,8 @@ def decommission_ont(
             exc,
         )
 
-    # Step 3: Release service port allocations
+    # Release any remaining local service-port allocations. Verified OLT cleanup
+    # already releases these, so this is intentionally idempotent.
     try:
         from app.services.network.service_port_allocator import release_all_for_ont
 
@@ -372,36 +472,16 @@ def decommission_ont(
             exc,
         )
 
-    # Step 5: Clear TR-069 CPE device association
-    tr069_device = db.scalars(
+    # Clear the local TR-069 association only after ACS cleanup has converged.
+    tr069_devices = db.scalars(
         select(Tr069CpeDevice).where(Tr069CpeDevice.ont_unit_id == ont_id)
-    ).first()
-    if tr069_device:
-        genieacs_device_id = tr069_device.genieacs_device_id
-        tr069_device.ont_unit_id = None
-        stats["acs_devices_cleared"] = 1
-
-        # Optionally delete from ACS entirely
-        if remove_from_acs and genieacs_device_id and ont.tr069_acs_server:
-            try:
-                from app.services.genieacs_client import create_genieacs_client
-
-                acs_client = create_genieacs_client(ont.tr069_acs_server)
-                if acs_client:
-                    acs_client.delete_device(genieacs_device_id)
-                    logger.info(
-                        "Deleted ONT %s from ACS during decommission",
-                        serial_number,
-                    )
-                    # Also delete the local CPE device record
-                    db.delete(tr069_device)
-            except Exception as exc:
-                errors.append(f"ACS delete error: {exc}")
-                logger.warning(
-                    "Failed to delete ONT %s from ACS during decommission: %s",
-                    serial_number,
-                    exc,
-                )
+    ).all()
+    for tr069_device in tr069_devices:
+        if remove_from_acs:
+            db.delete(tr069_device)
+        else:
+            tr069_device.ont_unit_id = None
+        stats["acs_devices_cleared"] += 1
 
     # Step 6: Mark ONT as decommissioned
     from app.models.network import OnuOnlineStatus
@@ -410,6 +490,17 @@ def decommission_ont(
         clear_provisioning_status,
     )
 
+    # Inventory reuse must forget prior observations, but a permanently retired
+    # asset keeps its last readback as forensic evidence.
+    tr069_snapshot = ont.tr069_last_snapshot
+    tr069_snapshot_at = ont.tr069_last_snapshot_at
+    olt_snapshot = ont.olt_observed_snapshot
+    olt_snapshot_at = ont.olt_observed_snapshot_at
+    reset_ont_service_state(db, ont, reason="decommission")
+    ont.tr069_last_snapshot = tr069_snapshot
+    ont.tr069_last_snapshot_at = tr069_snapshot_at
+    ont.olt_observed_snapshot = olt_snapshot
+    ont.olt_observed_snapshot_at = olt_snapshot_at
     ont.is_active = False
     clear_authorization_status(ont, reason="decommission")
     clear_provisioning_status(ont, reason="decommission")
@@ -459,13 +550,27 @@ def decommission_ont(
         },
     )
 
-    success = len(errors) == 0
+    if errors:
+        _record_decommission_compensation(
+            db,
+            ont=ont,
+            description=(
+                "ONT device cleanup and decommission completed, but one or more "
+                "local resource releases require operator review."
+            ),
+            error_message="; ".join(errors),
+            commit=False,
+        )
+    success = True
     return DecommissionResult(
         success=success,
         message=(
             f"Successfully decommissioned ONT {serial_number}"
-            if success
-            else f"Decommissioned ONT {serial_number} with {len(errors)} error(s)"
+            if not errors
+            else (
+                f"Decommissioned ONT {serial_number}; {len(errors)} local cleanup "
+                "item(s) require review"
+            )
         ),
         ont_id=ont_id,
         serial_number=serial_number,
@@ -473,6 +578,33 @@ def decommission_ont(
         cleanup_stats=stats,
         errors=errors,
     )
+
+
+def _record_decommission_compensation(
+    db: Session,
+    *,
+    ont: OntUnit,
+    description: str,
+    error_message: str,
+    commit: bool = True,
+) -> None:
+    """Persist forward-recovery evidence after a destructive partial result."""
+    from app.models.compensation_failure import CompensationFailure
+
+    failure = CompensationFailure(
+        ont_unit_id=ont.id,
+        olt_device_id=ont.olt_device_id,
+        operation_type="ont_decommission",
+        step_name="manual_decommission_cleanup_review",
+        undo_commands=[],
+        description=description,
+        resource_id=str(ont.id),
+        interface_path=(f"{ont.board}/{ont.port}" if ont.board and ont.port else None),
+        error_message=error_message,
+    )
+    db.add(failure)
+    if commit:
+        db.commit()
 
 
 def decommission_ont_audited(
@@ -493,7 +625,14 @@ def decommission_ont_audited(
 
     SAFETY: The `confirm` parameter MUST be True or the operation will be rejected.
     """
+    from fastapi import HTTPException
+
+    from app.models.network_operation import (
+        NetworkOperationTargetType,
+        NetworkOperationType,
+    )
     from app.services.network.olt_web_audit import log_olt_audit_event
+    from app.services.network_operations import network_operations
 
     # Extract actor from request if not provided
     if actor is None and request is not None:
@@ -502,21 +641,76 @@ def decommission_ont_audited(
         )
         actor = getattr(user, "email", None) if user else None
 
-    result = decommission_ont(
-        db,
-        ont_id,
-        reason=reason,
-        confirm=confirm,
-        remove_from_acs=remove_from_acs,
-        deauthorize_on_olt=deauthorize_on_olt,
-        actor=actor,
-    )
+    try:
+        operation = network_operations.start(
+            db,
+            NetworkOperationType.ont_decommission,
+            NetworkOperationTargetType.ont,
+            ont_id,
+            correlation_key=f"ont_decommission:{ont_id}",
+            input_payload={
+                "reason": reason,
+                "remove_from_acs": remove_from_acs,
+                "deauthorize_on_olt": deauthorize_on_olt,
+            },
+            initiated_by=actor,
+        )
+        network_operations.mark_running(db, str(operation.id))
+        db.commit()
+    except HTTPException as exc:
+        if exc.status_code != 409:
+            raise
+        return DecommissionResult(
+            success=False,
+            message="A decommission operation is already in progress for this ONT.",
+            ont_id=ont_id,
+        )
 
-    # Commit or rollback based on result
+    try:
+        result = decommission_ont(
+            db,
+            ont_id,
+            reason=reason,
+            confirm=confirm,
+            remove_from_acs=remove_from_acs,
+            deauthorize_on_olt=deauthorize_on_olt,
+            actor=actor,
+        )
+    except Exception as exc:
+        db.rollback()
+        network_operations.mark_failed(
+            db,
+            str(operation.id),
+            f"Unexpected decommission failure: {exc}",
+        )
+        db.commit()
+        raise
+
+    output_payload = result.to_dict()
     if result.success:
+        if result.errors:
+            network_operations.mark_warning(
+                db,
+                str(operation.id),
+                "; ".join(result.errors),
+                output_payload=output_payload,
+            )
+        else:
+            network_operations.mark_succeeded(
+                db,
+                str(operation.id),
+                output_payload=output_payload,
+            )
         db.commit()
     else:
         db.rollback()
+        network_operations.mark_failed(
+            db,
+            str(operation.id),
+            result.message,
+            output_payload=output_payload,
+        )
+        db.commit()
 
     # Get OLT ID for audit
     ont = db.get(OntUnit, ont_id)

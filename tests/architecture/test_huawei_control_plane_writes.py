@@ -48,7 +48,6 @@ OLT_WRITE_BACKLOG = {
     "app/services/network/olt_api_operations.py",
     "app/services/network/olt_tr069_admin.py",
     "app/services/network/ont_authorization.py",
-    "app/services/network/ont_decommission.py",
     "app/services/network/ont_inventory.py",
     "app/services/network/ont_provision_steps.py",
     "app/services/network/ont_write.py",
