@@ -3897,6 +3897,7 @@ def subscriptions_list_page_data(
     return {
         "subscriptions": subscriptions,
         "offers": offers,
+        "offer_options": _offer_options(db, list(offers), include_prices=False),
         "status": status,
         "page": page,
         "per_page": per_page,
