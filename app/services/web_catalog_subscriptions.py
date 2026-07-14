@@ -541,6 +541,20 @@ def parse_subscription_form(
     }
     if subscription_id:
         data["id"] = subscription_id
+    else:
+        # Creation establishes technical and commercial intent only. Lifecycle
+        # facts are owned by subscription_lifecycle_commands after the record
+        # and its provisioning inputs have been staged.
+        data.update(
+            {
+                "status": SubscriptionStatus.pending.value,
+                "start_at": "",
+                "end_at": "",
+                "next_billing_at": "",
+                "canceled_at": "",
+                "cancel_reason": "",
+            }
+        )
     return data
 
 
@@ -2884,18 +2898,24 @@ def ensure_ipv4_blocks_allocatable(
 def apply_create_quick_options(
     payload_data: dict[str, object], form: FormData
 ) -> tuple[bool, bool, bool]:
-    """Apply create quick options and return flags."""
+    """Return create follow-up flags without bypassing lifecycle ownership."""
     activate_immediately = form.get("activate_immediately") == "1"
     generate_invoice = form.get("generate_invoice") == "1"
     send_welcome_email = form.get("send_welcome_email") == "1"
     if activate_immediately:
-        payload_data["status"] = "active"
-        if not payload_data.get("start_at"):
-            payload_data["start_at"] = datetime.now(UTC).isoformat()
+        payload_data["status"] = SubscriptionStatus.pending.value
+        for field in (
+            "start_at",
+            "end_at",
+            "next_billing_at",
+            "canceled_at",
+            "cancel_reason",
+        ):
+            payload_data.pop(field, None)
     return activate_immediately, generate_invoice, send_welcome_email
 
 
-def create_subscription(db: Session, payload_data: dict[str, object]):
+def create_subscription(db: Session, payload_data: dict[str, object]) -> Subscription:
     """Create subscription."""
     return catalog_service.subscriptions.create(
         db=db, payload=SubscriptionCreate.model_validate(payload_data)
@@ -2904,7 +2924,7 @@ def create_subscription(db: Session, payload_data: dict[str, object]):
 
 def update_subscription(
     db: Session, subscription_id: str, payload_data: dict[str, object]
-):
+) -> Subscription:
     """Update subscription."""
     return catalog_service.subscriptions.update(
         db=db,
@@ -4108,13 +4128,13 @@ def create_subscription_with_audit(
     form: FormData,
     request: object,
     actor_id: str | None,
-) -> object:
+) -> Subscription:
     """Create subscription with quick-options, invoice, welcome email, and audit.
 
     Returns the created subscription ORM object.
     """
-    _, generate_invoice, send_welcome_email = apply_create_quick_options(
-        payload_data, form
+    activate_immediately, generate_invoice, send_welcome_email = (
+        apply_create_quick_options(payload_data, form)
     )
     created = create_subscription(db, payload_data)
 
@@ -4122,9 +4142,9 @@ def create_subscription_with_audit(
     if subscriber:
         pppoe_auto_generate = _pppoe_auto_generate_enabled(db)
         existing_credential = _current_access_credential(db, created.subscriber_id)
-        if (
-            not existing_credential
-            and str(getattr(created, "status", "") or "").strip().lower() == "active"
+        if not existing_credential and (
+            activate_immediately
+            or str(getattr(created, "status", "") or "").strip().lower() == "active"
         ):
             try:
                 from app.services.pppoe_credentials import (

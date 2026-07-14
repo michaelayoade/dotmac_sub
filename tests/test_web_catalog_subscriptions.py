@@ -17,6 +17,7 @@ from app.models.catalog import (
     BillingMode,
     NasDevice,
     PriceType,
+    Subscription,
     SubscriptionAddOn,
     SubscriptionStatus,
 )
@@ -49,8 +50,15 @@ from app.models.subscription_engine import SettingValueType
 from app.schemas.catalog import SubscriptionCreate
 from app.services import auth_flow as auth_flow_service
 from app.services import catalog as catalog_service
+from app.services import (
+    web_catalog_subscription_workflows as web_catalog_subscription_workflows_service,
+)
 from app.services import web_catalog_subscriptions as web_catalog_subscriptions_service
 from app.services import web_network_ip as web_network_ip_service
+from app.services.subscription_lifecycle import (
+    SubscriptionCommandOutcome,
+    SubscriptionCommandOutcomeStatus,
+)
 
 
 def _public_ip_addon(
@@ -545,6 +553,136 @@ def test_parse_subscription_form_keeps_single_ipv4_row():
 
     assert parsed["ipv4_block_ids"] == ["first-block"]
     assert parsed["ipv4_addresses"] == ["10.0.0.2"]
+
+
+def test_parse_subscription_create_rejects_forged_lifecycle_facts():
+    form = FormData(
+        {
+            "status": "active",
+            "start_at": "2025-01-01T00:00",
+            "end_at": "2025-12-31T00:00",
+            "next_billing_at": "2025-02-01T00:00",
+            "canceled_at": "2025-01-02T00:00",
+            "cancel_reason": "bypass lifecycle owner",
+        }
+    )
+
+    parsed = web_catalog_subscriptions_service.parse_subscription_form(form)
+
+    assert parsed["status"] == "pending"
+    for field in (
+        "start_at",
+        "end_at",
+        "next_billing_at",
+        "canceled_at",
+        "cancel_reason",
+    ):
+        assert parsed[field] == ""
+
+
+def test_activate_after_create_stages_pending_before_canonical_command():
+    payload = {
+        "status": "active",
+        "start_at": "2025-01-01T00:00:00+00:00",
+        "next_billing_at": "2025-02-01T00:00:00+00:00",
+    }
+
+    flags = web_catalog_subscriptions_service.apply_create_quick_options(
+        payload,
+        FormData({"activate_immediately": "1"}),
+    )
+
+    assert flags == (True, False, False)
+    assert payload == {"status": "pending"}
+
+
+def test_subscription_create_activates_through_canonical_lifecycle(
+    db_session,
+    subscriber,
+    catalog_offer,
+):
+    result = web_catalog_subscription_workflows_service.handle_subscription_create_form(
+        db_session,
+        form=FormData(
+            {
+                "account_id": str(subscriber.id),
+                "offer_id": str(catalog_offer.id),
+                "status": "canceled",
+                "start_at": "2025-01-01T00:00",
+                "ipv4_method": "dynamic",
+                "activate_immediately": "1",
+            }
+        ),
+        request=None,
+        actor_id="operator-1",
+    )
+
+    created = (
+        db_session.query(Subscription)
+        .filter(Subscription.subscriber_id == subscriber.id)
+        .filter(Subscription.offer_id == catalog_offer.id)
+        .one()
+    )
+    db_session.refresh(created)
+    assert created.status == SubscriptionStatus.active
+    assert created.start_at is not None
+    assert result["redirect_url"].endswith(f"/{subscriber.id}#subscriptions")
+
+
+def test_subscription_create_keeps_pending_and_redirects_to_record_on_activation_failure(
+    db_session,
+    subscriber,
+    catalog_offer,
+    monkeypatch,
+):
+    captured = {}
+
+    def fail_activation(db, command, **kwargs):
+        captured["command"] = command
+        return SubscriptionCommandOutcome(
+            command=command,
+            status=SubscriptionCommandOutcomeStatus.failed,
+            message="Provisioning owner unavailable",
+            previous_head=str(command.expected_head),
+            current_head=str(command.expected_head),
+            error_code="command_execution_failed",
+        )
+
+    monkeypatch.setattr(
+        web_catalog_subscription_workflows_service,
+        "execute_subscription_command",
+        fail_activation,
+    )
+
+    result = web_catalog_subscription_workflows_service.handle_subscription_create_form(
+        db_session,
+        form=FormData(
+            {
+                "account_id": str(subscriber.id),
+                "offer_id": str(catalog_offer.id),
+                "ipv4_method": "dynamic",
+                "activate_immediately": "1",
+            }
+        ),
+        request=None,
+        actor_id="operator-2",
+    )
+
+    created = (
+        db_session.query(Subscription)
+        .filter(Subscription.subscriber_id == subscriber.id)
+        .filter(Subscription.offer_id == catalog_offer.id)
+        .one()
+    )
+    assert created.status == SubscriptionStatus.pending
+    assert captured["command"].expected_head
+    assert captured["command"].idempotency_key == (
+        f"admin-create-activate:{created.id}"
+    )
+    assert result["redirect_url"].startswith(
+        f"/admin/catalog/subscriptions/{created.id}?error="
+    )
+    assert "Provisioning+owner+unavailable" in result["redirect_url"]
 
 
 def test_subscription_detail_context_exposes_events_notifications_and_radius_sync(
