@@ -665,10 +665,12 @@ def cancel_subscription(
         try:
             from app.services.billing_automation import generate_cancellation_credit
 
-            db.begin_nested()  # savepoint
-            generate_cancellation_credit(db, subscription)
+            # Keep credit generation inside its own managed savepoint. Calling
+            # Session.rollback() here would roll back the entire cancellation
+            # transaction, not just the failed credit operation.
+            with db.begin_nested():
+                generate_cancellation_credit(db, subscription)
         except Exception as exc:
-            db.rollback()  # rolls back to savepoint only
             logger.warning(
                 "Cancellation credit generation failed for subscription %s: %s",
                 subscription_id,

@@ -855,6 +855,28 @@ def catalog_subscription_execute_lifecycle_command(
 
 
 @router.post(
+    "/subscriptions/{subscription_id}/lifecycle/schedules/{schedule_id}/cancel",
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
+def catalog_subscription_cancel_lifecycle_schedule(
+    request: Request,
+    subscription_id: str,
+    schedule_id: str,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Cancel one pending deferred lifecycle status command."""
+    payload, status_code = (
+        web_catalog_subscription_workflows_service.cancel_lifecycle_schedule_response(
+            db,
+            subscription_id=subscription_id,
+            schedule_id=schedule_id,
+            actor_id=_get_actor_id(request),
+        )
+    )
+    return JSONResponse(payload, status_code=status_code)
+
+
+@router.post(
     "/subscriptions/{subscription_id}/send-credentials",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("catalog:write"))],

@@ -163,6 +163,8 @@ def execute_subscription_command(
             subscription,
             command,
             preview,
+            actor_id=actor_id,
+            actor_type=actor_type,
         )
         # Account lifecycle commands intentionally flush so callers can compose
         # them. Catalog and scheduler owners currently commit internally; this is
@@ -335,14 +337,6 @@ def _execution_rejection(
             "renewal_execution_is_billing_owned",
             "Renewals must be executed by the billing cycle or payment settlement owner",
         )
-    if (
-        command.kind != SubscriptionCommandKind.change_plan
-        and command.effective_timing != SubscriptionEffectiveTiming.immediate
-    ):
-        return (
-            "deferred_status_execution_not_supported",
-            "Deferred lifecycle status changes require the lifecycle scheduler",
-        )
     explicit_effective_at = _aware_utc(command.effective_at)
     if (
         command.effective_timing == SubscriptionEffectiveTiming.immediate
@@ -361,9 +355,30 @@ def _dispatch_command(
     subscription: Subscription,
     command: SubscriptionLifecycleCommand,
     preview: SubscriptionLifecyclePreview,
+    *,
+    actor_id: str | None,
+    actor_type: AuditActorType,
 ) -> tuple[SubscriptionCommandOutcomeStatus, tuple[str, ...], str]:
     if command.kind == SubscriptionCommandKind.change_plan:
         return _dispatch_plan_change(db, subscription, command, preview)
+    if command.effective_timing != SubscriptionEffectiveTiming.immediate:
+        from app.services.subscription_lifecycle_schedules import (
+            schedule_subscription_status_command,
+        )
+
+        schedule = schedule_subscription_status_command(
+            db,
+            command,
+            preview,
+            actor_id=actor_id,
+            actor_type=actor_type,
+        )
+        return (
+            SubscriptionCommandOutcomeStatus.scheduled,
+            (str(schedule.id),),
+            f"Subscription {command.kind.value} command scheduled for "
+            f"{schedule.effective_at.isoformat()}",
+        )
 
     from app.services.account_lifecycle import (
         suspend_subscription,
@@ -431,7 +446,7 @@ def _dispatch_plan_change(
             str(subscription.id),
             SubscriptionUpdate(offer_id=coerce_uuid(target_offer_id)),
             plan_change_operation_key=(
-                command.idempotency_key or _command_fingerprint(command)
+                command.idempotency_key or subscription_command_fingerprint(command)
             ),
         )
         return (
@@ -461,7 +476,7 @@ def _find_idempotency_reservation(
     db: Session,
     command: SubscriptionLifecycleCommand,
 ) -> IdempotencyKey | None:
-    key = _idempotency_storage_key(command)
+    key = subscription_command_idempotency_key(command)
     if key is None:
         return None
     return db.scalar(
@@ -477,7 +492,7 @@ def _reserve_idempotency(
     subscription: Subscription,
     command: SubscriptionLifecycleCommand,
 ) -> None:
-    key = _idempotency_storage_key(command)
+    key = subscription_command_idempotency_key(command)
     if key is None:
         return
     db.add(
@@ -485,7 +500,7 @@ def _reserve_idempotency(
             scope=_IDEMPOTENCY_SCOPE,
             key=key,
             account_id=subscription.subscriber_id,
-            ref_id=_command_fingerprint(command),
+            ref_id=subscription_command_fingerprint(command),
         )
     )
     db.flush()
@@ -498,7 +513,7 @@ def _replay_outcome(
     current_head: str,
     prior: IdempotencyKey,
 ) -> SubscriptionCommandOutcome:
-    fingerprint = _command_fingerprint(command)
+    fingerprint = subscription_command_fingerprint(command)
     if prior.ref_id != fingerprint:
         return SubscriptionCommandOutcome(
             command=command,
@@ -517,6 +532,21 @@ def _replay_outcome(
         and snapshot.pending_change.target_offer_id == str(command.target_offer_id)
     ):
         artifact_ids = (snapshot.pending_change.request_id,)
+    elif command.effective_timing != SubscriptionEffectiveTiming.immediate:
+        from app.models.subscription_lifecycle_schedule import (
+            SubscriptionLifecycleSchedule,
+        )
+
+        schedule = db.scalar(
+            select(SubscriptionLifecycleSchedule).where(
+                SubscriptionLifecycleSchedule.subscription_id
+                == coerce_uuid(command.subscription_id),
+                SubscriptionLifecycleSchedule.idempotency_key
+                == subscription_command_idempotency_key(command),
+            )
+        )
+        if schedule is not None:
+            artifact_ids = (str(schedule.id),)
     return SubscriptionCommandOutcome(
         command=command,
         status=SubscriptionCommandOutcomeStatus.skipped,
@@ -529,7 +559,7 @@ def _replay_outcome(
     )
 
 
-def _idempotency_storage_key(
+def subscription_command_idempotency_key(
     command: SubscriptionLifecycleCommand,
 ) -> str | None:
     if command.idempotency_key is None:
@@ -538,7 +568,7 @@ def _idempotency_storage_key(
     return hashlib.sha256(source.encode("utf-8")).hexdigest()
 
 
-def _command_fingerprint(command: SubscriptionLifecycleCommand) -> str:
+def subscription_command_fingerprint(command: SubscriptionLifecycleCommand) -> str:
     effective_at = _aware_utc(command.effective_at)
     payload = {
         "subscription_id": command.subscription_id,
