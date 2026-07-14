@@ -376,24 +376,20 @@ def get_statements_data(db: Session) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def get_tax_report_data(db: Session) -> dict:
-    """Per-invoice tax details and totals."""
-    try:
-        from app.models.billing import Invoice
+def get_tax_report_data(
+    db: Session,
+    *,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> dict[str, object]:
+    """Delegate tax-report meaning to the tax-accounting owner."""
+    from app.services import tax_accounting
 
-        stmt = (
-            select(Invoice)
-            .where(Invoice.tax_total > 0)
-            .order_by(Invoice.issued_at.desc())
-            .limit(200)
-        )
-        invoices = list(db.scalars(stmt).all())
-    except Exception as exc:
-        logger.warning("Could not query tax data: %s", exc)
-        invoices = []
-
-    total_tax = sum(getattr(i, "tax_total", 0) or 0 for i in invoices)
-    return {"invoices": invoices, "total_tax": total_tax}
+    return tax_accounting.build_tax_report(
+        db,
+        date_from=date_from,
+        date_to=date_to,
+    )
 
 
 # ---------------------------------------------------------------------------

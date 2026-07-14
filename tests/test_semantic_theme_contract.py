@@ -83,6 +83,7 @@ def test_migrated_web_slices_do_not_keep_local_semantic_color_maps() -> None:
     device_list = _read("templates/admin/network/devices/index.html")
     payments = _read("templates/admin/billing/payments.html")
     customer_detail = _read("templates/admin/customers/detail.html")
+    tax_accounting = _read("templates/admin/billing/tax_accounting.html")
 
     assert "status-panel-${this.tone}" in connection
     assert "border-emerald" not in connection
@@ -97,6 +98,9 @@ def test_migrated_web_slices_do_not_keep_local_semantic_color_maps() -> None:
     assert "--color-semantic-positive-600" in payments
     assert "card_conn_state" not in customer_detail
     assert "sub_conn_state" not in customer_detail
+    assert "status_presentation_badge" in tax_accounting
+    for literal in ("border-red", "text-red", "border-amber", "text-emerald"):
+        assert literal not in tax_accounting
 
 
 def test_flutter_status_renderers_use_brand_semantic_palettes() -> None:

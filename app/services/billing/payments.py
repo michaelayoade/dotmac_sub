@@ -1644,7 +1644,8 @@ class Payments(ListResponseMixin):
         query = db.query(Payment).options(
             selectinload(
                 Payment.allocations.and_(PaymentAllocation.is_active.is_(True))
-            )
+            ),
+            selectinload(Payment.withholding_tax_record),
         )
         if account_id:
             query = query.filter(Payment.account_id == account_id)
@@ -2569,11 +2570,11 @@ class Refunds:
             tax_total=Decimal("0.00"),
             total=round_money(amount),
             applied_total=Decimal("0.00"),
+            issued_at=datetime.now(UTC),
             memo=reason or f"Credit note for refund of payment {payment.id}",
         )
         db.add(credit_note)
         db.flush()
-
         # Create credit note line item
         line = CreditNoteLine(
             credit_note_id=credit_note.id,

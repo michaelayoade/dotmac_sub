@@ -10,8 +10,9 @@ from __future__ import annotations
 
 from enum import Enum
 
-from app.models.billing import InvoiceStatus, PaymentStatus
+from app.models.billing import CreditNoteStatus, InvoiceStatus, PaymentStatus
 from app.models.catalog import SubscriptionStatus
+from app.models.payment_proof import WithholdingTaxStatus
 from app.models.subscriber import SubscriberStatus
 from app.models.support import TicketStatus
 from app.schemas.status_presentation import (
@@ -215,6 +216,34 @@ _INVOICE_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
     ),
 }
 
+_CREDIT_NOTE_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    CreditNoteStatus.draft.value: (
+        "Draft",
+        StatusTone.neutral,
+        StatusIcon.archive,
+    ),
+    CreditNoteStatus.issued.value: (
+        "Issued",
+        StatusTone.info,
+        StatusIcon.info,
+    ),
+    CreditNoteStatus.partially_applied.value: (
+        "Partially applied",
+        StatusTone.warning,
+        StatusIcon.clock,
+    ),
+    CreditNoteStatus.applied.value: (
+        "Applied",
+        StatusTone.positive,
+        StatusIcon.check,
+    ),
+    CreditNoteStatus.void.value: (
+        "Void",
+        StatusTone.neutral,
+        StatusIcon.x,
+    ),
+}
+
 _PAYMENT_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
     PaymentStatus.pending.value: (
         "Pending",
@@ -309,6 +338,29 @@ _ACCESS_SESSION_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
     "inactive": ("Not connected", StatusTone.neutral, StatusIcon.minus),
 }
 
+_WITHHOLDING_TAX_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    WithholdingTaxStatus.pending.value: (
+        "Pending certificate",
+        StatusTone.warning,
+        StatusIcon.clock,
+    ),
+    WithholdingTaxStatus.certified.value: (
+        "Certified",
+        StatusTone.info,
+        StatusIcon.info,
+    ),
+    WithholdingTaxStatus.reclaimed.value: (
+        "Reclaimed",
+        StatusTone.positive,
+        StatusIcon.check,
+    ),
+    WithholdingTaxStatus.written_off.value: (
+        "Written off",
+        StatusTone.negative,
+        StatusIcon.archive,
+    ),
+}
+
 
 def _status_value(status: object | None) -> str:
     if isinstance(status, Enum):
@@ -377,6 +429,13 @@ def invoice_status_presentation(
     return _presentation(_status_value(status), _INVOICE_PRESENTATIONS)
 
 
+def credit_note_status_presentation(
+    status: CreditNoteStatus | str | None,
+) -> StatusPresentation:
+    """Project credit-note lifecycle status without deriving tax treatment."""
+    return _presentation(_status_value(status), _CREDIT_NOTE_PRESENTATIONS)
+
+
 def payment_status_presentation(
     status: PaymentStatus | str | None,
 ) -> StatusPresentation:
@@ -425,3 +484,10 @@ def connection_health_status_presentation(
 def access_session_status_presentation(status: str | None) -> StatusPresentation:
     """Project the admin RADIUS-session observation without deriving health."""
     return _presentation(_status_value(status), _ACCESS_SESSION_PRESENTATIONS)
+
+
+def withholding_tax_status_presentation(
+    status: WithholdingTaxStatus | str | None,
+) -> StatusPresentation:
+    """Project the official WHT receivable lifecycle without re-deriving it."""
+    return _presentation(_status_value(status), _WITHHOLDING_TAX_PRESENTATIONS)

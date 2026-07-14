@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -424,6 +424,7 @@ def prepare_immediate_prepaid_plan_change(
         tax_total=Decimal("0.00"),
         total=credit_amount,
         status=CreditNoteStatus.issued,
+        issued_at=datetime.now(UTC),
         memo=(
             f"Plan change credit: {old_offer_name} -> {target_offer.name} "
             f"({decision.proration.get('days_remaining', 0)} days remaining)"

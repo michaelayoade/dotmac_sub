@@ -111,6 +111,7 @@ class Invoices(ListResponseMixin):
         _validate_invoice_totals(data)
         invoice = Invoice(**data)
         db.add(invoice)
+        db.flush()
         db.commit()
         db.refresh(invoice)
 
@@ -351,7 +352,9 @@ class Invoices(ListResponseMixin):
     ):
         """Return the ordered ERP invoice delta without detail-only relations."""
         query = db.query(Invoice).options(
-            selectinload(Invoice.lines.and_(InvoiceLine.is_active.is_(True)))
+            selectinload(
+                Invoice.lines.and_(InvoiceLine.is_active.is_(True))
+            ).selectinload(InvoiceLine.tax_rate)
         )
         if account_id:
             query = query.filter(Invoice.account_id == account_id)

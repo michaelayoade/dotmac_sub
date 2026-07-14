@@ -415,7 +415,30 @@ Subscriber | Amount Owed | Days Overdue | Dunning Step | Last Action | Next Acti
 
 ### 3j. Tax Rates (`/admin/billing/tax-rates`)
 
-CRUD table: Name, Rate %, Type (inclusive/exclusive/exempt), Active, Actions
+CRUD table: Name, Code, Rate %, Active, Actions. Inclusive/exclusive/exempt is
+selected on invoice or credit-note lines; it is not a property of the tax-rate
+record.
+
+### Tax Accounting Report (`/admin/reports/tax`)
+
+- Date-filtered output tax recognized from issued invoice documents
+- Issued credit-note tax adjustments and net output-tax liability per currency
+- Credit-note periods use the persisted first-issuance tax point; automated
+  cancellation credits retain the source line's configured tax treatment
+- Totals separated by currency; never label issued tax as cash collected
+- WHT gross settlement, net cash, total withheld, and outstanding receivable
+- `app.services.tax_accounting` owns the projection; the route and template do
+  not query invoices or reconstruct WHT status meaning
+- The report remains the canonical source-document tax-register projection.
+  Dotmac ERP separately owns configurable TaxCode account mappings, balanced
+  journals, tax transactions, tax returns, and financial statements.
+- `/admin/billing/tax-accounting` owns the Sub operator experience for the WHT
+  evidence lifecycle. It provides server-side search, status filters, counts,
+  newest-first ordering, and pagination; it has no account-mapping or posting
+  controls.
+- Invoice/credit-note tax treatment and payment WHT facts flow through bounded
+  sync projections to the existing ERP pull integration. ERP fails closed when
+  an effective account mapping is missing or ambiguous.
 
 ### 3k. Payment Channels (`/admin/billing/payment-channels`)
 

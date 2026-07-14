@@ -396,6 +396,7 @@ class CreditNote(Base):
     memo: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     splynx_credit_note_id: Mapped[int | None] = mapped_column(Integer)
+    issued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
@@ -726,6 +727,14 @@ class Payment(Base):
     dunning_actions = relationship("DunningActionLog", back_populates="payment")
     allocations = relationship("PaymentAllocation", back_populates="payment")
     topup_intents = relationship("TopupIntent", back_populates="completed_payment")
+    # One proof-backed reseller payment can raise at most one WHT receivable.
+    # The relationship is read by the bounded ERP sync projection so ERP can
+    # post net bank cash + WHT receivable against the gross AR settlement.
+    withholding_tax_record = relationship(
+        "WithholdingTaxRecord",
+        back_populates="payment",
+        uselist=False,
+    )
 
 
 class TopupIntent(Base):

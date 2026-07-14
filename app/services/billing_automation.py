@@ -37,7 +37,10 @@ from app.models.domain_settings import SettingDomain
 from app.models.network import SubscriberAdditionalRoute
 from app.models.subscriber import Address, Subscriber, SubscriberStatus
 from app.services import control_registry, enforcement_window, settings_spec
-from app.services.billing import _recalculate_invoice_totals
+from app.services.billing import (
+    _recalculate_credit_note_totals,
+    _recalculate_invoice_totals,
+)
 from app.services.billing.invoice_classification import (
     collectible_ar_invoice_filter,
     prepaid_non_ar_invoice_ids,
@@ -2300,12 +2303,14 @@ def generate_cancellation_credit(
     offer_name = subscription.offer.name if subscription.offer else "Subscription"
     credit = CreditNote(
         account_id=subscription.subscriber_id,
+        invoice_id=last_line.invoice_id,
         credit_number=credit_number,
-        currency="NGN",
+        currency=last_line.invoice.currency,
         subtotal=credit_amount,
         tax_total=Decimal("0"),
         total=credit_amount,
         status=CreditNoteStatus.issued,
+        issued_at=now,
         memo=f"Cancellation credit: {offer_name} (unused {int(unused_seconds / 86400)} days)",
     )
     db.add(credit)
@@ -2314,11 +2319,15 @@ def generate_cancellation_credit(
     credit_line = CreditNoteLine(
         credit_note_id=credit.id,
         description=f"Prorated credit for {offer_name}",
+        unit_price=credit_amount,
         amount=credit_amount,
         quantity=Decimal("1"),
+        tax_rate_id=last_line.tax_rate_id,
+        tax_application=last_line.tax_application,
     )
     db.add(credit_line)
     db.flush()
+    _recalculate_credit_note_totals(db, credit)
 
     logger.info(
         "Generated cancellation credit %s for subscription %s: %s",

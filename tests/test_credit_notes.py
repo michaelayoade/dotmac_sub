@@ -9,6 +9,7 @@ from app.schemas.billing import (
     CreditNoteApplyRequest,
     CreditNoteCreate,
     CreditNoteLineCreate,
+    CreditNoteUpdate,
     InvoiceCreate,
     TaxRateCreate,
 )
@@ -41,6 +42,28 @@ def _issued_credit_note_and_invoice(db_session, account_id, *, amount):
         ),
     )
     return credit_note, invoice
+
+
+def test_credit_note_owner_persists_first_issuance_timestamp(
+    db_session, subscriber_account
+):
+    draft = billing_service.credit_notes.create(
+        db_session,
+        CreditNoteCreate(
+            account_id=subscriber_account.id,
+            status=CreditNoteStatus.draft,
+            currency="NGN",
+        ),
+    )
+    assert draft.issued_at is None
+
+    issued = billing_service.credit_notes.update(
+        db_session,
+        str(draft.id),
+        CreditNoteUpdate(status=CreditNoteStatus.issued),
+    )
+
+    assert issued.issued_at is not None
 
 
 def test_credit_form_rejects_non_positive_amounts(db_session, subscriber_account):

@@ -1,7 +1,7 @@
 """Credit note management services."""
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import HTTPException
 from sqlalchemy.exc import SQLAlchemyError
@@ -89,9 +89,16 @@ class CreditNotes(ListResponseMixin):
             )
             if generated:
                 data["credit_number"] = generated
+        if data.get("status") in {
+            CreditNoteStatus.issued,
+            CreditNoteStatus.partially_applied,
+            CreditNoteStatus.applied,
+        }:
+            data["issued_at"] = datetime.now(UTC)
         _validate_credit_note_totals(data)
         credit_note = CreditNote(**data)
         db.add(credit_note)
+        db.flush()
         db.commit()
         db.refresh(credit_note)
         return credit_note
@@ -171,7 +178,9 @@ class CreditNotes(ListResponseMixin):
         offset: int,
     ):
         query = db.query(CreditNote).options(
-            selectinload(CreditNote.lines.and_(CreditNoteLine.is_active.is_(True)))
+            selectinload(
+                CreditNote.lines.and_(CreditNoteLine.is_active.is_(True))
+            ).selectinload(CreditNoteLine.tax_rate)
         )
         if account_id:
             query = query.filter(CreditNote.account_id == account_id)
@@ -228,6 +237,16 @@ class CreditNotes(ListResponseMixin):
             "applied_total": credit_note.applied_total,
         }
         _validate_credit_note_totals(merged)
+        if (
+            data.get("status")
+            in {
+                CreditNoteStatus.issued,
+                CreditNoteStatus.partially_applied,
+                CreditNoteStatus.applied,
+            }
+            and credit_note.issued_at is None
+        ):
+            credit_note.issued_at = datetime.now(UTC)
         for key, value in data.items():
             setattr(credit_note, key, value)
         db.commit()

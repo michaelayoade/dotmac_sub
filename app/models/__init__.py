@@ -475,6 +475,8 @@ from app.models.payment_proof import (  # noqa: F401
     PaymentProofStatus,
     WithholdingTaxRecord,
     WithholdingTaxStatus,
+    WithholdingTaxTransition,
+    WithholdingTaxTransitionImmutableError,
 )
 from app.models.portal_message import (  # noqa: F401
     PortalMessage,

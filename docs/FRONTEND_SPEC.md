@@ -957,6 +957,65 @@ This is the **richest detail page** in the system:
 }
 ```
 
+#### `GET /admin/reports/tax`
+**Template:** `admin/reports/tax.html`
+
+`app.services.tax_accounting` owns this report contract. Output tax is tax on
+issued invoice documents less issued credit-note tax adjustments, not collected
+cash. WHT is shown as a separate receivable projection, and all aggregates remain
+separated by currency.
+
+```python
+{
+    "report_basis": "output_tax_invoiced_less_credit_note_adjustments_and_wht_receivable",
+    "date_from": str,
+    "date_to": str,
+    "invoice_rows": list[dict],                # canonical tax/gross fields
+    "output_tax_totals": list[dict],           # one aggregate per currency
+    "output_tax_invoice_count": int,
+    "output_tax_rows_truncated": bool,
+    "credit_note_rows": list[dict],
+    "credit_note_tax_totals": list[dict],
+    "credit_note_count": int,
+    "credit_note_rows_truncated": bool,
+    "net_output_tax_totals": list[dict],       # invoiced - credit adjustments
+    "wht_rows": list[dict],
+    "wht_totals": list[dict],                  # gross/net/WHT/outstanding
+    "wht_record_count": int,
+    "wht_rows_truncated": bool,
+}
+```
+
+Templates must not sum currencies, reconstruct outstanding WHT from raw proof
+rows, omit issued credit-note adjustments, or label output tax as tax collected.
+
+The report deliberately remains the canonical source-document tax-register
+projection. Dotmac ERP owns account mappings, balanced journals, tax
+transactions, and financial statements; neither side re-derives the other's
+owned state.
+Credit-note period recognition uses the first owner-set `issued_at` timestamp;
+draft creation time is not a tax point. Automated cancellation credits retain
+the source invoice line's configured rate and inclusive/exclusive/exempt mode.
+
+#### `GET /admin/billing/tax-accounting`
+**Template:** `admin/billing/tax_accounting.html`
+
+The tax owner supplies a bounded WHT evidence queue. POST actions request legal
+WHT transitions through the owner; routes do not write models directly. WHT
+certification requires certificate evidence, write-off requires a reason, and
+reclaimed/written-off states are terminal. Every transition is appended to the
+official timeline and advances the payment sync watermark for ERP.
+WHT lifecycle labels, tones, and icons are server-owned `StatusPresentation`
+values rendered through the shared semantic status macro.
+
+Page contract: this is the Sub finance-admin source-fact plane for moving WHT
+receivables through evidence-backed transitions. `financial.tax_accounting`
+owns both the read/context contract and commands; billing tax RBAC owns access.
+The WHT queue has server-side status/search filtering, newest-first ordering,
+counts, and pagination. Search covers reseller name, record ID, billing account
+ID, and certificate reference. Account mapping and journal operations belong in
+Dotmac ERP and are not presented here.
+
 ---
 
 ### Catalog — Offers
