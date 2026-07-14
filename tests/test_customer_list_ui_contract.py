@@ -24,9 +24,11 @@ def test_customer_route_delegates_query_normalization_to_list_owner():
     calls = {
         ast.unparse(node.func) for node in ast.walk(route) if isinstance(node, ast.Call)
     }
+    args = {arg.arg: ast.unparse(arg.annotation) for arg in route.args.args}
 
     assert "web_customer_lists_service.build_customer_list_query" in calls
     assert "web_customer_lists_service.build_customers_index_context" in calls
+    assert args["per_page"] == "str | None"
 
 
 def test_customer_table_consumes_contract_urls_and_accessibility_state():
