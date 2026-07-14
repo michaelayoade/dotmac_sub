@@ -171,6 +171,37 @@ def test_customer_query_canonicalizes_aliases_and_rejects_bad_filter_values():
         )
 
 
+def test_customer_query_defaults_stale_page_size_values():
+    query = build_customer_list_query(
+        search="Acme",
+        status=None,
+        customer_type=None,
+        nas_id=None,
+        pop_site_id=None,
+        per_page="",
+    )
+    stale_query = build_customer_list_query(
+        search="Acme",
+        status=None,
+        customer_type=None,
+        nas_id=None,
+        pop_site_id=None,
+        per_page="20",
+    )
+    allowed_query = build_customer_list_query(
+        search="Acme",
+        status=None,
+        customer_type=None,
+        nas_id=None,
+        pop_site_id=None,
+        per_page="50",
+    )
+
+    assert query.per_page == 25
+    assert stale_query.per_page == 25
+    assert allowed_query.per_page == 50
+
+
 def test_legacy_customer_table_query_maps_to_canonical_page_contract():
     query = build_customer_list_query_from_legacy_params(
         {
