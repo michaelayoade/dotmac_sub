@@ -2274,11 +2274,13 @@ def test_consolidated_page_data_moves_network_devices_ending_in_olt_to_olt_bucke
     db_session.commit()
 
     payload = core_devices_views.consolidated_page_data(tab="core", db=db_session)
+    olt_payload = core_devices_views.consolidated_page_data(tab="olts", db=db_session)
 
     assert payload["stats"]["core_total"] == 1
     assert payload["stats"]["olt_total"] == 1
     assert [device.name for device in payload["core_devices"]] == ["Aggregation SW1"]
-    assert [olt.name for olt in payload["olts"]] == ["Aggregation OLT"]
+    assert payload["olts"] == []
+    assert [olt.name for olt in olt_payload["olts"]] == ["Aggregation OLT"]
     created_olt = db_session.scalars(
         select(OLTDevice).where(OLTDevice.mgmt_ip == "192.0.2.210")
     ).first()

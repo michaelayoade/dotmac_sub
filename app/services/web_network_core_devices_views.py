@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import String, and_, cast, func, literal, not_, or_, select, union_all
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.catalog import (
@@ -19,7 +19,7 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
-from app.models.network import CPEDevice
+from app.models.network import CPEDevice, OLTDevice, OntUnit, PonPort
 from app.models.network_monitoring import (
     DeviceInterface,
     DeviceMetric,
@@ -48,7 +48,6 @@ from app.services.network.ont_status import (
 from app.services.network.provisioning_events import list_ont_provisioning_events
 from app.services.web_network_core_devices_inventory import (
     _build_legacy_probe_statuses,
-    _network_device_is_olt_candidate,
     resolve_olt_device_for_network_device,
 )
 from app.services.web_network_pon_interfaces import parse_pon_port_notes
@@ -3095,338 +3094,443 @@ def _core_device_table_maps(
     }
 
 
+def _inventory_search_filter(term: str, *columns: object):
+    if not term:
+        return None
+    escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    pattern = f"%{escaped}%"
+    return or_(*(column.ilike(pattern, escape="\\") for column in columns))
+
+
+def _page_metadata(total: int, requested_page: int, per_page: int) -> dict[str, object]:
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = min(max(1, requested_page), total_pages)
+    return {
+        "page": page,
+        "per_page": per_page,
+        "total": total,
+        "total_pages": total_pages,
+        "has_prev": page > 1,
+        "has_next": page < total_pages,
+    }
+
+
+def _statement_count(db: Session, statement) -> int:
+    count_statement = select(func.count()).select_from(
+        statement.order_by(None).subquery()
+    )
+    return int(db.scalar(count_statement) or 0)
+
+
+def _paged_statement(statement, pagination: dict[str, object]):
+    page = int(pagination["page"])
+    per_page = int(pagination["per_page"])
+    return statement.offset((page - 1) * per_page).limit(per_page)
+
+
 def consolidated_page_data(
-    tab: str, db: Session, search: str | None = None
+    tab: str,
+    db: Session,
+    search: str | None = None,
+    *,
+    page: int = 1,
+    olt_page: int = 1,
+    ont_page: int = 1,
+    cpe_page: int = 1,
+    per_page: int = 50,
 ) -> dict[str, object]:
-    """Return consolidated network-devices page payload."""
-    term = (search or "").strip().lower()
+    """Return one database-bounded consolidated inventory page."""
+    term = (search or "").strip()
+    selected_tab = tab if tab in {"core", "olts", "onts"} else "core"
+    per_page = min(max(1, per_page), 200)
 
-    all_monitoring_devices = list(
-        db.scalars(select(NetworkDevice).order_by(NetworkDevice.name)).all()
+    active_olt_candidate = and_(
+        NetworkDevice.is_active.is_(True),
+        func.lower(func.trim(NetworkDevice.name)).like("%olt"),
     )
-    promoted_olts = [
+    network_core_filters: list[object] = [not_(active_olt_candidate)]
+    network_search = _inventory_search_filter(
+        term,
+        NetworkDevice.name,
+        NetworkDevice.hostname,
+        NetworkDevice.mgmt_ip,
+        NetworkDevice.vendor,
+        NetworkDevice.model,
+        NetworkDevice.serial_number,
+        cast(NetworkDevice.role, String),
+    )
+    if network_search is not None:
+        network_core_filters.append(network_search)
+
+    nas_ip = func.coalesce(
+        NasDevice.management_ip,
+        NasDevice.ip_address,
+        NasDevice.nas_ip,
+        "",
+    )
+    matching_network_device = (
+        select(NetworkDevice.id)
+        .where(
+            func.coalesce(NetworkDevice.mgmt_ip, "") == nas_ip,
+            func.coalesce(NetworkDevice.hostname, "")
+            == func.coalesce(NasDevice.code, ""),
+            func.coalesce(NetworkDevice.name, "") == NasDevice.name,
+        )
+        .exists()
+    )
+    nas_core_filters: list[object] = [
+        NasDevice.is_active.is_(True),
+        not_(matching_network_device),
+    ]
+    nas_search = _inventory_search_filter(
+        term,
+        NasDevice.name,
+        NasDevice.code,
+        nas_ip,
+        cast(NasDevice.vendor, String),
+        NasDevice.model,
+        NasDevice.serial_number,
+    )
+    if nas_search is not None:
+        nas_core_filters.append(nas_search)
+
+    core_refs = union_all(
+        select(
+            literal("network").label("kind"),
+            NetworkDevice.id.label("item_id"),
+            func.lower(NetworkDevice.name).label("sort_name"),
+        ).where(*network_core_filters),
+        select(
+            literal("nas").label("kind"),
+            NasDevice.id.label("item_id"),
+            func.lower(NasDevice.name).label("sort_name"),
+        ).where(*nas_core_filters),
+    ).subquery()
+    core_ref_statement = select(
+        core_refs.c.kind,
+        core_refs.c.item_id,
+    ).order_by(core_refs.c.sort_name, core_refs.c.kind, core_refs.c.item_id)
+    core_total = _statement_count(db, core_ref_statement)
+
+    # Promotion remains an inventory synchronization concern, but the OLT page
+    # keeps the established compatibility behavior until the importer owns it.
+    promoted_devices = db.scalars(
+        select(NetworkDevice).where(active_olt_candidate).order_by(NetworkDevice.name)
+    ).all()
+    for device in promoted_devices:
         resolve_olt_device_for_network_device(db, device)
-        for device in all_monitoring_devices
-        if device.is_active and _network_device_is_olt_candidate(device)
-    ]
-    promoted_olt_keys = {
-        (
-            str(getattr(device, "mgmt_ip", "") or "").strip(),
-            str(getattr(device, "hostname", "") or "").strip(),
-            str(getattr(device, "name", "") or "").strip(),
-        )
-        for device in all_monitoring_devices
-        if device.is_active and _network_device_is_olt_candidate(device)
-    }
-    core_devices = [
-        device
-        for device in all_monitoring_devices
-        if (
-            str(getattr(device, "mgmt_ip", "") or "").strip(),
-            str(getattr(device, "hostname", "") or "").strip(),
-            str(getattr(device, "name", "") or "").strip(),
-        )
-        not in promoted_olt_keys
-    ]
-    core_device_keys = {
-        (
-            str(getattr(device, "mgmt_ip", "") or "").strip(),
-            str(getattr(device, "hostname", "") or "").strip(),
-            str(getattr(device, "name", "") or "").strip(),
-        )
-        for device in core_devices
-    }
-    nas_devices = list(
-        db.scalars(
-            select(NasDevice)
-            .where(NasDevice.is_active.is_(True))
-            .order_by(NasDevice.name.asc())
-        ).all()
-    )
-    monitoring_by_id = {device.id: device for device in all_monitoring_devices}
-    nas_ids = [device.id for device in nas_devices]
-    routers_by_nas_id: dict[object, Router] = {}
-    if nas_ids:
-        routers = db.scalars(
-            select(Router).where(
-                Router.is_active.is_(True), Router.nas_device_id.in_(nas_ids)
-            )
-        ).all()
-        routers_by_nas_id = {
-            router.nas_device_id: router for router in routers if router.nas_device_id
-        }
-    for nas_device in nas_devices:
-        linked_device = (
-            monitoring_by_id.get(nas_device.network_device_id)
-            if nas_device.network_device_id
-            else None
-        )
-        nas_stub = _nas_inventory_stub(
-            nas_device,
-            linked_device=linked_device,
-            linked_router=routers_by_nas_id.get(nas_device.id),
-        )
-        key = (
-            str(getattr(nas_stub, "mgmt_ip", "") or "").strip(),
-            str(getattr(nas_stub, "hostname", "") or "").strip(),
-            str(getattr(nas_stub, "name", "") or "").strip(),
-        )
-        if key in promoted_olt_keys or key in core_device_keys:
-            continue
-        core_devices.append(nas_stub)
-        core_device_keys.add(key)
-    # Derived NOC-facing operational status (projection over admin intent +
-    # live observation + warmer freshness). See DEVICE_OPERATIONAL_STATUS.md.
-    from app.services.device_operational_status import annotate_operational_status
 
-    annotate_operational_status(core_devices)
-    legacy_probe_statuses = _build_legacy_probe_statuses(
-        [{"id": str(getattr(device, "id", ""))} for device in core_devices]
+    olt_filters: list[object] = []
+    olt_search = _inventory_search_filter(
+        term,
+        OLTDevice.name,
+        OLTDevice.hostname,
+        OLTDevice.mgmt_ip,
+        OLTDevice.vendor,
+        OLTDevice.model,
+        OLTDevice.serial_number,
     )
-    for device in core_devices:
-        probe_status = legacy_probe_statuses.get(str(getattr(device, "id", ""))) or {}
-        device.ping_status = {
-            "label": probe_status.get("ping_label") or "Timeout",
-            "state": probe_status.get("ping_state") or "fail",
-            "source": "Legacy",
-            "reason": probe_status.get("ping_reason"),
-        }
-        device.snmp_status = {
-            "label": probe_status.get("snmp_label") or "Unknown",
-            "state": probe_status.get("snmp_state") or "unknown",
-            "source": "Legacy",
-            "reason": probe_status.get("snmp_reason"),
-        }
+    if olt_search is not None:
+        olt_filters.append(olt_search)
+    olt_base = select(OLTDevice)
+    if olt_filters:
+        olt_base = olt_base.where(*olt_filters)
+    olt_statement = olt_base.order_by(OLTDevice.name.asc(), OLTDevice.id.asc())
+    olt_total = _statement_count(db, olt_statement)
+    olt_active_statement = (
+        select(func.count()).select_from(OLTDevice).where(OLTDevice.is_active.is_(True))
+    )
+    if olt_filters:
+        olt_active_statement = olt_active_statement.where(*olt_filters)
+    olt_active = int(db.scalar(olt_active_statement) or 0)
+
+    ont_filters: list[object] = []
+    ont_search = _inventory_search_filter(
+        term,
+        OntUnit.serial_number,
+        OntUnit.vendor_serial_number,
+        OntUnit.name,
+        OntUnit.vendor,
+        OntUnit.model,
+        OntUnit.firmware_version,
+        OntUnit.software_version,
+        OntUnit.observed_wan_ip,
+        OntUnit.notes,
+    )
+    if ont_search is not None:
+        ont_filters.append(ont_search)
+    ont_base = select(OntUnit)
+    if ont_filters:
+        ont_base = ont_base.where(*ont_filters)
+    ont_statement = ont_base.order_by(OntUnit.serial_number.asc(), OntUnit.id.asc())
+    ont_total = _statement_count(db, ont_statement)
+    inactive_statement = (
+        select(func.count()).select_from(OntUnit).where(OntUnit.is_active.is_(False))
+    )
+    if ont_filters:
+        inactive_statement = inactive_statement.where(*ont_filters)
+    ont_inactive = int(db.scalar(inactive_statement) or 0)
+
+    cpe_filters: list[object] = []
+    cpe_search = _inventory_search_filter(
+        term,
+        CPEDevice.serial_number,
+        CPEDevice.vendor,
+        CPEDevice.model,
+        CPEDevice.mac_address,
+        CPEDevice.last_uisp_status,
+        CPEDevice.notes,
+    )
+    if cpe_search is not None:
+        cpe_filters.append(cpe_search)
+    cpe_base = select(CPEDevice)
+    if cpe_filters:
+        cpe_base = cpe_base.where(*cpe_filters)
+    cpe_statement = cpe_base.order_by(CPEDevice.created_at.desc(), CPEDevice.id.asc())
+    cpe_total = _statement_count(db, cpe_statement)
+
+    core_pagination = _page_metadata(core_total, page, per_page)
+    olt_pagination = _page_metadata(olt_total, olt_page, per_page)
+    ont_pagination = _page_metadata(ont_total, ont_page, per_page)
+    cpe_pagination = _page_metadata(cpe_total, cpe_page, per_page)
+
+    core_devices: list[object] = []
+    olts: list[OLTDevice] = []
+    onts: list[OntUnit] = []
+    cpes: list[CPEDevice] = []
+    olt_stats: dict[str, dict[str, int]] = {}
+    signal_data: dict[str, dict[str, str]] = {}
+    serial_display_by_ont_id: dict[str, str] = {}
+    core_table_maps: dict[str, object] = {
+        "display_status_map": {},
+        "uptime_map": {},
+        "ping_history_map": {},
+    }
+
+    nas_total = int(
+        db.scalar(select(func.count()).select_from(NasDevice).where(*nas_core_filters))
+        or 0
+    )
+    role_rows = db.execute(
+        select(NetworkDevice.role, func.count())
+        .where(*network_core_filters)
+        .group_by(NetworkDevice.role)
+    ).all()
+    core_roles = {role.value: int(count) for role, count in role_rows if role}
     core_roles = {
-        "core": len([d for d in core_devices if d.role and d.role.value == "core"]),
-        "distribution": len(
-            [d for d in core_devices if d.role and d.role.value == "distribution"]
-        ),
-        "access": len([d for d in core_devices if d.role and d.role.value == "access"]),
-        "aggregation": len(
-            [d for d in core_devices if d.role and d.role.value == "aggregation"]
-        ),
-        "edge": len([d for d in core_devices if d.role and d.role.value == "edge"]),
+        role: core_roles.get(role, 0)
+        + (nas_total if role == DeviceRole.access.value else 0)
+        for role in ("core", "distribution", "access", "aggregation", "edge")
     }
 
-    raw_olts = network_service.olt_devices.list(
-        db=db,
-        is_active=None,
-        order_by="name",
-        order_dir="asc",
-        limit=100,
-        offset=0,
-    )
-    olts_by_id = {str(olt.id): olt for olt in raw_olts}
-    for olt in promoted_olts:
-        olts_by_id[str(olt.id)] = olt
-    olts = sorted(
-        olts_by_id.values(), key=lambda olt: str(getattr(olt, "name", "") or "").lower()
-    )
-    monitoring_devices = all_monitoring_devices
-    by_mgmt_ip = {d.mgmt_ip: d for d in monitoring_devices if d.mgmt_ip}
-    by_hostname = {d.hostname: d for d in monitoring_devices if d.hostname}
-    by_name = {d.name: d for d in monitoring_devices if d.name}
-    monitoring_device_ids = [d.id for d in monitoring_devices]
-    interfaces_by_device_id: dict[str, list[DeviceInterface]] = {}
-    if monitoring_device_ids:
-        iface_rows = list(
-            db.scalars(
-                select(DeviceInterface).where(
-                    DeviceInterface.device_id.in_(monitoring_device_ids)
+    if selected_tab == "core":
+        refs = db.execute(_paged_statement(core_ref_statement, core_pagination)).all()
+        network_ids = [row.item_id for row in refs if row.kind == "network"]
+        nas_ids = [row.item_id for row in refs if row.kind == "nas"]
+
+        network_by_id: dict[str, NetworkDevice] = {}
+        if network_ids:
+            network_rows = (
+                db.scalars(
+                    select(NetworkDevice)
+                    .options(joinedload(NetworkDevice.pop_site))
+                    .where(NetworkDevice.id.in_(network_ids))
+                )
+                .unique()
+                .all()
+            )
+            network_by_id = {str(device.id): device for device in network_rows}
+
+        nas_by_id: dict[str, NasDevice] = {}
+        routers_by_nas_id: dict[object, Router] = {}
+        linked_network_by_id: dict[object, NetworkDevice] = {}
+        if nas_ids:
+            nas_rows = db.scalars(
+                select(NasDevice).where(NasDevice.id.in_(nas_ids))
+            ).all()
+            nas_by_id = {str(device.id): device for device in nas_rows}
+            linked_network_ids = [
+                device.network_device_id
+                for device in nas_rows
+                if device.network_device_id
+            ]
+            if linked_network_ids:
+                linked_network_by_id = {
+                    device.id: device
+                    for device in db.scalars(
+                        select(NetworkDevice).where(
+                            NetworkDevice.id.in_(linked_network_ids)
+                        )
+                    ).all()
+                }
+            routers = db.scalars(
+                select(Router).where(
+                    Router.is_active.is_(True),
+                    Router.nas_device_id.in_(nas_ids),
                 )
             ).all()
+            routers_by_nas_id = {
+                router.nas_device_id: router
+                for router in routers
+                if router.nas_device_id
+            }
+
+        for row in refs:
+            if row.kind == "network":
+                device = network_by_id.get(str(row.item_id))
+                if device is not None:
+                    core_devices.append(device)
+                continue
+            nas = nas_by_id.get(str(row.item_id))
+            if nas is not None:
+                core_devices.append(
+                    _nas_inventory_stub(
+                        nas,
+                        linked_device=linked_network_by_id.get(nas.network_device_id),
+                        linked_router=routers_by_nas_id.get(nas.id),
+                    )
+                )
+
+        from app.services.device_operational_status import annotate_operational_status
+
+        annotate_operational_status(core_devices)
+        legacy_probe_statuses = _build_legacy_probe_statuses(
+            [{"id": str(getattr(device, "id", ""))} for device in core_devices]
         )
-        for iface in iface_rows:
-            key = str(iface.device_id)
-            interfaces_by_device_id.setdefault(key, []).append(iface)
-
-    def _linked_monitoring(olt_obj: object) -> NetworkDevice | None:
-        mgmt_ip = getattr(olt_obj, "mgmt_ip", None)
-        hostname = getattr(olt_obj, "hostname", None)
-        name = getattr(olt_obj, "name", None)
-        if mgmt_ip and mgmt_ip in by_mgmt_ip:
-            return by_mgmt_ip[mgmt_ip]
-        if hostname and hostname in by_hostname:
-            return by_hostname[hostname]
-        if name and name in by_name:
-            return by_name[name]
-        return None
-
-    def _snmp_pon_count(olt_obj: object) -> int:
-        linked = _linked_monitoring(olt_obj)
-        if linked is None:
-            return 0
-        interfaces = interfaces_by_device_id.get(str(linked.id), [])
-        return sum(
-            1
-            for iface in interfaces
-            if any(
-                token in f"{iface.name or ''} {iface.description or ''}".lower()
-                for token in ("pon", "gpon", "epon", "xgpon", "xgs")
+        for device in core_devices:
+            probe_status = (
+                legacy_probe_statuses.get(str(getattr(device, "id", ""))) or {}
             )
+            device.ping_status = {
+                "label": probe_status.get("ping_label") or "Timeout",
+                "state": probe_status.get("ping_state") or "fail",
+                "source": "Legacy",
+                "reason": probe_status.get("ping_reason"),
+            }
+            device.snmp_status = {
+                "label": probe_status.get("snmp_label") or "Unknown",
+                "state": probe_status.get("snmp_state") or "unknown",
+                "source": "Legacy",
+                "reason": probe_status.get("snmp_reason"),
+            }
+        core_table_maps = _core_device_table_maps(db, core_devices)
+
+    if selected_tab == "olts":
+        olts = list(db.scalars(_paged_statement(olt_statement, olt_pagination)).all())
+        monitoring_conditions: list[object] = []
+        for olt in olts:
+            if olt.mgmt_ip:
+                monitoring_conditions.append(NetworkDevice.mgmt_ip == olt.mgmt_ip)
+            if olt.hostname:
+                monitoring_conditions.append(NetworkDevice.hostname == olt.hostname)
+            if olt.name:
+                monitoring_conditions.append(NetworkDevice.name == olt.name)
+        monitoring_devices = (
+            list(
+                db.scalars(
+                    select(NetworkDevice).where(or_(*monitoring_conditions))
+                ).all()
+            )
+            if monitoring_conditions
+            else []
         )
-
-    from app.services.device_operational_status import (
-        derive_olt_operational_status,
-        warmer_is_stale,
-    )
-
-    olt_warm_stale = warmer_is_stale()
-    olt_stats = {}
-    for olt in olts:
-        linked_monitor = _linked_monitoring(olt)
-        if linked_monitor and linked_monitor.status:
-            olt.runtime_status = linked_monitor.status.value
-        else:
-            # Keep unknown when we have no linked monitoring telemetry.
-            olt.runtime_status = "unknown"
-        # Derived operational status: the OLT's own ping/poll telemetry first,
-        # falling back to the linked monitoring device's live_status (reachable if
-        # any source confirms). runtime_status above is admin status — stale.
-        olt.operational = derive_olt_operational_status(
-            olt,
-            linked_live_status=getattr(linked_monitor, "live_status", None),
-            warm_stale=olt_warm_stale,
-        )
-
-        pon_ports = network_service.pon_ports.list(
-            db=db,
-            olt_id=str(olt.id),
-            is_active=True,
-            order_by="created_at",
-            order_dir="asc",
-            limit=1000,
-            offset=0,
-        )
-        db_count = len(pon_ports)
-        resolved_count = db_count if db_count > 0 else _snmp_pon_count(olt)
-        olt_stats[str(olt.id)] = {"pon_ports": resolved_count}
-
-    ont_limit = 5000 if term else 500
-    active_onts = network_service.ont_units.list(
-        db=db,
-        is_active=True,
-        order_by="serial_number",
-        order_dir="asc",
-        limit=ont_limit,
-        offset=0,
-    )
-    inactive_onts = network_service.ont_units.list(
-        db=db,
-        is_active=False,
-        order_by="serial_number",
-        order_dir="asc",
-        limit=ont_limit,
-        offset=0,
-    )
-    onts = active_onts + inactive_onts
-    cpes = db.scalars(
-        select(CPEDevice).order_by(CPEDevice.created_at.desc()).limit(200)
-    ).all()
-
-    if term:
-
-        def _contains(value: object | None) -> bool:
-            return term in str(value or "").lower()
-
-        core_devices = [
-            device
-            for device in core_devices
-            if any(
-                _contains(v)
-                for v in [
-                    device.name,
-                    device.hostname,
-                    device.mgmt_ip,
-                    device.vendor,
-                    device.model,
-                    device.serial_number,
-                    device.role.value if device.role else "",
-                ]
-            )
-        ]
-
-        olts = [
-            olt
-            for olt in olts
-            if any(
-                _contains(v)
-                for v in [
-                    olt.name,
-                    olt.vendor,
-                    olt.model,
-                    olt.mgmt_ip,
-                    getattr(olt, "management_ip", None),
-                    getattr(olt, "location", None),
-                ]
-            )
-        ]
-
-        onts = [
-            ont
-            for ont in onts
-            if any(
-                _contains(v)
-                for v in [
-                    _display_ont_serial(getattr(ont, "serial_number", None)),
-                    getattr(ont, "vendor", None),
-                    getattr(ont, "model", None),
-                    getattr(ont, "firmware_version", None),
-                    getattr(ont, "notes", None),
-                ]
-            )
-        ]
-
-        cpes = [
-            cpe
-            for cpe in cpes
-            if any(
-                _contains(v)
-                for v in [
-                    getattr(cpe, "serial_number", None),
-                    getattr(cpe, "vendor", None),
-                    getattr(cpe, "model", None),
-                    getattr(cpe, "mac_address", None),
-                    getattr(cpe, "hostname", None),
-                    getattr(cpe, "management_ip", None),
-                    getattr(cpe, "wan_ip", None),
-                    getattr(cpe, "ssid", None),
-                    getattr(cpe, "notes", None),
-                ]
-            )
-        ]
-
-    core_table_maps = _core_device_table_maps(db, core_devices)
-    stats = {
-        "core_total": len(core_devices),
-        "core_roles": core_roles,
-        "olt_total": len(olts),
-        "olt_active": sum(1 for o in olts if o.is_active),
-        "ont_total": len(onts),
-        "ont_inactive": len(inactive_onts),
-        "cpe_total": len(cpes),
-    }
-    serial_display_by_ont_id = {
-        str(ont.id): _ont_display_serial(ont)
-        for ont in onts
-        if getattr(ont, "id", None)
-    }
-    from app.services.device_operational_status import derive_ont_operational_status
-
-    signal_data: dict[str, dict[str, str]] = {}
-    for ont in onts:
-        ont_id = getattr(ont, "id", None)
-        if ont_id is None:
-            continue
-        operational = derive_ont_operational_status(ont)
-        signal_data[str(ont_id)] = {
-            "operational": operational.status,
-            "operational_label": operational.label,
-            "operational_reason": operational.reason,
+        by_mgmt_ip = {
+            device.mgmt_ip: device for device in monitoring_devices if device.mgmt_ip
         }
+        by_hostname = {
+            device.hostname: device for device in monitoring_devices if device.hostname
+        }
+        by_name = {device.name: device for device in monitoring_devices if device.name}
+
+        interfaces_by_device_id: dict[str, list[DeviceInterface]] = {}
+        monitoring_ids = [device.id for device in monitoring_devices]
+        if monitoring_ids:
+            interfaces = db.scalars(
+                select(DeviceInterface).where(
+                    DeviceInterface.device_id.in_(monitoring_ids)
+                )
+            ).all()
+            for interface in interfaces:
+                interfaces_by_device_id.setdefault(str(interface.device_id), []).append(
+                    interface
+                )
+
+        pon_counts = {}
+        olt_ids = [olt.id for olt in olts]
+        if olt_ids:
+            pon_counts = {
+                str(olt_id): int(count)
+                for olt_id, count in db.execute(
+                    select(PonPort.olt_id, func.count())
+                    .where(
+                        PonPort.olt_id.in_(olt_ids),
+                        PonPort.is_active.is_(True),
+                    )
+                    .group_by(PonPort.olt_id)
+                ).all()
+            }
+
+        from app.services.device_operational_status import (
+            derive_olt_operational_status,
+            warmer_is_stale,
+        )
+
+        warm_stale = warmer_is_stale()
+        for olt in olts:
+            linked = by_mgmt_ip.get(olt.mgmt_ip) if olt.mgmt_ip else None
+            if linked is None and olt.hostname:
+                linked = by_hostname.get(olt.hostname)
+            if linked is None:
+                linked = by_name.get(olt.name)
+            olt.runtime_status = (
+                linked.status.value if linked and linked.status else "unknown"
+            )
+            olt.operational = derive_olt_operational_status(
+                olt,
+                linked_live_status=getattr(linked, "live_status", None),
+                warm_stale=warm_stale,
+            )
+            db_count = pon_counts.get(str(olt.id), 0)
+            snmp_count = 0
+            if not db_count and linked is not None:
+                snmp_count = sum(
+                    1
+                    for interface in interfaces_by_device_id.get(str(linked.id), [])
+                    if any(
+                        token
+                        in f"{interface.name or ''} {interface.description or ''}".lower()
+                        for token in ("pon", "gpon", "epon", "xgpon", "xgs")
+                    )
+                )
+            olt_stats[str(olt.id)] = {"pon_ports": db_count or snmp_count}
+
+    if selected_tab == "onts":
+        onts = list(db.scalars(_paged_statement(ont_statement, ont_pagination)).all())
+        cpes = list(db.scalars(_paged_statement(cpe_statement, cpe_pagination)).all())
+        serial_display_by_ont_id = {
+            str(ont.id): _ont_display_serial(ont) for ont in onts
+        }
+        from app.services.device_operational_status import derive_ont_operational_status
+
+        for ont in onts:
+            operational = derive_ont_operational_status(ont)
+            signal_data[str(ont.id)] = {
+                "operational": operational.status,
+                "operational_label": operational.label,
+                "operational_reason": operational.reason,
+            }
+
+    stats = {
+        "core_total": core_total,
+        "core_roles": core_roles,
+        "olt_total": olt_total,
+        "olt_active": olt_active,
+        "ont_total": ont_total,
+        "ont_inactive": ont_inactive,
+        "cpe_total": cpe_total,
+    }
     return {
-        "tab": tab,
+        "tab": selected_tab,
         "search": search or "",
         "stats": stats,
         "core_devices": core_devices,
@@ -3437,6 +3541,10 @@ def consolidated_page_data(
         "serial_display_by_ont_id": serial_display_by_ont_id,
         "signal_data": signal_data,
         "cpes": cpes,
+        "core_pagination": core_pagination,
+        "olt_pagination": olt_pagination,
+        "ont_pagination": ont_pagination,
+        "cpe_pagination": cpe_pagination,
     }
 
 

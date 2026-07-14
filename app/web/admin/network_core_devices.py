@@ -40,22 +40,6 @@ def _coerce_uuid_or_none(value: str | None) -> UUID | None:
         return None
 
 
-def _paginate_rows(rows: list, page: int, per_page: int) -> tuple[list, dict]:
-    """Clamp and slice an in-memory inventory list for the consolidated view."""
-    total = len(rows)
-    total_pages = max(1, (total + per_page - 1) // per_page)
-    current_page = min(max(1, page), total_pages)
-    start = (current_page - 1) * per_page
-    return rows[start : start + per_page], {
-        "page": current_page,
-        "per_page": per_page,
-        "total": total,
-        "total_pages": total_pages,
-        "has_prev": current_page > 1,
-        "has_next": current_page < total_pages,
-    }
-
-
 def _base_context(
     request: Request, db: Session, active_page: str, active_menu: str = "network"
 ) -> dict:
@@ -91,24 +75,18 @@ def network_devices_consolidated(
 ):
     """Consolidated view of all network devices - core, OLTs, ONTs/CPE."""
     selected_tab = tab if tab in {"core", "olts", "onts"} else "core"
+    per_page_options = [25, 50, 100, 200]
+    selected_per_page = per_page if per_page in per_page_options else 50
     page_data = web_network_core_devices_service.consolidated_page_data(
         selected_tab,
         db,
         search,
+        page=page,
+        olt_page=olt_page,
+        ont_page=ont_page,
+        cpe_page=cpe_page,
+        per_page=selected_per_page,
     )
-    per_page_options = [25, 50, 100, 200]
-    selected_per_page = per_page if per_page in per_page_options else 50
-    for rows_key, pagination_key, requested_page in (
-        ("core_devices", "core_pagination", page),
-        ("olts", "olt_pagination", olt_page),
-        ("onts", "ont_pagination", ont_page),
-        ("cpes", "cpe_pagination", cpe_page),
-    ):
-        rows, pagination = _paginate_rows(
-            list(page_data.get(rows_key) or []), requested_page, selected_per_page
-        )
-        page_data[rows_key] = rows
-        page_data[pagination_key] = pagination
     page_data["tab"] = selected_tab
     page_data["per_page_options"] = per_page_options
     context = _base_context(request, db, active_page="network-devices")
