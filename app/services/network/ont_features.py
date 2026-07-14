@@ -15,10 +15,6 @@ from app.services.network.ont_action_common import (
     get_ont_or_error,
     get_ont_strict_or_error,
 )
-from app.services.network.ont_desired_config import (
-    set_access_flag,
-    set_desired_config_values,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -267,7 +263,9 @@ class OntFeatureService:
     def toggle_wan_remote_access(
         db: Session, ont_id: str, *, enabled: bool
     ) -> ActionResult:
-        """Toggle WAN remote access via TR-069."""
+        """Reconcile a time-bounded SSH grant with Telnet forced off."""
+        from app.services.network.reconcile import reconcile_ont
+
         ont, err = get_ont_or_error(db, ont_id)
         if err:
             return err
@@ -292,62 +290,45 @@ class OntFeatureService:
                     ),
                 )
 
-        if type(ont).__module__.startswith("unittest.mock"):
-            set_access_flag(ont, "wan_remote", enabled)
-            _emit_feature_event(db, ont_id, "wan_remote_access", enabled)
-            return ActionResult(
-                success=True,
-                message="WAN remote access updated.",
-            )
-
-        from app.services import tr069 as tr069_service
-
-        # Require ACS connectivity
-        if not tr069_service.resolve_acs_server_for_ont(db, ont=ont):
+        expires_at = datetime.now(UTC) + timedelta(hours=1) if enabled else None
+        result = reconcile_ont(
+            db,
+            ont_id,
+            proposed_change={
+                "wan_remote_access_enabled": enabled,
+                "wan_remote_access_expires_at": expires_at,
+                "wan_remote_access_source_cidrs": source_cidrs,
+            },
+            mode="sync",
+        )
+        if not result.success:
             return ActionResult(
                 success=False,
-                message="ONT has no ACS server configured. Cannot push remote access config.",
-            )
-
-        # Push via TR-069
-        from app.services.network.ont_action_remote_access import set_wan_remote_access
-
-        result = set_wan_remote_access(db, ont_id, enabled=enabled, protocol="ssh")
-
-        # Telnet must never remain exposed when the support SSH path is used.
-        if result.success and enabled:
-            telnet_result = set_wan_remote_access(
-                db, ont_id, enabled=False, protocol="telnet"
-            )
-            if not telnet_result.success:
-                set_wan_remote_access(db, ont_id, enabled=False, protocol="ssh")
-                return ActionResult(
-                    success=False,
-                    message=(
-                        "SSH was closed because Telnet could not be confirmed disabled: "
-                        f"{telnet_result.message}"
+                message=(
+                    result.failure.message
+                    if result.failure
+                    else "Remote-access reconcile failed."
+                ),
+                data={
+                    "sync_status": result.sync_status,
+                    "failure_reason": (
+                        result.failure.reason if result.failure else None
                     ),
-                )
-
-        if result.success:
-            set_access_flag(ont, "wan_remote", enabled)
-            set_desired_config_values(
-                ont,
-                {
-                    "access.wan_remote_expires_at": (
-                        (datetime.now(UTC) + timedelta(hours=1)).isoformat()
-                        if enabled
-                        else None
-                    ),
-                    "access.wan_remote_source_cidrs": list(source_cidrs),
                 },
             )
-            _set_sync_meta(ont, "acs")
-            db.commit()
-            db.refresh(ont)
-            _emit_feature_event(db, ont_id, "wan_remote_access", enabled)
 
-        return result
+        _set_sync_meta(ont, "tr069")
+        db.commit()
+        _emit_feature_event(db, ont_id, "wan_remote_access", enabled)
+        return ActionResult(
+            success=True,
+            message=(
+                "WAN SSH access opened for one hour and verified."
+                if enabled
+                else "WAN SSH access closed and verified."
+            ),
+            data={"sync_status": result.sync_status},
+        )
 
     @staticmethod
     def toggle_lan_port(

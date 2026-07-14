@@ -23,7 +23,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
-from .state import Tr069WifiParameterPaths, Tr181WanParameterPaths, WriteSurface
+from .state import (
+    Tr069RemoteAccessParameterPaths,
+    Tr069WifiParameterPaths,
+    Tr181WanParameterPaths,
+    WriteSurface,
+)
 
 # ── OLT-side actions ────────────────────────────────────────────────────────
 
@@ -369,6 +374,20 @@ class AcsSetWifiConfig:
 
 
 @dataclass(frozen=True)
+class AcsSetRemoteAccess:
+    """Apply SSH support access and forced Telnet shutdown atomically."""
+
+    surface: ClassVar[WriteSurface] = "acs"
+    requires_reset: ClassVar[bool] = False
+
+    device_id: str
+    paths: Tr069RemoteAccessParameterPaths
+    ssh_enabled: bool | None = None
+    ssh_port: int | None = None
+    telnet_enabled: bool | None = None
+
+
+@dataclass(frozen=True)
 class AcsSetNatEnabled:
     """``setParameterValues`` for ``WANPPPConnection.NATEnabled``.
 
@@ -491,6 +510,7 @@ AcsAction = (
     | AcsSetWifiSsid
     | AcsSetWifiPassword
     | AcsSetWifiConfig
+    | AcsSetRemoteAccess
     | AcsSetNatEnabled
     | AcsSetIpv6
     | AcsSetWanIp
@@ -514,6 +534,7 @@ __all__ = (
     "AcsSetManagementServer",
     "AcsSetNatEnabled",
     "AcsSetPppoe",
+    "AcsSetRemoteAccess",
     "AcsSetWifiPassword",
     "AcsSetWifiConfig",
     "AcsSetWifiSsid",

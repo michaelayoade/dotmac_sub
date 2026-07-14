@@ -33,7 +33,6 @@ UNRELATED_SAME_NAME_CALLERS = {"app/services/object_storage.py"}
 ACS_WRITE_BACKLOG = {
     "app/services/network/ont_action_common.py",
     "app/services/network/ont_action_network.py",
-    "app/services/network/ont_action_remote_access.py",
     "app/services/network/ont_action_wan.py",
     "app/services/network/ont_action_web_credentials.py",
     "app/services/network/tr069_batch_config.py",

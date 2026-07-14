@@ -21,6 +21,7 @@ from app.services.network.reconcile import (
     AcsSetManagementServer,
     AcsSetNatEnabled,
     AcsSetPppoe,
+    AcsSetRemoteAccess,
     AcsSetWanIp,
     AcsSetWifiConfig,
     OltAuthorize,
@@ -38,6 +39,7 @@ from app.services.network.reconcile import (
     OntDesiredState,
     OntObservedState,
     Plan,
+    Tr069RemoteAccessParameterPaths,
     Tr181WanParameterPaths,
     compute_plan,
 )
@@ -108,6 +110,15 @@ def _tr181_wan_paths() -> Tr181WanParameterPaths:
         nat_enable="Device.NAT.InterfaceSetting.1.Enable",
         vlan_enable="Device.Ethernet.VLANTermination.1.Enable",
         vlan_id="Device.Ethernet.VLANTermination.1.VLANID",
+    )
+
+
+def _remote_paths() -> Tr069RemoteAccessParameterPaths:
+    return Tr069RemoteAccessParameterPaths(
+        ssh_enabled="InternetGatewayDevice.X_HW_UserInterface.SSHEnable",
+        ssh_port="InternetGatewayDevice.X_HW_UserInterface.SSHPort",
+        telnet_enabled="InternetGatewayDevice.X_HW_UserInterface.TelnetEnable",
+        telnet_port="InternetGatewayDevice.X_HW_UserInterface.TelnetPort",
     )
 
 
@@ -938,3 +949,64 @@ def test_bootstrap_mode_pushes_wifi_password_on_synced_state():
     assert AcsSetWifiConfig in _types(plan)
     # ...but nothing else is required, so this should be the only action.
     assert _types(plan) == [AcsSetWifiConfig]
+
+
+def test_remote_access_enable_is_one_narrow_atomic_action():
+    desired = _desired(
+        wan_remote_access_enabled=True,
+        wan_remote_access_ssh_port=22,
+        remote_access_paths=_remote_paths(),
+    )
+    observed = _synced_observed(desired)
+    observed = dataclasses.replace(
+        observed,
+        acs=dataclasses.replace(
+            observed.acs,
+            acs_observed_remote_ssh_enabled=False,
+            acs_observed_remote_ssh_port=None,
+            acs_observed_remote_telnet_enabled=True,
+        ),
+    )
+
+    plan = compute_plan(
+        desired,
+        observed,
+        "sync",
+        proposed_fields=frozenset(
+            {
+                "wan_remote_access_enabled",
+                "wan_remote_access_expires_at",
+                "wan_remote_access_source_cidrs",
+            }
+        ),
+    )
+
+    assert _types(plan) == [AcsSetRemoteAccess]
+    action = plan.actions[0]
+    assert isinstance(action, AcsSetRemoteAccess)
+    assert action.ssh_enabled is True
+    assert action.ssh_port == 22
+    assert action.telnet_enabled is False
+
+
+def test_remote_access_enable_requires_ssh_telnet_and_port_readback():
+    desired = _desired(
+        wan_remote_access_enabled=True,
+        remote_access_paths=_remote_paths(),
+    )
+    observed = _synced_observed(desired)
+
+    plan = compute_plan(
+        desired,
+        observed,
+        "sync",
+        proposed_fields=frozenset({"wan_remote_access_enabled"}),
+        force_proposed_writes=False,
+    )
+
+    assert _types(plan) == [AcsSetRemoteAccess]
+    assert {drift.field for drift in plan.drifts} == {
+        "wan_remote_access_enabled",
+        "wan_remote_access_ssh_port",
+        "wan_remote_telnet_disabled",
+    }

@@ -19,6 +19,7 @@ from app.services.network.reconcile import (
     AcsSetManagementServer,
     AcsSetNatEnabled,
     AcsSetPppoe,
+    AcsSetRemoteAccess,
     AcsSetWanIp,
     AcsSetWifiConfig,
     AcsSetWifiPassword,
@@ -41,6 +42,7 @@ from app.services.network.reconcile import (
     OltTr069ServerConfig,
     Plan,
     ReconcileFailureReason,
+    Tr069RemoteAccessParameterPaths,
     Tr069WifiParameterPaths,
     Tr181WanParameterPaths,
     apply_plan,
@@ -664,6 +666,36 @@ def test_acs_set_wifi_config_batches_fields_and_resolves_password():
         paths.psk_path: "ACTUAL_PSK",
     }
     assert "ACTUAL_PSK" not in str(result.actions_applied)
+
+
+def test_acs_set_remote_access_batches_ssh_and_telnet_guard():
+    acs = _StubAcsClient()
+    paths = Tr069RemoteAccessParameterPaths(
+        ssh_enabled="Device.X_HW_UserInterface.SSHEnable",
+        ssh_port="Device.X_HW_UserInterface.SSHPort",
+        telnet_enabled="Device.X_HW_UserInterface.TelnetEnable",
+        telnet_port="Device.X_HW_UserInterface.TelnetPort",
+    )
+    result = apply_plan(
+        _plan(
+            AcsSetRemoteAccess(
+                device_id="dev",
+                paths=paths,
+                ssh_enabled=True,
+                ssh_port=22,
+                telnet_enabled=False,
+            )
+        ),
+        _ctx(acs_client=acs),
+    )
+
+    assert result.success is True
+    assert len(acs.calls) == 1
+    assert acs.calls[0][1][1] == {
+        paths.ssh_enabled: True,
+        paths.ssh_port: 22,
+        paths.telnet_enabled: False,
+    }
 
 
 def test_acs_set_nat_enabled_pushes_single_param():

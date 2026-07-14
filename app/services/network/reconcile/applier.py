@@ -30,6 +30,7 @@ Action → adapter call mapping:
       AcsSetWifiSsid            → client.set_parameter_values (1 param)
       AcsSetWifiPassword        → client.set_parameter_values (1 param)
       AcsSetWifiConfig          → client.set_parameter_values (changed fields)
+      AcsSetRemoteAccess        → client.set_parameter_values (SSH + Telnet guard)
       AcsSetNatEnabled          → client.set_parameter_values (1 param)
       AcsSetDhcpServer          → client.set_parameter_values (4 params)
       AcsSetManagementServer    → client.set_parameter_values (3 params)
@@ -69,6 +70,7 @@ from .actions import (
     AcsSetManagementServer,
     AcsSetNatEnabled,
     AcsSetPppoe,
+    AcsSetRemoteAccess,
     AcsSetWanIp,
     AcsSetWifiConfig,
     AcsSetWifiPassword,
@@ -527,6 +529,33 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
                 "acs_wifi_config",
                 None,
                 ",".join(changed),
+                started,
+            )
+
+        case AcsSetRemoteAccess():
+            remote_params: dict[str, object] = {}
+            remote_changed: list[str] = []
+            if action.ssh_enabled is not None:
+                remote_params[action.paths.ssh_enabled] = action.ssh_enabled
+                remote_changed.append("ssh_enabled")
+            if action.ssh_port is not None:
+                remote_params[action.paths.ssh_port] = action.ssh_port
+                remote_changed.append("ssh_port")
+            if action.telnet_enabled is not None:
+                remote_params[action.paths.telnet_enabled] = action.telnet_enabled
+                remote_changed.append("telnet_enabled")
+            if not remote_params:
+                raise ApplyError(
+                    action,
+                    ReconcileFailureReason.INVALID_CHANGE,
+                    "remote-access action contained no changed fields",
+                )
+            _acs_set(action, ctx, remote_params)
+            return _ok(
+                action,
+                "acs_remote_access",
+                None,
+                ",".join(remote_changed),
                 started,
             )
 

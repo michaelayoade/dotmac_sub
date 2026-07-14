@@ -755,6 +755,12 @@ def _device_doc(*, serial: str = "HWTC8535819A", overrides=None) -> dict:
                 "ConnectionRequestUsername": _leaf("admin"),
                 "ConnectionRequestPassword": _leaf("admin"),
             },
+            "X_HW_UserInterface": {
+                "SSHEnable": _leaf("true"),
+                "SSHPort": _leaf("22"),
+                "TelnetEnable": _leaf("false"),
+                "TelnetPort": _leaf("23"),
+            },
             "WANDevice": {
                 "1": {
                     "WANConnectionDevice": {
@@ -864,6 +870,10 @@ def test_acs_reader_parses_a_full_device_document():
     assert obs.acs_observed_wifi_channel == 6
     assert obs.acs_observed_wifi_security_mode == "11i"
     assert obs.acs_observed_wifi_instance_index == 1
+    assert obs.acs_observed_remote_ssh_enabled is True
+    assert obs.acs_observed_remote_ssh_port == 22
+    assert obs.acs_observed_remote_telnet_enabled is False
+    assert obs.acs_observed_remote_telnet_port == 23
     assert obs.acs_observed_periodic_inform_interval_sec == 300
     assert obs.acs_observed_cr_username == "admin"
     assert obs.acs_observed_cr_username_set is True

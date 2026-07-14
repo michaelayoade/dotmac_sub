@@ -8,7 +8,7 @@ where needed; no fixture sharing across tests.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -145,6 +145,36 @@ def test_desired_wifi_credentials_round_trip(db_session, ont):
     assert desired.wifi_security_mode == "WPA2-Personal"
     assert desired.wifi_paths is not None
     assert desired.wifi_paths.ssid.endswith("WLANConfiguration.1.SSID")
+
+
+def test_desired_remote_access_expires_closed_and_resolves_paths(db_session, ont):
+    future = datetime.now(UTC) + timedelta(hours=1)
+    ont.desired_config = {
+        "access": {
+            "wan_remote": True,
+            "wan_remote_expires_at": future.isoformat(),
+            "wan_remote_source_cidrs": ["10.0.0.0/24"],
+        }
+    }
+    db_session.commit()
+
+    desired = desired_from_ont_unit(db_session, ont)
+
+    assert desired.wan_remote_access_enabled is True
+    assert desired.wan_remote_access_expires_at == future
+    assert desired.wan_remote_access_source_cidrs == ("10.0.0.0/24",)
+    assert desired.remote_access_paths is not None
+    assert desired.remote_access_paths.ssh_enabled.endswith(
+        "X_HW_UserInterface.SSHEnable"
+    )
+
+    access = dict(ont.desired_config["access"])
+    access["wan_remote_expires_at"] = (
+        datetime.now(UTC) - timedelta(minutes=1)
+    ).isoformat()
+    ont.desired_config = {"access": access}
+    db_session.commit()
+    assert desired_from_ont_unit(db_session, ont).wan_remote_access_enabled is False
 
 
 def test_desired_defaults_dhcp_pool_for_empty_lan_config(db_session, ont):
@@ -411,6 +441,10 @@ def test_observed_round_trips_olt_and_acs_fields(db_session, ont):
             acs_observed_wifi_channel=6,
             acs_observed_wifi_security_mode="11i",
             acs_observed_wifi_instance_index=7,
+            acs_observed_remote_ssh_enabled=True,
+            acs_observed_remote_ssh_port=22,
+            acs_observed_remote_telnet_enabled=False,
+            acs_observed_remote_telnet_port=23,
             acs_observed_periodic_inform_interval_sec=300,
             acs_observed_cr_username="admin",
             acs_observed_cr_username_set=True,
@@ -435,6 +469,10 @@ def test_observed_round_trips_olt_and_acs_fields(db_session, ont):
     assert materialised.acs.acs_observed_wifi_channel == 6
     assert materialised.acs.acs_observed_wifi_security_mode == "11i"
     assert materialised.acs.acs_observed_wifi_instance_index == 7
+    assert materialised.acs.acs_observed_remote_ssh_enabled is True
+    assert materialised.acs.acs_observed_remote_ssh_port == 22
+    assert materialised.acs.acs_observed_remote_telnet_enabled is False
+    assert materialised.acs.acs_observed_remote_telnet_port == 23
     assert materialised.acs.acs_observed_software_version == "V5R019C10S100"
 
 

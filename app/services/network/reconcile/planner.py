@@ -51,6 +51,7 @@ from .actions import (
     AcsSetManagementServer,
     AcsSetNatEnabled,
     AcsSetPppoe,
+    AcsSetRemoteAccess,
     AcsSetWanIp,
     AcsSetWifiConfig,
     Action,
@@ -73,6 +74,7 @@ from .state import (
     OntDesiredState,
     OntObservedState,
     ReconcileMode,
+    Tr069RemoteAccessParameterPaths,
     Tr069WifiParameterPaths,
     WriteSurface,
 )
@@ -131,6 +133,14 @@ _WIFI_ONLY_FIELDS = frozenset(
         "wifi_security_mode",
     }
 )
+_REMOTE_ACCESS_ONLY_FIELDS = frozenset(
+    {
+        "wan_remote_access_enabled",
+        "wan_remote_access_expires_at",
+        "wan_remote_access_source_cidrs",
+        "wan_remote_access_ssh_port",
+    }
+)
 _ACS_ENDPOINT_FIELDS = frozenset({"acs_url", "acs_username", "acs_password_ref"})
 
 
@@ -139,6 +149,16 @@ def _is_wifi_only_change(mode: ReconcileMode, proposed_fields: frozenset[str]) -
         mode == "sync"
         and bool(proposed_fields)
         and proposed_fields <= _WIFI_ONLY_FIELDS
+    )
+
+
+def _is_remote_access_only_change(
+    mode: ReconcileMode, proposed_fields: frozenset[str]
+) -> bool:
+    return (
+        mode == "sync"
+        and bool(proposed_fields)
+        and proposed_fields <= _REMOTE_ACCESS_ONLY_FIELDS
     )
 
 
@@ -165,8 +185,9 @@ def compute_plan(
     drifts: list[Drift] = []
     proposed_fields = proposed_fields or frozenset()
     wifi_only_change = _is_wifi_only_change(mode, proposed_fields)
+    remote_only_change = _is_remote_access_only_change(mode, proposed_fields)
 
-    if wifi_only_change:
+    if wifi_only_change or remote_only_change:
         omci_wan_planned = False
     else:
         _plan_olt_side(desired, observed, mode, actions, drifts)
@@ -481,12 +502,18 @@ def _plan_acs_side(
     device_id = _acs_device_id(desired)
 
     wifi_only_change = _is_wifi_only_change(mode, proposed_fields)
+    remote_only_change = _is_remote_access_only_change(mode, proposed_fields)
 
     # TR-069 WAN PPP — skipped when OMCI owns the WAN.
-    if not wifi_only_change and desired.wan_mode == "pppoe" and not omci_wan_planned:
+    narrow_feature_change = wifi_only_change or remote_only_change
+    if (
+        not narrow_feature_change
+        and desired.wan_mode == "pppoe"
+        and not omci_wan_planned
+    ):
         _plan_acs_wan_ppp(desired, observed, device_id, actions, drifts)
 
-    if not wifi_only_change and desired.wan_mode in {"dhcp", "static"}:
+    if not narrow_feature_change and desired.wan_mode in {"dhcp", "static"}:
         if not observed.acs.acs_present or _wan_ip_differs(desired, observed):
             actions.append(
                 AcsSetWanIp(
@@ -518,18 +545,21 @@ def _plan_acs_side(
                 )
             )
 
-    push_password = _should_push_wifi_password(
-        mode,
-        observed,
-        proposed_fields,
-        force_proposed_writes,
-    )
-    wifi_changes = _wifi_changes(
-        desired,
-        observed,
-        proposed_fields=proposed_fields,
-        force_proposed_writes=force_proposed_writes,
-    )
+    push_password = False
+    wifi_changes = _WifiChanges(None, None, None, None, ())
+    if not remote_only_change:
+        push_password = _should_push_wifi_password(
+            mode,
+            observed,
+            proposed_fields,
+            force_proposed_writes,
+        )
+        wifi_changes = _wifi_changes(
+            desired,
+            observed,
+            proposed_fields=proposed_fields,
+            force_proposed_writes=force_proposed_writes,
+        )
     wifi_paths = desired.wifi_paths or _standard_wifi_paths(
         observed.acs.acs_data_model_root or desired.tr069_data_model_root
     )
@@ -565,7 +595,18 @@ def _plan_acs_side(
             )
         )
 
-    if wifi_only_change:
+    if not wifi_only_change:
+        _plan_remote_access(
+            desired,
+            observed,
+            device_id,
+            actions,
+            drifts,
+            proposed_fields=proposed_fields,
+            force_proposed_writes=force_proposed_writes,
+        )
+
+    if narrow_feature_change:
         return
 
     # Defensive NAT on routed mode (Fix #4 follow-up).
@@ -854,6 +895,99 @@ def _normalise_wifi_security_mode(value: str | None, root: str | None) -> str | 
     return aliases.get(text.lower(), text)
 
 
+def _plan_remote_access(
+    desired: OntDesiredState,
+    observed: OntObservedState,
+    device_id: str,
+    actions: list[Action],
+    drifts: list[Drift],
+    *,
+    proposed_fields: frozenset[str],
+    force_proposed_writes: bool,
+) -> None:
+    """Plan one atomic SSH/Telnet support-access transaction."""
+    acs = observed.acs
+    explicit_toggle = "wan_remote_access_enabled" in proposed_fields
+    strict_readback = desired.wan_remote_access_enabled or explicit_toggle
+    force_toggle = force_proposed_writes and explicit_toggle
+
+    ssh_differs = (
+        acs.acs_observed_remote_ssh_enabled != desired.wan_remote_access_enabled
+        if strict_readback
+        else _observed_differs(
+            acs.acs_observed_remote_ssh_enabled,
+            desired.wan_remote_access_enabled,
+        )
+    )
+    port_differs = desired.wan_remote_access_enabled and (
+        acs.acs_observed_remote_ssh_port != desired.wan_remote_access_ssh_port
+    )
+    telnet_differs = (
+        acs.acs_observed_remote_telnet_enabled is not False
+        if strict_readback
+        else acs.acs_observed_remote_telnet_enabled is True
+    )
+
+    paths = desired.remote_access_paths or _standard_remote_access_paths(
+        acs.acs_data_model_root or desired.tr069_data_model_root
+    )
+    changes: list[tuple[str, object, object]] = []
+    if force_toggle or ssh_differs:
+        changes.append(
+            (
+                "wan_remote_access_enabled",
+                desired.wan_remote_access_enabled,
+                acs.acs_observed_remote_ssh_enabled,
+            )
+        )
+    if port_differs:
+        changes.append(
+            (
+                "wan_remote_access_ssh_port",
+                desired.wan_remote_access_ssh_port,
+                acs.acs_observed_remote_ssh_port,
+            )
+        )
+    if telnet_differs:
+        changes.append(
+            (
+                "wan_remote_telnet_disabled",
+                False,
+                acs.acs_observed_remote_telnet_enabled,
+            )
+        )
+    for field, desired_value, observed_value in changes:
+        drifts.append(
+            Drift(
+                field=field,
+                surface="acs",
+                desired=desired_value,
+                observed=observed_value,
+                repairable=paths is not None,
+            )
+        )
+    if not changes or paths is None:
+        return
+
+    actions.append(
+        AcsSetRemoteAccess(
+            device_id=device_id,
+            paths=paths,
+            ssh_enabled=(
+                desired.wan_remote_access_enabled
+                if force_toggle or ssh_differs
+                else None
+            ),
+            ssh_port=(desired.wan_remote_access_ssh_port if port_differs else None),
+            # Enabling support access always carries the Telnet-off guard in
+            # the same CWMP request, even when the cached value is already off.
+            telnet_enabled=(
+                False if telnet_differs or desired.wan_remote_access_enabled else None
+            ),
+        )
+    )
+
+
 def _standard_wifi_paths(root: str | None) -> Tr069WifiParameterPaths:
     if root == "Device":
         return Tr069WifiParameterPaths(
@@ -874,6 +1008,19 @@ def _standard_wifi_paths(root: str | None) -> Tr069WifiParameterPaths:
         security_mode=(
             "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.BeaconType"
         ),
+    )
+
+
+def _standard_remote_access_paths(
+    root: str | None,
+) -> Tr069RemoteAccessParameterPaths:
+    prefix = "Device" if root == "Device" else "InternetGatewayDevice"
+    base = f"{prefix}.X_HW_UserInterface"
+    return Tr069RemoteAccessParameterPaths(
+        ssh_enabled=f"{base}.SSHEnable",
+        ssh_port=f"{base}.SSHPort",
+        telnet_enabled=f"{base}.TelnetEnable",
+        telnet_port=f"{base}.TelnetPort",
     )
 
 
