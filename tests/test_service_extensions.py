@@ -11,7 +11,6 @@ from fastapi import HTTPException
 
 from app.models.catalog import NasVendor, SubscriptionStatus
 from app.models.domain_settings import DomainSetting, SettingDomain
-from app.models.sequence import DocumentSequence  # noqa: F401
 from app.models.service_extension import (
     ServiceExtensionEntry,
     ServiceExtensionScope,
