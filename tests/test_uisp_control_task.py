@@ -92,6 +92,34 @@ def test_task_marks_success_only_after_adapter_verification(
     assert operation.output_payload["verified"] is True
 
 
+def test_task_does_not_apply_superseded_revision(
+    db_session, subscriber, catalog_offer, monkeypatch
+):
+    intent, operation = _records(db_session, subscriber, catalog_offer)
+    _use_session(monkeypatch, db_session)
+    applied = []
+    intent.desired_revision += 1
+    intent.status = UispIntentStatus.staged
+    db_session.commit()
+    adapter = SimpleNamespace(apply=lambda db, item: applied.append(item))
+
+    result = execute_uisp_apply(
+        str(operation.id),
+        str(intent.id),
+        expected_revision=intent.desired_revision - 1,
+        adapter=adapter,
+    )
+
+    db_session.refresh(intent)
+    db_session.refresh(operation)
+    assert result["outcome"] == "superseded"
+    assert applied == []
+    assert intent.status == UispIntentStatus.staged
+    assert operation.status == NetworkOperationStatus.failed
+    assert operation.output_payload["queued_revision"] == 1
+    assert operation.output_payload["current_revision"] == 2
+
+
 def test_task_marks_readback_drift_failed(
     db_session, subscriber, catalog_offer, monkeypatch
 ):

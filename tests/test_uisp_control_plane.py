@@ -270,3 +270,27 @@ def test_operator_edit_stages_new_revision_without_verification(
     assert intent.desired_revision == 2
     assert intent.verified_revision == 1
     assert intent.desired_state["firmware_version"] == "8.7.20"
+
+
+def test_apply_rejects_stale_operator_revision(db_session, subscriber, catalog_offer):
+    subscription = _subscription(db_session, subscriber, catalog_offer)
+    cpe = _cpe(db_session, subscriber, subscription)
+    intent = stage_intent(
+        db_session,
+        target_type=UispIntentTargetType.cpe,
+        target_id=cpe.id,
+        desired_state={"management_ip": "172.21.10.2"},
+    )
+    update_intent_desired(db_session, intent, management_ip="172.21.10.3")
+
+    try:
+        request_apply(
+            db_session,
+            intent,
+            expected_revision=1,
+            enqueue=False,
+        )
+    except UispIntentError as exc:
+        assert "current revision is 2" in str(exc)
+    else:  # pragma: no cover - explicit stale-write safety contract
+        raise AssertionError("stale UISP revision was queued")

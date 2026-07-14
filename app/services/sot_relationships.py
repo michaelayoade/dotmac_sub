@@ -390,6 +390,21 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("runtime.infrastructure_polling",),
             ),
             SOTService(
+                name="network.control_plane_intent",
+                module="app.services.control_plane_intent",
+                owns=(
+                    "shared desired-state delivery lifecycle",
+                    "control-plane target and revision identity",
+                    "vendor status projections and transition guards",
+                ),
+                depends_on=("network.identity",),
+                notes=(
+                    "Vendor adapters retain native persistence models but project "
+                    "through one desired-to-readback lifecycle. Verified always "
+                    "requires device evidence for the current intent revision."
+                ),
+            ),
+            SOTService(
                 name="network.nas_inventory",
                 module="app.services.nas.devices",
                 owns=("NAS administrative lifecycle state", "NAS inventory reads"),

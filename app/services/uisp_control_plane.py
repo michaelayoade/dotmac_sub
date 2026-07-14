@@ -29,6 +29,13 @@ from app.models.uisp_control import (
     UispIntentTargetType,
     UispSnapshotSource,
 )
+from app.services.control_plane_intent import (
+    ControlPlaneHeadConflict,
+    ControlPlaneTarget,
+    assert_intent_head,
+    assert_phase_transition,
+    phase_for_uisp_intent,
+)
 
 UISP_CAPABILITIES: dict[str, bool | str] = {
     "inventory": True,
@@ -375,9 +382,42 @@ def request_apply(
     *,
     initiated_by: str | None = None,
     enqueue: bool = True,
+    expected_revision: int | None = None,
 ) -> NetworkOperation:
     from app.services.network_operations import network_operations
 
+    locked_intent = (
+        db.query(UispDeviceIntent)
+        .filter(UispDeviceIntent.id == intent.id)
+        .with_for_update()
+        .populate_existing()
+        .one_or_none()
+    )
+    if locked_intent is None:
+        raise UispIntentError("UISP intent not found")
+    intent = locked_intent
+    revision = intent.desired_revision
+    try:
+        assert_intent_head(
+            expected_revision=(
+                expected_revision if expected_revision is not None else revision
+            ),
+            current_revision=revision,
+        )
+    except ControlPlaneHeadConflict as exc:
+        raise UispIntentError(str(exc)) from exc
+    target = ControlPlaneTarget(
+        provider="uisp",
+        target_type=intent.target_type.value,
+        target_id=str(intent.target_id),
+        desired_revision=revision,
+    )
+    assert_phase_transition(
+        phase_for_uisp_intent(intent.status),
+        phase_for_uisp_intent(UispIntentStatus.applying),
+    )
+    input_payload = redact_config(intent.desired_state)
+    input_payload["_control_plane"] = target.as_payload()
     operation = network_operations.start(
         db,
         (
@@ -391,8 +431,8 @@ def request_apply(
             else NetworkOperationTargetType.ont
         ),
         str(intent.target_id),
-        correlation_key=f"uisp:{intent.id}:revision:{intent.desired_revision}",
-        input_payload=redact_config(intent.desired_state),
+        correlation_key=target.correlation_key,
+        input_payload=input_payload,
         initiated_by=initiated_by,
     )
     intent.status = UispIntentStatus.applying
@@ -403,7 +443,7 @@ def request_apply(
         try:
             from app.tasks.uisp_control import apply_uisp_intent
 
-            apply_uisp_intent.delay(str(operation.id), str(intent.id))
+            apply_uisp_intent.delay(str(operation.id), str(intent.id), revision)
         except Exception as exc:
             network_operations.mark_failed(
                 db,

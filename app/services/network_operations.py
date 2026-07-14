@@ -23,6 +23,11 @@ from app.models.network_operation import (
     NetworkOperationTargetType,
     NetworkOperationType,
 )
+from app.services.control_plane_intent import (
+    ControlPlaneTransitionError,
+    assert_phase_transition,
+    phase_for_network_operation,
+)
 from app.services.network.action_logging import looks_like_prerequisite_failure
 from app.services.response import ListResponseMixin
 
@@ -70,6 +75,7 @@ def _operation_extra(op: NetworkOperation) -> dict[str, object]:
         "target_type": op.target_type.value,
         "target_id": str(op.target_id),
         "operation_status": op.status.value,
+        "control_plane_phase": phase_for_network_operation(op.status).value,
         "correlation_key": op.correlation_key,
         "parent_id": str(op.parent_id) if op.parent_id else None,
         "initiated_by": op.initiated_by,
@@ -150,6 +156,21 @@ def _check_not_terminal(op: NetworkOperation) -> None:
             status_code=409,
             detail=f"Cannot transition from terminal status '{op.status.value}'",
         )
+
+
+def _transition_status(
+    op: NetworkOperation, destination: NetworkOperationStatus
+) -> None:
+    """Apply a native transition only when its shared lifecycle is valid."""
+    _check_not_terminal(op)
+    try:
+        assert_phase_transition(
+            phase_for_network_operation(op.status),
+            phase_for_network_operation(destination),
+        )
+    except ControlPlaneTransitionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    op.status = destination
 
 
 class NetworkOperations(ListResponseMixin):
@@ -271,8 +292,7 @@ class NetworkOperations(ListResponseMixin):
     def mark_running(db: Session, operation_id: str) -> NetworkOperation:
         """Transition operation to running status."""
         op = _get_operation(db, operation_id)
-        _check_not_terminal(op)
-        op.status = NetworkOperationStatus.running
+        _transition_status(op, NetworkOperationStatus.running)
         if not op.started_at:
             op.started_at = datetime.now(UTC)
         op.waiting_reason = None
@@ -289,8 +309,7 @@ class NetworkOperations(ListResponseMixin):
     ) -> NetworkOperation:
         """Transition operation to succeeded status."""
         op = _get_operation(db, operation_id)
-        _check_not_terminal(op)
-        op.status = NetworkOperationStatus.succeeded
+        _transition_status(op, NetworkOperationStatus.succeeded)
         op.completed_at = datetime.now(UTC)
         if output_payload is not None:
             op.output_payload = output_payload
@@ -316,8 +335,7 @@ class NetworkOperations(ListResponseMixin):
     ) -> NetworkOperation:
         """Transition operation to failed status."""
         op = _get_operation(db, operation_id)
-        _check_not_terminal(op)
-        op.status = NetworkOperationStatus.failed
+        _transition_status(op, NetworkOperationStatus.failed)
         op.completed_at = datetime.now(UTC)
         op.error = error
         if output_payload is not None:
@@ -369,8 +387,7 @@ class NetworkOperations(ListResponseMixin):
     ) -> NetworkOperation:
         """Transition operation to warning status for degraded success."""
         op = _get_operation(db, operation_id)
-        _check_not_terminal(op)
-        op.status = NetworkOperationStatus.warning
+        _transition_status(op, NetworkOperationStatus.warning)
         op.completed_at = datetime.now(UTC)
         op.error = warning
         if output_payload is not None:
@@ -397,8 +414,7 @@ class NetworkOperations(ListResponseMixin):
     ) -> NetworkOperation:
         """Transition operation to waiting status."""
         op = _get_operation(db, operation_id)
-        _check_not_terminal(op)
-        op.status = NetworkOperationStatus.waiting
+        _transition_status(op, NetworkOperationStatus.waiting)
         op.waiting_reason = reason
         db.flush()
         extra = _operation_extra(op)
@@ -410,8 +426,7 @@ class NetworkOperations(ListResponseMixin):
     def mark_canceled(db: Session, operation_id: str) -> NetworkOperation:
         """Transition operation to canceled status."""
         op = _get_operation(db, operation_id)
-        _check_not_terminal(op)
-        op.status = NetworkOperationStatus.canceled
+        _transition_status(op, NetworkOperationStatus.canceled)
         op.completed_at = datetime.now(UTC)
         db.flush()
         logger.info(

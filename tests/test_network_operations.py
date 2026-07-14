@@ -183,6 +183,7 @@ class TestNetworkOperationLifecycle:
         assert start_record.operation_type == NetworkOperationType.ont_reboot.value
         assert start_record.correlation_key == "ont_reboot:test"
         assert waiting_record.operation_status == NetworkOperationStatus.waiting.value
+        assert waiting_record.control_plane_phase == "readback_pending"
         assert waiting_record.waiting_reason == "next_inform"
 
     def test_running_to_failed_with_payload(self, db_session):

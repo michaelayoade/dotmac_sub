@@ -17,6 +17,10 @@ from app.models.uisp_control import (
     UispIntentStatus,
     UispSnapshotSource,
 )
+from app.services.control_plane_intent import (
+    ControlPlaneHeadConflict,
+    assert_intent_head,
+)
 from app.services.db_session_adapter import db_session_adapter
 from app.services.network_operations import network_operations
 from app.services.uisp import UispClient, UispClientError
@@ -73,15 +77,49 @@ def execute_uisp_apply(
     operation_id: str,
     intent_id: str,
     *,
+    expected_revision: int | None = None,
     client: UispClient | None = None,
     adapter: UispConfigurationWriteAdapter | None = None,
 ) -> dict[str, Any]:
     with db_session_adapter.session() as db:
         operation = network_operations.get(db, operation_id)
-        intent = db.get(UispDeviceIntent, intent_id)
+        intent = db.get(UispDeviceIntent, intent_id, with_for_update=True)
         if intent is None:
             network_operations.mark_failed(db, operation_id, "UISP intent not found")
             return {"success": False, "error": "intent_not_found"}
+        operation_metadata = (operation.input_payload or {}).get("_control_plane", {})
+        if not isinstance(operation_metadata, dict):
+            operation_metadata = {}
+        queued_revision = (
+            expected_revision
+            if expected_revision is not None
+            else operation_metadata.get("desired_revision")
+        )
+        if queued_revision is not None:
+            try:
+                assert_intent_head(
+                    expected_revision=int(queued_revision),
+                    current_revision=intent.desired_revision,
+                )
+            except (ControlPlaneHeadConflict, TypeError, ValueError) as exc:
+                message = f"Superseded UISP operation was not applied: {exc}"
+                network_operations.mark_failed(
+                    db,
+                    operation_id,
+                    message,
+                    output_payload={
+                        "outcome": "superseded",
+                        "verified": False,
+                        "queued_revision": queued_revision,
+                        "current_revision": intent.desired_revision,
+                    },
+                )
+                db.commit()
+                return {
+                    "success": False,
+                    "outcome": "superseded",
+                    "message": message,
+                }
         network_operations.mark_running(db, operation_id)
         intent.status = UispIntentStatus.applying
         intent.last_error = None
@@ -187,8 +225,16 @@ def execute_uisp_apply(
     soft_time_limit=90,
     time_limit=120,
 )
-def apply_uisp_intent(operation_id: str, intent_id: str) -> dict[str, Any]:
-    return execute_uisp_apply(operation_id, intent_id)
+def apply_uisp_intent(
+    operation_id: str,
+    intent_id: str,
+    expected_revision: int | None = None,
+) -> dict[str, Any]:
+    return execute_uisp_apply(
+        operation_id,
+        intent_id,
+        expected_revision=expected_revision,
+    )
 
 
 @celery_app.task(
