@@ -374,8 +374,8 @@ def test_set_pppoe_credentials_prefers_existing_primary_igd_ppp_child(
 
 def test_genieacs_service_delegates_wifi_config(monkeypatch) -> None:
     from app.services.genieacs_service import genieacs_service
-    from app.services.network import ont_action_wifi
     from app.services.network.ont_action_common import ActionResult
+    from app.services.network.ont_features import OntFeatureService
 
     calls = {}
 
@@ -385,7 +385,7 @@ def test_genieacs_service_delegates_wifi_config(monkeypatch) -> None:
         calls["kwargs"] = kwargs
         return ActionResult(success=True, message="ok", data={"service": "genieacs"})
 
-    monkeypatch.setattr(ont_action_wifi, "set_wifi_config", fake_set_wifi_config)
+    monkeypatch.setattr(OntFeatureService, "set_wifi_config", fake_set_wifi_config)
 
     result = genieacs_service.set_wifi_config(
         object(),

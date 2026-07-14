@@ -170,9 +170,9 @@ class GenieAcsService:
         )
 
     def set_wifi_ssid(self, db: Session, ont_id: str, ssid: str) -> ActionResult:
-        from app.services.network.ont_action_wifi import set_wifi_ssid
+        from app.services.network.ont_features import OntFeatureService
 
-        return set_wifi_ssid(db, ont_id, ssid)
+        return OntFeatureService.set_wifi_config(db, ont_id, ssid=ssid)
 
     def queue_set_wifi_password(
         self,
@@ -191,9 +191,9 @@ class GenieAcsService:
         ont_id: str,
         password: str,
     ) -> ActionResult:
-        from app.services.network.ont_action_wifi import set_wifi_password
+        from app.services.network.ont_features import OntFeatureService
 
-        return set_wifi_password(db, ont_id, password)
+        return OntFeatureService.set_wifi_config(db, ont_id, password=password)
 
     def queue_set_wifi_config(
         self,
@@ -232,9 +232,9 @@ class GenieAcsService:
         channel: int | None = None,
         security_mode: str | None = None,
     ) -> ActionResult:
-        from app.services.network.ont_action_wifi import set_wifi_config
+        from app.services.network.ont_features import OntFeatureService
 
-        return set_wifi_config(
+        return OntFeatureService.set_wifi_config(
             db,
             ont_id,
             enabled=enabled,

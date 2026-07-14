@@ -51,6 +51,7 @@ from .state import (
     OltObservedFields,
     OntDesiredState,
     OntObservedState,
+    Tr069WifiParameterPaths,
     Tr181WanParameterPaths,
 )
 
@@ -89,9 +90,8 @@ def desired_from_ont_unit(db: Session, ont: OntUnit) -> OntDesiredState:
     acs_resolution = resolve_acs_for_ont(db, ont)
     acs_server = acs_resolution.server
     tr181_wan_paths = _resolve_tr181_wan_paths(db, ont, wan_mode, values)
-    tr069_data_model_root = getattr(ont, "tr069_data_model", None) or (
-        "Device" if tr181_wan_paths is not None else None
-    )
+    tr069_data_model_root = _resolve_tr069_root(db, ont, tr181_wan_paths)
+    wifi_paths = _resolve_wifi_paths(db, ont, tr069_data_model_root)
 
     return OntDesiredState(
         ont_unit_id=str(ont.id),
@@ -170,6 +170,10 @@ def desired_from_ont_unit(db: Session, ont: OntUnit) -> OntDesiredState:
         acs_url=getattr(acs_server, "cwmp_url", None),
         acs_username=getattr(acs_server, "cwmp_username", None),
         acs_password_ref=getattr(acs_server, "cwmp_password", None),
+        wifi_enabled=_bool_or_none(values.get("wifi_enabled")),
+        wifi_channel=_wifi_channel_or_none(values.get("wifi_channel")),
+        wifi_security_mode=_str_or_none(values.get("wifi_security_mode")),
+        wifi_paths=wifi_paths,
     )
 
 
@@ -250,7 +254,84 @@ def _resolve_tr181_wan_paths(
     return Tr181WanParameterPaths(**resolved)
 
 
-def apply_proposed_change(ont: OntUnit, target: OntDesiredState) -> None:
+def _resolve_tr069_root(
+    db: Session,
+    ont: OntUnit,
+    tr181_wan_paths: Tr181WanParameterPaths | None,
+) -> str:
+    explicit = str(getattr(ont, "tr069_data_model", None) or "").strip()
+    if explicit in {"Device", "InternetGatewayDevice"}:
+        return explicit
+    if explicit.lower() == "tr181":
+        return "Device"
+    if explicit.lower() == "tr098":
+        return "InternetGatewayDevice"
+    if tr181_wan_paths is not None:
+        return "Device"
+
+    vendor = str(getattr(ont, "vendor", "") or "").strip()
+    model = str(getattr(ont, "model", "") or "").strip()
+    firmware = _str_or_none(
+        getattr(ont, "firmware_version", None) or getattr(ont, "software_version", None)
+    )
+    if vendor and model:
+        capability = VendorCapabilities.resolve_capability(
+            db,
+            vendor=vendor,
+            model=model,
+            firmware=firmware,
+        )
+        if capability and capability.tr069_root in {
+            "Device",
+            "InternetGatewayDevice",
+        }:
+            return str(capability.tr069_root)
+    # Existing Huawei fleet is TR-098 unless device inventory or the model
+    # catalog says otherwise. Keeping this explicit preserves current behavior.
+    return "InternetGatewayDevice"
+
+
+def _resolve_wifi_paths(
+    db: Session,
+    ont: OntUnit,
+    root: str,
+) -> Tr069WifiParameterPaths | None:
+    vendor = _str_or_none(getattr(ont, "vendor", None))
+    model = _str_or_none(getattr(ont, "model", None))
+    firmware = _str_or_none(
+        getattr(ont, "firmware_version", None) or getattr(ont, "software_version", None)
+    )
+    canonical = {
+        "enabled": "wifi.enabled",
+        "ssid": "wifi.ssid",
+        "psk_path": "wifi.psk",
+        "channel": "wifi.channel",
+        "security_mode": "wifi.security_mode",
+    }
+    try:
+        resolved = {
+            field: tr069_path_resolver.resolve(
+                root,
+                name,
+                db=db,
+                vendor=vendor,
+                model=model,
+                firmware=firmware,
+                instance_index=1,
+            )
+            for field, name in canonical.items()
+        }
+    except Tr069PathError:
+        return None
+    return Tr069WifiParameterPaths(**resolved)
+
+
+def apply_proposed_change(
+    ont: OntUnit,
+    target: OntDesiredState,
+    *,
+    changed_fields: frozenset[str] = frozenset(),
+) -> None:
     """Write a successful proposed_change back to ``OntUnit``.
 
     Identity fields are not mutated (validator rejects identity changes before
@@ -270,6 +351,14 @@ def apply_proposed_change(ont: OntUnit, target: OntDesiredState) -> None:
 
     _set_desired_value(ont, "wifi", "ssid", target.wifi_ssid)
     _set_desired_value(ont, "wifi", "password", target.wifi_password_ref)
+    existing_wifi = dict((ont.desired_config or {}).get("wifi") or {})
+    for key, field, value in (
+        ("enabled", "wifi_enabled", target.wifi_enabled),
+        ("channel", "wifi_channel", target.wifi_channel),
+        ("security_mode", "wifi_security_mode", target.wifi_security_mode),
+    ):
+        if key in existing_wifi or field in changed_fields:
+            _set_desired_value(ont, "wifi", key, value)
 
     _set_desired_value(ont, "lan", "dhcp_enabled", target.dhcp_enabled)
     _set_desired_value(ont, "lan", "dhcp_start", target.dhcp_pool_min)
@@ -355,6 +444,10 @@ def observed_from_ont_observation(
             acs_observed_nat_enabled=obs.acs_observed_nat_enabled,
             acs_observed_dhcp_enabled=obs.acs_observed_dhcp_enabled,
             acs_observed_ssid=obs.acs_observed_ssid,
+            acs_observed_wifi_enabled=obs.acs_observed_wifi_enabled,
+            acs_observed_wifi_channel=obs.acs_observed_wifi_channel,
+            acs_observed_wifi_security_mode=obs.acs_observed_wifi_security_mode,
+            acs_observed_wifi_instance_index=obs.acs_observed_wifi_instance_index,
             acs_observed_periodic_inform_interval_sec=(
                 obs.acs_observed_periodic_inform_interval_sec
             ),
@@ -439,6 +532,10 @@ def upsert_ont_observation(
     row.acs_observed_nat_enabled = observed.acs.acs_observed_nat_enabled
     row.acs_observed_dhcp_enabled = observed.acs.acs_observed_dhcp_enabled
     row.acs_observed_ssid = observed.acs.acs_observed_ssid
+    row.acs_observed_wifi_enabled = observed.acs.acs_observed_wifi_enabled
+    row.acs_observed_wifi_channel = observed.acs.acs_observed_wifi_channel
+    row.acs_observed_wifi_security_mode = observed.acs.acs_observed_wifi_security_mode
+    row.acs_observed_wifi_instance_index = observed.acs.acs_observed_wifi_instance_index
     row.acs_observed_periodic_inform_interval_sec = (
         observed.acs.acs_observed_periodic_inform_interval_sec
     )
@@ -536,6 +633,25 @@ def _bool_or_default(value: Any, *, default: bool) -> bool:
     if text in {"false", "0", "no", "off"}:
         return False
     return default
+
+
+def _bool_or_none(value: Any) -> bool | None:
+    if value is None:
+        return None
+    return _bool_or_default(value, default=False)
+
+
+def _wifi_channel_or_none(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    if str(value).strip().lower() == "auto":
+        return 0
+    return _int_or_none(value)
+
+
+def _str_or_none(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
 
 
 def _subnet_mask_from_lan_subnet(raw: Any) -> str:

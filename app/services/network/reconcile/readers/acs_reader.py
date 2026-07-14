@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 from app.services.genieacs_client import GenieACSError
 
 from ..state import AcsObservedFields, OntDesiredState
+from ..wifi_paths import wifi_paths_for_instance
 from ._types import ReadResult
 
 if TYPE_CHECKING:
@@ -45,6 +46,10 @@ _PROJECTION_PATHS: tuple[str, ...] = (
     "InternetGatewayDevice.WANDevice.1.WANConnectionDevice",
     "InternetGatewayDevice.LANDevice.1.LANHostConfigManagement.DHCPServerEnable",
     "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID",
+    "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.Enable",
+    "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.Channel",
+    "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.BeaconType",
+    "InternetGatewayDevice.LANDevice.1.WLANConfiguration",
     # TR-181 (Device) — for any future ONTs on that data model.
     "Device.DeviceInfo.SoftwareVersion",
     "Device.ManagementServer.PeriodicInformInterval",
@@ -61,6 +66,11 @@ _PROJECTION_PATHS: tuple[str, ...] = (
     "Device.NAT.InterfaceSetting",
     "Device.Ethernet.VLANTermination",
     "Device.RouterAdvertisement.InterfaceSettings",
+    "Device.WiFi.SSID.1.Enable",
+    "Device.WiFi.SSID.1.SSID",
+    "Device.WiFi.Radio.1.Channel",
+    "Device.WiFi.AccessPoint.1.Security.ModeEnabled",
+    "Device.WiFi",
 )
 
 
@@ -90,6 +100,15 @@ def read_acs_state(
     projection_paths = list(_PROJECTION_PATHS)
     if desired.tr181_wan_paths is not None:
         projection_paths.extend(vars(desired.tr181_wan_paths).values())
+    if desired.wifi_paths is not None:
+        projection_paths.extend(
+            (
+                desired.wifi_paths.enabled,
+                desired.wifi_paths.ssid,
+                desired.wifi_paths.channel,
+                desired.wifi_paths.security_mode,
+            )
+        )
     projection = ",".join(dict.fromkeys(projection_paths))
 
     try:
@@ -252,6 +271,19 @@ def _parse_device(
         if tr181_paths
         else None
     )
+    wifi_instance_index = _detect_wifi_instance(device, data_model_root)
+    wifi_paths = desired.wifi_paths if desired is not None else None
+    if wifi_paths is not None:
+        wifi_paths = wifi_paths_for_instance(
+            wifi_paths,
+            data_model_root,
+            wifi_instance_index,
+        )
+    wifi_index = str(wifi_instance_index)
+    igd_wifi = _path(igd, "LANDevice", "1", "WLANConfiguration", wifi_index)
+    dev_wifi_ssid = _path(dev_root, "WiFi", "SSID", wifi_index)
+    dev_wifi_radio = _path(dev_root, "WiFi", "Radio", wifi_index)
+    dev_wifi_security = _path(dev_root, "WiFi", "AccessPoint", wifi_index, "Security")
 
     return AcsObservedFields(
         acs_present=True,
@@ -286,10 +318,39 @@ def _parse_device(
             _path(igd, "LANDevice", "1", "LANHostConfigManagement"),
             "DHCPServerEnable",
         ),
-        acs_observed_ssid=_value(
-            _path(igd, "LANDevice", "1", "WLANConfiguration", "1"),
-            "SSID",
+        acs_observed_ssid=(
+            _path_value(device, wifi_paths.ssid)
+            if wifi_paths
+            else _first_not_none(
+                _value(igd_wifi, "SSID"),
+                _value(dev_wifi_ssid, "SSID"),
+            )
         ),
+        acs_observed_wifi_enabled=(
+            _path_value_bool(device, wifi_paths.enabled)
+            if wifi_paths
+            else _first_not_none(
+                _value_bool(igd_wifi, "Enable"),
+                _value_bool(dev_wifi_ssid, "Enable"),
+            )
+        ),
+        acs_observed_wifi_channel=(
+            _path_value_int(device, wifi_paths.channel)
+            if wifi_paths
+            else _first_not_none(
+                _value_int(igd_wifi, "Channel"),
+                _value_int(dev_wifi_radio, "Channel"),
+            )
+        ),
+        acs_observed_wifi_security_mode=(
+            _path_value(device, wifi_paths.security_mode)
+            if wifi_paths
+            else _first_not_none(
+                _value(igd_wifi, "BeaconType"),
+                _value(dev_wifi_security, "ModeEnabled"),
+            )
+        ),
+        acs_observed_wifi_instance_index=wifi_instance_index,
         acs_observed_periodic_inform_interval_sec=_first_not_none(
             _value_int(igd_ms, "PeriodicInformInterval"),
             _value_int(dev_ms, "PeriodicInformInterval"),
@@ -391,6 +452,10 @@ def _absent_fields() -> AcsObservedFields:
         acs_observed_nat_enabled=None,
         acs_observed_dhcp_enabled=None,
         acs_observed_ssid=None,
+        acs_observed_wifi_enabled=None,
+        acs_observed_wifi_channel=None,
+        acs_observed_wifi_security_mode=None,
+        acs_observed_wifi_instance_index=None,
         acs_observed_periodic_inform_interval_sec=None,
         acs_observed_cr_username=None,
         acs_observed_cr_username_set=None,
@@ -498,6 +563,45 @@ def _first_not_none(*values):
         if value is not None:
             return value
     return None
+
+
+def _detect_wifi_instance(device: dict[str, Any], root: str) -> int:
+    """Select the active customer-facing WLAN object from the ACS cache."""
+    if root == "Device":
+        instances = _path(device, "Device", "WiFi", "SSID") or {}
+    else:
+        instances = (
+            _path(
+                device,
+                "InternetGatewayDevice",
+                "LANDevice",
+                "1",
+                "WLANConfiguration",
+            )
+            or {}
+        )
+
+    candidates: list[tuple[int, int]] = []
+    for key, value in instances.items():
+        if not str(key).isdigit() or not isinstance(value, dict):
+            continue
+        index = int(key)
+        ssid = _value(value, "SSID")
+        enabled = _value_bool(value, "Enable")
+        status = str(_value(value, "Status") or "").strip().lower()
+        if ssid is None and enabled is None and not status:
+            continue
+        score = 0
+        if ssid not in (None, ""):
+            score += 2
+        if enabled is True:
+            score += 4
+        if status == "up":
+            score += 3
+        if index == 1:
+            score += 1
+        candidates.append((score, index))
+    return max(candidates)[1] if candidates else 1
 
 
 def _path(node: dict[str, Any] | None, *keys: str) -> dict[str, Any] | None:

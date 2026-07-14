@@ -22,8 +22,7 @@ from app.services.network.reconcile import (
     AcsSetNatEnabled,
     AcsSetPppoe,
     AcsSetWanIp,
-    AcsSetWifiPassword,
-    AcsSetWifiSsid,
+    AcsSetWifiConfig,
     OltAuthorize,
     OltClearIphost,
     OltCreateServicePort,
@@ -207,6 +206,9 @@ def _synced_observed(desired: OntDesiredState) -> OntObservedState:
             acs_observed_nat_enabled=desired.nat_enabled,
             acs_observed_dhcp_enabled=desired.dhcp_enabled,
             acs_observed_ssid=desired.wifi_ssid,
+            acs_observed_wifi_enabled=desired.wifi_enabled,
+            acs_observed_wifi_channel=desired.wifi_channel,
+            acs_observed_wifi_security_mode=desired.wifi_security_mode,
             acs_observed_periodic_inform_interval_sec=(
                 desired.periodic_inform_interval_sec
             ),
@@ -415,8 +417,10 @@ def test_fresh_authorize_emits_authorize_servicep_ipconfig_tr069_acs():
     # set NAT, set DHCP, set ManagementServer.
     assert AcsAddObject in action_types
     assert AcsSetPppoe in action_types
-    assert AcsSetWifiSsid in action_types
-    assert AcsSetWifiPassword in action_types  # fresh sync → push
+    assert AcsSetWifiConfig in action_types
+    wifi = next(item for item in plan.actions if isinstance(item, AcsSetWifiConfig))
+    assert wifi.ssid == desired.wifi_ssid
+    assert wifi.password_ref == desired.wifi_password_ref
     assert AcsSetDhcpServer in action_types
     assert AcsSetManagementServer in action_types
 
@@ -496,7 +500,13 @@ def test_bridge_mode_skips_pppoe_and_nat_actions():
 
 def test_wifi_password_pushed_on_sync_for_fresh_ont():
     plan = compute_plan(_desired(), _observed(), "sync")
-    assert AcsSetWifiPassword in _types(plan)
+    assert AcsSetWifiConfig in _types(plan)
+    assert (
+        next(
+            item for item in plan.actions if isinstance(item, AcsSetWifiConfig)
+        ).password_ref
+        == _desired().wifi_password_ref
+    )
 
 
 def test_wifi_password_pushed_on_bootstrap_regardless_of_olt_presence():
@@ -504,21 +514,21 @@ def test_wifi_password_pushed_on_bootstrap_regardless_of_olt_presence():
     even though the OLT still has the ONT in its table."""
     desired = _desired()
     plan = compute_plan(desired, _synced_observed(desired), "bootstrap")
-    assert AcsSetWifiPassword in _types(plan)
+    assert AcsSetWifiConfig in _types(plan)
 
 
 def test_wifi_password_skipped_on_sweep():
     """Sweeper never pushes the PSK — no observable to confirm drift."""
     desired = _desired()
     plan = compute_plan(desired, _synced_observed(desired), "sweep")
-    assert AcsSetWifiPassword not in _types(plan)
+    assert AcsSetWifiConfig not in _types(plan)
 
 
 def test_wifi_password_skipped_on_sync_when_ont_already_present():
     """A no-op sync on a present-and-synced ONT shouldn't re-push the PSK."""
     desired = _desired()
     plan = compute_plan(desired, _synced_observed(desired), "sync")
-    assert AcsSetWifiPassword not in _types(plan)
+    assert AcsSetWifiConfig not in _types(plan)
 
 
 def test_wifi_password_pushed_on_operator_password_change():
@@ -531,7 +541,8 @@ def test_wifi_password_pushed_on_operator_password_change():
         "sync",
         proposed_fields=frozenset({"wifi_password_ref"}),
     )
-    assert _types(plan) == [AcsSetWifiPassword]
+    assert _types(plan) == [AcsSetWifiConfig]
+    assert plan.actions[0].password_ref == "new-pass"
     assert OltModifyDescription not in _types(plan)
 
 
@@ -546,7 +557,7 @@ def test_wifi_password_change_not_re_emitted_on_verify_plan():
         proposed_fields=frozenset({"wifi_password_ref"}),
         force_proposed_writes=False,
     )
-    assert AcsSetWifiPassword not in _types(plan)
+    assert AcsSetWifiConfig not in _types(plan)
     assert OltModifyDescription not in _types(plan)
 
 
@@ -559,7 +570,8 @@ def test_wifi_ssid_change_scopes_out_unrelated_olt_drift():
         "sync",
         proposed_fields=frozenset({"wifi_ssid"}),
     )
-    assert _types(plan) == [AcsSetWifiSsid]
+    assert _types(plan) == [AcsSetWifiConfig]
+    assert plan.actions[0].ssid == "NEW_SSID"
 
 
 # ── WiFi SSID — observable, diff-driven ─────────────────────────────────────
@@ -570,7 +582,7 @@ def test_wifi_ssid_change_emits_only_ssid_action():
     observed = _synced_observed(_desired())  # observed reflects OLD ssid
     plan = compute_plan(desired, observed, "sync")
     types = _types(plan)
-    assert AcsSetWifiSsid in types
+    assert AcsSetWifiConfig in types
     # SSID-only change shouldn't drag the OLT side along.
     assert OltAuthorize not in types
     assert OltIpconfig not in types
@@ -579,7 +591,47 @@ def test_wifi_ssid_change_emits_only_ssid_action():
 def test_wifi_ssid_match_skips_ssid_action():
     desired = _desired()
     plan = compute_plan(desired, _synced_observed(desired), "sync")
-    assert AcsSetWifiSsid not in _types(plan)
+    assert AcsSetWifiConfig not in _types(plan)
+
+
+def test_wifi_fields_are_batched_and_security_is_native_for_tr098():
+    desired = _desired(
+        wifi_enabled=False,
+        wifi_channel=6,
+        wifi_security_mode="WPA2-Personal",
+        tr069_data_model_root="InternetGatewayDevice",
+    )
+    observed = _synced_observed(_desired())
+    observed = dataclasses.replace(
+        observed,
+        acs=dataclasses.replace(
+            observed.acs,
+            acs_data_model_root="InternetGatewayDevice",
+            acs_observed_wifi_enabled=True,
+            acs_observed_wifi_channel=1,
+            acs_observed_wifi_security_mode="WPA",
+            acs_observed_wifi_instance_index=7,
+        ),
+    )
+
+    plan = compute_plan(
+        desired,
+        observed,
+        "sync",
+        proposed_fields=frozenset(
+            {"wifi_enabled", "wifi_channel", "wifi_security_mode"}
+        ),
+    )
+
+    assert _types(plan) == [AcsSetWifiConfig]
+    action = plan.actions[0]
+    assert isinstance(action, AcsSetWifiConfig)
+    assert action.enabled is False
+    assert action.channel == 6
+    assert action.security_mode == "11i"
+    assert action.ssid is None
+    assert action.password_ref is None
+    assert ".WLANConfiguration.7." in action.paths.ssid
 
 
 # ── OMCI vs TR-069 selection ────────────────────────────────────────────────
@@ -883,6 +935,6 @@ def test_drift_records_match_action_count_for_fresh_authorize():
 def test_bootstrap_mode_pushes_wifi_password_on_synced_state():
     desired = _desired()
     plan = compute_plan(desired, _synced_observed(desired), "bootstrap")
-    assert AcsSetWifiPassword in _types(plan)
+    assert AcsSetWifiConfig in _types(plan)
     # ...but nothing else is required, so this should be the only action.
-    assert _types(plan) == [AcsSetWifiPassword]
+    assert _types(plan) == [AcsSetWifiConfig]

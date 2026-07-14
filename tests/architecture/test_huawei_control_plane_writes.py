@@ -36,7 +36,6 @@ ACS_WRITE_BACKLOG = {
     "app/services/network/ont_action_remote_access.py",
     "app/services/network/ont_action_wan.py",
     "app/services/network/ont_action_web_credentials.py",
-    "app/services/network/ont_action_wifi.py",
     "app/services/network/tr069_batch_config.py",
     "app/services/provisioning_adapters.py",
 }

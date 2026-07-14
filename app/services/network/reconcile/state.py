@@ -66,6 +66,17 @@ class Tr181WanParameterPaths:
 
 
 @dataclass(frozen=True)
+class Tr069WifiParameterPaths:
+    """Resolved model-specific CWMP paths for the managed WiFi instance."""
+
+    enabled: str
+    ssid: str
+    psk_path: str
+    channel: str
+    security_mode: str
+
+
+@dataclass(frozen=True)
 class OntDesiredState:
     """What this ONT should be.
 
@@ -155,6 +166,10 @@ class OntDesiredState:
     acs_url: str | None = None
     acs_username: str | None = None
     acs_password_ref: str | None = None
+    wifi_enabled: bool | None = None
+    wifi_channel: int | None = None
+    wifi_security_mode: str | None = None
+    wifi_paths: Tr069WifiParameterPaths | None = None
 
 
 # ── Observed state ──────────────────────────────────────────────────────────
@@ -232,6 +247,10 @@ class AcsObservedFields:
     acs_observed_url: str | None = None
     acs_observed_username: str | None = None
     acs_observed_password_set: bool | None = None
+    acs_observed_wifi_enabled: bool | None = None
+    acs_observed_wifi_channel: int | None = None
+    acs_observed_wifi_security_mode: str | None = None
+    acs_observed_wifi_instance_index: int | None = None
 
 
 @dataclass(frozen=True)

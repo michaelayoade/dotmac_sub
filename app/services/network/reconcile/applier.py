@@ -29,6 +29,7 @@ Action → adapter call mapping:
       AcsSetPppoe               → client.set_parameter_values (6 params)
       AcsSetWifiSsid            → client.set_parameter_values (1 param)
       AcsSetWifiPassword        → client.set_parameter_values (1 param)
+      AcsSetWifiConfig          → client.set_parameter_values (changed fields)
       AcsSetNatEnabled          → client.set_parameter_values (1 param)
       AcsSetDhcpServer          → client.set_parameter_values (4 params)
       AcsSetManagementServer    → client.set_parameter_values (3 params)
@@ -69,6 +70,7 @@ from .actions import (
     AcsSetNatEnabled,
     AcsSetPppoe,
     AcsSetWanIp,
+    AcsSetWifiConfig,
     AcsSetWifiPassword,
     AcsSetWifiSsid,
     Action,
@@ -492,6 +494,41 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
             _acs_set(action, ctx, params)
             # Don't include the password in the AppliedAction — log the field name only.
             return _ok(action, "acs_wifi_password", None, "[redacted]", started)
+
+        case AcsSetWifiConfig():
+            wifi_params: dict[str, object] = {}
+            changed: list[str] = []
+            if action.enabled is not None:
+                wifi_params[action.paths.enabled] = action.enabled
+                changed.append("enabled")
+            if action.ssid is not None:
+                wifi_params[action.paths.ssid] = action.ssid
+                changed.append("ssid")
+            if action.channel is not None:
+                wifi_params[action.paths.channel] = action.channel
+                changed.append("channel")
+            if action.security_mode is not None:
+                wifi_params[action.paths.security_mode] = action.security_mode
+                changed.append("security_mode")
+            if action.password_ref is not None:
+                wifi_params[action.paths.psk_path] = _resolve_or_fail(
+                    ctx, action, action.password_ref
+                )
+                changed.append("password")
+            if not wifi_params:
+                raise ApplyError(
+                    action,
+                    ReconcileFailureReason.INVALID_CHANGE,
+                    "WiFi action contained no changed fields",
+                )
+            _acs_set(action, ctx, wifi_params)
+            return _ok(
+                action,
+                "acs_wifi_config",
+                None,
+                ",".join(changed),
+                started,
+            )
 
         case AcsSetNatEnabled():
             inst = ctx.wan_ppp_instances.get(action.wcd_index, action.instance_index)

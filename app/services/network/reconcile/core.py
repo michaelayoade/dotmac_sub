@@ -274,7 +274,11 @@ def reconcile_ont(
 
             # ── Success: commit desired-state mutation + observation ────────
             if proposed_change:
-                apply_proposed_change(ont, target)
+                apply_proposed_change(
+                    ont,
+                    target,
+                    changed_fields=proposed_fields,
+                )
 
             # Reset the sweep-unreachable counter on any successful reconcile.
             # Capture the prior value so we can fire a resolution alert when

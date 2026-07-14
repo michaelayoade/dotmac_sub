@@ -81,6 +81,59 @@ class TestToggleVoip:
         assert result.success is False
 
 
+class TestWifiConfig:
+    def test_routes_all_fields_through_one_reconcile_change(self):
+        ont = SimpleNamespace(
+            vendor="Huawei",
+            model="EG8145V5",
+            firmware_version=None,
+            last_sync_source=None,
+            last_sync_at=None,
+        )
+        db = MagicMock()
+        captured = {}
+
+        def _reconcile(db, ont_id, *, proposed_change, mode):
+            captured.update(proposed_change)
+            captured["mode"] = mode
+            return SimpleNamespace(success=True, sync_status="synced", failure=None)
+
+        with (
+            patch(
+                "app.services.network.ont_features.get_ont_or_error",
+                return_value=(ont, None),
+            ),
+            patch(
+                "app.services.network.ont_features._check_capability",
+                return_value=None,
+            ),
+            patch(
+                "app.services.network.reconcile.reconcile_ont",
+                side_effect=_reconcile,
+            ),
+            patch("app.services.network.ont_features._emit_feature_event"),
+        ):
+            result = OntFeatureService.set_wifi_config(
+                db,
+                "ont-1",
+                enabled=False,
+                ssid="DOTMAC",
+                password="Secret123",
+                channel=6,
+                security_mode="WPA2-Personal",
+            )
+
+        assert result.success is True
+        assert captured == {
+            "wifi_enabled": False,
+            "wifi_ssid": "DOTMAC",
+            "wifi_password_ref": "Secret123",
+            "wifi_channel": 6,
+            "wifi_security_mode": "WPA2-Personal",
+            "mode": "bootstrap",
+        }
+
+
 class TestToggleWanRemoteAccess:
     """WAN remote access toggle tests."""
 

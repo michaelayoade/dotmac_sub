@@ -111,6 +111,8 @@ class OntFeatureService:
         password: str | None = None,
         enabled: bool | None = None,
         band: str | None = None,
+        channel: int | None = None,
+        security_mode: str | None = None,
     ) -> ActionResult:
         """Apply SSID and PSK as one reconciled desired-state mutation."""
         from app.services.network.reconcile import reconcile_ont
@@ -125,10 +127,10 @@ class OntFeatureService:
         if cap_err:
             return cap_err
 
-        if enabled is not None or band is not None:
+        if band is not None:
             return ActionResult(
                 success=False,
-                message="WiFi radio and band changes are not yet reconciler-managed.",
+                message="WiFi band changes require a model-specific radio selector.",
             )
         if ssid is not None and not (1 <= len(ssid) <= 32):
             return ActionResult(
@@ -139,12 +141,27 @@ class OntFeatureService:
                 success=False,
                 message="WiFi password must be 8-63 characters.",
             )
+        if channel is not None and not (0 <= channel <= 196):
+            return ActionResult(
+                success=False, message="WiFi channel must be between 0 and 196."
+            )
+        if security_mode is not None and len(security_mode) > 40:
+            return ActionResult(
+                success=False,
+                message="WiFi security mode must be at most 40 characters.",
+            )
 
         proposed: dict[str, object] = {}
         if ssid is not None:
             proposed["wifi_ssid"] = ssid
         if password is not None:
             proposed["wifi_password_ref"] = password
+        if enabled is not None:
+            proposed["wifi_enabled"] = enabled
+        if channel is not None:
+            proposed["wifi_channel"] = channel
+        if security_mode is not None:
+            proposed["wifi_security_mode"] = security_mode
         if not proposed:
             return ActionResult(success=False, message="No WiFi change supplied.")
 
@@ -160,7 +177,12 @@ class OntFeatureService:
                 message=result.failure.message
                 if result.failure
                 else "WiFi reconcile failed.",
-                data={"sync_status": result.sync_status},
+                data={
+                    "sync_status": result.sync_status,
+                    "failure_reason": (
+                        result.failure.reason if result.failure else None
+                    ),
+                },
             )
 
         _set_sync_meta(ont, "tr069")

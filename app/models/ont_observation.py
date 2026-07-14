@@ -99,6 +99,10 @@ class OntObservation(Base):
     acs_observed_nat_enabled: Mapped[bool | None] = mapped_column(Boolean)
     acs_observed_dhcp_enabled: Mapped[bool | None] = mapped_column(Boolean)
     acs_observed_ssid: Mapped[str | None] = mapped_column(String(64))
+    acs_observed_wifi_enabled: Mapped[bool | None] = mapped_column(Boolean)
+    acs_observed_wifi_channel: Mapped[int | None] = mapped_column(Integer)
+    acs_observed_wifi_security_mode: Mapped[str | None] = mapped_column(String(40))
+    acs_observed_wifi_instance_index: Mapped[int | None] = mapped_column(Integer)
     acs_observed_periodic_inform_interval_sec: Mapped[int | None] = mapped_column(
         Integer
     )
