@@ -9,6 +9,84 @@ No code was changed. Every finding below carries a `file:line`.
 
 ---
 
+## 0. Post-audit status overlay — 2026-07-14
+
+This document preserves the 2026-07-12 static evidence and measured staging
+incidence. It is **not** a claim that every finding remains live on current
+`main`. The following coherent slices have since merged:
+
+| Findings / slice | Merged commit | Disposition |
+|---|---|---|
+| F3 payment re-allocation | `374f7030` | owner operation + guards |
+| F15 payment status transition | `c9579f54` | routed through `mark_status` |
+| F19 imported payments | `60c9f968`, regression `a3a28975` | owner path + rollback preserves evidence |
+| F1 ledger reversal | `2ef855bc` | append-only + DB-enforced one-reversal link |
+| F6/F7/F8 prepaid enforcement | `1e2b0096`, threshold owner `e50d72ab` | one funding decision; enforcement re-checks |
+| F2 webhook dead-letter replay | `0c178e2d` | settlement is posted or replay fails loudly |
+| F25 VAS wallet | `3658a302` | wallet-to-billing payment is atomic |
+| Refund owner + F17 | `f94e5341`, `ab69f413` | exact balance movement; partial refund preserves invoice state |
+| F16 reseller proof | `8b235d9c` | locked, idempotent single credit |
+| F18 reseller bulk settlement | `150a6d71` | member invoices settle through the owner |
+| Access/lifecycle strays | `88abb7d3`, `8472a588` | precise reversible enforcement/lifecycle transitions |
+| F22 CRM billing push | `b6d1accd` | writer deleted; finding struck |
+
+Do not re-open those forward-fix workstreams from the historical prose below
+without a fresh regression. Their **historical repair** questions remain
+separate from their merged forward fixes.
+
+D2/D7/D12 were re-adjudicated on 2026-07-14 with the corrected method. The June
+15 Splynx ledger is the opening source and the retained June 29 snapshot proves
+that legacy financial activity ended on June 17. Both source snapshots reconcile
+internally with zero differences. Current `subscribers.deposit` was never used
+to accept or reject that source: doing so would let the state under audit
+validate itself. See `BILLING_ALIGNMENT_RUN_2026-07-12.md` §7.
+
+D2 is now adjudicated: loading all 25,085 source cutoff deposits (not only the
+4,854 transaction-bearing ledgers) proves that the 1,103-row / 470-account /
+₦219,685,784.58 staging residual consists of cutoff-covered local projections.
+**D2 = 0 and no D2 historical repair is warranted.** The subsequent replay
+started from the final June 17 source position, applied proven post-legacy money
+facts, and derived funded renewals from source paid-through periods plus service
+extensions. Current deposit, documents, ledger and enforcement were comparison
+outputs only.
+
+At the immutable 2026-07-12 backup timestamp, 5,164 active accounts have a
+complete replay. D7 finds **589 persisted-deposit gaps / ₦73,041,254.69**:
+321 overcredited / ₦52,291,360.21 and 268 understated /
+₦20,749,894.48. The much larger document and ledger gaps are separate projection
+diagnostics, not repair totals. Another 93 accounts are explicitly incomplete
+(92 lack a source paid-through period; one has an unproven adjustment), and 12
+active accounts lack a mapped source baseline.
+
+The accepted D12 current-state pass ran against the explicitly named Sub
+production host `selfcare.dotmac.io` at 2026-07-14 12:08:25 UTC. The
+funded-with-money-lock cohort is now **zero**. It finds **2,539 independently
+unfunded accounts / ₦68,139,241.85 without a money lock**, of which **2,533 /
+₦67,989,048.85 are marked served**. Live FreeRADIUS confirms 2,166 have
+unrestricted password authentication and 492 have a recent open session. The
+owner fix is deployed, but the prepaid enforcement control is off via an active
+legacy database row; its zero-day policy would make a blind enablement unsafe.
+No customer debit is licensed without finance review.
+
+The same review found a more fundamental flaw in the existing cutover invariant:
+although the runbook says "Splynx cutover balance + subsequent transactions -
+service consumed", the code starts from `subscribers.deposit` and subtracts
+current invoice rows. Both are outputs that the cutover/remediation scripts may
+have changed. The corrected audit reconstructs money and service schedules
+independently, then compares deposit, documents, ledger and enforcement state to
+that expected state.
+
+One additional containment signal is source-independent: 396 active
+issued invoices / ₦13,283,375 satisfy the repository's own known
+prepaid-phantom criteria from the pre-#301 runner bug. Their creation is also
+present in the event store. That proves the rows exist and belong in the
+counterfactual review; it does not yet prove a net customer correction because
+later cutover adjustments may have offset or compounded them. They must not
+drive dunning or suspension unless the independently reconstructed account
+position supports that consequence.
+
+---
+
 ## 1. Ownership model: federated, bounded sources of truth
 
 This audit does **not** claim a single universal financial source of truth. Sub, ERP and CRM
@@ -84,12 +162,15 @@ wasn't looking.
 > | Finding | Measured | Meaning |
 > |---|---|---|
 > | F1 double-swing | **0 occurrences** | **Latent.** Proven defective in code (`tests/test_ledger_reversal_integrity.py`), never fired. Fix forward; **no historical repair.** |
+> | D2 deactivated legacy credits | **0 unresolved after cutoff replay** | 1,103 rows / ₦219.7m are covered by authoritative Splynx cutoff deposits; **no historical repair.** |
 > | F3 misallocation | **2 payments, ₦60,000** | **Fired in production.** |
 > | F24 paid-with-balance | 23 invoices, ₦411,821 | Fires today. |
 > | F19 orphan payment | **1 native payment** | Real but tiny (3,116 "orphans" were splynx-imported by design). |
 > | F15 NULL `paid_at` | 1 payment | The earlier fix largely held. |
 > | F4 unapplied credit notes | 339, ₦2,290,830 | The drift mechanism is populated. |
 > | F18, F6-void, opening debits | **0** | Zero-result. Opening-debit cohort already remediated. |
+> | D7 reconstructed deposit drift | **589 accounts, ₦73,041,254.69** | Complete source replay only; 321 overcredited and 268 understated. Projection gaps are reported separately. |
+> | D12 access/enforcement drift | **0 funded+locked; 2,533 unfunded+served** | Current production replay; 2,166 unrestricted RADIUS auth and 492 recent open sessions. Enforcement control is deliberately off. |
 >
 > Do not infer scope from severity: the highest-severity code defect (F1) has **zero** historical
 > damage, while a medium-looking one (F3) actually fired.
@@ -532,9 +613,25 @@ app per flow and refuses to send flows it does not own.
 
 ## 12. Recommended sequence
 
-Ordered by customer harm and monetary integrity. Each is one coherent domain slice per the
-standard. **Every item ships with four parts: containment, forward fix, historical repair, and a
-regression test.**
+This is the **original 2026-07-12 sequence**, retained as decision history. The
+status overlay in §0 supersedes it for merged forward fixes. Remaining work must
+be re-ranked from current `main`. D2 is closed at zero. The D12 production
+recheck is complete: wrongful cutoff has converged to zero, while current
+free-service access is confirmed. The next gate is an explicit warning/grace
+policy and independent-funding dry-run before enabling prepaid enforcement. D7
+correction design remains limited to the complete replay population and
+customer-debit cases still require finance approval.
+
+Draft PR #1284 now implements the activation/grace and independent-funding
+planner boundary. The audit exporter refuses to create an enforcement input
+until every owner-selected prepaid candidate has both a source-proven position
+and canonical threshold; incomplete and unmapped accounts remain blockers, not
+zero balances. The PR is CI-green but unmerged, and no enforcement setting has
+been changed.
+
+The original ordering was by customer harm and monetary integrity. Each item is
+one coherent domain slice per the standard. **Every item ships with four parts:
+containment, forward fix, historical repair, and a regression test.**
 
 1. **Monetary integrity — committed loss and AR corruption.** F25 (wallet debit lost on crash →
    atomic/outbox transfer), F3 (admin re-allocation corrupts AR), F19 (import wizard orphan cash),
@@ -562,8 +659,12 @@ regression test.**
 
 ## 13. Remediation matrix
 
-Every finding carries four parts. **Historical repair scope must be quantified with a read-only
-prod query first** — the "possible impact" caveat in §3 applies to every row not marked confirmed.
+This matrix records the original remediation design; §0 identifies the forward
+fixes already merged. **Historical repair scope must be quantified from a
+source-proven cutoff plus authoritative post-cutover replay first.** That replay
+now exists for 5,164 active accounts; the 93 incomplete and 12 unmapped accounts
+remain excluded. The "possible impact" caveat in §3 applies to every row not
+marked confirmed.
 
 | # | Containment (stop the bleeding) | Forward fix | Historical repair | Regression test |
 |---|---|---|---|---|
