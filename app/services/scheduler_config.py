@@ -1803,6 +1803,13 @@ def build_beat_schedule() -> dict:
         )
         _sync_scheduled_task(
             session,
+            name="router_sot_drift",
+            task_name="router_sync.audit_sot_drift",
+            enabled=True,
+            interval_seconds=900,
+        )
+        _sync_scheduled_task(
+            session,
             name="mikrotik_nas_vlan_readback",
             task_name="router_sync.reconcile_nas_vlan_readback",
             enabled=True,

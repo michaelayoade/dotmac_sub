@@ -168,9 +168,34 @@ class RouterConfigTemplateRead(BaseModel):
     updated_at: datetime
 
 
+class RouterSotIntentInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    resource: Literal[
+        "firewall_address_list",
+        "firewall_filter",
+        "firewall_nat",
+        "simple_queue",
+        "ipv4_address",
+        "ipv6_address",
+        "ipv4_route",
+        "ipv6_route",
+        "bgp_connection",
+        "ospf_instance",
+        "ospf_area",
+        "ospf_interface_template",
+        "routing_filter_rule",
+    ]
+    key: str = Field(min_length=1, max_length=127)
+    state: Literal["present", "absent"] = "present"
+    values: dict[str, str | int | bool] = Field(default_factory=dict)
+
+
 class RouterConfigPushCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     template_id: uuid.UUID | None = None
-    commands: list[str] = Field(min_length=1)
+    desired_state: list[RouterSotIntentInput] = Field(min_length=1)
     variable_values: dict | None = None
     router_ids: list[uuid.UUID] = Field(min_length=1)
     dry_run: bool = False
@@ -184,6 +209,7 @@ class RouterConfigPushRead(BaseModel):
     id: uuid.UUID
     template_id: uuid.UUID | None
     commands: list
+    desired_state: list[dict]
     variable_values: dict | None
     dry_run: bool
     failure_policy: str

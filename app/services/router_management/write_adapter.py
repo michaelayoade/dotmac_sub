@@ -6,11 +6,16 @@ import json
 import time
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlencode
 
 from app.models.router_management import Router
 from app.services.router_management.connection import (
     RouterConnectionService,
     RouterTransportError,
+)
+from app.services.router_management.sot_policy import (
+    RouterDesiredState,
+    RouterSotIntent,
 )
 
 _SUPPORTED_ACTIONS = frozenset({"add", "set", "remove", "enable", "disable"})
@@ -61,12 +66,13 @@ class RouterCommandPlan:
 
 @dataclass
 class RouterCommandResult:
-    plan: RouterCommandPlan
+    plan: RouterCommandPlan | RouterSotIntent
     response: Any = None
     observed: Any = None
     verified: bool = False
     duration_ms: int = 0
     drift: dict[str, Any] = field(default_factory=dict)
+    write_action: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -76,6 +82,7 @@ class RouterCommandResult:
             "verified": self.verified,
             "duration_ms": self.duration_ms,
             "drift": redact_router_data(self.drift),
+            "write_action": self.write_action,
         }
 
 
@@ -321,6 +328,234 @@ class RouterConfigurationWriteAdapter:
                     verified=verified,
                     duration_ms=int((time.monotonic() - started) * 1000),
                     drift=drift,
+                )
+            )
+        return RouterApplyResult(commands=results)
+
+
+def _owned_rows(
+    rows: list[dict[str, Any]], intent: RouterSotIntent
+) -> list[dict[str, Any]]:
+    marker = _normal(intent.ownership_marker)
+    return [row for row in rows if _normal(row.get("comment", "")) == marker]
+
+
+def _routeros_row_id(row: dict[str, Any]) -> str | None:
+    value = row.get(".id") or row.get("id")
+    return str(value) if value is not None else None
+
+
+def _verify_sot_intent(
+    intent: RouterSotIntent, response: Any
+) -> tuple[bool, list[dict[str, Any]], dict[str, Any]]:
+    owned = _owned_rows(_rows(response), intent)
+    if len(owned) > 1:
+        return False, owned, {"ownership": "duplicate", "count": len(owned)}
+    if intent.state is RouterDesiredState.absent:
+        verified = not owned
+        return verified, owned, {} if verified else {"expected": "absent"}
+    desired = intent.desired_payload()
+    verified = len(owned) == 1 and _matches(owned[0], desired)
+    return (
+        verified,
+        owned,
+        {} if verified else {"expected": redact_router_data(desired)},
+    )
+
+
+class RouterSotWriteAdapter:
+    """Reconcile only resources carrying an exact Dotmac ownership marker."""
+
+    @staticmethod
+    def _read(router: Router, intent: RouterSotIntent) -> Any:
+        properties = [".id", "comment", *sorted(intent.values)]
+        query = urlencode(
+            {
+                "comment": intent.ownership_marker,
+                ".proplist": ",".join(dict.fromkeys(properties)),
+            }
+        )
+        return RouterConnectionService.execute(
+            router, "GET", f"{intent.policy.path}?{query}"
+        )
+
+    @staticmethod
+    def _read_group(router: Router, intents: list[RouterSotIntent]) -> Any:
+        if len(intents) == 1:
+            return RouterSotWriteAdapter._read(router, intents[0])
+        properties = sorted(
+            {".id", "comment"}.union(*(set(intent.values) for intent in intents))
+        )
+        query_words: list[str] = []
+        for intent in intents:
+            query_words.append(f"comment={intent.ownership_marker}")
+            if len(query_words) > 1:
+                query_words.append("#|")
+        return RouterConnectionService.execute(
+            router,
+            "POST",
+            f"{intents[0].policy.path}/print",
+            payload={".proplist": properties, ".query": query_words},
+        )
+
+    @staticmethod
+    def _reject_duplicate_ownership(
+        intent: RouterSotIntent,
+        owned: list[dict[str, Any]],
+        results: list[RouterCommandResult],
+    ) -> None:
+        if len(owned) > 1:
+            raise RouterWriteRejected(
+                f"RouterOS has {len(owned)} rows with ownership marker "
+                f"{intent.ownership_marker!r}; refusing an ambiguous write",
+                partial_result=RouterApplyResult(commands=results),
+            )
+
+    def apply(
+        self, router: Router, intents: list[RouterSotIntent]
+    ) -> RouterApplyResult:
+        results: list[RouterCommandResult] = []
+        for intent in intents:
+            started = time.monotonic()
+            try:
+                before = self._read(router, intent)
+                owned = _owned_rows(_rows(before), intent)
+            except Exception as exc:
+                raise RouterWriteRejected(
+                    f"RouterOS ownership preflight failed for {intent.resource.value}: {exc}",
+                    partial_result=RouterApplyResult(commands=results),
+                ) from exc
+            self._reject_duplicate_ownership(intent, owned, results)
+
+            response: Any = None
+            action = "no_change"
+            if intent.state is RouterDesiredState.absent:
+                if owned:
+                    row_id = _routeros_row_id(owned[0])
+                    if not row_id:
+                        raise RouterWriteRejected(
+                            f"Owned RouterOS {intent.resource.value} row has no device id",
+                            partial_result=RouterApplyResult(commands=results),
+                        )
+                    action = "remove"
+                    path = f"{intent.policy.path}/remove"
+                    payload: dict[str, Any] = {"numbers": row_id}
+                else:
+                    path = ""
+                    payload = {}
+            elif owned and _matches(owned[0], intent.desired_payload()):
+                path = ""
+                payload = {}
+            elif owned:
+                row_id = _routeros_row_id(owned[0])
+                if not row_id:
+                    raise RouterWriteRejected(
+                        f"Owned RouterOS {intent.resource.value} row has no device id",
+                        partial_result=RouterApplyResult(commands=results),
+                    )
+                action = "set"
+                path = f"{intent.policy.path}/set"
+                payload = {"numbers": row_id, **intent.desired_payload()}
+            else:
+                action = "add"
+                path = f"{intent.policy.path}/add"
+                payload = intent.desired_payload()
+
+            if path:
+                try:
+                    response = RouterConnectionService.execute(
+                        router,
+                        "POST",
+                        path,
+                        payload=payload,
+                        max_retries=1,
+                    )
+                except RouterTransportError as exc:
+                    raise RouterPostWriteReadbackError(
+                        f"RouterOS {action} outcome is unknown for "
+                        f"{intent.resource.value}: {exc}",
+                        partial_result=RouterApplyResult(commands=results),
+                    ) from exc
+                except Exception as exc:
+                    raise RouterWriteRejected(
+                        f"RouterOS rejected {action} for {intent.resource.value}: {exc}",
+                        partial_result=RouterApplyResult(commands=results),
+                    ) from exc
+
+            try:
+                observed = self._read(router, intent)
+                verified, evidence, drift = _verify_sot_intent(intent, observed)
+            except Exception as exc:
+                if not path:
+                    raise RouterWriteRejected(
+                        f"RouterOS readback failed before any write for "
+                        f"{intent.resource.value}: {exc}",
+                        partial_result=RouterApplyResult(commands=results),
+                    ) from exc
+                raise RouterPostWriteReadbackError(
+                    f"RouterOS accepted {action} for {intent.resource.value}, "
+                    f"but readback failed: {exc}",
+                    partial_result=RouterApplyResult(
+                        commands=[
+                            *results,
+                            RouterCommandResult(
+                                plan=intent,
+                                response=response,
+                                write_action=action,
+                            ),
+                        ]
+                    ),
+                ) from exc
+
+            results.append(
+                RouterCommandResult(
+                    plan=intent,
+                    response=response,
+                    observed=evidence,
+                    verified=verified,
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                    drift=drift,
+                    write_action=action,
+                )
+            )
+            if not verified:
+                break
+        return RouterApplyResult(commands=results)
+
+    def readback(
+        self, router: Router, intents: list[RouterSotIntent]
+    ) -> RouterApplyResult:
+        results: list[RouterCommandResult] = []
+        grouped: dict[str, list[RouterSotIntent]] = {}
+        for intent in intents:
+            grouped.setdefault(intent.policy.path, []).append(intent)
+        try:
+            observed_by_path = {
+                path: self._read_group(router, rows) for path, rows in grouped.items()
+            }
+        except Exception as exc:
+            raise RouterPostWriteReadbackError(
+                f"RouterOS SOT readback failed: {exc}",
+                partial_result=RouterApplyResult(commands=results),
+            ) from exc
+        for intent in intents:
+            started = time.monotonic()
+            try:
+                observed = observed_by_path[intent.policy.path]
+                verified, evidence, drift = _verify_sot_intent(intent, observed)
+            except Exception as exc:
+                raise RouterPostWriteReadbackError(
+                    f"RouterOS SOT readback failed for {intent.resource.value}: {exc}",
+                    partial_result=RouterApplyResult(commands=results),
+                ) from exc
+            results.append(
+                RouterCommandResult(
+                    plan=intent,
+                    observed=evidence,
+                    verified=verified,
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                    drift=drift,
+                    write_action="readback",
                 )
             )
         return RouterApplyResult(commands=results)

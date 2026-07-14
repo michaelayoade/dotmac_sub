@@ -323,6 +323,11 @@ class RouterConfigPush(Base):
         back_populates="push", cascade="all, delete-orphan"
     )
 
+    @property
+    def desired_state(self) -> list[dict]:
+        """Typed SOT payload stored in the legacy JSON column."""
+        return [row for row in self.commands if isinstance(row, dict)]
+
 
 class RouterConfigPushResult(Base):
     __tablename__ = "router_config_push_results"

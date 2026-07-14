@@ -18,42 +18,66 @@
 
     {% call page_header(
         title="Bulk Config Push",
-        subtitle="Apply configuration commands to one or more routers",
+        subtitle="Reconcile owned RouterOS desired state",
         icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>',
         color="purple",
         color2="indigo",
         breadcrumbs=[{"label": "Network", "href": "/admin/network"}, {"label": "Routers", "href": "/admin/network/routers"}, {"label": "Config Push"}]
     ) %}{% endcall %}
 
-    {# Step 1: Commands #}
+    {# Step 1: Desired state #}
     <div class="animate-fade-in-up" style="animation-delay: 50ms;">
-    {% call card("Step 1 — Commands", color="purple") %}
-    <div class="space-y-4 max-w-2xl">
-        <div>
-            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Template (optional)</label>
-            <select x-model="selectedTemplate" @change="loadTemplate()"
-                    class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none focus:ring-1 focus:ring-purple-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                <option value="">— Ad-hoc commands —</option>
-                {% for t in templates %}
-                <option value="{{ t.id }}" data-body="{{ t.template_body | e }}">{{ t.name }} ({{ t.category.value }})</option>
-                {% endfor %}
-            </select>
-            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Load commands from a saved template or enter them manually below.</p>
+    {% call card("Step 1 — Desired State", color="purple") %}
+    <div class="space-y-4">
+        <div class="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(12rem,1fr)_minmax(12rem,1fr)_9rem]">
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Resource</label>
+                <select x-model="draft.resource" @change="syncResourceFields()"
+                        class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none focus:ring-1 focus:ring-purple-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <template x-for="option in resourceOptions" :key="option.value">
+                        <option :value="option.value" x-text="option.label"></option>
+                    </template>
+                </select>
+            </div>
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Ownership key</label>
+                <input x-model.trim="draft.key" type="text" maxlength="127" placeholder="service:identifier"
+                       class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono focus:border-purple-500 focus:outline-none focus:ring-1 focus:ring-purple-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">State</label>
+                <select x-model="draft.state"
+                        class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none focus:ring-1 focus:ring-purple-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="present">Present</option>
+                    <option value="absent">Absent</option>
+                </select>
+            </div>
         </div>
-        <div>
-            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-                Commands <span class="text-red-500">*</span>
-                <span class="text-xs font-normal text-slate-500 dark:text-slate-400 ml-1">(one per line)</span>
-            </label>
-            <textarea x-model="commands" rows="8"
+        <div x-show="draft.state === 'present'">
+            <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Desired values</label>
+            <textarea x-model="draft.values" rows="5"
                       class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono focus:border-purple-500 focus:outline-none focus:ring-1 focus:ring-purple-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
-                      placeholder="/system/ntp/client/set {&quot;enabled&quot;:&quot;yes&quot;}&#10;/ip/dns/set {&quot;servers&quot;:&quot;1.1.1.1&quot;}"></textarea>
-            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                One RouterOS <strong>REST</strong> command per line: a path, optionally
-                followed by a single space and a JSON object —
-                e.g. <code>/system/ntp/client/set {"enabled":"yes"}</code>.
-                Only mutations with deterministic device readback are accepted.
-            </p>
+                      :placeholder="valuesPlaceholder()"></textarea>
+        </div>
+        <div class="flex items-center justify-between gap-3">
+            <p x-show="intentError" x-text="intentError" class="text-sm text-red-600 dark:text-red-400"></p>
+            <button type="button" @click="addIntent()"
+                    class="ml-auto inline-flex items-center gap-2 rounded-lg bg-purple-600 px-4 py-2 text-sm font-semibold text-white hover:bg-purple-700">
+                <span aria-hidden="true">+</span>
+                Add resource
+            </button>
+        </div>
+        <div x-show="intents.length" class="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
+            <table class="w-full text-sm">
+                <thead class="bg-slate-50 text-left text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                    <tr><th class="px-3 py-2 font-medium">Resource</th><th class="px-3 py-2 font-medium">Key</th><th class="px-3 py-2 font-medium">State</th><th class="w-12 px-3 py-2"></th></tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+                    <template x-for="(intent, index) in intents" :key="`${intent.resource}:${intent.key}`">
+                        <tr><td class="px-3 py-2" x-text="resourceLabel(intent.resource)"></td><td class="px-3 py-2 font-mono text-xs" x-text="intent.key"></td><td class="px-3 py-2 capitalize" x-text="intent.state"></td><td class="px-3 py-2"><button type="button" @click="intents.splice(index, 1)" title="Remove resource" class="text-red-600 hover:text-red-700" aria-label="Remove resource">&times;</button></td></tr>
+                    </template>
+                </tbody>
+            </table>
         </div>
     </div>
     {% endcall %}
@@ -111,7 +135,7 @@
     <div class="flex items-center justify-between gap-4 flex-wrap">
         <div class="text-sm text-slate-600 dark:text-slate-300 space-y-1">
             <p>
-                <span class="font-semibold" x-text="commandCount()">0</span> command(s) will be
+                <span class="font-semibold" x-text="intents.length">0</span> resource(s) will be
                 <span class="font-semibold" x-text="dryRun ? 'previewed for' : 'pushed to'">pushed to</span>
                 <span class="font-semibold" x-text="selectedRouters.length">0</span> router(s).
             </p>
@@ -122,12 +146,12 @@
             <p x-show="selectedRouters.length === 0" class="text-amber-600 dark:text-amber-400 text-xs">
                 Select at least one router.
             </p>
-            <p x-show="!commands.trim()" class="text-amber-600 dark:text-amber-400 text-xs">
-                Enter at least one command.
+            <p x-show="intents.length === 0" class="text-amber-600 dark:text-amber-400 text-xs">
+                Add at least one managed resource.
             </p>
         </div>
         <button @click="executePush()"
-                :disabled="!commands.trim() || selectedRouters.length === 0 || pushing"
+                :disabled="intents.length === 0 || selectedRouters.length === 0 || pushing"
                 class="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-emerald-500 to-teal-600 px-6 py-2.5 text-sm font-semibold text-white shadow-sm hover:from-emerald-600 hover:to-teal-700 hover:-translate-y-0.5 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0">
             <svg x-show="!pushing" class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
             <svg x-show="pushing" class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
@@ -142,14 +166,52 @@
 <script>
 function pushWizard() {
     return {
-        selectedTemplate: '',
-        commands: '',
+        resourceOptions: {{ managed_resource_options | tojson }},
+        draft: {resource: 'firewall_address_list', key: '', state: 'present', values: ''},
+        intents: [],
+        intentError: '',
         selectedRouters: [],
         dryRun: false,
         failurePolicy: 'continue',
         pushing: false,
-        commandCount() {
-            return this.commands.split('\n').filter(l => l.trim()).length;
+        init() {
+            this.syncResourceFields();
+        },
+        resourceLabel(value) {
+            return this.resourceOptions.find(option => option.value === value)?.label || value;
+        },
+        selectedResource() {
+            return this.resourceOptions.find(option => option.value === this.draft.resource);
+        },
+        valuesPlaceholder() {
+            const fields = this.selectedResource()?.required_fields || [];
+            return JSON.stringify(Object.fromEntries(fields.map(field => [field, ''])), null, 2);
+        },
+        syncResourceFields() {
+            this.draft.values = this.valuesPlaceholder();
+        },
+        addIntent() {
+            this.intentError = '';
+            if (!this.draft.key) {
+                this.intentError = 'Ownership key is required.';
+                return;
+            }
+            let values = {};
+            if (this.draft.state === 'present') {
+                try {
+                    values = JSON.parse(this.draft.values || '{}');
+                } catch (_) {
+                    this.intentError = 'Desired values must be valid JSON.';
+                    return;
+                }
+            }
+            if (this.intents.some(row => row.resource === this.draft.resource && row.key === this.draft.key)) {
+                this.intentError = 'This resource and ownership key is already present.';
+                return;
+            }
+            this.intents.push({resource: this.draft.resource, key: this.draft.key, state: this.draft.state, values});
+            this.draft.key = '';
+            this.syncResourceFields();
         },
         toggleAll(event) {
             if (event.target.checked) {
@@ -158,16 +220,9 @@ function pushWizard() {
                 this.selectedRouters = [];
             }
         },
-        loadTemplate() {
-            const opt = document.querySelector(`option[value="${this.selectedTemplate}"]`);
-            if (opt && opt.dataset.body) {
-                this.commands = opt.dataset.body;
-            }
-        },
         async executePush() {
-            const cmds = this.commands.split('\n').filter(l => l.trim());
             const mode = this.dryRun ? 'Preview' : 'Push';
-            const target = `${cmds.length} command(s) for ${this.selectedRouters.length} router(s)`;
+            const target = `${this.intents.length} resource(s) for ${this.selectedRouters.length} router(s)`;
             let message = `${mode} ${target}?\nFailure policy: ${this.failurePolicy}.`;
             const confirmed = confirm(message);
             if (!confirmed) return;
@@ -178,9 +233,8 @@ function pushWizard() {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
-                        commands: cmds,
+                        desired_state: this.intents,
                         router_ids: this.selectedRouters,
-                        template_id: this.selectedTemplate || null,
                         dry_run: this.dryRun,
                         failure_policy: this.failurePolicy
                     })

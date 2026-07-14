@@ -387,6 +387,20 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("runtime.infrastructure_polling",),
             ),
             SOTService(
+                name="network.routeros_sot",
+                module="app.services.router_management.sot_policy",
+                owns=(
+                    "typed RouterOS desired-state contract",
+                    "managed RouterOS resource and field policy",
+                    "Dotmac RouterOS resource ownership identity",
+                ),
+                depends_on=(
+                    "network.identity",
+                    "runtime.db_sessions",
+                    "observability.recording",
+                ),
+            ),
+            SOTService(
                 name="network.nas_inventory",
                 module="app.services.nas.devices",
                 owns=("NAS administrative lifecycle state", "NAS inventory reads"),
@@ -456,7 +470,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         entrypoints=(
             "app.services.topology.*",
             "app.services.infrastructure_*",
+            "app.services.router_management.*",
             "app.tasks.network_*",
+            "app.tasks.router_sync",
             "app.web.admin.network_*",
         ),
         rule=(

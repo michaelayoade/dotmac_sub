@@ -1,6 +1,8 @@
 import logging
 import time
 from datetime import UTC, datetime
+from typing import Any, cast
+from uuid import UUID
 
 from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
@@ -28,12 +30,14 @@ from app.services.router_management.config import RouterConfigService
 from app.services.router_management.config_export import fetch_config_export
 from app.services.router_management.connection import RouterConnectionService
 from app.services.router_management.inventory import RouterInventory
+from app.services.router_management.sot_policy import (
+    RouterSotIntent,
+    parse_routeros_sot_intents,
+)
 from app.services.router_management.write_adapter import (
-    RouterConfigurationWriteAdapter,
     RouterPostWriteReadbackError,
+    RouterSotWriteAdapter,
     RouterWriteRejected,
-    parse_routeros_rest_command,
-    parse_routeros_rest_commands,
 )
 
 logger = logging.getLogger(__name__)
@@ -184,15 +188,6 @@ def _capture_post_snapshot(
         return None
 
 
-def _parse_routeros_rest_command(cmd: str) -> tuple[str, dict, None]:
-    plan = parse_routeros_rest_command(cmd)
-    return plan.path, plan.payload, None
-
-
-def _preview_commands(commands: list[str]) -> list[dict[str, object]]:
-    return [plan.preview() for plan in parse_routeros_rest_commands(commands)]
-
-
 def _active_operation(db, operation_id) -> bool:
     if not operation_id:
         return False
@@ -307,9 +302,9 @@ def execute_config_push(push_id: str) -> dict:
             return {"error": "Push not found"}
 
         try:
-            plans = parse_routeros_rest_commands(push.commands)
+            plans = parse_routeros_sot_intents(push.commands)
         except Exception as exc:
-            message = f"Stored RouterOS command is not verifiable: {exc}"
+            message = f"Stored RouterOS desired state is not verifiable: {exc}"
             for result in push.results:
                 _mark_result_failed(db, result, message)
             push.status = RouterConfigPushStatus.failed
@@ -336,7 +331,7 @@ def execute_config_push(push_id: str) -> dict:
         pending_readback_count = 0
         skipped_count = 0
         abort_remaining = False
-        adapter = RouterConfigurationWriteAdapter()
+        adapter = RouterSotWriteAdapter()
 
         for result in push.results:
             if abort_remaining:
@@ -376,7 +371,7 @@ def execute_config_push(push_id: str) -> dict:
                 if push.dry_run:
                     result.response_data = {
                         "dry_run": True,
-                        "planned_commands": [plan.preview() for plan in plans],
+                        "planned_intents": [plan.preview() for plan in plans],
                         "verified": False,
                         "write_accepted": False,
                     }
@@ -524,7 +519,7 @@ def reconcile_config_push_readback(max_results: int = 25) -> dict[str, int]:
                 .limit(max_results)
             ).all()
         )
-        adapter = RouterConfigurationWriteAdapter()
+        adapter = RouterSotWriteAdapter()
         touched_pushes: set[str] = set()
         for result in rows:
             stats["checked"] += 1
@@ -540,7 +535,7 @@ def reconcile_config_push_readback(max_results: int = 25) -> dict[str, int]:
             touched_pushes.add(str(push.id))
             try:
                 readback = adapter.readback(
-                    router, parse_routeros_rest_commands(push.commands)
+                    router, parse_routeros_sot_intents(push.commands)
                 )
                 payload = readback.to_dict()
                 result.response_data = payload
@@ -594,6 +589,163 @@ def reconcile_config_push_readback(max_results: int = 25) -> dict[str, int]:
                 push.completed_at = datetime.now(UTC)
             _refresh_parent_operation(db, push)
         db.commit()
+        return stats
+    finally:
+        db.close()
+
+
+@celery_app.task(name="router_sync.audit_sot_drift")
+def audit_sot_drift(max_results: int = 1000, max_routers: int = 100) -> dict[str, int]:
+    """Compare each router's latest typed intent with live owned resources."""
+    db = db_session_adapter.create_session()
+    stats = {
+        "routers": 0,
+        "intents": 0,
+        "in_sync": 0,
+        "drifted": 0,
+        "unreachable": 0,
+        "invalid": 0,
+    }
+    active_findings: dict[str, dict[str, Any]] = {}
+    try:
+        rows = db.execute(
+            select(RouterConfigPushResult, RouterConfigPush)
+            .join(
+                RouterConfigPush,
+                RouterConfigPush.id == RouterConfigPushResult.push_id,
+            )
+            .where(RouterConfigPush.dry_run.is_(False))
+            .order_by(
+                RouterConfigPush.created_at.desc(),
+                RouterConfigPushResult.created_at.desc(),
+            )
+            .limit(max_results)
+        ).all()
+        latest: dict[UUID, dict[tuple[str, str], RouterSotIntent]] = {}
+        for result, push in rows:
+            router_key = result.router_id
+            if router_key not in latest and len(latest) >= max_routers:
+                continue
+            try:
+                intents = parse_routeros_sot_intents(push.commands)
+            except Exception:
+                stats["invalid"] += 1
+                continue
+            owned = latest.setdefault(router_key, {})
+            for intent in intents:
+                owned.setdefault((intent.resource.value, intent.key), intent)
+
+        routers = {
+            router.id: router
+            for router in db.scalars(
+                select(Router).where(
+                    Router.id.in_(list(latest)),
+                    Router.is_active.is_(True),
+                )
+            ).all()
+        }
+        db.expunge_all()
+        db.rollback()
+
+        adapter = RouterSotWriteAdapter()
+        for router_id, desired in latest.items():
+            router = routers.get(router_id)
+            if router is None:
+                continue
+            stats["routers"] += 1
+            intents = list(desired.values())
+            stats["intents"] += len(intents)
+            try:
+                result = adapter.readback(router, intents)
+            except RouterPostWriteReadbackError as exc:
+                stats["unreachable"] += 1
+                fingerprint = f"router-sot:{router.id}"
+                active_findings[fingerprint] = {
+                    "router": router,
+                    "summary": str(exc),
+                    "details": {"unreachable": True},
+                    "critical": True,
+                }
+                continue
+            drift_details = []
+            for command in result.commands:
+                if command.verified:
+                    stats["in_sync"] += 1
+                else:
+                    stats["drifted"] += 1
+                    plan = cast(RouterSotIntent, command.plan)
+                    drift_details.append(
+                        {
+                            "resource": plan.resource.value,
+                            "key": plan.key,
+                            "drift": command.drift,
+                        }
+                    )
+            if drift_details:
+                fingerprint = f"router-sot:{router.id}"
+                active_findings[fingerprint] = {
+                    "router": router,
+                    "summary": (
+                        f"{len(drift_details)} owned RouterOS resource(s) differ "
+                        "from desired state."
+                    ),
+                    "details": {"drift": drift_details},
+                    "critical": False,
+                }
+
+        try:
+            from app.models.network_monitoring import AlertSeverity
+            from app.services.observability import (
+                Finding,
+                StateObservation,
+                publish_state_snapshot,
+                record_finding,
+                resolve_findings,
+            )
+
+            for fingerprint, finding in active_findings.items():
+                router = cast(Router, finding["router"])
+                record_finding(
+                    db,
+                    Finding(
+                        fingerprint=fingerprint,
+                        domain="router_sot",
+                        source="router_sot_drift",
+                        severity=(
+                            AlertSeverity.critical
+                            if finding["critical"]
+                            else AlertSeverity.warning
+                        ),
+                        title=f"Router SOT drift: {router.name}",
+                        summary=str(finding["summary"]),
+                        details=dict(finding["details"]),
+                        target_url=f"/admin/network/routers/{router.id}",
+                    ),
+                )
+            resolve_findings(
+                db,
+                managed_prefix="router-sot:",
+                active_fingerprints=set(active_findings),
+            )
+            db.commit()
+
+            status = (
+                "error"
+                if stats["unreachable"]
+                else "degraded"
+                if stats["drifted"] or stats["invalid"]
+                else "ok"
+            )
+            publish_state_snapshot(
+                "router_sot",
+                [
+                    StateObservation(signal=signal, scope="fleet", value=value)
+                    for signal, value in stats.items()
+                ],
+                status=status,
+            )
+        except Exception:
+            logger.exception("router_sot_snapshot_publish_failed")
         return stats
     finally:
         db.close()

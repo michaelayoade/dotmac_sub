@@ -595,6 +595,7 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.workflow.detect_sla_breaches": _c("workflow", SWEEP, IDEMP, STATUS),
     "router_sync.capture_scheduled_snapshots": _c("router", SWEEP, IDEMP, HEALTH),
     "router_sync.cleanup_idle_tunnels": _c("router", SWEEP, IDEMP, LOG),
+    "router_sync.audit_sot_drift": _c("router", SWEEP, IDEMP, HEALTH),
     "router_sync.execute_config_push": _c("router", STATE, STATEFUL, STATUS),
     "router_sync.reconcile_config_push_readback": _c("router", SWEEP, IDEMP, STATUS),
     "router_sync.reconcile_nas_vlan_readback": _c("router", SWEEP, IDEMP, STATUS),

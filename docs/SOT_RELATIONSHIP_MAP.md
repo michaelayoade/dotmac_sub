@@ -189,6 +189,9 @@ Dependency order:
    action queueing.
 8. `network.outage_lifecycle`: owns incident transitions, escalation planning,
    and outage event emission.
+9. `network.routeros_sot`: owns typed MikroTik desired state, the managed
+   resource/field registry, Dotmac ownership markers, verified reconciliation,
+   and periodic drift evidence. Router routes and tasks only orchestrate it.
 
 Rule: pollers write observations; resolver services decide state; event services
 decide consequences. Customer-facing outage, SLA, expiry suppression, support
