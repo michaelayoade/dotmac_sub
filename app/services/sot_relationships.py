@@ -1250,6 +1250,31 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="service_intent.subscription_lifecycle_execution",
+                module="app.services.subscription_lifecycle_commands",
+                owns=(
+                    "single-subscription command orchestration",
+                    "subscription command locking and reviewed-head enforcement",
+                    "subscription command idempotent replay",
+                    "structured subscription command outcomes",
+                    "independently committed subscription command batches",
+                ),
+                depends_on=(
+                    "service_intent.subscription_lifecycle",
+                    "service_intent.catalog_policy",
+                    "financial.prepaid_plan_change",
+                    "access.radius_state",
+                ),
+                notes=(
+                    "Delegates mutations and side effects to the established "
+                    "account lifecycle, catalog, billing, scheduler, and RADIUS "
+                    "owners. Renewal and deferred status execution fail closed "
+                    "until their dedicated owner slices are available. Admin "
+                    "single and bulk adapters delegate here instead of writing "
+                    "subscription lifecycle fields directly."
+                ),
+            ),
+            SOTService(
                 name="service_intent.ont",
                 module="app.services.network.ont_service_intent",
                 owns=("ONT service intent projection",),

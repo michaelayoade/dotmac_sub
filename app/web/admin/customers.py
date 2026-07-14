@@ -40,7 +40,11 @@ from app.services.audit_helpers import (
     build_changes_metadata,
     log_audit_event,
 )
-from app.services.auth_dependencies import require_any_permission, require_permission
+from app.services.auth_dependencies import (
+    has_permission,
+    require_any_permission,
+    require_permission,
+)
 from app.services.bandwidth import bandwidth_samples
 from app.services.customer_portal_context import resolve_customer_subscription
 from app.services.queue_adapter import enqueue_task
@@ -135,6 +139,19 @@ def _get_actor_id(request: Request) -> str | None:
 
     current_user = get_current_user(request)
     return str(current_user.get("subscriber_id")) if current_user else None
+
+
+def _subscription_action_permission_context(
+    request: Request, db: Session
+) -> dict[str, bool]:
+    auth = getattr(request.state, "auth", None) or {}
+    can_write_catalog = bool(auth) and has_permission(auth, db, "catalog:write")
+    return {
+        "can_activate_subscriptions": can_write_catalog
+        or (bool(auth) and has_permission(auth, db, "subscription:activate")),
+        "can_suspend_subscriptions": can_write_catalog
+        or (bool(auth) and has_permission(auth, db, "subscription:suspend")),
+    }
 
 
 def _workflow_changed_count(result: Mapping[str, Any]) -> int:
@@ -312,6 +329,9 @@ def customers_list(
         db=db,
         list_query=list_query,
     )
+    subscription_action_permissions = _subscription_action_permission_context(
+        request, db
+    )
 
     effective_query = page_data["list_query"]
     page_was_clamped = effective_query.page != page
@@ -323,6 +343,7 @@ def customers_list(
             {
                 "request": request,
                 **page_data,
+                **subscription_action_permissions,
             },
         )
         if page_was_clamped:
@@ -346,6 +367,7 @@ def customers_list(
         {
             "request": request,
             **page_data,
+            **subscription_action_permissions,
             **web_notifications_service.bulk_notification_setup_context(db),
             "active_page": "customers",
             "active_menu": "operations",

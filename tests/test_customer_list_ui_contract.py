@@ -45,6 +45,14 @@ def test_customer_table_consumes_contract_urls_and_accessibility_state():
     assert "status_presentation_badge(customer.status_presentation" in template
     assert "customer.raw.status" not in template
     assert "cust_status" not in template
+    assert (
+        "{% if can_activate_subscriptions and "
+        "customer.suspended_subscription_count %}" in template
+    )
+    assert (
+        "{% if can_suspend_subscriptions and customer.active_subscription_count %}"
+        in template
+    )
 
 
 def test_customer_status_surfaces_consume_semantic_presentation_owner():
