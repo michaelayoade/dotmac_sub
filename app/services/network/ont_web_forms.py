@@ -659,6 +659,10 @@ def wifi_controls_context(db: Session, ont_id: str) -> dict[str, object]:
 
 
 def firmware_form_context(db: Session, ont_id: str) -> dict[str, object]:
+    from sqlalchemy import select
+
+    from app.models.network_operation import NetworkOperation, NetworkOperationType
+
     ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     ont_vendor = str(getattr(ont, "vendor", "") or "").strip() if ont else ""
     available_firmware = web_onts_service.get_active_firmware_images(
@@ -666,10 +670,28 @@ def firmware_form_context(db: Session, ont_id: str) -> dict[str, object]:
         vendor_contains=ont_vendor or None,
         limit=20,
     )
+    latest_operation = None
+    if ont is not None:
+        latest_operation = db.scalars(
+            select(NetworkOperation)
+            .where(
+                NetworkOperation.target_id == ont.id,
+                NetworkOperation.operation_type
+                == NetworkOperationType.ont_firmware_upgrade,
+            )
+            .order_by(NetworkOperation.created_at.desc())
+            .limit(1)
+        ).first()
     return {
         "ont_id": ont_id,
         "available_firmware": available_firmware,
         "ont_vendor": ont_vendor,
+        "current_firmware": (
+            getattr(ont, "software_version", None)
+            or getattr(ont, "firmware_version", None)
+            or None
+        ),
+        "firmware_operation": latest_operation,
     }
 
 

@@ -327,6 +327,21 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "network", SWEEP, IDEMP, HEALTH
     ),
     "app.tasks.ont_bulk.execute_bulk_action": _c("network", ITEMS, PER_ITEM, STATUS),
+    "app.tasks.ont_firmware.apply_huawei_ont_firmware": _c(
+        "network",
+        STATE,
+        GUARDED,
+        STATUS,
+        "The operation ledger guards duplicate delivery; redelivery after the "
+        "delivery-start marker switches to readback instead of reflashing.",
+    ),
+    "app.tasks.ont_firmware.verify_huawei_ont_firmware": _c(
+        "network",
+        STATE,
+        STATEFUL,
+        STATUS,
+        "Bounded delayed readback retries are owned by the operation ledger.",
+    ),
     "app.tasks.ont_provisioning.authorize_ont": _c(
         "provisioning", STATE, STATEFUL, STATUS
     ),
