@@ -660,6 +660,10 @@ from app.models.subscription_engine import (  # noqa: F401
     SubscriptionEngine,
     SubscriptionEngineSetting,
 )
+from app.models.subscription_lifecycle_schedule import (  # noqa: F401
+    SubscriptionLifecycleSchedule,
+    SubscriptionLifecycleScheduleStatus,
+)
 from app.models.support import (  # noqa: F401
     Ticket,
     TicketAccessToken,

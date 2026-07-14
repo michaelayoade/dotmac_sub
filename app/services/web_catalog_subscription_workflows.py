@@ -24,6 +24,10 @@ from app.services.subscription_lifecycle import (
     SubscriptionLifecycleError,
 )
 from app.services.subscription_lifecycle_commands import execute_subscription_command
+from app.services.subscription_lifecycle_schedules import (
+    SubscriptionLifecycleScheduleError,
+    cancel_scheduled_subscription_status_command,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +101,47 @@ def execute_lifecycle_command_response(
             "replayed": outcome.replayed,
         },
         status_code,
+    )
+
+
+def cancel_lifecycle_schedule_response(
+    db: Session,
+    *,
+    subscription_id: str,
+    schedule_id: str,
+    actor_id: str | None,
+) -> tuple[dict[str, object], int]:
+    """Cancel one pending lifecycle status schedule."""
+    try:
+        schedule = cancel_scheduled_subscription_status_command(
+            db,
+            schedule_id,
+            subscription_id=subscription_id,
+            actor_id=actor_id,
+        )
+    except SubscriptionLifecycleScheduleError as exc:
+        missing = "not found" in str(exc).lower()
+        return (
+            {
+                "status": "rejected",
+                "schedule_id": schedule_id,
+                "message": str(exc),
+                "error_code": (
+                    "lifecycle_schedule_not_found"
+                    if missing
+                    else "lifecycle_schedule_not_cancelable"
+                ),
+            },
+            404 if missing else 409,
+        )
+    return (
+        {
+            "status": schedule.status.value,
+            "schedule_id": str(schedule.id),
+            "message": "Lifecycle schedule canceled",
+            "error_code": None,
+        },
+        200,
     )
 
 

@@ -25,8 +25,13 @@ from app.models.subscription_change import (
     SubscriptionChangeRequest,
     SubscriptionChangeStatus,
 )
+from app.models.subscription_lifecycle_schedule import (
+    SubscriptionLifecycleSchedule,
+    SubscriptionLifecycleScheduleStatus,
+)
 from app.services.subscription_lifecycle import (
     SubscriptionCommandKind,
+    SubscriptionCommandOutcome,
     SubscriptionCommandOutcomeStatus,
     SubscriptionEffectiveTiming,
     SubscriptionLifecycleCommand,
@@ -35,6 +40,10 @@ from app.services.subscription_lifecycle import (
 )
 from app.services.subscription_lifecycle_commands import (
     execute_subscription_command,
+)
+from app.services.subscription_lifecycle_schedules import (
+    apply_due_subscription_status_commands,
+    cancel_scheduled_subscription_status_command,
 )
 from app.services.web_catalog_subscription_workflows import (
     execute_lifecycle_command_response,
@@ -346,9 +355,7 @@ def test_deferred_plan_change_returns_scheduled_artifact_and_replays_it(
     assert subscription.offer_id == catalog_offer.id
 
 
-def test_renewal_and_deferred_status_commands_fail_closed(
-    db_session, subscriber, catalog_offer
-):
+def test_renewal_execution_remains_billing_owned(db_session, subscriber, catalog_offer):
     subscription = _subscription(db_session, subscriber, catalog_offer)
 
     renewal = execute_subscription_command(
@@ -359,22 +366,297 @@ def test_renewal_and_deferred_status_commands_fail_closed(
             source="admin:test",
         ),
     )
-    deferred_cancel = execute_subscription_command(
+    assert renewal.status == SubscriptionCommandOutcomeStatus.rejected
+    assert renewal.error_code == "renewal_execution_is_billing_owned"
+
+
+def test_deferred_status_command_is_durable_and_replays_schedule_artifact(
+    db_session, subscriber, catalog_offer
+):
+    subscription = _subscription(db_session, subscriber, catalog_offer)
+    reviewed = resolve_subscription_lifecycle(db_session, str(subscription.id))
+    command = SubscriptionLifecycleCommand(
+        subscription_id=str(subscription.id),
+        kind=SubscriptionCommandKind.cancel,
+        source="admin:test",
+        effective_timing=SubscriptionEffectiveTiming.scheduled,
+        effective_at=datetime(2026, 8, 15, tzinfo=UTC),
+        expected_head=reviewed.head,
+        idempotency_key="cancel-august",
+    )
+
+    outcome = execute_subscription_command(
+        db_session, command, now=datetime(2026, 7, 14, tzinfo=UTC)
+    )
+    replay = execute_subscription_command(
+        db_session, command, now=datetime(2026, 7, 14, tzinfo=UTC)
+    )
+
+    assert outcome.status == SubscriptionCommandOutcomeStatus.scheduled
+    assert replay.status == SubscriptionCommandOutcomeStatus.skipped
+    assert replay.replayed is True
+    assert replay.artifact_ids == outcome.artifact_ids
+    schedule = db_session.get(SubscriptionLifecycleSchedule, outcome.artifact_ids[0])
+    assert schedule is not None
+    assert schedule.status == SubscriptionLifecycleScheduleStatus.pending
+    assert schedule.reviewed_head == reviewed.head
+    assert schedule.actor_type == "system"
+    db_session.refresh(subscription)
+    assert subscription.status == SubscriptionStatus.active
+
+
+def test_identical_schedules_replay_their_own_idempotency_artifact(
+    db_session, subscriber, catalog_offer
+):
+    subscription = _subscription(db_session, subscriber, catalog_offer)
+    reviewed = resolve_subscription_lifecycle(db_session, str(subscription.id))
+
+    def _command(key: str) -> SubscriptionLifecycleCommand:
+        return SubscriptionLifecycleCommand(
+            subscription_id=str(subscription.id),
+            kind=SubscriptionCommandKind.cancel,
+            source="admin:test",
+            effective_timing=SubscriptionEffectiveTiming.scheduled,
+            effective_at=datetime(2026, 8, 15, tzinfo=UTC),
+            expected_head=reviewed.head,
+            idempotency_key=key,
+        )
+
+    first = execute_subscription_command(db_session, _command("cancel-first"))
+    second = execute_subscription_command(db_session, _command("cancel-second"))
+    replay = execute_subscription_command(db_session, _command("cancel-second"))
+
+    assert first.artifact_ids != second.artifact_ids
+    assert replay.replayed is True
+    assert replay.artifact_ids == second.artifact_ids
+
+
+def test_due_status_command_executes_through_canonical_owner(
+    db_session, subscriber, catalog_offer
+):
+    subscription = _subscription(db_session, subscriber, catalog_offer)
+    reviewed = resolve_subscription_lifecycle(db_session, str(subscription.id))
+    outcome = execute_subscription_command(
         db_session,
         SubscriptionLifecycleCommand(
             subscription_id=str(subscription.id),
             kind=SubscriptionCommandKind.cancel,
             source="admin:test",
             effective_timing=SubscriptionEffectiveTiming.scheduled,
-            effective_at=datetime(2026, 8, 15, tzinfo=UTC),
+            effective_at=datetime(2026, 7, 15, tzinfo=UTC),
+            expected_head=reviewed.head,
+            idempotency_key="cancel-due",
         ),
         now=datetime(2026, 7, 14, tzinfo=UTC),
     )
 
-    assert renewal.status == SubscriptionCommandOutcomeStatus.rejected
-    assert renewal.error_code == "renewal_execution_is_billing_owned"
-    assert deferred_cancel.status == SubscriptionCommandOutcomeStatus.rejected
-    assert deferred_cancel.error_code == "deferred_status_execution_not_supported"
+    result = apply_due_subscription_status_commands(
+        db_session,
+        now=datetime(2026, 7, 15, tzinfo=UTC),
+        worker_id="test-worker",
+    )
+
+    schedule = db_session.get(SubscriptionLifecycleSchedule, outcome.artifact_ids[0])
+    db_session.refresh(subscription)
+    assert result == {
+        "claimed": 1,
+        "applied": 1,
+        "retried": 0,
+        "superseded": 0,
+        "rejected": 0,
+        "failed": 0,
+    }
+    assert schedule is not None
+    assert schedule.status == SubscriptionLifecycleScheduleStatus.applied
+    assert schedule.applied_at is not None
+    assert schedule.applied_at.replace(tzinfo=UTC) == datetime(2026, 7, 15, tzinfo=UTC)
+    assert schedule.claimed_by is None
+    assert subscription.status == SubscriptionStatus.canceled
+
+
+def test_due_status_command_is_superseded_when_reviewed_state_drifted(
+    db_session, subscriber, catalog_offer
+):
+    subscription = _subscription(db_session, subscriber, catalog_offer)
+    reviewed = resolve_subscription_lifecycle(db_session, str(subscription.id))
+    outcome = execute_subscription_command(
+        db_session,
+        SubscriptionLifecycleCommand(
+            subscription_id=str(subscription.id),
+            kind=SubscriptionCommandKind.cancel,
+            source="admin:test",
+            effective_timing=SubscriptionEffectiveTiming.scheduled,
+            effective_at=datetime(2026, 7, 15, tzinfo=UTC),
+            expected_head=reviewed.head,
+        ),
+        now=datetime(2026, 7, 14, tzinfo=UTC),
+    )
+    subscription.offer_id = _target_offer(db_session, catalog_offer).id
+    subscription.updated_at = datetime(2026, 7, 14, 12, tzinfo=UTC)
+    db_session.commit()
+
+    result = apply_due_subscription_status_commands(
+        db_session, now=datetime(2026, 7, 15, tzinfo=UTC)
+    )
+
+    schedule = db_session.get(SubscriptionLifecycleSchedule, outcome.artifact_ids[0])
+    db_session.refresh(subscription)
+    assert result["superseded"] == 1
+    assert schedule is not None
+    assert schedule.status == SubscriptionLifecycleScheduleStatus.superseded
+    assert schedule.last_error_code == "subscription_head_changed"
+    assert subscription.status == SubscriptionStatus.active
+
+
+def test_pending_status_schedule_can_be_canceled(db_session, subscriber, catalog_offer):
+    subscription = _subscription(db_session, subscriber, catalog_offer)
+    outcome = execute_subscription_command(
+        db_session,
+        SubscriptionLifecycleCommand(
+            subscription_id=str(subscription.id),
+            kind=SubscriptionCommandKind.expire,
+            source="admin:test",
+            effective_timing=SubscriptionEffectiveTiming.next_cycle,
+        ),
+        now=datetime(2026, 7, 14, tzinfo=UTC),
+    )
+
+    schedule = cancel_scheduled_subscription_status_command(
+        db_session,
+        outcome.artifact_ids[0],
+        subscription_id=str(subscription.id),
+        actor_id="operator-1",
+        now=datetime(2026, 7, 20, tzinfo=UTC),
+    )
+    result = apply_due_subscription_status_commands(
+        db_session, now=datetime(2026, 8, 1, tzinfo=UTC)
+    )
+
+    assert schedule.status == SubscriptionLifecycleScheduleStatus.canceled
+    assert schedule.canceled_by == "operator-1"
+    assert result["claimed"] == 0
+    db_session.refresh(subscription)
+    assert subscription.status == SubscriptionStatus.active
+
+
+def test_failed_due_status_command_retries_with_backoff(
+    db_session, subscriber, catalog_offer, monkeypatch
+):
+    subscription = _subscription(db_session, subscriber, catalog_offer)
+    outcome = execute_subscription_command(
+        db_session,
+        SubscriptionLifecycleCommand(
+            subscription_id=str(subscription.id),
+            kind=SubscriptionCommandKind.cancel,
+            source="admin:test",
+            effective_timing=SubscriptionEffectiveTiming.scheduled,
+            effective_at=datetime(2026, 7, 15, tzinfo=UTC),
+        ),
+        now=datetime(2026, 7, 14, tzinfo=UTC),
+    )
+
+    def _fail(_db, command, **kwargs):
+        return SubscriptionCommandOutcome(
+            command=command,
+            status=SubscriptionCommandOutcomeStatus.failed,
+            message="temporary executor outage",
+            previous_head=command.expected_head or "unknown",
+            current_head=command.expected_head,
+            error_code="command_execution_failed",
+        )
+
+    monkeypatch.setattr(
+        "app.services.subscription_lifecycle_commands.execute_subscription_command",
+        _fail,
+    )
+    result = apply_due_subscription_status_commands(
+        db_session, now=datetime(2026, 7, 15, tzinfo=UTC)
+    )
+
+    schedule = db_session.get(SubscriptionLifecycleSchedule, outcome.artifact_ids[0])
+    assert result["retried"] == 1
+    assert schedule is not None
+    assert schedule.status == SubscriptionLifecycleScheduleStatus.pending
+    assert schedule.attempt_count == 1
+    assert schedule.next_attempt_at.replace(tzinfo=UTC) == datetime(
+        2026, 7, 15, 0, 5, tzinfo=UTC
+    )
+    assert schedule.last_error_code == "command_execution_failed"
+
+
+def test_due_status_command_stops_after_max_attempts(
+    db_session, subscriber, catalog_offer, monkeypatch
+):
+    subscription = _subscription(db_session, subscriber, catalog_offer)
+    outcome = execute_subscription_command(
+        db_session,
+        SubscriptionLifecycleCommand(
+            subscription_id=str(subscription.id),
+            kind=SubscriptionCommandKind.cancel,
+            source="admin:test",
+            effective_timing=SubscriptionEffectiveTiming.scheduled,
+            effective_at=datetime(2026, 7, 15, tzinfo=UTC),
+        ),
+        now=datetime(2026, 7, 14, tzinfo=UTC),
+    )
+    schedule = db_session.get(SubscriptionLifecycleSchedule, outcome.artifact_ids[0])
+    assert schedule is not None
+    schedule.max_attempts = 1
+    db_session.commit()
+
+    def _fail(_db, command, **kwargs):
+        return SubscriptionCommandOutcome(
+            command=command,
+            status=SubscriptionCommandOutcomeStatus.failed,
+            message="permanent executor outage",
+            previous_head=command.expected_head or "unknown",
+            current_head=command.expected_head,
+            error_code="command_execution_failed",
+        )
+
+    monkeypatch.setattr(
+        "app.services.subscription_lifecycle_commands.execute_subscription_command",
+        _fail,
+    )
+    result = apply_due_subscription_status_commands(
+        db_session, now=datetime(2026, 7, 15, tzinfo=UTC)
+    )
+
+    db_session.refresh(schedule)
+    assert result["failed"] == 1
+    assert schedule.status == SubscriptionLifecycleScheduleStatus.failed
+    assert schedule.attempt_count == 1
+
+
+def test_expired_processing_lease_is_reclaimed(db_session, subscriber, catalog_offer):
+    subscription = _subscription(db_session, subscriber, catalog_offer)
+    outcome = execute_subscription_command(
+        db_session,
+        SubscriptionLifecycleCommand(
+            subscription_id=str(subscription.id),
+            kind=SubscriptionCommandKind.cancel,
+            source="admin:test",
+            effective_timing=SubscriptionEffectiveTiming.scheduled,
+            effective_at=datetime(2026, 7, 15, tzinfo=UTC),
+        ),
+        now=datetime(2026, 7, 14, tzinfo=UTC),
+    )
+    schedule = db_session.get(SubscriptionLifecycleSchedule, outcome.artifact_ids[0])
+    assert schedule is not None
+    schedule.status = SubscriptionLifecycleScheduleStatus.processing
+    schedule.claimed_by = "dead-worker"
+    schedule.claimed_at = datetime(2026, 7, 15, tzinfo=UTC)
+    schedule.claim_expires_at = datetime(2026, 7, 15, 0, 15, tzinfo=UTC)
+    db_session.commit()
+
+    result = apply_due_subscription_status_commands(
+        db_session, now=datetime(2026, 7, 15, 0, 16, tzinfo=UTC)
+    )
+
+    db_session.refresh(schedule)
+    assert result["applied"] == 1
+    assert schedule.status == SubscriptionLifecycleScheduleStatus.applied
+    assert schedule.attempt_count == 1
 
 
 def test_future_time_is_not_executed_under_immediate_timing(

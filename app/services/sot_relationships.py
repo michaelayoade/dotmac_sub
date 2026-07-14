@@ -1267,8 +1267,28 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 notes=(
                     "Delegates mutations and side effects to the established "
                     "account lifecycle, catalog, billing, scheduler, and RADIUS "
-                    "owners. Renewal and deferred status execution fail closed "
-                    "until their dedicated owner slices are available."
+                    "owners. Renewal execution remains billing-owned."
+                ),
+            ),
+            SOTService(
+                name="service_intent.subscription_lifecycle_scheduling",
+                module="app.services.subscription_lifecycle_schedules",
+                owns=(
+                    "durable deferred subscription status intent",
+                    "deferred command execution leases and bounded retry",
+                    "scheduled lifecycle cancellation",
+                    "deferred lifecycle execution evidence",
+                ),
+                depends_on=(
+                    "service_intent.subscription_lifecycle",
+                    "service_intent.subscription_lifecycle_execution",
+                    "scheduler.registry",
+                ),
+                notes=(
+                    "Revalidates the reviewed subscription head at execution "
+                    "time and delegates every mutation to the canonical command "
+                    "executor. Plan scheduling remains with the catalog change "
+                    "request owner."
                 ),
             ),
             SOTService(
