@@ -118,15 +118,27 @@ def _build_plan_change_quote(
     *,
     current_balance: Decimal | None = None,
 ) -> dict[str, object]:
-    from app.services.prepaid_plan_changes import resolve_prepaid_plan_change
+    from app.services.subscription_lifecycle import (
+        SubscriptionCommandKind,
+        SubscriptionLifecycleCommand,
+        preview_subscription_command,
+    )
 
-    decision = resolve_prepaid_plan_change(
+    preview = preview_subscription_command(
         db,
-        subscription,
-        str(target_offer.id),
+        SubscriptionLifecycleCommand(
+            subscription_id=str(subscription.id),
+            kind=SubscriptionCommandKind.change_plan,
+            source="customer_portal:plan_change_quote",
+            target_offer_id=str(target_offer.id),
+        ),
         current_balance=current_balance,
     )
-    return decision.as_quote_dict()
+    details = preview.billing_impact.details or {}
+    quote = details.get("quote")
+    if not isinstance(quote, dict):
+        return {}
+    return quote
 
 
 def _serialize_plan_change_quote(quote: dict[str, object]) -> dict[str, object]:
