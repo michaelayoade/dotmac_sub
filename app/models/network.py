@@ -1961,6 +1961,10 @@ class OntUnit(Base):
     tr069_acs_server_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tr069_acs_servers.id")
     )
+    desired_tr069_profile_id: Mapped[int | None] = mapped_column(
+        Integer,
+        doc="Per-ONT OLT TR-069 profile override; NULL inherits OltConfigPack.",
+    )
     voip_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
 
     provisioning_status: Mapped[OntProvisioningStatus | None] = mapped_column(

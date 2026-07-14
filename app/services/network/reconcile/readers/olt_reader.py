@@ -152,6 +152,18 @@ def read_olt_state(
             error=detail_msg,
         )
     detail = detail or {}
+    tr069_profile_id = _int_or_none(detail.get("tr069_profile_id"))
+    if tr069_profile_id is None:
+        binding_reader = getattr(adapter, "get_tr069_profile_binding", None)
+        if callable(binding_reader):
+            try:
+                binding = binding_reader(desired.fsp, desired.olt_ont_id)
+                if binding.success:
+                    tr069_profile_id = _int_or_none(
+                        (binding.data or {}).get("profile_id")
+                    )
+            except Exception:
+                logger.debug("olt_reader_tr069_binding_unavailable", exc_info=True)
 
     # 4. Optical levels (Rx/Tx dBm, temperature). Best-effort: optical-info
     # can return an Out-of-range or "Not supported" line on some firmwares
@@ -196,6 +208,7 @@ def read_olt_state(
             olt_mgmt_vlan=_int_or_none(detail.get("mgmt_vlan")),
             olt_line_profile_id=_int_or_none(detail.get("line_profile_id")),
             olt_service_profile_id=_int_or_none(detail.get("service_profile_id")),
+            olt_tr069_profile_id=tr069_profile_id,
             olt_service_ports=olt_service_ports,
         ),
         error=None,
@@ -220,6 +233,7 @@ def _absent_fields() -> OltObservedFields:
         olt_mgmt_vlan=None,
         olt_line_profile_id=None,
         olt_service_profile_id=None,
+        olt_tr069_profile_id=None,
         olt_service_ports=(),
     )
 
@@ -244,6 +258,7 @@ def _present_with_unknown_state() -> OltObservedFields:
         olt_mgmt_vlan=None,
         olt_line_profile_id=None,
         olt_service_profile_id=None,
+        olt_tr069_profile_id=None,
         olt_service_ports=(),
     )
 

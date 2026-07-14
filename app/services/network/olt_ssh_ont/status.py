@@ -21,7 +21,8 @@ def parse_ont_info_detail(output: str) -> dict[str, str | int | None]:
     """Extract richer fields from a ``display ont info <fsp> <id>`` block.
 
     Returns a dict with keys: ``description``, ``line_profile_id``,
-    ``service_profile_id``, ``mgmt_ip``, ``mgmt_vlan``, ``distance_m``.
+    ``service_profile_id``, ``tr069_profile_id``, ``mgmt_ip``, ``mgmt_vlan``,
+    ``distance_m``.
     Missing values are ``None``. Designed to be fed plain-text output —
     callers that want to use it from already-collected SSH output can call
     this directly without re-running the command.
@@ -33,6 +34,7 @@ def parse_ont_info_detail(output: str) -> dict[str, str | int | None]:
         "description": None,
         "line_profile_id": None,
         "service_profile_id": None,
+        "tr069_profile_id": None,
         "mgmt_ip": None,
         "mgmt_vlan": None,
         "distance_m": None,
@@ -42,10 +44,11 @@ def parse_ont_info_detail(output: str) -> dict[str, str | int | None]:
     desc_parts: list[str] = []
     in_description = False
     for line in lines:
-        # A continuation line for a multi-line value starts with significant
-        # whitespace AND has no ``:`` before column 26 (Huawei's column-aligned
-        # field names always carry the colon there).
-        if in_description and line.startswith(" ") and (":" not in line[:26]):
+        # A continuation line is indented and has no field delimiter. Huawei
+        # pads long labels beyond column 26, so a fixed-column check can absorb
+        # legitimate fields such as ``TR069 server profile ID`` into the
+        # description.
+        if in_description and line.startswith(" ") and ":" not in line:
             desc_parts.append(line.strip())
             continue
         in_description = False
@@ -67,6 +70,16 @@ def parse_ont_info_detail(output: str) -> dict[str, str | int | None]:
         elif key_norm == "service profile id":
             try:
                 result["service_profile_id"] = int(value)
+            except ValueError:
+                pass
+        elif key_norm in {
+            "tr069 server profile",
+            "tr069 server profile id",
+            "tr-069 server profile",
+            "tr-069 server profile id",
+        }:
+            try:
+                result["tr069_profile_id"] = int(value)
             except ValueError:
                 pass
         elif key_norm == "ont ip 0 address/mask":

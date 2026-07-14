@@ -214,6 +214,7 @@ def test_olt_reader_populates_detail_fields_from_get_ont_info_detail(monkeypatch
                 "description": "Kolawole_Idiaro_2_authd_20260512",
                 "line_profile_id": 40,
                 "service_profile_id": 42,
+                "tr069_profile_id": 5,
                 "mgmt_ip": "172.16.210.20",
                 "mgmt_vlan": 201,
                 "distance_m": 4374,
@@ -226,6 +227,7 @@ def test_olt_reader_populates_detail_fields_from_get_ont_info_detail(monkeypatch
     assert obs.olt_description == "Kolawole_Idiaro_2_authd_20260512"
     assert obs.olt_line_profile_id == 40
     assert obs.olt_service_profile_id == 42
+    assert obs.olt_tr069_profile_id == 5
     assert obs.olt_mgmt_ip == "172.16.210.20"
     assert obs.olt_mgmt_vlan == 201
     assert obs.olt_distance_m == 4374

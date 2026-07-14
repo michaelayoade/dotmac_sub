@@ -211,6 +211,7 @@ class OltObservedFields:
     olt_service_profile_id: int | None
     # Each service-port entry: {index, vlan, gem, state}. Tuple to keep frozen.
     olt_service_ports: tuple[dict[str, Any], ...]
+    olt_tr069_profile_id: int | None = None
 
 
 @dataclass(frozen=True)

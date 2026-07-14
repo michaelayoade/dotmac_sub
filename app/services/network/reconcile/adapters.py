@@ -398,6 +398,8 @@ def apply_proposed_change(
 
     if hasattr(ont, "mgmt_ip_address"):
         ont.mgmt_ip_address = target.mgmt_ip
+    if "tr069_profile_id" in changed_fields:
+        ont.desired_tr069_profile_id = target.tr069_profile_id
 
     _set_desired_value(ont, "wifi", "ssid", target.wifi_ssid)
     _set_desired_value(ont, "wifi", "password", target.wifi_password_ref)
@@ -500,6 +502,7 @@ def observed_from_ont_observation(
             olt_mgmt_vlan=obs.olt_mgmt_vlan,
             olt_line_profile_id=obs.olt_line_profile_id,
             olt_service_profile_id=obs.olt_service_profile_id,
+            olt_tr069_profile_id=obs.olt_tr069_profile_id,
             olt_service_ports=tuple(obs.olt_service_ports or ()),
         ),
         acs=AcsObservedFields(
@@ -591,6 +594,7 @@ def upsert_ont_observation(
     row.olt_mgmt_vlan = observed.olt.olt_mgmt_vlan
     row.olt_line_profile_id = observed.olt.olt_line_profile_id
     row.olt_service_profile_id = observed.olt.olt_service_profile_id
+    row.olt_tr069_profile_id = observed.olt.olt_tr069_profile_id
     row.olt_service_ports = list(observed.olt.olt_service_ports)
 
     row.acs_present = observed.acs.acs_present

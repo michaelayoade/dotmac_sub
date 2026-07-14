@@ -45,13 +45,14 @@ from app.models.network import OLTDevice, OntSyncStatus, OntUnit
 from .adapters import (
     apply_proposed_change,
     desired_from_ont_unit,
+    observed_from_ont_observation,
     upsert_ont_observation,
 )
 from .alerts import resolve_sweep_unreachable
 from .applier import ApplyContext, SecretResolver, apply_plan
 from .locking import OntNotFound, acquire_reconcile_lock
 from .planner import compute_plan
-from .readers import read_acs_state, read_olt_state
+from .readers import ReadResult, read_acs_state, read_olt_state
 from .readers.reachability import PingFunction, is_pingable
 from .secrets import default_secret_resolver_from_env
 from .state import (
@@ -180,14 +181,26 @@ def reconcile_ont(
                 target = desired_current
 
             # ── Resolve adapters ────────────────────────────────────────────
+            olt_only_profile_change = mode == "sync" and proposed_fields == frozenset(
+                {"tr069_profile_id"}
+            )
             if olt_adapter is None:
                 olt_adapter = _resolve_olt_adapter(db, ont)
-            if acs_client is None:
+            if acs_client is None and not olt_only_profile_change:
                 acs_client = _resolve_acs_client(db, ont)
+            acs_observed_fallback = (
+                _cached_acs_observation(db, ont)
+                if olt_only_profile_change and acs_client is None
+                else None
+            )
 
             # ── Read observed (parallel OLT + ACS) ──────────────────────────
             olt_result, acs_result = _read_observed_parallel(
-                olt_adapter, acs_client, target, deadline=deadline
+                olt_adapter,
+                acs_client,
+                target,
+                deadline=deadline,
+                acs_observed_fallback=acs_observed_fallback,
             )
 
             # ICMP reachability check on the mgmt IP. Runs from the reconciler
@@ -310,7 +323,11 @@ def reconcile_ont(
                 )
 
             verify_olt_result, verify_acs_result = _read_observed_parallel(
-                olt_adapter, acs_client, target, deadline=deadline
+                olt_adapter,
+                acs_client,
+                target,
+                deadline=deadline,
+                acs_observed_fallback=acs_observed_fallback,
             )
             observed_after = OntObservedState(
                 last_reconciled_at=started_at,
@@ -521,12 +538,24 @@ def _read_observed_parallel(
     desired: OntDesiredState,
     *,
     deadline: datetime,
+    acs_observed_fallback: AcsObservedFields | None = None,
 ):
     """Run OLT + ACS reads in parallel.
 
     Two I/O-bound calls, one each — a small thread pool is the right fit.
     The readers themselves don't share state, so no synchronisation needed.
     """
+    if acs_client is None:
+        return (
+            read_olt_state(olt_adapter, desired, deadline=deadline),
+            ReadResult(
+                success=True,
+                unreachable=False,
+                observed=acs_observed_fallback or _absent_acs(),
+                error=None,
+            ),
+        )
+
     with ThreadPoolExecutor(max_workers=2, thread_name_prefix="reconcile-read") as pool:
         olt_future = pool.submit(
             read_olt_state, olt_adapter, desired, deadline=deadline
@@ -535,6 +564,17 @@ def _read_observed_parallel(
         olt_result = olt_future.result()
         acs_result = acs_future.result()
     return olt_result, acs_result
+
+
+def _cached_acs_observation(db: Session, ont: OntUnit) -> AcsObservedFields:
+    """Carry forward ACS reality when an OLT-only reconcile skips ACS I/O."""
+    from app.models.ont_observation import OntObservation
+
+    row = db.scalars(
+        select(OntObservation).where(OntObservation.ont_unit_id == ont.id)
+    ).first()
+    observed = observed_from_ont_observation(row)
+    return observed.acs if observed is not None else _absent_acs()
 
 
 def _absent_olt() -> OltObservedFields:
@@ -551,6 +591,7 @@ def _absent_olt() -> OltObservedFields:
         olt_mgmt_vlan=None,
         olt_line_profile_id=None,
         olt_service_profile_id=None,
+        olt_tr069_profile_id=None,
         olt_service_ports=(),
     )
 

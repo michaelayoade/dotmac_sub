@@ -404,9 +404,13 @@ def _values_from_assignment(
             else False
         ),
         "tr069_acs_server_id": config_pack.tr069_acs_server_id if config_pack else None,
-        "tr069_olt_profile_id": config_pack.tr069_olt_profile_id
-        if config_pack
-        else None,
+        "tr069_olt_profile_id": (
+            ont.desired_tr069_profile_id
+            if ont is not None and ont.desired_tr069_profile_id is not None
+            else config_pack.tr069_olt_profile_id
+            if config_pack
+            else None
+        ),
         "cr_username": config_pack.cr_username if config_pack else None,
         "cr_password": config_pack.cr_password if config_pack else None,
         "internet_config_ip_index": _coalesce_mapping_config(
