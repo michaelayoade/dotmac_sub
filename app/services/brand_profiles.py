@@ -25,6 +25,13 @@ _HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 _ASSET_URL_FIELDS = {"logo_url", "dark_logo_url", "favicon_url"}
 _LEGACY_CACHE_KEY = "brand_profiles.legacy"
 _PROFILE_CACHE_KEY = "brand_profiles.active_profiles"
+_LEGACY_SEMANTIC_SETTING_KEYS = {
+    "positive": "brand_semantic_positive_color",
+    "info": "brand_semantic_info_color",
+    "warning": "brand_semantic_warning_color",
+    "negative": "brand_semantic_negative_color",
+    "neutral": "brand_semantic_neutral_color",
+}
 
 
 @dataclass(frozen=True)
@@ -105,10 +112,10 @@ def _legacy_brand(db: Session) -> dict[str, Any]:
         "secondary_color": comms("brand_secondary_color", DEFAULT_SECONDARY_HEX),
         "semantic_colors": {
             tone: comms(
-                f"brand_semantic_{tone}_color",
+                setting_key,
                 static[f"semantic_{tone}_color"],
             )
-            for tone in SEMANTIC_TONES
+            for tone, setting_key in _LEGACY_SEMANTIC_SETTING_KEYS.items()
         },
         "logo_url": comms("sidebar_logo_url"),
         "dark_logo_url": comms("sidebar_logo_dark_url"),
