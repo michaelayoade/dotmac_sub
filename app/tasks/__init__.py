@@ -91,6 +91,10 @@ from app.tasks.olt_health_retry import (
 )
 from app.tasks.olt_mac_harvest import run_olt_mac_harvest
 from app.tasks.ont_bulk import execute_bulk_action as execute_ont_bulk_action
+from app.tasks.ont_firmware import (
+    apply_huawei_ont_firmware,
+    verify_huawei_ont_firmware,
+)
 from app.tasks.ont_provisioning import (
     authorize_ont as authorize_ont_task,
 )
@@ -317,6 +321,8 @@ __all__ = [
     "check_nas_health",
     "execute_ont_bulk_action",
     "run_ont_reconcile_sweep",
+    "apply_huawei_ont_firmware",
+    "verify_huawei_ont_firmware",
     "dispatch_huawei_ont_status",
     "refresh_huawei_olt_status",
     "authorize_ont_task",

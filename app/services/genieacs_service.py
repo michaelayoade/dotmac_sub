@@ -539,44 +539,10 @@ class GenieAcsService:
     def firmware_upgrade(
         self, db: Session, ont_id: str, firmware_image_id: str
     ) -> ActionResult:
-        """Trigger ONT firmware download through the configured ACS backend."""
-        from app.models.network import OntFirmwareImage
+        """Create a tracked firmware intent; device work runs asynchronously."""
+        from app.services.network.ont_firmware import request_firmware_upgrade
 
-        firmware = db.get(OntFirmwareImage, firmware_image_id)
-        if firmware is None:
-            return ActionResult(success=False, message="Firmware image not found.")
-        if not firmware.is_active:
-            return ActionResult(success=False, message="Firmware image is not active.")
-
-        result = self.download(
-            db,
-            ont_id,
-            file_type="1 Firmware Upgrade Image",
-            file_url=firmware.file_url,
-            filename=firmware.filename,
-        )
-        if not result.success:
-            return result
-
-        data = dict(result.data or {})
-        data.update(
-            {
-                "firmware_image_id": str(firmware.id),
-                "firmware_vendor": firmware.vendor,
-                "firmware_model": firmware.model,
-                "firmware_version": firmware.version,
-                "checksum": firmware.checksum,
-                "file_size_bytes": firmware.file_size_bytes,
-            }
-        )
-        return ActionResult(
-            success=True,
-            message=(
-                f"Firmware upgrade to v{firmware.version} initiated. "
-                "The ONT will download the image and reboot if the device accepts it."
-            ),
-            data=data,
-        )
+        return request_firmware_upgrade(db, ont_id, firmware_image_id)
 
     # -------------------------------------------------------------------------
     # WAN TR-069 Actions

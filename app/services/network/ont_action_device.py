@@ -13,7 +13,6 @@ from app.services.network.ont_action_common import (
     build_tr069_params,
     detect_data_model_root,
     get_ont_client_or_error,
-    get_ont_strict_or_error,
     persist_data_model_root,
     set_and_verify,
 )
@@ -356,51 +355,9 @@ def factory_reset(db: Session, ont_id: str) -> ActionResult:
 
 
 def firmware_upgrade(db: Session, ont_id: str, firmware_image_id: str) -> ActionResult:
-    from app.models.network import OntFirmwareImage
+    from app.services.network.ont_firmware import request_firmware_upgrade
 
-    ont, error = get_ont_strict_or_error(db, ont_id)
-    if error:
-        return error
-    if ont is None:
-        return ActionResult(success=False, message="ONT not found.")
-
-    firmware = db.get(OntFirmwareImage, firmware_image_id)
-    if not firmware:
-        return ActionResult(success=False, message="Firmware image not found.")
-    if not firmware.is_active:
-        return ActionResult(success=False, message="Firmware image is not active.")
-
-    resolved, error = get_ont_client_or_error(db, ont_id)
-    if error:
-        return error
-    if resolved is None:
-        return ActionResult(success=False, message="ONT resolution failed.")
-
-    _, client, device_id = resolved
-    try:
-        result = client.download_and_wait(
-            device_id,
-            file_type="1 Firmware Upgrade Image",
-            file_url=firmware.file_url,
-            filename=firmware.filename,
-        )
-        logger.info(
-            "Firmware upgrade triggered for ONT %s → %s v%s",
-            ont.serial_number,
-            firmware.vendor,
-            firmware.version,
-        )
-        return ActionResult(
-            success=True,
-            message=(
-                f"Firmware upgrade to v{firmware.version} accepted by "
-                f"{ont.serial_number}."
-            ),
-            data=result,
-        )
-    except GenieACSError as exc:
-        logger.error("Firmware upgrade failed for ONT %s: %s", ont.serial_number, exc)
-        return ActionResult(success=False, message=f"Firmware upgrade failed: {exc}")
+    return request_firmware_upgrade(db, ont_id, firmware_image_id)
 
 
 def run_ping_diagnostic(

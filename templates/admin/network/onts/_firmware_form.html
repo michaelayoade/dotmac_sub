@@ -1,10 +1,23 @@
 {# Firmware Upgrade Form — Lazy-loaded with available firmware #}
+{% if current_firmware or firmware_operation %}
+<div class="mb-2 border-l-2 border-slate-300 pl-3 text-xs dark:border-slate-600">
+    {% if current_firmware %}<p class="text-slate-700 dark:text-slate-200">Current: <span class="font-medium">{{ current_firmware }}</span></p>{% endif %}
+    {% if firmware_operation %}
+    <p class="text-slate-600 dark:text-slate-300">
+        Last upgrade: <span class="font-medium">{{ firmware_operation.status.value | replace('_', ' ') | title }}</span>
+        {% if firmware_operation.input_payload and firmware_operation.input_payload.target_version %} to v{{ firmware_operation.input_payload.target_version }}{% endif %}
+    </p>
+    {% if firmware_operation.waiting_reason %}<p class="mt-1 text-slate-500 dark:text-slate-400">{{ firmware_operation.waiting_reason }}</p>{% endif %}
+    {% if firmware_operation.error %}<p class="mt-1 text-red-700 dark:text-red-300">{{ firmware_operation.error }}</p>{% endif %}
+    {% endif %}
+</div>
+{% endif %}
 {% if available_firmware %}
 <form hx-post="/admin/network/onts/{{ ont_id }}/firmware-upgrade"
       hx-swap="none"
       hx-confirm="Upgrade firmware? The ONT will download the image and reboot automatically."
       data-network-action
-      data-loading-label="Upgrading..."
+      data-loading-label="Queuing..."
       class="flex items-center gap-2 pt-2 border-t border-slate-200 dark:border-slate-700">
     {% include "components/forms/csrf_input.html" %}
     <select name="firmware_image_id" required

@@ -26,6 +26,7 @@ OPERATION_DISPLAY: dict[str, str] = {
     "ont_set_conn_request_creds": "Set Connection Request Credentials",
     "ont_send_conn_request": "Connection Request",
     "ont_enable_ipv6": "Enable IPv6",
+    "ont_firmware_upgrade": "ONT Firmware Upgrade",
     "cpe_set_conn_request_creds": "Set Connection Request Credentials",
     "cpe_send_conn_request": "Connection Request",
     "cpe_reboot": "CPE Reboot",

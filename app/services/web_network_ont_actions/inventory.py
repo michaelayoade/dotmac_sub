@@ -21,6 +21,7 @@ from app.services.network.ont_inventory import (
 )
 from app.services.web_network_ont_actions._common import (
     _log_action_audit,
+    actor_name_from_request,
 )
 
 __all__ = (
@@ -66,14 +67,20 @@ def firmware_upgrade(
     db: Session, ont_id: str, firmware_image_id: str, *, request: Request | None = None
 ) -> ActionResult:
     """Trigger firmware upgrade and audit the admin action."""
-    from app.services.network.ont_actions import OntActions
+    from app.services.network.ont_firmware import request_firmware_upgrade
 
-    result = OntActions.firmware_upgrade(db, ont_id, firmware_image_id)
+    result = request_firmware_upgrade(
+        db,
+        ont_id,
+        firmware_image_id,
+        initiated_by=actor_name_from_request(request),
+    )
     _log_action_audit(
         db,
         request=request,
         action="firmware_upgrade",
         ont_id=ont_id,
         metadata={"firmware_image_id": firmware_image_id, "success": result.success},
+        status_code=202 if result.waiting else 200 if result.success else 400,
     )
     return result
