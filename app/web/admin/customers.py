@@ -22,6 +22,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.subscriber import SubscriberCategory
 from app.services import customer_portal
 from app.services import network_monitoring as network_monitoring_service
@@ -32,11 +33,14 @@ from app.services import web_customer_details as web_customer_details_service
 from app.services import web_customer_lists as web_customer_lists_service
 from app.services import web_customer_user_access as web_customer_user_access_service
 from app.services import web_notifications as web_notifications_service
+from app.services import (
+    web_catalog_subscription_workflows as web_catalog_subscription_workflows_service,
+)
 from app.services.audit_helpers import (
     build_changes_metadata,
     log_audit_event,
 )
-from app.services.auth_dependencies import require_permission
+from app.services.auth_dependencies import require_any_permission, require_permission
 from app.services.bandwidth import bandwidth_samples
 from app.services.customer_portal_context import resolve_customer_subscription
 from app.services.queue_adapter import enqueue_task
@@ -124,6 +128,13 @@ def _get_subscriber(db: Session, subscriber_id: str):
 
 def _resolve_business_customer_id(db: Session, customer_id: str) -> str:
     return web_customer_actions_service.resolve_business_customer_id(db, customer_id)
+
+
+def _get_actor_id(request: Request) -> str | None:
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request)
+    return str(current_user.get("subscriber_id")) if current_user else None
 
 
 def _load_tax_rates(db: Session):
@@ -1561,6 +1572,104 @@ def business_deactivate(
         return Response(status_code=200, headers={"HX-Refresh": "true"})
     return RedirectResponse(
         url=f"/admin/customers/business/{customer_id}", status_code=303
+    )
+
+
+@router.post(
+    "/{customer_type}/{customer_id}/suspend-services",
+    response_class=HTMLResponse,
+    dependencies=[
+        Depends(require_any_permission("catalog:write", "subscription:suspend"))
+    ],
+)
+def customer_suspend_active_services(
+    request: Request,
+    customer_type: Literal["person", "business"],
+    customer_id: str,
+    db: Session = Depends(get_db),
+):
+    """Suspend all active services attached to a customer row."""
+    active_subscription_ids = [
+        str(row[0])
+        for row in (
+            db.query(Subscription.id)
+            .filter(Subscription.subscriber_id == customer_id)
+            .filter(Subscription.status == SubscriptionStatus.active)
+            .all()
+        )
+    ]
+    redirect_url = f"/admin/customers/{customer_type}/{customer_id}"
+    if not active_subscription_ids:
+        return _toast_response(
+            request=request,
+            redirect_url=redirect_url,
+            ok=False,
+            title="No active services",
+            message="This customer has no active services to suspend.",
+        )
+
+    result = web_catalog_subscription_workflows_service.bulk_suspend_response(
+        db,
+        subscription_ids=",".join(active_subscription_ids),
+        request=request,
+        actor_id=_get_actor_id(request),
+    )
+    changed = int(result.get("changed") or result.get("count") or 0)
+    return _toast_response(
+        request=request,
+        redirect_url=redirect_url,
+        ok=changed > 0,
+        title="Services suspended" if changed else "No services suspended",
+        message=str(result.get("message") or "Suspension completed."),
+    )
+
+
+@router.post(
+    "/{customer_type}/{customer_id}/activate-services",
+    response_class=HTMLResponse,
+    dependencies=[
+        Depends(require_any_permission("catalog:write", "subscription:activate"))
+    ],
+)
+def customer_activate_suspended_services(
+    request: Request,
+    customer_type: Literal["person", "business"],
+    customer_id: str,
+    db: Session = Depends(get_db),
+):
+    """Activate all suspended services attached to a customer row."""
+    suspended_subscription_ids = [
+        str(row[0])
+        for row in (
+            db.query(Subscription.id)
+            .filter(Subscription.subscriber_id == customer_id)
+            .filter(Subscription.status == SubscriptionStatus.suspended)
+            .all()
+        )
+    ]
+    redirect_url = f"/admin/customers/{customer_type}/{customer_id}"
+    if not suspended_subscription_ids:
+        return _toast_response(
+            request=request,
+            redirect_url=redirect_url,
+            ok=False,
+            title="No suspended services",
+            message="This customer has no suspended services to activate.",
+        )
+
+    result = web_catalog_subscription_workflows_service.bulk_activate_response(
+        db,
+        subscription_ids=",".join(suspended_subscription_ids),
+        request=request,
+        actor_id=_get_actor_id(request),
+    )
+    changed = int(result.get("changed") or result.get("count") or 0)
+    return _toast_response(
+        request=request,
+        redirect_url=redirect_url,
+        ok=changed > 0,
+        title="Services activated" if changed else "No services activated",
+        message=str(result.get("message") or "Activation completed."),
     )
 
 

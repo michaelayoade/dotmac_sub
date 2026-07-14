@@ -22,7 +22,7 @@ from app.services import (
 )
 from app.services import web_catalog_subscriptions as web_catalog_subscriptions_service
 from app.services import web_fup as web_fup_service
-from app.services.auth_dependencies import require_permission
+from app.services.auth_dependencies import require_any_permission, require_permission
 from app.services.topology.customer_path import resolve_customer_path
 from app.web.request_parsing import parse_form_data, parse_form_data_sync
 
@@ -823,7 +823,9 @@ def catalog_subscription_resume_vacation_hold(
 
 @router.post(
     "/subscriptions/bulk/activate",
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[
+        Depends(require_any_permission("catalog:write", "subscription:activate"))
+    ],
 )
 def subscription_bulk_activate(
     request: Request,
@@ -843,7 +845,9 @@ def subscription_bulk_activate(
 
 @router.post(
     "/subscriptions/bulk/suspend",
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[
+        Depends(require_any_permission("catalog:write", "subscription:suspend"))
+    ],
 )
 def subscription_bulk_suspend(
     request: Request,
